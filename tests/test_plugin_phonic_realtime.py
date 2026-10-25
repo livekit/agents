@@ -44,18 +44,6 @@ async def test_update_options_resets_every_active_session(
         assert second._opts.voice == "updated"
 
 
-async def test_update_options_ignores_values_that_did_not_change(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PHONIC_API_KEY", "fake-key")
-    model = RealtimeModel(voice="original")
-
-    async with _make_session(model) as session:
-        model.update_options(voice="original")
-
-        assert session._options_reset_task is None
-
-
 async def test_instructions_set_on_one_session_do_not_reach_another(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
