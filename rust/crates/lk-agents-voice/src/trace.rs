@@ -597,7 +597,8 @@ pub enum FillerEnd {
     /// `interval=None` fired once, or `max_steps` was reached.
     Done,
     /// A `FillerStart` for an id already open or for a speech the loop does not hold, a fire
-    /// whose say the scheduler refused, or a host callable that raised or passed its bound.
+    /// whose say the scheduler refused, or a host callable that raised, passed its bound or had
+    /// no host to run it.
     Refused,
 }
 

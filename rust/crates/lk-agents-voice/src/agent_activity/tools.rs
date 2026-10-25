@@ -534,10 +534,12 @@ impl Driver {
                     let hook = self.activity.hooks.mint();
                     let wait = self.hook_wait();
                     let call = HookCall::FillerSource { id: hook, filler: id, step };
-                    if !self.issue_hook(now, call, Some(wait), out) {
-                        self.fire_filler(now, id, step, None, false, out)
-                    } else {
+                    // A callable no host can run never produces: like one that raises, it ends
+                    // the filler. Taken as a decline, the next fire could come in this instant.
+                    if self.issue_hook(now, call, Some(wait), out) {
                         self.activity.tools.filler_asking(id, hook);
+                    } else {
+                        self.end_filler(id, FillerEnd::Refused, out);
                     }
                 }
                 None => {}
