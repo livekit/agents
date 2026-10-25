@@ -7,7 +7,7 @@ import queue
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -442,34 +442,17 @@ async def test_stt_restarts_completed_worker_without_flush(
     await stream.aclose()
 
 
-async def test_stt_clean_completion_does_not_consume_retry_budget_or_backoff(
+async def test_stt_clean_completion_uses_retry_budget_and_backoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = nvidia_stt.STT(api_key="test-key")
     calls: list[list[bytes]] = []
-    final_response = SimpleNamespace(
-        results=[
-            SimpleNamespace(
-                is_final=True,
-                alternatives=[SimpleNamespace(transcript="ready", confidence=0.9, words=[])],
-            )
-        ]
-    )
-    final_attempt_started = threading.Event()
 
     class CleanEndingASRService:
         def streaming_response_generator(self, audio_generator, config):
             call_audio: list[bytes] = [next(audio_generator)]
             calls.append(call_audio)
-            if len(calls) <= 3:
-                return iter(())
-
-            def responses():
-                final_attempt_started.set()
-                yield final_response
-                call_audio.extend(audio_generator)
-
-            return responses()
+            return iter(())
 
     monkeypatch.setattr(service, "_ensure_asr_service", lambda: CleanEndingASRService())
     monkeypatch.setattr(
@@ -478,22 +461,19 @@ async def test_stt_clean_completion_does_not_consume_retry_budget_or_backoff(
         lambda self: SimpleNamespace(),
     )
 
-    stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=10))
+    sleep = AsyncMock()
+    monkeypatch.setattr(nvidia_stt.asyncio, "sleep", sleep)
+
+    stream = service.stream(conn_options=APIConnectOptions(max_retry=2, retry_interval=0.25))
     frame = _audio_frame(3)
     stream.push_frame(frame)
 
-    assert await asyncio.to_thread(final_attempt_started.wait, 1.0)
-    stream.end_input()
-    await asyncio.wait_for(stream._task, timeout=2.0)
-    events = [event async for event in stream]
+    with pytest.raises(APIConnectionError, match="ended unexpectedly after 3 attempts"):
+        await asyncio.wait_for(stream._task, timeout=2.0)
 
-    assert len(calls) == 4
+    assert len(calls) == 3
     assert all(call[0] == frame.data.tobytes() for call in calls)
-    assert any(
-        event.type == nvidia_stt.stt.SpeechEventType.FINAL_TRANSCRIPT
-        and event.alternatives[0].text == "ready"
-        for event in events
-    )
+    assert [call.args[0] for call in sleep.await_args_list] == [0.1, 0.25]
     await stream.aclose()
 
 
