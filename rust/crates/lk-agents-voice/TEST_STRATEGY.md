@@ -52,7 +52,9 @@ Every run ends the same way (`drive::finish`): release rounds answer everything 
 (end streams and chats, answer tools and hooks, report playouts, release holds, close
 utterances) until two rounds in a row have nothing to release, then `Settle`, `Close { drain:
 true }`, `AwaitExit`, and every spawned task is joined. A run still producing work after 100
-rounds is reported as `session_settles`. The rules then run once, over the finished recording.
+rounds is reported as `session_settles`; a round that grants the next of the case's queued
+floor-hold asks is working down a finite backlog and does not count. The rules then run once,
+over the finished recording.
 
 ## 3. Contracts and the known-findings baseline
 

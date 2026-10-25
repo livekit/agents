@@ -115,6 +115,29 @@ impl Run {
         out
     }
 
+    /// Whether the last round granted a floor hold the case asked for. The release phase never
+    /// asks for one, and holds are granted one at a time, so such a round works down the case's
+    /// own queue of `WaitForIdleAndHold` asks, a finite backlog, rather than producing new work.
+    /// A grant beyond the asks is not the backlog.
+    fn granted_queued_hold(&self, grants_before: usize) -> bool {
+        let grants = self.hold_grants();
+        let asks = self
+            .record
+            .sent(|i| matches!(i, Input::WaitForIdleAndHold {}).then_some(()))
+            .filter(|(_, (), accepted)| *accepted)
+            .count();
+        grants > grants_before && grants <= asks
+    }
+
+    fn hold_grants(&self) -> usize {
+        self.record
+            .journal_where(|step| match step {
+                Step::Speech(SpeechStep::IdleAnswered { hold: Some(_), .. }) => Some(()),
+                _ => None,
+            })
+            .count()
+    }
+
     /// Whether the IVR navigator has acted since the case last closed it: the navigator's own
     /// triggers, against the case's closes, in order.
     fn ivr_navigating(&self) -> bool {
@@ -263,8 +286,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
     let mut quiet = 0;
     let mut rounds = 0;
     while quiet < QUIET_ROUNDS {
-        rounds += 1;
-        if rounds > MAX_RELEASE_ROUNDS {
+        if rounds >= MAX_RELEASE_ROUNDS {
             let never_quiet = Failure {
                 contract: "session_settles".into(),
                 subject: Subject::Session,
@@ -280,6 +302,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
             outcome.failures.push(never_quiet);
             return outcome;
         }
+        let grants_before = run.hold_grants();
         let mut offered = run.releases();
         let releases = offered.len();
         // Advance regardless, so an armed deadline with nothing else to do still fires.
@@ -300,6 +323,9 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
             quiet += 1;
         } else {
             quiet = 0;
+        }
+        if !run.granted_queued_hold(grants_before) {
+            rounds += 1;
         }
     }
 
