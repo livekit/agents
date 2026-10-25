@@ -373,6 +373,11 @@ impl Driver {
         self.handoff_step(HandoffEvent::Closing, out);
         self.activity.on_exit.abandon();
         self.activity.tools.abandon_replies();
+        self.abandon_hooks(out);
+    }
+
+    /// Every callback still waited on is left to the host, its wait abandoned.
+    pub(crate) fn abandon_hooks(&mut self, out: &mut Out) {
         // All abandoned before any is let go: the run reads what is still pending.
         let pending = self.activity.hooks.take_all();
         for &(id, kind) in &pending {

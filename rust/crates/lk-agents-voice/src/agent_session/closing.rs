@@ -392,6 +392,9 @@ impl Driver {
         if let Some(closing) = &mut self.session.closing {
             closing.phase = ClosePhase::Closed;
         }
+        // A callback issued past the edge (a cut step's `function_tools_executed`) is abandoned as
+        // the edge abandoned the ones before it: once the loop stops, nobody would hear its answer.
+        self.abandon_hooks(out);
         self.answer_close_drains(out);
         self.stopped = true;
     }
