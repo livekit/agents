@@ -145,7 +145,7 @@ capped near a quarter of the seeds.
 
 ## 3. Promises and the rules that check them
 
-27 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
+28 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
 that must fail. Failures are counted per seed over 1,024 seeds, split by how random the run
 was: **conversation** (under 0.01 uniform moves per conversation move, 295 seeds), **mixed**
 (0.01 to 10, 437 seeds) and **uniform** (over 10, 292 seeds). A failure in a conversation seed
@@ -160,6 +160,7 @@ was a driver bug).
 | P1 | `drain_answers_once_settled` | `drain()` answers only after `on_exit` and every speech is done | 0 / 0 / 0 |
 | P1 | `idle_respects_holds` | `wait_for_idle` waits for other callers' floor holds | 48 / 59 / 35 |
 | P1 | `driver_exits_only_on_close` | the driver stops only after a close, never by panicking | 0 / 0 / 0 |
+| P1 | `close_finishes` | a close, once begun, ends with the session's exit, never stalls with nothing left to wake it (the run waits for the exit however long it takes in virtual time; a virtual day without one is the finding) | 0 / 0 / 0 (new 2026-10-25; 1 of 5,120 seeds had a close past the former 30 s cut, now judged) |
 | P1 | `virtual_time_advances` | the session never does unbounded work at one virtual instant (a livelock) | 0 / 0 / 0 |
 | P1 | `every_task_finishes` | every task the session spawned finishes, without panicking, once it closed; a report names the spawning line | 0 / 0 / 0 |
 | P1 | harness: `session_settles` | the run goes quiet once everything is released | 0 / 11 / 21 (2026-10-25; was 23 / 145 / 127 while a dead driver's refused releases counted as work) |
@@ -183,7 +184,7 @@ was a driver bug).
 | P5 | `provider_failure_is_accounted` | every injected failure is retried, surfaced or closes the session | 9 / 23 / 35 |
 | P5 | `speech_error_is_injected` | a failed speech traces back to an injected failure or an explicit refusal | 1 / 6 / 19 |
 | P5 | `provider_streams_closed` | every LLM, TTS and STT stream is closed by the end | 7 / 41 / 6 |
-| P5 | soak: residue | after a long call and release, nothing opened is still live | red (2026-10-25): seed 6 leaves a floor hold. A call that never reached its close is excluded and reported, never read as a leak; most calls must be judged |
+| P5 | soak: residue | after a long call and release, nothing opened is still live | red (2026-10-25): seed 6 leaves a floor hold. Every call must reach its close: one that stopped before it fails the soak |
 
 Every rule is exercised. Promises with no rule are listed per subsystem in section 5.
 
@@ -696,8 +697,12 @@ What it can and cannot miss:
 - **Verdicts never depend on real time.** A livelock is counted in steps at one virtual instant
   (`NO_PROGRESS_STEPS`, twenty times the busiest instant measured), in the journal and in the
   run's own loop, and reported as `virtual_time_advances`. Every wait the harness makes is
-  bounded in virtual time (`BUDGET_MS`), every loop in rounds (release, join), so a slow machine
-  cannot change a verdict.
+  bounded in virtual time (`BUDGET_MS`), except the wait for a begun close, which runs until the
+  session exits (a virtual day without an exit is `close_finishes`), and every loop in rounds
+  (release, join), so a slow machine cannot change a verdict. Every run that reaches its ending
+  is judged closed or reported.
+- **A saved case replays its run.** A campaign saves the whole run, ending included; a case
+  holding `Settle` (which only the runner sends) is replayed without being finished again.
 - **A real hang ends the process, loudly.** A product task that never yields blocks the run's
   only thread, where no step count can see it; a watchdog thread beside it (`VOICE_HANG_S`, 600 s)
   aborts with the seed. It is a crash, not a verdict: rerun the seed with `VOICE_TRACE=1`.

@@ -6,17 +6,16 @@
 //! `VOICE_SOAK_SEEDS` and `VOICE_SOAK_BUDGET` size it; the default is eight callers of about forty
 //! turns each.
 //!
-//! The residue is only read off a run that reached its close. One stopped before it (a livelock,
-//! a release phase that never went quiet) left live whatever it was holding when it stopped, so it
-//! is excluded and reported by seed with why, never misread as a leak. Why it stopped is a
-//! contract finding, and a long call's findings outside the known ones fail the soak as they fail
-//! the survey. So that exclusions cannot quietly empty the oracle, most calls must be judged.
+//! Every call must reach its close, so the residue is read off every one: a call that stopped
+//! before it (a livelock, a release phase that never went quiet, a close that never finished)
+//! fails the soak, by seed with why, rather than being left out of the oracle. A long call's
+//! findings outside the known ones fail the soak as they fail the survey.
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_fuzz::{
     check::KNOWN_FINDINGS,
     drive::{Run, Setup, simulate_with},
-    record::Kind,
+    record::{Kind, Phase},
     search::{Dials, explore_at, sample_setup},
 };
 
@@ -69,7 +68,7 @@ fn nothing_grows_with_the_conversation() {
     let seeds = env("VOICE_SOAK_SEEDS", 8);
     let budget = env("VOICE_SOAK_BUDGET", 12_000) as usize;
     let mut problems: Vec<String> = Vec::new();
-    let mut judged = 0;
+    let mut closed = 0;
     for seed in 0..seeds {
         // A caller the mode can converse with: a recogniser, and no realtime socket.
         let setup = Setup {
@@ -83,13 +82,6 @@ fn nothing_grows_with_the_conversation() {
                 problems.push(format!("seed {seed}: {}: {}", failure.contract, failure.detail));
             }
         }
-        if outcome.stopped_early {
-            let why: BTreeSet<&str> =
-                outcome.failures.iter().map(|f| f.contract.as_str()).collect();
-            println!("seed {seed}: EXCLUDED, stopped before its close: {why:?}");
-            continue;
-        }
-        judged += 1;
         let case = outcome.case;
         let run = simulate_with(case.schedule, async {
             let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
@@ -98,6 +90,12 @@ fn nothing_grows_with_the_conversation() {
             }
             run
         });
+        if run.record.phase() != Phase::Closed {
+            let why: BTreeSet<String> = outcome.failures.into_iter().map(|f| f.contract).collect();
+            problems.push(format!("seed {seed}: stopped before its close: {why:?}"));
+            continue;
+        }
+        closed += 1;
         let turns = case.inputs.iter().filter(|i| i.name() == "SttFinal").count();
         println!("seed {seed}: {} inputs, {turns} user turns", case.inputs.len());
         for (kind, (peak, left)) in live_by_quarter(&run) {
@@ -114,9 +112,6 @@ fn nothing_grows_with_the_conversation() {
             }
         }
     }
-    println!("{judged} of {seeds} calls reached their close and were judged");
-    if judged * 2 < seeds {
-        problems.push(format!("only {judged} of {seeds} calls reached their close"));
-    }
+    println!("{closed} of {seeds} calls reached their close and were judged");
     assert!(problems.is_empty(), "the soak failed:\n  {}", problems.join("\n  "));
 }

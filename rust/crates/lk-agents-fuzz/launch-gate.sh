@@ -31,7 +31,7 @@ campaign() {
         echo "FAILED: $name ran no test"
         exit 1
     fi
-    grep -E "^[0-9]+ seeds from|^reached |calls reached their close|EXCLUDED|known findings this" \
+    grep -E "^[0-9]+ seeds from|^reached |calls reached their close|known findings this" \
         <<<"$out" || true
 }
 

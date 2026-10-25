@@ -26,13 +26,10 @@ impl Rule for DriverExitsOnlyOnClose {
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
-        let inputs = r.inputs_view();
-        let internal = r.internal_view();
         // A finished driver task with no close behind it is a loop that died on its own.
-        let began_closing = inputs.close_asked_at().is_some() || internal.close_requested().is_some();
         check.expect(
             Subject::Session,
-            !r.driver_finished() || began_closing,
+            !r.driver_finished() || r.close_begun().is_some(),
             "driver exited with no close begun",
         );
         if let Some(panic) = r.driver_panic() {

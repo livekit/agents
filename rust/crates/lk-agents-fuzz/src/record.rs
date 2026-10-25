@@ -574,6 +574,14 @@ impl Recording {
         self.driver_finished
     }
 
+    /// When a close was begun: the case's `Close`, or the session's own (its error policy, a room
+    /// that went away), whichever came first.
+    pub fn close_begun(&self) -> Option<Observed> {
+        let asked = self.inputs_view().close_asked_at();
+        let own = self.internal_view().close_requested().map(|(at, _)| at);
+        asked.into_iter().chain(own).min()
+    }
+
     pub fn driver_panic(&self) -> Option<&str> {
         self.driver_panic.as_deref()
     }

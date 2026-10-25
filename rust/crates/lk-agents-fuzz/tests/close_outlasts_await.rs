@@ -1,4 +1,4 @@
-//! A close longer than `AwaitExit`'s budget still ends every task, once the session exits.
+//! A close longer than 30 s of virtual time still ends every task, once the session exits.
 use lk_agents_fuzz::drive::{Case, RoomSetup, Setup, run};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, Models, Ref, SayInput, ToolArgs, UserText};
 
@@ -6,8 +6,9 @@ use lk_agents_fuzz::input::{AgentText, Input, Millis, Models, Ref, SayInput, Too
 // phase of this close runs to its bound: the inline task's unwind (5 s), the `on_exit` nobody
 // answers (the 15 s hook bound), the drain waiting on replies parked behind the caller's open
 // utterance (5 s), the edge waiting on a tool's `function_tools_executed` (5 s), then the trailing
-// transcript. That outlasts `AwaitExit`'s 30 s, and the room forwarder, the drains and every reply
-// task were reported as never finishing although the close would have ended them.
+// transcript. That outlasted the 30 s `AwaitExit` used to wait, and the room forwarder, the
+// drains and every reply task were reported as never finishing although the close would have
+// ended them.
 #[test]
 fn a_close_longer_than_the_wait_ends_every_task() {
     let line = |text: &str| AgentText(text.into());

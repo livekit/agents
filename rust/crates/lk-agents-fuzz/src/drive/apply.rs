@@ -749,6 +749,11 @@ impl Run {
 /// answers the moment it is released, so anything still pending after this is stuck.
 pub const BUDGET_MS: u64 = 30_000;
 
+/// When a close that has not finished never will: a virtual day, where the longest close the
+/// phases allow is under a minute. The paused clock jumps to the next armed timer whenever nothing
+/// can run, so a session left idle with nothing armed to wake it gets here at once, for free.
+const NEVER_MS: u64 = 86_400_000;
+
 /// How many times closing will wait for a fresh batch of tasks before giving up on the driver.
 const MAX_JOIN_ROUNDS: u32 = 100;
 
@@ -774,8 +779,13 @@ impl Run {
         self.drive(Some(self.budget()), async move { handle.wait_for_done().await }).await.is_some()
     }
 
+    /// Before a close nothing obliges the session to exit, so that wait is an ordinary one. Once a
+    /// close is begun it is waited out however long it takes: its phases are each bounded, and
+    /// virtual time is free.
     async fn await_exit(&mut self) -> bool {
-        self.drive(Some(self.budget()), std::future::pending::<()>()).await;
+        let wait = if self.record.close_begun().is_some() { NEVER_MS } else { BUDGET_MS };
+        let until = self.time.now().saturating_add(Duration::from_millis(wait));
+        self.drive(Some(until), std::future::pending::<()>()).await;
         let exited = self.runtime.is_none();
         if exited {
             self.record.enter_phase(Phase::Closed);
@@ -928,8 +938,8 @@ impl Run {
     /// spawning while closing is a result worth reporting rather than waiting on forever.
     ///
     /// Each batch is raced against a deadline a budget away, the session stepped meanwhile as its
-    /// own loop would be: a close is a chain of bounded phases that can outlast `AwaitExit`, and a
-    /// session frozen mid-close would hold every task it ends. The clock is paused and moves only
+    /// own loop would be: a session whose close never finished, frozen, would hold every task it
+    /// ends. The clock is paused and moves only
     /// when nothing can run, so the deadline passes exactly when the tasks still pending can never
     /// finish: those are recorded as stuck and aborted, and the run completes.
     pub async fn join_tasks(&mut self) {
