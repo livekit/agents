@@ -104,13 +104,14 @@ impl Out {
                 })),
                 // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
                 Effect::Audio(
-                    crate::agent_session::effects::AudioOp::SetInput
-                    | crate::agent_session::effects::AudioOp::SetVideoInput
+                    crate::agent_session::effects::AudioOp::SetVideoInput
                     | crate::agent_session::effects::AudioOp::SetAudioOutput(_)
                     | crate::agent_session::effects::AudioOp::SetTranscriptionOutput(_)
                     | crate::agent_session::effects::AudioOp::SetOutputEnabled { .. },
                 ) => {}
                 Effect::Decision(d) => self.record(Step::Decided(d.clone())),
+                // Journalled through the data plane's reports.
+                Effect::Forwarder(_) => {}
                 Effect::Realtime(send) => self.record(Step::Realtime(RealtimeStep::Sent {
                     kind: send.0.kind(),
                     req_id: send.0.req_id().map(str::to_owned),
@@ -156,7 +157,8 @@ impl Out {
                 | Effect::Detector(_)
                 | Effect::Audio(_)
                 | Effect::Decision(_)
-                | Effect::Realtime(_) => None,
+                | Effect::Realtime(_)
+                | Effect::Forwarder(_) => None,
             })
             .collect()
     }
@@ -175,6 +177,8 @@ pub enum Effect {
     Realtime(RealtimeSend),
     Audio(AudioOp),
     Detector(DetectorCall),
+    /// Sent to the data plane through the queue.
+    Forwarder(crate::data_plane::ForwarderCommand),
 }
 
 #[cfg(test)]
@@ -370,8 +374,6 @@ pub enum AudioOp {
         op: GateOp,
         cause: GateCause,
     },
-    /// The old pump stops first.
-    SetInput,
     SetVideoInput,
     /// A reply in flight keeps the sink it started with.
     SetAudioOutput(Option<ResourceId>),
@@ -611,8 +613,10 @@ impl Driver {
             E::Provider(call @ (P::FlushStt | P::FlushVad)) => {
                 let leg =
                     if matches!(call, P::FlushStt) { AudioChannel::Stt } else { AudioChannel::Vad };
-                if let Some(s) = self.input.leg(leg) {
-                    let _ = s.flush();
+                let sink =
+                    self.input.sinks.get(&leg).and_then(|s| self.shared.resources.audio_sink(*s));
+                if let Some(sink) = sink {
+                    let _ = sink.flush();
                 }
             }
             // A session without a turn detector asks for no flush.
@@ -695,12 +699,14 @@ impl Driver {
                 };
                 let Some(pending) = pending else { return };
                 let tx = self.leg_opens.clone();
+                let resources = resources.clone();
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     use crate::room_io::Opened;
                     use crate::room_io::StreamOpened;
+                    let register = |sink| resources.register_audio_sink(Arc::from(sink));
                     let outcome = match pending {
                         Pending::Stt(stt) => match stt.stream(None, None).await {
-                            Some(Ok((sink, source))) => Ok(Opened::Stt(sink, source)),
+                            Some(Ok((sink, source))) => Ok(Opened::Stt(register(sink), source)),
                             Some(Err(e)) => Err(e),
                             None => Err(lk_agents_abi::errors::ProviderError::Local(
                                 lk_agents_abi::errors::ApiError::new(
@@ -708,9 +714,10 @@ impl Driver {
                                 ),
                             )),
                         },
-                        Pending::Vad(vad) => {
-                            vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
-                        }
+                        Pending::Vad(vad) => vad
+                            .stream()
+                            .await
+                            .map(|(sink, source)| Opened::Vad(register(sink), source)),
                     };
                     let _ = tx.send(StreamOpened { open, leg, outcome });
                 });
@@ -771,9 +778,9 @@ impl Driver {
                     }
                 }
             },
-            // Abort the old pump first: two sources on one table look like the user talking over
-            // themselves.
-            E::Audio(AudioOp::SetInput) => self.input.swap_audio_forwarder(&*self.shared.spawner),
+            E::Forwarder(command) => {
+                let _ = self.forwarder_tx.send(command);
+            }
             E::Audio(AudioOp::SetVideoInput) => {
                 self.input.swap_video_forwarder(&*self.shared.spawner)
             }

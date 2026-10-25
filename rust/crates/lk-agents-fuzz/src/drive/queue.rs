@@ -8,7 +8,8 @@
 use std::mem::Discriminant;
 
 use fastrand::Rng;
-use lk_agents_voice::agent_session::Input;
+use lk_agents_abi::resources::ResourceId;
+use lk_agents_voice::agent_session::{Event, Input};
 
 /// How the next step is chosen, drawn per seed and saved with the case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -42,7 +43,7 @@ const STARVE: u64 = 10_000;
 
 /// What runs next.
 pub enum Next {
-    Event(Input),
+    Event(Event),
     /// One turn for the driver's ready tasks.
     Tasks,
 }
@@ -67,23 +68,26 @@ struct Queued {
     source: Source,
     arrival: u64,
     priority: Priority,
-    input: Input,
+    event: Event,
 }
 
-/// Who sent an event: one host origin, one recognition stream, or one kind of input.
+/// Who sent an event: one host origin, one recognition stream, one kind of input, or the decision
+/// core's commands to the data plane.
 #[derive(PartialEq, Eq)]
 enum Source {
     Host(String),
-    Stt(u32),
+    Stt(ResourceId),
     Kind(Discriminant<Input>),
+    Event(Discriminant<Event>),
 }
 
 impl Source {
-    fn of(input: &Input) -> Self {
-        match input {
-            Input::Host(sent) => Source::Host(format!("{:?}", sent.origin)),
-            Input::Stt(tagged) => Source::Stt(tagged.open),
-            other => Source::Kind(std::mem::discriminant(other)),
+    fn of(event: &Event) -> Self {
+        match event {
+            Event::Input(Input::Host(sent)) => Source::Host(format!("{:?}", sent.origin)),
+            Event::Input(Input::Stt(tagged)) => Source::Stt(tagged.stream),
+            Event::Input(other) => Source::Kind(std::mem::discriminant(other)),
+            other => Source::Event(std::mem::discriminant(other)),
         }
     }
 }
@@ -95,11 +99,11 @@ impl Queue {
         Queue { policy, rng, pending: Vec::new(), arrivals: 0, dispatches: 0, tasks }
     }
 
-    pub fn push(&mut self, input: Input) {
+    pub fn push(&mut self, event: Event) {
         let arrival = self.arrivals;
         self.arrivals += 1;
         let priority = self.draw();
-        self.pending.push(Queued { source: Source::of(&input), arrival, priority, input });
+        self.pending.push(Queued { source: Source::of(&event), arrival, priority, event });
     }
 
     /// The next step: an event, a task turn when `tasks_ready`, or nothing.
@@ -127,7 +131,7 @@ impl Queue {
             }
         };
         if let Some(i) = event {
-            return Some(Next::Event(self.pending.remove(i).input));
+            return Some(Next::Event(self.pending.remove(i).event));
         }
         if !tasks_ready {
             return None;
@@ -138,9 +142,9 @@ impl Queue {
     }
 
     /// Everything still pending, in arrival order.
-    pub fn drain(&mut self) -> Vec<Input> {
+    pub fn drain(&mut self) -> Vec<Event> {
         self.pending.sort_by_key(|q| q.arrival);
-        self.pending.drain(..).map(|q| q.input).collect()
+        self.pending.drain(..).map(|q| q.event).collect()
     }
 
     fn draw(&mut self) -> Priority {

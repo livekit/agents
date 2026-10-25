@@ -155,7 +155,7 @@ event queue. `lk-agents-runtime`'s own tests may use one.
 
 ### The voice core
 
-The driver has part of the shape: one loop owns the session (`Driver::run`),
+The driver has part of the shape: one loop owns the session (`Runtime::run`),
 takes one `Input` at a time with a merge rule ("a due timer fires before any
 same-instant input"), and asks every subsystem for its next deadline. Hooks
 cross as an effect and an answer (`HostEvent::Hook`, then
@@ -333,10 +333,17 @@ only where the behaviour would surprise without it.
    fuzzer owns the queue, so partial-order sampling and bursts work over every
    source, the still-spawned tasks' reports included.
 1. The data plane: frame forwarding, output buffering, the synchroniser, the
-   recorder tap, pre-connect audio and the realtime audio push. The gate is
-   already published once per cycle (`publish_gate`). Outputs, inputs and the
-   recorder go by id here, not in 0: an interrupt cuts the sink and reads its
-   playhead inside the decision, so the playhead must first arrive as data.
+   recorder tap, pre-connect audio and the realtime audio push. Outputs, inputs
+   and the recorder go by id here, not in 0: an interrupt cuts the sink and
+   reads its playhead inside the decision, so the playhead must first arrive as
+   data. Frame forwarding is done: `data_plane::AudioForwarder` owns the
+   microphone fan-out (sinks by `ResourceId` per `AudioChannel`, the 16 kHz
+   conversion, the gate's verdict, the input switch), and `Runtime` steps it
+   beside the driver (`handle(event, now)`, `on_frame(frame, now)`). The
+   driver's `ForwarderCommand`s travel through the queue as `Event::Forwarder`;
+   the forwarder answers with reports in (`Input::InputStarted`,
+   `GateSilenced`, `InputCensus`); frames come straight from the microphone's
+   reader, never through the queue.
 2. Generation with its tools: the LLM stream, sentence splitting, TTS, tool
    runs and playout become core state driven by model events, with audio
    demand for backpressure. Tools cannot go first: they are dispatched inside

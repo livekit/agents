@@ -22,14 +22,12 @@ use crate::agent_activity::options::{ConfigStack, LegSet, SessionConfig};
 use crate::agent_activity::scheduling::{SpeechId, SpeechScheduler};
 use crate::agent_session::effects::{AudioOp, Effect, Out};
 use crate::agent_session::{ActivityCommand, Driver, HostAudio, HostVideo};
-use crate::audio::{GateInputs, audio_gate};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, InterruptCause, PlayoutStep, ToolStep};
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatItem, Modality, Ts};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 /// What the STT and VAD legs are fed: every model in the tree wants 16 kHz mono.
@@ -335,42 +333,6 @@ impl DriverConfig {
         };
         self.effective = next;
         diff
-    }
-}
-
-/// Neither verdict, so the first publish is always an edge.
-const VERDICT_UNPUBLISHED: u8 = u8::MAX;
-
-/// The pump runs at 50 fps outside the driver loop: staleness is one loop iteration, and the
-/// interruption leg is never substituted.
-#[derive(Debug)]
-pub struct GateSnapshot {
-    /// [`VERDICT_PASS`], [`VERDICT_DISCARD`], or [`VERDICT_UNPUBLISHED`] until the first `publish`.
-    verdict: AtomicU8,
-}
-
-const VERDICT_PASS: u8 = 0;
-const VERDICT_DISCARD: u8 = 1;
-
-impl GateSnapshot {
-    pub fn new() -> Arc<Self> {
-        Arc::new(GateSnapshot { verdict: AtomicU8::new(VERDICT_UNPUBLISHED) })
-    }
-
-    /// Run the gate and return whether it discards **only if that changed** (the
-    /// `GatePublished` edge).
-    #[must_use]
-    pub fn publish(&self, i: &GateInputs) -> Option<bool> {
-        let discard = audio_gate(i);
-        let encoded = if discard { VERDICT_DISCARD } else { VERDICT_PASS };
-        let previous = self.verdict.swap(encoded, Ordering::AcqRel);
-        (previous != encoded).then_some(discard)
-    }
-
-    /// Whether the substituted legs get silence for the next frame; `false` until the first
-    /// publish.
-    pub fn discard(&self) -> bool {
-        self.verdict.load(Ordering::Acquire) == VERDICT_DISCARD
     }
 }
 

@@ -18,7 +18,8 @@ use crate::agent_session::{
     ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
     IdleRefused, SpeechCommand,
 };
-use crate::audio::{AudioChannel, ChannelOp};
+use crate::audio::AudioChannel;
+use crate::data_plane::{ForwarderCommand, InputCensus};
 use crate::events::SessionEvent;
 use crate::trace::{
     CloseAct, CloseStep, CoreStep, HandoffStep, InputStep, InterruptCause, InterruptStep,
@@ -393,7 +394,7 @@ impl Driver {
     /// Whether the recogniser may still owe the last final: the user is speaking, words are held
     /// uncommitted, or speech ended within the last second. Only with an STT leg.
     fn transcript_pending(&self, now: Ts) -> bool {
-        if self.input.leg(AudioChannel::Stt).is_none() {
+        if !self.input.sinks.contains_key(&AudioChannel::Stt) {
             return false;
         }
         let turn = &self.activity.audio_recognition;
@@ -406,6 +407,30 @@ impl Driver {
                     && now.saturating_duration_since(spoke) <= Duration::from_secs(1)
             }
             (None, _) => false,
+        }
+    }
+
+    /// The close's frame census: per channel, then the shapes those frames had (the microphone's
+    /// and the conversion's, then each channel's).
+    pub(crate) fn on_input_census(&mut self, census: InputCensus, out: &mut Out) {
+        for &(leg, frames, silent, _) in &census.channels {
+            out.trace(InputStep::LegFrames { leg, frames, silent });
+        }
+        let Some((input, converted)) = census.input else { return };
+        out.trace(InputStep::InputShape {
+            sample_rate: input.sample_rate,
+            num_channels: input.num_channels,
+            samples_per_channel: input.samples_per_channel,
+            converted_rate: converted.sample_rate,
+            converted_samples_per_channel: converted.samples_per_channel,
+        });
+        for (leg, _, _, shape) in census.channels {
+            out.trace(InputStep::LegShape {
+                leg,
+                sample_rate: shape.sample_rate,
+                num_channels: shape.num_channels,
+                samples_per_channel: shape.samples_per_channel,
+            });
         }
     }
 
@@ -523,7 +548,7 @@ impl Driver {
         // A run still open ends here, `Closed`, before the close's own last event.
         self.run_close(out);
         // Detach the microphone: the recogniser hears only the commit's silence flush.
-        self.apply_leg_op(ChannelOp::SetSource(None), out);
+        out.machine().push(Effect::Forwarder(ForwarderCommand::SetSource(None)));
         // And the recorder: its last flush, its timer cancelled at the edge.
         self.detach_recorder(now, out);
         // `wait_for_idle` raises `ActivityClosedError` on a closing session; the trailing-turn
@@ -534,33 +559,8 @@ impl Driver {
         let host_commit_pending = self.activity.audio_recognition.commit_pending();
         // Refuse a handoff in flight; a running hook is left to the host and its wait abandoned.
         self.abandon_handoffs(out);
-        // The per-leg frame census, read off the one table.
-        for leg in AudioChannel::ALL {
-            let (frames, silent) = self.input.legs().counters(leg);
-            if frames > 0 {
-                out.trace(InputStep::LegFrames { leg, frames, silent });
-            }
-        }
-        // The shapes those frames had: the microphone's and the fan-out's, then each row's.
-        if let Some((input, converted)) = self.input.legs().input_shape() {
-            out.trace(InputStep::InputShape {
-                sample_rate: input.sample_rate,
-                num_channels: input.num_channels,
-                samples_per_channel: input.samples_per_channel,
-                converted_rate: converted.sample_rate,
-                converted_samples_per_channel: converted.samples_per_channel,
-            });
-            for leg in AudioChannel::ALL {
-                if let Some(shape) = self.input.legs().shape(leg) {
-                    out.trace(InputStep::LegShape {
-                        leg,
-                        sample_rate: shape.sample_rate,
-                        num_channels: shape.num_channels,
-                        samples_per_channel: shape.samples_per_channel,
-                    });
-                }
-            }
-        }
+        // The per-leg frame census, journalled when the data plane answers.
+        out.machine().push(Effect::Forwarder(ForwarderCommand::ReportCensus));
         // Cut a running endpointing delay short, unless the close is an error's: that commits no
         // trailing transcript, so the countdown is torn down.
         let eff = self.activity.audio_recognition.on_closing(now, reason != CloseReason::Error);
@@ -584,7 +584,8 @@ impl Driver {
                     | Effect::Decision(_)
                     | Effect::Realtime(_)
                     | Effect::Audio(_)
-                    | Effect::Detector(_) => None,
+                    | Effect::Detector(_)
+                    | Effect::Forwarder(_) => None,
                 })
                 .collect();
             for t in [

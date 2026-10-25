@@ -4,30 +4,37 @@
 use crate::agent_session::effects::{AudioOp, Effect, ProviderCall};
 use crate::agent_session::effects::{Out, StreamKind};
 use crate::agent_session::{Driver, IoKind};
-use crate::audio::{
-    AudioChannel, ChannelEnd, ChannelOp, Ticket, on_leg_ended, spawn_drain, tagged,
-};
+use crate::audio::{AudioChannel, ChannelEnd, on_leg_ended, spawn_drain, tagged};
+use crate::data_plane::ForwarderCommand;
 use crate::room_io::{InputProviders, Opened, StreamOpened};
 use crate::trace::{CoreStep, InputKind, InputStep, OutputKind, Step, TurnStep};
+use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{ChatMessage, Maybe, Role, Ts};
 use std::sync::Arc;
 
 impl Driver {
-    /// The one door every leg mutation goes through; a new source is swapped by the performer.
-    pub(crate) fn apply_leg_op(&mut self, op: ChannelOp, out: &mut Out) -> Option<Ticket> {
-        let source = matches!(op, ChannelOp::SetSource(_));
-        let ticket = self.input.apply_leg_op(op);
-        if source {
-            out.machine().push(crate::agent_session::effects::Effect::Audio(
-                crate::agent_session::effects::AudioOp::SetInput,
-            ));
+    /// Put `sink` on `channel`; the data plane ends the sink it replaces.
+    fn install_sink(&mut self, channel: AudioChannel, sink: ResourceId, out: &mut Out) {
+        self.input.sinks.insert(channel, sink);
+        if channel == AudioChannel::Stt {
+            self.input.live_stt = Some(sink);
         }
-        ticket
+        out.machine().push(Effect::Forwarder(ForwarderCommand::Install { channel, sink }));
     }
 
-    /// `Given` reopens off the loop; the new sink is installed before the old ends, so the pump
-    /// never reads an empty row. `Given(None)` closes the leg; `NotGiven` leaves it.
+    /// Take `channel`'s sink down, its input ended. `Agent(stt=None)`: this agent does not listen.
+    fn remove_sink(&mut self, channel: AudioChannel, out: &mut Out) {
+        if channel == AudioChannel::Stt {
+            self.input.live_stt = None;
+        }
+        if let Some(sink) = self.input.sinks.remove(&channel) {
+            out.machine().push(Effect::Forwarder(ForwarderCommand::Remove(sink)));
+        }
+    }
+
+    /// `Given` reopens off the loop; the new sink replaces the old in one command, so no frame
+    /// finds the channel empty. `Given(None)` closes the leg; `NotGiven` leaves it.
     pub(crate) fn reopen_legs(
         &mut self,
         stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
@@ -55,7 +62,7 @@ impl Driver {
                 None => {
                     self.session.stt = None;
                     self.input.expect_open(StreamKind::Stt, 0);
-                    self.apply_leg_op(ChannelOp::Clear(AudioChannel::Stt), out);
+                    self.remove_sink(AudioChannel::Stt, out);
                     intent.stt = false;
                 }
             }
@@ -71,7 +78,7 @@ impl Driver {
                 None => {
                     self.session.vad = None;
                     self.input.expect_open(StreamKind::Vad, 0);
-                    self.apply_leg_op(ChannelOp::Clear(AudioChannel::Vad), out);
+                    self.remove_sink(AudioChannel::Vad, out);
                     intent.vad = false;
                 }
             }
@@ -119,40 +126,28 @@ impl Driver {
                 // A different recogniser is told the full list.
                 let same_stt = self.input.stt_open_same();
                 self.keyterms_on_stt_swap(now, same_stt, out);
-                let ticket = self
-                    .apply_leg_op(
-                        ChannelOp::Install { leg: AudioChannel::Stt, sink: Arc::from(sink) },
-                        out,
-                    )
-                    .expect("Install returns its ticket");
+                self.install_sink(AudioChannel::Stt, sink, out);
                 spawn_drain(
                     &self.shared.spawner,
                     self.shared.time.clone(),
                     self.shared.closing.subscribe(),
-                    tagged(ticket, source),
+                    tagged(sink, source),
                     self.stt_tx.clone(),
-                    Arc::clone(self.input.legs()),
-                    ticket,
-                    self.input.leg_ended().clone(),
+                    (AudioChannel::Stt, sink),
+                    self.input.ended.clone(),
                 );
                 out.trace(InputStep::StreamOpened { leg: AudioChannel::Stt.label() });
             }
             (Ok(Opened::Vad(sink, source)), true) => {
-                let ticket = self
-                    .apply_leg_op(
-                        ChannelOp::Install { leg: AudioChannel::Vad, sink: Arc::from(sink) },
-                        out,
-                    )
-                    .expect("Install returns its ticket");
+                self.install_sink(AudioChannel::Vad, sink, out);
                 spawn_drain(
                     &self.shared.spawner,
                     self.shared.time.clone(),
                     self.shared.closing.subscribe(),
                     source,
                     self.vad_tx.clone(),
-                    Arc::clone(self.input.legs()),
-                    ticket,
-                    self.input.leg_ended().clone(),
+                    (AudioChannel::Vad, sink),
+                    self.input.ended.clone(),
                 );
                 out.trace(InputStep::StreamOpened { leg: AudioChannel::Vad.label() });
             }
@@ -164,12 +159,14 @@ impl Driver {
         let time = self.shared.time.clone();
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         match stream {
-            Opened::Stt(_sink, source) => {
+            Opened::Stt(sink, source) => {
+                self.shared.resources.release(sink);
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     let _ = source.close(deadline).await;
                 });
             }
-            Opened::Vad(_sink, source) => {
+            Opened::Vad(sink, source) => {
+                self.shared.resources.release(sink);
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     let _ = source.close(deadline).await;
                 });
@@ -194,11 +191,17 @@ impl Driver {
         out.trace(InputStep::ModelsUpdated { stt_given, vad_given, stt_reopened, vad_reopened });
     }
 
-    /// A leg's drain ended. A failed STT is terminal (`STTError{recoverable: False}`); a VAD
-    /// failure is only journalled.
+    /// A leg's drain ended: its sink is taken down if still installed. A failed STT is terminal
+    /// (`STTError{recoverable: False}`); a VAD failure is only journalled.
     pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: ChannelEnd, out: &mut Out) {
         let error = end.error.take();
         let leg = end.leg;
+        // Not `remove_sink`: the items the stream sent before its end are still consumed.
+        let installed = self.input.sinks.iter().find(|(_, sink)| Some(**sink) == end.sink);
+        if let Some((&channel, &sink)) = installed {
+            self.input.sinks.remove(&channel);
+            out.machine().push(Effect::Forwarder(ForwarderCommand::Remove(sink)));
+        }
         on_leg_ended(end, out);
         if let Some(error) = error
             && leg == AudioChannel::Stt.label()
@@ -217,10 +220,10 @@ impl Driver {
     ) {
         let attached = input.is_some();
         out.trace(InputStep::AudioInputSet { attached });
-        self.input.replace_audio_in(input.clone());
-        self.apply_leg_op(ChannelOp::SetSource(input), out);
+        let source = input.map(|input| self.shared.resources.register_audio_input(input));
+        out.machine().push(Effect::Forwarder(ForwarderCommand::SetSource(source)));
         if attached {
-            self.input.forget_first_input();
+            self.input.first_input_at = None;
             self.activity.audio_recognition.input_started_at = None;
             if let Some(stt) = self.session.stt.as_ref().cloned() {
                 let _ = self.reopen_legs(Maybe::Given(Some(stt)), Maybe::NotGiven, out);
@@ -243,7 +246,14 @@ impl Driver {
     /// The leg stays installed; the host object is told.
     pub(crate) fn set_io_enabled(&mut self, now: Ts, leg: IoKind, enabled: bool, out: &mut Out) {
         let changed = match leg {
-            IoKind::AudioInput => self.input.set_audio_enabled(enabled),
+            IoKind::AudioInput => {
+                let changed = std::mem::replace(&mut self.input.audio_enabled, enabled) != enabled;
+                if changed {
+                    let command = ForwarderCommand::SetInputEnabled(enabled);
+                    out.machine().push(Effect::Forwarder(command));
+                }
+                changed
+            }
             IoKind::AudioOutput => {
                 let changed =
                     std::mem::replace(&mut self.session.outputs.audio_enabled, enabled) != enabled;
@@ -291,12 +301,16 @@ impl Driver {
     }
 
     /// `_commit_user_turn`'s "flush the stt by pushing silence", `ceil(duration / 0.2)` frames.
-    /// Silent before any audio.
-    pub(crate) fn flush_stt_with_silence(&self, seconds: f64) {
-        if let Some(frames) = self.input.push_stt_silence(seconds) {
-            // `&self` from a command handler with no cycle.
-            self.journal(Step::Turn(TurnStep::SttFlushed { frames }));
+    /// Silent before any audio or with no STT leg.
+    pub(crate) fn flush_stt_with_silence(&self, seconds: f64, out: &mut Out) {
+        let heard = self.input.first_input_at.is_some();
+        if !heard || !(seconds > 0.0) || !self.input.sinks.contains_key(&AudioChannel::Stt) {
+            return;
         }
+        // `ceil`, so at least the asked duration is flushed.
+        let frames = (seconds / 0.2).ceil() as u32;
+        out.machine().push(Effect::Forwarder(ForwarderCommand::FlushSttWithSilence { frames }));
+        out.trace(TurnStep::SttFlushed { frames });
     }
 
     /// `VoiceActivityVideoSampler`'s rate gate (faster while the user speaks). Rejected frames are

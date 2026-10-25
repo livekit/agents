@@ -531,7 +531,9 @@ impl Driver {
         let realtime_turn_detection = self.activity.rt_session.as_ref().is_some_and(|s| {
             let caps = s.capabilities;
             caps.turn_detection
-                && !(caps.can_disable_turn_detection && (stt_enabled || self.input.has_vad()))
+                && !(caps.can_disable_turn_detection
+                    && (stt_enabled
+                        || self.input.sinks.contains_key(&crate::audio::AudioChannel::Vad)))
         });
         if realtime_turn_detection && trigger != AudioInterruptTrigger::ServerOnset {
             return Err(R::RealtimeTurnDetection);

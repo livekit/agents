@@ -916,7 +916,7 @@ impl Driver {
             .note_resolved_mode(resolved, self.session.config.effective.turn.detection);
         let side = SessionSide {
             stt: self.activity.audio_recognition.stt_enabled(),
-            vad: self.input.has_vad(),
+            vad: self.input.sinks.contains_key(&crate::audio::AudioChannel::Vad),
             detection: self.session.config.effective.turn.detection,
             streaming_detector: self.session.config.legs.detector
                 == Some(crate::agent_activity::options::DetectorKind::Streaming),

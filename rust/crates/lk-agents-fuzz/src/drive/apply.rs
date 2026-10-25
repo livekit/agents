@@ -775,7 +775,7 @@ impl Run {
 
     async fn await_exit(&mut self) -> bool {
         self.drive(Some(self.budget()), std::future::pending::<()>()).await;
-        let exited = self.driver.is_none();
+        let exited = self.runtime.is_none();
         if exited {
             self.record.enter_phase(Phase::Closed);
         }
@@ -804,27 +804,37 @@ impl Run {
                 value = &mut done => return Some(value),
                 () = std::future::ready(()) => {}
             }
-            let Some(driver) = &mut self.driver else { return None };
-            while let Some(input) = driver.try_next_input() {
-                self.queue.push(input);
+            let Some(runtime) = &mut self.runtime else { return None };
+            while let Ok(event) = runtime.queue.try_recv() {
+                self.queue.push(event);
             }
-            if driver.stopped() {
+            // Frames are not scheduled: each reaches the data plane as it arrives.
+            if !runtime.frames.is_empty() {
+                let now = self.time.read();
+                self.step(|runtime| {
+                    while let Ok(frame) = runtime.frames.try_recv() {
+                        runtime.on_frame(frame, now);
+                    }
+                });
+                continue;
+            }
+            if runtime.driver.stopped() {
                 let undelivered = self.queue.drain();
-                self.step(|driver| driver.finish(undelivered));
-                self.drop_driver();
+                self.step(|runtime| runtime.finish(undelivered));
+                self.drop_runtime();
                 continue;
             }
             let now = self.time.now();
-            let wake_at = driver.wake_at();
+            let wake_at = runtime.driver.wake_at();
             if wake_at.is_some_and(|at| at <= now) {
                 let now = self.time.read();
-                self.step(|driver| driver.handle(Event::Wake, now));
+                self.step(|runtime| runtime.handle(Event::Wake, now));
                 continue;
             }
             match self.queue.next(tasks_runnable()) {
-                Some(Next::Event(input)) => {
+                Some(Next::Event(event)) => {
                     let now = self.time.read();
-                    self.step(|driver| driver.handle(Event::Input(input), now));
+                    self.step(|runtime| runtime.handle(event, now));
                     continue;
                 }
                 Some(Next::Tasks) => {
@@ -837,25 +847,29 @@ impl Run {
                 return None;
             }
             let next = [wake_at, until].into_iter().flatten().min();
-            let settled = driver.settled();
+            let settled = runtime.driver.settled();
             tokio::select! {
                 biased;
                 value = &mut done => return Some(value),
                 () = self.time.wait_until_opt(next) => {}
                 () = settled => {}
-                input = driver.next_input() => match input {
-                    Some(input) => self.queue.push(input),
+                Some(frame) = runtime.frames.recv() => {
+                    let now = self.time.read();
+                    self.step(|runtime| runtime.on_frame(frame, now));
+                }
+                event = runtime.queue.recv() => match event {
+                    Some(event) => self.queue.push(event),
                     None => return None,
                 },
             }
         }
     }
 
-    /// One call into the driver. A panic is a finding about the driver, recorded, and the end of
-    /// it: the driver is dropped.
-    fn step(&mut self, call: impl FnOnce(&mut Driver)) {
-        let Some(driver) = &mut self.driver else { return };
-        let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(driver)));
+    /// One call into the session's cores. A panic is a finding about them, recorded, and the end
+    /// of them: they are dropped.
+    fn step(&mut self, call: impl FnOnce(&mut Runtime)) {
+        let Some(runtime) = &mut self.runtime else { return };
+        let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(runtime)));
         self.settle_answers();
         if let Err(panic) = called {
             let message = panic
@@ -864,7 +878,7 @@ impl Run {
                 .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
                 .unwrap_or_default();
             self.record.set_driver_panic(message);
-            self.drop_driver();
+            self.drop_runtime();
         }
     }
 
@@ -875,9 +889,9 @@ impl Run {
         }
     }
 
-    /// The core is gone, as production drops it: a call it never answered is closed.
-    fn drop_driver(&mut self) {
-        self.driver = None;
+    /// The cores are gone, as production drops them: a call never answered is closed.
+    fn drop_runtime(&mut self) {
+        self.runtime = None;
         self.registry.calls().close();
     }
 

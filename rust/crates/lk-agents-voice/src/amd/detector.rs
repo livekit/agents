@@ -142,11 +142,12 @@ enum SttLeg {
     /// No STT of AMD's own: the session's finals feed the machine.
     None,
     Opening,
-    /// In the leg table's peer row behind `gate`: frames flow while the machine listens. `sink`
-    /// is that row's, for the host's own frames.
+    /// On the forwarder's `Amd` channel as `tap`, behind `gate`: frames flow while the machine
+    /// listens. `sink` is the same stream, for the host's own frames.
     Installed {
         gate: Arc<AtomicBool>,
         sink: Arc<dyn StreamSink<AudioFrame>>,
+        tap: lk_agents_abi::resources::ResourceId,
     },
     /// Cleared; an open that lands now is discarded.
     Done,
@@ -534,10 +535,10 @@ impl AmdSystem {
         let gate = Arc::new(AtomicBool::new(self.machine.as_ref().is_some_and(Amd::listening)));
         let sink: Arc<dyn StreamSink<AudioFrame>> =
             Arc::new(GatedSink { inner: Arc::from(sink), open: Arc::clone(&gate) });
-        self.stt = SttLeg::Installed { gate, sink: Arc::clone(&sink) };
-        let ticket = self.peer.install_audio_tap(sink);
+        let tap = self.peer.install_audio_tap(Arc::clone(&sink));
+        self.stt = SttLeg::Installed { gate, sink, tap };
         self.peer.journal(Step::Input(InputStep::StreamOpened { leg: TAP }));
-        spawn_tap_drain(self.peer.clone(), source, ticket, self.tx.clone());
+        spawn_tap_drain(self.peer.clone(), source, tap, self.tx.clone());
     }
 
     fn discard_tap(&self, source: SttSource) {
@@ -563,29 +564,30 @@ impl AmdSystem {
     /// is out or the machine closed.
     fn sync_tap(&mut self) {
         let over = matches!(self.machine, Some(Amd::Emitted(_) | Amd::Closed(_)));
-        let clear = match &self.stt {
+        let removed = match &self.stt {
             SttLeg::Installed { gate, .. } if self.machine.as_ref().is_some_and(Amd::listening) => {
                 gate.store(true, Ordering::Relaxed);
-                false
+                None
             }
             SttLeg::Installed { .. } | SttLeg::Opening if over => {
-                let installed = matches!(self.stt, SttLeg::Installed { .. });
+                let tap =
+                    if let SttLeg::Installed { tap, .. } = self.stt { Some(tap) } else { None };
                 self.stt = SttLeg::Done;
-                installed
+                tap
             }
-            _ => false,
+            _ => None,
         };
-        if clear {
-            self.peer.clear_audio_tap();
+        if let Some(tap) = removed {
+            self.peer.remove_audio_tap(tap);
         }
     }
 }
 
-/// The tap's drain onto the system's channel: source closed once, row forgotten if still installed.
+/// The tap's drain onto the system's channel: source closed once, tap removed if still installed.
 fn spawn_tap_drain(
     peer: PeerHandle,
     mut source: SttSource,
-    ticket: crate::audio::Ticket,
+    tap: lk_agents_abi::resources::ResourceId,
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
 ) {
     let mut closing = peer.closing.clone();
@@ -608,7 +610,7 @@ fn spawn_tap_drain(
                 None => break ChannelEndCause::Closing,
             }
         };
-        peer.audio_tap_ended(ticket);
+        peer.remove_audio_tap(tap);
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let closed = source.close(deadline).await;
         peer.journal(Step::Input(InputStep::ChannelEnded { leg: TAP, cause }));

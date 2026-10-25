@@ -39,12 +39,12 @@ impl Driver {
         }
         // When audio started flowing, not this event's instant.
         if turn.input_started_at.is_none() {
-            turn.input_started_at = self.input.first_input_at();
+            turn.input_started_at = self.input.first_input_at;
         }
     }
 
     pub(crate) fn on_stt(&mut self, now: Ts, ev: Tagged<SpeechEvent>, out: &mut Out) {
-        let Tagged { open, item: ev } = ev;
+        let Tagged { stream, item: ev } = ev;
         self.anchor_stt_stream(now);
         // `RecognizeStream._metrics_monitor_task`: one `STTMetrics` per usage report.
         if ev.kind == SpeechEventType::RecognitionUsage {
@@ -72,8 +72,8 @@ impl Driver {
         // An item from a stream the row retired is dropped: the reference's `_update_stt` cancels
         // the old consumer, so a swapped-out recogniser's final reaches nothing. Until the new
         // stream lands the old row is the installed one.
-        if self.input.legs().installed_open(AudioChannel::Stt) != Some(open) {
-            out.trace(InputStep::LegItemDiscarded { leg: AudioChannel::Stt.label(), open });
+        if self.input.live_stt != Some(stream) {
+            out.trace(InputStep::LegItemDiscarded { leg: AudioChannel::Stt.label(), stream });
             return;
         }
         // The recogniser's item for the peers (the AMD reads the finals).
@@ -94,7 +94,7 @@ impl Driver {
         let words = ev
             .best_alternative()
             .map_or(0, |a| crate::agent_activity::false_interruption::count_min_words(&a.text));
-        let has_vad = self.input.has_vad();
+        let has_vad = self.input.sinks.contains_key(&AudioChannel::Vad);
         match ev.kind {
             SpeechEventType::FinalTranscript => {
                 self.interrupt_by_audio_activity(
@@ -547,7 +547,7 @@ impl Driver {
         }
         // The reference flushes only when the mic is detached; that fact doesn't reach the driver,
         // so every awaited commit flushes (it is what makes the last final arrive).
-        self.flush_stt_with_silence(stt_flush_duration.as_secs_f64());
+        self.flush_stt_with_silence(stt_flush_duration.as_secs_f64(), out);
     }
 
     pub(crate) fn perform_pending_commit(&mut self, now: Ts, out: &mut Out) {

@@ -34,7 +34,7 @@ use lk_agents_abi::{
 };
 use lk_agents_rtc::RoomEvent;
 use lk_agents_voice::{
-    DriverBuilder, SessionHandle,
+    DriverBuilder, Runtime, SessionHandle,
     agent::TurnEdit,
     agent_activity::DriverConfig,
     agent_activity::false_interruption::InterruptRefusal,
@@ -46,7 +46,7 @@ use lk_agents_voice::{
     agent_activity::scheduling::SpeechId,
     agent_session::{
         ActivityCommand, AgentUpdate, Answer as DriverAnswer, Close, Command, CommitSuperseded,
-        DrainRefused, Driver, DtmfCommand, Event, FillerSource, HandoffRefused, HoldId, HookId,
+        DrainRefused, DtmfCommand, Event, FillerSource, HandoffRefused, HoldId, HookId,
         HookOutcome, HostAudio, HostEvent, HostRecorder, HostVideo, IdleRefused, IvrCommand,
         NewActivity, PreviousActivity, RecorderCommand, SayText, SpeechCommand, TaskCommand,
         TaskEntry, Timebase, ToolUpdate, TurnCommand, effects::Decision,
@@ -362,9 +362,9 @@ pub struct Run {
     /// session layer closes its own.
     sync: Option<Arc<lk_agents_voice::transcription::synchronizer::TranscriptSynchronizer>>,
     session: SessionHandle,
-    /// The session's core, stepped by the run itself: the run owns its queue. `None` once it
+    /// The session's cores, stepped by the run itself: the run owns its queue. `None` once it
     /// finished, or panicked.
-    driver: Option<Driver>,
+    runtime: Option<Runtime>,
     queue: queue::Queue,
     time: Timebase,
     tasks: Arc<Tasks>,

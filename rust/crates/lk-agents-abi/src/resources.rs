@@ -1,13 +1,16 @@
 //! The providers a session uses, by id. The host registers each one when it hands it over and
 //! puts the typed reference in its command: the core decides with the reference (its id and what
 //! the provider said about itself at registration) and names the id in the effects that reach it.
-//! The table resolves an id to the provider for whoever performs those effects.
+//! The table resolves an id to the provider for whoever performs those effects. The microphone and
+//! the audio sinks it feeds are registered the same way, so the data plane names them by id.
 
 use crate::llm::realtime::RealtimeCapabilities;
-use crate::voice::io::{AudioOutput, AudioOutputCapabilities, AudioOutputExt, TextOutput};
+use crate::voice::io::{
+    AudioInput, AudioOutput, AudioOutputCapabilities, AudioOutputExt, TextOutput,
+};
 use crate::{
-    Llm, ProviderId, RealtimeSession, Stt, SttCapabilities, Tts, TtsCapabilities, Vad,
-    VadCapabilities,
+    AudioFrame, Llm, ProviderId, RealtimeSession, StreamSink, Stt, SttCapabilities, Tts,
+    TtsCapabilities, Vad, VadCapabilities,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -76,6 +79,8 @@ enum Resource {
     Realtime(Arc<dyn RealtimeSession>),
     AudioOutput(Arc<dyn AudioOutput>),
     TextOutput(Arc<dyn TextOutput>),
+    AudioInput(Arc<dyn AudioInput>),
+    AudioSink(Arc<dyn StreamSink<AudioFrame>>),
 }
 
 #[derive(Default)]
@@ -158,6 +163,23 @@ impl Resources {
         self.get(id, |r| if let Resource::TextOutput(o) = r { Some(Arc::clone(o)) } else { None })
     }
 
+    pub fn register_audio_input(&self, input: Arc<dyn AudioInput>) -> ResourceId {
+        self.insert(Resource::AudioInput(input))
+    }
+
+    pub fn audio_input(&self, id: ResourceId) -> Option<Arc<dyn AudioInput>> {
+        self.get(id, |r| if let Resource::AudioInput(i) = r { Some(Arc::clone(i)) } else { None })
+    }
+
+    /// A stream's input side the microphone feeds: an STT, VAD or detector stream.
+    pub fn register_audio_sink(&self, sink: Arc<dyn StreamSink<AudioFrame>>) -> ResourceId {
+        self.insert(Resource::AudioSink(sink))
+    }
+
+    pub fn audio_sink(&self, id: ResourceId) -> Option<Arc<dyn StreamSink<AudioFrame>>> {
+        self.get(id, |r| if let Resource::AudioSink(s) = r { Some(Arc::clone(s)) } else { None })
+    }
+
     pub fn stt(&self, id: ResourceId) -> Option<Arc<dyn Stt>> {
         self.get(id, |r| if let Resource::Stt(s) = r { Some(Arc::clone(s)) } else { None })
     }
@@ -181,7 +203,13 @@ impl Resources {
             Some(Resource::Vad(v)) => v.prewarm(),
             Some(Resource::Llm(l)) => l.prewarm(),
             Some(Resource::Tts(t)) => t.prewarm(),
-            Some(Resource::Realtime(_) | Resource::AudioOutput(_) | Resource::TextOutput(_))
+            Some(
+                Resource::Realtime(_)
+                | Resource::AudioOutput(_)
+                | Resource::TextOutput(_)
+                | Resource::AudioInput(_)
+                | Resource::AudioSink(_),
+            )
             | None => {}
         }
     }

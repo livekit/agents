@@ -127,18 +127,18 @@ impl SessionApi {
             room_io.start();
             builder.room_io_events = room_io.events();
 
-            let (mut driver, handle) = builder.start().await?;
+            let (mut runtime, handle) = builder.start().await?;
             let SessionHandle { api, events, answers, trace, peer, ivr_detection } = handle;
             // The IVR navigator's task, subscribed before the opening cycle.
             start_ivr(&peer, ivr_detection);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
             // `start()` sees `listening` dispatched first.
-            driver.open(time.read());
+            runtime.driver.open(time.read());
             let (opening_tx, opening_rx) = tokio::sync::oneshot::channel();
             let opening = Opening { left: events.len(), delivered: Some(opening_tx) };
 
             let mut tasks = Vec::new();
-            tasks.push(spawner.spawn_unboxed(async move { driver.run().await }));
+            tasks.push(spawner.spawn_unboxed(async move { runtime.run().await }));
             let calls = Calls::default();
             tasks.push(spawner.spawn_unboxed(calls.clone().pump(answers)));
             // Drained whether or not anybody listens: the queue is unbounded.

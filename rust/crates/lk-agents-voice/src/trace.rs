@@ -405,7 +405,7 @@ pub enum PlayoutStep {
         vad_real: bool,
         amd_real: bool,
     },
-    /// Silence frames the pump substituted on `leg`, journalled at the gate publish that changes the
+    /// Silence frames the forwarder substituted on `leg`, reported at the gate change that ends the
     /// verdict.
     GateSilenced {
         leg: crate::audio::AudioChannel,
@@ -450,7 +450,7 @@ pub enum InputStep {
     /// cancels the old consumer at `_update_stt`.
     LegItemDiscarded {
         leg: &'static str,
-        open: u32,
+        stream: lk_agents_abi::resources::ResourceId,
     },
     ChannelEnded {
         leg: &'static str,

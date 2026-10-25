@@ -129,7 +129,7 @@ impl Run {
             Some((mic, (registry.new_mic(), frames)))
         };
         let resources = lk_agents_abi::resources::Resources::default();
-        let (mut driver, session) = DriverBuilder {
+        let (mut runtime, session) = DriverBuilder {
             resources: resources.clone(),
             time: time.clone(),
             spawner: tasks.clone(),
@@ -229,14 +229,14 @@ impl Run {
             let _ = amd.input(AmdIn::Start(AmdStart::DetectionTimer));
             let _ = amd.input(AmdIn::Start(AmdStart::Listening));
         }
-        driver.open(time.read());
+        runtime.driver.open(time.read());
         let mut run = Run {
             sync,
             room: room_tx,
             room_io: room_io_tx,
             session,
             resources: resources.clone(),
-            driver: Some(driver),
+            runtime: Some(runtime),
             queue: super::queue::Queue::new(schedule, policy),
             time,
             tasks,
