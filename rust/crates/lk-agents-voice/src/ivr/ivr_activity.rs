@@ -1,7 +1,6 @@
-use crate::agent_session::effects::TurnTimer;
 use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap};
 use crate::events::SessionEvent;
-use crate::trace::{CoreStep, DetectorStep, IvrLifecycle, Step};
+use crate::trace::{CoreStep, DetectorStep, IvrLifecycle, Step, TimerName};
 use lk_agents_abi::voice::events::{AgentState, UserState};
 use lk_agents_abi::{SpawnerExt, Ts};
 use std::collections::BTreeMap;
@@ -328,7 +327,7 @@ impl IvrSystem {
                 let at = now.saturating_add(nav.max_silence);
                 self.deadline = Some(at);
                 self.peer
-                    .journal(Step::Core(CoreStep::TimerArmed { timer: TurnTimer::IvrSilence, at }));
+                    .journal(Step::Core(CoreStep::TimerArmed { timer: TimerName::IvrSilence, at }));
             }
             (false, true) => self.cancel_silence(),
             (true, true) | (false, false) => {}
@@ -337,7 +336,7 @@ impl IvrSystem {
 
     fn cancel_silence(&mut self) {
         self.deadline = None;
-        self.peer.journal(Step::Core(CoreStep::TimerCancelled(TurnTimer::IvrSilence)));
+        self.peer.journal(Step::Core(CoreStep::TimerCancelled(TimerName::IvrSilence)));
     }
 
     /// The countdown elapsed: `_on_silence_detected`.
@@ -345,7 +344,7 @@ impl IvrSystem {
         if self.deadline.take().is_none() {
             return;
         }
-        self.peer.journal(Step::Core(CoreStep::TimerFired(TurnTimer::IvrSilence, now)));
+        self.peer.journal(Step::Core(CoreStep::TimerFired(TimerName::IvrSilence, now)));
         self.reply(IvrReplyOrigin::Silence, true);
     }
 

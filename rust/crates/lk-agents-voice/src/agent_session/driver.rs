@@ -7,7 +7,7 @@ use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{
     Answer, Close, Command, HostRecorder, IvrCommand, Origin, RequestId, Sent,
 };
-use crate::agent_session::effects::{Out, TurnTimer};
+use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::Now;
 use crate::audio::ChannelEnd;
@@ -248,7 +248,7 @@ pub struct Driver {
     pub(crate) input: crate::io::AgentInput,
     /// Machines never see it; [`Out`] carries it for them.
     pub(crate) current: FrameId,
-    pub(crate) timers: TimerSet<TurnTimer>,
+    pub(crate) timers: TimerSet<Timer>,
     /// What the spawned tasks share with the loop, the session clock among it.
     pub(crate) shared: Arc<SessionShared>,
     pub(crate) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
@@ -377,21 +377,21 @@ impl Driver {
     /// when a watched task is already due.
     pub fn wake_at(&self) -> Option<Ts> {
         let task = self.task_due().map(|_| self.step.now);
-        [self.next_deadline(), task].into_iter().flatten().min()
+        [self.timers.next_deadline(), task].into_iter().flatten().min()
     }
 
-    fn next_deadline(&self) -> Option<Ts> {
-        [
-            self.timers.next_deadline(),
-            self.activity.speech_scheduler.next_deadline(),
-            self.activity.pending_turn.as_ref().map(|p| p.deadline),
-            self.session.close_phase().and_then(super::ClosePhase::deadline),
-            self.activity.audio_recognition.commit_deadline(),
-            self.activity.hooks.next_deadline(),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+    /// Whether `timer` is armed, this cycle's own arms and cancels counted.
+    pub(crate) fn armed(&self, timer: Timer, out: &mut Out) -> bool {
+        out.arms(timer).unwrap_or_else(|| self.timers.is_armed(timer))
+    }
+
+    /// Cancels `timer` if it is armed: `true` when it was.
+    pub(crate) fn disarm(&self, timer: Timer, out: &mut Out) -> bool {
+        let armed = self.armed(timer, out);
+        if armed {
+            out.machine().cancel(timer);
+        }
+        armed
     }
 
     /// The innermost task whose settle the loop has not seen: its handle settled, or the speech
@@ -412,7 +412,7 @@ impl Driver {
         let mut out = self.out();
         match input {
             None => {
-                if self.next_deadline().is_some_and(|at| at <= now) {
+                if self.timers.next_deadline().is_some_and(|at| at <= now) {
                     self.on_timers(now, &mut out);
                 } else if let Some(task) = self.task_due() {
                     self.on_task_wake(now, task, &mut out);
@@ -575,70 +575,81 @@ impl Driver {
         }
     }
 
+    /// The next timer due by `now` that `pick` accepts, fired. One an earlier fire of this step
+    /// cancelled or moved is not due: its cancel effect runs after the step, and asyncio's
+    /// `_run_once` likewise skips a handle cancelled earlier in the same tick.
+    pub(crate) fn pop_due(
+        &mut self,
+        now: Ts,
+        out: &mut Out,
+        pick: impl Fn(Timer) -> bool,
+    ) -> Option<Timer> {
+        for touched in out.timers_touched() {
+            self.timers.cancel(touched);
+        }
+        let timer = self.timers.pop_due_where(now, pick)?;
+        out.trace(CoreStep::TimerFired(timer.into(), now));
+        Some(timer)
+    }
+
+    /// Every due timer but the scheduler's, which the scheduling pass fires wherever it runs.
     pub(super) fn on_timers(&mut self, now: Ts, out: &mut Out) {
-        // The close's drain bound. The edge cancels every timer, so none fires in its instant.
-        if self.close_tick(now, out) {
-            return;
-        }
-        // `commit_user_turn`'s `transcript_timeout`: the commit promotes a held interim.
-        if self.activity.audio_recognition.commit_deadline().is_some_and(|at| at <= now) {
-            self.perform_pending_commit(now, out);
-        }
-        // The end-of-turn hook's bound: the turn proceeds with no edits, once.
-        if self.activity.pending_turn.as_ref().is_some_and(|p| p.deadline <= now)
-            && let Some(pending) = self.activity.pending_turn.take()
-        {
-            if let Some(hook) = pending.hook {
-                self.activity.hooks.finish(hook);
-                out.trace(HandoffStep::HookFinished {
-                    hook,
-                    kind: crate::agent_session::HookKind::OnUserTurnCompleted,
-                    how: crate::trace::HookEnd::TimedOut,
-                });
-            }
-            self.finish_turn(now, pending.finished(now), Vec::new(), out);
-            self.pump_schedule(now, out);
-        }
-        self.expire_hooks(now, out);
-        loop {
-            // Disarm deadlines an earlier fire of this pass cancelled or moved: the cancel effect
-            // runs after the pass. asyncio's `_run_once` likewise skips a handle cancelled earlier
-            // in the same tick.
-            for touched in out.timers_touched() {
-                self.timers.cancel(touched);
-            }
-            let Some(timer) = self.timers.pop_due(now) else { break };
-            out.trace(CoreStep::TimerFired(timer, now));
+        let pick = |t| !matches!(t, Timer::InterruptionTimeout(_) | Timer::ConsecutiveSpeechDelay);
+        while let Some(timer) = self.pop_due(now, out, pick) {
             match timer {
-                // `PausedSpeech` owns this one; every other `TurnTimer` is the turn machine's.
-                TurnTimer::FalseInterruption => self.on_false_interruption_timeout(now, out),
+                // A close that moved on ends the pass: the edge cancels the turn's timers, and
+                // whatever else is due fires on the next wake, after the phase's effects.
+                Timer::Close => {
+                    if self.close_tick(now, out) {
+                        return;
+                    }
+                }
+                Timer::Commit => self.perform_pending_commit(now, out),
+                // The turn proceeds with no edits, once.
+                Timer::UserTurnCompleted => {
+                    if let Some(pending) = self.activity.pending_turn.take() {
+                        if let Some(hook) = pending.hook {
+                            self.activity.hooks.finish(hook);
+                            out.trace(HandoffStep::HookFinished {
+                                hook,
+                                kind: crate::agent_session::HookKind::OnUserTurnCompleted,
+                                how: crate::trace::HookEnd::TimedOut,
+                            });
+                        }
+                        self.finish_turn(now, pending.finished(now), Vec::new(), out);
+                        self.pump_schedule(now, out);
+                    }
+                }
+                Timer::Hook(id) => self.hook_timed_out(now, id, out),
+                // `PausedSpeech` owns this one.
+                Timer::FalseInterruption => self.on_false_interruption_timeout(now, out),
                 // `_on_aec_warmup_expired`: the one place `aec_warmup_armed` goes back to `false`
                 // before close.
-                TurnTimer::AecWarmup => {
+                Timer::AecWarmup => {
                     let closing = self.session.closing_past_edge();
                     self.session.aec.expire(closing);
                 }
-                TurnTimer::UserAway => {
+                Timer::UserAway => {
                     out.machine().append(self.session.states.on_user_away(now));
                 }
-                TurnTimer::RecorderFlush => self.flush_recorder(now, true, out),
-                // A peer's deadlines, fired on the peer's own set. Never here.
-                TurnTimer::Amd(_) | TurnTimer::IvrSilence => {}
-                TurnTimer::KeytermTimeout => self.on_keyterm_timeout(now, out),
-                TurnTimer::DtmfDebounce => {
+                Timer::RecorderFlush => self.flush_recorder(now, true, out),
+                Timer::KeytermTimeout => self.on_keyterm_timeout(now, out),
+                Timer::DtmfDebounce => {
                     self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Debounced, out)
                 }
                 // A realtime request the server never answered: the machine settles it.
-                TurnTimer::RealtimeRequest(key) => self.realtime_request_timed_out(key, out),
-                TurnTimer::Filler(id) => self.on_filler_timer(now, id, out),
-                TurnTimer::EotPredictionTimeout
-                | TurnTimer::EndpointingDelay
-                | TurnTimer::TranscriptionTimeout
-                | TurnTimer::BackchannelBoundary
-                | TurnTimer::UserTurnDuration => {
+                Timer::RealtimeRequest(key) => self.realtime_request_timed_out(key, out),
+                Timer::Filler(id) => self.on_filler_timer(now, id, out),
+                Timer::EotPredictionTimeout
+                | Timer::EndpointingDelay
+                | Timer::TranscriptionTimeout
+                | Timer::BackchannelBoundary
+                | Timer::UserTurnDuration => {
                     let eff = self.activity.audio_recognition.on_timer(now, timer);
                     out.machine().append(eff);
                 }
+                // Fired by the scheduling pass.
+                Timer::InterruptionTimeout(_) | Timer::ConsecutiveSpeechDelay => {}
             }
         }
     }

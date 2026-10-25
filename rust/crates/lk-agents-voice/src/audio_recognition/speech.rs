@@ -7,7 +7,7 @@ use super::{
     MIN_SILENCE_DURATION, NON_SPECIFIC_LANGUAGE_CODES, OverlapVerdict, Phase, Prediction,
     ServerSpeech, Start, TurnDetectionMode, user_transcript,
 };
-use crate::agent_session::effects::{Decision, Effect, Effects, ProviderCall, TurnTimer};
+use crate::agent_session::effects::{Decision, Effect, Effects, ProviderCall, Timer};
 use crate::events::{
     EndOfSpeechEvent, PreemptiveGenerationEvent, SessionEvent, StartOfSpeechEvent,
 };
@@ -498,7 +498,7 @@ impl AudioRecognition {
         {
             eff.append(self.cancel_backchannel_boundary());
             eff.append(self.overlap.step(In::Boundary { armed: true }).1);
-            eff.arm(TurnTimer::BackchannelBoundary, now.saturating_add(start_cooldown));
+            eff.arm(Timer::BackchannelBoundary, now.saturating_add(start_cooldown));
         }
 
         if self.adaptive_interruption_active() {

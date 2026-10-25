@@ -5,7 +5,7 @@ use crate::agent::TurnEdit;
 use crate::agent_activity::drain::DrainEvent;
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
-use crate::agent_session::effects::Out;
+use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::signals::{Cx, PauseResult, Signal};
 use crate::agent_session::{
     AgentUpdate, Answer, Driver, HandoffRefused, HookCall, HookId, HookKind, NewActivity,
@@ -381,6 +381,7 @@ impl Driver {
         // All abandoned before any is let go: the run reads what is still pending.
         let pending = self.activity.hooks.take_all();
         for &(id, kind) in &pending {
+            self.disarm(Timer::Hook(id), out);
             let how = HookEnd::Abandoned;
             out.trace(HandoffStep::HookFinished { hook: id, kind, how });
             self.run_release(Owned::Hook(id), out);

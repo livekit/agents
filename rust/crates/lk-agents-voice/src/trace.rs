@@ -1,6 +1,6 @@
 use crate::agent_activity::false_interruption::InterruptRefusal;
 use crate::agent_activity::scheduling::{PreemptiveVerdict, SpeechId};
-use crate::agent_session::effects::TurnTimer;
+use crate::agent_session::effects::Timer;
 pub use crate::agent_session::effects::{GateCause, GateOp};
 use crate::audio_recognition::CommitVerdict;
 use crate::events::SessionEvent;
@@ -63,12 +63,12 @@ pub enum CoreStep {
         kind: &'static str,
     },
     TimerArmed {
-        timer: crate::agent_session::effects::TurnTimer,
+        timer: TimerName,
         at: lk_agents_abi::Ts,
     },
-    TimerCancelled(crate::agent_session::effects::TurnTimer),
+    TimerCancelled(TimerName),
     /// Recorded as the cycle that performs it begins.
-    TimerFired(TurnTimer, Ts),
+    TimerFired(TimerName, Ts),
     /// The whole configuration in effect after a layer of the option stack was applied. What a
     /// re-resolution changed is the diff against the previous `ConfigApplied`. Boxed: largest, rarest.
     ConfigApplied {
@@ -80,6 +80,22 @@ pub enum CoreStep {
     },
     /// Never silent.
     PortFailure(&'static str),
+}
+
+/// A deadline as the journal names it: the session's, or one the AMD or the IVR navigator keeps
+/// on its own loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TimerName {
+    Session(Timer),
+    Amd(crate::amd::classifier::AmdTimer),
+    /// `IVRActivity._debounced_silence`.
+    IvrSilence,
+}
+
+impl From<Timer> for TimerName {
+    fn from(timer: Timer) -> Self {
+        TimerName::Session(timer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]

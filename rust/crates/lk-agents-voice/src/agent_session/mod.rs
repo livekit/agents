@@ -4,7 +4,7 @@
 
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::effects::{Effects, TurnTimer};
+use crate::agent_session::effects::{Effects, Timer};
 use crate::audio::LaunchGate;
 use crate::generation::GenEvent;
 use crate::io::RealtimeAudioNode;
@@ -256,7 +256,7 @@ impl AecWarmup {
     fn on_speaking(&mut self, now: Ts, audio_output_ready: bool, eff: &mut Effects) {
         if !self.remaining.is_zero() && !self.armed && audio_output_ready {
             self.armed = true;
-            eff.arm(TurnTimer::AecWarmup, now.saturating_add(self.remaining));
+            eff.arm(Timer::AecWarmup, now.saturating_add(self.remaining));
         }
     }
 
@@ -279,7 +279,7 @@ impl AecWarmup {
         self.remaining = duration.unwrap_or(Duration::ZERO);
         if duration.is_none() && self.armed {
             self.armed = false;
-            eff.cancel(TurnTimer::AecWarmup);
+            eff.cancel(Timer::AecWarmup);
         }
         eff
     }
@@ -497,7 +497,7 @@ pub struct ActivitySnapshot {
 #[cfg(test)]
 mod label_tests {
     use super::*;
-    use crate::agent_session::effects::{Effect, TimerOp};
+    use crate::agent_session::effects::Effect;
     use crate::events::SessionEvent;
     use lk_agents_abi::Ts;
 
@@ -512,7 +512,7 @@ mod label_tests {
         eff.as_slice()
             .iter()
             .filter_map(|e| match e {
-                Effect::Timer(TimerOp::Arm(TurnTimer::AecWarmup, at)) => Some(*at),
+                Effect::Arm(Timer::AecWarmup, at) => Some(*at),
                 _ => None,
             })
             .collect()
@@ -566,7 +566,7 @@ mod label_tests {
         assert!(s.aec.armed());
 
         let eff = s.aec.set(None);
-        assert_eq!(eff.as_slice(), &[Effect::cancel(TurnTimer::AecWarmup)]);
+        assert_eq!(eff.as_slice(), &[Effect::Cancel(Timer::AecWarmup)]);
         assert!(!s.aec.armed());
         assert_eq!(s.aec.remaining(), Duration::ZERO);
 

@@ -1,4 +1,4 @@
-use crate::agent_session::effects::{Out, TurnTimer};
+use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::{Driver, SessionShared};
 use crate::generation::GenEvent;
 use crate::trace::{DetectorName, DetectorStep, InputStep};
@@ -817,7 +817,7 @@ impl Driver {
     ) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
         if slot.answered(req) {
-            out.machine().cancel(TurnTimer::KeytermTimeout);
+            out.machine().cancel(Timer::KeytermTimeout);
         }
         // Rides the session stream like the reply LLM's metrics, with no speech.
         if let Some(m) = metrics {
@@ -860,7 +860,7 @@ impl Driver {
                     if let Some(slot) = self.session.keyterms.as_mut() {
                         slot.cancel(req);
                     }
-                    out.machine().cancel(TurnTimer::KeytermTimeout);
+                    out.machine().cancel(Timer::KeytermTimeout);
                 }
             }
         }
@@ -883,7 +883,7 @@ impl Driver {
             return;
         };
         out.trace(InputStep::LegRequested { leg: DetectorName::Keyterms, req });
-        out.machine().arm(TurnTimer::KeytermTimeout, now.saturating_add(slot.timeout()));
+        out.machine().arm(Timer::KeytermTimeout, now.saturating_add(slot.timeout()));
         let request = slot.request(prompt, self.step.wall());
         let shared = Arc::clone(&self.shared);
         let handle =

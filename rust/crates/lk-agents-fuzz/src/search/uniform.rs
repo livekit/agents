@@ -9,10 +9,7 @@ use std::collections::BTreeMap;
 
 use fastrand::Rng;
 use lk_agents_abi::Ts;
-use lk_agents_voice::{
-    agent_session::effects::TurnTimer,
-    trace::{CoreStep, Step},
-};
+use lk_agents_voice::trace::{CoreStep, Step, TimerName};
 
 use crate::{
     input::{DELAYS_MS, Input, Millis, RoomIn, Sampler},
@@ -89,7 +86,7 @@ pub fn sample_next(record: &Recording, rng: &mut Rng) -> Option<Input> {
 
 /// A delay that lands just before, on, or just after a deadline the driver still has armed.
 pub fn aim_at_armed_timer(record: &Recording, sampler: &mut Sampler<'_>) -> Option<Millis> {
-    let mut armed: BTreeMap<TurnTimer, Ts> = BTreeMap::new();
+    let mut armed: BTreeMap<TimerName, Ts> = BTreeMap::new();
     for (_, step) in record.journal() {
         match step {
             Step::Core(CoreStep::TimerArmed { timer, at }) => {

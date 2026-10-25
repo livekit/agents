@@ -4,7 +4,7 @@
 
 use crate::agent::TurnEdit;
 use crate::agent_activity::handoff::HandoffEvent;
-use crate::agent_session::effects::Out;
+use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::signals::Signal;
 use crate::agent_session::{Driver, HookCall, HookId, HookKind, HookOutcome, HostEvent};
 use crate::audio_recognition::PendingTurn;
@@ -26,8 +26,6 @@ pub(crate) struct Hooks {
 
 struct Pending {
     kind: HookKind,
-    /// When the driver stops waiting; `None` when nothing waits.
-    deadline: Option<Ts>,
     /// A `DescribeAgent` asked by the driving agent. A tool's handoff blocks the agent whose tool
     /// returned the new one, not one a handoff installs meanwhile (cleared at the swap).
     describing: bool,
@@ -39,10 +37,10 @@ impl Hooks {
         HookId(self.next)
     }
 
-    /// The host was asked `hook`: waited on until `deadline` (`None`: nothing waits).
-    pub(crate) fn wait_for(&mut self, hook: HookId, kind: HookKind, deadline: Option<Ts>) {
+    /// The host was asked `hook`.
+    pub(crate) fn wait_for(&mut self, hook: HookId, kind: HookKind) {
         let describing = kind == HookKind::DescribeAgent;
-        self.pending.insert(hook, Pending { kind, deadline, describing });
+        self.pending.insert(hook, Pending { kind, describing });
     }
 
     /// The callback is answered or given up on: its kind, if it was waited on.
@@ -57,10 +55,6 @@ impl Hooks {
     /// The pending callbacks of one kind, in id order.
     pub(crate) fn pending_of(&self, kind: HookKind) -> Vec<HookId> {
         self.pending.iter().filter(|(_, h)| h.kind == kind).map(|(id, _)| *id).collect()
-    }
-
-    pub(crate) fn next_deadline(&self) -> Option<Ts> {
-        self.pending.values().filter_map(|h| h.deadline).min()
     }
 
     /// A tool's handoff waits for the host to describe the new agent.
@@ -108,8 +102,10 @@ impl Driver {
             out.trace(HandoffStep::HookFinished { hook: id, kind, how: HookEnd::NoHost });
             return false;
         }
-        let deadline = wait.map(|d| now.saturating_add(d));
-        self.activity.hooks.wait_for(id, kind, deadline);
+        self.activity.hooks.wait_for(id, kind);
+        if let Some(wait) = wait {
+            out.machine().arm(Timer::Hook(id), now.saturating_add(wait));
+        }
         // An open run owns the agent's `on_enter` and the describe a tool's handoff waits on.
         match kind {
             HookKind::OnEnter | HookKind::DescribeAgent => self.run_own(Owned::Hook(id), out),
@@ -149,12 +145,8 @@ impl Driver {
             transcript_confidence: info.transcript_confidence,
         };
         if self.issue_hook(now, call, None, out) {
-            self.activity.pending_turn = Some(PendingTurn {
-                info,
-                issued_at: now,
-                deadline: now.saturating_add(bound),
-                hook: Some(id),
-            });
+            self.activity.pending_turn = Some(PendingTurn { info, issued_at: now, hook: Some(id) });
+            out.machine().arm(Timer::UserTurnCompleted, now.saturating_add(bound));
         } else {
             self.finish_turn(now, info, Vec::new(), out);
         }
@@ -184,6 +176,7 @@ impl Driver {
     /// The callback left `pending`, journalled and let go by the open run; `None` if not pending.
     fn finish_hook(&mut self, id: HookId, how: HookEnd, out: &mut Out) -> Option<HookKind> {
         let kind = self.activity.hooks.finish(id)?;
+        self.disarm(Timer::Hook(id), out);
         out.trace(HandoffStep::HookFinished { hook: id, kind, how });
         self.run_release(Owned::Hook(id), out);
         Some(kind)
@@ -248,6 +241,7 @@ impl Driver {
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
+                    self.disarm(Timer::UserTurnCompleted, out);
                     self.finish_turn(now, pending.finished(now), edits, out)
                 }
             }
@@ -293,17 +287,11 @@ impl Driver {
         }
     }
 
-    /// Expired bounds: an unreturned `on_exit` lets the drain go on; an unanswered describe drops
+    /// The bound passed: an unreturned `on_exit` lets the drain go on; an unanswered describe drops
     /// the handoff.
-    pub(crate) fn expire_hooks(&mut self, now: Ts, out: &mut Out) {
-        let due: Vec<_> = (self.activity.hooks.pending.iter())
-            .filter(|(_, h)| h.deadline.is_some_and(|d| d <= now))
-            .map(|(id, _)| *id)
-            .collect();
-        for id in due {
-            if let Some(kind) = self.finish_hook(id, HookEnd::TimedOut, out) {
-                self.hook_ended(now, kind, id, HookOutcome::Failed, out);
-            }
+    pub(crate) fn hook_timed_out(&mut self, now: Ts, id: HookId, out: &mut Out) {
+        if let Some(kind) = self.finish_hook(id, HookEnd::TimedOut, out) {
+            self.hook_ended(now, kind, id, HookOutcome::Failed, out);
         }
     }
 }

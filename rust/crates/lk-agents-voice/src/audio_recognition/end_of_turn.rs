@@ -8,9 +8,7 @@ use super::{
     user_transcript,
 };
 use crate::agent_activity::false_interruption::TurnSettled;
-use crate::agent_session::effects::{
-    Decision, Effect, Effects, FlushReason, ProviderCall, TurnTimer,
-};
+use crate::agent_session::effects::{Decision, Effect, Effects, FlushReason, ProviderCall, Timer};
 use crate::events::{
     AgentBackchannelOpportunityEvent, EotPredictionEvent, SessionEvent, TranscriptionTimeoutEvent,
     UserTurnExceededEvent,
@@ -209,10 +207,10 @@ impl AudioRecognition {
     // --- timers ---------------------------------------------------------------------------------
 
     /// A timer for a phase the machine has left (a fire that raced a cancel) is dropped.
-    pub fn on_timer(&mut self, now: Ts, timer: TurnTimer) -> Effects {
+    pub fn on_timer(&mut self, now: Ts, timer: Timer) -> Effects {
         let mut eff = Effects::new();
         match timer {
-            TurnTimer::EotPredictionTimeout => {
+            Timer::EotPredictionTimeout => {
                 if let Phase::Awaiting { run, req, deadline: Some(_) } = &self.phase {
                     let (run, req) = (*run, *req);
                     self.fired = Some(timer);
@@ -222,14 +220,14 @@ impl AudioRecognition {
                     self.fired = None;
                 }
             }
-            TurnTimer::EndpointingDelay => {
+            Timer::EndpointingDelay => {
                 if let Some((run, speaking)) = self.phase.delay() {
                     self.fired = Some(timer);
                     eff.append(self.commit(now, run, speaking));
                     self.fired = None;
                 }
             }
-            TurnTimer::TranscriptionTimeout => {
+            Timer::TranscriptionTimeout => {
                 self.transcription_timeout_armed = false;
                 // No open turn means nothing was expected; a landed transcript means the timeout
                 // raced it.
@@ -242,24 +240,28 @@ impl AudioRecognition {
                     }));
                 }
             }
-            TurnTimer::BackchannelBoundary => {
+            Timer::BackchannelBoundary => {
                 eff.append(self.overlap.step(In::Boundary { armed: false }).1);
             }
-            TurnTimer::UserTurnDuration => {
+            Timer::UserTurnDuration => {
                 self.turn_limit_timer_armed = false;
                 eff.append(self.fire_user_turn_limit(now));
             }
             // Owned by other machines; the driver routes them directly.
-            TurnTimer::FalseInterruption
-            | TurnTimer::AecWarmup
-            | TurnTimer::UserAway
-            | TurnTimer::Amd(_)
-            | TurnTimer::IvrSilence
-            | TurnTimer::RecorderFlush
-            | TurnTimer::KeytermTimeout
-            | TurnTimer::RealtimeRequest(_)
-            | TurnTimer::Filler(_)
-            | TurnTimer::DtmfDebounce => {}
+            Timer::Close
+            | Timer::Commit
+            | Timer::UserTurnCompleted
+            | Timer::Hook(_)
+            | Timer::FalseInterruption
+            | Timer::AecWarmup
+            | Timer::UserAway
+            | Timer::RecorderFlush
+            | Timer::KeytermTimeout
+            | Timer::RealtimeRequest(_)
+            | Timer::Filler(_)
+            | Timer::DtmfDebounce
+            | Timer::InterruptionTimeout(_)
+            | Timer::ConsecutiveSpeechDelay => {}
         }
         eff
     }
@@ -405,7 +407,7 @@ impl AudioRecognition {
         self.closed = true;
         if self.turn_limit_timer_armed {
             self.turn_limit_timer_armed = false;
-            eff.cancel(TurnTimer::UserTurnDuration);
+            eff.cancel(Timer::UserTurnDuration);
         }
         match self.phase.delay() {
             Some((run, speaking)) if commit => eff.append(self.commit(now, run, speaking)),
@@ -457,7 +459,7 @@ impl AudioRecognition {
         self.turn_tracker.started_at = Some(started_at);
         if let Some(max) = limit.max_duration {
             self.turn_limit_timer_armed = true;
-            eff.arm(TurnTimer::UserTurnDuration, started_at.saturating_add(max));
+            eff.arm(Timer::UserTurnDuration, started_at.saturating_add(max));
         }
         eff
     }
@@ -484,7 +486,7 @@ impl AudioRecognition {
         self.turn_tracker = UserTurnTracker::default();
         if self.turn_limit_timer_armed {
             self.turn_limit_timer_armed = false;
-            eff.cancel(TurnTimer::UserTurnDuration);
+            eff.cancel(Timer::UserTurnDuration);
         }
         eff
     }
@@ -511,7 +513,7 @@ impl AudioRecognition {
         eff.append(self.cancel_transcription_timeout());
         let remaining = timeout.saturating_sub(delay);
         self.transcription_timeout_armed = true;
-        eff.arm(TurnTimer::TranscriptionTimeout, now.saturating_add(remaining));
+        eff.arm(Timer::TranscriptionTimeout, now.saturating_add(remaining));
         eff
     }
 
@@ -519,7 +521,7 @@ impl AudioRecognition {
         let mut eff = Effects::new();
         if self.transcription_timeout_armed {
             self.transcription_timeout_armed = false;
-            eff.cancel(TurnTimer::TranscriptionTimeout);
+            eff.cancel(Timer::TranscriptionTimeout);
         }
         eff
     }
@@ -543,7 +545,7 @@ impl AudioRecognition {
         let mut eff = Effects::new();
         if self.overlap.boundary_armed() {
             eff.append(self.overlap.step(In::Boundary { armed: false }).1);
-            eff.cancel(TurnTimer::BackchannelBoundary);
+            eff.cancel(Timer::BackchannelBoundary);
         }
         eff
     }

@@ -78,17 +78,14 @@ impl Out {
     /// instant it was decided. Called after every transition, so the journal reads in causal
     /// order; `perform` records nothing.
     pub fn absorb(&mut self) {
-        use crate::agent_session::effects::TimerOp;
         for effect in self.machine.take() {
             match &effect {
                 // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
                 Effect::Emit(ev) => self.record(Step::Emitted(ev.journal_form())),
-                Effect::Timer(TimerOp::Arm(t, at)) => {
-                    self.record(Step::Core(CoreStep::TimerArmed { timer: *t, at: *at }))
+                Effect::Arm(t, at) => {
+                    self.record(Step::Core(CoreStep::TimerArmed { timer: (*t).into(), at: *at }))
                 }
-                Effect::Timer(TimerOp::Cancel(t)) => {
-                    self.record(Step::Core(CoreStep::TimerCancelled(*t)))
-                }
+                Effect::Cancel(t) => self.record(Step::Core(CoreStep::TimerCancelled((*t).into()))),
                 Effect::Provider(call) => {
                     self.record(Step::Input(InputStep::ProviderCalled(*call)))
                 }
@@ -150,13 +147,12 @@ impl Out {
     /// The timers a pending `Arm` or `Cancel` of this cycle touches, in order. Timer effects run
     /// after the loop's timer pass, so without this a deadline cancelled by an earlier fire in the
     /// same instant would still be popped (`Driver::on_timers`).
-    pub fn timers_touched(&mut self) -> Vec<crate::agent_session::effects::TurnTimer> {
-        use crate::agent_session::effects::TimerOp;
+    pub fn timers_touched(&mut self) -> Vec<crate::agent_session::effects::Timer> {
         self.absorb();
         self.todo
             .iter()
             .filter_map(|e| match e {
-                Effect::Timer(TimerOp::Arm(t, _) | TimerOp::Cancel(t)) => Some(*t),
+                Effect::Arm(t, _) | Effect::Cancel(t) => Some(*t),
                 Effect::Emit(_)
                 | Effect::Provider(_)
                 | Effect::Detector(_)
@@ -168,13 +164,26 @@ impl Out {
             })
             .collect()
     }
+
+    /// Whether this cycle's last `Arm` or `Cancel` of `timer` arms it; `None` when it touches none.
+    pub fn arms(&mut self, timer: Timer) -> Option<bool> {
+        self.absorb();
+        self.todo.iter().rev().find_map(|e| match e {
+            Effect::Arm(t, _) if *t == timer => Some(true),
+            Effect::Cancel(t) if *t == timer => Some(false),
+            _ => None,
+        })
+    }
 }
 
 /// One ordered list, not per-kind fields: order within and across kinds is inherited from the
 /// reference, where these ran inline in exactly this order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
-    Timer(TimerOp),
+    /// Arming an armed timer *replaces* it ([`TimerSet`](lk_agents_abi::TimerSet)).
+    Arm(Timer, Ts),
+    /// Idempotent: cancelling an unarmed timer is a no-op, so cleanup paths cancel unconditionally.
+    Cancel(Timer),
     /// Buffered because reaching it needs `&mut` on the driver.
     Provider(ProviderCall),
     Emit(SessionEvent),
@@ -190,13 +199,6 @@ pub enum Effect {
         call_id: String,
         runner: crate::tool_executor::RunnerRef,
     },
-}
-
-#[cfg(test)]
-impl Effect {
-    pub fn cancel(timer: TurnTimer) -> Effect {
-        Effect::Timer(TimerOp::Cancel(timer))
-    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -228,12 +230,12 @@ impl Effects {
         self.effects.extend(returned.effects);
     }
 
-    pub fn arm(&mut self, timer: TurnTimer, at: Ts) {
-        self.push(Effect::Timer(TimerOp::Arm(timer, at)));
+    pub fn arm(&mut self, timer: Timer, at: Ts) {
+        self.push(Effect::Arm(timer, at));
     }
 
-    pub fn cancel(&mut self, timer: TurnTimer) {
-        self.push(Effect::Timer(TimerOp::Cancel(timer)));
+    pub fn cancel(&mut self, timer: Timer) {
+        self.push(Effect::Cancel(timer));
     }
 
     pub fn emit(&mut self, ev: SessionEvent) {
@@ -266,18 +268,21 @@ impl Effects {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimerOp {
-    /// Arming an armed timer *replaces* it ([`TimerSet`](lk_agents_abi::TimerSet)).
-    Arm(TurnTimer, Ts),
-    /// Idempotent: cancelling an unarmed timer is a no-op, so cleanup paths cancel unconditionally.
-    Cancel(TurnTimer),
-}
-
+/// Every deadline of the session, fired by the driver's one [`TimerSet`](lk_agents_abi::TimerSet).
 /// `arm` on an armed timer replaces it (the reference's `handle.cancel(); handle =
-/// call_later(..)`).
+/// call_later(..)`). Deadlines due at one instant fire in declaration order: the close's bound,
+/// a waiting commit, the parked turn, the callbacks, then the rest. The scheduler's two, last,
+/// fire in the scheduling pass, wherever it runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TurnTimer {
+pub enum Timer {
+    /// The current close phase's bound.
+    Close,
+    /// `commit_user_turn`'s `transcript_timeout`: the commit promotes a held interim.
+    Commit,
+    /// The end-of-turn hook's bound: the parked turn proceeds with no edits.
+    UserTurnCompleted,
+    /// A callback the driver waits on: past it, the callback counts as failed.
+    Hook(crate::agent_session::HookId),
     /// `audio_recognition._bounce_eou_task`.
     EotPredictionTimeout,
     /// `audio_recognition._bounce_eou_task`.
@@ -295,19 +300,20 @@ pub enum TurnTimer {
     /// From the first speech onset since the agent last spoke; fires `UserTurnExceeded` once per
     /// crossing.
     UserTurnDuration,
-    /// `IVRActivity._debounced_silence`.
-    IvrSilence,
     /// `RecorderIO._write_task`'s 2.5 s.
     RecorderFlush,
     /// `keyterm_detection.timeout`.
     KeytermTimeout,
-    Amd(crate::amd::classifier::AmdTimer),
     /// No `GenerationCreated` (or failure) back yet; on firing it fails with a timeout.
     RealtimeRequest(crate::agent_activity::realtime::RequestKey),
     /// `RunContext.with_filler`.
     Filler(crate::filler_scheduler::FillerId),
     /// Re-armed by every digit, cancelled while either side speaks.
     DtmfDebounce,
+    /// An interrupted speech that never reported its end is released (`SpeechHandle._cancel`).
+    InterruptionTimeout(SpeechId),
+    /// `min_consecutive_speech_delay` ran out.
+    ConsecutiveSpeechDelay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -570,14 +576,14 @@ impl Driver {
     ) {
         use crate::agent_session::effects::{
             AudioInterruptGuard, AudioOp, Decision, DetectorCall as D, Effect as E, GateOp,
-            ProviderCall as P, TimerOp,
+            ProviderCall as P,
         };
         // Journalled already: `Out::absorb` recorded every effect when the machine produced it.
         match effect {
-            E::Timer(TimerOp::Arm(t, at)) => {
+            E::Arm(t, at) => {
                 self.timers.arm(t, at);
             }
-            E::Timer(TimerOp::Cancel(t)) => {
+            E::Cancel(t) => {
                 self.timers.cancel(t);
             }
             // Not traced here: `Out::absorb` journalled it where it was decided.

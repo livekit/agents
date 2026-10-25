@@ -6,7 +6,7 @@ use std::time::Duration;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
 
-use super::effects::{Effects, TurnTimer};
+use super::effects::{Effects, Timer};
 use super::{Span, SpanEnded, SpanStarted};
 use crate::events::SessionEvent;
 
@@ -18,7 +18,7 @@ pub(crate) struct AgentUserState {
     user: UserState,
     /// `timers.user_away`: `None` is no away timer at all.
     away_timeout: Option<Duration>,
-    /// Whether `TurnTimer::UserAway` is armed, so a restart cancels only a timer that exists.
+    /// Whether `Timer::UserAway` is armed, so a restart cancels only a timer that exists.
     away_armed: bool,
     /// While one runs the away timer stays off (#6883).
     running_tool_calls: u32,
@@ -125,14 +125,14 @@ impl AgentUserState {
         }
         if self.away_armed {
             self.away_armed = false;
-            eff.cancel(TurnTimer::UserAway);
+            eff.cancel(Timer::UserAway);
         }
         let Some(timeout) = self.away_timeout else { return eff };
         if !self.both_listening() || self.running_tool_calls > 0 {
             return eff;
         }
         self.away_armed = true;
-        eff.arm(TurnTimer::UserAway, now.saturating_add(timeout));
+        eff.arm(Timer::UserAway, now.saturating_add(timeout));
         eff
     }
 
