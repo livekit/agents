@@ -2,7 +2,9 @@
 
 What `lk-agents-fuzz` covers of the Rust voice driver (`lk-agents-voice`), and what it does not.
 Every number is measured, not claimed: a 1,024-seed survey and `cargo llvm-cov` over the same
-suite, at `56e265f06` (2026-10-25). Written by hand for now; section 12 says how to re-measure
+suite. Sections 7 to 10 and the line counts of section 6 were re-measured at `049e7e332`
+(2026-10-25), after a seed became the whole of its run; sections 2 to 5 and the appendix are
+still the measurement at `56e265f06`. Written by hand for now; section 12 says how to re-measure
 and what makes it generated.
 
 Scope: the driver only. The Python voice pipeline, threads and lanes, the A2A door and the real
@@ -485,7 +487,7 @@ The fuzzer builds the driver with the internal `DriverBuilder` (`src/drive/start
 sends each input as a driver `Command` (`src/drive/apply.rs:515`). The public `SessionApi`
 (`lk-agents-voice/src/agent_session/api.rs`, `api/host.rs`) is what Python and Node call: it
 parses arguments, validates them, builds the command and owns room I/O. None of that runs
-under the fuzzer: 1,296 lines at 0%, plus `room_io/` at 2% (only `link.rs`).
+under the fuzzer: 1,275 lines at 0%, plus `room_io/` at 2% (only `link.rs`).
 
 There is no principled reason. `TEST_STRATEGY.md` says the opposite ("actual public API
 payloads are the inputs to the system under test", "do not bypass the real interface"). The
@@ -521,32 +523,40 @@ section 12 says how it will be measured.
 | one generator, randomness flat over seven decades | 1,024 | 18 s | 159 | 3,752 | 11 of 520 |
 | **the same, plus barge-ins anywhere, backchannels, patience, the call's end as its own dial (kept)** | **1,024** | **25 s** | **159** | **4,499** | **8 of 520** |
 
-Re-measured at `56e265f06`, the kept search reaches 159 variants and 4,322 edges in 38 s, with
-no developer cell never reached of 480 (the start column gone, section 2.2). The edges fell from
-4,499 across the core's rewrite since `edc90fe24` (synchronous step, providers and outputs by
-id, and the queue policy of section 8); the causes were not measured apart.
+Re-measured at `049e7e332`, after a seed became the whole of its run (setup drawn from the seed
+alone, no learning across seeds), the kept search reaches 158 variants and 4,291 edges in 23 s
+on seeds 0 to 1023, with 2 developer cells never reached of 540 (the 45 developer and lifecycle
+rows of section 4, the start column gone, section 2.2): `FillerStop` and `ReleaseIdleHold`
+during the turn hook. At `56e265f06` it was 159 variants, 4,322 edges in 38 s and none never
+reached. `Emitted::BackchannelConfirmed`, reached by the 1e-1 to 1 decade then, is not reached
+in this window. The edges fell from 4,499 across the core's rewrite since `edc90fe24`
+(synchronous step, providers and outputs by id, and the queue policy of section 8); the causes
+were not measured apart.
 
-By decade of randomness, at 1,024 seeds (`56e265f06`):
+By decade of randomness, at 1,024 seeds (`049e7e332`):
 
 | Uniform moves per conversation move | Seeds | Wall | Variants | Edges | Cells | Reached only here |
 |---|--:|--:|--:|--:|--:|---|
-| 1e-4 to 1e-3 | 143 | 9.9 s | 158 | 1,945 | 703 | |
-| 1e-3 to 1e-2 | 152 | 9.0 s | 155 | 2,075 | 779 | |
-| 1e-2 to 1e-1 | 146 | 6.4 s | 155 | 2,241 | 830 | |
-| 1e-1 to 1 | 143 | 2.5 s | 156 | 2,643 | 873 | `Emitted::BackchannelConfirmed` |
-| 1 to 10 | 148 | 2.2 s | 153 | 2,609 | 869 | |
-| 10 to 100 | 149 | 3.3 s | 150 | 2,459 | 882 | |
-| 100 to 1,000 | 143 | 4.4 s | 153 | 2,748 | 899 | |
+| 1e-4 to 1e-3 | 143 | 5.0 s | 150 | 1,962 | 649 | |
+| 1e-3 to 1e-2 | 152 | 5.2 s | 153 | 2,020 | 719 | |
+| 1e-2 to 1e-1 | 146 | 3.8 s | 158 | 2,372 | 810 | |
+| 1e-1 to 1 | 143 | 1.6 s | 152 | 2,539 | 836 | |
+| 1 to 10 | 148 | 1.3 s | 151 | 2,479 | 821 | |
+| 10 to 100 | 149 | 1.9 s | 152 | 2,479 | 797 | |
+| 100 to 1,000 | 143 | 3.6 s | 154 | 2,857 | 870 | |
 
-By queue policy (section 8), drawn per seed: `Arrival` 508 seeds, 159 variants, 3,558 edges, 15
-findings; `Pos` 516 seeds, 158 variants, 3,794 edges, 16 findings.
+By queue policy (section 8), drawn per seed: `Arrival` 508 seeds, 153 variants, 3,508 edges, 14
+findings; `Pos` 516 seeds, 158 variants, 3,747 edges, 15 findings. Five variants are reached
+only under `Pos`: `Decided::InterruptByAudioActivity`, `Emitted::OverlapInterruption`,
+`Input::LegItemDiscarded`, `Tool::ReplyDone`, `Tool::ReplyScheduled`.
 
 What this says:
 
 - Neither end is enough. Before the person listened properly, only near-pure conversations
   reached barge-ins and backchannels; now every decade does, and the middle and the uniform end
-  reach the most edges and (call x phase) cells. Every decade adds something, so no decade is
-  dropped and none is weighted.
+  reach the most edges and (call x phase) cells. At `56e265f06` one decade reached a variant no
+  other did; at `049e7e332` none does, but the decades still differ in edges and cells, so no
+  decade is dropped and none is weighted.
 - Ending the call was the biggest waste: with random moves allowed to close it, half the runs
   ended early (median at input 386 of 1,500), almost all by a random `Close` or room event. With
   the call's end as its own dial and random moves never ending it, 324 of 1,024 end early: 135
@@ -570,9 +580,10 @@ Lessons taken from agent-store's simulation and gosim:
   Here: randomness per seed.
 - **A coin per kind of trouble** (agent-store's swarm hunt), so adding a kind never moves
   another's draw.
-- **Fail a livelock by name** (gosim's "no progress" watchdog): a run whose journal grows by
-  100,000 steps without virtual time moving panics with that message, and the panic is a
-  finding. Before, such a run hung the whole campaign.
+- **Fail a livelock by name** (gosim's "no progress" watchdog): a run that takes
+  `NO_PROGRESS_STEPS` (10,000) steps at one virtual instant, in the journal or in its own loop,
+  is stopped there and reported as `virtual_time_advances`. Before, such a run hung the whole
+  campaign.
 - **Judge by known bugs, with the protocol fixed before the run** (gosim's benchmark,
   agent-store's held-out findings): not yet done here; section 12.
 - **Bursts and same-instant orderings** (gosim's scheduling policy): the case owns the driver's
@@ -609,23 +620,23 @@ Each is a choice the search makes for every run that a real call does not.
 
 ## 9. How to read the numbers honestly
 
-- A journal variant or a code line reached is not a guarantee checked. 159 of 160 journal
-  variants are reached (missing: `Tool::SessionToolsExtended`),
+- A journal variant or a code line reached is not a guarantee checked. 158 of 160 journal
+  variants are reached (missing: `Emitted::BackchannelConfirmed`, `Tool::SessionToolsExtended`),
   but section 5 lists dozens of promises nobody checks on them.
-- Most seeds fail at least one rule (884 of 1,024), including conversation seeds (202 of 295).
-  Until the failures are triaged, the driver's defect rate is unknown; that is the number a ship
-  decision needs.
-- The widest clusters are `output_replacement_is_clean` (503 seeds), `speech_done_once` (424)
-  and `forwarded_while_enabled` (317): audio stops reaching the recogniser. In four of the eight
-  soak calls the person is heard 0 to 7 times (three of them over 12,000 inputs), which the soak
-  does not judge: it only checks for leaks. Either a driver bug or a fake's, and the first thing
-  to triage.
-- Registered providers are not checked to be released. After the driver exits, the session's
-  provider table (`lk_agents_abi::resources`) still holds entries in 285 of 300 runs: the data
-  plane's sinks and the microphone in most (the runtime never releases them on exit), and in 116
-  a model or output the host registered for a command the driver never took. The table dies with
-  the session, so this is memory held until then, not a process leak. Checking it needs a
-  read-only accessor on `Resources` and a decision on who releases the data plane's entries.
+- Most seeds fail at least one rule (838 of 1,024), including conversation seeds, the two least
+  random decades (166 of 295). Every failure is of a contract in `check::KNOWN_FINDINGS`, and
+  every contract made at least one expectation. Until the failures are triaged, the driver's
+  defect rate is unknown; that is the number a ship decision needs.
+- The widest clusters are `speech_done_once` (559 seeds), `output_replacement_is_clean` (434),
+  `interruption_has_cause` (228) and `interrupted_handle_is_journalled` (219);
+  `forwarded_while_enabled`, audio not reaching a recogniser, is down to 96 (317 at
+  `56e265f06`). The soak counts each call's finals: 4 to 103 per call, three calls under ten
+  (seeds 0, 1 and 6; seed 0 over 12,000 inputs). The soak does not judge that count, only
+  leaks; `tests/replaced_inputs.rs` fixed the fakes' part of it (a replaced recogniser kept
+  being spoken into), and what is left is still to triage.
+- Registered providers are checked to be released: `every_resource_released` requires the
+  session's resource table (`lk_agents_abi::resources`) to be empty once the driver exited, and
+  it is not a known finding, so it held on every seed of the survey.
 - A stuck agent is not caught by anything yet. The person now waits their own patience, so a
   stuck agent shows as a long silence, but no rule says how long the agent may stay silent after
   a turn it should answer. That rule needs the per-operation bounds `TEST_STRATEGY.md` leaves
@@ -637,32 +648,35 @@ Each is a choice the search makes for every run that a real call does not.
 
 ## 10. Code reached
 
-Line coverage of `lk-agents-voice` over the whole suite (gate, soak, 1,024-seed
-survey): **56.9% of 25,558 lines**.
+Line coverage of `lk-agents-voice` over every `lk-agents-fuzz` test, the 1,024-seed
+survey and the soak included (`049e7e332`): **56.7% of 25,285 lines** (56.9% of 25,558 at
+`56e265f06`). `cargo llvm-cov` warns that 30 functions have mismatched data.
 
 | Area | Lines | Reached | Note |
 |---|--:|--:|---|
-| `audio_recognition/` | 1,700 | 94% | hearing: VAD, STT, end of turn, overlap |
+| `audio_recognition/` | 1,513 | 95% | hearing: VAD, STT, end of turn, overlap |
 | `trace.rs` | 152 | 92% | |
-| `agent_session/` but the API and `host_events.rs` | 2,370 | 88% | the loop: driver, effects, signals, close |
-| `generation/` | 2,000 | 89% | LLM and TTS requests, replans |
+| `agent_session/` but the API and `host_events.rs` | 2,378 | 88% | the loop: driver, effects, signals, close |
+| `generation/` | 2,002 | 89% | LLM and TTS requests, replans |
 | `ivr/` | 247 | 89% | |
-| `audio.rs` | 460 | 88% | legs and gates |
-| `tool_executor.rs` | 575 | 87% | |
-| `agent_activity/` | 5,990 | 86% | scheduling, interruption, tools, hooks, handoff |
+| `audio.rs` | 121 | 91% | legs and gates |
+| `data_plane/` | 168 | 96% | |
+| `tool_executor.rs` | 594 | 86% | |
+| `agent_activity/` | 6,030 | 86% | scheduling, interruption, tools, hooks, handoff |
 | `transcription/synchronizer.rs` | 593 | 86% | |
-| `io.rs` | 295 | 79% | the host output seam (the IO traits moved to `lk-agents-abi`) |
-| `amd/` | 898 | 73% | |
+| `io.rs` | 174 | 68% | the host output seam (the IO traits moved to `lk-agents-abi`) |
+| `amd/` | 899 | 73% | |
 | `endpointing.rs` | 266 | 58% | |
 | `speech_handle.rs` | 573 | 40% | the handle the developer holds |
 | `keyterm_detection.rs` | 566 | 24% | the LLM pass is never set up |
-| **`agent_session/api.rs`, `api/host.rs`** | **1,296** | **0%** | **the public API (section 6)** |
+| **`agent_session/api.rs`, `api/host.rs`** | **1,275** | **0%** | **the public API (section 6)** |
 | `room_io/` | 1,969 | 2% | the real room input and output (section 6); only `link.rs` |
 | `transcription/filters.rs`, `text_transforms.rs` | 543 | 0% | text transforms never configured |
 | `background_audio.rs` | 547 | 0% | |
 | `remote_session*` | 946 | 0% | |
 | `workflows/` (builtin tasks) | 2,440 | 7% | host-side tasks; only the DTMF collector is used |
 | `turn.rs`, `events.rs`, `host_events.rs` | 516 | 10% | |
+| the rest (`agent.rs`, `filler_scheduler.rs`, `recorder_io/`, `run_result.rs`, `runtime.rs`, `transcription/mod.rs`) | 773 | 85% | |
 
 The core loop is well reached and the search changes above barely moved this number: what is
 left is not reachable by any search until the fuzzer goes through the public API and the room
@@ -725,12 +739,12 @@ What it can and cannot miss:
   VOICE_TRACE=1`.
 - **Leaks**: tasks (`every_task_finishes`, with the spawning line), speeches (`speech_settles`),
   answers (`api_calls_return`), provider streams (`provider_streams_closed`), turn-owned work
-  (`nothing_left_live`), and growth over forty turns (the soak). Not checked: the provider table
-  (`lk_agents_abi::resources`), section 9.
+  (`nothing_left_live`), the provider table (`every_resource_released`), and growth over forty
+  turns (the soak).
 
 ```bash
 cd rust
-# reach, failures and the operation x phase table, by decade of randomness (about 40 s)
+# reach, failures and the operation x phase table, by decade of randomness (about 25 s)
 VOICE_CELLS=1 VOICE_SEEDS=1024 cargo test --release -p lk-agents-fuzz --test survey -- --ignored --nocapture
 # long calls, and what is still live after them
 cargo test --release -p lk-agents-fuzz --test soak -- --ignored --nocapture
