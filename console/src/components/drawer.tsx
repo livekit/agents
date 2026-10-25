@@ -4,11 +4,12 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { InDrawer } from "./chrome/panel";
 
 /** The debug drawer's views: the session's database in the plan's words, and what the page talks to. */
-export type View = "lanes" | "tasks" | "journal" | "inbox" | "stream" | "info";
+export type View = "lanes" | "tasks" | "questions" | "journal" | "inbox" | "stream" | "info";
 
 export const VIEWS: { id: View; name: string; tip: string }[] = [
   { id: "lanes", name: "Lanes", tip: "One per agent in the conversation, and who holds its lease" },
   { id: "tasks", name: "Tasks", tip: "Every turn, and the expert's work" },
+  { id: "questions", name: "Questions", tip: "What waits on the person: the question in front of them, and the ones behind it" },
   { id: "journal", name: "Journal", tip: "What happened, in order" },
   { id: "inbox", name: "Inbox", tip: "Messages that waited for a turn" },
   { id: "stream", name: "Stream", tip: "A reply, frame by frame" },

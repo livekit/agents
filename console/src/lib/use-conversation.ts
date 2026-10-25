@@ -109,7 +109,11 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [busy, setBusy] = useState(false);
+  /* Turns in flight: under the live inbox a message can be sent while an earlier task still answers. */
+  const [inFlight, setInFlight] = useState(0);
+  const busy = inFlight > 0;
+  /* The tasks this conversation's turns ran under: a message that continues one says so. */
+  const seenTasks = useRef(new Set<string>());
   /** The debug API or the endpoint did not answer at boot: nothing can be sent. */
   const [unreachable, setUnreachable] = useState(false);
   /* The history of the session being opened is on its way: the stage keeps the conversation's layout. */
@@ -179,6 +183,7 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
         /* Switching: one connection serves one session, and the log is the session's. */
         setEntries([]);
         firstUserText.current = null;
+        seenTasks.current = new Set();
       }
     },
     [],
@@ -326,7 +331,7 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
       let reply: string | null = null;
       let artifactText = "";
       let taskId: string | null = null;
-      setBusy(true);
+      setInFlight((count) => count + 1);
       try {
         for await (const frame of frames) {
           for (const event of interpret(frame)) {
@@ -336,6 +341,10 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
                 return;
               case "task":
                 taskId = event.taskId;
+                /* The answer to a question continues the task that asked, under its id (docs/delegation.md). */
+                if (userText && seenTasks.current.has(event.taskId))
+                  append({ kind: "status", text: "continues the waiting task", taskId: event.taskId, state: "continued" });
+                seenTasks.current.add(event.taskId);
                 /* The first message made the session. */
                 if (!sessionRef.current) setSession(event.contextId, { fresh: true });
                 write(PENDING_KEY, JSON.stringify({ taskId, sessionId: event.contextId, text: userText } satisfies Pending));
@@ -365,15 +374,24 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
               case "question":
                 append({ kind: "question", text: event.text });
                 break;
+              case "background":
+                /* The reply so far acknowledged work that goes on; the answer arrives later on this task. */
+                if (reply) patch(reply, (entry) => ({ ...entry, streaming: false }) as Entry);
+                reply = null;
+                append({ kind: "status", text: "working in the background", taskId: event.taskId, state: "background", meta: "background=true" });
+                break;
               case "ended": {
                 write(PENDING_KEY, null);
                 /* The turn's delegation, if any, is over with it. */
                 setEntries((list) => list.map((entry) => (entry.kind === "delegation" && entry.endedAt === undefined ? { ...entry, endedAt: Date.now() } : entry)));
-                if (artifactText && !reply) reply = append({ kind: "agent", text: artifactText, taskId: event.taskId });
+                /* One reply answered this task and a later one (livekit/answeredWith): it shows once, with the later task. */
+                if (artifactText && !reply && !event.meta.answeredWith) reply = append({ kind: "agent", text: artifactText, taskId: event.taskId });
                 if (reply) patch(reply, (entry) => ({ ...entry, streaming: false }) as Entry);
                 /* The plan's spelling of the A2A states: input-required, not INPUT_REQUIRED. */
                 const state = event.state.replace("TASK_STATE_", "").toLowerCase().replace(/_/g, "-");
+                /* A key set false (a question no longer queued, work no longer in the background) says nothing. */
                 const meta = Object.entries(event.meta)
+                  .filter(([, value]) => value !== false)
                   .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
                   .join(" ");
                 append({
@@ -397,7 +415,7 @@ export function useConversation({ onSessionLost }: { onSessionLost?: () => void 
           failed: true,
         });
       } finally {
-        setBusy(false);
+        setInFlight((count) => count - 1);
         if (grant) {
           await refreshSessions(grant.agent, grant.endpointName, grant.sub);
           const id = sessionRef.current;

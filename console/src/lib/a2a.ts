@@ -37,6 +37,8 @@ export type Frame =
 export type WireEvent =
   | { type: "task"; taskId: string; contextId: string; state: string; artifactText?: string }
   | { type: "progress"; text: string }
+  /** The turn ended and its work goes on in the background (`livekit/background`); the answer comes later. */
+  | { type: "background"; taskId: string; text: string }
   | { type: "artifact"; text: string; append: boolean }
   | { type: "question"; text: string }
   | { type: "ended"; taskId: string; state: string; meta: Record<string, unknown> }
@@ -79,14 +81,17 @@ export function interpret(frame: Frame): WireEvent[] {
   if (r.statusUpdate) {
     const update = r.statusUpdate;
     const state = update.status.state;
-    if (state === "TASK_STATE_WORKING" && update.status.message)
+    const meta = extensionMeta(update.metadata);
+    if (state === "TASK_STATE_WORKING" && meta.background === true)
+      out.push({ type: "background", taskId: update.taskId, text: partsText(update.status.message?.parts) });
+    else if (state === "TASK_STATE_WORKING" && update.status.message)
       out.push({ type: "progress", text: partsText(update.status.message.parts) });
     if (update.final || state !== "TASK_STATE_WORKING") {
       /* A tool waiting on the person (plan 7.4): the question rides on the
          status, not an artifact. */
       if (state === "TASK_STATE_INPUT_REQUIRED" && update.status.message)
         out.push({ type: "question", text: partsText(update.status.message.parts) });
-      out.push({ type: "ended", taskId: update.taskId, state, meta: extensionMeta(update.metadata) });
+      out.push({ type: "ended", taskId: update.taskId, state, meta });
     }
   }
   if (r.artifactUpdate)

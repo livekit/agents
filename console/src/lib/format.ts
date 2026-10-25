@@ -99,7 +99,7 @@ export function lease(
   return { state: "held", label: `${left.toFixed(1)}s left` };
 }
 
-/** The `livekit/*` metadata of a task row's `task` document: mergedInto, interrupted. */
+/** The `livekit/*` metadata of a task row's `task` document: mergedInto, answeredWith, interrupted, the work in the background, a queued question, a cancel asked for. */
 export function taskFlags(task: unknown): string[] {
   const out: string[] = [];
   if (!task || typeof task !== "object") return out;
@@ -108,7 +108,11 @@ export function taskFlags(task: unknown): string[] {
   /* The agents extension's keys, whatever URI they are under. */
   const meta = (name: string) => Object.entries(metadata).find(([key]) => key.endsWith(`/${name}`))?.[1];
   if (meta("mergedInto")) out.push(`merged into ${short(String(meta("mergedInto")))}`);
+  if (meta("answeredWith")) out.push(`answered with ${short(String(meta("answeredWith")))}`);
   if (meta("interrupted")) out.push(`interrupted${meta("interruptionReason") ? `: ${meta("interruptionReason")}` : ""}`);
+  if (meta("background") === true) out.push("in the background");
+  if (meta("queued") === true) out.push("queued");
+  if (meta("cancelRequested") === true) out.push("cancel requested");
   return out;
 }
 

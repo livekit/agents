@@ -24,10 +24,15 @@ describe("lease", () => {
 describe("taskFlags", () => {
   it("surfaces the merge and the interrupt", () => {
     expect(taskFlags({ metadata: { "livekit/mergedInto": "AST_x" } })).toEqual(["merged into AST_x"]);
+    expect(taskFlags({ metadata: { "livekit/answeredWith": "AST_y" } })).toEqual(["answered with AST_y"]);
     expect(
       taskFlags({ metadata: { "livekit/interrupted": true, "livekit/interruptionReason": "new-message" } }),
     ).toEqual(["interrupted: new-message"]);
     expect(taskFlags(null)).toEqual([]);
+    expect(
+      taskFlags({ metadata: { "livekit/background": true, "livekit/queued": true, "livekit/cancelRequested": true } }),
+    ).toEqual(["in the background", "queued", "cancel requested"]);
+    expect(taskFlags({ metadata: { "livekit/background": false, "livekit/queued": false } })).toEqual([]);
   });
 });
 

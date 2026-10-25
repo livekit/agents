@@ -7,6 +7,7 @@ import { Icon } from "../chrome/icon";
 import { Orb, type OrbState } from "../chrome/orb";
 import { Disclosure, Document } from "../chrome/panel";
 import { DelegationCard } from "./delegation";
+import type { OpenQuestion } from "./questions";
 import { tail } from "@/lib/format";
 import { elapsed, type VoiceTurn, type useCall } from "@/lib/use-call";
 import { useStick } from "@/lib/use-stick";
@@ -82,6 +83,7 @@ export function ConversationPanel({
   command,
   call,
   expertTasks,
+  questions,
   taskLog,
   now,
   onCall,
@@ -102,6 +104,8 @@ export function ConversationPanel({
   call: Call;
   /** The experts' tasks in the session's database: every task on a lane that is not the agent's. */
   expertTasks: TaskRow[];
+  /** The agent's open questions: the one in front of the person, which the next message answers, and the ones behind it. */
+  questions: OpenQuestion[];
   /** What the dumps said about each task over time. */
   taskLog: Map<string, TaskLog>;
   now: number;
@@ -196,6 +200,7 @@ export function ConversationPanel({
               The call could not start. Keep chatting in text.
             </p>
           ) : null}
+          <QuestionStrip questions={questions} onOpenTask={onOpenTask} />
           <Composer
             ready={ready}
             placeholder={call.connected ? "Type during the call" : "Send a message"}
@@ -337,6 +342,26 @@ function Composer({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * What the next message answers: the question in front of the person and its
+ * task, which the message continues, and how many wait behind it.
+ */
+function QuestionStrip({ questions, onOpenTask }: { questions: OpenQuestion[]; onOpenTask: (taskId: string) => void }) {
+  const front = questions.find((question) => question.front);
+  if (!front) return null;
+  const waiting = questions.length - 1;
+  return (
+    <p className="m-0 flex min-h-row-sm min-w-0 flex-wrap items-center gap-x-2 px-3 meta" data-question-front={front.task.task_id}>
+      <span>Your next message answers:</span>
+      <span className="wrap-break-word text-ink">{front.question}</span>
+      <button type="button" className="btn btnQuiet h-row-sm px-1" title="Open the task this answer continues" onClick={() => onOpenTask(front.task.task_id)}>
+        {tail(front.task.task_id)}
+      </button>
+      {waiting > 0 ? <span>{`${waiting} more waiting`}</span> : null}
+    </p>
   );
 }
 

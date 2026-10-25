@@ -61,17 +61,21 @@ several (components-react's device list, the one agents-ui's track control
 uses; the choice is kept for the next call) and ends the call. Text during a
 call lands in the same session.
 
-The demo's knobs are in the Demo view at the foot of the rail. The policy sets
-`livekit/channel`: under interrupt (a2a) a burst ends the first task
-`canceled` with `livekit/interrupted` and the second answers both; under inbox
-(sms) one reply answers both and the first task carries `livekit/mergedInto`.
-The composer shows the policy as one small label when it is off its default.
+Under the `live` inbox (the default for web chat) a message can be sent
+while an earlier task still answers. A turn whose work went on in the
+background shows `working in the background`, and its answer arrives later
+on the same task, in a reply of its own. An answer to a question shows
+`continues the waiting task` under the task id it continued: the person
+names no task, and the message goes to the question in front of them. The
+strip over the composer says which question that is and how many wait
+behind it; the Questions view lists every lane's open questions.
 
 The rail on the left opens one view beside the conversation: the subject's
 conversations (named by the console's own `app/api/title` after the first
 turn, text or voice; a session nothing was said in is not listed), then the
 session's database: the lanes with their lease counting down, the task
-table, the journal, the inbox, and a task's stream, replayable. The panel's
+table (with the interrupt, merge, background, queued and cancel marks), the
+open questions, the journal, the inbox, and a task's stream, replayable. The panel's
 width and the open view persist.
 
 ## Check it

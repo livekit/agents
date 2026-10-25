@@ -20,6 +20,7 @@ import { Chips } from "./chips";
 import { Swatches } from "./chrome/swatches";
 import { StreamPanel } from "./panels/stream";
 import { TasksPanel } from "./panels/tasks";
+import { QuestionsPanel, openQuestions } from "./panels/questions";
 
 type Detail = { lanes: number; firstMessage: string | null };
 
@@ -117,6 +118,8 @@ export function Room() {
   const openStream = useCallback(() => panel.setView("stream"), [panel]);
   /* The experts' tasks: every task on a lane that is not the agent's own. */
   const expertTasks = useMemo(() => (database?.tasks ?? []).filter((task) => task.lane !== agent), [agent, database?.tasks]);
+  /* The agent's open questions: one in front of the person, the rest waiting behind it. */
+  const questions = useMemo(() => openQuestions(database?.tasks ?? [], agent), [agent, database?.tasks]);
 
   /* A session with a first message and no title gets one: the one a voice
      call just made, and any older one the list still shows by its message. */
@@ -212,6 +215,8 @@ export function Room() {
         return <LanesPanel lanes={database?.lanes ?? null} now={now} tip={database?.tip} sessionId={chat.sessionId} empty={empty} />;
       case "tasks":
         return <TasksPanel tasks={database?.tasks ?? null} selected={selectedTask} now={now} empty={empty} onSelect={selectTask} onStream={openStream} />;
+      case "questions":
+        return <QuestionsPanel tasks={database?.tasks ?? null} agent={agent} now={now} empty={empty} onSelect={openTask} />;
       case "journal":
         return <JournalPanel events={database?.events ?? null} lanes={database?.lanes ?? []} now={now} empty={empty} />;
       case "inbox":
@@ -247,6 +252,7 @@ export function Room() {
               command={stopped ? `cd ${stopped.dir} && ${stopped.start}` : undefined}
               call={call}
               expertTasks={expertTasks}
+              questions={questions}
               taskLog={taskLog}
               now={now}
               onCall={startCall}

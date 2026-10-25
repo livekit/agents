@@ -10,6 +10,20 @@ describe("cutEvents", () => {
 });
 
 describe("interpret", () => {
+  it("tells a turn that went on in the background from progress", () => {
+    expect(
+      interpret({
+        result: {
+          statusUpdate: {
+            taskId: "AST_3",
+            status: { state: "TASK_STATE_WORKING", message: { parts: [{ text: "On it." }] } },
+            metadata: { [key("background")]: true },
+          },
+        },
+      }),
+    ).toEqual([{ type: "background", taskId: "AST_3", text: "On it." }]);
+  });
+
   it("turns a progress status and an artifact into stage events", () => {
     expect(
       interpret({
