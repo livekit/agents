@@ -102,7 +102,14 @@ def _agent_turn(handle: SpeechHandle, **kwargs: Any) -> Iterator[Any]:
 
 
 class RimeAgentActivity(core_activity.AgentActivity):
-    """Own the Prism lifecycle without changing shared activities or globals."""
+    """Own the Prism lifecycle without changing shared activities or globals.
+
+    LiveKit 1.7 and 1.8 keep per-message forwarding results inside their realtime
+    tasks and expose no hooks for typed-turn admission or playback receipts.
+    The task overrides retain those results and the original branch's ordering;
+    scheduling, tools and resource management still use the installed activity.
+    Keep these overrides covered by the published-version and parity tests.
+    """
 
     def __init__(self, agent: Agent, session: Any) -> None:
         super().__init__(agent, session)
