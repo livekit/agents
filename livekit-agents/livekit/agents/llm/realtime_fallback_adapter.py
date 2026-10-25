@@ -198,6 +198,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         # audio during a swap is dropped; replaying it would lag the model behind realtime
         self._swapping = False
+        self._initialized = False
         self._initializing = False
         self._initialization_error: Exception | None = None
 
@@ -382,6 +383,13 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         if is_given(tools):
             self._tools = tools
         async with self._swap_lock:
+            if self._initialized:
+                # Agent handoffs reuse an initialized child. A rejected or cancelled
+                # update must not close it; fatal error events still trigger a swap.
+                await self._active._update_session(
+                    instructions=instructions, chat_ctx=chat_ctx, tools=tools
+                )
+                return
             self._swapping = True
             try:
                 error = await self._initialize_child(
@@ -430,6 +438,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                     if replacing and is_given(self._tool_choice):
                         self._active.update_options(tool_choice=self._tool_choice)
                     self._adapter._active_instance = self._adapter._models[index]
+                    self._initialized = True
                     return None
                 except Exception as error:
                     self._unbind(self._active)

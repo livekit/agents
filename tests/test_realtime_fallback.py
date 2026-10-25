@@ -697,3 +697,52 @@ async def test_zero_cooldown_initialization_tries_each_candidate_once() -> None:
         assert [error.recoverable for error in errors] == [True, False]
     finally:
         await session.aclose()
+
+
+async def test_rejected_update_keeps_initialized_child(monkeypatch) -> None:
+    primary, backup = FakeRealtimeModel(), FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary, backup]).session()
+    try:
+        await session._update_session(instructions="Original")
+        child = primary.active_session
+
+        async def reject(chat_ctx: ChatContext) -> None:
+            raise ValueError("Unsupported history item")
+
+        monkeypatch.setattr(child, "update_chat_ctx", reject)
+        with pytest.raises(ValueError, match="Unsupported history item"):
+            await session._update_session(chat_ctx=ChatContext.empty())
+
+        assert not child.closed
+        assert backup.created_sessions == []
+        session.generate_reply()
+        assert child.generate_reply_calls == 1
+    finally:
+        await session.aclose()
+
+
+async def test_cancelled_update_keeps_initialized_child(monkeypatch) -> None:
+    primary, backup = FakeRealtimeModel(), FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary, backup]).session()
+    try:
+        await session._update_session(instructions="Original")
+        child = primary.active_session
+        entered = asyncio.Event()
+
+        async def pending(chat_ctx: ChatContext) -> None:
+            entered.set()
+            await asyncio.Future()
+
+        monkeypatch.setattr(child, "update_chat_ctx", pending)
+        update = asyncio.create_task(session._update_session(chat_ctx=ChatContext.empty()))
+        await asyncio.wait_for(entered.wait(), 3)
+        update.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await update
+
+        assert not child.closed
+        assert backup.created_sessions == []
+        session.generate_reply()
+        assert child.generate_reply_calls == 1
+    finally:
+        await session.aclose()
