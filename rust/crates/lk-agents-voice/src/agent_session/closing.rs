@@ -160,6 +160,9 @@ impl Driver {
         self.watch.publish(crate::agent_session::SystemTap::CloseRequested);
         // The keyterm pass: the request in flight is cancelled, no push after this.
         self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close, out);
+        // `GetDtmfTask.on_exit`, the first thing the close runs, stops listening: a key pressed
+        // during the drain is not collected, a pending debounce never answers.
+        self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Stop, out);
         let exit = (!self.activity.tasks.any_live()).then(|| self.plan_exit(out));
         // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's,
         // and the caller is answered with the close's drain.

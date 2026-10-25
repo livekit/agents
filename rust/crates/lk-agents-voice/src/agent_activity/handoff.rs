@@ -346,7 +346,7 @@ impl Driver {
         // A drain still waiting on its `on_exit` is refused as closing; one already pausing is
         // answered by the pause's refusal.
         self.drain_step(DrainEvent::Closing, out);
-        // A DTMF collection ends with the session: its answer, if still owed, is `Stopped`.
+        // A DTMF collection started during the close ends with it: an owed answer is `Stopped`.
         self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Stop, out);
         self.handoff_step(HandoffEvent::Closing, out);
         self.activity.on_exit.abandon();
