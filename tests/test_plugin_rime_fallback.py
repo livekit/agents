@@ -4,7 +4,8 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, llm
+from livekit.agents import Agent, llm
+from livekit.plugins.rime.realtime import AgentSession, RealtimeModelFallbackAdapter
 
 from .fake_io import FakeAudioOutput
 from .test_plugin_rime_realtime import peer_model
@@ -14,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 async def test_prism_fallback_typed_input_playback_and_explicit_restart() -> None:
     async with peer_model() as (peer, model, _):
-        adapter = llm.RealtimeModelFallbackAdapter([model])
+        adapter = RealtimeModelFallbackAdapter([model])
         async with AgentSession(llm=adapter) as session:
             session.output.audio = FakeAudioOutput()
             await session.start(Agent(instructions="test"))
@@ -37,7 +38,7 @@ async def test_prism_startup_uses_backup_after_primary_initialization_failure() 
     async with peer_model() as (primary_peer, primary, _):
         primary_peer.refusals["session.update"] = ("invalid_session", "event")
         async with peer_model() as (backup_peer, backup, _):
-            adapter = llm.RealtimeModelFallbackAdapter([primary, backup])
+            adapter = RealtimeModelFallbackAdapter([primary, backup])
             history = llm.ChatContext.empty()
             history.add_message(role="user", content="Saved history")
             async with AgentSession(llm=adapter) as session:
@@ -68,7 +69,7 @@ async def test_prism_restart_initialization_failure_opens_backup_once(monkeypatc
                 return child
 
             monkeypatch.setattr(backup, "session", counted_session)
-            adapter = llm.RealtimeModelFallbackAdapter([primary, backup])
+            adapter = RealtimeModelFallbackAdapter([primary, backup])
             session = adapter.session()
             reconnected = []
             session.on("session_reconnected", reconnected.append)

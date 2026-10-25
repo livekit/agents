@@ -16,9 +16,13 @@ r = pytest.importorskip("rimelabs_sdk.realtime")
 from rimelabs_sdk import Rime, RimeInputError
 from websockets.asyncio.server import serve
 
-from livekit.agents import Agent, AgentSession, function_tool, llm
+from livekit.agents import Agent, function_tool, llm
 from livekit.plugins import rime
-from livekit.plugins.rime.realtime import PrismUnsupported
+from livekit.plugins.rime.realtime import (
+    AgentSession,
+    PrismUnsupported,
+    RealtimeModelFallbackAdapter,
+)
 
 from .fake_io import FakeAudioOutput
 
@@ -339,7 +343,7 @@ async def test_history_update_validates_all_new_items_before_sending(invalid_ite
 @pytest.mark.parametrize("instructions", ["", " \n\t"])
 async def test_blank_instructions_allow_startup_and_restart(instructions):
     async with peer_model() as (peer, model, _):
-        adapter = llm.RealtimeModelFallbackAdapter([model])
+        adapter = RealtimeModelFallbackAdapter([model])
         async with AgentSession(llm=adapter) as session:
             await session.start(Agent(instructions=instructions))
             assert "instructions" not in peer.settings
@@ -378,7 +382,7 @@ async def test_agent_session_typed_reply_and_playback_receipt():
 @pytest.mark.parametrize("wrapped", [False, True])
 async def test_empty_response_allows_next_typed_turn(wrapped):
     async with peer_model() as (peer, model, _):
-        realtime = llm.RealtimeModelFallbackAdapter([model]) if wrapped else model
+        realtime = RealtimeModelFallbackAdapter([model]) if wrapped else model
         async with AgentSession(llm=realtime) as session:
             session.output.audio = FakeAudioOutput()
             await session.start(Agent(instructions="test"))

@@ -6,9 +6,12 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, llm, utils
+from livekit.agents import Agent, llm, utils
+from livekit.plugins.rime._realtime_fallback import RealtimeModelFallbackAdapter
+from livekit.plugins.rime._realtime_session import AgentSession
+from livekit.plugins.rime._realtime_types import GenerationCreatedEvent
 
-from .fake_realtime import FakeRealtimeModel
+from .fake_rime_realtime import FakeRealtimeModel
 
 pytestmark = pytest.mark.unit
 
@@ -21,7 +24,7 @@ def context(text):
 
 async def test_history_update_waits_for_swap_and_reaches_the_replacement():
     model = FakeRealtimeModel()
-    fallback = llm.RealtimeModelFallbackAdapter([model])
+    fallback = RealtimeModelFallbackAdapter([model])
     async with AgentSession(llm=fallback) as session:
         agent = Agent(instructions="Help", chat_ctx=context("old"))
         await session.start(agent)
@@ -46,7 +49,7 @@ async def test_history_update_waits_for_swap_and_reaches_the_replacement():
 
 async def test_restart_allows_history_update_from_interruption_cleanup(monkeypatch):
     model = FakeRealtimeModel()
-    fallback = llm.RealtimeModelFallbackAdapter([model])
+    fallback = RealtimeModelFallbackAdapter([model])
     async with AgentSession(llm=fallback) as session:
         agent = Agent(instructions="Help", chat_ctx=context("old"))
         await session.start(agent)
@@ -64,7 +67,7 @@ async def test_restart_allows_history_update_from_interruption_cleanup(monkeypat
 
 async def test_cancelled_update_during_swap_applies_once_after_replacement():
     model = FakeRealtimeModel()
-    fallback = llm.RealtimeModelFallbackAdapter([model])
+    fallback = RealtimeModelFallbackAdapter([model])
     session = fallback.session()
     try:
         await session._update_session(chat_ctx=context("old"))
@@ -135,7 +138,7 @@ async def test_new_conversation_item_survives_an_acknowledged_context_edit(monke
             )
             messages.close()
             provider._reply_futs[-1].set_result(
-                llm.GenerationCreatedEvent(
+                GenerationCreatedEvent(
                     message_stream=messages, function_stream=functions, user_initiated=True
                 )
             )

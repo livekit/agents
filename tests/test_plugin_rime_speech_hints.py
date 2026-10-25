@@ -6,24 +6,25 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, llm
-from livekit.agents.voice.io import AudioOutputCapabilities
+from livekit.agents import Agent, llm
+from livekit.plugins.rime._realtime_io import AudioOutput as RimeAudioOutput
+from livekit.plugins.rime._realtime_session import AgentSession
+from livekit.plugins.rime._realtime_types import InputSpeechHintEvent
 
 from .fake_io import FakeAudioOutput
-from .fake_realtime import FakeRealtimeModel
+from .fake_rime_realtime import FakeRealtimeModel
 
 pytestmark = pytest.mark.unit
 
 
-class GainOutput(FakeAudioOutput):
+class GainOutput(RimeAudioOutput):
     def __init__(self):
-        super().__init__()
-        self._capabilities = AudioOutputCapabilities(pause=False, gain=True)
+        super().__init__(FakeAudioOutput())
 
 
 def hint(model):
     model.active_session.emit(
-        "input_speech_hint", llm.InputSpeechHintEvent(audio_start_ms=0, gain=0.25, timeout=0.02)
+        "input_speech_hint", InputSpeechHintEvent(audio_start_ms=0, gain=0.25, timeout=0.02)
     )
 
 
@@ -68,7 +69,7 @@ async def test_hint_timeout_preserves_new_application_gain_through_wrapper():
     model = FakeRealtimeModel()
     leaf = GainOutput()
     leaf.set_gain(0.8)
-    wrapper = FakeAudioOutput(next_in_chain=leaf)
+    wrapper = RimeAudioOutput(FakeAudioOutput(next_in_chain=leaf))
     async with AgentSession(llm=model) as session:
         session.output.audio = wrapper
         await session.start(Agent(instructions="Help"))
@@ -91,14 +92,13 @@ async def test_hint_restoration_does_not_change_a_replacement_leaf():
     old_leaf.set_gain(0.8)
     new_leaf = GainOutput()
     new_leaf.set_gain(0.2)
-    wrapper = FakeAudioOutput(next_in_chain=old_leaf)
+    wrapper = RimeAudioOutput(FakeAudioOutput(next_in_chain=old_leaf))
     async with AgentSession(llm=model) as session:
         session.output.audio = wrapper
         await session.start(Agent(instructions="Help"))
         hint(model)
         # Simulate the existing sink replacement seam below a stable wrapper.
-        proxy = wrapper.next_in_chain
-        proxy.set_next_in_chain(new_leaf)
+        session.output.replace_audio_tail(new_leaf)
         stop_hint(model)
         assert new_leaf.gain == pytest.approx(0.2)
         hint(model)
@@ -109,7 +109,7 @@ async def test_hint_restoration_does_not_change_a_replacement_leaf():
 
 async def test_speech_hints_leave_unsupported_output_unchanged():
     model = FakeRealtimeModel()
-    output = FakeAudioOutput()
+    output = RimeAudioOutput(FakeAudioOutput(), gain=False)
     async with AgentSession(llm=model) as session:
         session.output.audio = output
         await session.start(Agent(instructions="Help"))

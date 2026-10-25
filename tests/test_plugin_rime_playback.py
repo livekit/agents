@@ -11,7 +11,8 @@ import pytest
 pytestmark = pytest.mark.unit
 pytest.importorskip("rimelabs_sdk.realtime")
 
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent
+from livekit.plugins.rime.realtime import AgentSession
 
 from .fake_io import FakeAudioOutput
 from .test_plugin_rime_realtime import peer_model

@@ -27,7 +27,15 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.generation import remove_instructions
 
+from ._realtime_fallback import RealtimeModelFallbackAdapter as RealtimeModelFallbackAdapter
 from ._realtime_history import HistoryUpdateError, PrismHistory
+from ._realtime_session import AgentSession as AgentSession
+from ._realtime_types import (
+    GenerationCreatedEvent,
+    InputSpeechHintEvent,
+    InputSpeechStartedEvent,
+    RealtimeSession as BaseRealtimeSession,
+)
 
 
 class PrismUnsupported(llm.RealtimeError):
@@ -47,7 +55,7 @@ class PrismError(llm.RealtimeError):
 
 
 @dataclass
-class PrismGenerationCreatedEvent(llm.GenerationCreatedEvent):
+class PrismGenerationCreatedEvent(GenerationCreatedEvent):
     """A LiveKit generation with Prism response diagnostics."""
 
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -233,7 +241,7 @@ class _Generation:
     cancel_requested: bool = False
 
 
-class RealtimeSession(llm.RealtimeSession):
+class RealtimeSession(BaseRealtimeSession):
     def __init__(self, model: RealtimeModel):
         super().__init__(model)
         self._model = model
@@ -965,7 +973,7 @@ class RealtimeSession(llm.RealtimeSession):
             self._history.observe(payload)
         if isinstance(payload, r.SpeechHint):
             if self._playback_interrupts():
-                hint = llm.InputSpeechHintEvent(
+                hint = InputSpeechHintEvent(
                     audio_start_ms=payload.audio_start_ms,
                     gain=self._model._speech_hint_gain,
                     timeout=self._model._speech_hint_timeout,
@@ -982,7 +990,7 @@ class RealtimeSession(llm.RealtimeSession):
                 self._turn_started.popitem(last=False)
             self.emit(
                 "input_speech_started",
-                llm.InputSpeechStartedEvent(interrupt_response=interrupt_response),
+                InputSpeechStartedEvent(interrupt_response=interrupt_response),
             )
         elif isinstance(payload, r.SpeechStopped):
             self._caller_speaking = False

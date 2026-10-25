@@ -73,7 +73,7 @@ class TcpAudioOutput(io.AudioOutput):
             label="TCP Console",
             next_in_chain=None,
             sample_rate=AGENT_SAMPLE_RATE,
-            capabilities=io.AudioOutputCapabilities(pause=True, gain=True),
+            capabilities=io.AudioOutputCapabilities(pause=True),
         )
         self._transport = transport
         self._resampler = rtc.AudioResampler(
@@ -105,7 +105,7 @@ class TcpAudioOutput(io.AudioOutput):
 
         self._pushed_duration += frame.duration
 
-        resampled = self._resampler.push(self._apply_gain(frame))
+        resampled = self._resampler.push(frame)
         for rf in resampled:
             audio_frame = agent_pb.AgentSessionMessage.ConsoleIO.AudioFrame(
                 data=bytes(rf.data),

@@ -12,8 +12,8 @@ pytest.importorskip("rimelabs_sdk.realtime")
 
 from rimelabs_sdk import realtime as r
 
-from livekit.agents import Agent, AgentSession, function_tool, llm
-from livekit.plugins.rime.realtime import PrismError
+from livekit.agents import Agent, function_tool, llm
+from livekit.plugins.rime.realtime import AgentSession, PrismError, RealtimeModelFallbackAdapter
 
 from .test_plugin_rime_realtime import peer_model
 from .test_plugin_rime_settings import wait_until
@@ -44,7 +44,7 @@ def tool_history():
 @pytest.mark.parametrize("policy", [None, "auto", "disabled", r.RetentionRatio(0.9)])
 async def test_truncation_at_connect_update_and_restart(policy):
     async with peer_model(truncation=policy) as (peer, model, _):
-        fallback = llm.RealtimeModelFallbackAdapter([model])
+        fallback = RealtimeModelFallbackAdapter([model])
         session = fallback.session()
         try:
             await session._update_session(instructions="Help")
@@ -139,7 +139,7 @@ async def test_context_edits_preserve_local_identity_and_server_order(edit):
 
 async def test_completed_tool_pair_deletion_and_restart_do_not_execute_tools():
     async with peer_model() as (peer, model, _):
-        fallback = llm.RealtimeModelFallbackAdapter([model])
+        fallback = RealtimeModelFallbackAdapter([model])
         session = fallback.session()
         try:
             await session._update_session(chat_ctx=tool_history())
@@ -399,7 +399,7 @@ async def test_reply_started_during_final_rebuild_acknowledgment_requires_recove
 async def test_partial_update_recovers_prior_context_on_a_backup_model():
     async with peer_model() as (primary_peer, primary, _):
         async with peer_model() as (backup_peer, backup, _):
-            fallback = llm.RealtimeModelFallbackAdapter([primary, backup], regenerate_on_swap=False)
+            fallback = RealtimeModelFallbackAdapter([primary, backup], regenerate_on_swap=False)
             async with AgentSession(llm=fallback) as session:
                 agent = Agent(instructions="Help", chat_ctx=messages("keep prior context"))
                 await session.start(agent)

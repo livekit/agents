@@ -9,13 +9,15 @@ from livekit.agents import NOT_GIVEN, NotGivenOr, function_tool, utils
 from livekit.agents.llm import (
     ChatContext,
     ChatMessage,
-    GenerationCreatedEvent,
     MessageGeneration,
-    RealtimeModelFallbackAdapter,
 )
 from livekit.agents.llm.tool_context import Tool
+from livekit.plugins.rime._realtime_fallback import RealtimeModelFallbackAdapter
+from livekit.plugins.rime._realtime_types import (
+    GenerationCreatedEvent,
+)
 
-from .fake_realtime import FakeRealtimeModel, FakeRealtimeSession
+from .fake_rime_realtime import FakeRealtimeModel, FakeRealtimeSession
 
 pytestmark = pytest.mark.unit
 

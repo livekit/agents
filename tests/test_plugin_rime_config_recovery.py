@@ -6,10 +6,13 @@ import asyncio
 
 import pytest
 
-from livekit.agents import NOT_GIVEN, Agent, AgentSession, NotGivenOr, function_tool, llm, utils
+from livekit.agents import NOT_GIVEN, Agent, NotGivenOr, function_tool, llm, utils
 from livekit.agents.utils import is_given
+from livekit.plugins.rime._realtime_fallback import RealtimeModelFallbackAdapter
+from livekit.plugins.rime._realtime_session import AgentSession
+from livekit.plugins.rime._realtime_types import GenerationCreatedEvent
 
-from .fake_realtime import FakeRealtimeModel, FakeRealtimeSession, fake_capabilities
+from .fake_rime_realtime import FakeRealtimeModel, FakeRealtimeSession, fake_capabilities
 
 pytestmark = pytest.mark.unit
 
@@ -84,7 +87,7 @@ async def _finish_reply(session: AgentSession, provider: FakeRealtimeSession) ->
     messages.close()
     functions.close()
     provider._reply_futs[-1].set_result(
-        llm.GenerationCreatedEvent(
+        GenerationCreatedEvent(
             message_stream=messages, function_stream=functions, user_initiated=True
         )
     )
@@ -159,7 +162,7 @@ async def test_failed_setup_stays_pending_until_restore_is_acknowledged():
 async def test_failed_restore_switches_to_a_clean_fallback_session():
     primary = _FailingModel()
     backup = FakeRealtimeModel(capabilities=fake_capabilities(per_response_tool_choice=False))
-    fallback = llm.RealtimeModelFallbackAdapter([primary, backup], regenerate_on_swap=False)
+    fallback = RealtimeModelFallbackAdapter([primary, backup], regenerate_on_swap=False)
     async with AgentSession(llm=fallback) as session:
         await session.start(Agent(instructions="test", tools=[lookup]))
         provider = primary.active_session

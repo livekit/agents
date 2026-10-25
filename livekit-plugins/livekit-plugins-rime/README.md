@@ -142,7 +142,7 @@ uv sync --package livekit-plugins-rime --extra realtime --inexact
 ```
 
 ```python
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent
 from livekit.plugins import rime
 from rimelabs_sdk.realtime import TurnDetection
 
@@ -150,7 +150,7 @@ model = rime.realtime.RealtimeModel(
     turn_detection=TurnDetection(eagerness="low", end_of_turn_timeout_ms=5000),
     response_metadata={"workflow": "support"},
 )
-session = AgentSession(
+session = rime.realtime.AgentSession(
     llm=model,
 )
 await session.start(agent=Agent(instructions="Give short, clear answers."), room=ctx.room)
@@ -160,6 +160,26 @@ session.generate_reply(user_input="Hello!")
 Set `RIME_API_KEY`. The default endpoint is `wss://prism.api.rime.ai/v1/realtime`.
 Set `endpoint=` for a custom deployment and `voice=` if it has no default voice.
 For a complete room agent, see `examples/voice_agents/rime_prism.py`.
+
+Use `rime.realtime.AgentSession` for Prism. It keeps typed input, playback reports,
+history updates, and handoff handling inside the Rime plugin. The installed
+LiveKit core and ordinary `livekit.agents.AgentSession` remain unchanged. `Agent`,
+`AgentTask`, tools, and room options use their normal LiveKit interfaces.
+
+For fallback or explicit conversation restart, use the Rime adapter:
+
+```python
+model = rime.realtime.RealtimeModelFallbackAdapter(
+    [rime.realtime.RealtimeModel(), rime.realtime.RealtimeModel()]
+)
+session = rime.realtime.AgentSession(llm=model)
+```
+
+The plugin requires `livekit-agents>=1.7.0`. The Rime session adapter supports
+the LiveKit 1.7 and 1.8 realtime activity
+interfaces. It specializes the activity methods that need provider response
+ownership and actual playback results. It does not patch shared classes or
+module globals. These internal interfaces are covered by compatibility tests.
 
 Optional constructor settings include `turn_detection`, `timeouts` (`RealtimeTimeouts`),
 `interrupt_on_speech`, `request_id`, and `response_metadata`. Turn timing can be set
@@ -172,7 +192,7 @@ plugin does not close an injected client. Create one model per AgentSession.
 The adapter initializes instructions, tools, and supported history before it sends
 input. `set_input_text` identifies a typed turn; `update_chat_ctx` synchronizes history
 or submits live tool results. No timer determines whether text is a history note or a turn.
-LiveKit's `playback_finished` hook reports the response ID, playback position,
+The Rime session's `playback_finished` hook reports the response ID, playback position,
 and stop cause, including skipped audio. Caller speech sends a truncate.
 Application stops send a playback receipt. Late transcripts keep the user's
 original position in history.

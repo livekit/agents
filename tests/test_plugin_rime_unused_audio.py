@@ -5,10 +5,12 @@ import asyncio
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, llm, utils
+from livekit.agents import Agent, llm, utils
+from livekit.plugins.rime._realtime_session import AgentSession
+from livekit.plugins.rime._realtime_types import GenerationCreatedEvent
 
 from .fake_io import FakeAudioOutput
-from .fake_realtime import FakeRealtimeModel
+from .fake_rime_realtime import FakeRealtimeModel
 
 pytestmark = pytest.mark.unit
 
@@ -39,7 +41,7 @@ async def test_unused_audio_is_drained(disabled: bool) -> None:
         messages.close()
         functions.close()
         model.active_session._reply_futs[0].set_result(
-            llm.GenerationCreatedEvent(
+            GenerationCreatedEvent(
                 response_id="response",
                 message_stream=messages,
                 function_stream=functions,
@@ -119,7 +121,7 @@ async def test_audio_drain_failure_records_error_and_cleans_up(
         text.send_nowait("Reply")
         if not open_text:
             text.close()
-        event = llm.GenerationCreatedEvent(
+        event = GenerationCreatedEvent(
             response_id="response",
             message_stream=messages,
             function_stream=function_stream(),

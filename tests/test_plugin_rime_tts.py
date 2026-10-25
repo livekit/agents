@@ -2883,7 +2883,8 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
     tracer.set_provider(provider)
     monkeypatch.setattr(tts_module, "tracer", tracer)
     # The plugin must produce safe exceptions even when telemetry redaction is off.
-    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: False)
+    if hasattr(telemetry_utils, "redaction_enabled"):
+        monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: False)
     caplog.set_level(logging.WARNING, logger="livekit.agents")
 
     app = web.Application()

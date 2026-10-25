@@ -14,13 +14,15 @@ pytest.importorskip("rimelabs_sdk.realtime")
 from rimelabs_sdk import realtime as r
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool, llm
-from livekit.agents.voice.io import AudioOutputCapabilities
+from livekit.agents import Agent, AgentTask, RunContext, function_tool
+from livekit.plugins.rime._realtime_io import AudioOutput as RimeAudioOutput
 from livekit.plugins.rime.realtime import (
+    AgentSession,
     PrismError,
     PrismGenerationCreatedEvent,
     PrismModelError,
     PrismSpeechStoppedEvent,
+    RealtimeModelFallbackAdapter,
 )
 
 from .fake_io import FakeAudioOutput
@@ -109,7 +111,7 @@ async def test_cancelled_update_waits_for_acknowledged_settings():
 @pytest.mark.parametrize("setting", ["instructions", "tools"])
 async def test_cancelled_fallback_update_survives_restart(setting):
     async with peer_model() as (peer, model, _):
-        fallback = llm.RealtimeModelFallbackAdapter([model])
+        fallback = RealtimeModelFallbackAdapter([model])
         session = fallback.session()
         try:
             await session._update_session(instructions="Original")
@@ -290,7 +292,7 @@ async def test_generation_diagnostics_and_transcript_deltas():
 @pytest.mark.parametrize("via_fallback", [False, True])
 async def test_fault_retryability_does_not_replay_requests(code, retryable, via_fallback):
     async with peer_model() as (peer, model, _):
-        realtime_model = llm.RealtimeModelFallbackAdapter([model]) if via_fallback else model
+        realtime_model = RealtimeModelFallbackAdapter([model]) if via_fallback else model
         async with AgentSession(llm=realtime_model) as session:
             errors = []
             session.on("error", errors.append)
@@ -318,10 +320,9 @@ async def test_fault_retryability_does_not_replay_requests(code, retryable, via_
             assert peer.requests.empty()
 
 
-class GainOutput(FakeAudioOutput):
+class GainOutput(RimeAudioOutput):
     def __init__(self):
-        super().__init__()
-        self._capabilities = AudioOutputCapabilities(pause=False, gain=True)
+        super().__init__(FakeAudioOutput())
         self.frames = []
 
     async def capture_frame(self, frame):
@@ -380,9 +381,9 @@ async def test_noninterrupting_response_ignores_confirmed_speech():
 @pytest.mark.parametrize("source", ["reply", "event"])
 async def test_fallback_preserves_generation_metadata_and_speech_hints(nested, source):
     async with peer_model(request_id="fallback-request") as (peer, model, _):
-        fallback = llm.RealtimeModelFallbackAdapter([model])
+        fallback = RealtimeModelFallbackAdapter([model])
         if nested:
-            fallback = llm.RealtimeModelFallbackAdapter([fallback])
+            fallback = RealtimeModelFallbackAdapter([fallback])
         session = fallback.session()
         hints, generations = [], []
         session.on("input_speech_hint", hints.append)

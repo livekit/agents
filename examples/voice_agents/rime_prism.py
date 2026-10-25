@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 from rimelabs_sdk.realtime import PrismFiller, TurnDetection
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, function_tool
+from livekit.agents import Agent, AgentServer, JobContext, cli, function_tool
 from livekit.plugins import rime
 
 load_dotenv()
@@ -40,7 +40,7 @@ async def entrypoint(ctx: JobContext) -> None:
         truncation="auto",
         tool_fillers={"lookup_order": PrismFiller(type="text", text="Checking that order.")},
     )
-    session = AgentSession(llm=model)
+    session = rime.realtime.AgentSession(llm=model)
     ctx.add_shutdown_callback(model.aclose)
     await session.start(agent=Assistant(), room=ctx.room)
 
