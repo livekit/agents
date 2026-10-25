@@ -55,6 +55,8 @@ pub struct SessionApi {
     anchor: lk_agents_abi::WallAnchor,
     /// What only a host-built session carries ([`host_new`](Self::host_new)).
     host: HostParts,
+    /// Every provider handed over is registered here; the driver performs against it.
+    resources: lk_agents_abi::resources::Resources,
 }
 
 impl SessionApi {
@@ -313,24 +315,31 @@ impl SessionApi {
 
 type Leg<T> = Maybe<Option<Arc<T>>>;
 
+/// The providers a host call hands over, registered.
+pub(super) struct ModelRefs {
+    pub(super) llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
+    pub(super) tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
+    pub(super) stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
+    pub(super) vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
+}
+
 impl SessionApi {
     /// Given present, given `None` clears, not-given keeps. The speaker filter follows the STT: the
     /// options given, else none for a swapped STT (only a `MultiSpeakerAdapter` brings some), kept:
     /// `None`.
-    #[allow(clippy::type_complexity)]
+    /// Each provider given is wrapped and registered: the command carries its reference.
     fn swap(
         &self,
         llm: Leg<dyn Llm>,
         tts: Leg<dyn Tts>,
         stt: Leg<dyn Stt>,
-        vad: &Leg<dyn Vad>,
+        vad: Leg<dyn Vad>,
         speaker_filter: Maybe<Option<crate::audio::SpeakerFilterConfig>>,
-    ) -> (Leg<dyn Llm>, Leg<dyn Tts>, Leg<dyn Stt>, Option<Option<crate::audio::SpeakerFilterConfig>>)
-    {
-        fn map<T: ?Sized>(leg: Leg<T>, f: impl FnOnce(Arc<T>) -> Arc<T>) -> Leg<T> {
+    ) -> (ModelRefs, Option<Option<crate::audio::SpeakerFilterConfig>>) {
+        fn map<T: ?Sized, R>(leg: Leg<T>, f: impl FnOnce(Arc<T>) -> R) -> Maybe<Option<R>> {
             match leg {
-                Maybe::Given(Some(v)) => Maybe::Given(Some(f(v))),
-                other => other,
+                Maybe::Given(given) => Maybe::Given(given.map(f)),
+                Maybe::NotGiven => Maybe::NotGiven,
             }
         }
         fn slot<T>(slot: &mut bool, arg: &Maybe<Option<T>>) {
@@ -339,21 +348,26 @@ impl SessionApi {
             }
         }
         let clock = self.time.clock();
-        let (llm, tts, stt) =
-            (map(llm, llm_leg), map(tts, |t| tts_leg(t, clock)), map(stt, stt_leg));
+        let r = &self.resources;
+        let models = ModelRefs {
+            llm: map(llm, |l| r.register_llm(llm_leg(l))),
+            tts: map(tts, |t| r.register_tts(tts_leg(t, clock))),
+            stt: map(stt, |s| r.register_stt(stt_leg(s))),
+            vad: map(vad, |v| r.register_vad(v)),
+        };
         {
             let mut legs = self.legs.lock().unwrap_or_else(|p| p.into_inner());
-            slot(&mut legs.stt, &stt);
-            slot(&mut legs.vad, vad);
-            slot(&mut legs.llm, &llm);
-            slot(&mut legs.tts, &tts);
+            slot(&mut legs.stt, &models.stt);
+            slot(&mut legs.vad, &models.vad);
+            slot(&mut legs.llm, &models.llm);
+            slot(&mut legs.tts, &models.tts);
         }
-        let filter = match (&stt, speaker_filter) {
+        let filter = match (&models.stt, speaker_filter) {
             (_, Maybe::Given(config)) => Some(config),
             (Maybe::Given(_), Maybe::NotGiven) => Some(None),
             (Maybe::NotGiven, Maybe::NotGiven) => None,
         };
-        (llm, tts, stt, filter)
+        (models, filter)
     }
 
     /// Shared by `update_agent`, `hook_described` and `enter_task`. A host frame change closes the
@@ -379,7 +393,8 @@ impl SessionApi {
         } = frame;
         let options = turn_handling.as_ref().map(crate::turn::agent_patch).unwrap_or_default();
         self.set_agent_layer(Some(options));
-        let (llm, tts, stt, speaker_filter) = self.swap(llm, tts, stt, &vad, speaker_filter);
+        let (ModelRefs { llm, tts, stt, vad }, speaker_filter) =
+            self.swap(llm, tts, stt, vad, speaker_filter);
         let update = AgentUpdate {
             agent,
             instructions,

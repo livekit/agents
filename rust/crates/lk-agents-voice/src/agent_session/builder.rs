@@ -43,6 +43,8 @@ pub struct DriverBuilder {
     pub capture_run: Option<crate::run_result::RunSpec>,
     /// Consecutive unrecoverable errors of one leg tolerated before closing (default `3`).
     pub max_unrecoverable_errors: u32,
+    /// Where the providers below are registered, and every one handed over later.
+    pub resources: lk_agents_abi::resources::Resources,
     pub llm: Option<Arc<dyn Llm>>,
     /// A TTS with no duplex path arrives wrapped in `StreamAdapter`.
     pub tts: Option<Arc<dyn Tts>>,
@@ -284,10 +286,15 @@ impl DriverBuilder {
             spawner: Arc::clone(&self.spawner),
             frames: Arc::new(FrameTable::new()),
             gen_ids: std::sync::atomic::AtomicU64::new(0),
+            resources: self.resources.clone(),
             activity:
                 tokio::sync::watch::channel(crate::agent_session::ActivitySnapshot::default()).0,
         });
-        let tts = self.tts.clone();
+        let resources = &self.resources;
+        let llm = self.llm.clone().map(|l| resources.register_llm(l));
+        let tts = self.tts.clone().map(|t| resources.register_tts(t));
+        let stt = self.stt.clone().map(|s| resources.register_stt(s));
+        let vad = self.vad.clone().map(|v| resources.register_vad(v));
 
         let config = self.config.clone();
         let mut audio_recognition =
@@ -309,10 +316,10 @@ impl DriverBuilder {
         let session = LiveSession::new(
             config,
             crate::agent_session::SessionParts {
-                llm: self.llm,
+                llm,
                 tts,
-                stt: self.stt,
-                vad: self.vad,
+                stt,
+                vad,
                 max_unrecoverable_errors: self.max_unrecoverable_errors,
                 start_options: crate::agent_session::StartOptions {
                     recorder: self.recorder,

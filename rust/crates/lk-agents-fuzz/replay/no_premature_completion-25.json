@@ -273,7 +273,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Tts"
+          "models": "Tts"
         }
       },
       {

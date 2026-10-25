@@ -629,8 +629,8 @@ impl Driver {
             frame: self.current,
             toolset: spec.toolset,
             providers: Providers {
-                llm: self.session.llm.as_ref().cloned(),
-                tts: self.session.tts.as_ref().cloned(),
+                llm: self.session.llm.as_ref().and_then(|l| self.shared.resources.llm(l.id)),
+                tts: self.session.tts.as_ref().and_then(|t| self.shared.resources.tts(t.id)),
                 toolset: advertised,
                 tools_host_extra: self.session.tool_hosts.clone(),
             },

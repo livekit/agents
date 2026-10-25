@@ -381,6 +381,7 @@ impl Driver {
         self.execute(out);
         self.settle_waiters_at_end();
         self.release_tasks_at_end();
+        self.release_all_providers();
     }
 
     /// When the core next wants [`Event::Wake`]: its earliest deadline, or the last step's instant
@@ -436,6 +437,7 @@ impl Driver {
                     kind: command.kind(),
                 });
                 self.command_origin = origin;
+                self.session.providers.extend(command.resources());
                 // Past the close's hard edge no command takes effect: its promise is answered.
                 // A `Close` joins; a hook's answer is still read.
                 let late = self.session.closing_past_edge()
@@ -468,6 +470,7 @@ impl Driver {
             self.pump_schedule(now, &mut out);
         }
         self.settle_waiters(now, &mut out);
+        self.release_providers(&mut out);
         self.execute(out);
         self.publish_gate();
     }

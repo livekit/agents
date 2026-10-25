@@ -82,8 +82,8 @@ use crate::{
     check::{Failure, Subject, check_all},
     fakes::{self, Control, Record, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot},
     input::{
-        AgentText, AudioChannels, Confidence, Count, DtmfInput, HookAnswer, Input, IvrInput, Knob,
-        Millis, Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
+        AgentText, Confidence, Count, DtmfInput, HookAnswer, Input, IvrInput, Knob, Millis, Models,
+        Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
     },
     record::step_name,
     record::{
@@ -373,6 +373,8 @@ pub struct Run {
     tasks: Arc<Tasks>,
     stamps: Stamps,
     pub registry: Arc<Registry>,
+    /// Where the fakes handed to the session are registered.
+    resources: lk_agents_abi::resources::Resources,
     /// What the fakes have done and not yet been read. Drained after every input; see [`Record`]
     /// for why reading it later still yields the order things happened in.
     records: mpsc::UnboundedReceiver<Record>,

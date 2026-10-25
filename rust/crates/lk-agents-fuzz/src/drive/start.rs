@@ -128,7 +128,9 @@ impl Run {
             let (mic, frames) = fakes::FakeAudioInput::new();
             Some((mic, (registry.new_mic(), frames)))
         };
+        let resources = lk_agents_abi::resources::Resources::default();
         let (mut driver, session) = DriverBuilder {
+            resources: resources.clone(),
             time: time.clone(),
             spawner: tasks.clone(),
             config: DriverConfig::new(config, legs),
@@ -234,6 +236,7 @@ impl Run {
             room: room_tx,
             room_io: room_io_tx,
             session,
+            resources: resources.clone(),
             driver: Some(driver),
             queue: super::queue::Queue::new(schedule, policy),
             time,

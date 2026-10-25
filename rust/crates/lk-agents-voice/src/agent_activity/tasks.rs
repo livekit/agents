@@ -142,6 +142,14 @@ mod tasks {
     }
 
     impl Tasks {
+        /// Every frame held: the parents to reinstall and the entries waiting their turn.
+        pub(crate) fn frames(&self) -> impl Iterator<Item = &AgentUpdate> {
+            std::iter::once(&self.slot).chain(&self.stack).flat_map(|slot| {
+                let restore = slot.current.as_ref().and_then(|t| t.restore.as_ref());
+                restore.into_iter().chain(slot.queue.iter().map(|e| &e.frame))
+            })
+        }
+
         pub(crate) fn any_live(&self) -> bool {
             self.slot.current.is_some() || self.stack.iter().any(|s| s.current.is_some())
         }

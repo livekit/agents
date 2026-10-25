@@ -8,7 +8,8 @@ use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use crate::workflows::{TaskHandle, TaskId};
-use lk_agents_abi::{ChatContext, Llm, Maybe, Stt, Tts, Vad};
+use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::{ChatContext, Maybe};
 use lk_agents_voice::io::AudioInput;
 use std::sync::Arc;
 
@@ -531,10 +532,10 @@ pub enum ActivityCommand {
     /// **Not a handoff**: only the providers change; the streaming legs reopen as a handoff reopens
     /// them.
     UpdateModels {
-        stt: Maybe<Option<Arc<dyn Stt>>>,
-        vad: Maybe<Option<Arc<dyn Vad>>>,
-        llm: Maybe<Option<Arc<dyn Llm>>>,
-        tts: Maybe<Option<Arc<dyn Tts>>>,
+        stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
+        vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
+        llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
+        tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
     },
     /// Runs the driving frame's `on_exit` (once per frame), then pauses scheduling until the speech
     /// in flight finishes, tools included. A second joins. Refused only if the pause is lifted or
@@ -573,11 +574,11 @@ pub struct AgentUpdate {
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     /// `NotGiven` keeps, `Given(x)` installs, `Given(None)` is `Agent(llm=None)`. The host picks
     /// `NotGiven` on identity, so warm state is preserved.
-    pub llm: Maybe<Option<Arc<dyn Llm>>>,
-    pub tts: Maybe<Option<Arc<dyn Tts>>>,
+    pub llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
+    pub tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
     /// `Given` closes the leg and reopens it.
-    pub stt: Maybe<Option<Arc<dyn Stt>>>,
-    pub vad: Maybe<Option<Arc<dyn Vad>>>,
+    pub stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
+    pub vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
     /// **Replaced whole** and re-resolved over the resulting legs.
     pub options: crate::agent_activity::options::SessionPatch,
     /// `Close` runs the leaving frame's `on_exit`; `Pause` keeps it for a later resume, no hook.
@@ -610,7 +611,50 @@ pub enum HandoffRefused {
     NotDescribed,
 }
 
+/// The provider a three-state argument hands over.
+fn handed<R>(arg: &Maybe<Option<R>>, id: impl Fn(&R) -> ResourceId) -> Option<ResourceId> {
+    match arg {
+        Maybe::Given(Some(r)) => Some(id(r)),
+        Maybe::Given(None) | Maybe::NotGiven => None,
+    }
+}
+
+impl Command {
+    /// The providers it hands the core.
+    pub(crate) fn resources(&self) -> Vec<ResourceId> {
+        match self {
+            Command::Activity(ActivityCommand::Update(update))
+            | Command::HookDone { outcome: HookOutcome::Described(update), .. } => {
+                update.resources().collect()
+            }
+            Command::Task(TaskCommand::Enter(entry)) => entry.frame.resources().collect(),
+            Command::Activity(ActivityCommand::UpdateModels { stt, vad, llm, tts }) => [
+                handed(stt, |r| r.id),
+                handed(vad, |r| r.id),
+                handed(llm, |r| r.id),
+                handed(tts, |r| r.id),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
 impl AgentUpdate {
+    /// The providers it hands over.
+    pub(crate) fn resources(&self) -> impl Iterator<Item = ResourceId> {
+        [
+            handed(&self.llm, |r| r.id),
+            handed(&self.tts, |r| r.id),
+            handed(&self.stt, |r| r.id),
+            handed(&self.vad, |r| r.id),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
     pub fn frame(agent: impl Into<String>, instructions: Instructions) -> Self {
         AgentUpdate {
             agent: agent.into(),

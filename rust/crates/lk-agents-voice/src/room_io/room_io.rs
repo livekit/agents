@@ -27,12 +27,6 @@ use tokio::sync::{mpsc, watch};
 /// `RecorderIO._write_task`'s `WRITE_INTERVAL`, on the session clock.
 pub const RECORDER_FLUSH: Duration = Duration::from_millis(2500);
 
-/// A provider parked between `Effect::Provider(OpenLeg)` and the performer's spawn.
-pub(crate) enum PendingOpen {
-    Stt(Arc<dyn lk_agents_abi::Stt>),
-    Vad(Arc<dyn lk_agents_abi::Vad>),
-}
-
 pub struct StreamOpened {
     pub open: u64,
     pub leg: StreamKind,

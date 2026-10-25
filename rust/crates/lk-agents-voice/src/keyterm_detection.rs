@@ -788,7 +788,7 @@ impl Driver {
     /// `_on_conversation_item_added`; fed only while a pass could run, as the reference subscribes.
     pub(crate) fn keyterms_on_item(&mut self, now: Ts, item: &ChatItem, out: &mut Out) {
         let detecting = self.session.keyterms.as_ref().is_some_and(KeytermSlot::detecting)
-            && self.session.stt.as_ref().is_some_and(|stt| stt.capabilities().keyterms);
+            && self.session.stt.as_ref().is_some_and(|stt| stt.capabilities.keyterms);
         if !detecting {
             return;
         }
@@ -867,7 +867,8 @@ impl Driver {
     }
 
     fn push_keyterms(&mut self, terms: Vec<String>, out: &mut Out) {
-        if let Some(stt) = self.session.stt.as_ref() {
+        // Called through the table until the keyterm pass is core state (step 3).
+        if let Some(stt) = self.session.stt.as_ref().and_then(|s| self.shared.resources.stt(s.id)) {
             stt.update_keyterms(&terms);
         }
         out.trace(DetectorStep::KeytermsPushed { terms });

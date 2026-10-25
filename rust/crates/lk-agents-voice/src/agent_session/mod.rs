@@ -9,7 +9,7 @@ use crate::audio::LaunchGate;
 use crate::generation::GenEvent;
 use crate::io::RealtimeAudioNode;
 use lk_agents_abi::voice::events::AgentState;
-use lk_agents_abi::{Llm, Maybe, Spawner, Stt, Ts, Tts, Vad};
+use lk_agents_abi::{Maybe, Spawner, Ts};
 use lk_agents_voice::io::{AudioOutput, TextOutput};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +24,7 @@ pub mod driver;
 pub mod effects;
 pub mod host_events;
 pub(crate) mod idle;
+pub(crate) mod providers;
 pub(crate) mod signals;
 pub mod time;
 
@@ -59,11 +60,11 @@ pub(crate) struct LiveSession {
     /// `_chat_ctx`: the one record of the session's items, each agent's view of them.
     pub(crate) chat_ctx: crate::agent::SessionChatCtx,
     /// Snapshotted into every reply at creation.
-    pub(crate) llm: Option<Arc<dyn Llm>>,
-    pub(crate) tts: Option<Arc<dyn Tts>>,
-    pub(crate) stt: Option<Arc<dyn Stt>>,
+    pub(crate) llm: Option<lk_agents_abi::resources::LlmRef>,
+    pub(crate) tts: Option<lk_agents_abi::resources::TtsRef>,
+    pub(crate) stt: Option<lk_agents_abi::resources::SttRef>,
     /// Restored to a task's parent on exit.
-    pub(crate) vad: Option<Arc<dyn Vad>>,
+    pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
     /// `AgentSession._tools`, and the hosts that run them.
     pub(crate) tools: crate::tool_executor::SessionTools,
     pub(crate) tool_hosts: Vec<lk_agents_abi::HostRef>,
@@ -75,16 +76,18 @@ pub(crate) struct LiveSession {
     /// `_global_run_state`.
     pub(crate) runs: crate::run_result::Runs,
     pub(crate) idle: IdleHolds,
+    /// The providers held at the end of the last step, and those handed over since.
+    pub(crate) providers: std::collections::BTreeSet<lk_agents_abi::resources::ResourceId>,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening frame and
 /// what `start()` asked for.
 #[derive(Default)]
 pub(crate) struct SessionParts {
-    pub(crate) llm: Option<Arc<dyn Llm>>,
-    pub(crate) tts: Option<Arc<dyn Tts>>,
-    pub(crate) stt: Option<Arc<dyn Stt>>,
-    pub(crate) vad: Option<Arc<dyn Vad>>,
+    pub(crate) llm: Option<lk_agents_abi::resources::LlmRef>,
+    pub(crate) tts: Option<lk_agents_abi::resources::TtsRef>,
+    pub(crate) stt: Option<lk_agents_abi::resources::SttRef>,
+    pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
     pub(crate) max_unrecoverable_errors: u32,
     pub(crate) start_options: StartOptions,
     pub(crate) room_link: Option<crate::room_io::link::RoomLinkConfig>,
@@ -142,6 +145,7 @@ impl LiveSession {
             closing: None,
             runs: Default::default(),
             idle: IdleHolds::default(),
+            providers: Default::default(),
         }
     }
 
@@ -201,18 +205,20 @@ impl LiveSession {
     /// replies keep their snapshot.
     pub(crate) fn apply_providers(
         &mut self,
-        llm: Maybe<Option<Arc<dyn Llm>>>,
-        tts: Maybe<Option<Arc<dyn Tts>>>,
+        llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
+        tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
+        out: &mut crate::agent_session::effects::Out,
     ) {
+        use crate::agent_session::effects::{Effect, ProviderCall};
         if let Maybe::Given(llm) = llm {
             if let Some(l) = &llm {
-                l.prewarm();
+                out.machine().push(Effect::Provider(ProviderCall::Prewarm(l.id)));
             }
             self.llm = llm;
         }
         if let Maybe::Given(tts) = tts {
             if let Some(t) = &tts {
-                t.prewarm();
+                out.machine().push(Effect::Provider(ProviderCall::Prewarm(t.id)));
             }
             self.tts = tts;
         }
@@ -371,6 +377,8 @@ pub struct SessionShared {
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
     pub gen_ids: std::sync::atomic::AtomicU64,
     pub activity: tokio::sync::watch::Sender<ActivitySnapshot>,
+    /// The providers by id, until the runtime owns them.
+    pub resources: lk_agents_abi::resources::Resources,
 }
 
 impl SessionShared {

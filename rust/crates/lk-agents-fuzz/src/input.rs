@@ -444,8 +444,8 @@ impl DtmfKey {
 }
 
 plain_enum! {
-    /// Which provider legs a model swap replaces.
-    AudioChannels { Stt, Llm, Tts, LlmAndTts, All }
+    /// Which models a swap replaces.
+    Models { Stt, Llm, Tts, LlmAndTts, All }
 }
 plain_enum! {
     /// Who is speaking in a history item the host supplies.
@@ -469,28 +469,9 @@ macro_rules! unreferenced {
 }
 
 unreferenced!(
-    bool,
-    AgentText,
-    UserText,
-    Millis,
-    Count,
-    String,
-    IoKind,
-    SayInput,
-    ToolAnswer,
-    HookAnswer,
-    Knob,
-    TurnMode,
-    IvrInput,
-    AudioChannels,
-    Role,
-    RoomIn,
-    Confidence,
-    ToolArgs,
-    Speaker,
-    RtEvent,
-    DtmfInput,
-    DtmfKey
+    bool, AgentText, UserText, Millis, Count, String, IoKind, SayInput, ToolAnswer, HookAnswer,
+    Knob, TurnMode, IvrInput, Models, Role, RoomIn, Confidence, ToolArgs, Speaker, RtEvent,
+    DtmfInput, DtmfKey
 );
 
 impl<K: Resource> Referenced for Ref<K> {
@@ -643,7 +624,7 @@ inputs! {
     UpdateChatCtx { items: Vec<Role>, text: AgentText } leaf activity::UpdateChatCtx;
     SetAudioOutput { attach: bool } opens [Output] leaf activity::SetAudioOutput;
     SetTranscriptionOutput { attach: bool } opens [Output] leaf activity::SetTranscriptionOutput;
-    UpdateModels { legs: AudioChannels } leaf activity::UpdateModels;
+    UpdateModels { models: Models } leaf activity::UpdateModels;
     /// `drain()`: the frame's `on_exit`, then scheduling pauses and the session stays open, idle.
     /// `wait` asks for the answer.
     Drain { wait: bool } opens [Answer] leaf activity::Drain;

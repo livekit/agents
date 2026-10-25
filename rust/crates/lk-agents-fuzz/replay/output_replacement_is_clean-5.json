@@ -174,7 +174,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Stt"
+          "models": "Stt"
         }
       },
       {
@@ -382,7 +382,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "All"
+          "models": "All"
         }
       },
       {

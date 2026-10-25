@@ -3,10 +3,10 @@
 
 use super::{
     CLOSE_TIMEOUT, CommandRefused, FramePusher, HostMetricsRecord, HostParts,
-    InterruptionPortFactory, NodeFactory, NotAnImage, NotInterruptible, OpenRefused, Ready, Reply,
-    SessionApi, SessionBuildError, SessionEvents, SessionRefused, SessionRoom, SessionRunner,
-    Stage, StartFailed, TextPusher, UnknownCloseReason, UpdateAgentArgs, host_toolset, llm_leg,
-    origin_of, session_tools, stt_leg, tts_leg,
+    InterruptionPortFactory, ModelRefs, NodeFactory, NotAnImage, NotInterruptible, OpenRefused,
+    Ready, Reply, SessionApi, SessionBuildError, SessionEvents, SessionRefused, SessionRoom,
+    SessionRunner, Stage, StartFailed, TextPusher, UnknownCloseReason, UpdateAgentArgs,
+    host_toolset, llm_leg, origin_of, session_tools, stt_leg, tts_leg,
 };
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
@@ -256,7 +256,9 @@ impl SessionApi {
             sink_can_pause: true,
         };
 
+        let resources = lk_agents_abi::resources::Resources::default();
         let builder = DriverBuilder {
+            resources: resources.clone(),
             agent,
             time: time.clone(),
             spawner: spawner.clone(),
@@ -316,6 +318,7 @@ impl SessionApi {
             time,
             dtmf_reply: Mutex::new(None),
             host: HostParts::default(),
+            resources,
         };
         // The reference's `@deprecate_params` warnings, as `Diagnostic` events, not Python logs.
         if let Some(events) = &on_event {
@@ -419,7 +422,8 @@ impl SessionApi {
         vad: Maybe<Option<Arc<dyn Vad>>>,
         speaker_filter: Maybe<Option<crate::audio::SpeakerFilterConfig>>,
     ) -> Result<(), SessionRefused> {
-        let (llm, tts, stt, filter) = self.swap(llm, tts, stt, &vad, speaker_filter);
+        let (ModelRefs { llm, tts, stt, vad }, filter) =
+            self.swap(llm, tts, stt, vad, speaker_filter);
         self.send(ActivityCommand::UpdateModels { stt, vad, llm, tts })?;
         if let Some(config) = filter {
             self.send(ActivityCommand::SetSpeakerFilter(config))?;

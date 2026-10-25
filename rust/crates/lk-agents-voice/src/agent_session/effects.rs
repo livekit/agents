@@ -9,6 +9,7 @@ use crate::audio::AudioChannel;
 use crate::audio_recognition::{EndOfTurnInfo, InterruptionSignal, TurnDetectionMode};
 use crate::events::SessionEvent;
 use crate::trace::{CoreStep, InputStep, InterruptStep, RealtimeStep, Step, Trace, TurnStep};
+use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::voice::events::UserState;
 use lk_agents_abi::{FrameId, Ts};
@@ -299,7 +300,12 @@ pub enum ProviderCall {
     OpenLeg {
         leg: StreamKind,
         open: u64,
+        resource: ResourceId,
     },
+    /// `prewarm()`: open the provider's connection pool early.
+    Prewarm(ResourceId),
+    /// The core holds the provider no more.
+    Release(ResourceId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -662,15 +668,23 @@ impl Driver {
             }
             // Journal-only: the learn is the machine's. The open runs off the loop (the provider
             // awaits a connection); the stream comes back as `Input::StreamOpened`.
-            E::Provider(P::OpenLeg { leg, open }) => {
-                let Some(pending) = self.input.take_pending_open(open) else { return };
+            E::Provider(P::OpenLeg { leg, open, resource }) => {
+                enum Pending {
+                    Stt(Arc<dyn lk_agents_abi::Stt>),
+                    Vad(Arc<dyn lk_agents_abi::Vad>),
+                }
+                let resources = &self.shared.resources;
+                let pending = match leg {
+                    StreamKind::Stt => resources.stt(resource).map(Pending::Stt),
+                    StreamKind::Vad => resources.vad(resource).map(Pending::Vad),
+                };
+                let Some(pending) = pending else { return };
                 let tx = self.leg_opens.clone();
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     use crate::room_io::Opened;
-                    use crate::room_io::PendingOpen;
                     use crate::room_io::StreamOpened;
                     let outcome = match pending {
-                        PendingOpen::Stt(stt) => match stt.stream(None, None).await {
+                        Pending::Stt(stt) => match stt.stream(None, None).await {
                             Some(Ok((sink, source))) => Ok(Opened::Stt(sink, source)),
                             Some(Err(e)) => Err(e),
                             None => Err(lk_agents_abi::errors::ProviderError::Local(
@@ -679,13 +693,15 @@ impl Driver {
                                 ),
                             )),
                         },
-                        PendingOpen::Vad(vad) => {
+                        Pending::Vad(vad) => {
                             vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
                         }
                     };
                     let _ = tx.send(StreamOpened { open, leg, outcome });
                 });
             }
+            E::Provider(P::Prewarm(id)) => self.shared.resources.prewarm(id),
+            E::Provider(P::Release(id)) => self.shared.resources.release(id),
             E::Detector(D::Close) => {
                 if let Some(leg) = self.activity.audio_recognition.eot() {
                     leg.close();

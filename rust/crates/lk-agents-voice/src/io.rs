@@ -745,7 +745,6 @@ pub(crate) struct AgentInput {
     video_sampler: Option<Arc<crate::room_io::_input::VideoSampler>>,
     video_sink_warned: bool,
     gate: Arc<crate::agent_activity::GateSnapshot>,
-    pending_opens: std::collections::BTreeMap<u64, crate::room_io::PendingOpen>,
     next_open: u64,
     /// A `StreamOpened` for any other open is discarded (0: none).
     stt_open: u64,
@@ -784,7 +783,6 @@ impl AgentInput {
             video_sampler,
             video_sink_warned: false,
             gate,
-            pending_opens: std::collections::BTreeMap::new(),
             next_open: 0,
             stt_open: 0,
             vad_open: 0,
@@ -966,12 +964,9 @@ impl AgentInput {
         !std::mem::replace(&mut self.video_sink_warned, true)
     }
 
-    /// A provider parked for the performer; the open's id.
-    pub(crate) fn request_open(&mut self, pending: crate::room_io::PendingOpen) -> u64 {
+    pub(crate) fn mint_open(&mut self) -> u64 {
         self.next_open += 1;
-        let open = self.next_open;
-        self.pending_opens.insert(open, pending);
-        open
+        self.next_open
     }
 
     /// The open a leg's `StreamOpened` must carry to land (0: none), and for the STT whether it
@@ -1002,10 +997,6 @@ impl AgentInput {
 
     pub(crate) fn stt_open_same(&self) -> bool {
         self.stt_open_same
-    }
-
-    pub(crate) fn take_pending_open(&mut self, open: u64) -> Option<crate::room_io::PendingOpen> {
-        self.pending_opens.remove(&open)
     }
 
     /// One `_detector` per wrapper stream: the event to forward and a changed speaker verdict.

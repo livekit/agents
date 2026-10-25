@@ -169,7 +169,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Tts"
+          "models": "Tts"
         }
       },
       {
@@ -186,7 +186,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Tts"
+          "models": "Tts"
         }
       },
       {
@@ -222,7 +222,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "All"
+          "models": "All"
         }
       },
       {

@@ -438,7 +438,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Llm"
+          "models": "Llm"
         }
       },
       {
@@ -654,7 +654,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Llm"
+          "models": "Llm"
         }
       },
       {

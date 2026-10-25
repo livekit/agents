@@ -1,14 +1,15 @@
 //! The activity's IO: the STT and VAD legs (reopened by a handoff or `update_models`), audio and
 //! video input, and output enablement.
 
+use crate::agent_session::effects::{Effect, ProviderCall};
 use crate::agent_session::effects::{Out, StreamKind};
 use crate::agent_session::{Driver, IoKind};
 use crate::audio::{
     AudioChannel, ChannelEnd, ChannelOp, Ticket, on_leg_ended, spawn_drain, tagged,
 };
-use crate::room_io::{InputProviders, Opened, PendingOpen, StreamOpened};
+use crate::room_io::{InputProviders, Opened, StreamOpened};
 use crate::trace::{CoreStep, InputKind, InputStep, OutputKind, Step, TurnStep};
-use lk_agents_abi::{ChatMessage, Llm, Maybe, Role, Ts};
+use lk_agents_abi::{ChatMessage, Maybe, Role, Ts};
 use lk_agents_voice::io::AudioInput;
 use std::sync::Arc;
 
@@ -29,8 +30,8 @@ impl Driver {
     /// never reads an empty row. `Given(None)` closes the leg; `NotGiven` leaves it.
     pub(crate) fn reopen_legs(
         &mut self,
-        stt: Maybe<Option<Arc<dyn lk_agents_abi::Stt>>>,
-        vad: Maybe<Option<Arc<dyn lk_agents_abi::Vad>>>,
+        stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
+        vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
         out: &mut Out,
     ) -> InputProviders {
         let given = stt.is_given() || vad.is_given();
@@ -43,10 +44,10 @@ impl Driver {
                 // A different STT: reopened; the row follows when the stream lands.
                 Some(stt) => {
                     let same_stt =
-                        self.session.stt.as_ref().is_some_and(|old| Arc::ptr_eq(old, &stt));
-                    self.session.stt = Some(Arc::clone(&stt));
+                        self.session.stt.as_ref().is_some_and(|old| old.instance == stt.instance);
+                    let open = self.request_open(StreamKind::Stt, stt.id, out);
+                    self.session.stt = Some(stt);
                     self.input.set_stt_open_same(same_stt);
-                    let open = self.request_open(PendingOpen::Stt(stt), StreamKind::Stt, out);
                     self.input.expect_open(StreamKind::Stt, open);
                     intent.stt = true;
                 }
@@ -62,8 +63,8 @@ impl Driver {
         if let Maybe::Given(vad) = vad {
             match vad {
                 Some(vad) => {
-                    self.session.vad = Some(Arc::clone(&vad));
-                    let open = self.request_open(PendingOpen::Vad(vad), StreamKind::Vad, out);
+                    let open = self.request_open(StreamKind::Vad, vad.id, out);
+                    self.session.vad = Some(vad);
                     self.input.expect_open(StreamKind::Vad, open);
                     intent.vad = true;
                 }
@@ -83,10 +84,14 @@ impl Driver {
         intent
     }
 
-    fn request_open(&mut self, pending: PendingOpen, leg: StreamKind, out: &mut Out) -> u64 {
-        let open = self.input.request_open(pending);
-        let call = crate::agent_session::effects::ProviderCall::OpenLeg { leg, open };
-        out.machine().push(crate::agent_session::effects::Effect::Provider(call));
+    fn request_open(
+        &mut self,
+        leg: StreamKind,
+        resource: lk_agents_abi::resources::ResourceId,
+        out: &mut Out,
+    ) -> u64 {
+        let open = self.input.mint_open();
+        out.machine().push(Effect::Provider(ProviderCall::OpenLeg { leg, open, resource }));
         open
     }
 
@@ -108,8 +113,8 @@ impl Driver {
                 self.discard_open(stream);
             }
             (Ok(Opened::Stt(sink, source)), true) => {
-                if let Some(stt) = self.session.stt.as_ref() {
-                    stt.prewarm();
+                if let Some(stt) = &self.session.stt {
+                    out.machine().push(Effect::Provider(ProviderCall::Prewarm(stt.id)));
                 }
                 // A different recogniser is told the full list.
                 let same_stt = self.input.stt_open_same();
@@ -175,13 +180,13 @@ impl Driver {
     /// Only a given leg is reopened.
     pub(crate) fn update_models(
         &mut self,
-        stt: Maybe<Option<Arc<dyn lk_agents_abi::Stt>>>,
-        vad: Maybe<Option<Arc<dyn lk_agents_abi::Vad>>>,
-        llm: Maybe<Option<Arc<dyn Llm>>>,
-        tts: Maybe<Option<Arc<dyn lk_agents_abi::Tts>>>,
+        stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
+        vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
+        llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
+        tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
         out: &mut Out,
     ) {
-        self.session.apply_providers(llm, tts);
+        self.session.apply_providers(llm, tts, out);
         let (stt_given, vad_given) = (stt.is_given(), vad.is_given());
         let (stt_reopened, vad_reopened) =
             (matches!(stt, Maybe::Given(Some(_))), matches!(vad, Maybe::Given(Some(_))));

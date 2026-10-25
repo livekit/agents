@@ -178,7 +178,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Llm"
+          "models": "Llm"
         }
       },
       {
@@ -379,7 +379,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Llm"
+          "models": "Llm"
         }
       },
       {
@@ -464,7 +464,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Tts"
+          "models": "Tts"
         }
       },
       {
@@ -688,7 +688,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Tts"
+          "models": "Tts"
         }
       },
       {
@@ -846,7 +846,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Llm"
+          "models": "Llm"
         }
       },
       {

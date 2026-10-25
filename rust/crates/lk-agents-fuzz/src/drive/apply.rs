@@ -405,21 +405,28 @@ impl Run {
                 let out = attach.then(|| HostTextOut(fakes::FakeTextOutput::new(registry.clone())));
                 ActivityCommand::SetTranscriptionOutput(out).into()
             }
-            Input::UpdateModels { legs } => {
-                let (stt, llm, tts) = match legs {
-                    AudioChannels::Stt => (true, false, false),
-                    AudioChannels::Llm => (false, true, false),
-                    AudioChannels::Tts => (false, false, true),
-                    AudioChannels::LlmAndTts => (false, true, true),
-                    AudioChannels::All => (true, true, true),
+            Input::UpdateModels { models } => {
+                let (stt, llm, tts) = match models {
+                    Models::Stt => (true, false, false),
+                    Models::Llm => (false, true, false),
+                    Models::Tts => (false, false, true),
+                    Models::LlmAndTts => (false, true, true),
+                    Models::All => (true, true, true),
                 };
                 ActivityCommand::UpdateModels {
                     stt: given(stt.then(|| {
                         let connect = Duration::from_millis(self.setup.connect_ms.unwrap_or(0));
-                        fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>
+                        let stt = fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>;
+                        self.resources.register_stt(stt)
                     })),
-                    llm: given(llm.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>)),
-                    tts: given(tts.then(|| fakes::FakeTts::new(registry.clone()) as Arc<Tts>)),
+                    llm: given(llm.then(|| {
+                        let llm = fakes::FakeLlm::new(registry.clone()) as Arc<Llm>;
+                        self.resources.register_llm(llm)
+                    })),
+                    tts: given(tts.then(|| {
+                        let tts = fakes::FakeTts::new(registry.clone()) as Arc<Tts>;
+                        self.resources.register_tts(tts)
+                    })),
                     vad: Maybe::NotGiven,
                 }
                 .into()

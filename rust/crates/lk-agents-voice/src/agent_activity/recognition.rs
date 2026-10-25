@@ -49,7 +49,7 @@ impl Driver {
         // `RecognizeStream._metrics_monitor_task`: one `STTMetrics` per usage report.
         if ev.kind == SpeechEventType::RecognitionUsage {
             let usage = ev.recognition_usage.clone().unwrap_or_default();
-            let id = self.session.stt.as_ref().map(|s| s.id()).unwrap_or_default();
+            let id = self.session.stt.as_ref().map(|s| s.provider.clone()).unwrap_or_default();
             let record = lk_agents_abi::metrics::base::SttMetrics {
                 label: id.label.clone(),
                 request_id: ev.request_id.clone(),

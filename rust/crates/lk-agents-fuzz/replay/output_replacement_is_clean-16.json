@@ -121,7 +121,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "Llm"
+          "models": "Llm"
         }
       },
       {
@@ -162,7 +162,7 @@
       },
       {
         "UpdateModels": {
-          "legs": "LlmAndTts"
+          "models": "LlmAndTts"
         }
       },
       {

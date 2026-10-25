@@ -157,6 +157,15 @@ impl Handoff {
         self.in_progress.as_ref().map(|h| &*h.update)
     }
 
+    /// Every switch it holds: the one in progress, then the queued ones.
+    pub(crate) fn updates(&self) -> impl Iterator<Item = &AgentUpdate> {
+        let queued = self.queue.iter().filter_map(|q| match q {
+            Queued::Ready { update, .. } => Some(&**update),
+            Queued::Describing(_) => None,
+        });
+        self.in_progress().into_iter().chain(queued)
+    }
+
     pub(crate) fn take_in_progress(&mut self) -> Option<(HandoffId, Box<AgentUpdate>)> {
         self.in_progress.take().map(|InProgress { id, update, phase: _ }| (id, update))
     }
@@ -417,7 +426,7 @@ impl Driver {
         // A reply in flight keeps the instructions and tools it snapshotted.
         let count = toolset.specs.len();
         let previous_agent = self.activity.set_agent(agent, instructions, toolset);
-        self.session.apply_providers(llm, tts);
+        self.session.apply_providers(llm, tts, out);
 
         // The new agent's view: the context it brought, or the conversation carried forward.
         let replaced_ctx = chat_ctx.is_some();
