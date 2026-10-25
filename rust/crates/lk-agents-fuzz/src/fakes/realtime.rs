@@ -81,6 +81,7 @@ impl Realtime for FakeRealtime {
             sender: Mutex::new(Some(sender)),
             events: tokio::sync::Mutex::new(events),
             next: AtomicU64::new(1),
+            extra: AtomicU64::new(1),
             server_turns: self.server_turns,
             slot: OnceLock::new(),
             registry: self.registry.clone(),
@@ -121,12 +122,13 @@ pub(super) fn deliver(socket: &Session, what: &Input) -> bool {
         socket.registry.mark_closed(slot);
         return sent;
     }
-    static EXTRA: AtomicU64 = AtomicU64::new(1);
-    let nth = EXTRA.fetch_add(1, Ordering::Relaxed);
+    let nth = socket.extra.fetch_add(1, Ordering::Relaxed);
     let event = match event {
         RtEvent::GenerationDone => unreachable!("answered above"),
         RtEvent::Disconnected => unreachable!("answered above"),
-        RtEvent::Reconnected => Event::SessionReconnected(lk_agents_abi::llm::realtime::SessionReconnected {}),
+        RtEvent::Reconnected => {
+            Event::SessionReconnected(lk_agents_abi::llm::realtime::SessionReconnected {})
+        }
         // A delta for a generation the driver never saw created.
         RtEvent::StrayDelta => Event::TextDelta(TextDelta {
             message_id: format!("rt-stray-msg-{nth}"),
@@ -150,6 +152,9 @@ pub struct Session {
     sender: Mutex<Option<mpsc::UnboundedSender<Event>>>,
     events: tokio::sync::Mutex<mpsc::UnboundedReceiver<Event>>,
     next: AtomicU64,
+    /// Numbers the events the server sends unasked, per socket so a run's ids depend on nothing
+    /// before it in the process.
+    extra: AtomicU64,
     server_turns: bool,
     slot: OnceLock<Slot>,
     registry: Arc<Registry>,
