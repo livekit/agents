@@ -306,6 +306,8 @@ pub enum ProviderCall {
     Prewarm(ResourceId),
     /// The core holds the provider no more.
     Release(ResourceId),
+    /// The realtime session's `aclose()`, off the loop; comes back as `RealtimeWake::Closed`.
+    CloseRealtime(ResourceId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -702,6 +704,14 @@ impl Driver {
             }
             E::Provider(P::Prewarm(id)) => self.shared.resources.prewarm(id),
             E::Provider(P::Release(id)) => self.shared.resources.release(id),
+            E::Provider(P::CloseRealtime(id)) => {
+                let Some(session) = self.shared.resources.realtime(id) else { return };
+                let tx = self.realtime_tx.clone();
+                lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
+                    session.aclose().await;
+                    let _ = tx.send(crate::agent_activity::realtime::RealtimeWake::Closed);
+                });
+            }
             E::Detector(D::Close) => {
                 if let Some(leg) = self.activity.audio_recognition.eot() {
                     leg.close();
@@ -723,7 +733,8 @@ impl Driver {
                 self.input.swap_video_forwarder(&*self.shared.spawner)
             }
             E::Realtime(crate::agent_session::effects::RealtimeSend(cmd)) => {
-                if let Some(session) = self.activity.rt_session.as_ref() {
+                let session = self.activity.rt_session.as_ref();
+                if let Some(session) = session.and_then(|s| self.shared.resources.realtime(s.id)) {
                     session.send(cmd);
                 }
             }

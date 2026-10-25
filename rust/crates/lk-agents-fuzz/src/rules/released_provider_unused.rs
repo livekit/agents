@@ -36,7 +36,9 @@ impl Rule for ReleasedProviderUnused {
             let Step::Input(InputStep::ProviderCalled(call)) = step else { continue };
             let id = match *call {
                 ProviderCall::OpenLeg { resource, .. } => resource,
-                ProviderCall::Prewarm(id) | ProviderCall::Release(id) => id,
+                ProviderCall::Prewarm(id)
+                | ProviderCall::Release(id)
+                | ProviderCall::CloseRealtime(id) => id,
                 ProviderCall::FlushStt | ProviderCall::FlushVad => continue,
             };
             check.expect(

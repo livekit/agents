@@ -230,7 +230,7 @@ impl Driver {
     ) {
         let ConfigDiff { endpointing, turn_detection_mode: mode, aec_warmup } = diff;
         // Refine the mode first: the journalled config carries the machine's mode.
-        let mode = match self.activity.rt_session.as_ref().map(|s| s.capabilities()) {
+        let mode = match self.activity.rt_session.as_ref().map(|s| s.capabilities) {
             Some(caps) => self.reconcile_realtime_turn_detection(&caps, out),
             None => mode,
         };
@@ -263,7 +263,7 @@ impl Driver {
         });
         // `self._rt_turn_detection_enabled`: the realtime model does its own turn taking.
         let rt_turn_detection =
-            self.activity.rt_session.as_ref().is_some_and(|s| s.capabilities().turn_detection);
+            self.activity.rt_session.as_ref().is_some_and(|s| s.capabilities.turn_detection);
         let decision = decide_commit(&CommitInputs {
             // `_scheduling_paused` holds through the hard edge (only a resume clears it, and the
             // close never resumes), so past the edge it is read off `closing`.
@@ -500,7 +500,7 @@ impl Driver {
         // segment audio (a client commit of a server-segmented buffer is refused).
         if let Some(rt) = self.activity.rt_session.as_ref() {
             let server_segments =
-                rt.capabilities().turn_detection && !self.activity.realtime_turn_detection_disabled;
+                rt.capabilities.turn_detection && !self.activity.realtime_turn_detection_disabled;
             if skip_reply {
                 if !server_segments {
                     self.rt_send(

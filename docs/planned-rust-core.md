@@ -334,7 +334,9 @@ only where the behaviour would surprise without it.
    source, the still-spawned tasks' reports included.
 1. The data plane: frame forwarding, output buffering, the synchroniser, the
    recorder tap, pre-connect audio and the realtime audio push. The gate is
-   already published once per cycle (`publish_gate`).
+   already published once per cycle (`publish_gate`). Outputs, inputs and the
+   recorder go by id here, not in 0: an interrupt cuts the sink and reads its
+   playhead inside the decision, so the playhead must first arrive as data.
 2. Generation with its tools: the LLM stream, sentence splitting, TTS, tool
    runs and playout become core state driven by model events, with audio
    demand for backpressure. Tools cannot go first: they are dispatched inside

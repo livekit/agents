@@ -358,7 +358,7 @@ impl DriverBuilder {
             speech_scheduler,
             paused_speech,
             hook_bound: self.hook_bound,
-            rt_session: realtime_session,
+            rt_session: realtime_session.map(|s| self.resources.register_realtime(s)),
             realtime_caps: realtime_caps.unwrap_or_default(),
             realtime_turn_detection_disabled: realtime_disabled.unwrap_or(false),
             realtime_resolved_mode: resolved_mode,

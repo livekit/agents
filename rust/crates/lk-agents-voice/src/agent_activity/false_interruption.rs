@@ -542,7 +542,7 @@ impl Driver {
         // Guard 3: `_rt_turn_detection_enabled`, read at the call; the server's own onset is exempt.
         let stt_enabled = turn.stt_enabled();
         let realtime_turn_detection = self.activity.rt_session.as_ref().is_some_and(|s| {
-            let caps = s.capabilities();
+            let caps = s.capabilities;
             caps.turn_detection
                 && !(caps.can_disable_turn_detection && (stt_enabled || self.input.has_vad()))
         });

@@ -3,7 +3,11 @@
 //! the provider said about itself at registration) and names the id in the effects that reach it.
 //! The table resolves an id to the provider for whoever performs those effects.
 
-use crate::{Llm, ProviderId, Stt, SttCapabilities, Tts, TtsCapabilities, Vad, VadCapabilities};
+use crate::llm::realtime::RealtimeCapabilities;
+use crate::{
+    Llm, ProviderId, RealtimeSession, Stt, SttCapabilities, Tts, TtsCapabilities, Vad,
+    VadCapabilities,
+};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -41,11 +45,19 @@ pub struct TtsRef {
     pub num_channels: u16,
 }
 
+/// The session a realtime model opened: what it said it can do when it opened.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RealtimeRef {
+    pub id: ResourceId,
+    pub capabilities: RealtimeCapabilities,
+}
+
 enum Resource {
     Stt(Arc<dyn Stt>),
     Vad(Arc<dyn Vad>),
     Llm(Arc<dyn Llm>),
     Tts(Arc<dyn Tts>),
+    Realtime(Arc<dyn RealtimeSession>),
 }
 
 #[derive(Default)]
@@ -100,6 +112,15 @@ impl Resources {
         }
     }
 
+    pub fn register_realtime(&self, session: Arc<dyn RealtimeSession>) -> RealtimeRef {
+        let capabilities = session.capabilities();
+        RealtimeRef { id: self.insert(Resource::Realtime(session)), capabilities }
+    }
+
+    pub fn realtime(&self, id: ResourceId) -> Option<Arc<dyn RealtimeSession>> {
+        self.get(id, |r| if let Resource::Realtime(s) = r { Some(Arc::clone(s)) } else { None })
+    }
+
     pub fn stt(&self, id: ResourceId) -> Option<Arc<dyn Stt>> {
         self.get(id, |r| if let Resource::Stt(s) = r { Some(Arc::clone(s)) } else { None })
     }
@@ -123,7 +144,7 @@ impl Resources {
             Some(Resource::Vad(v)) => v.prewarm(),
             Some(Resource::Llm(l)) => l.prewarm(),
             Some(Resource::Tts(t)) => t.prewarm(),
-            None => {}
+            Some(Resource::Realtime(_)) | None => {}
         }
     }
 

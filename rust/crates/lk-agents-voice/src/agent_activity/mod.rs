@@ -94,7 +94,7 @@ pub(crate) struct AgentActivity {
     /// The record version a preemptive generation was planned against.
     pub(crate) preemptive_record_version: u64,
     /// `_rt_session`. Exclusive with a pipeline.
-    pub(crate) rt_session: Option<Arc<dyn lk_agents_abi::RealtimeSession>>,
+    pub(crate) rt_session: Option<lk_agents_abi::resources::RealtimeRef>,
     pub(crate) realtime_state: crate::agent_activity::realtime::RealtimeSessionState,
     /// Dropping a sender ends its generation.
     pub(crate) realtime_players:
@@ -117,7 +117,7 @@ pub(crate) struct ActivityParts {
     pub(crate) speech_scheduler: SpeechScheduler,
     pub(crate) paused_speech: PausedSpeech,
     pub(crate) hook_bound: Option<Duration>,
-    pub(crate) rt_session: Option<Arc<dyn lk_agents_abi::RealtimeSession>>,
+    pub(crate) rt_session: Option<lk_agents_abi::resources::RealtimeRef>,
     pub(crate) realtime_caps: lk_agents_abi::llm::realtime::RealtimeCapabilities,
     pub(crate) realtime_turn_detection_disabled: bool,
     pub(crate) realtime_resolved_mode: crate::audio_recognition::TurnDetectionMode,

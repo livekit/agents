@@ -515,7 +515,7 @@ impl Driver {
     pub(crate) fn realtime_user_turn(&mut self, now: Ts, out: &mut Out) {
         let Some(rt) = self.activity.rt_session.as_ref() else { return };
         let server_segments =
-            rt.capabilities().turn_detection && !self.activity.realtime_turn_detection_disabled;
+            rt.capabilities.turn_detection && !self.activity.realtime_turn_detection_disabled;
         let request = Request::UserTurn { commit_audio: !server_segments };
         self.realtime_request(now, request, None, None, out);
     }
@@ -724,7 +724,7 @@ impl Driver {
         // `allow_interruptions=false` holds only when the client owns replies; a self-replying
         // server interrupts on onset, so the caller is told once.
         let server_replies = self.activity.rt_session.as_ref().is_some_and(|s| {
-            let caps = s.capabilities();
+            let caps = s.capabilities;
             caps.turn_detection && caps.auto_turn_reply_generation
         }) && self.activity.audio_recognition.turn_detection_mode()
             == TurnDetectionMode::RealtimeLlm;

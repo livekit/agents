@@ -12,7 +12,7 @@ use crate::agent_activity::false_interruption::InterruptOutcome;
 use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
-use crate::agent_session::effects::{Effect, Out, TimerOp, TurnTimer};
+use crate::agent_session::effects::{Effect, Out, ProviderCall, TimerOp, TurnTimer};
 use crate::agent_session::signals::Signal;
 use crate::agent_session::{
     ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
@@ -325,7 +325,7 @@ impl Driver {
     /// Tell every leg to close. The realtime socket's `aclose` runs off the loop, bounded by
     /// [`TEARDOWN_BOUND`]; its answer comes back as `RealtimeWake::Closed`.
     fn close_legs_begin(&mut self, now: Ts, out: &mut Out) {
-        let rt = self.activity.rt_session.clone();
+        let rt = self.activity.rt_session.as_ref().map(|s| s.id);
         let until = now.saturating_add(TEARDOWN_BOUND);
         if let Some(closing) = &mut self.session.closing {
             closing.phase = ClosePhase::ClosingActivity { until, closed: rt.is_none() };
@@ -335,11 +335,7 @@ impl Driver {
         let _ = self.shared.closing.send(true);
         out.machine().close_turn_detector();
         if let Some(rt) = rt {
-            let tx = self.realtime_tx.clone();
-            lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
-                rt.aclose().await;
-                let _ = tx.send(crate::agent_activity::realtime::RealtimeWake::Closed);
-            });
+            out.machine().push(Effect::Provider(ProviderCall::CloseRealtime(rt)));
         }
     }
 
