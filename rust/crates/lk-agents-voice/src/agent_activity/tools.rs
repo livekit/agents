@@ -14,7 +14,9 @@ use crate::tool_executor::{
     Batch, HANDOFF_AFTER_UPDATE, Running, ToolAnswer, ToolEnd, ToolOutcome, answer, decide,
     default_reply_instructions, emit_ended, pair_for,
 };
-use crate::trace::{CoreStep, FillerEnd, GenerationStep, ToolStep as TraceToolStep};
+use crate::trace::{
+    CoreStep, FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep,
+};
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
 use std::time::Duration;
 
@@ -385,8 +387,10 @@ impl Driver {
         if armed {
             out.machine().cancel(TurnTimer::Filler(id));
         }
-        if let Some(hook) = asking {
-            self.activity.hooks.finish(hook);
+        if let Some(hook) = asking
+            && let Some(kind) = self.activity.hooks.finish(hook)
+        {
+            out.trace(HandoffStep::HookFinished { hook, kind, how: HookEnd::Abandoned });
         }
         out.trace(GenerationStep::FillerStopped { filler: id, cause });
     }

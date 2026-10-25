@@ -627,7 +627,8 @@ pub enum HookEnd {
     Failed,
     /// The bound passed with no answer; the sequence went ahead without it.
     TimedOut,
-    /// The session closed with the hook running; user code is not cancelled.
+    /// Nothing waits on the running hook any more (the session closed, or the filler it sources
+    /// ended); user code is not cancelled.
     Abandoned,
     /// No host to run hooks: issued and finished in the same step.
     NoHost,
