@@ -1046,6 +1046,12 @@ impl Driver {
         if !self.session.idle.has_waiters() || !self.is_idle() {
             return;
         }
+        // `wait_for_idle` raises `ActivityClosedError` when it wakes on a closing session: idle
+        // reached during a close's drain grants nothing, or a hold would outlive the session.
+        if self.session.closing.is_some() {
+            self.refuse_idle_waiters(out);
+            return;
+        }
         for waiter in self.session.idle.admit() {
             out.trace(SpeechStep::IdleAnswered { hold: waiter.grant, closing: false });
             self.answer(waiter.call, waiter.answer(Ok(())));
