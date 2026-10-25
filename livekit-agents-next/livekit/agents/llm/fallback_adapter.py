@@ -1,0 +1,405 @@
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import time
+from collections.abc import AsyncIterable
+from dataclasses import dataclass
+from typing import Any, ClassVar, Literal
+
+from opentelemetry import trace
+
+from .._exceptions import APIConnectionError, APIError
+from ..log import logger
+from ..telemetry import trace_types
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from .chat_context import ChatContext, MetricsMetadata
+from .llm import LLM, ChatChunk, LLMStream
+from .tool_context import Tool, ToolChoice
+
+DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
+    max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
+)
+
+
+@dataclass
+class _LLMStatus:
+    available: bool
+    recovering_task: asyncio.Task[None] | None
+    selection_id: int = 0
+
+
+@dataclass
+class AvailabilityChangedEvent:
+    llm: LLM
+    available: bool
+
+
+class FallbackAdapter(
+    LLM[Literal["llm_availability_changed"]],
+):
+    """Agent Fallback Adapter for LLM. Manages multiple STT instances with automatic fallback
+    when the primary provider fails.
+    """
+
+    def __init__(
+        self,
+        llm: list[LLM],
+        *,
+        attempt_timeout: float = 5.0,
+        # use fallback instead of retrying
+        max_retry_per_llm: int = 0,
+        retry_interval: float = 0.5,
+        retry_on_chunk_sent: bool = False,
+        sticky: bool = False,
+    ) -> None:
+        """FallbackAdapter is an LLM that can fallback to a different LLM if the current LLM fails.
+
+        Args:
+            llm (list[LLM]): List of LLM instances to fallback to.
+            attempt_timeout (float, optional): Timeout for each LLM attempt. Defaults to 5.0.
+            max_retry_per_llm (int, optional): Internal retries per LLM. Defaults to 0, which means no
+                internal retries, the failed LLM will be skipped and the next LLM will be used.
+            retry_interval (float, optional): Interval between retries. Defaults to 0.5.
+            retry_on_chunk_sent (bool, optional): Whether to retry when a LLM failed after chunks
+                are sent. Defaults to False.
+            sticky (bool, optional): Keep using the current LLM until it fails, even if a
+                higher-priority LLM recovers. On failure, try the remaining LLMs in the given
+                order. Defaults to False.
+
+        Raises:
+            ValueError: If no LLM instances are provided.
+        """
+        if len(llm) < 1:
+            raise ValueError("at least one LLM instance must be provided.")
+
+        super().__init__()
+
+        self._llm_instances = llm
+        self._attempt_timeout = attempt_timeout
+        self._max_retry_per_llm = max_retry_per_llm
+        self._retry_interval = retry_interval
+        self._retry_on_chunk_sent = retry_on_chunk_sent
+        self._sticky = sticky
+        self._attempt_id = 0
+
+        self._status = [
+            _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
+        ]
+
+        # the instance that most recently served a request; used to label metrics & traces
+        self._active_instance: LLM = self._llm_instances[0]
+
+        for llm_instance in self._llm_instances:
+            llm_instance.on("metrics_collected", self._on_metrics_collected)
+
+    def _llm_order(self) -> list[int]:
+        order = list(range(len(self._llm_instances)))
+        if self._sticky:
+            selected = max(
+                order,
+                key=lambda i: self._status[i].selection_id if self._status[i].available else 0,
+            )
+            order.remove(selected)
+            order.insert(0, selected)
+        return order
+
+    def _next_instance(self) -> LLM:
+        """The first available instance in request order, or the primary if all are down."""
+        for i in self._llm_order():
+            if self._status[i].available:
+                return self._llm_instances[i]
+        return self._llm_instances[0]
+
+    @property
+    def model(self) -> str:
+        """The model of the instance that serves next (see :meth:`_next_instance`). Spans and
+        metrics read this, so a failover shows the model expected to answer rather than the
+        adapter; the instance that actually served is stamped per request by the stream."""
+        return self._next_instance().model
+
+    @property
+    def provider(self) -> str:
+        """The provider of the instance that serves next (see :attr:`model`)."""
+        return self._next_instance().provider
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.metrics_metadata
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> LLMStream:
+        return FallbackLLMStream(
+            llm=self,
+            conn_options=conn_options,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            extra_kwargs=extra_kwargs,
+        )
+
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Pre-warm the primary LLM.
+
+        Only the first instance is prewarmed; the remaining instances are not expected to
+        serve traffic unless the primary fails.
+
+        Args:
+            loop: Event loop to schedule the prewarm request on. Defaults to the
+                running event loop.
+        """
+        if self._llm_instances:
+            self._llm_instances[0].prewarm(loop=loop)
+
+    async def aclose(self) -> None:
+        for llm_instance in self._llm_instances:
+            llm_instance.off("metrics_collected", self._on_metrics_collected)
+
+    def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("metrics_collected", *args, **kwargs)
+
+
+def _provider_attr(llm: LLM) -> dict[str, str]:
+    normalized = trace_types.gen_ai_provider_name(llm.provider)
+    return {trace_types.ATTR_GEN_AI_PROVIDER_NAME: normalized} if normalized else {}
+
+
+class FallbackLLMStream(LLMStream):
+    _llm_request_span_name: ClassVar[str] = "llm_fallback_adapter"
+    # each instance's request span nests directly under the adapter's
+    _llm_attempt_span_name: ClassVar[str | None] = None
+    # Provider request spans own the inference operation.
+    _genai_operation_name: ClassVar[str | None] = None
+
+    def __init__(
+        self,
+        llm: FallbackAdapter,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool],
+        conn_options: APIConnectOptions,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> None:
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._fallback_adapter = llm
+        self._retry_on_chunk_sent = llm._retry_on_chunk_sent
+        # the span this request was made under (llm_node): told which instance served
+        self._caller_span = trace.get_current_span()
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+        self._extra_kwargs = extra_kwargs
+
+        self._current_stream: LLMStream | None = None
+
+    @property
+    def chat_ctx(self) -> ChatContext:
+        if self._current_stream is None:
+            return self._chat_ctx
+        return self._current_stream.chat_ctx
+
+    @property
+    def tools(self) -> list[Tool]:
+        if self._current_stream is None:
+            return self._tools
+        return self._current_stream.tools
+
+    async def _try_generate(
+        self, *, llm: LLM, check_recovery: bool = False
+    ) -> AsyncIterable[ChatChunk]:
+        """
+        Try to generate with the given LLM.
+
+        Args:
+            llm: The LLM instance to generate with
+            check_recovery: When True, indicates this is a background recovery check and the
+                          result will not be used. Recovery checks verify if a previously
+                          failed LLM has become available again.
+        """
+        try:
+            async with llm.chat(
+                chat_ctx=self._chat_ctx,
+                tools=self._tools,
+                parallel_tool_calls=self._parallel_tool_calls,
+                tool_choice=self._tool_choice,
+                extra_kwargs=self._extra_kwargs,
+                conn_options=dataclasses.replace(
+                    self._conn_options,
+                    max_retry=self._fallback_adapter._max_retry_per_llm,
+                    timeout=self._fallback_adapter._attempt_timeout,
+                    retry_interval=self._fallback_adapter._retry_interval,
+                ),
+            ) as stream:
+                if not check_recovery:
+                    stream._retry_on_chunk_sent = self._fallback_adapter._retry_on_chunk_sent
+                should_set_current = not check_recovery
+                try:
+                    async for chunk in stream:
+                        if should_set_current:
+                            should_set_current = False
+                            self._current_stream = stream
+                            self._fallback_adapter._active_instance = llm
+                        yield chunk
+                finally:
+                    # the probe nests beside the request's real attempts; tell them apart
+                    if check_recovery and stream._llm_request_span is not None:
+                        stream._llm_request_span.set_attribute(
+                            trace_types.ATTR_FALLBACK_RECOVERY, True
+                        )
+
+        except asyncio.TimeoutError:
+            if check_recovery:
+                logger.warning(f"{llm.label} recovery timed out")
+                raise
+
+            logger.warning(
+                f"{llm.label} timed out, switching to next LLM",
+            )
+
+            raise
+        except APIError as e:
+            if check_recovery:
+                logger.warning(
+                    "%s recovery failed: %s",
+                    llm.label,
+                    e,
+                )
+                raise
+
+            logger.warning(
+                "%s failed, switching to next LLM: %s",
+                llm.label,
+                e,
+            )
+            raise
+        except Exception:
+            if check_recovery:
+                logger.exception(
+                    f"{llm.label} recovery unexpected error",
+                )
+                raise
+
+            logger.exception(
+                f"{llm.label} unexpected error, switching to next LLM",
+            )
+            raise
+
+    def _try_recovery(self, llm: LLM) -> None:
+        llm_status = self._fallback_adapter._status[
+            self._fallback_adapter._llm_instances.index(llm)
+        ]
+        if llm_status.recovering_task is None or llm_status.recovering_task.done():
+
+            async def _recover_llm_task(llm: LLM) -> None:
+                try:
+                    async for _ in self._try_generate(llm=llm, check_recovery=True):
+                        pass
+
+                    llm_status.available = True
+                    logger.info(f"llm.FallbackAdapter, {llm.label} recovered")
+                    self._fallback_adapter.emit(
+                        "llm_availability_changed",
+                        AvailabilityChangedEvent(llm=llm, available=True),
+                    )
+                except Exception:
+                    return
+
+            llm_status.recovering_task = asyncio.create_task(_recover_llm_task(llm))
+
+    async def _run(self) -> None:
+        start_time = time.time()
+
+        all_failed = all(not llm_status.available for llm_status in self._fallback_adapter._status)
+        if all_failed:
+            logger.error("all LLMs are unavailable, retrying..")
+
+        for i in self._fallback_adapter._llm_order():
+            llm = self._fallback_adapter._llm_instances[i]
+            llm_status = self._fallback_adapter._status[i]
+            if llm_status.available or all_failed:
+                self._fallback_adapter._attempt_id += 1
+                attempt_id = self._fallback_adapter._attempt_id
+                llm_status.selection_id = attempt_id
+                text_sent: str = ""
+                tool_calls_sent: list[str] = []
+                try:
+                    async for result in self._try_generate(llm=llm, check_recovery=False):
+                        if result.delta:
+                            if result.delta.content:
+                                text_sent += result.delta.content
+                            for tool_call in result.delta.tool_calls:
+                                tool_calls_sent.append(tool_call.name)
+
+                        self._event_ch.send_nowait(result)
+
+                    # Restore this selection after concurrent failures without outranking
+                    # a newer selection that has not failed.
+                    llm_status.selection_id = max(llm_status.selection_id, attempt_id)
+                    if self._fallback_adapter._sticky and not llm_status.available:
+                        llm_status.available = True
+                        self._fallback_adapter.emit(
+                            "llm_availability_changed",
+                            AvailabilityChangedEvent(llm=llm, available=True),
+                        )
+
+                    # request-side attributes named the instance expected to serve; the
+                    # response side names the one that did (from `llm`, not the adapter:
+                    # concurrent requests may be served by different instances)
+                    response_attrs = {
+                        trace_types.ATTR_GEN_AI_RESPONSE_MODEL: llm.model,
+                        **_provider_attr(llm),
+                    }
+                    if self._llm_request_span is not None:
+                        self._llm_request_span.set_attributes(
+                            {
+                                trace_types.ATTR_FALLBACK_LABEL: llm.label,
+                                trace_types.ATTR_FALLBACK_INDEX: i,
+                                **response_attrs,
+                            }
+                        )
+                    self._caller_span.set_attributes(response_attrs)
+                    return
+                except Exception:  # exceptions already logged inside _try_generate
+                    llm_status.selection_id = 0
+                    if llm_status.available:
+                        llm_status.available = False
+                        self._fallback_adapter.emit(
+                            "llm_availability_changed",
+                            AvailabilityChangedEvent(llm=llm, available=False),
+                        )
+
+                    if text_sent or tool_calls_sent:
+                        extra = {"text_sent": text_sent, "tool_calls_sent": tool_calls_sent}
+                        if not self._fallback_adapter._retry_on_chunk_sent:
+                            logger.error(
+                                f"{llm.label} failed after sending chunk, skip retrying. "
+                                "Set `retry_on_chunk_sent` to `True` to enable retrying after chunks are sent.",
+                                extra=extra,
+                            )
+                            raise
+
+                        logger.warning(
+                            f"{llm.label} failed after sending chunk, retrying..",
+                            extra=extra,
+                        )
+
+            self._try_recovery(llm)
+
+        raise APIConnectionError(
+            f"all LLMs failed ({[llm.label for llm in self._fallback_adapter._llm_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
+        )
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
+        async for _ in event_aiter:
+            pass

@@ -1,0 +1,615 @@
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import time
+from collections.abc import AsyncGenerator, AsyncIterable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
+
+from opentelemetry import trace
+
+from livekit import rtc
+
+from .. import utils
+from .._exceptions import APIConnectionError
+from ..log import logger
+from ..telemetry import trace_types
+from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
+from ..utils import aio
+from .stream_adapter import StreamAdapter
+from .tts import (
+    TTS,
+    AudioEmitter,
+    ChunkedStream,
+    SynthesizedAudio,
+    SynthesizeStream,
+    TTSCapabilities,
+)
+
+if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
+
+# don't retry when using the fallback adapter
+DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
+    max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
+)
+
+
+@dataclass
+class _TTSStatus:
+    available: bool
+    # One slot per recovery path, mirroring `_STTStatus`. A single shared slot let a probe in
+    # flight on one path suppress probing on the other, and let the second path to run drop the
+    # first path's task so `aclose()` could no longer cancel it.
+    recovering_synthesize_task: asyncio.Task[None] | None
+    recovering_stream_task: asyncio.Task[None] | None
+    needs_resampling: bool
+
+
+@dataclass
+class AvailabilityChangedEvent:
+    tts: TTS
+    available: bool
+
+
+class FallbackAdapter(
+    TTS[Literal["tts_availability_changed"]],
+):
+    """Agent Fallback Adapter for TTS. Manages multiple STT instances with automatic fallback
+    when the primary provider fails.
+    """
+
+    def __init__(
+        self,
+        tts: list[TTS],
+        *,
+        max_retry_per_tts: int = 2,
+        sample_rate: int | None = None,
+    ) -> None:
+        """
+        Initialize a FallbackAdapter that manages multiple TTS instances.
+
+        Args:
+            tts (list[TTS]): A list of TTS instances to use for fallback.
+            max_retry_per_tts (int, optional): Maximum number of retries per TTS instance. Defaults to 2.
+            sample_rate (int | None, optional): Desired sample rate for the synthesized audio. If None, uses the maximum sample rate among the TTS instances.
+
+        Raises:
+            ValueError: If less than one TTS instance is provided.
+            ValueError: If TTS instances have different numbers of channels.
+        """  # noqa: E501
+
+        if len(tts) < 1:
+            raise ValueError("at least one TTS instance must be provided.")
+
+        if len({t.num_channels for t in tts}) != 1:
+            raise ValueError("all TTS must have the same number of channels")
+
+        if sample_rate is None:
+            sample_rate = max(t.sample_rate for t in tts)
+
+        num_channels = tts[0].num_channels
+
+        super().__init__(
+            capabilities=TTSCapabilities(
+                streaming=any(t.capabilities.streaming for t in tts),
+                aligned_transcript=all(t.capabilities.aligned_transcript for t in tts),
+            ),
+            sample_rate=sample_rate,
+            num_channels=num_channels,
+        )
+
+        self._tts_instances = tts
+        self._max_retry_per_tts = max_retry_per_tts
+        self._closed = False
+
+        # the instance that most recently served a request; used to label metrics & traces
+        self._active_instance: TTS = self._tts_instances[0]
+
+        self._status: list[_TTSStatus] = []
+        for t in tts:
+            needs_resampling = sample_rate != t.sample_rate
+            if needs_resampling:
+                logger.info(f"resampling {t.label} from {t.sample_rate}Hz to {sample_rate}Hz")
+
+            self._status.append(
+                _TTSStatus(
+                    available=True,
+                    recovering_synthesize_task=None,
+                    recovering_stream_task=None,
+                    needs_resampling=needs_resampling,
+                )
+            )
+
+            t.on("metrics_collected", self._on_metrics_collected)
+
+    def _next_instance(self) -> TTS:
+        """The instance the next request goes to first: the first one marked available, or
+        the primary once all are down (they are then all retried, primary first). A failed
+        instance's recovery task flips it back to available, so a recovered primary is
+        reported again before it has served."""
+        for instance, status in zip(self._tts_instances, self._status, strict=True):
+            if status.available:
+                return instance
+        return self._tts_instances[0]
+
+    @property
+    def model(self) -> str:
+        """The model of the instance that serves next (see :meth:`_next_instance`). Spans and
+        metrics read this, so a failover shows the model expected to answer rather than the
+        adapter; the instance that actually served is stamped per request by the stream."""
+        return self._next_instance().model
+
+    @property
+    def provider(self) -> str:
+        """The provider of the instance that serves next (see :attr:`model`)."""
+        return self._next_instance().provider
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.metrics_metadata
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS
+    ) -> FallbackChunkedStream:
+        return FallbackChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_FALLBACK_API_CONNECT_OPTIONS
+    ) -> FallbackSynthesizeStream:
+        return FallbackSynthesizeStream(tts=self, conn_options=conn_options)
+
+    def prewarm(self) -> None:
+        if self._tts_instances:
+            self._tts_instances[0].prewarm()
+
+    def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("metrics_collected", *args, **kwargs)
+
+    async def aclose(self) -> None:
+        # set before the sweep: _try_recovery is synchronous, so a probe is
+        # either already in a slot (and cancelled below) or refused by this
+        # flag. A stream still in flight runs its finally after this returns,
+        # and must not start a probe that nothing is left to cancel
+        self._closed = True
+
+        for tts_status in self._status:
+            if tts_status.recovering_synthesize_task is not None:
+                await aio.cancel_and_wait(tts_status.recovering_synthesize_task)
+
+            if tts_status.recovering_stream_task is not None:
+                await aio.cancel_and_wait(tts_status.recovering_stream_task)
+
+        for t in self._tts_instances:
+            t.off("metrics_collected", self._on_metrics_collected)
+
+
+def _record_fallback_served(
+    tts: TTS, index: int, request_span: trace.Span | None, caller_span: trace.Span
+) -> None:
+    """The instance that served: its label and position on the adapter's request span, and
+    the response side there and on the caller's (tts_node). From ``tts``, not the adapter:
+    concurrent requests may be served by different instances."""
+    response_attrs: dict[str, Any] = {trace_types.ATTR_GEN_AI_RESPONSE_MODEL: tts.model}
+    if (normalized := trace_types.gen_ai_provider_name(tts.provider)) is not None:
+        response_attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
+    if request_span is not None:
+        request_span.set_attributes(
+            {
+                trace_types.ATTR_FALLBACK_LABEL: tts.label,
+                trace_types.ATTR_FALLBACK_INDEX: index,
+                **response_attrs,
+            }
+        )
+    caller_span.set_attributes(response_attrs)
+
+
+def _mark_recovery(stream: ChunkedStream | SynthesizeStream) -> None:
+    # the probe nests beside the request's real attempts; tell them apart
+    if stream._tts_request_span is not None:
+        stream._tts_request_span.set_attribute(trace_types.ATTR_FALLBACK_RECOVERY, True)
+
+
+class FallbackChunkedStream(ChunkedStream):
+    _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    # each instance's request span nests directly under the adapter's
+    _tts_attempt_span_name: ClassVar[str | None] = None
+
+    def __init__(
+        self, *, tts: FallbackAdapter, input_text: str, conn_options: APIConnectOptions
+    ) -> None:
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._fallback_adapter = tts
+        # the span this request was made under (tts_node); see _record_fallback_served
+        self._caller_span = trace.get_current_span()
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
+        async for _ in event_aiter:
+            pass
+
+    async def _try_synthesize(
+        self, *, tts: TTS, recovering: bool = False
+    ) -> AsyncGenerator[SynthesizedAudio, None]:
+        try:
+            async with tts.synthesize(
+                self._input_text,
+                conn_options=dataclasses.replace(
+                    self._conn_options,
+                    max_retry=self._fallback_adapter._max_retry_per_tts,
+                    timeout=self._conn_options.timeout,
+                    retry_interval=self._conn_options.retry_interval,
+                ),
+            ) as stream:
+                should_set_active = not recovering
+                try:
+                    async for audio in stream:
+                        if should_set_active:
+                            should_set_active = False
+                            self._fallback_adapter._active_instance = tts
+                        yield audio
+                finally:
+                    if recovering:
+                        _mark_recovery(stream)
+
+        except Exception as e:
+            if recovering:
+                logger.warning("%s recovery failed: %s", tts.label, e, extra={"streamed": False})
+                raise
+
+            logger.warning(
+                f"{tts.label} error, switching to next TTS",
+                extra={"streamed": False},
+            )
+            raise
+
+    def _try_recovery(self, tts: TTS) -> None:
+        assert isinstance(self._tts, FallbackAdapter)
+
+        if self._tts._closed:
+            # nothing would cancel a probe started from here
+            return
+
+        tts_status = self._tts._status[self._tts._tts_instances.index(tts)]
+        recovering_task = tts_status.recovering_synthesize_task
+        if recovering_task is None or recovering_task.done():
+
+            async def _recover_tts_task(tts: TTS) -> None:
+                try:
+                    async for _ in self._try_synthesize(tts=tts, recovering=True):
+                        pass
+
+                    tts_status.available = True
+                    logger.info(f"tts.FallbackAdapter, {tts.label} recovered")
+                    self._tts.emit(
+                        "tts_availability_changed",
+                        AvailabilityChangedEvent(tts=tts, available=True),
+                    )
+                except Exception:  # exceptions already logged inside _try_synthesize
+                    return
+
+            tts_status.recovering_synthesize_task = asyncio.create_task(_recover_tts_task(tts))
+
+    async def _run(self, output_emitter: AudioEmitter) -> None:
+        assert isinstance(self._tts, FallbackAdapter)
+
+        start_time = time.time()
+
+        all_failed = all(not tts_status.available for tts_status in self._tts._status)
+        if all_failed:
+            logger.error("all TTSs are unavailable, retrying..")
+
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type="audio/pcm",
+        )
+
+        for i, tts in enumerate(self._tts._tts_instances):
+            tts_status = self._tts._status[i]
+            if tts_status.available or all_failed:
+                try:
+                    resampler = (
+                        rtc.AudioResampler(
+                            input_rate=tts.sample_rate,
+                            output_rate=self._tts.sample_rate,
+                        )
+                        if tts_status.needs_resampling
+                        else None
+                    )
+                    async for synthesized_audio in self._try_synthesize(tts=tts, recovering=False):
+                        if texts := synthesized_audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
+                            output_emitter.push_timed_transcript(texts)
+
+                        if resampler is not None:
+                            for rf in resampler.push(synthesized_audio.frame):
+                                output_emitter.push_frame(rf)
+                        else:
+                            output_emitter.push_frame(synthesized_audio.frame)
+
+                    if resampler is not None:
+                        for rf in resampler.flush():
+                            output_emitter.push_frame(rf)
+
+                    _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
+                    return
+                except Exception:  # exceptions already logged inside _try_synthesize
+                    if tts_status.available:
+                        tts_status.available = False
+                        self._tts.emit(
+                            "tts_availability_changed",
+                            AvailabilityChangedEvent(tts=tts, available=False),
+                        )
+
+                    if output_emitter.pushed_duration() > 0.0:
+                        logger.warning(
+                            f"{tts.label} already synthesized of audio, ignoring fallback"
+                        )
+                        # the caller heard this instance's audio: it served, partially
+                        _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
+                        return
+
+            self._try_recovery(tts)
+
+        raise APIConnectionError(
+            f"all TTSs failed ({[tts.label for tts in self._tts._tts_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
+        )
+
+
+class FallbackSynthesizeStream(SynthesizeStream):
+    _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    # each instance's request span nests directly under the adapter's
+    _tts_attempt_span_name: ClassVar[str | None] = None
+
+    def __init__(self, *, tts: FallbackAdapter, conn_options: APIConnectOptions):
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._fallback_adapter = tts
+        self._caller_span = trace.get_current_span()
+        self._pushed_tokens: list[str] = []
+
+    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
+        async for _ in event_aiter:
+            pass
+
+    async def _try_synthesize(
+        self,
+        *,
+        tts: TTS,
+        input_ch: aio.ChanReceiver[str | SynthesizeStream._FlushSentinel],
+        conn_options: APIConnectOptions,
+        recovering: bool = False,
+    ) -> AsyncGenerator[SynthesizedAudio, None]:
+        # If TTS doesn't support streaming, wrap it with StreamAdapter
+        temporary_adapter: StreamAdapter | None = None
+        if tts.capabilities.streaming:
+            stream = tts.stream(conn_options=conn_options)
+        else:
+            from .. import tokenize
+
+            temporary_adapter = StreamAdapter(
+                tts=tts,
+                sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+            )
+            stream = temporary_adapter.stream(conn_options=conn_options)
+
+        @utils.log_exceptions(logger=logger)
+        async def _forward_input_task() -> None:
+            try:
+                async for data in input_ch:
+                    if isinstance(data, str):
+                        stream.push_text(data)
+                    elif isinstance(data, self._FlushSentinel):
+                        stream.flush()
+            finally:
+                stream.end_input()
+
+        input_task = asyncio.create_task(_forward_input_task())
+
+        def _capture_started_time() -> None:
+            # ttfb measures the fallback adapter as a whole: anchor on the first time a
+            # sentence was handed to any underlying TTS — even one that failed before
+            # emitting audio — and never overwrite it when falling back to another TTS
+            if not recovering and not self._started_time and stream._started_time:
+                self._started_time = stream._started_time
+
+        try:
+            async with stream:
+                should_set_active = not recovering
+                try:
+                    async for audio in stream:
+                        _capture_started_time()
+                        if should_set_active:
+                            should_set_active = False
+                            self._fallback_adapter._active_instance = tts
+                        yield audio
+                finally:
+                    if recovering:
+                        _mark_recovery(stream)
+        except Exception as e:
+            if recovering:
+                logger.warning(
+                    "%s recovery failed: %s",
+                    tts.label,
+                    e,
+                    extra={"streamed": True},
+                )
+                raise
+
+            logger.exception(
+                f"{tts.label} error, switching to next TTS",
+                extra={"streamed": True},
+            )
+            raise
+        finally:
+            _capture_started_time()
+            try:
+                await utils.aio.cancel_and_wait(input_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
+
+    async def _run(self, output_emitter: AudioEmitter) -> None:
+        start_time = time.time()
+
+        all_failed = all(not tts_status.available for tts_status in self._fallback_adapter._status)
+        if all_failed:
+            logger.error("all TTSs are unavailable, retrying..")
+
+        new_input_ch: aio.Chan[str | SynthesizeStream._FlushSentinel] | None = None
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=self._fallback_adapter.sample_rate,
+            num_channels=self._fallback_adapter.num_channels,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+        output_emitter.start_segment(segment_id=utils.shortuuid())
+
+        async def _forward_input_task() -> None:
+            nonlocal new_input_ch
+
+            async for data in self._input_ch:
+                if new_input_ch:
+                    new_input_ch.send_nowait(data)
+
+                if isinstance(data, str) and data:
+                    self._pushed_tokens.append(data)
+
+            if new_input_ch:
+                new_input_ch.close()
+
+        input_task = asyncio.create_task(_forward_input_task())
+
+        # a probe needs text to synthesize, and _pushed_tokens is only filled
+        # once _forward_input_task has run: an instance that is skipped because
+        # it is already unavailable is reached before that happens, so the
+        # probes are started below, after the input has been consumed
+        pending_recovery: list[TTS] = []
+
+        try:
+            for i, tts in enumerate(self._fallback_adapter._tts_instances):
+                tts_status = self._fallback_adapter._status[i]
+                if tts_status.available or all_failed:
+                    try:
+                        new_input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
+
+                        for text in self._pushed_tokens:
+                            new_input_ch.send_nowait(text)
+
+                        if input_task.done():
+                            new_input_ch.close()
+
+                        resampler = (
+                            rtc.AudioResampler(
+                                input_rate=tts.sample_rate,
+                                output_rate=self._fallback_adapter.sample_rate,
+                            )
+                            if tts_status.needs_resampling
+                            else None
+                        )
+                        async for synthesized_audio in self._try_synthesize(
+                            tts=tts,
+                            input_ch=new_input_ch,
+                            conn_options=dataclasses.replace(
+                                self._conn_options,
+                                max_retry=self._fallback_adapter._max_retry_per_tts,
+                                timeout=self._conn_options.timeout,
+                                retry_interval=self._conn_options.retry_interval,
+                            ),
+                            recovering=False,
+                        ):
+                            if texts := synthesized_audio.frame.userdata.get(
+                                USERDATA_TIMED_TRANSCRIPT
+                            ):
+                                output_emitter.push_timed_transcript(texts)
+
+                            if resampler is not None:
+                                for resampled_frame in resampler.push(synthesized_audio.frame):
+                                    output_emitter.push_frame(resampled_frame)
+
+                                if synthesized_audio.is_final:
+                                    for resampled_frame in resampler.flush():
+                                        output_emitter.push_frame(resampled_frame)
+                            else:
+                                output_emitter.push_frame(synthesized_audio.frame)
+
+                        _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
+                        return
+                    except Exception:
+                        if tts_status.available:
+                            tts_status.available = False
+                            self._tts.emit(
+                                "tts_availability_changed",
+                                AvailabilityChangedEvent(tts=tts, available=False),
+                            )
+
+                        if output_emitter.pushed_duration() > 0.0:
+                            logger.warning(
+                                f"{tts.label} already synthesized of audio, ignoring the current segment for the tts fallback"  # noqa: E501
+                            )
+                            # the caller heard this instance's audio: it served, partially
+                            _record_fallback_served(
+                                tts, i, self._tts_request_span, self._caller_span
+                            )
+                            return
+
+                pending_recovery.append(tts)
+
+            raise APIConnectionError(
+                f"all TTSs failed ({[tts.label for tts in self._fallback_adapter._tts_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
+            )
+        finally:
+            await utils.aio.cancel_and_wait(input_task)
+
+            for tts in pending_recovery:
+                self._try_recovery(tts)
+
+    def _try_recovery(self, tts: TTS) -> None:
+        assert isinstance(self._tts, FallbackAdapter)
+
+        if self._tts._closed:
+            # a stream still in flight when the adapter closed runs its finally
+            # after the sweep, and nothing would cancel a probe started here
+            return
+
+        retry_text = self._pushed_tokens.copy()
+        if not retry_text:
+            return
+
+        tts_status = self._tts._status[self._tts._tts_instances.index(tts)]
+        recovering_task = tts_status.recovering_stream_task
+        if recovering_task is None or recovering_task.done():
+
+            async def _recover_tts_task(tts: TTS) -> None:
+                try:
+                    input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
+                    for t in retry_text:
+                        input_ch.send_nowait(t)
+
+                    input_ch.close()
+
+                    async for _ in self._try_synthesize(
+                        tts=tts,
+                        input_ch=input_ch,
+                        recovering=True,
+                        conn_options=dataclasses.replace(
+                            self._conn_options,
+                            max_retry=0,
+                            timeout=self._conn_options.timeout,
+                            retry_interval=self._conn_options.retry_interval,
+                        ),
+                    ):
+                        pass
+
+                    tts_status.available = True
+                    logger.info(f"tts.FallbackAdapter, {tts.label} recovered")
+                    self._tts.emit(
+                        "tts_availability_changed",
+                        AvailabilityChangedEvent(tts=tts, available=True),
+                    )
+                except Exception:
+                    return
+
+            tts_status.recovering_stream_task = asyncio.create_task(_recover_tts_task(tts))

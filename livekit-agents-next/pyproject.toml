@@ -1,0 +1,186 @@
+# The wheel is built by maturin and carries the Python package together with `livekit.agents._core`,
+# the pyo3 extension from `rust/crates/lk-agents-py` (plan 13.1: one wheel). `uv sync` builds it
+# through PEP 517 (a Rust toolchain is required); `cache-keys` below rebuilds the editable install
+# when a Rust source changes, not only when this file does.
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "livekit-agents-next"
+version = "2.0.0b1"
+description = "LiveKit Agents over the Rust core: the developer surface, the session run by `_core`"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10,<3.15"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "certifi>=2025.6.15",
+    "livekit==1.1.20",
+    "livekit-api>=1.2.0,<2",
+    "livekit-local-inference>=0.2.7",
+    "livekit-protocol>=1.1.21,<2",
+    "livekit-blingfire~=1.1,<2",
+    "protobuf>=3",
+    "pyjwt>=2.0",
+    "types-protobuf>=4",
+    "psutil>=7.0",
+    "aiohttp~=3.10",
+    "typing-extensions>=4.12",
+    "docstring_parser>=0.16",
+    "eval-type-backport",
+    "colorama>=0.4.6",
+    "av>=14.0.0",
+    "numpy>=1.26.0",
+    "pydantic>=2.5,<3",
+    "nest-asyncio>=1.6.0",
+    "opentelemetry-api>=1.45,<1.46",
+    "opentelemetry-sdk>=1.45,<1.46",
+    "opentelemetry-exporter-otlp>=1.45,<1.46",
+    "prometheus-client>=0.22",
+    "openai>=3.19,<4",
+    # Direct HTTP clients (inference, MCP) use httpx2, matching the OpenAI 3 / MCP 2 SDKs.
+    "httpx2>=2.12,<3",
+    "aiofiles>=24",
+    "json-repair==0.63.5",
+    "pyyaml>=6.0.3",
+    # Required by the deprecated rich CLI (`cli.run_app`); drop when it is removed.
+    "typer>=0.15.1",
+    "click~=8.1",
+    "sounddevice>=0.5",
+    "watchfiles>=1.0",
+    # `AgentServer.http`: the ASGI app and the two codecs the endpoint bridge drives it with
+    # (`http.py`). Pure Python, all three.
+    "starlette>=0.40",
+    "h11>=0.14",
+    "wsproto>=1.2",
+    # the text door, its client and the delegate speak A2A
+    "a2a-sdk>=1.1.2,<2",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=2.2, <3"]
+codecs = ["numpy>=1.26.0"]
+images = ["pillow>=10.3.0"]
+anam = ["livekit-plugins-anam>=1.8.6"]
+anthropic = ["livekit-plugins-anthropic>=1.8.6"]
+assemblyai = ["livekit-plugins-assemblyai>=1.8.6"]
+asyncai = ["livekit-plugins-asyncai>=1.8.6"]
+avatario = ["livekit-plugins-avatario>=1.8.6"]
+avatartalk = ["livekit-plugins-avatartalk>=1.8.6"]
+aws = ["livekit-plugins-aws>=1.8.6"]
+azure = ["livekit-plugins-azure>=1.8.6"]
+baseten = ["livekit-plugins-baseten>=1.8.6"]
+bey = ["livekit-plugins-bey>=1.8.6"]
+bithuman = ["livekit-plugins-bithuman>=1.8.7"]
+bland = ["livekit-plugins-bland>=1.8.6"]
+boson-avatar = ["livekit-plugins-boson-avatar>=1.8.6"]
+browser = ["livekit-plugins-browser>=0.4.6"]
+cambai = ["livekit-plugins-cambai>=1.8.6"]
+cartesia = ["livekit-plugins-cartesia>=1.8.6"]
+cerebras = ["livekit-plugins-cerebras>=1.8.6"]
+clova = ["livekit-plugins-clova>=1.8.6"]
+deepgram = ["livekit-plugins-deepgram>=1.8.6"]
+elevenlabs = ["livekit-plugins-elevenlabs>=1.8.6"]
+fal = ["livekit-plugins-fal>=1.8.6"]
+fishaudio = ["livekit-plugins-fishaudio>=1.8.6"]
+fireworksai = ["livekit-plugins-fireworksai>=1.8.6"]
+gladia = ["livekit-plugins-gladia>=1.8.6"]
+gnani = ["livekit-plugins-gnani>=1.8.6"]
+google = ["livekit-plugins-google>=1.8.6"]
+groq = ["livekit-plugins-groq>=1.8.6"]
+hamming = ["livekit-plugins-hamming>=1.8.6"]
+hume = ["livekit-plugins-hume>=1.8.6"]
+inworld = ["livekit-plugins-inworld>=1.8.6"]
+keyframe = ["livekit-plugins-keyframe>=1.8.6"]
+langchain = ["livekit-plugins-langchain>=1.8.6"]
+lemonslice = ["livekit-plugins-lemonslice>=1.8.6"]
+liveavatar = ["livekit-plugins-liveavatar>=1.8.6"]
+lmnt = ["livekit-plugins-lmnt>=1.8.6"]
+meta = ["livekit-plugins-meta>=1.8.6"]
+microsoft-ai = ["livekit-plugins-microsoft-ai>=1.8.6"]
+minimax = ["livekit-plugins-minimax-ai>=1.8.6"]
+mistralai = ["livekit-plugins-mistralai>=1.8.6"]
+murf = ["livekit-plugins-murf>=1.8.6"]
+nabrah = ["livekit-plugins-nabrah>=1.8.6"]
+neuphonic = ["livekit-plugins-neuphonic>=1.8.6"]
+nltk = ["livekit-plugins-nltk>=1.8.6"]
+nvidia = ["livekit-plugins-nvidia>=1.8.6"]
+openai = ["livekit-plugins-openai>=1.8.6"]
+palabra = ["livekit-plugins-palabra>=1.8.6"]
+perplexity = ["livekit-plugins-perplexity>=1.8.6"]
+protoface = ["livekit-plugins-protoface>=1.8.6"]
+resemble = ["livekit-plugins-resemble>=1.8.6"]
+respeecher = ["livekit-plugins-respeecher>=1.8.6"]
+rime = ["livekit-plugins-rime>=1.8.6"]
+runway = ["livekit-plugins-runway>=1.8.6"]
+rtzr = ["livekit-plugins-rtzr>=1.8.6"]
+sarvam = ["livekit-plugins-sarvam>=1.8.6"]
+silero = ["livekit-plugins-silero>=1.8.6"]
+simli = ["livekit-plugins-simli>=1.8.6"]
+smallestai = ["livekit-plugins-smallestai>=1.8.6"]
+simplismart = ["livekit-plugins-simplismart>=1.8.6"]
+slng = ["livekit-plugins-slng>=1.8.6"]
+soniox = ["livekit-plugins-soniox>=1.8.6"]
+speechify = ["livekit-plugins-speechify>=1.8.6"]
+speechmatics = ["livekit-plugins-speechmatics>=1.8.6"]
+spatius = ["livekit-plugins-spatius>=1.8.6"]
+spitch = ["livekit-plugins-spitch>=1.8.6"]
+synthesia = ["livekit-plugins-synthesia>=1.8.6"]
+tavus = ["livekit-plugins-tavus>=1.8.6"]
+trugen = ["livekit-plugins-trugen>=1.8.6"]
+turn-detector = ["livekit-plugins-turn-detector>=1.8.6"]
+ultravox = ["livekit-plugins-ultravox>=1.8.6"]
+upliftai = ["livekit-plugins-upliftai>=1.8.6"]
+vakyam = ["livekit-plugins-vakyam>=1.8.6"]
+gradium = ["livekit-plugins-gradium>=1.8.6"]
+xai = ["livekit-plugins-xai>=1.8.6"]
+phonic = ["livekit-plugins-phonic>=1.8.6"]
+did = ["livekit-plugins-did>=1.8.6"]
+
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
+
+[tool.maturin]
+module-name = "livekit.agents._core"
+python-source = "."
+manifest-path = "../rust/crates/lk-agents-py/Cargo.toml"
+# abi3: one wheel per platform for every Python from 3.10
+features = ["pyo3/extension-module", "pyo3/abi3-py310"]
+include = [
+    { path = "livekit/agents/resources/*", format = "wheel" },
+    { path = "livekit/agents/debug/index.html", format = "wheel" },
+]
+exclude = [
+    { path = "**/__pycache__/**", format = "wheel" },
+    { path = "**/*.pyc", format = "wheel" },
+]
+
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "../rust/Cargo.toml" },
+    { file = "../rust/Cargo.lock" },
+    { file = "../rust/crates/**/Cargo.toml" },
+    { file = "../rust/crates/**/*.rs" },
+]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit = "0 days", livekit-api = "0 days", livekit-protocol = "0 days", livekit-blingfire = "0 days" }
