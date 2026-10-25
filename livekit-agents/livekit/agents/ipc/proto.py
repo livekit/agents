@@ -236,6 +236,72 @@ class ShuttingDown:
         pass
 
 
+@dataclass
+class LaneSignal:
+    """sent by the main process to a job that holds a lane: a message landed in the lane's
+    inbox (``arrival``), or a client asked to cancel one of its tasks (``cancel``)"""
+
+    MSG_ID: ClassVar[int] = 12
+    thread_id: str = ""
+    lane: str = ""
+    kind: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.thread_id)
+        channel.write_string(b, self.lane)
+        channel.write_string(b, self.kind)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.thread_id = channel.read_string(b)
+        self.lane = channel.read_string(b)
+        self.kind = channel.read_string(b)
+
+
+@dataclass
+class LaneHeld:
+    """sent by a job to the main process: it holds a lane for a whole call (``held``), or let
+    it go, so the main process signals it about that lane"""
+
+    MSG_ID: ClassVar[int] = 13
+    thread_id: str = ""
+    lane: str = ""
+    holder: str = ""
+    held: bool = True
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.thread_id)
+        channel.write_string(b, self.lane)
+        channel.write_string(b, self.holder)
+        channel.write_bool(b, self.held)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.thread_id = channel.read_string(b)
+        self.lane = channel.read_string(b)
+        self.holder = channel.read_string(b)
+        self.held = channel.read_bool(b)
+
+
+@dataclass
+class TaskMoved:
+    """sent by a job to the main process: a turn of the job ended a task of a lane it holds,
+    so a request of the main process that waits on the task reads it now"""
+
+    MSG_ID: ClassVar[int] = 14
+    thread_id: str = ""
+    lane: str = ""
+    task_id: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.thread_id)
+        channel.write_string(b, self.lane)
+        channel.write_string(b, self.task_id)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.thread_id = channel.read_string(b)
+        self.lane = channel.read_string(b)
+        self.task_id = channel.read_string(b)
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -249,4 +315,7 @@ IPC_MESSAGES = {
     DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
     ShutdownRequestAck.MSG_ID: ShutdownRequestAck,
     ShuttingDown.MSG_ID: ShuttingDown,
+    LaneSignal.MSG_ID: LaneSignal,
+    LaneHeld.MSG_ID: LaneHeld,
+    TaskMoved.MSG_ID: TaskMoved,
 }

@@ -260,6 +260,12 @@ class ThreadJobExecutor:
                 proto.InferenceResponse(request_id=inf_req.request_id, error=str(e)),
             )
 
+    async def signal_lane(self, thread_id: str, lane: str, kind: str) -> None:
+        """A message or a cancel for a lane the running job holds for its whole call."""
+        await channel.asend_message(
+            self._pch, proto.LaneSignal(thread_id=thread_id, lane=lane, kind=kind)
+        )
+
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the executor"""
         if self._running_job is not None:
@@ -339,6 +345,14 @@ class ThreadJobExecutor:
                     task = asyncio.create_task(self._do_inference_task(msg))
                     self._inference_tasks.add(task)
                     task.add_done_callback(self._inference_tasks.discard)
+                if isinstance(msg, proto.LaneHeld) and self._running_job is not None:
+                    from ..storage import hub
+
+                    hub.job_holds(msg.thread_id, msg.lane, self._running_job.job.id, msg.held)
+                if isinstance(msg, proto.TaskMoved):
+                    from ..storage import hub
+
+                    hub.task_moved(msg.task_id)
         finally:
             # this task is the sole reader of the IPC channel; once it ends, the thread is gone
             # (channel closed) or being torn down (cancelled). resolve the shutdown futures here

@@ -40,10 +40,13 @@ from .proto import (
     InferenceRequest,
     InferenceResponse,
     InitializeRequest,
+    LaneHeld,
+    LaneSignal,
     ShutdownRequest,
     ShutdownRequestAck,
     ShuttingDown,
     StartJobRequest,
+    TaskMoved,
 )
 
 # Defensive timeout for LiveSession.aclose() during job shutdown. Hardcoded for now
@@ -231,6 +234,8 @@ class _JobProc:
 
     @log_exceptions(logger=logger)
     async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
+        from ..storage import hub
+
         self._exit_proc_flag = asyncio.Event()
         self._shutdown_fut: asyncio.Future[_ShutdownInfo] = asyncio.Future()
         self._entrypoint_span_context: otel_context.Context | None = None
@@ -263,12 +268,30 @@ class _JobProc:
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
 
+                if isinstance(msg, LaneSignal):
+                    # the worker took a message or a cancel for a lane this job's call holds
+                    hub.wake(msg.thread_id, msg.lane)
+
                 if isinstance(msg, DumpStackTraceRequest):
                     _dump_stack_traces_impl()
 
             # unblock any pending do_inference() calls
             self._inf_client.close()
 
+        def send(message: LaneHeld | TaskMoved) -> None:
+            task = asyncio.ensure_future(self._client.send(message))
+            self._announcing.add(task)
+            task.add_done_callback(self._announcing.discard)
+
+        self._announcing: set[asyncio.Future[None]] = set()
+        hub.announce_with(
+            lambda thread_id, lane, holder, held: send(
+                LaneHeld(thread_id=thread_id, lane=lane, holder=holder, held=held)
+            ),
+            moved=lambda thread_id, lane, task_id: send(
+                TaskMoved(thread_id=thread_id, lane=lane, task_id=task_id)
+            ),
+        )
         read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
         try:
             await self._exit_proc_flag.wait()

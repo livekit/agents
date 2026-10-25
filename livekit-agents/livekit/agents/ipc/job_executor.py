@@ -35,6 +35,10 @@ class JobExecutor(Protocol):
 
     async def launch_job(self, info: RunningJobInfo) -> None: ...
 
+    async def signal_lane(self, thread_id: str, lane: str, kind: str) -> None:
+        """A message or a cancel for a lane the running job holds for its whole call."""
+        ...
+
     def logging_extra(self) -> dict[str, Any]: ...
 
 
