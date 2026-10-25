@@ -183,6 +183,37 @@ class AgentClient:
         result = await self._rpc("CancelTask", params)
         return json_format.ParseDict(result, pb.Task(), ignore_unknown_fields=True)
 
+    def resubscribe(self, task_id: str, *, thread_id: str | None = None) -> Reply:
+        """``tasks/resubscribe``: the task as it is now, then its answer stream from the start,
+        following it until its last frame. The task's session rides as ``contextId`` when the
+        card offers the extension (plan 3.3.8)."""
+        params: dict[str, JsonValue] = {"id": task_id}
+        context_id = thread_id or self._thread_id
+        if context_id and self.offers_extension:
+            params["contextId"] = context_id
+        events = self._stream_rpc("SubscribeToTask", params)
+        return Reply(task_id, context_id or "", updates_from_events(events))
+
+    async def _stream_rpc(
+        self, method: str, params: dict[str, JsonValue]
+    ) -> AsyncIterator[pb.StreamResponse]:
+        """One streamed JSON-RPC call over SSE, its results as ``StreamResponse`` frames."""
+        await self.connect()
+        headers = {**(self._call_context(None).service_parameters or {})}
+        headers["Accept"] = "text/event-stream"
+        body = {"jsonrpc": "2.0", "id": shortuuid("rpc_"), "method": method, "params": params}
+        async with self._http.stream("POST", self._rpc_url, json=body, headers=headers) as r:
+            r.raise_for_status()
+            async for line in r.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                answer = json.loads(line[len("data:") :].strip())
+                if "error" in answer:
+                    raise A2AClientError(f"{method}: {json.dumps(answer['error'])}")
+                yield json_format.ParseDict(
+                    answer.get("result") or {}, pb.StreamResponse(), ignore_unknown_fields=True
+                )
+
     async def _rpc(self, method: str, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
         """One JSON-RPC call the a2a-sdk's typed requests cannot carry; the result object."""
         headers = self._call_context(None).service_parameters

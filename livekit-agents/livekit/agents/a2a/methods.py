@@ -35,12 +35,13 @@ from pydantic import JsonValue
 
 from .. import _core
 from .._core import ThreadDb
-from .._generated.storage import StreamInfo, TaskData
+from .._generated.storage import StreamInfo, TaskData, TaskRow
 from .._generated.storage_run import TaskRecord
 from .._generated.storage_turn import TurnResult
 from ..log import logger
+from ..storage import hub
 from ..storage.agentdb import AgentDBStorage
-from ..storage.context import TokenHook, TurnHost, UpdateHook
+from ..storage.context import EndHook, TokenHook, TurnHost, UpdateHook
 from ..storage.protocol import (
     TERMINAL_TASK_STATES,
     RunRejected,
@@ -60,7 +61,7 @@ from .codec import (
     task_to_pb,
     to_stream_response,
 )
-from .extension import REASON, Extensions, pb, to_json
+from .extension import CALLER_LANE, KIND, KIND_DELEGATION, REASON, Extensions, pb, to_json
 from .pump import ResponsePump, WireHost, start
 
 if TYPE_CHECKING:
@@ -94,6 +95,10 @@ STREAMING = frozenset({"stream", "resubscribe"})
 REASON_THREAD_NOT_FOUND = "thread-not-found"
 READY_STREAMS = 2
 """Answer streams created ahead of the requests that will use them."""
+CANCEL_WAIT = 10.0
+"""How long ``tasks/cancel`` waits for a running task's tools to stop, in seconds."""
+LOOKUP_LIMIT = 500
+"""The lane's newest task rows a message's routing reads, as the turn's own lookups do."""
 REASON_STORAGE_UNAVAILABLE = "storage-unavailable"
 """Plan 5.12: the ``failed`` reason of a message to an id the threads service does not know."""
 
@@ -242,6 +247,7 @@ class A2AService(Generic[S]):
         if thread_id is None:
             record, context_id = self._unknown_session(message, call)
         else:
+            pump: ResponsePump[TurnOutcome] | None = None
             try:
                 pump = await self._start(thread_id, message, call.extensions)
                 async for _ in pump.frames():
@@ -250,7 +256,8 @@ class A2AService(Generic[S]):
             except (RunRejected, ThreadNotFound):
                 raise
             except StorageError as e:
-                record, context_id = self._unsaved(thread_id, message, e)
+                acked = pump.acked if pump is not None else None
+                record, context_id = self._unsaved(thread_id, message, e, acked)
 
         configuration = params.get("configuration")
         length = configuration.get("historyLength") if isinstance(configuration, Mapping) else None
@@ -263,7 +270,9 @@ class A2AService(Generic[S]):
             )
         )
 
-    async def stream(self, params: Params, call: CallContext) -> AsyncIterator[StreamEvent]:
+    async def stream(
+        self, params: Params, call: CallContext
+    ) -> AsyncIterator[StreamEvent | pb.StreamResponse]:
         """``message/stream``: the acknowledgment, progress, the artifact, the final status."""
         message = _message_of(params)
         received = time.monotonic()
@@ -274,24 +283,17 @@ class A2AService(Generic[S]):
             yield final_event(record, context_id, exts=call.extensions)
             return
 
-        announced = False
+        pump: ResponsePump[TurnOutcome] | None = None
         try:
-            pump = await self._start(thread_id, message, call.extensions)
-            logger.debug(
-                "a turn started",
-                extra={
-                    "threadId": thread_id,
-                    "openMs": round((time.monotonic() - received) * 1000),
-                },
-            )
+            pump = await self._start(thread_id, message, call.extensions, received)
             async for event in pump.frames():
-                announced = True
                 yield event
         except (RunRejected, ThreadNotFound):
             raise
         except StorageError as e:
-            record, context_id = self._unsaved(thread_id, message, e)
-            if not announced:
+            acked = pump.acked if pump is not None else None
+            record, context_id = self._unsaved(thread_id, message, e, acked)
+            if acked is None:
                 yield submitted_task(record.id, context_id)
             yield final_event(record, context_id, exts=call.extensions)
 
@@ -306,7 +308,9 @@ class A2AService(Generic[S]):
         task_id: str | None = None,
     ) -> TurnOutcome:
         """One message in process, A2A semantics kept, no wire: what
-        ``LiveSession(delegate=endpoint)`` calls (plan 7.2). Progress and tokens reach the hooks."""
+        ``LiveSession(delegate=endpoint)`` calls (plan 7.2). Progress and tokens of its own task
+        reach the hooks. It returns when its task ends, as the wire's response does, also when
+        its turn made it the lane's holder and the holder goes on with other work."""
         call = CallContext(
             principal=principal or Principal(kind="project"),
             extensions=Extensions(livekit=True),
@@ -317,9 +321,48 @@ class A2AService(Generic[S]):
         if resolved is None:
             raise ThreadNotFound(f"thread {thread_id} does not exist")
 
-        host = self._host(resolved, on_update=on_update, on_token=on_token)
+        task_id = task_id or shortuuid("AST_")
+        own = {task_id, str(message.get("taskId") or task_id)}
+        outcome: asyncio.Future[TurnOutcome] = asyncio.get_running_loop().create_future()
+
+        async def updated(of: str, text: str) -> None:
+            if of in own and on_update is not None:
+                await on_update(of, text)
+
+        async def token(of: str, delta: str) -> None:
+            if of in own and on_token is not None:
+                await on_token(of, delta)
+
+        async def end(record: TaskRecord, output: JsonValue) -> None:
+            if record.id in own and record.status != "working" and not outcome.done():
+                result = TurnResult(
+                    task=record,
+                    output=output,
+                    thread_id=resolved,
+                    answered_by=record.id,
+                    run_id=None,
+                )
+                outcome.set_result(TurnOutcome(result=result, context_id=resolved))
+
+        host = self._host(resolved, on_update=updated, on_token=token, on_end=end)
         db = await self._storage.open(resolved)
-        return await self._run(resolved, message, host, task_id, db)
+        core, turn = self._turn_on(db, host)
+
+        async def run() -> None:
+            # the holder's work goes on after this task ended, whatever this caller does
+            try:
+                ran = await self._run(resolved, message, core, turn, task_id)
+            except Exception as e:
+                if not outcome.done():
+                    outcome.set_exception(e)
+                else:
+                    logger.warning("the lane's holder failed", extra={"error": str(e)})
+                return
+            if not outcome.done():
+                outcome.set_result(ran)
+
+        start(run())
+        return await outcome
 
     def _next_stream(self) -> asyncio.Task[StreamInfo]:
         """An answer stream created ahead of the request, so a turn does not wait for one;
@@ -331,15 +374,22 @@ class A2AService(Generic[S]):
         return taken
 
     async def _start(
-        self, thread_id: str, message: StoredMessage, exts: Extensions
+        self,
+        thread_id: str,
+        message: StoredMessage,
+        exts: Extensions,
+        received: float | None = None,
     ) -> ResponsePump[TurnOutcome]:
         """The turn in a task of its own, its frames through the pump (plan 6)."""
+        self._refuse_own_lane(message)
+        began = time.monotonic()
         opening = asyncio.ensure_future(self._storage.open(thread_id))
         try:
-            continued, created = await asyncio.gather(
-                self._continued(thread_id, message), self._next_stream()
-            )
-            db = await opening
+            db, created = await asyncio.gather(opening, self._next_stream())
+            connected = time.monotonic()
+            # the routing reads on the connection the turn runs on: a second one per request
+            # is dialed while the lane's holder keeps its own
+            continued = await self._continued(thread_id, db, message)
         except BaseException:
             # a request that fails before its turn leaves no connection open behind it
             def close(f: asyncio.Future[ThreadDb]) -> None:
@@ -349,27 +399,53 @@ class A2AService(Generic[S]):
             opening.cancel()
             opening.add_done_callback(close)
             raise
-        stream_id = created.stream_id
+        logger.debug(
+            "a turn started",
+            extra={
+                "threadId": thread_id,
+                "openMs": _ms(received if received is not None else began),
+                "resolveMs": round((began - received) * 1000) if received is not None else None,
+                "connectMs": round((connected - began) * 1000),
+                "routeMs": _ms(connected),
+            },
+        )
+        # a continued task answers on its own stream, which stayed open while it waited
+        stream_id = continued or created.stream_id
+        if continued:
+            message = {**message, "taskId": continued}
         pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, stream_id)
         wire = WireHost(
-            lambda on_update, on_token: self._host(
-                thread_id, on_update=on_update, on_token=on_token
+            lambda on_update, on_token, on_end: self._host(
+                thread_id, on_update=on_update, on_token=on_token, on_end=on_end
             ),
             pump,
-            task_id=continued or stream_id,
+            task_id=stream_id,
             context_id=thread_id,
+            lane=self.lane,
             exts=exts,
         )
+        core, turn = self._turn_on(db, wire)
+        if turn.policy_for(_channel_of(message)) == "live":
+            # acknowledged once the message is in the lane's inbox, under the task the turn
+            # found it is (``WireHost.accepted``); a continued task's stream is relayed from
+            # where it ends now
+            wire.live = True
+            if continued:
+                wire.follow_after = asyncio.ensure_future(_tail(self._storage, stream_id))
 
         async def produce() -> None:
             try:
-                outcome = await self._run(thread_id, message, wire, stream_id, db)
+                outcome = await self._run(thread_id, message, core, turn, created.stream_id)
             except Exception as e:
+                if wire.holds:
+                    hub.drop(thread_id, self.lane)  # the holder failed: its lane is not held here
                 await pump.fail(e)
                 return
 
-            wire.finish(outcome)
-            await pump.finish(outcome)
+            await wire.finish(outcome)
+            # under live the holder that ended the task closed its stream
+            ended = outcome.result.task.status in TERMINAL_TASK_STATES
+            pump.finish(outcome, close=ended and not wire.live)
 
         start(produce())
         return pump
@@ -380,6 +456,7 @@ class A2AService(Generic[S]):
         *,
         on_update: UpdateHook | None = None,
         on_token: TokenHook | None = None,
+        on_end: EndHook | None = None,
     ) -> TurnHost[S]:
         thread = Thread(self._storage, thread_id, agent_name=self.lane)
         return TurnHost(
@@ -389,42 +466,68 @@ class A2AService(Generic[S]):
             agents=self._agents,
             on_update=on_update,
             on_token=on_token,
+            on_end=on_end,
         )
+
+    def _turn_on(
+        self, db: ThreadDb, host: _core.TurnHostProtocol
+    ) -> tuple[_core.Thread, _core.Turn]:
+        """``_core.Turn`` of this door on ``db``, the thread's database, with ``host``."""
+        core = _core.Thread(db, self._storage.process_holder)
+        return core, _core.Turn(core, self.lane, host, self._endpoint.turn_options)
 
     async def _run(
         self,
         thread_id: str,
         message: StoredMessage,
-        host: _core.TurnHostProtocol,
+        core: _core.Thread,
+        turn: _core.Turn,
         task_id: str | None,
-        db: ThreadDb,
     ) -> TurnOutcome:
-        """One message through ``_core.Turn`` on ``db``, the thread's database, closed after."""
-        core = _core.Thread(db, self._storage.holder)
+        """One message through the turn; the thread's database is closed after."""
         try:
-            turn = _core.Turn(core, self.lane, host, self._endpoint.turn_options)
             result = await turn.run(message, task_id)
         finally:
             core.close()
 
         return TurnOutcome(result=result, context_id=thread_id)
 
-    async def _continued(self, thread_id: str, message: StoredMessage) -> str | None:
-        """The task a message with a ``taskId`` continues, when it is still open (plan 5.5):
-        the id its frames go out under."""
-        continued = str(message.get("taskId") or "")
-        if not continued:
-            return None
-
-        found = await self._find_task(thread_id, continued)
-        if found is None:
-            raise TaskNotFoundError(message=f"task {continued} is not in session {thread_id}")
-        if found.status in TERMINAL_TASK_STATES:
+    def _refuse_own_lane(self, message: StoredMessage) -> None:
+        """A delegation that names this door's own lane as its caller's would wait for the lane
+        its caller holds, so it can never run: refused at once."""
+        caller = metadata_from_wire(message.get("metadata")).get(CALLER_LANE)
+        if caller is not None and caller == self.lane:
             raise UnsupportedOperationError(
-                message=f"task {continued} is {found.status}; a follow-up is a new task",
-                data={"taskId": continued, "status": found.status},
+                message=f"a delegation to the caller's own lane {self.lane} cannot run",
+                data={"lane": self.lane},
             )
-        return continued
+
+    async def _continued(self, thread_id: str, db: ThreadDb, message: StoredMessage) -> str | None:
+        """The task waiting on a question that this message continues (docs/delegation.md):
+        the one its ``taskId`` names, or, for a message from the person with no ``taskId``,
+        the question in front of them. A delegation without a ``taskId`` is a new task."""
+        named = str(message.get("taskId") or "")
+        if named:
+            rows = await db.tasks(self.lane, limit=LOOKUP_LIMIT)
+            found = next((r for r in rows if r.task_id == named), None)
+            if found is None:
+                raise TaskNotFoundError(message=f"task {named} is not in session {thread_id}")
+            history = (found.data or {}).get("history") or []
+            resent = any(m.get("messageId") == message.get("messageId") for m in history)
+            if found.status in TERMINAL_TASK_STATES and not resent:
+                raise UnsupportedOperationError(
+                    message=f"task {named} is {found.status}; a follow-up is a new task",
+                    data={"taskId": named, "status": found.status},
+                )
+            # a resend is answered by the turn with what the task holds
+            return named if found.status == "input-required" and not resent else None
+
+        metadata = metadata_from_wire(message.get("metadata"))
+        if metadata.get(KIND) == KIND_DELEGATION:
+            return None
+        return front_question(
+            await db.tasks(self.lane, status="input-required", limit=LOOKUP_LIMIT)
+        )
 
     def _unknown_session(self, message: StoredMessage, call: CallContext) -> tuple[TaskRecord, str]:
         """Plan 5.12: an id the threads service does not know fails the task ``thread-not-found``."""
@@ -433,15 +536,18 @@ class A2AService(Generic[S]):
         return record, context_id
 
     def _unsaved(
-        self, thread_id: str, message: StoredMessage, error: StorageError
+        self, thread_id: str, message: StoredMessage, error: StorageError, task_id: str | None
     ) -> tuple[TaskRecord, str]:
         """The turn's save could not be written: the task fails ``storage-unavailable`` in the
-        answer, unpersisted, and the client resends (docs/a2a.md)."""
+        answer, under the id the client was acknowledged with, and the client resends
+        (docs/a2a.md)."""
         logger.warning(
             "an agent-store error ended a turn",
             extra={"endpoint": self._endpoint.name, "threadId": thread_id, "error": str(error)},
         )
-        record = _failed_record(shortuuid("AST_"), self.lane, message, REASON_STORAGE_UNAVAILABLE)
+        record = _failed_record(
+            task_id or shortuuid("AST_"), self.lane, message, REASON_STORAGE_UNAVAILABLE
+        )
         return record, thread_id
 
     # -- tasks/* --
@@ -496,8 +602,10 @@ class A2AService(Generic[S]):
         return response
 
     async def cancel_task(self, params: Params, call: CallContext) -> pb.Task:
-        """``tasks/cancel``: the row goes ``canceled`` now; a running turn yields at its next
-        boundary and writes nothing over it (plan 5.5)."""
+        """``tasks/cancel`` (docs/delegation.md): a task that runs gets a cancel request, its
+        tools stop at their next wait point, and its holder ends it ``canceled`` with what they
+        did, which the answer waits for, up to ``CANCEL_WAIT``; a task that runs nothing (it
+        waits on a question, or for the lane) goes ``canceled`` now."""
         thread_id = await self._context_for_tasks(params, call, flag="write")
         task_id = str(params.get("id") or "")
         record = await self._find_task(thread_id, task_id)
@@ -510,13 +618,36 @@ class A2AService(Generic[S]):
         reason = metadata_from_wire(params.get("metadata")).get(REASON)
         if reason is not None:
             metadata[REASON] = reason
-        await Thread(self._storage, thread_id, agent_name=record.lane).cancel(record, metadata)
+        thread = Thread(self._storage, thread_id, agent_name=record.lane)
+        requested = record.status == "working" and await thread.request_cancel(
+            record, str(reason) if reason is not None else None
+        )
+        updated: TaskRecord | None = None
+        if requested:
+            # the holder hears it at once when it is in this process or a job of this worker,
+            # and says so when the task ends; a holder on another worker is polled
+            hub.signal(thread_id, record.lane, "cancel")
+            deadline = time.monotonic() + CANCEL_WAIT
+            while time.monotonic() < deadline:
+                if (
+                    hub.held_here(thread_id, record.lane) is not None
+                    or hub.job_holding(thread_id, record.lane) is not None
+                ):
+                    await hub.settled(task_id, deadline - time.monotonic())
+                else:
+                    await asyncio.sleep(0.2)
+                # the task's own lane, one read
+                updated = next((r for r in await thread.tasks() if r.id == task_id), None)
+                if updated is not None and updated.status in TERMINAL_TASK_STATES:
+                    break
+        else:
+            await thread.cancel(record, metadata)
+            updated = next((r for r in await thread.tasks() if r.id == task_id), None)
 
         logger.info(
             "a client canceled a task",
             extra={"taskId": task_id, "threadId": thread_id, "reason": reason},
         )
-        updated = await self._find_task(thread_id, task_id)
         return task_to_pb(updated or record, thread_id, exts=call.extensions)
 
     async def resubscribe(
@@ -533,7 +664,9 @@ class A2AService(Generic[S]):
         yield task_to_pb(record, thread_id, exts=call.extensions)
         offset = params.get("offset")
         after = str(offset) if offset is not None else call.resume_offset
-        live = record.status not in TERMINAL_TASK_STATES
+        # a task waiting on a question keeps its stream open until it is answered; a reader
+        # gets what is there, and follows only a task that runs
+        live = record.status in ("submitted", "working")
         try:
             reader = self._storage.streams.read(task_id, after=after, live=live)
             while (frame := await reader.next()) is not None:
@@ -612,6 +745,43 @@ class A2AService(Generic[S]):
         return None
 
 
+def _channel_of(message: StoredMessage) -> str:
+    """``livekit/channel`` of a message; a delegation's is ``delegation``, none is ``a2a``."""
+    metadata = metadata_from_wire(message.get("metadata"))
+    if metadata.get(KIND) == KIND_DELEGATION:
+        return "delegation"
+    channel = metadata.get("livekit/channel")
+    return str(channel) if channel else "a2a"
+
+
+async def _tail(storage: AgentDBStorage, stream_id: str) -> str | None:
+    """Where a stream ends now: a continued task's frames are relayed from there."""
+    try:
+        reader = storage.streams.read(stream_id, after=None, live=False)
+        while await reader.next() is not None:
+            pass
+        return str(await reader.next_offset())
+    except StorageError:
+        return None
+
+
+def front_question(rows: list[TaskRow]) -> str | None:
+    """The question in front of the person: the oldest task of the lane waiting on one, among
+    those not queued behind another (docs/delegation.md). ``rows`` newest first."""
+    for row in reversed(rows):
+        if row.status != "input-required":
+            continue
+        ask = (row.internal or {}).get("ask")
+        if isinstance(ask, Mapping) and ask.get("queued"):
+            continue
+        return row.task_id
+    return None
+
+
+def _ms(since: float) -> int:
+    return round((time.monotonic() - since) * 1000)
+
+
 def _message_of(params: Params) -> StoredMessage:
     raw = params.get("message")
     if not isinstance(raw, Mapping):
@@ -652,4 +822,5 @@ __all__ = [
     "A2AService",
     "CallContext",
     "TurnOutcome",
+    "front_question",
 ]

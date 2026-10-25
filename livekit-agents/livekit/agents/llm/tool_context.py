@@ -221,17 +221,17 @@ class Rejected:
 
 @dataclass(frozen=True)
 class InputRequired:
-    """The turn or task waits on the person for an answer to ``question``.
+    """The turn or task waits on the person for an answer to ``question``, with no timeout.
 
+    Only for an input a tool needs to go on (an email, a yes or no on a read-back, a card
+    number); a conversational question is a plain reply, and the next message is a new request.
     The agent facing the person asks it in its own words, or exactly as written with
-    ``verbatim=True``. From a conversation tool the next message is written as this call's
-    output. ``tool`` names the tool that takes the answer and ``timeout`` schedules
-    ``on_timeout``.
+    ``verbatim=True``. The answer continues the waiting task as the person's next message, and
+    the task's model reads it; the call keeps the question as its output. An input that fixed
+    logic must collect is an ``AgentTask``.
     """
 
     question: str
-    tool: FunctionTool | RawFunctionTool | None = None
-    timeout: timedelta | None = None
     verbatim: bool = False
 
 
@@ -342,9 +342,26 @@ class _ApprovalScope:
     asked: bool = False
 
 
+ANSWERS_KEY = "lk.answers"
+"""``FunctionCall.extra`` of a call the framework made with the person's answer: the call of a
+tool that relays answers (``relays_answer``) whose question it answers."""
+
+HEARD_KEY = "lk.heard"
+"""``FunctionCall.extra`` of such a call when the person's message cut the question off: what
+they saw or heard of it, often nothing."""
+
+ASKED_VERBATIM_KEY = "lk.verbatim"
+"""``FunctionCall.extra`` of a call whose question reaches the person as written: kept so the
+question can be asked again, joined with a later one of its task."""
+
 APPROVAL_KEY = "lk.approval"
 """``FunctionCall.extra`` key on a call of a tool that requires approval: ``asked`` when it
 returned the read-back, ``granted`` when it ran on the person's answer."""
+
+
+TASK_KEY = "lk.task"
+"""``extra`` key on a message or a call that a run recorded in a lane: the task it belongs to. A
+call's output belongs to its call's task."""
 
 
 _approval_scope: ContextVar[_ApprovalScope | None] = ContextVar(
@@ -356,6 +373,11 @@ ASK_IN_OWN_WORDS = (
     "Ask the person this, in your own words, as your whole reply, and add nothing else: {question}"
 )
 """How the agent facing the person is told to ask a question that is not verbatim."""
+
+SAY_AS_WRITTEN = (
+    "Say this to the person word for word, as your whole reply, and add nothing: {text}"
+)
+"""How a model that cannot ``say()`` is told to speak a verbatim text."""
 
 DELIVERED = "delivered to the person as written: {text}"
 """What the model reads as the output of a verbatim result it did not write."""
@@ -370,48 +392,90 @@ def delivered(result: ToolResult) -> ToolResult:
 
 
 APPROVAL_ANSWERED = (
-    "not run yet: the person answered {answer!r} to its read-back. If they agreed, call {name} "
-    "again with exactly the same arguments to run it; if not, do not, and go on from what they "
-    "said."
+    "not run yet: it read back {question!r} and the person answered in the message that "
+    "follows. If they agreed, call {name} again with exactly the same arguments to run it; if "
+    "not, do not, and go on from what they said."
 )
 """What the model reads as the output of a call that asked for approval, once answered: the
-answer alone reads like a call that ran."""
+read-back alone, before the answer, reads like a call that ran."""
+
+WAITING_PREFIX = "waiting for the person's answer to: "
+"""The output of a call that asked the person: its question. The answer is the person's next
+message, never this output."""
+
+
+def relays_answer(tool: Any) -> bool:
+    """Whether ``tool`` hands the person's answer to its question on to whoever asked, whose own
+    model reads it, as a delegate does: the answer goes to the tool as said, with no model step.
+    Private to the delegate; any other question's answer goes to the task's model."""
+    return bool(getattr(tool, "_relays_answer", False))
+
+
+def joint_question(questions: Sequence[InputRequired]) -> InputRequired:
+    """The questions of one step as the one question its task pauses on: in order, each once,
+    and verbatim only when every part is."""
+    parts = list(dict.fromkeys(q.question for q in questions))
+    return InputRequired("\n\n".join(parts), verbatim=all(q.verbatim for q in questions))
+
+
+def _tasks_of(items: Sequence[Any]) -> dict[str, str | None]:
+    """Each item's task by item id, ``TASK_KEY``; an output takes its call's."""
+    from .chat_context import FunctionCall, FunctionCallOutput
+
+    calls: dict[str, str | None] = {}
+    tasks: dict[str, str | None] = {}
+    for item in items:
+        if isinstance(item, FunctionCallOutput):
+            tasks[item.id] = calls.get(item.call_id)
+            continue
+        task = getattr(item, "extra", {}).get(TASK_KEY)
+        if isinstance(item, FunctionCall):
+            calls[item.call_id] = task
+        tasks[item.id] = task
+    return tasks
+
+
+def _answered_read_backs(items: Sequence[Any]) -> set[str]:
+    """The call ids of the read-backs the person answered: ``asked`` calls with a user message
+    of the same task after them."""
+    from .chat_context import ChatMessage, FunctionCall
+
+    tasks = _tasks_of(items)
+    answered: set[str] = set()
+    waiting: dict[str | None, list[str]] = {}
+    for item in items:
+        if isinstance(item, FunctionCall) and item.extra.get(APPROVAL_KEY) == "asked":
+            waiting.setdefault(tasks[item.id], []).append(item.call_id)
+        elif isinstance(item, ChatMessage) and item.role == "user":
+            answered.update(waiting.pop(tasks[item.id], []))
+    return answered
 
 
 def as_model_reads(items: Sequence[Any]) -> list[Any]:
     """The history as the model reads it: an answered read-back's output says the call has not
-    run, and how to run it. What is stored stays the person's words."""
+    run, and how to run it. What is stored stays the question."""
     from .chat_context import FunctionCall, FunctionCallOutput
 
-    asked = {
-        i.call_id: i.name
-        for i in items
-        if isinstance(i, FunctionCall) and i.extra.get(APPROVAL_KEY) == "asked"
-    }
+    answered = _answered_read_backs(items)
+    names = {i.call_id: i.name for i in items if isinstance(i, FunctionCall)}
     out: list[Any] = []
     for item in items:
-        if (
-            isinstance(item, FunctionCallOutput)
-            and item.call_id in asked
-            and not str(item.output).startswith(WAITING_PREFIX)
-        ):
-            text = APPROVAL_ANSWERED.format(answer=str(item.output), name=asked[item.call_id])
+        if isinstance(item, FunctionCallOutput) and item.call_id in answered:
+            question = str(item.output).removeprefix(WAITING_PREFIX)
+            text = APPROVAL_ANSWERED.format(question=question, name=names[item.call_id])
             item = item.model_copy(update={"output": text})
         out.append(item)
     return out
 
 
-WAITING_PREFIX = "waiting for the person's answer to: "
-"""How a call's output reads while it waits on the person; the answer replaces it."""
-
-
 def approval_granted(items: Sequence[Any], call: Any) -> bool:
-    """Whether ``call`` repeats the latest read-back of its tool, with the same arguments,
-    after the person answered it, and no earlier repeat used that answer.
+    """Whether ``call`` repeats the latest read-back of its tool in its task, with the same
+    arguments, after the person answered it in that task, and no earlier repeat used that answer.
 
-    A reading of the history by the calls' ``APPROVAL_KEY`` marks: a call that asked something
-    else, such as a missing detail, is neither a read-back nor a run."""
-    from .chat_context import FunctionCall, FunctionCallOutput
+    A reading of the history by the calls' ``APPROVAL_KEY`` and ``TASK_KEY`` marks and the
+    person's messages: a call that asked something else, such as a missing detail, is neither a
+    read-back nor a run."""
+    from .chat_context import FunctionCall
 
     def key(c: FunctionCall) -> str:
         try:
@@ -419,10 +483,13 @@ def approval_granted(items: Sequence[Any], call: Any) -> bool:
         except ValueError:
             return c.arguments or ""
 
-    outputs = {i.call_id: i for i in items if isinstance(i, FunctionCallOutput)}
+    answered = _answered_read_backs(items)
+    task = call.extra.get(TASK_KEY)
     asked: str | None = None  # the arguments of the latest answered, unused read-back
     for item in items:
         if not isinstance(item, FunctionCall) or item.name != call.name:
+            continue
+        if item.extra.get(TASK_KEY) != task:
             continue
         if item.call_id == call.call_id:
             break
@@ -430,9 +497,7 @@ def approval_granted(items: Sequence[Any], call: Any) -> bool:
         if mark == "granted" and key(item) == asked:
             asked = None  # this repeat ran on the answer
         elif mark == "asked":
-            out = outputs.get(item.call_id)
-            answered = out is not None and not str(out.output).startswith(WAITING_PREFIX)
-            asked = key(item) if answered else None
+            asked = key(item) if item.call_id in answered else None
     return asked is not None and key(call) == asked
 
 
@@ -577,8 +642,8 @@ def function_tool(
 ):
     """``requires_approval`` is plan 7.4's approval, held by the framework: a call returns
     ``InputRequired`` with a read-back instead of running, verbatim. The person's answer is
-    written as that call's output, and the body runs only for a repeat of the same call, same
-    arguments, made after that answer. ``True`` builds the read-back from the description and
+    their next message, and the body runs only for a repeat of the same call, same arguments,
+    made after that answer. ``True`` builds the read-back from the description and
     the arguments; a ``ReadBack`` function writes it. Typed tools only."""
 
     def deco_raw(

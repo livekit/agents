@@ -10,18 +10,21 @@ from ..llm.chat_context import FunctionCall
 from .delegate import DelegationResult
 
 TASK_ID_KEY = "lk.delegation.task_id"
+CONTEXT_ID_KEY = "lk.delegation.context_id"
 ENDPOINT_KEY = "lk.delegation.endpoint"
 TRANSPORT_KEY = "lk.delegation.transport"
 PROFILE_KEY = "lk.delegation.profile"
-"""``FunctionCall.extra``: the expert's task that answered the call, where the expert was
-reached, over which binding, under which profile (``livekit`` or ``a2a``), so a dashboard
-joins the delegation to the call as it ran."""
+"""``FunctionCall.extra``: the expert's task that answered the call and its context, where the
+expert was reached, over which binding, under which profile (``livekit`` or ``a2a``), so a
+dashboard joins the delegation to the call as it ran, and an answer to the expert's question
+continues that task."""
 
 
 def record_delegation(function_call: FunctionCall, result: DelegationResult) -> None:
     """Writes the expert's task id and how it was reached on the call that delegated."""
     recorded = (
         (TASK_ID_KEY, result.task_id),
+        (CONTEXT_ID_KEY, result.context_id),
         (ENDPOINT_KEY, result.endpoint),
         (TRANSPORT_KEY, result.transport),
         (PROFILE_KEY, result.profile),
@@ -39,6 +42,7 @@ DISPATCHED = (
 
 
 __all__ = [
+    "CONTEXT_ID_KEY",
     "DISPATCHED",
     "ENDPOINT_KEY",
     "PROFILE_KEY",

@@ -47,6 +47,9 @@ if TYPE_CHECKING:
     from .speech_handle import SpeechHandle
 
 
+NON_BLOCKING_KEY = "__livekit_agents_tool_non_blocking"
+"""``FunctionCall.extra``: the call went on in the background after its first update."""
+
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
 The task is still running, so DON'T make up or give information not included in the message above."""
 
@@ -61,18 +64,44 @@ Re-call with confirm duplicate True to run a duplicate if needed,
 or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
 Only run duplicate or cancel the existing one when user explicitly requests it."""
 
-# used when the pending update is the most recent item in chat_ctx — the agent
-# can't have already talked about it.
+# used when no reply came after the pending update — the agent can't have talked about it.
 REPLY_INSTRUCTIONS_AT_TAIL = """New results arrived from background tool calls (call_ids: {call_ids}).
 Summarize the results naturally. Do NOT repeat information you have already told the user."""
 
-# used when newer items have been appended after the pending update — the agent
-# may have already verbalized the result in its most recent turn.
+# used when a reply came after the pending update — the agent may have already verbalized
+# the result in it.
 REPLY_INSTRUCTIONS_MAYBE_COVERED = """New results arrived from background tool calls (call_ids: {call_ids}).
 You may have already mentioned them in your most recent replies.
 If you already told the user everything in these results, reply with an empty response (no text at all).
 Otherwise, summarize only what you have not said yet, with a natural transition.
 Never repeat information you have already told the user."""
+
+
+def told_already(speech_handle: SpeechHandle) -> bool:
+    """The speech that made a call already said something to the person: a progress update
+    of that call is status, and asks for no other reply."""
+    return any(
+        item.type == "message" and item.role == "assistant" for item in speech_handle.chat_items
+    )
+
+
+def told_for(ctx: RunContext, items: Sequence[ChatItem]) -> bool:
+    """The turn said something for the call: beside it, or in any reply after its first output,
+    in whichever speech. Its later progress is status, and asks for no reply."""
+    if told_already(ctx.speech_handle):
+        return True
+    call_id = ctx.function_call.call_id
+    first = next(
+        (
+            n
+            for n, item in enumerate(items)
+            if item.type == "function_call_output" and item.call_id == call_id
+        ),
+        None,
+    )
+    return first is not None and any(
+        item.type == "message" and item.role == "assistant" for item in items[first + 1 :]
+    )
 
 
 class UpdatePromptArgs(TypedDict):
@@ -259,6 +288,7 @@ class _PendingUpdate:
     ctx: RunContext
     items: list[ChatItem]
     target: AgentActivity  # activity whose history received the eager insert
+    progress: bool = False  # a later progress update, not the call's result
 
 
 class _ToolExecutor:
@@ -352,15 +382,8 @@ class _ToolExecutor:
         # derives the call's single terminal entry from how the task ended
         async def _execute_tool() -> Any:
             try:
-                arguments = raw_arguments
-                if (activity := self._owning_activity) is not None:
-                    # a call that answers an InputRequired(tool=) carries the person's words,
-                    # and the history shows the call as it ran
-                    arguments = await activity._answer_arguments(tool, raw_arguments)
-                    if arguments is not raw_arguments:
-                        run_ctx.function_call.arguments = json.dumps(arguments)
                 fnc_args, fnc_kwargs = prepare_function_arguments(
-                    fnc=tool, json_arguments=arguments, call_ctx=run_ctx
+                    fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
                 )
                 granted = isinstance(tool, FunctionTool) and tool.info.requires_approval
                 if granted:
@@ -431,7 +454,15 @@ class _ToolExecutor:
                 # an InputRequired speaks the question itself, so no reply is generated
                 pair[1].reply_required = not isinstance(output, InputRequired)
                 await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
-                activity._apply_transition(output, fnc_call_out=pair[1])
+                try:
+                    activity._apply_transition(output, fnc_call_out=pair[1])
+                except Exception as e:
+                    # nothing awaits this task: the failure goes to the log and the call's lane
+                    logger.exception(
+                        "a tool's transition could not be applied",
+                        extra={"function": fnc_name, "call_id": call_id},
+                    )
+                    run_ctx.session._report_error(f"`{fnc_name}` could not be applied: {e}")
                 return output
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
             return output
@@ -548,7 +579,9 @@ class _ToolExecutor:
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
-    async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
+    async def _enqueue_reply(
+        self, ctx: RunContext, items: list[ChatItem], *, progress: bool = False
+    ) -> None:
         # eager insert so a reply firing before delivery sees the items
         target = (
             self._owning_activity
@@ -563,7 +596,9 @@ class _ToolExecutor:
         if not any(item.type == "function_call_output" and item.reply_required for item in items):
             return
 
-        self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
+        self._pending_updates.append(
+            _PendingUpdate(ctx=ctx, items=items, target=target, progress=progress)
+        )
 
         if self._reply_task is None or self._reply_task.done():
             self._reply_task = asyncio.create_task(
@@ -593,6 +628,9 @@ class _ToolExecutor:
 
         updates = self._pending_updates[:]
         self._pending_updates.clear()
+        # progress of a call the turn already said something for is status: no reply
+        said = target_activity._chat_ctx.items
+        updates = [u for u in updates if not (u.progress and told_for(u.ctx, said))]
 
         pending_items: list[ChatItem] = []
         for update in updates:
@@ -618,11 +656,14 @@ class _ToolExecutor:
             chat_ctx = target_activity._chat_ctx.copy()
             chat_ctx.insert(items_to_insert)
 
-        # if the update is still the tail, the agent hasn't spoken since: summarize
-        # directly; otherwise let the LLM decide whether it already covered this
-        at_tail = (items := target_activity._chat_ctx.items) and items[-1].id == pending_items[
-            -1
-        ].id
+        # only a reply made after the results landed had them in front of it and may have told
+        # them; an acknowledgement before them, or the person's words after, tell nothing
+        items = target_activity._chat_ctx.items
+        landed = {item.id for item in pending_items}
+        first = next((n for n, item in enumerate(items) if item.id in landed), len(items))
+        at_tail = not any(
+            item.type == "message" and item.role == "assistant" for item in items[first + 1 :]
+        )
         template = (
             self._tool_options["reply_at_tail_template"]
             if at_tail

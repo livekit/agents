@@ -22,6 +22,7 @@ from ..llm.chat_context import ChatContext
 from ..utils import shortuuid
 from .extension import (
     ANSWER_ARTIFACT_NAME,
+    BACKGROUND,
     KIND,
     KIND_CHAT_CTX,
     Extensions,
@@ -460,8 +461,11 @@ class _Answer:
 
     bodies: dict[str, str] = field(default_factory=dict)
     names: dict[str, str] = field(default_factory=dict)
+    last: str | None = None
+    """The artifact whose last chunk arrived last: the whole answer, which replaces what was
+    streamed under another id when the two differ."""
 
-    def collect(self, artifact: pb.Artifact, append: bool) -> None:
+    def collect(self, artifact: pb.Artifact, append: bool, last_chunk: bool = False) -> None:
         chunk = _text(artifact.parts)
         if append:
             chunk = self.bodies.get(artifact.artifact_id, "") + chunk
@@ -469,15 +473,22 @@ class _Answer:
 
         if artifact.name:
             self.names[artifact.artifact_id] = artifact.name
+        if last_chunk:
+            self.last = artifact.artifact_id
 
     def text(self) -> str:
-        """The ``answer`` artifact; every artifact joined when none carries that name."""
+        """The ``answer`` artifact that ended last; every ``answer`` artifact joined when none
+        ended, every artifact when none carries that name."""
         named = [
-            body
-            for artifact_id, body in self.bodies.items()
+            artifact_id
+            for artifact_id in self.bodies
             if self.names.get(artifact_id) == ANSWER_ARTIFACT_NAME
         ]
-        return "\n".join(named or self.bodies.values())
+        if self.last is not None and (not named or self.last in named):
+            return self.bodies[self.last]
+        return (
+            "\n".join(self.bodies[i] for i in named) if named else "\n".join(self.bodies.values())
+        )
 
 
 @dataclass
@@ -525,7 +536,8 @@ def _status_update(
             metadata=metadata,
         )
 
-    answer_text = answer.text()
+    # a question is the status message; an answer is the artifact, else the status message
+    answer_text = "" if state == "input-required" and text else answer.text()
     return TaskUpdate(
         state=state,
         text=answer_text or text,
@@ -558,7 +570,7 @@ async def updates_from_events(
 
         ids.note(event)
         if isinstance(event, pb.TaskArtifactUpdateEvent):
-            answer.collect(event.artifact, event.append)
+            answer.collect(event.artifact, event.append, event.last_chunk)
             continue
 
         if isinstance(event, pb.Task):
@@ -568,6 +580,9 @@ async def updates_from_events(
         update = _status_update(event, ids, answer)
         if update is None:
             continue
+        if update.metadata.get(BACKGROUND) is True:
+            # the reply streamed so far acknowledged work that goes on: it is not the answer
+            answer = _Answer()
 
         yield update
         if update.state not in ("submitted", "working"):

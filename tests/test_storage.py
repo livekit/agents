@@ -27,6 +27,7 @@ from livekit.agents._generated.storage_run import TaskRecord
 from livekit.agents._generated.storage_turn import TurnOptions, TurnResult
 from livekit.agents.a2a.endpoint import A2AEndpoint
 from livekit.agents.llm import ChatItem, FunctionToolCall
+from livekit.agents.llm.tool_context import WAITING_PREFIX
 from livekit.agents.llm.utils import build_legacy_openai_schema
 from livekit.agents.storage import AgentDBStorage, Ref, RunRejected
 from livekit.agents.storage.context import A2ASessionContext, Handler, TurnHost
@@ -389,6 +390,42 @@ async def test_message_id_resend_returns_the_existing_task(
     assert len(await history_items(storage, sid, LANE)) == 4
 
 
+@pytest.mark.parametrize("policy", ["interrupt", "queue"])
+async def test_a_resend_while_its_turn_runs_gets_the_original_answer(
+    agentdb_storage: AgentDBStorage, policy: str
+) -> None:
+    """A client retries a dropped stream with the same messageId while the first turn still
+    runs: the resend waits on that task and gets its answer; it never cancels it."""
+    storage = agentdb_storage
+    sid = await new_session(storage, LANE)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    runs: list[str] = []
+
+    async def slow(ctx: A2ASessionContext[Any]) -> str:
+        runs.append(ctx.task_id)
+        entered.set()
+        await release.wait()
+        return "the answer"
+
+    first = asyncio.create_task(
+        run_turn(storage, sid, LANE, a2a("hi", "m1"), policy, slow, task_id="AST_first")
+    )
+    await entered.wait()
+    resend = asyncio.create_task(
+        run_turn(storage, sid, LANE, a2a("hi", "m1"), policy, slow, task_id="AST_resend")
+    )
+    await asyncio.sleep(1.5)
+    assert not resend.done()
+    release.set()
+    r1, r2 = await asyncio.gather(first, resend)
+    assert runs == ["AST_first"]
+    assert r1.task.status == "completed" and r1.output == "the answer"
+    assert r2.task.id == "AST_first" and r2.task.status == "completed"
+    assert r2.output == "the answer"
+    assert await task_of(storage, sid, LANE, "AST_resend") is None
+
+
 # -- the lease --
 
 
@@ -477,7 +514,7 @@ async def test_a_resend_after_the_holder_died_fails_worker_lost(
 # -- input required --
 
 
-async def test_input_required_pending_call_is_the_next_messages_output(
+async def test_an_answer_is_the_next_message_of_the_waiting_task(
     agentdb_storage: AgentDBStorage,
 ) -> None:
     storage = agentdb_storage
@@ -519,21 +556,116 @@ async def test_input_required_pending_call_is_the_next_messages_output(
     }
     assert first.task.status_message["parts"][0]["text"] == "Could you send a photo?"
 
-    second = await run_turn(storage, sid, LANE, a2a("here it is", "m2"), "interrupt", handler)
+    # the answer names the waiting task: that task continues, with no row of its own
+    answer = a2a("here it is", "m2", task_id=first.task.id)
+    second = await run_turn(storage, sid, LANE, answer, "interrupt", handler, task_id="AST_m2")
     assert second.output == "thanks"
+    assert second.task.id == first.task.id and second.task.status == "completed"
+    assert MERGED_INTO_KEY not in second.task.data.metadata
+    assert second.task.message_id == "m1", "the task keeps the message that started it"
+    assert [m["messageId"] for m in second.task.data.history] == ["m1", "m2"]
+    assert await task_of(storage, sid, LANE, "AST_m2") is None
     items = await history_items(storage, sid, LANE)
     outputs = [i for i in items if i.type == "function_call_output" and i.call_id == "p1"]
-    assert outputs[0].output == "here it is"
-    answered = await task_of(storage, sid, LANE, first.task.id)
-    assert answered is not None and answered.status == "completed"
-    assert answered.data.metadata[MERGED_INTO_KEY] == second.task.id
+    assert [o.output for o in outputs] == [f"{WAITING_PREFIX}Could you send a photo?"]
+    said = [i.text_content for i in items if i.type == "message" and i.role == "user"]
+    assert said == ["my car is damaged", "here it is"], "each message is recorded once"
+
+    # a resend of the answer runs nothing again
+    again = await run_turn(storage, sid, LANE, answer, "interrupt", handler, task_id="AST_m2b")
+    assert again.task.id == first.task.id and again.task.status == "completed"
+    assert len(await history_items(storage, sid, LANE)) == len(items)
+
+
+async def test_one_question_is_in_front_of_the_person_and_the_next_waits(
+    agentdb_storage: AgentDBStorage,
+) -> None:
+    """Two tasks wait on the person: the second question waits unasked behind the first,
+    a follow-up of the first goes before it, and the reply that ends the first asks it."""
+    storage = agentdb_storage
+    sid = await new_session(storage, LANE)
+    front = Agent(instructions="front desk")
+
+    @front.tool
+    async def payer(ctx: RunContext) -> InputRequired:
+        """Ask for the payer."""
+        return InputRequired("Which payer?", verbatim=True)
+
+    @front.tool
+    async def email(ctx: RunContext) -> InputRequired:
+        """Ask for the email."""
+        return InputRequired("Which email?", verbatim=True)
+
+    def call(name: str, call_id: str) -> list[FunctionToolCall]:
+        return [FunctionToolCall(name=name, arguments="{}", call_id=call_id)]
+
+    front.update_options(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="am I covered?",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=call("payer", "p1"),
+                ),
+                FakeLLMResponse(
+                    input="send the ticket",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=call("email", "e1"),
+                ),
+                # the answer is not one: the same task asks again
+                FakeLLMResponse(
+                    input="why?", content="", ttft=0, duration=0, tool_calls=call("payer", "p2")
+                ),
+                FakeLLMResponse(input="Aetna", content="You are covered.", ttft=0, duration=0),
+            ]
+        )
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+        result = await front.run(ctx.message, message_history=ctx.message_history)
+        return result.input_required or result.output
+
+    t1 = await run_turn(storage, sid, LANE, a2a("am I covered?", "m1"), "interrupt", handler)
+    assert t1.task.status == "input-required" and t1.output == "Which payer?"
+    # a second task asks while the first question is in front: it waits, unasked
+    t2 = await run_turn(storage, sid, LANE, a2a("send the ticket", "m2"), "interrupt", handler)
+    assert t2.task.status == "input-required"
+    assert t2.task.internal is not None and t2.task.internal.ask["queued"] is True
+    assert t2.task.data.metadata["livekit/queued"] is True
+    assert "Which email?" not in [
+        i.text_content for i in await history_items(storage, sid, LANE) if i.type == "message"
+    ]
+
+    # the answer to the front question asks again: the follow-up goes first
+    again = await run_turn(
+        storage, sid, LANE, a2a("why?", "m3", task_id=t1.task.id), "interrupt", handler
+    )
+    assert again.task.id == t1.task.id and again.task.status == "input-required"
+    assert again.output == "Which payer?"
+    queued = await task_of(storage, sid, LANE, t2.task.id)
+    assert queued is not None and queued.internal is not None and queued.internal.ask["queued"]
+
+    # the first task ends: its reply puts the waiting question to the person
+    done = await run_turn(
+        storage, sid, LANE, a2a("Aetna", "m4", task_id=t1.task.id), "interrupt", handler
+    )
+    assert done.task.status == "completed"
+    assert done.output == "You are covered.\n\nWhich email?"
+    asked = await task_of(storage, sid, LANE, t2.task.id)
+    assert asked is not None and asked.status == "input-required"
+    assert asked.internal is not None and "queued" not in asked.internal.ask
+    assert asked.data.metadata["livekit/queued"] is False
 
 
 async def test_requires_approval_asks_then_runs_on_the_approved_call(
     agentdb_storage: AgentDBStorage,
 ) -> None:
     """Plan 7.4: ``requires_approval=True`` returns the ``InputRequired`` for you. The first call
-    asks yes or no and does not run; the answer is its output; the model's repeat of the same
+    asks yes or no and does not run; the answer is the next message; the model's repeat of the same
     call after the answer runs the body. The schema has no approval flag for the model."""
     storage = agentdb_storage
     sid = await new_session(storage, LANE)
@@ -587,11 +719,19 @@ async def test_requires_approval_asks_then_runs_on_the_approved_call(
     assert first.task.status_message["parts"][0]["text"] == (
         "Please confirm: Cancel the appointment on a date (date='monday'). Yes or no?"
     )
-    second = await run_turn(storage, sid, LANE, a2a("yes", "m2"), "interrupt", handler)
+    second = await run_turn(
+        storage, sid, LANE, a2a("yes", "m2", task_id=first.task.id), "interrupt", handler
+    )
     assert second.output == "done" and ran == ["monday"]
     items = await history_items(storage, sid, LANE)
     outputs = {i.call_id: i.output for i in items if i.type == "function_call_output"}
-    assert outputs == {"c1": "yes", "c2": "canceled monday"}
+    assert outputs == {
+        "c1": "waiting for the person's answer to: Please confirm: Cancel the appointment on a "
+        "date (date='monday'). Yes or no?",
+        "c2": "canceled monday",
+    }
+    said = [i.text_content for i in items if i.type == "message" and i.role == "user"]
+    assert said == ["cancel monday", "yes"]
 
 
 # -- concurrent and reject --
@@ -828,7 +968,8 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: 
         ]
     )
     state = Patient()
-    thread = Thread(call_worker, sid, agent_name="desk")
+    # the lane's text door is not live: the call takes the lane per voice turn
+    thread = Thread(call_worker, sid, agent_name="desk", call_holds_lane=False)
     async with LiveSession(llm=llm, state=state, thread=thread) as session:
         await session.start(agent)
         assert session.thread is thread
@@ -905,3 +1046,192 @@ async def test_create_thread_creates_the_database(agentdb_storage: AgentDBStorag
     tasks = await core.tasks("front")
     assert len(tasks) == 2 and all(t.status == "completed" for t in tasks)
     core.close()
+
+
+async def test_a_text_during_a_live_call_goes_to_the_call_and_answers_its_question(
+    agentdb_workers: Workers,
+) -> None:
+    """docs/delegation.md, Flow D: under ``live`` the call holds its lane; an SMS that arrives
+    during the call is a turn of the call, the model sees it at once, and as the answer to the
+    question in front of the person it goes, as written, to the tool that asked."""
+    from livekit.agents import LiveSession
+
+    call_worker, text_worker = agentdb_workers
+    sid = await new_session(call_worker, "desk")
+    agent = Agent(instructions="desk", name="desk")
+    requests: list[str] = []
+
+    @agent.tool
+    async def ask(ctx: RunContext, request: str) -> str | InputRequired:
+        """The back office.
+
+        Args:
+            request: the request, in full
+        """
+        requests.append(request)
+        if request == "a flight":
+            return InputRequired("Which email for the ticket?", verbatim=True)
+        return f"booked, ticket to {request}"
+
+    ask._relays_answer = True  # type: ignore[attr-defined]  (as a delegate's tool)
+
+    agent.update_options(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="book me a flight",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[
+                        FunctionToolCall(
+                            name="ask", arguments='{"request": "a flight"}', call_id="c1"
+                        )
+                    ],
+                ),
+                FakeLLMResponse(
+                    input="booked, ticket to ana@example.com",
+                    content="You are booked; the ticket is in your email.",
+                    ttft=0,
+                    duration=0,
+                ),
+            ]
+        )
+    )
+    thread = Thread(call_worker, sid, agent_name="desk")
+    async with LiveSession(thread=thread) as session:
+        await session.start(agent)
+        await session.run(user_input="book me a flight")
+        row = await lane_row(text_worker, sid, "desk")
+        assert row is not None and row.lease_until > 0, "the call holds its lane"
+
+        # the email comes by SMS during the call
+        texted = await run_turn(
+            text_worker,
+            sid,
+            "desk",
+            a2a("ana@example.com", "m1", channel="sms"),
+            None,
+            echo,
+            debounce=timedelta(0),
+        )
+        assert requests == ["a flight", "ana@example.com"]
+        assert texted.task.status == "completed"
+        assert texted.output == "You are booked; the ticket is in your email."
+        said = [i.text_content for i in session.history.items if i.type == "message"]
+        assert said[-2:] == ["ana@example.com", "You are booked; the ticket is in your email."]
+
+    row = await lane_row(text_worker, sid, "desk")
+    assert row is not None and row.lease_until == 0, "released when the call ends"
+    stored = [
+        i.text_content for i in await history_items(text_worker, sid, "desk") if i.type == "message"
+    ]
+    assert stored[-1] == "You are booked; the ticket is in your email."
+
+
+def _flight_desk() -> tuple[Agent, list[str]]:
+    agent = Agent(instructions="desk", name="desk")
+    requests: list[str] = []
+
+    @agent.tool
+    async def ask(ctx: RunContext, request: str) -> str | InputRequired:
+        """The back office.
+
+        Args:
+            request: the request, in full
+        """
+        requests.append(request)
+        if request == "a flight":
+            return InputRequired("Which email for the ticket?", verbatim=True)
+        return f"booked, ticket to {request}"
+
+    ask._relays_answer = True  # type: ignore[attr-defined]  (as a delegate's tool)
+
+    agent.update_options(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="book me a flight",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[
+                        FunctionToolCall(
+                            name="ask", arguments='{"request": "a flight"}', call_id="c1"
+                        )
+                    ],
+                ),
+                FakeLLMResponse(
+                    input="booked, ticket to ana@example.com",
+                    content="You are booked.",
+                    ttft=0,
+                    duration=0,
+                ),
+            ]
+        )
+    )
+    return agent, requests
+
+
+async def test_a_question_asked_by_text_is_answered_on_a_call(
+    agentdb_workers: Workers,
+) -> None:
+    """The open questions belong to the lane: one asked in a text is in front of the person
+    when they call, and the spoken answer goes to the tool that asked."""
+    from livekit.agents import LiveSession
+
+    call_worker, text_worker = agentdb_workers
+    sid = await new_session(call_worker, "desk")
+    agent, requests = _flight_desk()
+
+    async def by_text(ctx: A2ASessionContext[Any]) -> Any:
+        result = await agent.run(ctx.message, message_history=ctx.message_history)
+        return result.input_required or result.output
+
+    asked = await run_turn(text_worker, sid, "desk", a2a("book me a flight", "m1"), None, by_text)
+    assert asked.task.status == "input-required"
+
+    async with LiveSession(thread=Thread(call_worker, sid, agent_name="desk")) as session:
+        await session.start(agent)
+        await session.run(user_input="ana@example.com")
+        said = [i.text_content for i in session.history.items if i.type == "message"]
+        assert said[-1] == "You are booked."
+
+    assert requests == ["a flight", "ana@example.com"]
+    answered = await task_of(text_worker, sid, "desk", asked.task.id)
+    assert answered is not None and answered.status == "completed"
+
+
+async def test_a_question_asked_on_a_call_is_answered_by_text(agentdb_workers: Workers) -> None:
+    """A question still open when the call ends stays on the lane: a text answers it."""
+    from livekit.agents import LiveSession
+
+    call_worker, text_worker = agentdb_workers
+    sid = await new_session(call_worker, "desk")
+    agent, requests = _flight_desk()
+
+    async with LiveSession(thread=Thread(call_worker, sid, agent_name="desk")) as session:
+        await session.start(agent)
+        await session.run(user_input="book me a flight")
+
+    (waiting,) = [
+        t for t in await tasks_of(text_worker, sid, "desk") if t.status == "input-required"
+    ]
+    assert waiting.internal is not None and waiting.internal.ask["call_id"] == "c1"
+
+    async def by_text(ctx: A2ASessionContext[Any]) -> Any:
+        result = await agent.run(ctx.message, message_history=ctx.message_history)
+        return result.input_required or result.output
+
+    texted = await run_turn(
+        text_worker,
+        sid,
+        "desk",
+        a2a("ana@example.com", "m2", channel="sms", task_id=waiting.id),
+        None,
+        by_text,
+        debounce=timedelta(0),
+    )
+    assert requests == ["a flight", "ana@example.com"]
+    assert texted.task.id == waiting.id and texted.task.status == "completed"
+    assert texted.output == "You are booked."

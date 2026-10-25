@@ -143,10 +143,25 @@ class Thread:
     """``ctx.thread``: the durable thread, with the verbs that reach outside the turn. Reads
     open the thread's database for the call."""
 
-    def __init__(self, storage: AgentDBStorage, thread_id: str, *, agent_name: str) -> None:
+    def __init__(
+        self,
+        storage: AgentDBStorage,
+        thread_id: str,
+        *,
+        agent_name: str,
+        call_holds_lane: bool = True,
+    ) -> None:
         self._storage = storage
         self._id = thread_id
         self._agent_name = agent_name
+        self._call_holds_lane = call_holds_lane
+
+    @property
+    def call_holds_lane(self) -> bool:
+        """Whether a call on this thread holds its lane for the whole call and answers the
+        texts that arrive during it: the lane's text door is ``live``, or it has none. Else
+        the call takes the lane per voice turn and the text door answers."""
+        return self._call_holds_lane
 
     @property
     def id(self) -> str:
@@ -227,6 +242,15 @@ class Thread:
         finally:
             db.close()
 
+    async def request_cancel(self, record: TaskRecord, reason: str | None) -> bool:
+        """``tasks/cancel`` on a running task: the request its holder acts on. ``False`` when
+        the task no longer runs."""
+        db = await self._storage.open(self._id)
+        try:
+            return await db.request_cancel(record.lane, record.id, reason)
+        finally:
+            db.close()
+
     async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
         """One page of the session's journal (docs/journal.md), every lane, in order; pass the
         last ``id`` to read the next."""
@@ -250,7 +274,7 @@ class Thread:
         return EventWrite(ts_ms=int(time.time() * 1000), type=type, payload=payload)
 
     async def _open(self) -> _core.Thread:
-        return _core.Thread(await self._storage.open(self._id), self._storage.holder)
+        return _core.Thread(await self._storage.open(self._id), self._storage.process_holder)
 
 
 __all__ = [

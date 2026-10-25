@@ -7,10 +7,11 @@ from dataclasses import dataclass
 import pytest
 
 from livekit.agents import Agent, AgentTask, Completed, InputRequired, RunContext, function_tool
-from livekit.agents.llm import FunctionCall, FunctionCallOutput, FunctionToolCall
+from livekit.agents.llm import ChatMessage, FunctionCall, FunctionCallOutput, FunctionToolCall
 from livekit.agents.llm.tool_context import (
     APPROVAL_ANSWERED,
     APPROVAL_KEY,
+    TASK_KEY,
     WAITING_PREFIX,
     approval_granted,
     approval_scope,
@@ -42,52 +43,64 @@ def out(call_id: str, output: str, *, is_error: bool = False) -> FunctionCallOut
     return FunctionCallOutput(call_id=call_id, name="cancel", output=output, is_error=is_error)
 
 
+def waiting(call_id: str, question: str = "Cancel monday?") -> FunctionCallOutput:
+    """The output of a call that asked: its question, never the answer."""
+    return out(call_id, f"{WAITING_PREFIX}{question}")
+
+
+def said(text: str) -> ChatMessage:
+    """The person's answer: their next message."""
+    return ChatMessage(role="user", content=[text])
+
+
 def test_first_call_asks() -> None:
     assert not approval_granted([call("c1")], call("c1"))
 
 
 def test_repeat_after_the_answer_runs() -> None:
-    assert approval_granted([asked("c1"), out("c1", "yes"), call("c2")], call("c2"))
+    assert approval_granted([asked("c1"), waiting("c1"), said("yes"), call("c2")], call("c2"))
 
 
 def test_arguments_are_compared_as_json() -> None:
-    history = [asked("c1", '{"a": 1, "b": 2}'), out("c1", "yes")]
+    history = [asked("c1", '{"a": 1, "b": 2}'), waiting("c1"), said("yes")]
     assert approval_granted(history, call("c2", '{"b":2,"a":1}'))
 
 
 def test_repeat_before_the_answer_asks() -> None:
-    history = [asked("c1"), out("c1", f"{WAITING_PREFIX}Cancel monday?"), call("c2")]
+    history = [asked("c1"), waiting("c1"), call("c2")]
     assert not approval_granted(history, call("c2"))
 
 
 def test_changed_arguments_ask_again() -> None:
-    history = [asked("c1"), out("c1", "no, tuesday")]
+    history = [asked("c1"), waiting("c1"), said("no, tuesday")]
     assert not approval_granted(history, call("c2", '{"date": "tuesday"}'))
 
 
 def test_an_answer_runs_one_repeat() -> None:
-    history = [asked("c1"), out("c1", "yes"), ran("c2"), out("c2", "canceled")]
+    history = [asked("c1"), waiting("c1"), said("yes"), ran("c2"), out("c2", "canceled")]
     assert not approval_granted(history, call("c3"))
 
 
 def test_a_newer_ask_replaces_the_older() -> None:
     history = [
         asked("c1"),
-        out("c1", "yes"),
+        waiting("c1"),
+        said("yes"),
         asked("c2", '{"date": "tuesday"}'),
-        out("c2", "yes"),
+        waiting("c2"),
+        said("yes"),
     ]
     assert not approval_granted(history, call("c3"))
 
 
 def test_a_missing_detail_answered_is_not_an_approval() -> None:
     # the call asked for an email, not for approval: its answer approves nothing
-    history = [call("c1"), out("c1", "jo@example.com")]
+    history = [call("c1"), waiting("c1", "Which email?"), said("jo@example.com")]
     assert not approval_granted(history, call("c2"))
 
 
 def test_other_tools_do_not_count() -> None:
-    history = [asked("x1"), out("x1", "yes")]
+    history = [asked("x1"), waiting("x1"), said("yes")]
     assert not approval_granted(history, call("c1", name="other"))
 
 
@@ -192,11 +205,18 @@ async def test_a_read_back_may_await_a_task_that_verifies_first() -> None:
 
 
 def test_the_model_reads_an_answered_read_back_as_not_run() -> None:
-    history = [asked("c1"), out("c1", "yes"), call("c2"), out("c2", f"{WAITING_PREFIX}Cancel?")]
+    history = [asked("c1"), waiting("c1"), said("yes"), call("c2"), waiting("c2", "Cancel?")]
     seen = as_model_reads(history)
-    assert seen[1].output == APPROVAL_ANSWERED.format(answer="yes", name="cancel")
-    assert history[1].output == "yes"  # what is stored stays the person's words
-    assert seen[3].output.startswith(WAITING_PREFIX)  # not answered yet, not an approval ask
+    assert seen[1].output == APPROVAL_ANSWERED.format(question="Cancel monday?", name="cancel")
+    assert (
+        history[1].output == f"{WAITING_PREFIX}Cancel monday?"
+    )  # what is stored stays the question
+    assert seen[4].output.startswith(WAITING_PREFIX)  # not answered yet, not an approval ask
+
+
+def test_a_read_back_not_answered_yet_reads_as_its_question() -> None:
+    history = [asked("c1"), waiting("c1")]
+    assert as_model_reads(history)[1].output == f"{WAITING_PREFIX}Cancel monday?"
 
 
 @dataclass
@@ -229,3 +249,26 @@ async def test_a_task_run_as_the_root_ends_the_run_with_its_value() -> None:
     result = await task.run("hi")
     assert result.output == "greeted"
     assert task.done()
+
+
+def of(task: str, item: FunctionCall | ChatMessage) -> FunctionCall | ChatMessage:
+    """An item a run recorded under ``task``."""
+    item.extra[TASK_KEY] = task
+    return item
+
+
+def test_another_tasks_message_does_not_answer_a_read_back() -> None:
+    history = [of("A", asked("c1")), waiting("c1"), of("B", said("yes"))]
+    assert not approval_granted(history, of("A", call("c2")))
+    assert not approval_granted(history, of("B", call("c2"))), "nor approves its own repeat"
+
+
+def test_a_read_back_answered_in_its_task_runs_only_that_tasks_repeat() -> None:
+    history = [of("A", asked("c1")), waiting("c1"), of("A", said("yes"))]
+    assert approval_granted(history, of("A", call("c2")))
+    assert not approval_granted(history, of("B", call("c2")))
+
+
+def test_the_model_reads_a_read_back_answered_only_in_its_task_as_not_run() -> None:
+    history = [of("A", asked("c1")), waiting("c1"), of("B", said("yes"))]
+    assert as_model_reads(history)[1].output == f"{WAITING_PREFIX}Cancel monday?"

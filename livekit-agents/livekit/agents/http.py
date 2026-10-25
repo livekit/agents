@@ -1,8 +1,8 @@
 """``AgentServer.http``: the ASGI app behind an agent's HTTP endpoints, and the bridge that serves
 it on the endpoint data plane.
 
-Routes are served through the LiveKit server at ``/agents/{agent_name}/{deployment}/{path}``; no
-local listener exposes them. The Rust worker (``_core.Worker``) accepts one stream per request,
+Routes are served through the LiveKit server at ``/agents/{agent_name}/{deployment}/{path}``;
+the only local listener is the loopback one (:func:`serve_loopback`), for the worker's own jobs. The Rust worker (``_core.Worker``) accepts one stream per request,
 parses the node's preamble and hands the stream here: :func:`serve_endpoint` runs one ASGI call
 over it, an h11 codec for an HTTP exchange, a wsproto codec after a WebSocket upgrade. Nothing is
 multiplexed in Python.
@@ -267,6 +267,61 @@ async def serve_endpoint(
         await bridge.run()
     else:
         await _HttpBridge(stream, request, app, head.buffered).run()
+
+
+LOCAL_ROUTES_ENV = "LIVEKIT_AGENT_LOCAL_ROUTES"
+"""``<public prefix>=<loopback base>``, comma separated: the worker's own routes, which a job of
+the worker reaches over the loopback listener instead of through the node."""
+
+
+class _TcpStream:
+    """A loopback connection as the stream ``serve_endpoint`` reads and writes."""
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._reader = reader
+        self._writer = writer
+
+    async def read(self, max_bytes: int = _READ_SIZE) -> bytes:
+        return await self._reader.read(max_bytes)
+
+    async def write(self, data: bytes) -> None:
+        self._writer.write(data)
+        await self._writer.drain()
+
+    def finish(self) -> None:
+        self._writer.close()
+
+    def reset(self, code: int) -> None:
+        self._writer.transport.abort()
+
+    def stop(self, code: int) -> None:
+        self._writer.transport.abort()
+
+
+async def serve_loopback(app: ASGIApp) -> tuple[asyncio.Server, str]:
+    """Serves ``app`` on 127.0.0.1, one exchange per connection, with the bridge the node's
+    streams use: responses stream as written, an SSE answer included. Returns the server and
+    its base URL. A request authenticates with its own token, as no node vouches for it."""
+
+    async def connection(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        peer = writer.get_extra_info("peername")
+        request = EndpointRequest(
+            request_id=f"loopback-{id(writer):x}",
+            authorized=False,
+            route="",
+            kind="http",
+            client_addr=f"{peer[0]}:{peer[1]}" if peer else "",
+            scheme="http",
+            timeout_ms=0,
+        )
+        try:
+            await serve_endpoint(_TcpStream(reader, writer), request, app)
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(connection, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, f"http://127.0.0.1:{port}"
 
 
 class _PeerGone(Exception):

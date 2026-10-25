@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import functools
 import os
+import threading
 import time
 from datetime import timedelta
 from typing import Any
@@ -15,7 +16,11 @@ from .. import _core
 from .._core import Streams, ThreadDb, Threads
 from .._generated.storage_threads import ThreadInfo
 
-GET_THREAD_TTL = 30.0
+GET_THREAD_TTL = 3600.0
+"""A thread's scope and database never change: its lookup is kept this long, or until the
+thread's own expiry when that comes first."""
+GET_THREAD_CACHE = 4096
+"""Threads whose lookup a process keeps at most."""
 
 _thread_cache: dict[str, tuple[float, ThreadInfo]] = {}
 
@@ -75,6 +80,17 @@ class AgentDBStorage:
         self.holder = holder
         """This worker's lease holder id: the worker's id, set once it is registered."""
 
+    @property
+    def process_holder(self) -> str:
+        """The lease holder of this process: ``<worker>/<process tag>``, where the tag is
+        ``p<pid>``, and ``t<thread>`` off the main thread, where a job may run with a loop of
+        its own. A lease adds its own handle, so a request reads from the holder whether the
+        lane is held in its process, in a job of its worker, or on another worker."""
+        tag = f"p{os.getpid()}"
+        if threading.current_thread() is not threading.main_thread():
+            tag += f"t{threading.get_ident()}"
+        return f"{self.holder}/{tag}"
+
     def __reduce__(self) -> tuple[functools.partial[AgentDBStorage], tuple[()]]:
         return functools.partial(AgentDBStorage, **self._args, holder=self.holder), ()
 
@@ -109,8 +125,15 @@ class AgentDBStorage:
         return await self._core.open(database_id)
 
     def _remember(self, info: ThreadInfo) -> ThreadInfo:
-        _thread_cache[info.thread_id] = (time.monotonic() + GET_THREAD_TTL, info)
+        now = time.monotonic()
+        keep = GET_THREAD_TTL
+        if info.expires_at:
+            keep = min(keep, info.expires_at - time.time())
+        _thread_cache.pop(info.thread_id, None)
+        _thread_cache[info.thread_id] = (now + keep, info)
+        while len(_thread_cache) > GET_THREAD_CACHE:
+            del _thread_cache[next(iter(_thread_cache))]  # the oldest lookup
         return info
 
 
-__all__ = ["GET_THREAD_TTL", "AgentDBStorage"]
+__all__ = ["GET_THREAD_CACHE", "GET_THREAD_TTL", "AgentDBStorage"]

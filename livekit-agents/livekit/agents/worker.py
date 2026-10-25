@@ -41,7 +41,7 @@ from livekit.protocol import agent, agent_worker, models
 
 from . import _core, ipc, telemetry, utils
 from ._generated.storage_turn import Policy
-from .http import AgentHttp
+from .http import LOCAL_ROUTES_ENV, AgentHttp, serve_loopback
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -54,6 +54,7 @@ from .job import (
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
+from .storage import hub
 from .storage.agentdb import AgentDBStorage
 from .storage.context import Handler, S
 from .storage.protocol import StorageError
@@ -81,6 +82,8 @@ class _CallThreadEntrypoint:
 
     entrypoint: Callable[[JobContext], Awaitable[None]]
     storage: AgentDBStorage
+    call_holds_lane: bool = True
+    """The mode the lane's text door gives a call (``Thread.call_holds_lane``)."""
 
     async def __call__(self, ctx: JobContext) -> None:
         if not self.storage.holder:
@@ -93,7 +96,12 @@ class _CallThreadEntrypoint:
         try:
             if not isinstance(thread_id, str) or not thread_id:
                 thread_id = (await resolve_thread(self.storage.threads)).id
-            ctx._thread = Thread(self.storage, thread_id, agent_name=ctx.job.agent_name)
+            ctx._thread = Thread(
+                self.storage,
+                thread_id,
+                agent_name=ctx.job.agent_name,
+                call_holds_lane=self.call_holds_lane,
+            )
         except StorageError as e:
             logger.warning(
                 "the call's thread could not be resolved; the call is kept in memory",
@@ -555,9 +563,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._closed, self._draining, self._connection_failed = True, False, False
         self._http_server: http_server.HttpServer | None = None
+        self._loopback: asyncio.Server | None = None
         # built here and not in run(): the @server.http decorators run at import time
         self._http = AgentHttp()
         self._a2a_endpoints: dict[str, A2AEndpoint[Any]] = {}
+        self._call_holds_lane = True
         self._conn: _core.Worker | None = None  # once run() has started the Rust worker
 
         self._lock = asyncio.Lock()
@@ -698,6 +708,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     url_base=self._endpoint_url_base,
                     agents=self._agents,
                 )
+                if door.lane in (None, self._agent_name):
+                    # the call's mode follows the person's text door on its lane: under live,
+                    # or with no text door, the call holds the lane; else it takes it per turn
+                    policy = door.turn_options.policy
+                    person = policy.get("a2a", "live") if isinstance(policy, dict) else policy
+                    self._call_holds_lane &= (person or "live") == "live"
                 self._http.mount(f"/{door.name}", door.app, name=door.name)
                 self._http.configure_endpoint(f"/{door.name}", public=door.public)
                 self._a2a_endpoints[door.name] = door
@@ -956,7 +972,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool = ipc.proc_pool.ProcPool(
                 initialize_process_fnc=self._setup_fnc,
                 job_entrypoint_fnc=(
-                    _CallThreadEntrypoint(self._entrypoint_fnc, self._storage)
+                    _CallThreadEntrypoint(
+                        self._entrypoint_fnc,
+                        self._storage,
+                        call_holds_lane=self._call_holds_lane,
+                    )
                     if self._storage is not None
                     and self._entrypoint_fnc is not _text_only_entrypoint
                     else self._entrypoint_fnc
@@ -975,6 +995,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 memory_limit_mb=self._job_memory_limit_mb,
                 http_proxy=self._http_proxy or None,
             )
+            pool = self._proc_pool
+            signaling: set[asyncio.Future[None]] = set()
+
+            def forward(thread_id: str, lane: str, kind: str) -> None:
+                # a text door took a message or a cancel for a lane one of the jobs holds for
+                # its whole call: that job hears it now, through IPC
+                job_id = hub.job_holding(thread_id, lane)
+                executor = pool.get_by_job_id(job_id) if job_id is not None else None
+                if executor is not None:
+                    task = asyncio.ensure_future(executor.signal_lane(thread_id, lane, kind))
+                    signaling.add(task)
+                    task.add_done_callback(signaling.discard)
+
+            hub.forward = forward
 
             self._api: api.LiveKitAPI | None = None
             self._http_session: aiohttp.ClientSession | None = None
@@ -1132,6 +1166,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._prometheus_server.host,
                     self._prometheus_server.port,
                 )
+
+            if self._a2a_endpoints and (base := self._endpoint_url_base()) is not None:
+                # a job's delegation to a door of this worker goes over the loopback, not
+                # through the node; the jobs read the route from the environment
+                self._loopback, local = await serve_loopback(self._http.app)
+                os.environ[LOCAL_ROUTES_ENV] = f"{base}={local}"
+                # one line a script can parse to reach the doors without the node
+                logger.info(f"a2a loopback {local} serves {base} agent={self._agent_name}")
 
             self._proc_pool.on("process_started", _update_job_status)
             self._proc_pool.on("process_closed", _update_job_status)
@@ -1400,6 +1442,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             if self._http_server is not None:
                 await self._http_server.aclose()
+
+            if self._loopback is not None:
+                self._loopback.close()
 
             if self._prometheus_server:
                 await self._prometheus_server.aclose()

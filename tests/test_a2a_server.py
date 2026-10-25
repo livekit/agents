@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any
 
@@ -39,7 +40,7 @@ from livekit.agents.a2a.extension import (
     as_dict,
 )
 from livekit.agents.llm import ChatItem, FunctionToolCall
-from livekit.agents.storage import AgentDBStorage, StorageUnavailable
+from livekit.agents.storage import AgentDBStorage, StorageUnavailable, hub
 from livekit.agents.storage.resolve import Thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -396,8 +397,8 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
     async def handler(ctx: A2ASessionContext[Any]) -> str | None:
         return (await front.run(ctx.message, message_history=ctx.message_history)).output
 
-    server_a, _ = make_server(a, handler)
-    server_b, _ = make_server(b, handler)
+    server_a, _ = make_server(a, handler, inbox="interrupt")
+    server_b, _ = make_server(b, handler, inbox="interrupt")
     ctx_id = (await a.threads.create_thread()).thread_id
     async with http_client(server_a) as http_a, http_client(server_b) as http_b:
         first = asyncio.create_task(
@@ -539,6 +540,93 @@ async def test_a_resent_message_id_returns_the_existing_task(
     assert [i.text_content for i in items] == ["hi", "reply to: hi"]
 
 
+def frame_task(result: dict[str, Any]) -> str:
+    """The task a stream frame names."""
+    if "task" in result:
+        return str(result["task"]["id"])
+    return str((result.get("statusUpdate") or result.get("artifactUpdate") or {})["taskId"])
+
+
+@pytest.mark.parametrize("when", ["during", "after"])
+async def test_a_resend_under_live_is_the_existing_tasks_stream(
+    agentdb_storage: AgentDBStorage, when: str
+) -> None:
+    """docs/delegation.md, when the lane is busy: a message id the thread already has gets the
+    existing task. Under ``live`` the resend's stream is that task's, from its first frame,
+    under its id, with its answer; nothing runs twice."""
+    release = asyncio.Event()
+    runs: list[str] = []
+
+    async def handler(ctx: A2ASessionContext[Any]) -> str:
+        runs.append(ctx.task_id)
+        await ctx.update("looking")
+        await release.wait()
+        return "the answer"
+
+    server, _ = make_server(agentdb_storage, handler)
+    ctx_id = (await agentdb_storage.threads.create_thread()).thread_id
+    message = {"message": wire("hi", "m1", context_id=ctx_id)}
+    async with http_client(server) as http:
+        first = asyncio.create_task(rpc(http, "message/stream", message))
+        if when == "during":
+            while not runs:
+                await asyncio.sleep(0.05)
+            resend = asyncio.create_task(rpc(http, "message/stream", message))
+            await asyncio.sleep(0.5)
+            release.set()
+            r1, r2 = await asyncio.gather(first, resend)
+        else:
+            release.set()
+            r1 = await first
+            r2 = await rpc(http, "message/stream", message)
+
+    original = [r["result"] for r in sse_results(r1)]
+    resent = [r["result"] for r in sse_results(r2)]
+    task_id = frame_task(original[0])
+    assert runs == [task_id]
+    assert {frame_task(r) for r in resent} == {task_id}
+    assert resent[0]["task"]["id"] == task_id
+    answer = "".join(
+        p.get("text", "")
+        for r in resent
+        if "artifactUpdate" in r
+        for p in r["artifactUpdate"]["artifact"]["parts"]
+    )
+    assert "the answer" in answer
+    assert state_of(resent[-1]) == "TASK_STATE_COMPLETED"
+    if when == "after":
+        # the stream of an ended task is replayed whole: its progress is there too
+        assert any(
+            state_of(r) == "TASK_STATE_WORKING"
+            and r["statusUpdate"]["status"]["message"]["parts"][0]["text"] == "looking"
+            for r in resent
+        )
+
+
+async def test_a_persons_message_opens_one_connection(
+    agentdb_storage: AgentDBStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The door reads where a person's message goes (the question in front of them) on the
+    connection its turn runs on. A second one would be dialed whenever the lane's holder keeps
+    a parked one, which costs a delegation nothing and a person's message seconds."""
+    server, _ = make_server(agentdb_storage)
+    ctx_id = (await agentdb_storage.threads.create_thread()).thread_id
+    opened: list[str] = []
+    open_ = agentdb_storage.open
+
+    async def counted(thread_id: str) -> Any:
+        opened.append(thread_id)
+        return await open_(thread_id)
+
+    monkeypatch.setattr(agentdb_storage, "open", counted)
+    async with http_client(server) as http:
+        response = await rpc(
+            http, "message/stream", {"message": wire("hi", "m1", context_id=ctx_id)}
+        )
+    assert state_of(sse_results(response)[-1]["result"]) == "TASK_STATE_COMPLETED"
+    assert opened == [ctx_id]
+
+
 async def test_resubscribe_replays_after_the_first_stream_is_dropped(
     agentdb_workers: Workers,
 ) -> None:
@@ -634,22 +722,73 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
     del stream
 
 
-async def test_tasks_cancel_ends_a_running_turn_at_its_boundary(
-    agentdb_storage: AgentDBStorage,
+@pytest.mark.parametrize("inbox", ["live", "interrupt"])
+async def test_tasks_cancel_stops_the_running_tool(
+    agentdb_storage: AgentDBStorage, inbox: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    entered, release = asyncio.Event(), asyncio.Event()
-    front = _blocking_agent(entered, release)
+    """docs/delegation.md: ``tasks/cancel`` reaches the running tool at its next wait point,
+    outside the region it protects; the task ends ``canceled`` once the tool stopped, with the
+    reason, and the answer says so."""
+    entered, protected_done = asyncio.Event(), asyncio.Event()
+    seen: list[str] = []
+    at: dict[str, float] = {}
+    signal = hub.signal
+
+    def signaled(thread_id: str, lane: str, kind: str = "arrival") -> None:
+        at["signaled"] = time.monotonic()
+        signal(thread_id, lane, kind)
+
+    monkeypatch.setattr(hub, "signal", signaled)
+    task_moved = hub.task_moved
+
+    def moved(task_id: str, **kw: str) -> None:
+        at.setdefault("ended", time.monotonic())
+        task_moved(task_id, **kw)
+
+    monkeypatch.setattr(hub, "task_moved", moved)
+    front = Agent(instructions="front desk")
+
+    @front.tool
+    async def charge(ctx: RunContext) -> str:
+        """Charge the card."""
+        with ctx.uninterruptible():
+            entered.set()
+            await asyncio.sleep(1.0)  # the charge is not cut in half
+            seen.append("charged")
+        protected_done.set()
+        at["protected"] = time.monotonic()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            seen.append("stopped")
+            at["stopped"] = time.monotonic()
+            raise
+        return "receipt sent"
+
+    front.update_options(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="pay",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[FunctionToolCall(name="charge", arguments="{}", call_id="c1")],
+                ),
+            ]
+        )
+    )
 
     async def handler(ctx: A2ASessionContext[Any]) -> str | None:
         return (await front.run(ctx.message, message_history=ctx.message_history)).output
 
-    server, _ = make_server(agentdb_storage, handler)
+    server, _ = make_server(agentdb_storage, handler, inbox=inbox)
     ctx_id = (await agentdb_storage.threads.create_thread()).thread_id
     async with http_client(server) as http:
         running = asyncio.create_task(
-            rpc(http, "message/stream", {"message": wire("first", "m1", context_id=ctx_id)})
+            rpc(http, "message/stream", {"message": wire("pay", "m1", context_id=ctx_id)})
         )
-        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(entered.wait(), 10)
         listed = (await rpc(http, "tasks/list", {"contextId": ctx_id})).json()["result"]["tasks"]
         (task,) = listed
         assert task["status"]["state"] == "TASK_STATE_WORKING"
@@ -662,15 +801,104 @@ async def test_tasks_cancel_ends_a_running_turn_at_its_boundary(
                 "metadata": {f"{EXTENSION_URI}/reason": "user_interrupted"},
             },
         )
+        at["answered"] = time.monotonic()
         assert canceled.json()["result"]["status"]["state"] == "TASK_STATE_CANCELED"
-        release.set()
-        response = await running
+        if inbox == "live":
+            # the holder is in this process: the cancel answers once the task ended, with one
+            # read of its row, not after its backstop
+            assert at["answered"] - at["ended"] < 1.5
+        assert protected_done.is_set(), "the protected region ran to its end first"
+        response = await asyncio.wait_for(running, 30)
+        again = await rpc(http, "tasks/cancel", {"id": task["id"], "contextId": ctx_id})
+
+    assert seen == ["charged", "stopped"]
+    if inbox == "live":
+        # the holder is in this process: the tool's watcher hears the cancel at once and reads
+        # the row, instead of at its next read (seconds later)
+        assert at["stopped"] - max(at["signaled"], at["protected"]) < 1.0
     results = [r["result"] for r in sse_results(response)]
     final = results[-1]["statusUpdate"]
     assert final["status"]["state"] == "TASK_STATE_CANCELED"
     # a client's cancel, not the server's interrupt
-    assert INTERRUPTED not in metadata_from_wire(final.get("metadata", {}))
+    assert not metadata_from_wire(final.get("metadata", {})).get(INTERRUPTED)
     assert metadata_from_wire(final["metadata"])["livekit/reason"] == "user_interrupted"
+    # a task that already ended cannot be canceled, and the caller is told so
+    assert again.json()["error"]["code"] == -32002
+
+
+async def test_a_cancel_after_the_protected_step_says_what_the_work_did(
+    agentdb_storage: AgentDBStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """docs/delegation.md, when work stops: a cancel that lands while work in the background
+    is inside its protected step lets the step finish; the task ends ``canceled`` with what the
+    work did as its status, not with the progress line it had, and ``tasks/cancel`` answers as
+    soon as it ended."""
+    entered, cancel_sent = asyncio.Event(), asyncio.Event()
+    signal = hub.signal
+
+    def signaled(thread_id: str, lane: str, kind: str = "arrival") -> None:
+        if kind == "cancel":
+            cancel_sent.set()
+        signal(thread_id, lane, kind)
+
+    monkeypatch.setattr(hub, "signal", signaled)
+    front = Agent(instructions="front desk")
+
+    @front.tool
+    async def book(ctx: RunContext) -> str:
+        """Book the flight."""
+        await ctx.update("booking the flight")
+        with ctx.uninterruptible():
+            entered.set()
+            # the seat is taken whatever happens: the cancel lands in the middle of it
+            await asyncio.wait_for(cancel_sent.wait(), 30)
+            await asyncio.sleep(0.2)
+        return "took seat 12A"
+
+    front.update_options(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="book it",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[FunctionToolCall(name="book", arguments="{}", call_id="b1")],
+                ),
+            ]
+        )
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+        return (await front.run(ctx.message, message_history=ctx.message_history)).output
+
+    server, _ = make_server(agentdb_storage, handler)
+    ctx_id = (await agentdb_storage.threads.create_thread()).thread_id
+    async with http_client(server) as http:
+        running = asyncio.create_task(
+            rpc(http, "message/stream", {"message": wire("book it", "m1", context_id=ctx_id)})
+        )
+        await asyncio.wait_for(entered.wait(), 10)
+        (task,) = (await rpc(http, "tasks/list", {"contextId": ctx_id})).json()["result"]["tasks"]
+        sent = time.monotonic()
+        canceled = await rpc(http, "tasks/cancel", {"id": task["id"], "contextId": ctx_id})
+        waited = time.monotonic() - sent
+        response = await asyncio.wait_for(running, 30)
+
+    status = canceled.json()["result"]["status"]
+    assert status["state"] == "TASK_STATE_CANCELED"
+    said = status["message"]["parts"][0]["text"]
+    assert "took seat 12A" in said and "booking the flight" not in said
+    # the stream's last answer is the same, replacing what streamed before the cancel
+    artifacts = [
+        r["artifactUpdate"]
+        for r in (x["result"] for x in sse_results(response))
+        if "artifactUpdate" in r
+    ]
+    assert artifacts[-1]["artifact"]["parts"][0]["text"] == said
+    assert canceled.json()["result"]["artifacts"][0]["parts"][0]["text"] == said
+    # its backstop is 10 s: the cancel answers when the task ended, a resumed turn later
+    assert waited < 8.0, f"the cancel answered {waited:.1f} s after it was sent"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -859,3 +1087,16 @@ async def test_a_storage_error_mid_turn_fails_the_task_storage_unavailable(
     assert task["status"]["state"] == "TASK_STATE_FAILED"
     reason = metadata_from_wire(task["status"]["message"]["metadata"])[REASON]
     assert reason == "storage-unavailable"
+
+    # streamed: the final frame names the task the acknowledgment named, and that row failed
+    async with http_client(server) as http:
+        r = await rpc(http, "message/stream", {"message": wire("hi", "m2", context_id=ctx_id)})
+    results = sse_results(r)
+    acked = results[0]["result"]["task"]["id"]
+    final = results[-1]["result"]["statusUpdate"]
+    assert final["taskId"] == acked
+    assert final["status"]["state"] == "TASK_STATE_FAILED"
+    stored = next(t for t in await Thread(a, ctx_id, agent_name=AGENT).all_tasks() if t.id == acked)
+    assert stored.status == "failed"
+    assert stored.status_message is not None
+    assert stored.status_message["metadata"][REASON] == "storage-unavailable"

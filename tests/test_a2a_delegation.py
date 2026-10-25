@@ -25,12 +25,14 @@ from starlette.routing import Mount
 
 from livekit.agents import Agent, AgentServer, InputRequired, RunContext, _core, llm
 from livekit.agents.a2a import A2ASessionContext
-from livekit.agents.a2a.extension import KIND
+from livekit.agents.a2a.extension import EXTENSION_URI, KIND
 from livekit.agents.delegation import A2ADelegate, DelegationFailed
+from livekit.agents.delegation.a2a import NO_ANSWER
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
-from livekit.agents.llm.tool_context import ASK_IN_OWN_WORDS
+from livekit.agents.llm.tool_context import ASK_IN_OWN_WORDS, WAITING_PREFIX
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.storage.resolve import Thread
+from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .test_a2a_server import (
@@ -44,6 +46,7 @@ from .test_a2a_server import (
     sse_results,
     wire,
 )
+from .test_live_inbox import told
 
 
 async def lanes_of(storage: AgentDBStorage, thread_id: str) -> set[str]:
@@ -358,9 +361,16 @@ def _front_desk(expert: A2ADelegate) -> Agent:
                     duration=0,
                     tool_calls=[FunctionToolCall(name="coverage", arguments="{}", call_id="c1")],
                 ),
+                # under live the first update lets the run go on: the model acknowledges
                 FakeLLMResponse(
-                    input="the fare is 240 USD", content="Yes, 240 USD.", ttft=0, duration=0
+                    input=UPDATE_TEMPLATE.format(
+                        function_name="coverage", call_id="c1", message="asking the expert"
+                    ),
+                    content="Checking.",
+                    ttft=0,
+                    duration=0,
                 ),
+                FakeLLMResponse(input=told("c1"), content="Yes, 240 USD.", ttft=0, duration=0),
             ]
         )
     )
@@ -393,8 +403,18 @@ async def test_a_tools_update_inside_agent_run_reaches_the_door_and_the_delegate
         for r in results
         if "statusUpdate" in r and r["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
     ]
-    assert working == ["asking the expert", "checking the fare rules"]
+    # the tool's progress, the acknowledgment while it runs in the background, the expert's
+    assert working[0] == "asking the expert"
+    assert {"Checking.", "checking the fare rules"} <= set(working)
     assert results[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    # the answer streams after the frame that said the work went on in the background
+    went_on = max(
+        i
+        for i, r in enumerate(results)
+        if r.get("statusUpdate", {}).get("metadata", {}).get(f"{EXTENSION_URI}/background")
+    )
+    answer = [r["artifactUpdate"]["artifact"] for r in results[went_on:] if "artifactUpdate" in r]
+    assert "".join(p["text"] for a in answer for p in a.get("parts", [])) == "Yes, 240 USD."
     # the expert wrote its own lane of the clinic's session, with no context_id passed
     storage = expert_server.storage
     assert storage is not None
@@ -524,6 +544,19 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
             ]
         await delegate.aclose()
     assert second[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    # the person named no task: the answer continued the task that asked, on both lanes
+    asked_id = first[0]["task"]["id"]
+    assert {r.get("statusUpdate", r.get("task", {})).get("taskId", asked_id) for r in second} == {
+        asked_id
+    }
+    assert second[0]["task"]["id"] == asked_id
+    expert_tasks = await Thread(expert_storage, thread_id, agent_name="eligibility").tasks()
+    assert len(expert_tasks) == 1 and expert_tasks[0].status == "completed"
+    assert "livekit/mergedInto" not in expert_tasks[0].data.metadata
+    assert [m["parts"][0]["text"] for m in expert_tasks[0].data.history] == [
+        "check coverage",
+        "Aetna, member 12-345",
+    ]
     artifacts = [r["artifactUpdate"]["artifact"] for r in second if "artifactUpdate" in r]
     # streamed in pieces as the model writes it, the last piece empty
     assert "".join(p["text"] for a in artifacts for p in a.get("parts", [])) == "You are covered."
@@ -538,6 +571,19 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
         "check coverage",
         "Aetna, member 12-345",  # the person's words, not the model's
     ]
+    # each fact once on each lane: the question stays the asking call's output, the answer is
+    # the person's message, the forward's output is the expert's reply
+    outputs = {i["call_id"]: i["output"] for i in history if i["type"] == "function_call_output"}
+    assert outputs[calls[0]["call_id"]].startswith(WAITING_PREFIX)
+    texts = [json.dumps(i) for i in history]
+    assert sum("Aetna, member 12-345" in t for t in texts) == 2, "the message and the forward"
+    db = await expert_storage.open(thread_id)
+    try:
+        expert_history = [row.payload for row in await db.history("eligibility")]
+    finally:
+        db.close()
+    expert_texts = [json.dumps(i) for i in expert_history]
+    assert sum("Aetna, member 12-345" in t for t in expert_texts) == 1, "the answer, once"
 
 
 async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
@@ -611,3 +657,179 @@ async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
         await delegate.aclose()
     assert result.output == f"{disclaimer}\n\nGood news, you are covered."
     assert result.verbatim == disclaimer
+
+
+async def test_a_caller_that_gives_up_leaves_the_experts_task_running(
+    agentdb_workers: tuple[AgentDBStorage, AgentDBStorage],
+) -> None:
+    """A barge-in cancels the delegate's call, not the expert's work: no cancel is sent, the
+    expert's task runs to its end. Only an explicit cancel stops it."""
+    _, expert_storage = agentdb_workers
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_expert(ctx: A2ASessionContext[Any]) -> str:
+        entered.set()
+        await release.wait()
+        return "done"
+
+    expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
+    expert_server.a2a_session(endpoint=ENDPOINT, description="x")(slow_expert)
+    async with http_client(expert_server) as http:
+        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
+        thread_id = (await expert_storage.threads.create_thread()).thread_id
+        call = asyncio.create_task(delegate.run("check", context_id=thread_id))
+        await asyncio.wait_for(entered.wait(), 20)
+        call.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await call
+        release.set()
+        thread = Thread(expert_storage, thread_id, agent_name="eligibility")
+        for _ in range(100):
+            tasks = await thread.tasks()
+            if tasks and tasks[0].status in ("completed", "canceled"):
+                break
+            await asyncio.sleep(0.2)
+        await delegate.aclose()
+    assert [t.status for t in tasks] == ["completed"]
+
+
+class _DropFirstStream(httpx.AsyncBaseTransport):
+    """Cuts the first streamed answer after its acknowledgment, as a dropped connection."""
+
+    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
+        self._inner = inner
+        self.dropped = 0
+        self.methods: list[str] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._inner.handle_async_request(request)
+        method = json.loads(request.content or b"{}").get("method", "") if request.content else ""
+        self.methods.append(method)
+        if method in ("SendStreamingMessage", "message/stream") and not self.dropped:
+            self.dropped += 1
+            body = await response.aread()
+            first = body.split(b"\n\n", 1)[0] + b"\n\n"
+            return httpx.Response(response.status_code, headers=response.headers, content=first)
+        return response
+
+
+async def test_a_dropped_answer_stream_is_read_again_and_the_answer_arrives(
+    agentdb_storage: AgentDBStorage,
+) -> None:
+    expert_server = AgentServer(storage=agentdb_storage, agent_name="eligibility")
+    expert_server.a2a_session(endpoint=ENDPOINT, description="x")(expert)
+    transport = _DropFirstStream(httpx.ASGITransport(app=expert_server.http.app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://agents.test") as http:
+        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
+        progress: list[str] = []
+        result = await delegate.run("fare?", progress=progress.append)
+        await delegate.aclose()
+    assert transport.dropped == 1
+    assert "SubscribeToTask" in transport.methods
+    assert result.output.startswith("the fare is 240 USD")
+    assert progress.count("checking the fare rules") <= 1
+
+
+async def test_an_expert_never_answers_with_its_progress(agentdb_storage: AgentDBStorage) -> None:
+    """An expert's work ends in the background and its model words nothing: the expert answers
+    with the tool's result, because its answer must carry it. An expert task that still ends
+    with no text reaches the delegate as that fact, never as its last progress line."""
+    back = Agent(instructions="back office")
+
+    @back.tool
+    async def book(ctx: RunContext, day: str) -> str:
+        """Book a flight.
+
+        Args:
+            day: the day
+        """
+        await ctx.update(f"booking step 1/2 for {day}")
+        await asyncio.sleep(0.2)
+        await ctx.update(f"booking step 2/2 for {day}")
+        return f"booked {day}"
+
+    back.update_options(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="book monday",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[
+                        FunctionToolCall(name="book", arguments='{"day": "monday"}', call_id="b1")
+                    ],
+                ),
+                FakeLLMResponse(
+                    input=UPDATE_TEMPLATE.format(
+                        function_name="book", call_id="b1", message="booking step 1/2 for monday"
+                    ),
+                    content="Booking it now.",
+                    ttft=0,
+                    duration=0,
+                ),
+            ]
+        )
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> str:
+        if ctx.message.text_content == "say nothing":
+            await ctx.update("thinking it over")
+            return ""
+        result = await back.run(ctx.message, message_history=ctx.message_history)
+        return result.input_required or result.output or ""
+
+    server, _ = make_server(agentdb_storage, handler)
+    async with http_client(server) as http:
+        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
+        progress: list[str] = []
+        booked = await delegate.run("book monday", progress=progress.append)
+        silent = await delegate.run("say nothing")
+        await delegate.aclose()
+
+    assert "booking step 2/2 for monday" in progress
+    assert booked.state == "completed" and booked.output == "booked monday"
+    assert silent.state == "completed" and silent.output == NO_ANSWER
+
+
+async def test_the_experts_question_carries_what_it_said_before_it(
+    agentdb_storage: AgentDBStorage,
+) -> None:
+    """The expert states the slot and calls the booking, which asks for the email, in the same
+    model response: the front desk's delegate gets one question that carries both, never the
+    bare question."""
+    back = Agent(instructions="back office")
+
+    @back.tool
+    async def book(ctx: RunContext) -> InputRequired:
+        """Book the slot."""
+        return InputRequired("What email should the confirmation go to?")
+
+    back.update_options(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="book monday at two",
+                    content="Monday at 14:00 is open.",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[FunctionToolCall(name="book", arguments="{}", call_id="b1")],
+                ),
+            ]
+        )
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> str:
+        result = await back.run(ctx.message, message_history=ctx.message_history)
+        return result.input_required or result.output or ""
+
+    server, _ = make_server(agentdb_storage, handler)
+    async with http_client(server) as http:
+        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
+        asked = await delegate.run("book monday at two")
+        await delegate.aclose()
+
+    assert asked.state == "input-required"
+    assert asked.input_required == (
+        "Monday at 14:00 is open.\n\nWhat email should the confirmation go to?"
+    )

@@ -244,7 +244,9 @@ async def test_input_required_pauses_the_turn_until_the_next_message() -> None:
     question = [i for i in history if i.type == "message" and i.role == "assistant"][0]
     assert question.text_content == "Could you send a photo of the damage?"
     output = [i for i in history if i.type == "function_call_output" and i.call_id == "p1"][0]
-    assert output.output == "here it is"
+    assert output.output.endswith("Could you send a photo of the damage?"), "it keeps its question"
+    answers = [i for i in history if i.type == "message" and i.text_content == "here it is"]
+    assert len(answers) == 1, "the answer is the person's message, once"
     # the model ran on the call, its answer and the question
     assert [i.call_id for i in llm.requests[-1].items if i.type == "function_call_output"] == ["p1"]
 
@@ -402,6 +404,45 @@ async def test_agent_run_stops_at_input_required() -> None:
 
     second = await fnol.run("here it is", message_history=result.all_messages())
     assert second.output == "thanks"
+
+
+@pytest.mark.parametrize("verbatim", [False, True])
+async def test_the_question_carries_what_the_turn_said_before_it(verbatim: bool) -> None:
+    """The model states the slot and calls the booking, which asks for the email, in the same
+    response: the question the turn ends on is that text and then the question, one message,
+    since whoever relays it sees only the question. It is exact as a whole only when every
+    part is."""
+    desk = Agent(instructions="back office")
+
+    @desk.tool
+    async def book(ctx: RunContext) -> InputRequired:
+        """Book the slot."""
+        return InputRequired("What email should the confirmation go to?", verbatim=verbatim)
+
+    desk.update_options(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="book monday at two",
+                    content="Monday at 14:00 is open.",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[FunctionToolCall(name="book", arguments="{}", call_id="b1")],
+                ),
+            ]
+        )
+    )
+    result = await desk.run("book monday at two")
+    assert result.input_required == (
+        "Monday at 14:00 is open.\n\nWhat email should the confirmation go to?"
+    )
+    # the part not written by a tool is not exact: only the question is
+    assert result.verbatim == ("What email should the confirmation go to?" if verbatim else None)
+    said = [m.text_content for m in result.new_messages() if m.type == "message"]
+    assert said[1:] == [
+        "Monday at 14:00 is open.",
+        "What email should the confirmation go to?",
+    ], "each is recorded once, in order"
 
 
 async def test_live_session_state_and_deps_reach_the_run_context(

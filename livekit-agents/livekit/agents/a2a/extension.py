@@ -48,10 +48,28 @@ def widen(short_key: str) -> str:
 
 # the Live extension's keys, short
 KIND = "livekit/kind"
+INTERRUPT = "livekit/interrupt"
+"""On a message: whether it stops the reply the agent is producing; absent means it does. A
+delegation sends ``False``."""
+CALLER_LANE = "livekit/callerLane"
+"""On a delegation in the caller's thread: the caller's lane, whose history holds the person's
+own words. A delegation that names the expert's own lane is refused."""
+BACKGROUND = "livekit/background"
+"""On a ``working`` status: the task's turn ended and its work goes on in the background; the
+reply streamed so far acknowledged it, and the answer comes when the work ends."""
+QUEUED = "livekit/queued"
+"""On an ``input-required`` task: its question waits unasked behind the one in front of the
+person."""
+CANCEL_REQUESTED = "livekit/cancelRequested"
+"""On a ``working`` task: a client asked to cancel it; it ends ``canceled`` once its tools stop."""
 INTERRUPTED = "livekit/interrupted"
 INTERRUPTION_REASON = "livekit/interruptionReason"
 MERGED_INTO = "livekit/mergedInto"
 REASON = "livekit/reason"
+HEARD = "livekit/heard"
+"""On a message that answers an expert's question: the person's message cut the question off,
+and this is what they saw or heard of it, often nothing. The expert's model decides what the
+message means."""
 VERBATIM = "livekit/verbatim"
 """The part of a reply that reaches the person exactly as written; the rest is phrased by the
 agent facing them."""
@@ -197,6 +215,7 @@ __all__ = [
     "ANSWER_ARTIFACT_NAME",
     "EXTENSIONS_HEADER",
     "EXTENSION_URI",
+    "HEARD",
     "INTERRUPTED",
     "INTERRUPTION_REASON",
     "JSONRPC_BINDING",

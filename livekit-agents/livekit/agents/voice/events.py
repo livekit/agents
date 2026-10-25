@@ -4,8 +4,8 @@ import asyncio
 import functools
 import inspect
 import time
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal
 
@@ -82,10 +82,38 @@ class RunContext(Generic[Deps_T, State_T]):
         # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
+        # in agent.run() under the live policy: the first update lets the run go on while the
+        # tool runs in the background, with the update as the call's output
+        self._release: asyncio.Future[str] | None = None
+        # in agent.run(): the task running the tool, which a cancel stops at its next wait
+        # point outside the regions `uninterruptible()` protects
+        self._work: asyncio.Future[Any] | None = None
+        self._protected = 0
+        self._cancel_pending = False
 
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
         self._run_state = session._global_run_state if session is not None else None
+
+    @contextmanager
+    def uninterruptible(self) -> Iterator[None]:
+        """A region a cancel of the task does not stop: the cancel lands at the first wait point
+        after it, so work done in an outside system is finished, not cut in half."""
+        self._protected += 1
+        try:
+            yield
+        finally:
+            self._protected -= 1
+            if self._protected == 0 and self._cancel_pending:
+                # at the next wait point, not in this step: a tool that returns right after the
+                # region keeps its result
+                asyncio.get_running_loop().call_soon(self._cancel)
+
+    def _cancel(self) -> None:
+        """The task was canceled: the tool stops now, or when its protected region ends."""
+        self._cancel_pending = True
+        if self._protected == 0 and self._work is not None and not self._work.done():
+            self._work.cancel()
 
     @property
     def session(self) -> LiveSession[Any]:
@@ -306,6 +334,8 @@ class RunContext(Generic[Deps_T, State_T]):
                 out = hooks.on_update(raw_message)
                 if inspect.isawaitable(out):
                     await out
+            if self._release is not None and not self._release.done():
+                self._release.set_result(message if isinstance(message, str) else raw_message)
             return
 
         self.session._tool_execution_updated(
@@ -318,13 +348,17 @@ class RunContext(Generic[Deps_T, State_T]):
             ),
         )
 
+        from .tool_executor import NON_BLOCKING_KEY, told_already
+
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
             self._first_update_fut.set_result(message)
-            self.function_call.extra["__livekit_agents_tool_non_blocking"] = True
+            self.function_call.extra[NON_BLOCKING_KEY] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+        if told_already(self.speech_handle):
+            pair[1].reply_required = False  # the person heard from this turn: status only
+        await self._executor._enqueue_reply(self, [pair[0], pair[1]], progress=True)
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]

@@ -109,6 +109,8 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from .._generated.storage import InboxRow
+    from .._generated.storage_run import TaskRecord
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
@@ -482,8 +484,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             deps: What the tools need for this call, read as ``ctx.deps``; never saved.
             thread: The call's durable thread, ``ctx.thread`` in an ``rtc_session``: the
                 agent's lane is loaded at ``start()`` and each reply committed to it. Omitted,
-                the history is kept in memory and not saved. When a text moved the lane during
-                the call, the history and state are reloaded before the next voice turn.
+                the history is kept in memory and not saved.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
             turn_handling (TurnHandlingOptions, optional): Configuration for turn handling.
             stt_context_options (STTContextOptions, optional): Conversation-aware context for the
@@ -1369,12 +1370,14 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 close_span.set_attribute(trace_types.ATTR_EXCEPTION_TYPE, error.type)
             close_token = otel_context.attach(trace.set_span_in_context(close_span))
             try:
+                # the questions the call leaves open, read before the activity holding them goes
+                left = self._open_questions()
                 await self._teardown_activity(reason=reason, drain=drain)
 
                 self._started = False
 
                 if self._live_lane is not None:
-                    await self._live_lane.close()
+                    await self._live_lane.close(questions=left)
                     self._live_lane = None
 
                 self.emit("close", CloseEvent(error=error, reason=reason))
@@ -1923,6 +1926,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             agent_name=thread.agent_name or agent.id,
             history=self._chat_ctx,
             state=self._state,
+            live=thread.call_holds_lane,
+            on_texts=self._answer_texts,
         )
         self._state = await self._live_lane.open()
 
@@ -1932,6 +1937,67 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 ev.speech_handle.add_done_callback(lambda _: lane.turn_ended())
 
         self.on("speech_created", on_speech_created)
+
+    def _take_lane_questions(self) -> list[TaskRecord]:
+        """The lane's open questions at the call's start, for the first activity, once."""
+        lane = self._live_lane
+        return lane.take_questions() if lane is not None else []
+
+    async def _record_message(self) -> None:
+        """The person's latest message on the call's lane ahead of the commit: a delegation is
+        about to go out, and the expert may read the caller's lane."""
+        if self._live_lane is None:
+            return
+        said = next(
+            (
+                item
+                for item in reversed(self._chat_ctx.items)
+                if item.type == "message" and item.role == "user"
+            ),
+            None,
+        )
+        if said is not None:
+            await self._live_lane.record(said)
+
+    def _report_error(self, text: str) -> None:
+        """A failure nothing awaits, such as a question that could not be spoken: it goes on
+        the call's lane, as an event of its next commit."""
+        if self._live_lane is not None:
+            self._live_lane.error(text)
+
+    def _lane_question_answered(self, task_id: str) -> None:
+        if self._live_lane is not None:
+            self._live_lane.question_answered(task_id)
+
+    def _open_questions(
+        self,
+    ) -> list[tuple[llm.FunctionCallOutput | None, str, str | None, bool, bool]]:
+        """The questions the call leaves open, asked on it: ``(output, question, tool that
+        relays the answer, verbatim, asked)``; the lane keeps them for the next door."""
+        activity = self._activity
+        if activity is None:
+            return []
+        return [
+            (q.output, q.question, q.relays[0].name if q.relays else None, q.verbatim, q.asked)
+            for q in activity._questions
+            if q.task_id is None
+        ]
+
+    async def _answer_texts(self, rows: list[InboxRow]) -> str | None:
+        """Texts that arrived during the call, one turn of it: the model reads them at once,
+        and an open question in front of the person takes them as its answer. The texts'
+        answer is the full text the call generated for that turn, also what an interruption
+        cut off: when the turn continued a question, the call's wording of the result."""
+        texts = [
+            str(part.get("text", ""))
+            for row in rows
+            if isinstance(row.message, dict)
+            for part in row.message.get("parts", [])
+            if isinstance(part, dict) and part.get("kind", "text") == "text"
+        ]
+        handle = self.generate_reply(user_input="\n".join(t for t in texts if t))
+        await handle
+        return "\n".join(t for t in handle._generated if t) or None
 
     def _continued_chat_ctx(self) -> llm.ChatContext:
         """The history a new activity continues: the current activity's, or the session's.

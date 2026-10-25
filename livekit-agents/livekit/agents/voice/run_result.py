@@ -163,6 +163,15 @@ class RunResult(Generic[Run_T]):
         self._interrupted: bool = False
         self._pending_call: llm.FunctionCall | None = None
         self._answer_tool: str | None = None  # the tool the answer is handed to, if named
+        self._queued = False  # the question waits behind the one in front of the person
+        self._relayed: str | None = None  # the waiting task whose question the reply asked
+        # a newer message cut the question off: what the person saw of it, often nothing
+        self._heard: str | None = None
+        # of tasks resumed together, the other questions: (task, question, call, tool, verbatim)
+        self._waiting: list[tuple[str, str, llm.FunctionCall, str | None, bool]] = []
+        self._background = False  # a tool of the run went on in the background
+        # the reply to the tasks resumed with the one whose work asked: their answer
+        self._answered: str | None = None
         self._verbatim: str | None = None
         self._agent_stack: list[Ref] | None = None
 

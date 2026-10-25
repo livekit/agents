@@ -1,6 +1,7 @@
-"""``InputRequired(tool=)`` from a conversation tool in text (docs/tools.md): the next message
-is handed to the named tool as its argument before any model request, as the person wrote it,
-and the model goes on from that tool's output."""
+"""A delegate's question in text (docs/delegation.md): the next message is handed to the
+delegate's tool as its argument before any model request, as the person wrote it, to continue
+the expert's task, and the model goes on from that tool's output. The tool here stands in for an
+``A2ADelegate``'s, which relays answers."""
 
 from __future__ import annotations
 
@@ -12,10 +13,19 @@ from a2a.types import a2a_pb2 as pb
 from livekit.agents import Agent, InputRequired, RunContext
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm.tool_context import WAITING_PREFIX
 from livekit.agents.storage import AgentDBStorage
 
 from .fake_llm import FakeLLM, FakeLLMResponse
-from .test_a2a_server import http_client, make_server, payloads, send, stock_client, user_message
+from .test_a2a_server import (  # noqa: F401  (no_project_env: autouse, the cards address the test client)
+    http_client,
+    make_server,
+    no_project_env,
+    payloads,
+    send,
+    stock_client,
+    user_message,
+)
 
 pytestmark = [pytest.mark.unit]
 
@@ -52,8 +62,11 @@ async def ask(ctx: RunContext, request: str) -> str | InputRequired:
         request: the request, in full
     """
     if request == "a booking":
-        return InputRequired("Name and email?", tool=ask)
+        return InputRequired("Name and email?")
     return f"booked for {request}"
+
+
+ask._relays_answer = True  # type: ignore[attr-defined]  (as a delegate's tool)
 
 
 async def desk(ctx: A2ASessionContext[Any]) -> str:
@@ -72,13 +85,15 @@ async def test_the_answer_goes_to_the_tool_that_asked(agentdb_storage: AgentDBSt
         assert asked.message.parts[0].text == "Name and email?"
 
         answer = "Jane O'Neil-Smith <j.o@example.co.uk>"
+        # the person names no task: the answer continues the one waiting on the question
         second = payloads(await send(client, user_message(answer, "m2", context_id=ctx_id)))
         done = [p for p in second if hasattr(p, "status")][-1].status
         await client.close()
 
+    assert {p.task_id for p in second if hasattr(p, "task_id")} == {first[0].id}
     assert done.state == pb.TaskState.TASK_STATE_COMPLETED
     artifacts = [p for p in second if hasattr(p, "artifact")]
-    assert artifacts and artifacts[-1].artifact.parts[0].text == "All set."
+    assert "".join(part.text for a in artifacts for part in a.artifact.parts) == "All set."
 
     db = await agentdb_storage.open(ctx_id)
     try:
@@ -87,6 +102,8 @@ async def test_the_answer_goes_to_the_tool_that_asked(agentdb_storage: AgentDBSt
         db.close()
     calls = [i for i in history if i["type"] == "function_call" and i["name"] == "ask"]
     outputs = {i["call_id"]: i["output"] for i in history if i["type"] == "function_call_output"}
-    assert outputs["c1"] == answer, "the answer is the pending call's output"
+    assert outputs["c1"] == f"{WAITING_PREFIX}Name and email?", "the asking call keeps its question"
+    said = [i for i in history if i["type"] == "message" and i["role"] == "user"]
+    assert [m["content"] for m in said].count([answer]) == 1, "the answer is recorded once"
     assert len(calls) == 2 and calls[1]["arguments"] == f'{{"request": "{answer}"}}'
     assert outputs[calls[1]["call_id"]] == f"booked for {answer}"

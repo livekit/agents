@@ -25,8 +25,19 @@ INTERRUPTED = "livekit/interrupted"
 INTERRUPTION_REASON = "livekit/interruptionReason"
 
 
-def a2a(text: str, message_id: str) -> dict[str, Any]:
-    return {"messageId": message_id, "role": "user", "parts": [{"kind": "text", "text": text}]}
+def a2a(
+    text: str, message_id: str, *, task_id: str | None = None, channel: str | None = None
+) -> dict[str, Any]:
+    msg: dict[str, Any] = {
+        "messageId": message_id,
+        "role": "user",
+        "parts": [{"kind": "text", "text": text}],
+    }
+    if task_id:
+        msg["taskId"] = task_id
+    if channel:
+        msg["metadata"] = {"livekit/channel": channel}
+    return msg
 
 
 def assistant_item(text: str) -> dict[str, Any]:
@@ -176,3 +187,48 @@ async def test_a_second_message_under_interrupt_yields_the_first(
     assert [text_of(i) for i in host_b.contexts[0][0].history] == ["first"]
     session_a.close()
     session_b.close()
+
+
+class Asker(Host):
+    """Asks when the message is ``ask``, with no pending call; echoes otherwise."""
+
+    async def handle(self, ctx: TurnContext, boundary: Boundary) -> HandlerOutput:
+        if ctx.batch[-1].parts[0]["text"] == "ask":
+            self.contexts.append((ctx, boundary))
+            return HandlerOutput(new_items=[ctx.message], input_required="Your date of birth?")
+        return await super().handle(ctx, boundary)
+
+
+async def test_an_answer_continues_the_waiting_task_and_anything_else_is_new(
+    agentdb_storage: AgentDBStorage,
+) -> None:
+    """docs/delegation.md: a message that names a task waiting on a question continues it, even
+    when the question has no pending call; a message that names none is a new task, and the
+    question stays open."""
+    database_id = await database_of(agentdb_storage)
+    session = _core.Thread(await agentdb_storage.open_database(database_id), "worker-a")
+    host = Asker()
+    turn = _core.Turn(session, LANE, host, TurnOptions(policy="queue", debounce=0))
+
+    asked = await turn.run(a2a("ask", "m1", channel="delegation"))
+    assert asked.task.status == "input-required"
+    assert asked.task.internal is not None and asked.task.internal.ask == {
+        "question": "Your date of birth?"
+    }
+
+    other = await turn.run(a2a("the fare?", "m2", channel="delegation"))
+    assert other.task.id != asked.task.id and other.output == "reply to: the fare?"
+    assert (await task_of_session(session, asked.task.id)).status == "input-required"
+
+    answered = await turn.run(a2a("1990-01-01", "m3", task_id=asked.task.id), "AST_unused")
+    assert answered.task.id == asked.task.id and answered.answered_by == asked.task.id
+    assert answered.task.status == "completed" and answered.output == "reply to: 1990-01-01"
+    assert "livekit/mergedInto" not in answered.task.data.metadata
+    assert host.contexts[-1][0].task_id == asked.task.id
+    ids = [t.id for t in await session.tasks(LANE)]
+    assert "AST_unused" not in ids and len(ids) == 2
+    session.close()
+
+
+async def task_of_session(session: _core.Thread, task_id: str) -> Any:
+    return next(t for t in await session.tasks(LANE) if t.id == task_id)
