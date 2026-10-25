@@ -34,6 +34,9 @@ pub(crate) enum Signal {
     /// Outside a switch, a held user turn reaches the agent.
     DeliverHeldTurn,
     NextHandoff,
+    InterruptForDtmf,
+    /// The digits read back for the caller to confirm.
+    ReadBackDtmf(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +90,8 @@ impl Driver {
                 self.handoff_step(HandoffEvent::Next, out);
                 self.pump_schedule(now, out);
             }
+            Signal::InterruptForDtmf => self.interrupt_for_dtmf(now, out),
+            Signal::ReadBackDtmf(digits) => self.read_back_dtmf(now, digits, out),
         }
     }
 

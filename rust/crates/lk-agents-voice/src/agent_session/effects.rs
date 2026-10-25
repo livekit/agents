@@ -457,7 +457,7 @@ impl Driver {
     /// restores `away` or pushes the deadline out; every state edge reconciles the away timer.
     pub(crate) fn on_session_edge(&mut self, now: Ts, ev: &SessionEvent, out: &mut Out) {
         // A DTMF collection reads the same edges (and its read-back's end) off the same events.
-        self.dtmf_on_event(now, ev, out);
+        self.dtmf_on_event(ev, out);
         match ev {
             SessionEvent::StartOfSpeech(e) => {
                 out.machine()

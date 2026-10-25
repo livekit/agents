@@ -640,7 +640,7 @@ impl Driver {
         for call in self.activity.drain.take_waiters() {
             self.answer(Some(call), Answer::Drain(Err(DrainRefused::Closing)));
         }
-        let call = self.activity.dtmf.take().and_then(|d| d.call);
+        let call = self.activity.dtmf.take_call();
         self.answer(call, Answer::Dtmf(DtmfOutcome::Stopped));
     }
 

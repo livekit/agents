@@ -548,7 +548,7 @@ impl Driver {
             Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome, out),
             Command::Task(cmd) => self.on_task(now, cmd, out),
             Command::Run(spec) => self.on_run(now, *spec, out),
-            Command::Dtmf(cmd) => self.on_dtmf(now, cmd, out),
+            Command::Dtmf(cmd) => self.dtmf_step(cmd.into(), out),
             Command::HostMetrics(record) => {
                 out.machine().emit(crate::events::SessionEvent::MetricsCollected {
                     metrics: record,
@@ -624,7 +624,9 @@ impl Driver {
                 // A peer's deadlines, fired on the peer's own set. Never here.
                 TurnTimer::Amd(_) | TurnTimer::IvrSilence => {}
                 TurnTimer::KeytermTimeout => self.on_keyterm_timeout(now, out),
-                TurnTimer::DtmfDebounce => self.on_dtmf_debounce(now, out),
+                TurnTimer::DtmfDebounce => {
+                    self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Debounced, out)
+                }
                 // A realtime request the server never answered: the machine settles it.
                 TurnTimer::RealtimeRequest(key) => self.realtime_request_timed_out(key, out),
                 TurnTimer::Filler(id) => self.on_filler_timer(now, id, out),

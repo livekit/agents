@@ -338,7 +338,7 @@ impl Driver {
         // answered by the pause's refusal.
         self.drain_step(DrainEvent::Closing, out);
         // A DTMF collection ends with the session: its answer, if still owed, is `Stopped`.
-        self.dtmf_stop(out);
+        self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Stop, out);
         self.handoff_step(HandoffEvent::Closing, out);
         self.activity.on_exit.abandon();
         self.activity.tools.abandon_replies();

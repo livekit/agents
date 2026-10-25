@@ -81,7 +81,7 @@ pub(crate) struct AgentActivity {
     /// The host's `drain()`.
     pub(crate) drain: crate::agent_activity::drain::Drain,
     /// `GetDtmfTask` while it runs.
-    pub(crate) dtmf: Option<crate::agent_activity::dtmf::DtmfCollection>,
+    pub(crate) dtmf: crate::agent_activity::dtmf::Dtmf,
     /// The inline `AgentTask` stack.
     pub(crate) tasks: crate::agent_activity::tasks::Tasks,
     pub(crate) drain_blocked: crate::agent_activity::tasks::DrainBlocked,
@@ -160,7 +160,7 @@ impl AgentActivity {
             handoff: Default::default(),
             on_exit: Default::default(),
             drain: Default::default(),
-            dtmf: None,
+            dtmf: Default::default(),
             tasks: Default::default(),
             drain_blocked: Default::default(),
             pending_turn: None,
