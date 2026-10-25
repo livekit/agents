@@ -60,11 +60,14 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
     segment: &mut S,
 ) -> Result<Heard, DriverError> {
     let Some(out) = out else {
+        // Raced like the sink path's `watched`: a cut source may never end its segment.
         let complete = loop {
-            if handle.interrupted() {
-                break false;
-            }
-            match segment.next().await? {
+            let next = tokio::select! {
+                biased;
+                () = handle.wait_for_interrupted() => break false,
+                next = segment.next() => next?,
+            };
+            match next {
                 Next::Frame(_) | Next::Boundary => {}
                 Next::End => break true,
             }
