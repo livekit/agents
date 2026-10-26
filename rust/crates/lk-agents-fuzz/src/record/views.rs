@@ -592,7 +592,8 @@ impl<'a> OutputView<'a> {
     }
 }
 
-/// The instance a sink call landed on, for the calls that name one.
+/// The instance a sink call landed on, for the calls that name one. A reset is the output's own
+/// act, reported by the case like a playout, not a call the product made.
 fn sink_output(sink: &Sink) -> Option<u32> {
     match sink {
         Sink::Audio { output, .. }
@@ -601,11 +602,11 @@ fn sink_output(sink: &Sink) -> Option<u32> {
         | Sink::Text { output, .. }
         | Sink::TextFlush { output }
         | Sink::Paused { output }
-        | Sink::Resumed { output }
-        | Sink::Reset { output, .. } => Some(*output),
+        | Sink::Resumed { output } => Some(*output),
         Sink::Played { .. }
         | Sink::Started { .. }
         | Sink::Progressed { .. }
+        | Sink::Reset { .. }
         | Sink::Recorder(_) => None,
     }
 }
