@@ -3,18 +3,20 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
 from livekit import rtc
 
+from .. import _core
 from .._exceptions import (
     APIConnectionError,
     APIError,
     APITimeoutError,
     create_api_error_from_http,
 )
+from .._generated.inference_avatar import LemonSliceOptions
 from ..job import get_job_context
 from ..log import logger
 from ..types import (
@@ -27,8 +29,8 @@ from ..utils import is_given
 from ..voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
+    Credentials,
     create_access_token,
-    get_default_inference_url,
     get_inference_headers,
 )
 
@@ -44,50 +46,6 @@ _DEFAULT_SAMPLE_RATE = 16000
 # accepts the connection but never responds can't hang start()/aclose()
 # indefinitely. Matches the BYOK lemonslice plugin's request timeout.
 _REQUEST_TIMEOUT = 60.0
-
-
-class LemonSliceOptions(TypedDict, total=False):
-    """Provider-specific options for a LemonSlice inference avatar.
-
-    Mirrors the per-provider option dicts in :mod:`inference.stt` /
-    :mod:`inference.tts` (e.g. ``CartesiaOptions``); passed via ``extra_kwargs``.
-    All keys are optional.
-    """
-
-    image_url: str  # appearance source; mutually exclusive with a model-string agent id
-    prompt: str  # speaking prompt (mapped to the provider's agent_prompt)
-    idle_prompt: str  # idle prompt (mapped to the provider's agent_idle_prompt)
-    idle_timeout: int  # provider idle timeout in seconds; the gateway clamps it
-
-
-# Maps LemonSliceOptions keys onto the gateway avatar-request's first-class
-# fields. Keys not listed here are forwarded verbatim under ``extra_kwargs``
-# (subject to the gateway's per-provider allowlist).
-_OPTION_TO_PAYLOAD_FIELD = {
-    "image_url": "image_url",
-    "prompt": "prompt",
-    "idle_prompt": "idle_prompt",
-    "idle_timeout": "idle_timeout_s",
-}
-
-
-def _parse_avatar_model(model: str) -> tuple[str, str | None]:
-    """Parse an avatar model string into (provider, avatar_id).
-
-    ``"lemonslice"`` -> ``("lemonslice", None)``; ``"lemonslice/agent_abc"`` ->
-    ``("lemonslice", "agent_abc")``. The id (when present) is a provider catalog
-    id forwarded to the gateway as ``avatar_id``. For LemonSlice this is the
-    agent id: the gateway maps ``avatar_id`` onto LemonSlice's ``agent_id``, so
-    ``"lemonslice/<agent_id>"`` selects a pre-built LemonSlice agent.
-    """
-    provider, _, avatar_id = model.partition("/")
-    provider = provider.strip()
-    if not provider:
-        raise ValueError(
-            f"invalid avatar model string: {model!r} (expected 'provider' or 'provider/<id>')"
-        )
-    avatar_id = avatar_id.strip()
-    return provider, (avatar_id or None)
 
 
 class AvatarSession(BaseAvatarSession):
@@ -166,38 +124,25 @@ class AvatarSession(BaseAvatarSession):
         """
         super().__init__()
 
-        self._provider, self._avatar_id = _parse_avatar_model(model)
-        # Copy so a later mutation of the caller's dict can't change what we send.
+        try:
+            self._provider, self._avatar_id = _core.avatar_model(model)
+        except RuntimeError as e:
+            raise ValueError(str(e)) from None
+        # a copy, so a later change to the caller's dict does not reach the request
         self._extra_kwargs: dict[str, Any] = dict(extra_kwargs) if is_given(extra_kwargs) else {}
         if self._avatar_id and "image_url" in self._extra_kwargs:
-            # The gateway (e.g. the LemonSlice adapter) rejects both; fail fast
-            # here so the caller doesn't spend a round trip to learn that.
             raise ValueError(
                 "pass either a catalog id in the model string "
                 f"('{self._provider}/<avatar_id>') or image_url, not both"
             )
         self._conn_options = conn_options
         self._http_session = http_session
-
-        self._base_url = base_url if is_given(base_url) else get_default_inference_url()
-        self._api_key = (
-            api_key
-            if is_given(api_key)
-            else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
+        creds = Credentials.resolve(base_url, api_key, api_secret)
+        self._base_url, self._api_key, self._api_secret = (
+            creds.base_url,
+            creds.api_key,
+            creds.api_secret,
         )
-        if not self._api_key:
-            raise ValueError(
-                "api_key is required, either as argument or set LIVEKIT_API_KEY environment variable"
-            )
-        self._api_secret = (
-            api_secret
-            if is_given(api_secret)
-            else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
-        )
-        if not self._api_secret:
-            raise ValueError(
-                "api_secret is required, either as argument or set LIVEKIT_API_SECRET environment variable"
-            )
 
         self._avatar_participant_identity = (
             avatar_participant_identity
@@ -395,28 +340,19 @@ class AvatarSession(BaseAvatarSession):
         # gateway mints the worker room token from, not just attribution: it
         # scopes the roomJoin grant to room_name, joins as avatar_identity, and
         # sets lk.publish_on_behalf to agent_identity.
-        payload: dict[str, Any] = {
-            "provider": self._provider,
-            "livekit_url": livekit_url,
-            "room_name": room_name,
-            "room_sid": room_sid,
-            "avatar_identity": self._avatar_participant_identity,
-            "avatar_name": self._avatar_participant_name,
-            "agent_identity": agent_identity,
-        }
-        if self._avatar_id:
-            payload["avatar_id"] = self._avatar_id
-        # Map known LemonSlice options onto the gateway's first-class request
-        # fields; forward anything else via extra_kwargs (gateway allowlist).
-        extra: dict[str, Any] = {}
-        for key, value in self._extra_kwargs.items():
-            payload_field = _OPTION_TO_PAYLOAD_FIELD.get(key)
-            if payload_field is not None:
-                payload[payload_field] = value
-            else:
-                extra[key] = value
-        if extra:
-            payload["extra_kwargs"] = extra
+        payload = _core.avatar_payload(
+            {
+                "provider": self._provider,
+                "livekit_url": livekit_url,
+                "room_name": room_name,
+                "room_sid": room_sid,
+                "avatar_identity": self._avatar_participant_identity,
+                "avatar_name": self._avatar_participant_name,
+                "agent_identity": agent_identity,
+            },
+            self._avatar_id,
+            self._extra_kwargs,
+        )
 
         # One idempotency key per start(), stable across retries, so a retried
         # create replays the first result on the gateway instead of paying for a
