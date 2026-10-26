@@ -827,10 +827,16 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_error(self, wire: dict[str, Any]) -> None:
         logger.error("session error", extra={"source": wire["source"], "error": str(wire["error"])})
-        self.emit(
-            "error",
-            ErrorEvent(error=wire["error"], source=wire["source"]),
+        # the reference's payload: the provider's error record, and the provider that failed
+        record, leg = _ERROR_RECORDS[wire["source"]]
+        source = getattr(_VoiceBinding(self, self.current_agent), leg)
+        error = record(
+            timestamp=time.time(),
+            label=getattr(source, "label", wire["label"]),
+            error=wire["error"],
+            recoverable=wire["recoverable"],
         )
+        self.emit("error", ErrorEvent(error=error, source=source))
 
     def _on_close(self, wire: dict[str, Any]) -> None:
         self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=None))
@@ -857,6 +863,14 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
+
+
+_ERROR_RECORDS: dict[str, tuple[Any, str]] = {
+    "llm_error": (llm.LLMError, "llm"),
+    "tts_error": (tts.TTSError, "tts"),
+    "stt_error": (stt.STTError, "stt"),
+    "realtime_model_error": (llm.RealtimeModelError, "llm"),
+}
 
 
 def __getattr__(name: str) -> Any:
