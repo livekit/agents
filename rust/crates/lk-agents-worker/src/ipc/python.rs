@@ -212,9 +212,70 @@ fn socket(fd: i64) -> PyResult<Socket> {
     Ok(Socket::from_std(std)?)
 }
 
-/// The parent's side of one job or inference process (`ipc/supervised_proc.py`).
+/// The parent's side of one job or inference process (`ipc/supervised_proc.py`): its
+/// initialization, supervision, messages and close, from the spawn the host made to the exit.
 #[pyclass(name = "ProcSupervisor", module = "livekit.agents._core", frozen)]
-pub struct PyProcSupervisor(ProcSupervisor<PyProcHost>);
+pub struct PyProcSupervisor {
+    sup: ProcSupervisor<PyProcHost>,
+    /// Whether the process initialized, once that settled (answered, failed, timed out, killed).
+    initialized: watch::Sender<Option<bool>>,
+    /// Set once `run` ended: the process exited and was reaped.
+    ran: watch::Sender<bool>,
+    inferences: Arc<Inferences>,
+}
+
+impl PyProcSupervisor {
+    fn settle(&self, initialized: bool) {
+        self.initialized.send_if_modified(|v| v.is_none() && v.replace(initialized).is_none());
+    }
+}
+
+/// One message the process sent while supervised: an inference it asks for runs on the host's
+/// `_core_inference(method, data)` and is answered; an answer to one of ours resolves it.
+async fn on_proc_message(
+    sup: ProcSupervisor<PyProcHost>,
+    inferences: Arc<Inferences>,
+    host: Arc<CancellingHandle>,
+    data: Vec<u8>,
+    inflight: &mut tokio::task::JoinSet<()>,
+) {
+    let msg = match IpcMessage::decode(&data) {
+        Ok(msg) => msg,
+        Err(e) => return log::error!(target: "livekit.agents", "Error in _read_ipc_task: {e}"),
+    };
+    match msg.id() {
+        super::INFERENCE_RESPONSE => inferences.answered(&msg),
+        super::INFERENCE_REQUEST => {
+            let str_of = |name: &str| match msg.get(name) {
+                Some(Value::Str(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let (method, request_id) = (str_of("method"), str_of("request_id"));
+            let data = match msg.get("data") {
+                Some(Value::Bytes(data)) => data.clone(),
+                _ => Vec::new(),
+            };
+            inflight.spawn(async move {
+                let r = host
+                    .await_call(|h| h.call_method1("_core_inference", (method, PyBytes::new(h.py(), &data))))
+                    .await;
+                let (data, error) = Python::attach(|py| match r {
+                    Ok(out) if out.is_none(py) => (Value::Absent, String::new()),
+                    Ok(out) => match out.extract::<Vec<u8>>(py) {
+                        Ok(bytes) => (Value::Bytes(bytes), String::new()),
+                        Err(e) => (Value::Absent, e.value(py).to_string()),
+                    },
+                    Err(e) => (Value::Absent, e.value(py).to_string()),
+                });
+                let reply = IpcMessage::new(super::INFERENCE_RESPONSE, vec![Value::Str(request_id), data, Value::Str(error)]);
+                if let Ok(reply) = reply {
+                    let _ = sup.send(&reply.encode()).await;
+                }
+            });
+        }
+        _ => {}
+    }
+}
 
 #[pymethods]
 impl PyProcSupervisor {
@@ -252,15 +313,23 @@ impl PyProcSupervisor {
             high_ping_threshold,
             killable,
         };
-        Ok(Self(ProcSupervisor::new(socket(fd)?, PyProcHost(Mutex::new(Some(host))), opts)))
+        Ok(Self {
+            sup: ProcSupervisor::new(socket(fd)?, PyProcHost(Mutex::new(Some(host))), opts),
+            initialized: watch::channel(None).0,
+            ran: watch::channel(false).0,
+            inferences: Arc::default(),
+        })
     }
 
     /// Seconds the process took to answer the InitializeRequest the host sent, or `None` when it
     /// timed out (the process was killed).
-    fn initialize<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let sup = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            match sup.initialize().await {
+    fn initialize<'py>(slf: Bound<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
+        let this = slf.clone().unbind();
+        let sup = slf.get().sup.clone();
+        pyo3_async_runtimes::tokio::future_into_py(slf.py(), async move {
+            let outcome = sup.initialize().await;
+            this.get().settle(matches!(outcome, Ok(Some(_))));
+            match outcome {
                 Ok(elapsed) => Ok(elapsed.map(|d| d.as_secs_f64())),
                 Err(InitError::Closed) => Err(duplex_closed(Closed)),
                 Err(InitError::Unexpected) => {
@@ -272,54 +341,105 @@ impl PyProcSupervisor {
         })
     }
 
-    /// Starts the read loop, the pings and the memory monitor.
-    fn supervise(&self) {
-        let _rt = pyo3_async_runtimes::tokio::get_runtime().enter();
-        self.0.supervise();
+    /// Whether the process answered its initialization.
+    #[getter]
+    fn initialized(&self) -> bool {
+        *self.initialized.borrow() == Some(true)
     }
 
-    fn recv_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let sup = self.0.clone();
+    /// The process from its initialization to its exit: once the initialization settled, the
+    /// pings, the memory monitor and the messages (`_core_inference(method, data)` answers the
+    /// inferences it asks for); then `joined` (the process was reaped), `host._core_reap()` (its
+    /// exit code) and the end of the supervision.
+    fn run<'py>(slf: Bound<'py, Self>, joined: Py<PyAny>, host: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let py = slf.py();
+        let host = Arc::new(CancellingHandle::new(py, host)?);
+        let this = slf.get();
+        let (sup, inferences) = (this.sup.clone(), this.inferences.clone());
+        let mut initialized = this.initialized.subscribe();
+        let ran = this.ran.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            sup.recv().await.map_err(duplex_closed)
+            let _ = initialized.wait_for(Option::is_some).await;
+            sup.supervise();
+            let serving = {
+                let (sup, inferences, host) = (sup.clone(), inferences.clone(), host.clone());
+                tokio::spawn(async move {
+                    let mut inflight = tokio::task::JoinSet::new();
+                    while let Ok(data) = sup.recv().await {
+                        on_proc_message(sup.clone(), inferences.clone(), host.clone(), data, &mut inflight).await;
+                    }
+                    // the socket closed: what is still running is cancelled once the process is reaped
+                    std::future::pending::<()>().await;
+                })
+            };
+            let joined = host.await_call(|h| Ok(joined.bind(h.py()).clone())).await;
+            let exitcode = joined.and_then(|_| {
+                Python::attach(|py| host.object().bind(py).call_method0("_core_reap")?.extract::<Option<i64>>())
+            });
+            serving.abort();
+            let _ = serving.await;
+            inferences.clear();
+            let exitcode = exitcode.unwrap_or_else(|e| {
+                Python::attach(|py| e.print(py));
+                None
+            });
+            sup.exited(exitcode).await;
+            ran.send_replace(true);
+            Ok(())
+        })
+    }
+
+    /// A graceful close: an initialized process is asked to shut down (killed when late), any
+    /// other is killed; returns once it exited.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let initialized = self.initialized();
+        self.settle(false);
+        let sup = self.sup.clone();
+        let mut ran = self.ran.subscribe();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            if initialized {
+                sup.shutdown().await;
+            } else {
+                sup.kill().await;
+            }
+            let _ = ran.wait_for(|ran| *ran).await;
+            Ok(())
+        })
+    }
+
+    /// The kill sequence; returns once the process exited.
+    fn kill<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.settle(false);
+        let sup = self.sup.clone();
+        let mut ran = self.ran.subscribe();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            sup.kill().await;
+            let _ = ran.wait_for(|ran| *ran).await;
+            Ok(())
+        })
+    }
+
+    /// `InferenceExecutor.do_inference`: the process runs `method` on `data`.
+    fn do_inference<'py>(&self, py: Python<'py>, method: String, data: Cow<[u8]>) -> PyResult<Bound<'py, PyAny>> {
+        let (sup, inferences) = (self.sup.clone(), self.inferences.clone());
+        let data = data.into_owned();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let send = |msg: IpcMessage| async move { sup.send(&msg.encode()).await };
+            inferences.request("inference_req", method, data, send).await
         })
     }
 
     fn send_bytes<'py>(&self, py: Python<'py>, data: Cow<[u8]>) -> PyResult<Bound<'py, PyAny>> {
-        let sup = self.0.clone();
+        let sup = self.sup.clone();
         let data = data.into_owned();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             sup.send(&data).await.map_err(duplex_closed)
         })
     }
 
-    fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let sup = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            sup.shutdown().await;
-            Ok(())
-        })
-    }
-
-    fn kill<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let sup = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            sup.kill().await;
-            Ok(())
-        })
-    }
-
-    fn exited<'py>(&self, py: Python<'py>, exitcode: Option<i64>) -> PyResult<Bound<'py, PyAny>> {
-        let sup = self.0.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            sup.exited(exitcode).await;
-            Ok(())
-        })
-    }
-
     #[getter]
     fn killed(&self) -> bool {
-        self.0.killed()
+        self.sup.killed()
     }
 }
 
@@ -336,15 +456,83 @@ pub struct PyIpcClient(Arc<Child>);
 
 struct Child {
     client: IpcClient,
-    /// The inference requests in flight, by request id.
-    pending: Mutex<HashMap<String, InferenceReply>>,
-    last_request: AtomicU64,
+    inferences: Inferences,
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
 }
 
 /// An `InferenceResponse`'s data and error.
 type InferenceReply = tokio::sync::oneshot::Sender<(Option<Vec<u8>>, String)>;
+
+/// The inference requests one side of the socket sent, awaiting their `InferenceResponse`.
+#[derive(Default)]
+struct Inferences {
+    pending: Mutex<HashMap<String, InferenceReply>>,
+    last_request: AtomicU64,
+}
+
+impl Inferences {
+    /// An `InferenceResponse`: its request's answer.
+    fn answered(&self, msg: &IpcMessage) {
+        let request_id = match msg.get("request_id") {
+            Some(Value::Str(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let data = match msg.get("data") {
+            Some(Value::Bytes(data)) => Some(data.clone()),
+            _ => None,
+        };
+        let error = match msg.get("error") {
+            Some(Value::Str(s)) => s.clone(),
+            _ => String::new(),
+        };
+        match lock(&self.pending).remove(&request_id) {
+            Some(reply) => {
+                let _ = reply.send((data, error));
+            }
+            None => log::warn!(
+                target: "livekit.agents", request_id = request_id.as_str();
+                "received unexpected inference response"
+            ),
+        }
+    }
+
+    /// Sends an `InferenceRequest` for `method` on `data` (ids `<prefix>_<n>`) and awaits its
+    /// answer: raises the `RuntimeError` of a failed inference, `CancelledError` once nothing
+    /// will answer.
+    async fn request<F: std::future::Future<Output = Result<(), Closed>>>(
+        &self,
+        prefix: &str,
+        method: String,
+        data: Vec<u8>,
+        send: impl FnOnce(IpcMessage) -> F,
+    ) -> PyResult<Option<Py<PyBytes>>> {
+        let n = self.last_request.fetch_add(1, Ordering::Relaxed) + 1;
+        let request_id = format!("{prefix}_{n}");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        lock(&self.pending).insert(request_id.clone(), tx);
+        let request = IpcMessage::new(
+            super::INFERENCE_REQUEST,
+            vec![Value::Str(method.clone()), Value::Str(request_id.clone()), Value::Bytes(data)],
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        if let Err(e) = send(request).await {
+            lock(&self.pending).remove(&request_id);
+            return Err(duplex_closed(e));
+        }
+        let Ok((data, error)) = rx.await else {
+            return Err(pyo3::exceptions::asyncio::CancelledError::new_err(()));
+        };
+        if !error.is_empty() {
+            return Err(PyRuntimeError::new_err(format!("inference of {method} failed: {error}")));
+        }
+        Ok(data.map(|d| Python::attach(|py| PyBytes::new(py, &d).unbind())))
+    }
+
+    fn clear(&self) {
+        lock(&self.pending).clear();
+    }
+}
 
 impl Child {
     async fn send(&self, msg: IpcMessage) -> Result<(), Closed> {
@@ -379,20 +567,7 @@ impl Child {
                 Ok(self.send(pong).await.is_ok())
             }
             super::INFERENCE_RESPONSE => {
-                let request_id = str_of("request_id");
-                let data = match msg.get("data") {
-                    Some(Value::Bytes(data)) => Some(data.clone()),
-                    _ => None,
-                };
-                match lock(&self.pending).remove(&request_id) {
-                    Some(reply) => {
-                        let _ = reply.send((data, str_of("error")));
-                    }
-                    None => log::warn!(
-                        target: "livekit.agents", request_id = request_id.as_str();
-                        "received unexpected inference response"
-                    ),
-                }
+                self.inferences.answered(&msg);
                 Ok(true)
             }
             super::START_JOB_REQUEST => {
@@ -438,8 +613,7 @@ impl PyIpcClient {
         let health_timeout = health_timeout.map(super::secs);
         Ok(Self(Arc::new(Child {
             client: IpcClient::new(socket(fd)?, health_timeout),
-            pending: Mutex::new(HashMap::new()),
-            last_request: AtomicU64::new(0),
+            inferences: Inferences::default(),
             stop: watch::channel(false).0,
         })))
     }
@@ -473,7 +647,7 @@ impl PyIpcClient {
                 r = served => r,
                 _ = stop.wait_for(|stopped| *stopped) => Ok(()),
             };
-            lock(&child.pending).clear();
+            child.inferences.clear();
             outcome
         })
     }
@@ -495,26 +669,10 @@ impl PyIpcClient {
         let data = data.into_owned();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             // unique across the job processes of one worker, whose inference process answers all
-            let n = child.last_request.fetch_add(1, Ordering::Relaxed) + 1;
-            let request_id = format!("inference_job_{:x}_{n}", std::process::id());
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            lock(&child.pending).insert(request_id.clone(), tx);
-            let request = IpcMessage::new(
-                super::INFERENCE_REQUEST,
-                vec![Value::Str(method.clone()), Value::Str(request_id.clone()), Value::Bytes(data)],
-            )
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            if let Err(e) = child.send(request).await {
-                lock(&child.pending).remove(&request_id);
-                return Err(duplex_closed(e));
-            }
-            let Ok((data, error)) = rx.await else {
-                return Err(pyo3::exceptions::asyncio::CancelledError::new_err(()));
-            };
-            if !error.is_empty() {
-                return Err(PyRuntimeError::new_err(format!("inference of {method} failed: {error}")));
-            }
-            Ok(data.map(|d| Python::attach(|py| PyBytes::new(py, &d).unbind())))
+            let prefix = format!("inference_job_{:x}", std::process::id());
+            let sender = child.clone();
+            let send = |msg: IpcMessage| async move { sender.send(msg).await };
+            child.inferences.request(&prefix, method, data, send).await
         })
     }
 

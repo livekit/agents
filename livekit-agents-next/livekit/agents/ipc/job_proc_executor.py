@@ -11,7 +11,7 @@ from typing import Any
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
-from ..utils import aio, log_exceptions, shortuuid
+from ..utils import shortuuid
 from . import channel, proto
 from .inference_executor import InferenceExecutor
 from .job_executor import JobStatus
@@ -62,7 +62,6 @@ class ProcJobExecutor(SupervisedProc):
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._inference_executor = inference_executor
-        self._inference_tasks: set[asyncio.Task[None]] = set()
         self._id = shortuuid("PCEXEC_")
 
     @property
@@ -117,55 +116,25 @@ class ProcJobExecutor(SupervisedProc):
             target=proc_main, args=(proc_args,), name="job_proc"
         )
 
-    @log_exceptions(logger=logger)
-    async def _main_task(self, ipc_ch: aio.ChanReceiver[channel.Message]) -> None:
-        try:
-            async for msg in ipc_ch:
-                if isinstance(msg, proto.InferenceRequest):
-                    task = asyncio.create_task(self._do_inference_task(msg))
-                    self._inference_tasks.add(task)
-                    task.add_done_callback(self._inference_tasks.discard)
-        finally:
-            await aio.cancel_and_wait(*self._inference_tasks)
+    def _core_reap(self) -> int | None:
+        exitcode = super()._core_reap()
+        if self._running_job and self._metered:
+            metrics.job_ended()
+        self._job_status = JobStatus.SUCCESS if exitcode == 0 else JobStatus.FAILED
+        return exitcode
 
-    @log_exceptions(logger=logger)
-    async def _supervise_task(self) -> None:
-        try:
-            await super()._supervise_task()
-        finally:
-            if self._running_job and self._metered:
-                metrics.job_ended()
-            self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
-
-    async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
+    async def _core_inference(self, method: str, data: bytes) -> bytes | None:
         if self._inference_executor is None:
             logger.warning("inference request received but no inference executor")
-            await channel.asend_message(
-                self._pch,
-                proto.InferenceResponse(
-                    request_id=inf_req.request_id, error="no inference executor"
-                ),
-            )
-            return
-
-        try:
-            inf_res = await self._inference_executor.do_inference(inf_req.method, inf_req.data)
-            await channel.asend_message(
-                self._pch,
-                proto.InferenceResponse(request_id=inf_req.request_id, data=inf_res),
-            )
-        except Exception as e:
-            await channel.asend_message(
-                self._pch,
-                proto.InferenceResponse(request_id=inf_req.request_id, error=str(e)),
-            )
+            return await super()._core_inference(method, data)
+        return await self._inference_executor.do_inference(method, data)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the process"""
         if self._running_job is not None:
             raise RuntimeError("process already has a running job")
 
-        if not self._initialize_fut.done():
+        if not self.started or not self._pch.initialized:
             raise RuntimeError("process not initialized")
 
         if self._metered:

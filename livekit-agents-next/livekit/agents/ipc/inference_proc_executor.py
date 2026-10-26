@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import multiprocessing as mp
 import socket
 from multiprocessing.context import BaseContext
 from typing import Any
 
 from ..inference_runner import _RunnersDict
-from ..log import logger
-from ..utils import aio, log_exceptions, shortuuid
-from . import channel, proto
 from .inference_proc_lazy_main import ProcStartArgs, proc_main
 from .supervised_proc import SupervisedProc, SupervisedProcKind
 
@@ -45,7 +41,6 @@ class InferenceProcExecutor(SupervisedProc):
         )
 
         self._runners = runners
-        self._active_requests: dict[str, asyncio.Future[proto.InferenceResponse]] = {}
 
     @property
     def process_kind(self) -> SupervisedProcKind:
@@ -64,45 +59,11 @@ class InferenceProcExecutor(SupervisedProc):
             name="agents_inference_process",
         )
 
-    @log_exceptions(logger=logger)
-    async def _main_task(self, ipc_ch: aio.ChanReceiver[channel.Message]) -> None:
-        async for msg in ipc_ch:
-            if isinstance(msg, proto.InferenceResponse):
-                fut = self._active_requests.pop(msg.request_id, None)
-                if fut is None:
-                    logger.warning(
-                        "received unexpected inference response",
-                        extra={"request_id": msg.request_id},
-                    )
-                    continue
-
-                with contextlib.suppress(asyncio.InvalidStateError):
-                    fut.set_result(msg)
-
     async def do_inference(self, method: str, data: bytes) -> bytes | None:
         if not self.started:
             raise RuntimeError("process not started")
 
-        request_id = shortuuid("inference_req_")
-        fut = asyncio.Future[proto.InferenceResponse]()
-        self._active_requests[request_id] = fut
-
-        try:
-            await channel.asend_message(
-                self._pch,
-                proto.InferenceRequest(request_id=request_id, method=method, data=data),
-            )
-        except Exception:
-            if not fut.done():
-                fut.cancel()
-            self._active_requests.pop(request_id, None)
-            raise
-
-        inf_resp = await fut
-        if inf_resp.error:
-            raise RuntimeError(f"inference of {method} failed: {inf_resp.error}")
-
-        return inf_resp.data
+        return await self._pch.do_inference(method, data)  # type: ignore[no-any-return]
 
     def logging_extra(self) -> dict[str, Any]:
         extra = super().logging_extra()

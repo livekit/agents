@@ -22,7 +22,6 @@ import psutil
 from .. import _core
 from ..log import logger
 from ..telemetry import metrics
-from ..utils import aio, log_exceptions
 from ..utils.aio import duplex_unix
 from . import channel, proto
 from .log_queue import LogQueueListener
@@ -83,8 +82,10 @@ class _ProcOpts:
 
 
 class SupervisedProc(ABC):
-    # the core's supervision of the process (initialize, pings, memory, shutdown, kill),
-    # created once the process is spawned
+    """A spawned process (or job thread) the core supervises (``_core.ProcSupervisor``): its
+    initialization, pings, memory, messages and close, until it exited. The ``_core_*`` methods
+    are the core's calls."""
+
     _pch: _core.ProcSupervisor
     # a process; the thread executor's runner can't be killed, nor is it in the metrics
     _killable = True
@@ -125,16 +126,12 @@ class SupervisedProc(ABC):
         self._psutil_process: psutil.Process | None = None
 
         self._start_atask: asyncio.Task[None] | None = None
-        self._supervise_atask: asyncio.Task[None] | None = None
+        # the core's run of the process, from its initialization to its exit
+        self._supervise_atask: asyncio.Future[None] | None = None
         self._closing = False
-        self._initialize_fut = asyncio.Future[None]()
-        self._lock = asyncio.Lock()
 
     @abstractmethod
     def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process: ...
-
-    @abstractmethod
-    async def _main_task(self, ipc_ch: aio.ChanReceiver[channel.Message]) -> None: ...
 
     @property
     def enabled_stack_trace_dump(self) -> bool:
@@ -169,7 +166,7 @@ class SupervisedProc(ABC):
 
     async def start(self) -> None:
         """start the supervised process"""
-        if self.started:
+        if self._start_atask is not None:
             raise RuntimeError("process already started")
 
         if self._closing:
@@ -185,75 +182,70 @@ class SupervisedProc(ABC):
             for key, value in extra.items():
                 setattr(record, key, value)
 
-        async with self._lock:
-            mp_pch, mp_cch = socket.socketpair()
-            mp_log_pch, mp_log_cch = socket.socketpair()
+        mp_pch, mp_cch = socket.socketpair()
+        mp_log_pch, mp_log_cch = socket.socketpair()
 
-            sockets = (mp_pch, mp_cch, mp_log_pch, mp_log_cch)
-            log_listener: LogQueueListener | None = None
-            try:
-                log_pch = duplex_unix._Duplex.open(mp_log_pch)
-                log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
-                log_listener.start()
+        sockets = (mp_pch, mp_cch, mp_log_pch, mp_log_cch)
+        log_listener: LogQueueListener | None = None
+        try:
+            log_pch = duplex_unix._Duplex.open(mp_log_pch)
+            log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
+            log_listener.start()
 
-                self._proc = self._create_process(mp_cch, mp_log_cch)
+            self._proc = self._create_process(mp_cch, mp_log_cch)
 
-                # Set SIG_IGN process-wide before forking so the child inherits it
-                # (SIG_IGN is preserved across exec per POSIX). This prevents
-                # KeyboardInterrupt during the child's bootstrap phase before
-                # it can install its own signal handlers.
-                with _mask_ctrl_c():
-                    await self._loop.run_in_executor(None, self._proc.start)
-            except Exception:
-                for s in sockets:
-                    with contextlib.suppress(OSError):
-                        s.close()
+            # Set SIG_IGN process-wide before forking so the child inherits it
+            # (SIG_IGN is preserved across exec per POSIX). This prevents
+            # KeyboardInterrupt during the child's bootstrap phase before
+            # it can install its own signal handlers.
+            with _mask_ctrl_c():
+                await self._loop.run_in_executor(None, self._proc.start)
+        except Exception:
+            for s in sockets:
+                with contextlib.suppress(OSError):
+                    s.close()
 
-                if log_listener is not None:
-                    with contextlib.suppress(duplex_unix.DuplexClosed):
-                        log_listener.stop()
-                raise
+            if log_listener is not None:
+                with contextlib.suppress(duplex_unix.DuplexClosed):
+                    log_listener.stop()
+            raise
 
-            mp_log_cch.close()
-            mp_cch.close()
+        mp_log_cch.close()
+        mp_cch.close()
 
-            self._pid = self._proc.pid
-            self._spawn_time = time.monotonic()
-            self._pch = _core.ProcSupervisor(
-                mp_pch.detach(),
-                self,
-                pid=self._pid or 0,
-                process_kind=str(self.process_kind),
-                initialize_timeout=self._opts.initialize_timeout,
-                close_timeout=self._opts.close_timeout,
-                memory_warn_mb=self._opts.memory_warn_mb,
-                memory_limit_mb=self._opts.memory_limit_mb,
-                ping_interval=self._opts.ping_interval,
-                ping_timeout=self._opts.ping_timeout,
-                high_ping_threshold=self._opts.high_ping_threshold,
-                killable=self._killable,
-            )
-            self._join_fut = asyncio.Future[None]()
+        self._pid = self._proc.pid
+        self._spawn_time = time.monotonic()
+        self._pch = _core.ProcSupervisor(
+            mp_pch.detach(),
+            self,
+            pid=self._pid or 0,
+            process_kind=str(self.process_kind),
+            initialize_timeout=self._opts.initialize_timeout,
+            close_timeout=self._opts.close_timeout,
+            memory_warn_mb=self._opts.memory_warn_mb,
+            memory_limit_mb=self._opts.memory_limit_mb,
+            ping_interval=self._opts.ping_interval,
+            ping_timeout=self._opts.ping_timeout,
+            high_ping_threshold=self._opts.high_ping_threshold,
+            killable=self._killable,
+        )
+        joined = asyncio.Future[None]()
 
-            def _sync_run() -> None:
-                self._proc.join()
-                log_listener.stop()
-                try:
-                    self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
-                except RuntimeError:
-                    pass
+        def _sync_run() -> None:
+            self._proc.join()
+            log_listener.stop()
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(joined.set_result, None)
 
-            thread = threading.Thread(target=_sync_run, name="proc_join_thread")
-            thread.start()
-            self._supervise_atask = asyncio.create_task(self._supervise_task())
+        threading.Thread(target=_sync_run, name="proc_join_thread").start()
+        self._supervise_atask = self._pch.run(joined, self)
 
     async def join(self) -> None:
         """wait for the process to finish"""
-        if not self.started:
+        if self._supervise_atask is None:
             raise RuntimeError("process not started")
 
-        if self._supervise_atask:
-            await asyncio.shield(self._supervise_atask)
+        await asyncio.shield(self._supervise_atask)
 
     async def initialize(self) -> None:
         """initialize the process, this is sending a InitializeRequest message and waiting for a
@@ -269,96 +261,34 @@ class SupervisedProc(ABC):
             ),
         )
 
-        # wait for the process to become ready
-        try:
-            elapsed_time = await self._pch.initialize()
-            if elapsed_time is None:
-                # the core killed the process
-                raise asyncio.TimeoutError()
-
-            self._initialize_fut.set_result(None)
-            if self._metered:
-                metrics.proc_initialized(time_elapsed=elapsed_time)
-        except asyncio.TimeoutError:
-            self._initialize_fut.set_exception(
-                asyncio.TimeoutError(f"{self._runner} initialization timed out")
-            )
-            raise
-        except Exception as e:
-            # should be channel.ChannelClosed most of the time (or init_res error)
-            self._initialize_fut.set_exception(e)
-            raise
+        # should be channel.ChannelClosed most of the time when it raises (or init_res error)
+        elapsed_time = await self._pch.initialize()
+        if elapsed_time is None:
+            # the core killed the process
+            raise asyncio.TimeoutError(f"{self._runner} initialization timed out")
+        if self._metered:
+            metrics.proc_initialized(time_elapsed=elapsed_time)
 
     async def aclose(self) -> None:
-        """attempt to gracefully close the supervised process"""
+        """attempt to gracefully close the supervised process: an initialized one is asked to
+        shut down (and killed when late), any other is killed"""
         if self._start_atask is not None and not self._start_atask.done():
             # start() may have been cancelled mid-shield; wait so the started check can't race
             await asyncio.wait([self._start_atask])
 
-        if not self.started:
-            return
-
-        if not self._initialize_fut.done():
-            # never initialized: the child can't ack a graceful shutdown yet, kill it instead
-            await self.kill()
+        if self._supervise_atask is None:
             return
 
         self._closing = True
-        # ShutdownRequest, then the ack and the exit within close_timeout, killing when late
-        await self._pch.shutdown()
-
-        async with self._lock:
-            if self._supervise_atask:
-                await asyncio.shield(self._supervise_atask)
+        await self._pch.aclose()
 
     async def kill(self) -> None:
         """forcefully kill the supervised process"""
-        if not self.started:
+        if self._supervise_atask is None:
             raise RuntimeError("process not started")
 
         self._closing = True
-        if not self._initialize_fut.done():
-            # unblock the supervise task waiting on this future
-            self._initialize_fut.set_exception(
-                RuntimeError("process killed before initialization completed")
-            )
         await self._pch.kill()
-
-        async with self._lock:
-            if self._supervise_atask:
-                await asyncio.shield(self._supervise_atask)
-
-    @log_exceptions(logger=logger)
-    async def _supervise_task(self) -> None:
-        try:
-            await self._initialize_fut
-        except asyncio.TimeoutError:
-            pass  # this happens when the initialization takes longer than self._initialize_timeout
-        except Exception:
-            pass  # initialization failed
-
-        self._pch.supervise()
-
-        ipc_ch = aio.Chan[channel.Message]()
-
-        main_task = asyncio.create_task(self._main_task(ipc_ch))
-        read_ipc_task = asyncio.create_task(self._read_ipc_task(ipc_ch))
-
-        await self._join_fut
-        self._exitcode = self._proc.exitcode
-        self._proc.close()
-        await aio.cancel_and_wait(read_ipc_task, main_task)
-        await self._pch.exited(self._exitcode)
-
-    async def _read_ipc_task(self, ipc_ch: aio.Chan[channel.Message]) -> None:
-        # the messages the core read, until the process closes the socket
-        try:
-            while True:
-                ipc_ch.send_nowait(await channel.arecv_message(self._pch, proto.IPC_MESSAGES))
-        except duplex_unix.DuplexClosed:
-            pass
-        finally:
-            ipc_ch.close()
 
     def _core_log(
         self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
@@ -379,6 +309,14 @@ class SupervisedProc(ABC):
     def _core_has_running_job(self) -> bool:
         # _running_job only exists on the job executor subclass, not the inference one
         return getattr(self, "_running_job", None) is not None
+
+    def _core_reap(self) -> int | None:
+        self._exitcode = self._proc.exitcode
+        self._proc.close()
+        return self._exitcode
+
+    async def _core_inference(self, method: str, data: bytes) -> bytes | None:
+        raise RuntimeError("no inference executor")
 
     def _sample_memory_mb(self) -> tuple[float, str]:
         """Real footprint of the process, preferring metrics that don't
