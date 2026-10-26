@@ -5,7 +5,10 @@
 use std::sync::Arc;
 
 use lk_agents_abi::python::{check_pid, extract_generated, provider_error_to_py, value_from_py, value_to_py};
-use lk_agents_abi::{ChatContext, ChatItem, InferenceLlmStream, ToolChoice, ToolSpec};
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::{ChatContext, ChatItem, ChatRequest, InferenceLlmStream, Llm, LlmStream, ToolChoice, ToolSpec};
+
+use crate::headers::{BoundIdentity, Headers};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -19,22 +22,39 @@ use crate::python::{conn_options, json_from_py, register_class, register_fn, ses
 /// `frozen`: `update_options` mutates through the `Mutex`, so pyo3 emits no borrow flag.
 #[pyclass(frozen, name = "InferenceLlm", module = "livekit.agents._core")]
 pub struct InferenceLlm {
-    /// A client is built per `chat()` because the reference overrides the timeout per request.
+    inner: Arc<GatewayLlm>,
+}
+
+register_class!(InferenceLlm);
+
+// A session holds the client directly: `_core.InferenceLlm` is the core's `Llm`, not a proxy.
+lk_agents_abi::python::inventory::submit! {
+    lk_agents_abi::python::HostNative {
+        trait_id: || std::any::TypeId::of::<dyn Llm>(),
+        read: |obj| {
+            let llm = obj.extract::<PyRef<'_, InferenceLlm>>().ok()?;
+            let llm: Arc<dyn Llm> = Arc::clone(&llm.inner) as Arc<dyn Llm>;
+            Some(Box::new(llm) as Box<dyn std::any::Any>)
+        },
+    }
+}
+
+/// The gateway LLM: a client per request, since the reference overrides the timeout per request.
+pub struct GatewayLlm {
     opts: std::sync::Mutex<LlmOptions>,
     images: Arc<lk_agents_abi::llm::provider_format::PreResolved>,
     http: Arc<dyn crate::transport::HttpTransport>,
     /// `RealClock` until a session binds its own.
     pub(crate) clock: Arc<lk_agents_abi::BoundClock>,
+    identity: BoundIdentity,
 }
-
-register_class!(InferenceLlm);
 
 impl InferenceLlm {
     pub(crate) fn build(_py: Python<'_>, cfg: LlmClientConfig) -> PyResult<Self> {
         let llm = Self::from_parts(cfg.into(), transport()?);
         // The ambient clock until a session binds its own: on a loop on virtual time, a request
         // times out in that loop's seconds.
-        llm.clock.bind(<Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient());
+        llm.inner.clock.bind(<Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient());
         Ok(llm)
     }
 
@@ -44,19 +64,62 @@ impl InferenceLlm {
             String,
             lk_agents_abi::llm::provider_format::SerializedImage,
         )>::new()));
-        InferenceLlm { opts: std::sync::Mutex::new(opts), images, http, clock: lk_agents_abi::BoundClock::new() }
+        let inner = GatewayLlm {
+            opts: std::sync::Mutex::new(opts),
+            images,
+            http,
+            clock: lk_agents_abi::BoundClock::new(),
+            identity: BoundIdentity::default(),
+        };
+        InferenceLlm { inner: Arc::new(inner) }
     }
 
-    /// `headers` is `get_inference_headers(...)`, read by the host in the caller's job context.
     pub(crate) fn client(&self, timeout: f64, headers: Option<Vec<(String, String)>>) -> NativeLlm {
+        self.inner.client(timeout, headers.map(|pairs| pairs.into_iter().collect()))
+    }
+}
+
+impl GatewayLlm {
+    /// `headers` is `get_inference_headers(...)`, read by the host in the caller's job context.
+    fn client(&self, timeout: f64, headers: Option<Headers>) -> NativeLlm {
         let opts = self.opts.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let client = NativeLlm::new(opts, self.http.clone(), self.images.clone())
             .with_clock(Arc::clone(&self.clock) as Arc<dyn lk_agents_abi::Clock>)
             .with_conn_options(conn_options(timeout, 0));
         match headers {
-            Some(headers) => client.with_identification(headers.into_iter().collect()),
+            Some(headers) => client.with_identification(headers),
             None => client,
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl Llm for GatewayLlm {
+    fn label(&self) -> String {
+        "livekit.agents.inference.llm.LLM".into()
+    }
+
+    fn model(&self) -> String {
+        self.opts.lock().unwrap_or_else(|p| p.into_inner()).model.clone()
+    }
+
+    fn id(&self) -> lk_agents_abi::ProviderId {
+        lk_agents_abi::ProviderId { label: self.label(), model: self.model(), provider: "livekit".into() }
+    }
+
+    /// The bound job identity, the request's scheduling class over the client's.
+    async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
+        let class = req
+            .inference_class
+            .clone()
+            .or_else(|| self.opts.lock().unwrap_or_else(|p| p.into_inner()).inference_class.clone());
+        let headers = self.identity.for_connection().map(|mut headers| {
+            if let Some(class) = class {
+                headers.set(crate::headers::HEADER_INFERENCE_PRIORITY, class);
+            }
+            headers
+        });
+        self.client(req.conn_options.timeout, headers).chat(req).await
     }
 }
 
@@ -66,26 +129,34 @@ impl InferenceLlm {
     fn bind_clock(&self, clock: &Bound<'_, PyAny>) -> PyResult<()> {
         let clock = session_clock(clock, "clock")?;
         check_pid()?;
-        self.clock.bind(clock);
+        self.inner.clock.bind(clock);
+        Ok(())
+    }
+
+    /// `get_inference_headers()` of the job the client now serves; every later request a session
+    /// makes carries them, with a fresh session id.
+    fn bind_identification(&self, headers: Vec<(String, String)>) -> PyResult<()> {
+        check_pid()?;
+        self.inner.identity.bind(headers.into_iter().collect());
         Ok(())
     }
 
     #[getter]
     fn model(&self) -> String {
-        self.opts.lock().unwrap_or_else(|p| p.into_inner()).model.clone()
+        self.inner.opts.lock().unwrap_or_else(|p| p.into_inner()).model.clone()
     }
 
     /// The persistent kwargs, a copy (`update_options` replaces them).
     #[getter]
     fn extra_kwargs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let extra = self.opts.lock().unwrap_or_else(|p| p.into_inner()).extra_kwargs.clone();
+        let extra = self.inner.opts.lock().unwrap_or_else(|p| p.into_inner()).extra_kwargs.clone();
         value_to_py(py, &Value::Object(extra))
     }
 
     /// `LLM.update_options`: read by the next `chat()`. `extra_kwargs` replaces the dict.
     #[pyo3(signature = (*, model = None, extra_kwargs = None))]
     fn update_options(&self, model: Option<String>, extra_kwargs: Option<crate::extra::ExtraKwargs>) {
-        let mut opts = self.opts.lock().unwrap_or_else(|p| p.into_inner());
+        let mut opts = self.inner.opts.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(model) = model {
             opts.model = model;
         }
@@ -230,7 +301,7 @@ mod tests {
         let mut idle = Box::pin(idle.next());
         let http = Arc::new(FakeHttp::hanging());
         let llm = InferenceLlm::from_parts(opts(), http.clone());
-        llm.clock.bind(Arc::clone(&clock) as Arc<dyn lk_agents_abi::Clock>);
+        llm.inner.clock.bind(Arc::clone(&clock) as Arc<dyn lk_agents_abi::Clock>);
 
         let mut stream = llm.client(10.0, None).chat(&ChatRequest::default()).await.expect("opens");
         let mut next = Box::pin(stream.next());

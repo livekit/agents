@@ -199,6 +199,24 @@ pub(crate) fn gateway_headers(
     Ok(headers)
 }
 
+/// The job's identification headers (`get_inference_headers()`), bound once by the host that
+/// hands the client to a session. Each connection carries them with a fresh session id, as the
+/// reference mints one per call; unbound, the native headers.
+#[derive(Debug, Default)]
+pub struct BoundIdentity(std::sync::Mutex<Option<Headers>>);
+
+impl BoundIdentity {
+    pub fn bind(&self, headers: Headers) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(headers);
+    }
+
+    pub fn for_connection(&self) -> Option<Headers> {
+        let mut headers = self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+        headers.set(HEADER_SESSION_ID, crate::ids::shortuuid("inference_"));
+        Some(headers)
+    }
+}
+
 pub fn user_agent(version: &str) -> String {
     format!("LiveKit Agents/{version} (rust)")
 }

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import weakref
+import dataclasses
+import functools
 from typing import TYPE_CHECKING, Any
 
 from .. import _core, stt, vad as vad_mod
@@ -64,7 +65,6 @@ __all__ = [
 ]
 
 DEFAULT_SAMPLE_RATE = 16000
-_MAX_AGENT_CONTEXT_CHARS = 1750
 
 
 class STT(stt.STT):
@@ -119,8 +119,6 @@ class STT(stt.STT):
         self._conn = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
         self._creds = Credentials.resolve(base_url, api_key, api_secret)
         self._vad = self._resolve_vad(vad if is_given(vad) else None)
-        self._session_keyterms: list[str] = []
-        self._streams = weakref.WeakSet[SpeechStream]()
         super().__init__(capabilities=self._fold_capabilities())
 
     @classmethod
@@ -158,28 +156,29 @@ class STT(stt.STT):
                 return VAD()
         return vad
 
-    def _native(self, language: str | None) -> _core.InferenceStt:
+    @functools.cached_property
+    def _native(self) -> _core.InferenceStt:
+        # built on first use, after a fork: the client tracks its open streams and takes the
+        # option and keyterm changes to them
         return _core.InferenceStt(
             model=self._model,
-            language=language or (str(self._language) if self._language else None),
+            language=str(self._language) if self._language else None,
             encoding=self._encoding,
             sample_rate=self._sample_rate,
             base_url=self._creds.base_url,
             api_key=self._creds.api_key,
             api_secret=self._creds.api_secret,
-            extra_kwargs=self._extra | self._keyterm_extra(),
+            extra_kwargs=self._extra,
             fallback=self._fallback or None,
             timeout=self._conn.timeout,
             max_retry=self._conn.max_retry,
             vad=self._vad,
-            headers=list(get_inference_headers().items()),
         )
 
-    def _keyterm_extra(self) -> dict[str, Any]:
-        extra = _core.stt_keyterms_extra_for_model(
-            self._model, extra_kwargs=self._extra, session_keyterms=self._session_keyterms
-        )
-        return extra or {}
+    def _core_native(self) -> _core.InferenceStt:
+        """The client, identified as the current job's, as a session holds it."""
+        self._native.bind_identification(list(get_inference_headers().items()))
+        return self._native
 
     async def _recognize_impl(self, buffer: Any, **_: Any) -> stt.SpeechEvent:
         raise NotImplementedError(
@@ -192,13 +191,11 @@ class STT(stt.STT):
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        stream = SpeechStream(
+        return SpeechStream(
             stt=self,
             language=str(LanguageCode(language)) if is_given(language) else None,
             conn_options=conn_options,
         )
-        self._streams.add(stream)
-        return stream
 
     def update_options(
         self,
@@ -207,44 +204,39 @@ class STT(stt.STT):
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
-        """Update the options; live streams get them as a mid-stream ``session.update``."""
+        """Update the options; open streams get them as a mid-stream ``session.update``."""
         if is_given(model):
             model, parsed_language = _core.stt_parse_model_string(model)
             if parsed_language and not is_given(language):
                 language = parsed_language
             self._model = model
             self._vad = self._resolve_vad(self._vad)
+            self._native.set_vad(self._vad)
         if is_given(language):
             self._language = LanguageCode(language)
         if is_given(extra):
             self._extra.update(extra)
-            extra = {**extra, **self._keyterm_extra()}
         self._capabilities = self._fold_capabilities()
-        for stream in self._streams:
-            stream.update_options(model=model, language=language, extra=extra)
+        self._native.update_options(
+            model=model if is_given(model) else None,
+            language=str(self._language) if is_given(language) else None,
+            extra=extra if is_given(extra) else None,
+        )
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
-        if keyterms == self._session_keyterms:
-            return
-        if not self._capabilities.keyterms:
-            super()._update_session_keyterms(keyterms)
-            return
-        self._session_keyterms = list(keyterms)
-        extra = self._keyterm_extra()
-        for stream in self._streams:
-            stream._apply_keyterms(extra)
+        self._native.update_keyterms(keyterms)
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
-        item = ev.item
-        if item.type == "message" and item.role == "assistant" and (text := item.text_content):
-            self.update_options(extra={"agent_context": text[-_MAX_AGENT_CONTEXT_CHARS:]})
+        if ev.item.type == "message" and (text := ev.item.text_content):
+            self._native.push_conversation_item(ev.item.role, text)
 
 
 class SpeechStream(stt.SpeechStream):
-    """One gateway recognition session; each retry opens a new one."""
+    """One gateway recognition session; the client reconnects it under its ``conn_options``."""
 
     def __init__(self, *, stt: STT, language: str | None, conn_options: APIConnectOptions) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._sample_rate)
+        # the client retries, so this stream does not retry on top of it
+        super().__init__(stt=stt, conn_options=dataclasses.replace(conn_options, max_retry=0))
         self._stt: STT = stt
         self._language = language
         self._native: _core.InferenceSttStream | None = None
@@ -265,12 +257,10 @@ class SpeechStream(stt.SpeechStream):
                 extra=extra if is_given(extra) else None,
             )
 
-    def _apply_keyterms(self, extra: dict[str, Any]) -> None:
-        if self._native is not None:
-            self._native.apply_keyterms(extra)
-
     async def _run(self) -> None:
-        native = self._native = self._stt._native(self._language).stream(language=self._language)
+        native = self._native = self._stt._core_native().stream(
+            language=self._language, start_time_offset=self.start_time_offset
+        )
 
         async def _push() -> None:
             async for item in self._input_ch:
@@ -283,9 +273,7 @@ class SpeechStream(stt.SpeechStream):
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
-                self._event_ch.send_nowait(
-                    stt.stt._speech_event_from_core(ev, offset=self.start_time_offset)
-                )
+                self._event_ch.send_nowait(stt.stt._speech_event_from_core(ev))
         finally:
             self._native = None
             await aio.cancel_and_wait(push)

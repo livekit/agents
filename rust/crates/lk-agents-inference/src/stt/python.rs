@@ -80,7 +80,7 @@ impl InferenceStt {
             <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient(),
         )
         .with_clock(Arc::clone(&clock));
-        // `get_inference_headers()`, read by the host where this stream opens.
+        // `get_inference_headers()`, read by the host where the client is built.
         let native = match headers {
             Some(headers) => native.with_identification(headers.into_iter().collect()),
             None => native,
@@ -94,6 +94,29 @@ impl InferenceStt {
             _ => native,
         };
         Ok(InferenceStt { inner: Arc::new(native) })
+    }
+
+    /// The model's VAD as the host resolved it on `update_options(model=)`; `None` drops it.
+    #[pyo3(signature = (vad = None))]
+    fn set_vad(&self, vad: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        check_pid()?;
+        let vad = match vad {
+            Some(obj) if !obj.is_none() => Some(<dyn lk_agents_abi::Vad as HostProxy>::from_host(
+                obj,
+                Some(Arc::clone(&self.inner.clock)),
+            )?),
+            _ => None,
+        };
+        self.inner.set_vad(vad);
+        Ok(())
+    }
+
+    /// `get_inference_headers()` of the job the client now serves; every later connection carries
+    /// them, with a fresh session id.
+    fn bind_identification(&self, headers: Vec<(String, String)>) -> PyResult<()> {
+        check_pid()?;
+        self.inner.bind_identification(headers.into_iter().collect());
+        Ok(())
     }
 }
 

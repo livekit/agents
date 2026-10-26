@@ -143,6 +143,12 @@ class LLM(llm.LLM):
     def from_model_string(cls, model: str) -> LLM:
         return cls(model)
 
+    def _core_native(self) -> _core.InferenceLlm:
+        """The client, identified as the current job's, as a session holds it."""
+        headers = get_inference_headers(inference_class=self._inference_class)
+        self._native.bind_identification(list(headers.items()))
+        return self._native
+
     def update_options(
         self,
         *,

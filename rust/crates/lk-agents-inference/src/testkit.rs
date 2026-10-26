@@ -161,6 +161,10 @@ impl FakeWs {
         self.sent().iter().map(|s| serde_json::from_str(s).expect("a JSON frame")).collect()
     }
 
+    pub fn connect_count(&self) -> usize {
+        self.connects.lock().unwrap().len()
+    }
+
     pub fn last_connect(&self) -> Option<ConnectRecord> {
         self.connects.lock().unwrap().last().cloned()
     }

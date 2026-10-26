@@ -6,10 +6,9 @@ import re
 from typing import TYPE_CHECKING, TypedDict
 
 from .. import _core
-from ..types import TimedString
 
 if TYPE_CHECKING:
-    from .. import tokenize
+    pass
 
 
 class ExpressiveTag(TypedDict):
@@ -50,42 +49,3 @@ def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
 
 def strip_expr_markup(text: str) -> str:
     return split_expr_markup(text)[0]
-
-
-def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceTokenizer:
-    """The blingfire tokenizer for a provider's streamed input: capped at its max chunk length,
-    batching sentences up to it when ``expressive``."""
-    from .. import tokenize
-
-    max_len, min_len, xml_aware = _core.sentence_tokenizer_config(provider, expressive=expressive)
-    return tokenize.blingfire.SentenceTokenizer(
-        max_token_len=max_len, min_token_len=min_len, xml_aware=xml_aware
-    )
-
-
-def drop_bracket_cues(
-    tokens: list[TimedString], held: list[TimedString], *, final: bool = False
-) -> list[TimedString]:
-    """Remove bracket cues from TTS-aligned tokens, keeping the survivors' timings.
-
-    ``held`` carries an unclosed span across calls; pass the same list each time and call once
-    more with ``final=True`` at the end of the stream.
-    """
-    tokens = held + tokens
-    held.clear()
-    emit, keep = _core.drop_bracket_cues([str(t) for t in tokens], final)
-    held.extend(_retext(tokens[i], text) for i, text in keep)
-    return [_retext(tokens[i], text) for i, text in emit]
-
-
-def _retext(token: TimedString, text: str | None) -> TimedString:
-    if text is None:
-        return token
-    return TimedString(
-        text,
-        start_time=token.start_time,
-        end_time=token.end_time,
-        confidence=token.confidence,
-        start_time_offset=token.start_time_offset,
-        speaker_id=token.speaker_id,
-    )

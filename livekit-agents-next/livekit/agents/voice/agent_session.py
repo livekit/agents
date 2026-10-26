@@ -157,8 +157,11 @@ class VoiceActivityVideoSampler:
 
 
 def _core_leg(leg: Any) -> Any:
-    """A fallback chain as the core's own (``_core.FallbackStt`` and the like), which the session
-    drives directly rather than through the Python adapter."""
+    """A gateway client or a fallback chain as the core's own (``_core.InferenceStt``,
+    ``_core.FallbackStt`` and the like), which the session drives directly rather than through
+    the Python wrapper."""
+    if isinstance(leg, (inference.STT, inference.LLM, inference.TTS)):
+        return leg._core_native()
     if isinstance(leg, (stt.FallbackAdapter, llm.FallbackAdapter, tts.FallbackAdapter)):
         return leg._native
     return leg

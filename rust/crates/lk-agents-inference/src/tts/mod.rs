@@ -1,7 +1,8 @@
 //! `inference/tts.py` -- the gateway TTS, WebSocket + JSON (§1.4). `synthesize()` is the duplex
 //! path with one push and the input closed, as in the reference, so [`NativeTts::stream`] always
 //! returns `Some`. The reference's connection pool is not ported: a socket opens per synthesis.
-//! Text arrives normalised, converted and split by the host (`inference/tts.py`).
+//! Text is normalised, split into sentences and converted to the provider's markup here, as
+//! `inference/tts.py`'s `SynthesizeStream` does.
 
 #[cfg(feature = "python")]
 mod python;
@@ -11,7 +12,7 @@ use crate::abi::{
     StreamSink, StreamSource, SynthesizedAudio, Tts, TtsCapabilities, TtsSink,
     TtsSource,
 };
-use crate::headers::{HEADER_SESSION_ID, Headers, gateway_headers};
+use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
 use crate::transport::{
     WsMessage, WsSender, WsTransport, connect_error, next_terminal, open_ws, stream_closed,
@@ -22,7 +23,10 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{ApiConnectOptions, Clock, TimedString};
+use lk_agents_abi::tts::markup::{Markup, SentenceTokenizerConfig, drop_bracket_cues, sentence_tokenizer_of};
+use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, TimedString};
+use lk_agents_media::blingfire::{SentenceBuffer, SentenceBufferOptions};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -71,6 +75,9 @@ impl Default for TtsOptions {
 
 pub struct NativeTts {
     opts: Mutex<TtsOptions>,
+    /// `_expressive`: the framework sets it before a synthesis opens.
+    expressive: AtomicBool,
+    identity: BoundIdentity,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
     /// Bound into, not rebuilt, so `update_options` state survives a session binding its own.
@@ -106,6 +113,8 @@ impl NativeTts {
     pub fn new(opts: TtsOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         NativeTts {
             opts: Mutex::new(opts),
+            expressive: AtomicBool::new(false),
+            identity: BoundIdentity::default(),
             ws,
             spawner,
             clock: lk_agents_abi::BoundClock::new(),
@@ -121,8 +130,13 @@ impl NativeTts {
         self.clock.bind(clock);
     }
 
+    /// The client as the provider a session holds directly.
+    pub fn as_tts(self: &Arc<Self>) -> Arc<dyn Tts> {
+        Arc::clone(self) as Arc<dyn Tts>
+    }
+
     /// Headers are per stream, not a client field: each synthesis gets its own session id.
-    /// `None`: no job, the native headers.
+    /// `None`: the identity a session bound, else no job, the native headers.
     pub fn stream_identified(
         &self,
         identification: Option<Headers>,
@@ -136,16 +150,24 @@ impl NativeTts {
     name = "InferenceTts",
     cell = "arc",
     rust_name = InferenceTts,
+    as_dyn(Tts = as_tts),
     stub = "def __init__(self, *args: Any, **kwargs: Any) -> None: ...",
     stub = "def bind_clock(self, clock: SessionClock) -> None: ...",
     stub = "def prewarm(self, *, headers: list[tuple[str, str]] | None = None) -> None: ..."
 ))]
 impl NativeTts {
-    /// `_resolve_expressive_options` decided this turn is expressive. A no-op here: the host
-    /// converts the markup and drops bracket cues from alignment itself (`inference/tts.py`).
+    /// `_set_expressive`: whether syntheses opened from here batch sentences for markup and drop
+    /// bracket cues from the alignment.
     #[host(method)]
     pub fn set_expressive(&self, expressive: bool) {
-        let _ = expressive;
+        self.expressive.store(expressive, Ordering::SeqCst);
+    }
+
+    /// `get_inference_headers()` of the job the client now serves; every later synthesis carries
+    /// them, with a fresh session id.
+    #[host(method)]
+    pub fn bind_identification(&self, headers: Vec<(String, String)>) {
+        self.identity.bind(headers.into_iter().collect());
     }
 
     pub fn model(&self) -> String {
@@ -206,6 +228,12 @@ impl NativeTts {
     ) -> Result<(TtsSinkHandle, TtsSourceHandle), ProviderError> {
         let opts = self.opts.lock().unwrap().clone();
         let provider = opts.model.split('/').next().unwrap_or("").to_owned();
+        let expressive = self.expressive.load(Ordering::SeqCst);
+        let identification = match identification {
+            Some(headers) => Some(headers.clone()),
+            None => self.identity.for_connection(),
+        };
+        let identification = identification.as_ref();
 
         let (text_tx, text_rx) = mpsc::unbounded_channel::<TextCmd>();
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Result<SynthesizedAudio, ApiError>>();
@@ -231,19 +259,40 @@ impl NativeTts {
                 RequestKind::Tts,
                 "",
             ),
+            expressive,
             text_rx,
             audio_tx,
         };
+        let (max_token_len, min_token_len, xml_aware) = sentence_tokenizer_of(&pump.provider, expressive);
+        let sentences = SentenceBuffer::with_options(SentenceBufferOptions {
+            retain_format: false,
+            ..SentenceBufferOptions::from_config(SentenceTokenizerConfig {
+                max_token_len,
+                min_token_len,
+                xml_aware,
+            })
+        });
+        let prep = TextPrep {
+            markup: Markup::from_provider_key(wire::markup_provider_key(&pump.opts.model)),
+            sentences: Box::new(sentences),
+        };
         self.spawner.spawn_unboxed(pump.run());
 
-        Ok((TtsSinkHandle { text: text_tx }, TtsSourceHandle { audio: audio_rx, done: false }))
+        Ok((
+            TtsSinkHandle { text: text_tx, prep: Mutex::new(prep) },
+            TtsSourceHandle { audio: audio_rx, done: false },
+        ))
     }
 }
 
 #[async_trait]
 impl Tts for NativeTts {
     fn label(&self) -> String {
-        format!("livekit.{}", self.model())
+        "livekit.agents.inference.tts.TTS".into()
+    }
+
+    fn id(&self) -> lk_agents_abi::ProviderId {
+        lk_agents_abi::ProviderId { label: Tts::label(self), model: self.model(), provider: "livekit".into() }
     }
 
     /// `streaming` is always `True`; `aligned_transcript` reads the live extra kwargs.
@@ -262,10 +311,7 @@ impl Tts for NativeTts {
     /// `synthesize(text)` = `_synthesize_with_stream(text)`: the gateway has no one-shot endpoint.
     async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
         let (sink, source) = self.open(None)?;
-        // The host's tokenizer yields no sentence for empty text, so nothing is sent for it.
-        if !text.is_empty() {
-            sink.push(text.to_owned())?;
-        }
+        sink.push(text.to_owned())?;
         sink.end_input();
         Ok(Box::new(source))
     }
@@ -289,19 +335,47 @@ enum TextCmd {
 
 pub struct TtsSinkHandle {
     text: mpsc::UnboundedSender<TextCmd>,
+    prep: Mutex<TextPrep>,
+}
+
+/// `SynthesizeStream`'s input side: the markup normalised, the text split into the provider's
+/// sentences, each converted to its markup.
+struct TextPrep {
+    markup: Markup,
+    sentences: Box<dyn SentenceSplitter>,
+}
+
+impl TtsSinkHandle {
+    fn send(&self, sentences: Vec<String>) -> Result<(), ProviderError> {
+        let markup = self.prep.lock().unwrap().markup;
+        for sentence in sentences {
+            let converted = markup.convert(&markup.normalize(&sentence));
+            self.text.send(TextCmd::Push(converted)).map_err(|_| stream_closed(WHAT))?;
+        }
+        Ok(())
+    }
 }
 
 impl StreamSink<String> for TtsSinkHandle {
     fn push(&self, item: String) -> Result<(), ProviderError> {
-        self.text.send(TextCmd::Push(item)).map_err(|_| stream_closed(WHAT))
+        let sentences = {
+            let mut prep = self.prep.lock().unwrap();
+            let normalized = prep.markup.normalize(&item);
+            prep.sentences.push(&normalized)
+        };
+        self.send(sentences)
     }
 
-    /// The `_FlushSentinel`. A no-op on the wire: pushes are already whole sentences.
+    /// The `_FlushSentinel`: whatever the tokenizer holds goes out as a sentence.
     fn flush(&self) -> Result<(), ProviderError> {
+        let sentences = self.prep.lock().unwrap().sentences.flush();
+        self.send(sentences)?;
         self.text.send(TextCmd::Flush).map_err(|_| stream_closed(WHAT))
     }
 
     fn end_input(&self) {
+        let sentences = self.prep.lock().unwrap().sentences.flush();
+        let _ = self.send(sentences);
         let _ = self.text.send(TextCmd::End);
     }
 }
@@ -342,6 +416,8 @@ struct Pump {
     provider: String,
     request_id: String,
     sample_rate: u32,
+    /// Bracket cues are dropped from the alignment: the provider aligned the converted text.
+    expressive: bool,
     text_rx: mpsc::UnboundedReceiver<TextCmd>,
     audio_tx: mpsc::UnboundedSender<Result<SynthesizedAudio, ApiError>>,
 }
@@ -359,6 +435,7 @@ impl Pump {
             provider,
             request_id,
             sample_rate,
+            expressive,
             text_rx,
             audio_tx,
         } = self;
@@ -384,6 +461,7 @@ impl Pump {
                 provider: &provider,
                 request_id,
                 sample_rate,
+                expressive,
                 input_sent: input_sent_rx,
                 clock: clock.as_ref(),
                 first_message_timeout: timeout,
@@ -444,6 +522,7 @@ impl Pump {
             provider,
             request_id,
             sample_rate,
+            expressive,
             mut input_sent,
             clock,
             first_message_timeout,
@@ -454,6 +533,8 @@ impl Pump {
         let mut segment_id: Option<String> = None;
         // Alignment arrives on its own message and rides out on the next audio frame.
         let mut pending_transcript: Vec<TimedString> = Vec::new();
+        // An unclosed bracket cue, held across alignment messages.
+        let mut held: Vec<TimedString> = Vec::new();
 
         loop {
             let recv = receiver.recv();
@@ -504,9 +585,16 @@ impl Pump {
                             }
                         }
                         wire::Incoming::OutputAlignment { tokens, .. } => {
-                            pending_transcript.extend(tokens);
+                            pending_transcript.extend(if expressive {
+                                drop_bracket_cues(tokens, &mut held, false)
+                            } else {
+                                tokens
+                            });
                         }
                         wire::Incoming::Done { .. } => {
+                            if !held.is_empty() {
+                                pending_transcript.extend(drop_bracket_cues(Vec::new(), &mut held, true));
+                            }
                             // `output_emitter.end_input()` flushes a final, possibly empty frame;
                             // the driver keys on `is_final`.
                             let out = SynthesizedAudio {
@@ -540,6 +628,7 @@ struct RecvCtx<'a> {
     provider: &'a str,
     request_id: String,
     sample_rate: u32,
+    expressive: bool,
     input_sent: tokio::sync::watch::Receiver<bool>,
     clock: &'a dyn Clock,
     first_message_timeout: Duration,
@@ -650,20 +739,21 @@ mod tests {
         let ws = Arc::new(FakeWs::new(vec![]).keep_open());
         let tts = tts(ws.clone());
         let (sink, _source) = tts.stream().await.unwrap();
-        sink.push("Hello there.".to_owned()).unwrap();
+        for token in ["Hello there, this is", " the first sentence.", " And here comes", " the second"] {
+            sink.push(token.to_owned()).unwrap();
+        }
 
         let sent = until_sent(&ws, 2).await;
         assert_eq!(sent.len(), 2, "session.create, then the sentence, with the input open: {sent:?}");
         assert_eq!(sent[0]["type"], json!("session.create"));
         assert_eq!(sent[1]["type"], json!("input_transcript"));
-        assert_eq!(sent[1]["transcript"], json!("Hello there. "));
+        assert_eq!(sent[1]["transcript"], json!("Hello there, this is the first sentence. "));
 
-        // A flush is the host tokenizer's business: nothing more goes on the wire for it.
+        // A flush sends what the tokenizer holds; the wire's own flush waits for the end.
         sink.flush().unwrap();
-        sink.push("How are you?".to_owned()).unwrap();
         let sent = until_sent(&ws, 3).await;
         assert_eq!(sent.len(), 3, "{sent:?}");
-        assert_eq!(sent[2]["transcript"], json!("How are you? "));
+        assert_eq!(sent[2]["transcript"], json!("And here comes the second "));
 
         sink.end_input();
         let sent = until_sent(&ws, 4).await;
@@ -671,25 +761,56 @@ mod tests {
         assert_eq!(sent[3], json!({"type": "session.flush"}), "one flush, at the end of input");
     }
 
-    // Catches: the trailing space added twice (host and wire) or not at all. Each sentence is its
-    // own `input_transcript` carrying `converted + " "` -- one space, never two.
+    // Catches: the trailing space added twice, or short sentences sent alone instead of batched
+    // up to the tokenizer's floor.
     #[tokio::test]
-    async fn each_sentence_carries_exactly_one_trailing_space() {
+    async fn sentences_are_batched_and_carry_exactly_one_trailing_space() {
         let ws = Arc::new(FakeWs::new(vec![]).keep_open());
         let tts = tts(ws.clone());
         let (sink, _source) = tts.stream().await.unwrap();
-        for sentence in ["One.", "Two!", "Three?"] {
+        for sentence in ["One. ", "Two! ", "Three? "] {
             sink.push(sentence.to_owned()).unwrap();
         }
         sink.end_input();
 
-        let sent = until_sent(&ws, 5).await;
+        let sent = until_sent(&ws, 3).await;
         let transcripts: Vec<&str> = sent
             .iter()
             .filter(|v| v["type"] == json!("input_transcript"))
             .map(|v| v["transcript"].as_str().unwrap())
             .collect();
-        assert_eq!(transcripts, ["One. ", "Two! ", "Three? "]);
+        assert_eq!(transcripts, ["One. Two! Three? "]);
+    }
+
+    // Catches: an expressive synthesis sending standard markup instead of the provider's, or its
+    // bracket cues left in the alignment the transcript is synchronised against.
+    #[tokio::test]
+    async fn an_expressive_synthesis_converts_markup_and_drops_cues_from_the_alignment() {
+        let ws = Arc::new(FakeWs::new(vec![
+            text(json!({"type": "session.created", "session_id": "sess_1"})),
+            text(json!({"type": "output_alignment", "words": [
+                {"word": "[laughs]", "start": 0.0, "end": 0.2},
+                {"word": "hi", "start": 0.2, "end": 0.4},
+            ]})),
+            text(json!({"type": "output_audio", "audio": pcm(4)})),
+            text(json!({"type": "done"})),
+        ]));
+        let mut opts = opts();
+        opts.model = "inworld/inworld-tts-2".into();
+        let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
+        let tts = NativeTts::new(opts, ws.clone(), spawner);
+        tts.set_expressive(true);
+        let mut source = tts
+            .synthesize("say <expr type=\"prosody\" label=\"whisper\">this</expr> now")
+            .await
+            .unwrap();
+        let mut words = Vec::new();
+        while let Some(audio) = source.next().await.unwrap() {
+            words.extend(audio.timed_transcript.into_iter().map(|t| t.text));
+        }
+        assert!(words.iter().all(|w| !w.contains('[')), "{words:?}");
+        let transcript = ws.sent_json()[1]["transcript"].as_str().unwrap().to_owned();
+        assert_eq!(transcript, "say [whisper]this now ", "converted to the provider's markup");
     }
 
     // Catches: the host's identification headers (the job's `X-LiveKit-*` identity) not reaching

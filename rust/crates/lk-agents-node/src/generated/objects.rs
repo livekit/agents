@@ -2297,9 +2297,14 @@ pub struct InferenceStt {
 
 #[napi]
 impl InferenceStt {
-    #[napi(js_name = "updateSessionKeyterms")]
-    pub fn update_session_keyterms(&self, keyterms: Vec<String>) -> Option<serde_json::Map<String, serde_json::Value>> {
-        self.inner.update_session_keyterms(&keyterms)
+    #[napi(js_name = "updateKeyterms")]
+    pub fn update_keyterms(&self, keyterms: Vec<String>) {
+        self.inner.update_keyterms_for_host(keyterms);
+    }
+
+    #[napi(js_name = "pushConversationItem")]
+    pub fn push_conversation_item(&self, role: String, text: String) {
+        self.inner.push_conversation_item(&role, &text);
     }
 }
 
@@ -2328,6 +2333,11 @@ impl InferenceTts {
     #[napi(js_name = "setExpressive")]
     pub fn set_expressive(&self, expressive: bool) {
         self.inner.set_expressive(expressive);
+    }
+
+    #[napi(js_name = "bindIdentification")]
+    pub fn bind_identification(&self, headers: Vec<(String, String)>) {
+        self.inner.bind_identification(headers);
     }
 
     #[napi(getter, js_name = "sampleRate")]

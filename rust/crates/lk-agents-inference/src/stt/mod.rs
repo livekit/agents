@@ -9,7 +9,7 @@ mod python;
 pub mod wire;
 
 use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
-use crate::headers::{HEADER_SESSION_ID, Headers, gateway_headers};
+use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::transport::{
     TransportError, WsMessage, WsSender, WsTransport, connect_error, next_terminal, open_ws,
     stream_closed, to_ws_url, within,
@@ -22,11 +22,16 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ApiConnectOptions, Clock, RealClock, SpeechEvent};
 use machine::TranscriptMachine;
 use options::FallbackModel;
-use std::sync::{Arc, Mutex};
+use lk_agents_abi::types::retry::{RequestKind, RetryDecision, decide};
+use lk_agents_media::{FrameResampler, OnChange, Quality};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 const WHAT: &str = "LiveKit Inference STT";
+
+/// `_MAX_AGENT_CONTEXT_CHARS`: AssemblyAI caps `agent_context`, so the tail is kept.
+const MAX_AGENT_CONTEXT_CHARS: usize = 1750;
 
 /// `STTOptions`, plus the credentials.
 #[derive(Debug, Clone)]
@@ -67,12 +72,15 @@ pub struct NativeStt {
     capabilities: Mutex<SttCapabilities>,
     /// Framework-managed keyterms, merged into `extra` at connect and by `session.update`.
     session_keyterms: Mutex<Vec<String>>,
+    keyterms_unsupported_warned: std::sync::atomic::AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
-    identification: Option<Headers>,
+    identity: BoundIdentity,
     clock: Arc<dyn Clock>,
     /// The Speechmatics path: a client-side VAD whose end-of-speech sends `session.finalize`.
-    vad: Option<Arc<dyn crate::abi::Vad>>,
+    vad: Mutex<Option<Arc<dyn crate::abi::Vad>>>,
+    /// Every open stream, which `update_options` and keyterm changes reach mid-stream.
+    live: Mutex<Vec<Weak<StreamControl>>>,
 }
 
 /// `inference/stt.py`'s WebSocket, over `lk-agents-inference::stt::NativeStt`.
@@ -85,7 +93,10 @@ pub struct NativeStt {
     name = "InferenceStt",
     cell = "arc",
     rust_name = InferenceStt,
-    stub = "def __init__(self, *args: Any, **kwargs: Any) -> None: ..."
+    as_dyn(Stt = as_stt),
+    stub = "def __init__(self, *args: Any, **kwargs: Any) -> None: ...",
+    stub = "def set_vad(self, vad: Any | None = None) -> None: ...",
+    stub = "def bind_identification(self, headers: list[tuple[str, str]]) -> None: ..."
 ))]
 impl NativeStt {
     pub fn new(opts: SttOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
@@ -95,18 +106,31 @@ impl NativeStt {
             opts: Mutex::new(opts),
             capabilities: Mutex::new(capabilities),
             session_keyterms: Mutex::new(Vec::new()),
+            keyterms_unsupported_warned: Default::default(),
             ws,
             spawner,
-            identification: None,
+            identity: BoundIdentity::default(),
             clock: Arc::new(RealClock::new()),
-            vad: None,
+            vad: Mutex::new(None),
+            live: Mutex::new(Vec::new()),
         }
     }
 
-    /// `get_inference_headers()`: the job's `X-LiveKit-*` identity and the connection's session id.
-    pub fn with_identification(mut self, headers: Headers) -> Self {
-        self.identification = Some(headers);
+    /// `get_inference_headers()`: the job's `X-LiveKit-*` identity; each connection gets a fresh
+    /// session id.
+    pub fn with_identification(self, headers: Headers) -> Self {
+        self.identity.bind(headers);
         self
+    }
+
+    /// The identity of the job the client now serves, bound by the host that hands it to a session.
+    pub fn bind_identification(&self, headers: Headers) {
+        self.identity.bind(headers);
+    }
+
+    /// The client as the provider a session holds directly.
+    pub fn as_stt(self: &Arc<Self>) -> Arc<dyn Stt> {
+        Arc::clone(self) as Arc<dyn Stt>
     }
 
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
@@ -114,9 +138,21 @@ impl NativeStt {
         self
     }
 
-    pub fn with_vad(mut self, vad: Arc<dyn crate::abi::Vad>) -> Self {
-        self.vad = Some(vad);
+    pub fn with_vad(self, vad: Arc<dyn crate::abi::Vad>) -> Self {
+        self.set_vad(Some(vad));
         self
+    }
+
+    /// The model's VAD as the host resolved it (`_resolve_vad_for_model`); later streams use it.
+    pub fn set_vad(&self, vad: Option<Arc<dyn crate::abi::Vad>>) {
+        *self.vad.lock().unwrap() = vad;
+    }
+
+    /// The open streams; a dropped one is pruned on the way.
+    fn live_streams(&self) -> Vec<Arc<StreamControl>> {
+        let mut live = self.live.lock().unwrap();
+        live.retain(|w| w.strong_count() > 0);
+        live.iter().filter_map(Weak::upgrade).collect()
     }
 
     pub fn model(&self) -> String {
@@ -156,11 +192,64 @@ impl NativeStt {
         // `update_options` drifted apart.
         *self.capabilities.lock().unwrap() =
             options::capabilities(opts.model.as_deref(), &opts.fallback, Some(&opts.extra_kwargs));
+        // A user `extra` re-merges the session keyterms, so the update does not drop them.
+        let extra = extra.map(|extra| {
+            let mut merged = extra.0.clone();
+            let terms = self.session_keyterms.lock().unwrap().clone();
+            let model = opts.model.as_deref().map(|m| options::parse_model_string(m).0);
+            if let Some(keyterms) =
+                options::keyterms_extra_for_model(model, Some(&opts.extra_kwargs), &terms)
+            {
+                merged.extend(keyterms);
+            }
+            merged
+        });
+        let model = model.map(|m| options::parse_model_string(m).0.to_owned());
+        let language = language.and(opts.language.clone());
+        drop(opts);
+        for stream in self.live_streams() {
+            stream.update_options(model.as_deref(), language.as_deref(), extra.as_ref());
+        }
     }
 
-    /// `_update_session_keyterms`. The `extra` entry to apply, or `None` when unsupported or
-    /// unchanged.
+    /// `_update_session_keyterms`: a warning once for a model without keyterm prompting, else the
+    /// keyterms reach every open stream (now if the user is silent, at end of speech if not).
+    #[host(method(name = "update_keyterms"))]
+    pub fn update_keyterms_for_host(&self, keyterms: Vec<String>) {
+        if !self.capabilities.lock().unwrap().keyterms {
+            if !self.keyterms_unsupported_warned.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                log::warn!(
+                    target: "livekit.agents",
+                    stt = Stt::label(self).as_str();
+                    "keyterms are not supported by this STT, ignoring keyterms update"
+                );
+            }
+            return;
+        }
+        if let Some(extra) = self.update_session_keyterms(&keyterms) {
+            for stream in self.live_streams() {
+                stream.apply_keyterms(extra.clone());
+            }
+        }
+    }
+
+    /// `_push_conversation_item`: an assistant turn's text, its tail, biases recognition as
+    /// `agent_context` on a model that carries it.
     #[host(method)]
+    pub fn push_conversation_item(&self, role: &str, text: &str) {
+        if role != "assistant" || text.is_empty() || !self.capabilities.lock().unwrap().chat_context {
+            return;
+        }
+        let tail: String = {
+            let chars: Vec<char> = text.chars().collect();
+            chars[chars.len().saturating_sub(MAX_AGENT_CONTEXT_CHARS)..].iter().collect()
+        };
+        let mut extra = serde_json::Map::new();
+        extra.insert("agent_context".into(), tail.into());
+        self.update_options(None, None, Some(&crate::extra::ExtraKwargs(extra)));
+    }
+
+    /// The `extra` entry a keyterm change applies, or `None` when unsupported or unchanged.
     pub fn update_session_keyterms(
         &self,
         keyterms: &[String],
@@ -193,16 +282,18 @@ impl NativeStt {
         opts
     }
 
-    /// Open a stream. Synchronous: the pump task opens the socket.
+    /// Open a stream. Synchronous: the pump task opens the socket. `start_time_offset` shifts its
+    /// timestamps onto the caller's input timeline.
     #[host(method(name = "stream", stream = InferenceSttStream, kw_only))]
-    pub fn stream_for_host(&self, language: Option<&str>) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
-        self.stream_native(language)
+    pub fn stream_for_host(&self, language: Option<&str>, start_time_offset: Option<f64>) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
+        self.stream_native(language, start_time_offset.unwrap_or(0.0))
     }
 
     /// The unboxed pair, for callers that need the live stream's `update_options`.
     pub fn stream_native(
         &self,
         language: Option<&str>,
+        start_time_offset: f64,
     ) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
         let opts = self.sanitize(language);
         let keyterms = self.session_keyterms.lock().unwrap().clone();
@@ -210,49 +301,30 @@ impl NativeStt {
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<SinkCmd>();
         let (event_tx, event_rx) = mpsc::unbounded_channel::<Result<SpeechEvent, ApiError>>();
         let (update_tx, update_rx) = mpsc::unbounded_channel::<serde_json::Value>();
-        let deferred = Arc::new(DeferredExtra::default());
-
-        let headers =
-            gateway_headers(
-            self.identification.as_ref(),
-            None,
-            None,
-            &opts.api_key,
-            &opts.api_secret,
-        )?;
-        // The reference reads the session id back out of the header map (a job's
-        // `inference_headers` cannot override it) and uses it as the request id.
-        let connection_session_id = headers.get(HEADER_SESSION_ID).map(str::to_owned);
+        let control = Arc::new(StreamControl {
+            updates: update_tx.clone(),
+            deferred: Arc::new(DeferredExtra::default()),
+        });
+        self.live.lock().unwrap().push(Arc::downgrade(&control));
 
         let pump = Pump {
             ws: self.ws.clone(),
-            url: format!(
-                "{}/stt?model={}",
-                to_ws_url(&opts.base_url),
-                opts.model.as_deref().unwrap_or("")
-            ),
-            headers: headers.into_vec(),
-            timeout: Duration::from_secs_f64(opts.conn_options.timeout.max(0.0)),
+            identification: self.identity.for_connection(),
             clock: self.clock.clone(),
             create_frame: wire::session_create(&opts, &keyterms),
-            machine: TranscriptMachine::new(
-                connection_session_id
-                    .clone()
-                    .unwrap_or_else(|| crate::ids::shortuuid("stt_request_")),
-                opts.language.as_deref(),
-            ),
-            sample_rate: opts.sample_rate,
-            vad: self.vad.clone(),
+            vad: self.vad.lock().unwrap().clone(),
+            offset: start_time_offset,
+            opts,
             audio_rx,
             update_rx,
-            deferred: deferred.clone(),
-            update_tx: update_tx.clone(),
+            deferred: control.deferred.clone(),
+            update_tx,
             event_tx,
         };
         self.spawner.spawn_unboxed(pump.run());
 
         Ok((
-            SttSinkHandle { audio: audio_tx, updates: update_tx, deferred },
+            SttSinkHandle { audio: audio_tx, control },
             SttSourceHandle { events: event_rx, done: false },
         ))
     }
@@ -261,7 +333,15 @@ impl NativeStt {
 #[async_trait]
 impl Stt for NativeStt {
     fn label(&self) -> String {
-        format!("livekit.{}", self.model())
+        "livekit.agents.inference.stt.STT".into()
+    }
+
+    fn id(&self) -> lk_agents_abi::ProviderId {
+        lk_agents_abi::ProviderId { label: Stt::label(self), model: self.model(), provider: "livekit".into() }
+    }
+
+    fn update_keyterms(&self, keyterms: &[String]) {
+        self.update_keyterms_for_host(keyterms.to_vec());
     }
 
     fn capabilities(&self) -> SttCapabilities {
@@ -280,13 +360,13 @@ impl Stt for NativeStt {
     }
 
     /// Always `Some`: gateway STT declares `streaming=True`.
-    /// The offset is not applied here: the host's `SpeechStream` adds its own to each event.
     async fn stream(
         &self,
         language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
-        _start_time_offset: Option<f64>,
+        start_time_offset: Option<f64>,
     ) -> Option<Result<(crate::abi::SttSink, crate::abi::SttSource), ProviderError>> {
-        Some(self.stream_native(language.map(|l| l.as_str())).map(|(sink, source)| {
+        let offset = start_time_offset.unwrap_or(0.0);
+        Some(self.stream_native(language.map(|l| l.as_str()), offset).map(|(sink, source)| {
             (Box::new(sink) as crate::abi::SttSink, Box::new(source) as crate::abi::SttSource)
         }))
     }
@@ -315,11 +395,31 @@ struct DeferredExtra {
 
 pub struct SttSinkHandle {
     audio: mpsc::UnboundedSender<SinkCmd>,
+    control: Arc<StreamControl>,
+}
+
+impl SttSinkHandle {
+    pub fn update_options(
+        &self,
+        model: Option<&str>,
+        language: Option<&str>,
+        extra: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) {
+        self.control.update_options(model, language, extra);
+    }
+
+    pub fn apply_keyterms(&self, extra: serde_json::Map<String, serde_json::Value>) {
+        self.control.apply_keyterms(extra);
+    }
+}
+
+/// What reaches a live stream from its client: `session.update` frames and deferred keyterms.
+struct StreamControl {
     updates: mpsc::UnboundedSender<serde_json::Value>,
     deferred: Arc<DeferredExtra>,
 }
 
-impl SttSinkHandle {
+impl StreamControl {
     /// A mid-stream `session.update`; unsupported providers ignore it.
     pub fn update_options(
         &self,
@@ -399,16 +499,14 @@ impl StreamSource<SpeechEvent> for SttSourceHandle {
 
 struct Pump {
     ws: Arc<dyn WsTransport>,
-    url: String,
-    headers: Vec<(String, String)>,
-    /// `conn_options.timeout`: bounds the handshake and the first message back, not later reads
-    /// (an STT socket is silent as long as the user is).
-    timeout: Duration,
+    identification: Option<Headers>,
     clock: Arc<dyn Clock>,
     create_frame: serde_json::Value,
-    machine: TranscriptMachine,
-    sample_rate: u32,
+    opts: SttOptions,
     vad: Option<Arc<dyn crate::abi::Vad>>,
+    /// Seconds added to every timestamp: the caller's, plus the time spent on failed attempts, so
+    /// transcripts stay on one linear timeline across reconnects.
+    offset: f64,
     audio_rx: mpsc::UnboundedReceiver<SinkCmd>,
     update_rx: mpsc::UnboundedReceiver<serde_json::Value>,
     deferred: Arc<DeferredExtra>,
@@ -417,23 +515,86 @@ struct Pump {
 }
 
 impl Pump {
-    async fn run(self) {
-        let opened = open_ws(
+    /// `RecognizeStream._main_task`: each failed attempt reconnects, under `conn_options`, with the
+    /// audio pushed meanwhile still queued. An attempt that outlived the connect timeout had
+    /// connected, so the budget restarts.
+    async fn run(mut self) {
+        let timeout = Duration::from_secs_f64(self.opts.conn_options.timeout.max(0.0));
+        let mut retries = 0u32;
+        let mut last_start = self.clock.now();
+        loop {
+            let started = self.clock.now();
+            self.offset += started.saturating_duration_since(last_start).as_secs_f64();
+            last_start = started;
+            let Err(err) = self.attempt(timeout).await else { return };
+            if self.clock.now().saturating_duration_since(started) > timeout {
+                retries = 0;
+            }
+            let decision = decide(
+                RequestKind::SttStream,
+                &self.opts.conn_options,
+                retries,
+                err.retryable,
+                err.status_code,
+                false,
+            );
+            match decision {
+                RetryDecision::Retry(delay) => {
+                    log::warn!(
+                        target: "livekit.agents",
+                        stt = "livekit.agents.inference.stt.STT", attempt = retries;
+                        "failed to recognize speech: {err}, retrying in {delay}s"
+                    );
+                    let at = self.clock.now().saturating_add(Duration::from_secs_f64(delay.max(0.0)));
+                    self.clock.wait_until(at).await;
+                    retries += 1;
+                }
+                RetryDecision::Exhausted(message) => {
+                    let _ = self.event_tx.send(Err(ApiError::connection(Some(message))));
+                    return;
+                }
+                RetryDecision::Stop | RetryDecision::Raise => {
+                    let _ = self.event_tx.send(Err(err));
+                    return;
+                }
+            }
+        }
+    }
+
+    /// One connection. `Ok` when the stream ended, the caller gone or the input finished.
+    async fn attempt(&mut self, timeout: Duration) -> Result<(), ApiError> {
+        let headers = gateway_headers(
+            self.identification.as_ref().map(|h| {
+                let mut h = h.clone();
+                h.set(HEADER_SESSION_ID, crate::ids::shortuuid("inference_"));
+                h
+            }).as_ref(),
+            None,
+            None,
+            &self.opts.api_key,
+            &self.opts.api_secret,
+        )?;
+        // The reference reads the session id back out of the header map (a job's
+        // `inference_headers` cannot override it) and uses it as the request id.
+        let request_id = headers
+            .get(HEADER_SESSION_ID)
+            .map(str::to_owned)
+            .unwrap_or_else(|| crate::ids::shortuuid("stt_request_"));
+        let url = format!(
+            "{}/stt?model={}",
+            to_ws_url(&self.opts.base_url),
+            self.opts.model.as_deref().unwrap_or("")
+        );
+        let (sender, mut receiver) = open_ws(
             self.ws.as_ref(),
-            &self.url,
-            self.headers.clone(),
+            &url,
+            headers.into_vec(),
             &*self.clock,
-            self.timeout,
+            timeout,
             WHAT,
             &self.create_frame,
-        );
-        let (sender, mut receiver) = match opened.await {
-            Ok(pair) => pair,
-            Err(err) => {
-                let _ = self.event_tx.send(Err(err));
-                return;
-            }
-        };
+        )
+        .await?;
 
         // Built before the loops so the send half can push into it while the finalize half drains it.
         let vad_stream = match self.vad.as_ref() {
@@ -446,28 +607,33 @@ impl Pump {
         };
 
         // `_speech_duration`: written by send, read by recv.
-        let machine = Arc::new(Mutex::new(self.machine));
-
+        let machine = Arc::new(Mutex::new(TranscriptMachine::new(
+            request_id,
+            self.opts.language.as_deref(),
+        )));
         let closing = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let send = Self::send_loop(
             sender.clone(),
-            self.audio_rx,
-            self.update_rx,
+            &mut self.audio_rx,
+            &mut self.update_rx,
             vad_sink,
-            self.sample_rate,
+            self.opts.sample_rate,
             machine.clone(),
             closing.clone(),
         );
         let recv = Self::recv_loop(
             receiver.as_mut(),
             machine,
-            self.event_tx.clone(),
-            closing.clone(),
-            self.deferred.clone(),
-            self.update_tx.clone(),
-            self.clock.clone(),
-            self.timeout,
+            RecvCtx {
+                event_tx: self.event_tx.clone(),
+                closing: closing.clone(),
+                deferred: self.deferred.clone(),
+                update_tx: self.update_tx.clone(),
+                clock: self.clock.clone(),
+                first_message_timeout: timeout,
+                offset: self.offset,
+            },
         );
         let finalize = Self::vad_finalize_loop(sender.clone(), vad_source);
 
@@ -477,16 +643,14 @@ impl Pump {
             r = recv => r,
             r = finalize => r,
         };
-        if let Err(err) = outcome {
-            let _ = self.event_tx.send(Err(err));
-        }
         sender.close().await;
+        outcome
     }
 
     async fn send_loop(
         sender: Arc<dyn WsSender>,
-        mut audio_rx: mpsc::UnboundedReceiver<SinkCmd>,
-        mut update_rx: mpsc::UnboundedReceiver<serde_json::Value>,
+        audio_rx: &mut mpsc::UnboundedReceiver<SinkCmd>,
+        update_rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
         mut vad_sink: Option<crate::abi::VadSink>,
         sample_rate: u32,
         machine: Arc<Mutex<TranscriptMachine>>,
@@ -494,6 +658,8 @@ impl Pump {
     ) -> Result<(), ApiError> {
         // 50 ms frames: `samples_per_channel=self._opts.sample_rate // 20`.
         let mut bstream = AudioByteStream::new(sample_rate, 1, Some(sample_rate / 20), false);
+        // `RecognizeStream.push_frame` resamples to the rate the gateway was told.
+        let mut resampler = FrameResampler::new(sample_rate, Quality::High, OnChange::Drain);
 
         loop {
             let item = tokio::select! {
@@ -515,9 +681,17 @@ impl Pump {
                     if let Some(sink) = vad_sink.as_mut() {
                         let _ = sink.push(frame.clone());
                     }
-                    bstream.push(&frame.data)
+                    let resampled = resampler
+                        .push(&frame)
+                        .map_err(|e| ApiError::new(format!("{WHAT}: {e}")).with_retryable(false))?;
+                    resampled.iter().flat_map(|f| bstream.push(&f.data)).collect()
                 }
-                Some(SinkCmd::Flush) => bstream.flush(),
+                Some(SinkCmd::Flush) => {
+                    let tail = resampler.flush().ok().flatten();
+                    let mut frames: Vec<_> = tail.iter().flat_map(|f| bstream.push(&f.data)).collect();
+                    frames.extend(bstream.flush());
+                    frames
+                }
                 // `end_input()` or a dropped sink: both end the send half.
                 Some(SinkCmd::End) | None => break,
             };
@@ -557,13 +731,10 @@ impl Pump {
     async fn recv_loop(
         receiver: &mut dyn crate::transport::WsReceiver,
         machine: Arc<Mutex<TranscriptMachine>>,
-        event_tx: mpsc::UnboundedSender<Result<SpeechEvent, ApiError>>,
-        closing: Arc<std::sync::atomic::AtomicBool>,
-        deferred: Arc<DeferredExtra>,
-        update_tx: mpsc::UnboundedSender<serde_json::Value>,
-        clock: Arc<dyn Clock>,
-        first_message_timeout: Duration,
+        ctx: RecvCtx,
     ) -> Result<(), ApiError> {
+        let RecvCtx { event_tx, closing, deferred, update_tx, clock, first_message_timeout, offset } =
+            ctx;
         // Only the first read (the `session.create` ack) is bounded; later silence is the user's.
         let mut awaiting_first = true;
         loop {
@@ -611,7 +782,7 @@ impl Pump {
                         let _ = update_tx.send(frame);
                     }
                     for event in processed.events {
-                        if event_tx.send(Ok(event)).is_err() {
+                        if event_tx.send(Ok(shifted(event, offset))).is_err() {
                             return Ok(());
                         }
                     }
@@ -649,6 +820,30 @@ impl Pump {
     }
 }
 
+struct RecvCtx {
+    event_tx: mpsc::UnboundedSender<Result<SpeechEvent, ApiError>>,
+    closing: Arc<std::sync::atomic::AtomicBool>,
+    deferred: Arc<DeferredExtra>,
+    update_tx: mpsc::UnboundedSender<serde_json::Value>,
+    clock: Arc<dyn Clock>,
+    first_message_timeout: Duration,
+    offset: f64,
+}
+
+/// The event on the caller's timeline: every alternative's and word's times moved by `offset`.
+fn shifted(mut event: SpeechEvent, offset: f64) -> SpeechEvent {
+    for alt in &mut event.alternatives {
+        alt.start_time += offset;
+        alt.end_time += offset;
+        for word in alt.words.iter_mut().flatten() {
+            word.start_time = Some(word.start_time.unwrap_or(0.0) + offset);
+            word.end_time = Some(word.end_time.unwrap_or(0.0) + offset);
+            word.start_time_offset = Some(offset);
+        }
+    }
+    event
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,12 +872,82 @@ mod tests {
         NativeStt::new(opts(), ws, spawner)
     }
 
+    /// A client whose streams do not retry, for tests about one connection's failure.
+    fn stt_once(ws: Arc<FakeWs>) -> NativeStt {
+        let mut opts = opts();
+        opts.conn_options.max_retry = 0;
+        let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
+        NativeStt::new(opts, ws, spawner)
+    }
+
+    // Catches: a failed connection ending the stream instead of reconnecting under
+    // `conn_options`, or the exhausted error not naming the attempts.
+    #[tokio::test]
+    async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
+        let ws = Arc::new(FakeWs::failing(TransportError::Connect("refused".into())));
+        let mut opts = opts();
+        opts.conn_options = ApiConnectOptions { max_retry: 2, retry_interval: 0.0, timeout: 10.0 };
+        let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
+        let stt = NativeStt::new(opts, ws.clone(), spawner);
+        let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
+        let err = tokio::time::timeout(Duration::from_secs(5), source.next())
+            .await
+            .expect("the retries settle")
+            .expect_err("every attempt failed");
+        assert_eq!(ws.connect_count(), 3, "the first attempt and two retries");
+        assert!(err.message().contains("after 2 attempts"), "{}", err.message());
+    }
+
+    // Catches: an option change or a keyterm change reaching only streams opened after it.
+    #[tokio::test]
+    async fn option_and_keyterm_changes_reach_an_open_stream() {
+        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+        let stt = stt(ws.clone());
+        let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+        let mut extra = serde_json::Map::new();
+        extra.insert("endpointing".into(), json!(300));
+        stt.update_options(None, Some("fr"), Some(&crate::extra::ExtraKwargs(extra)));
+        stt.update_keyterms(&["LiveKit".into()]);
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+        let updates: Vec<_> =
+            ws.sent_json().into_iter().filter(|f| f["type"] == json!("session.update")).collect();
+        assert_eq!(updates.len(), 2, "{updates:?}");
+        assert_eq!(updates[0]["settings"]["extra"]["endpointing"], json!(300), "{updates:?}");
+        assert_eq!(updates[1]["settings"]["extra"]["keyterm"], json!(["LiveKit"]), "{updates:?}");
+    }
+
+    // Catches: transcripts of a stream opened mid-input left at zero on the caller's timeline.
+    #[test]
+    fn the_start_time_offset_moves_every_timestamp() {
+        let mut event = SpeechEvent::new(SpeechEventType::FinalTranscript);
+        event.alternatives.push(lk_agents_abi::SpeechData {
+            start_time: 1.0,
+            end_time: 2.0,
+            words: Some(vec![lk_agents_abi::TimedString {
+                start_time: Some(1.0),
+                end_time: Some(1.5),
+                ..lk_agents_abi::TimedString::new("hi")
+            }]),
+            ..lk_agents_abi::SpeechData::new("en", "hi")
+        });
+        let event = shifted(event, 10.0);
+        let alt = &event.alternatives[0];
+        assert_eq!((alt.start_time, alt.end_time), (11.0, 12.0));
+        let word = &alt.words.as_ref().unwrap()[0];
+        assert_eq!((word.start_time, word.end_time, word.start_time_offset), (Some(11.0), Some(11.5), Some(10.0)));
+    }
+
     // Catches: an unbounded handshake, or one bounded on tokio's clock rather than the session's.
     #[tokio::test]
     async fn a_handshake_that_never_completes_is_a_retryable_timeout_on_the_session_clock() {
         let clock = Arc::new(lk_agents_abi::VirtualClock::new());
         let ws = Arc::new(FakeWs::hanging());
-        let stt = stt(ws.clone()).with_clock(clock.clone());
+        let stt = stt_once(ws.clone()).with_clock(clock.clone());
         let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
 
         crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
@@ -698,7 +963,7 @@ mod tests {
     async fn a_gateway_that_connects_but_never_acknowledges_the_session_is_a_retryable_timeout() {
         let clock = Arc::new(lk_agents_abi::VirtualClock::new());
         let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let stt = stt(ws.clone()).with_clock(clock.clone());
+        let stt = stt_once(ws.clone()).with_clock(clock.clone());
         let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
 
         crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
@@ -790,7 +1055,9 @@ mod tests {
         let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
         assert_eq!(get("X-LiveKit-Room-ID"), Some("RM_1"));
         assert_eq!(get("X-LiveKit-Job-ID"), Some("AJ_1"));
-        assert_eq!(get("X-LiveKit-Session-ID"), Some("inference_abc"));
+        // A fresh session id per connection, as the reference mints one per call.
+        let session = get("X-LiveKit-Session-ID").expect("a session id");
+        assert!(session.starts_with("inference_") && session != "inference_abc", "{session}");
         assert!(get("Authorization").is_some());
 
         // No job: no `X-LiveKit-*` header.
@@ -960,7 +1227,8 @@ mod tests {
         let _guard = rt.enter();
         let stt = stt(Arc::new(FakeWs::new(vec![])));
         assert_eq!(stt.model(), "deepgram/nova-3");
-        assert_eq!(stt.label(), "livekit.deepgram/nova-3");
+        assert_eq!(stt.label(), "livekit.agents.inference.stt.STT");
+        assert_eq!((stt.id().model.as_str(), stt.id().provider.as_str()), ("deepgram/nova-3", "livekit"));
         let caps = Stt::capabilities(&stt);
         assert!(caps.streaming && caps.interim_results && caps.keyterms);
         assert!(!caps.offline_recognize, "the default is true; this provider has no batch path");
@@ -989,7 +1257,7 @@ mod tests {
     async fn a_session_update_is_not_starved_by_the_audio_stream() {
         let ws = Arc::new(FakeWs::new(vec![]).keep_open());
         let stt = stt(ws.clone());
-        let (sink, _source) = stt.stream_native(None).unwrap();
+        let (sink, _source) = stt.stream_native(None, 0.0).unwrap();
         for _ in 0..50 {
             sink.push(frame(800)).unwrap();
         }
@@ -1010,7 +1278,7 @@ mod tests {
     async fn a_keyterm_change_mid_utterance_waits_for_the_end_of_speech() {
         let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "start_of_speech"}))]).keep_open());
         let stt = stt(ws.clone());
-        let (sink, mut source) = stt.stream_native(None).unwrap();
+        let (sink, mut source) = stt.stream_native(None, 0.0).unwrap();
 
         // Let the start_of_speech land, then change the keyterms.
         assert_eq!(source.next().await.unwrap().unwrap().kind, SpeechEventType::StartOfSpeech);

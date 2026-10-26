@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import weakref
+import functools
 from typing import Any
 
 from .. import _core, tts
@@ -24,7 +24,6 @@ from .._generated.inference_tts import (
     XaiOptions,
 )
 from ..language import LanguageCode
-from ..tts._provider_format import drop_bracket_cues, sentence_tokenizer
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio, is_given, shortuuid
 from ._utils import Credentials, get_inference_headers
@@ -111,7 +110,6 @@ class TTS(tts.TTS):
             sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
             num_channels=1,
         )
-        self._streams = weakref.WeakSet[SynthesizeStream]()
 
     class Markup(tts.TTS.Markup):
         def _provider_key(self) -> str:
@@ -131,7 +129,9 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "livekit"
 
+    @functools.cached_property
     def _native(self) -> _core.InferenceTts:
+        # built on first use, after a fork; the client splits, converts and aligns each synthesis
         return _core.InferenceTts(
             self._model,
             voice=self._voice,
@@ -146,6 +146,15 @@ class TTS(tts.TTS):
             timeout=self._conn.timeout,
             max_retry=self._conn.max_retry,
         )
+
+    def _core_native(self) -> _core.InferenceTts:
+        """The client, identified as the current job's, as a session holds it."""
+        self._native.bind_identification(list(get_inference_headers().items()))
+        return self._native
+
+    def _set_expressive(self, enabled: bool) -> None:
+        super()._set_expressive(enabled)
+        self._native.set_expressive(enabled)
 
     def update_options(
         self,
@@ -167,6 +176,12 @@ class TTS(tts.TTS):
         self._capabilities.aligned_transcript = _core.tts_has_aligned_transcript(
             self._model, self._extra
         )
+        self._native.update_options(
+            model=model if is_given(model) else None,
+            voice=voice if is_given(voice) else None,
+            language=str(self._language) if is_given(language) else None,
+            extra=extra_kwargs if is_given(extra_kwargs) else None,
+        )
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -176,29 +191,19 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
-        self._streams.add(stream)
-        return stream
-
-    async def aclose(self) -> None:
-        await asyncio.gather(*(s.aclose() for s in list(self._streams)))
+        return SynthesizeStream(tts=self, conn_options=conn_options)
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    """One gateway synthesis: sentences (markup converted) in, audio and alignment out."""
+    """One gateway synthesis: text in, audio and alignment out; the client splits the sentences
+    and converts the markup."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        # fixed for this synthesis: the framework sets it before stream()
-        self._expressive = tts._expressive
-        self._held: list[Any] = []
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        markup = self._tts.markup
-        provider = self._tts._model.split("/")[0]
-        sentences = sentence_tokenizer(provider, expressive=self._expressive).stream()
-        native = await self._tts._native().stream(headers=list(get_inference_headers().items()))
+        native = await self._tts._core_native().stream()
         output_emitter.initialize(
             request_id=shortuuid("tts_"),
             sample_rate=self._tts.sample_rate,
@@ -207,18 +212,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        async def _input() -> None:
+        async def _send() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    sentences.flush()
+                    native.flush()
                 else:
-                    sentences.push_text(markup.normalize(data))
-            sentences.end_input()
-
-        async def _send() -> None:
-            async for ev in sentences:
-                self._mark_started()
-                native.push(markup.convert(markup.normalize(ev.token)) + " ")
+                    self._mark_started()
+                    native.push(data)
             native.end_input()
 
         async def _recv() -> None:
@@ -228,18 +228,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                     started = True
                     output_emitter.start_segment(segment_id=audio["segment_id"] or shortuuid())
                 if words := audio["timed_transcript"]:
-                    output_emitter.push_timed_transcript(
-                        drop_bracket_cues(words, self._held) if self._expressive else words
-                    )
+                    output_emitter.push_timed_transcript(words)
                 output_emitter.push_frame(audio["frame"])
-            if self._held:
-                output_emitter.push_timed_transcript(drop_bracket_cues([], self._held, final=True))
             output_emitter.end_input()
 
-        tasks = [asyncio.create_task(t()) for t in (_input, _send, _recv)]
+        tasks = [asyncio.create_task(t()) for t in (_send, _recv)]
         try:
             await asyncio.gather(*tasks)
         finally:
             await aio.gracefully_cancel(*tasks)
-            await sentences.aclose()
             await native.aclose()
