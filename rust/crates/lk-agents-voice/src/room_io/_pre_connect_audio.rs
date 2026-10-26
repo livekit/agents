@@ -1,4 +1,4 @@
-use crate::room_io::types::{PRE_CONNECT_AUDIO_BUFFER_STREAM, PRE_CONNECT_MAX_DELTA};
+use crate::room_io::{PRE_CONNECT_AUDIO_BUFFER_STREAM, PRE_CONNECT_MAX_DELTA};
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::voice::io::IoError;
 use lk_agents_abi::voice::io::Result;

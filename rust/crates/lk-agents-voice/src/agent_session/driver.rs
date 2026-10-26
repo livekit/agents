@@ -698,7 +698,7 @@ pub enum DriverError {
 
 /// The IVR navigator, when the session detects IVRs; the AMD is the host's to start.
 pub fn start_ivr(peer: &PeerHandle, ivr_detection: bool) {
-    crate::ivr::ivr_activity::IvrSystem::spawn(peer.clone(), ivr_detection);
+    crate::ivr::IvrSystem::spawn(peer.clone(), ivr_detection);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

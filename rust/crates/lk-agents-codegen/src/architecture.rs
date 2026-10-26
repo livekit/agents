@@ -10,7 +10,6 @@ const SYSTEM_INTERNALS: &[&str] = &[
     "agent_activity",
     "generation",
     "turn",
-    "agent_session::cycle::Cycle",
     "agent_session::driver::Driver",
     "agent_session::driver::DriverBuilder",
     "agent_session::driver::Input",
@@ -19,12 +18,11 @@ const SYSTEM_INTERNALS: &[&str] = &[
     "agent_session::DriverBuilder",
     "agent_session::Input",
 ];
-const SYSTEMS: &[&str] = &["amd::detector", "ivr::ivr_activity"];
+const SYSTEMS: &[&str] = &["amd::detector", "ivr"];
 /// The core: it must not depend on host systems. A module, or `module::Type` for one type's
 /// definition and its impls there: the core types that live beside host-facing code.
 const CORE: &[&str] = &[
     "agent_activity",
-    "agent_session::cycle",
     "generation",
     "turn",
     "agent_session::SessionShared",
@@ -35,7 +33,7 @@ const CORE: &[&str] = &[
     "tool_executor::ToolRunner",
 ];
 const SESSION_EXECUTION: &[&str] = &[
-    // With its api, commands, cycle, driver, host_events and time.
+    // With its api, commands, driver, host_events and time.
     "agent_session",
     "agent_activity",
     "generation",
@@ -483,7 +481,7 @@ mod tests {
         let text = r#"
             use crate::amd::detector::AmdSetup;
             pub struct SessionShared { pub amd: Option<AmdSetup> }
-            impl SessionShared { fn f() { crate::ivr::ivr_activity::IvrSystem::spawn(); } }
+            impl SessionShared { fn f() { crate::ivr::IvrSystem::spawn(); } }
             fn attach(setup: AmdSetup) {}
         "#;
         let errors = source("agent_session/mod.rs", text).unwrap();

@@ -1,7 +1,7 @@
 //! `voice/room_io/_output.py`: `_ParticipantAudioOutput`, the agent's audio on its published track,
 //! and its host object; the transcription output is [`transcription`].
 
-use crate::room_io::types::AudioOutputConfig;
+use crate::room_io::AudioOutputConfig;
 use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::voice::io::Result;

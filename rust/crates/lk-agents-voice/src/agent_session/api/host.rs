@@ -88,7 +88,7 @@ impl SessionApi {
         >,
         text_output: bool,
         // `RoomOptions._to_rust_config()`, resolved per leg; without it the scalars above.
-        room_io_config: Option<crate::room_io::types::RoomIoConfig>,
+        room_io_config: Option<crate::room_io::RoomIoConfig>,
         tools: Option<Vec<lk_agents_abi::ToolSpec>>,
         tools_host: Option<lk_agents_abi::HostRef>,
         tool_runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
@@ -119,7 +119,7 @@ impl SessionApi {
         session_id: Option<String>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
     ) -> Result<Self, SessionBuildError> {
-        use crate::room_io::types::{
+        use crate::room_io::{
             AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig,
         };
         let agents = super::HostAgents::default();

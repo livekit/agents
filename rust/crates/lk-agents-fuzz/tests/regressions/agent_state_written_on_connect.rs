@@ -6,7 +6,7 @@ use lk_agents_abi::{ATTRIBUTE_AGENT_STATE, TokioSpawner};
 use lk_agents_rtc::{ConnectionState, FakeRtc, RtcRoom};
 use lk_agents_voice::room_io::_output::transcription::CountingSegmentIds;
 use lk_agents_voice::room_io::RoomIo;
-use lk_agents_voice::room_io::types::RoomIoConfig;
+use lk_agents_voice::room_io::RoomIoConfig;
 
 // Catches: `lk.agent.state` written only while the room is connected, and the session started
 // alongside the job's `connect()`: the `listening` it takes at start was dropped, so until the

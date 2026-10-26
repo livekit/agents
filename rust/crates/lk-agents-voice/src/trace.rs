@@ -583,7 +583,7 @@ pub enum CloseStep {
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum DetectorStep {
     AmdRefused(crate::amd::classifier::Refusal),
-    IvrTriggered { origin: crate::ivr::ivr_activity::IvrReplyOrigin },
+    IvrTriggered { origin: crate::ivr::IvrReplyOrigin },
     IvrLifecycle(IvrLifecycle),
     KeytermsPushed { terms: Vec<String> },
     KeytermsRebound { same_stt: bool },

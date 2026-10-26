@@ -50,7 +50,7 @@ use lk_agents_voice::remote_session::{
     proto,
     proto::agent_session_message::{Message, console_io},
 };
-use lk_agents_voice::room_io::types::PRE_CONNECT_AUDIO_BUFFER_STREAM;
+use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::{
     agent_activity::options::{
         Deployment, HostOptions, InterruptionGate, InterruptionGateInputs, RealtimeGate,
