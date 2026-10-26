@@ -18,7 +18,7 @@ from typing_extensions import TypeVar
 from .._core import Boundary
 from .._generated.storage_run import RunUsage, TaskRecord
 from .._generated.storage_turn import HandlerOutput, HostEvent, Message, PendingCall, TurnContext
-from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput
+from ..llm import ChatContext, ChatItem, ChatMessage, FunctionCall, FunctionCallOutput
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunResult
@@ -157,9 +157,11 @@ class TurnHost(Generic[S]):
             on_token=self._on_token,
         )
         results: list[RunResult[object]] = []
+        added: list[ChatItem] = []
         hooks = RunHooks(
             boundary=boundary.check,
             on_result=results.append,
+            on_item=added.append,
             on_update=context.update,
             on_say=context.say,
             on_token=context.token,
@@ -191,7 +193,11 @@ class TurnHost(Generic[S]):
                 "the a2a_session handler raised; the task fails",
                 extra={"lane": ctx.lane, "taskId": ctx.task_id},
             )
-            return HandlerOutput(error=f"{type(e).__name__}: {e}")
+            # the tool calls that ran are kept, so the next turn does not run them again
+            return HandlerOutput(
+                error=f"{type(e).__name__}: {e}",
+                new_items=[item_to_payload(item) for item in added],
+            )
         finally:
             reset_run_hooks(token)
 

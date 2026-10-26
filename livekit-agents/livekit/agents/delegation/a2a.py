@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from a2a.client.errors import A2AClientError
+from a2a.utils.errors import A2AError
 from pydantic import JsonValue
 
 from ..llm.chat_context import ChatContext, ChatItem, FunctionCall
@@ -203,12 +204,17 @@ class A2ADelegate(Delegate, Toolset):
     ) -> DelegationResult:
         """One request; ``caller_lane`` is the caller's lane of ``context_id``, which an expert
         of this project may read. Inside a turn both default to the turn's. ``say`` takes the
-        expert's exact text, ``progress`` when it is not given."""
-        client = await self._connect()
-        offers = client.offers_extension
+        expert's exact text, ``progress`` when it is not given; ``DelegationFailed`` when the
+        expert failed the task or never took it."""
         if context_id is None and (hooks := current_run_hooks()) is not None:
             context_id, caller_lane = hooks.thread_id, hooks.lane
-        reply = await self._send(client, prompt, context_id, message_history, caller_lane)
+        try:
+            client = await self._connect()
+            reply = await self._send(client, prompt, context_id, message_history, caller_lane)
+        except A2AError as e:
+            # unreachable, or refused: the caller's model hears why
+            raise DelegationFailed(f"the expert did not take the request: {e}") from e
+        offers = client.offers_extension
 
         try:
             update, text = await _answer(

@@ -71,7 +71,6 @@ async def unsaved(ctx: A2ASessionContext[Any]) -> str:
 
 
 @pytest.mark.rule("R15", "B1")
-@pytest.mark.xfail(strict=True, reason="B1: the failure names a new AST_ id, not the acked one")
 async def test_a_failed_save_is_reported_under_the_acked_task_id(
     door: Callable[..., Door],
 ) -> None:
@@ -112,7 +111,6 @@ class ModelDownOnce(ScriptedLLM):
 
 
 @pytest.mark.rule("B3")
-@pytest.mark.xfail(strict=True, reason="B3: a failed run commits none of its tool calls")
 async def test_a_failed_run_keeps_the_tool_calls_that_ran(door: Callable[..., Door]) -> None:
     booked: list[str] = []
     model = ModelDownOnce(
@@ -241,7 +239,6 @@ def asks_once() -> ScriptedLLM:
 
 
 @pytest.mark.rule("R19")
-@pytest.mark.xfail(strict=True, reason="R19: the delegation waits for the lane its caller holds")
 async def test_a_delegation_to_the_callers_own_lane_is_refused_at_once(
     door: Callable[..., Door],
 ) -> None:
@@ -300,7 +297,6 @@ class GoesDown(httpx.AsyncBaseTransport):
 
 
 @pytest.mark.rule("R26")
-@pytest.mark.xfail(strict=True, reason="R26: an unreachable expert is a bare internal error")
 async def test_an_unreachable_expert_is_a_tool_error_the_front_desk_tells(
     door: Callable[..., Door], agentdb_storage: AgentDBStorage
 ) -> None:
