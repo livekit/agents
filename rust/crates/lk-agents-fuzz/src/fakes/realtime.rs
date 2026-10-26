@@ -17,11 +17,11 @@ use std::{
 };
 
 use lk_agents_abi::{
-    ChatContext, Realtime, RealtimeCommand, RealtimeSession,
+    ChatContext, ChatItem, ChatMessage, Realtime, RealtimeCommand, RealtimeSession, Role,
     errors::ProviderError,
     llm::realtime::{
         Event, GenerationCreated, GenerationDone, InputTranscription, MessageDone, MessageStarted,
-        RealtimeCapabilities, TextDelta,
+        RealtimeCapabilities, RemoteItemAdded, TextDelta,
     },
 };
 use tokio::sync::mpsc;
@@ -180,6 +180,7 @@ impl Session {
                 response_id: response_id.clone(),
                 req_id,
             }),
+            mirrored(&message_id, Role::Assistant),
             Event::MessageStarted(MessageStarted {
                 message_id: message_id.clone(),
                 response_id: of(&response_id),
@@ -213,8 +214,10 @@ impl Session {
     fn transcribe(&self) {
         let Some(sender) = self.sender.lock().unwrap().clone() else { return };
         let nth = self.next.fetch_add(1, Ordering::Relaxed);
+        let item_id = format!("rt-user-{nth}");
+        let _ = sender.send(mirrored(&item_id, Role::User));
         let _ = sender.send(Event::InputTranscription(InputTranscription {
-            item_id: format!("rt-user-{nth}"),
+            item_id,
             transcript: "yeah hi um I'm calling about my order".into(),
             is_final: true,
             confidence: None,
@@ -271,4 +274,14 @@ impl RealtimeSession for Session {
             self.registry.mark_closed(*slot);
         }
     }
+}
+
+/// The server's own record of an item it creates, empty until filled: what a real server
+/// announces before the item's words.
+fn mirrored(id: &str, role: Role) -> Event {
+    let item = ChatMessage::new(id, role, Vec::new(), std::time::SystemTime::UNIX_EPOCH);
+    Event::RemoteItemAdded(RemoteItemAdded {
+        previous_item_id: None,
+        item: Box::new(ChatItem::Message(item)),
+    })
 }

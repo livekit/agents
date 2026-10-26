@@ -115,6 +115,7 @@ impl Visibility {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum CommitOutcome {
+    /// New to the record, or a frame-only item (a realtime server's placeholder) now in history.
     Added,
     /// Replaced in place (a realtime server re-finalising one `item_id`); no second `ItemAdded`.
     Replaced,
@@ -229,9 +230,14 @@ impl SessionChatCtx {
                 .iter()
                 .position(|c| c.item.id() == id)
                 .expect("an id in the set is on the record");
-            let visibility = self.items[idx].visibility.union(visibility);
+            let was = self.items[idx].visibility;
+            let visibility = was.union(visibility);
             self.items[idx] = Committed { visibility, ..entry.clone() };
-            CommitOutcome::Replaced
+            if !was.history() && visibility.history() {
+                CommitOutcome::Added
+            } else {
+                CommitOutcome::Replaced
+            }
         };
         (entry, outcome)
     }

@@ -1072,7 +1072,9 @@ impl Driver {
             let message = "realtime server anchored an item to one this session does not hold; placed by its stamp";
             diagnose(out, DiagnosticEvent::warning(message).with("item_id", id.clone()));
         }
-        self.commit_item(item, Source::Remote { item_id: id }, Visibility::Both, out);
+        // A placeholder in the model's context (`_on_remote_item_added`): the message or the
+        // transcript that fills it is what reaches history.
+        self.commit_item(item, Source::Remote { item_id: id }, Visibility::Model, out);
     }
 
     /// The open generation cancelled and truncated to what was heard. The interruption decision is

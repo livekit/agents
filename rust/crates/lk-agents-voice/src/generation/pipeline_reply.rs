@@ -154,7 +154,7 @@ fn finish_step(
     finish_step_with(
         shared,
         handle,
-        ctx,
+        ctx.message_id.clone(),
         acc,
         interrupted,
         stats,
@@ -169,7 +169,7 @@ fn finish_step(
 pub(crate) fn finish_step_with(
     shared: &SessionShared,
     handle: &SpeechHandle,
-    ctx: &ReplyContext,
+    message_id: String,
     acc: TurnAccumulator,
     interrupted: bool,
     stats: TurnStats,
@@ -181,7 +181,7 @@ pub(crate) fn finish_step_with(
         stopped_speaking_at: shared.time.wall_secs(),
         interrupted,
         stats,
-        message_id: ctx.message_id.clone(),
+        message_id,
     });
     if let Some(msg) = outcome.assistant_message.as_mut() {
         msg.metrics.provider_request_ids = provider_request_ids;

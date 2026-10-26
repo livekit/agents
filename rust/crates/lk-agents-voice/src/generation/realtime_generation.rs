@@ -75,6 +75,7 @@ pub(crate) async fn realtime_generation_task(
         segments: Vec::new(),
         tools: &mut tools,
         response_id: None,
+        message_id: None,
         received: false,
         text_out: text_out.as_deref(),
         speaks_text: out.is_none(),
@@ -86,7 +87,7 @@ pub(crate) async fn realtime_generation_task(
     if let Some(node) = &node {
         node.end();
     }
-    let Generation { segments, received, first_token_at, response_id, .. } = generation;
+    let Generation { segments, received, first_token_at, response_id, message_id, .. } = generation;
     let interrupted = played.is_ok_and(|heard| !heard.complete) || handle.interrupted();
     // The metrics' `llm_started_at` anchor, on the driver's clock. `None` when nothing arrived.
     let ttft = first_token_at.map(|at| (at - started_at).max(0.0));
@@ -105,10 +106,12 @@ pub(crate) async fn realtime_generation_task(
     let tools_running = has_calls && !interrupted;
     // `assistant_metrics["provider_request_ids"] = [generation_ev.response_id]` (`:4168-4169`).
     let request_ids = response_id.map(|id| vec![id]);
+    // The server's id, as `_realtime_generation_task` commits it: it fills the placeholder.
+    let message_id = message_id.unwrap_or_else(|| ctx.message_id.clone());
     let finished = finish_step_with(
         shared,
         handle,
-        ctx,
+        message_id,
         acc,
         interrupted,
         stats,
@@ -166,6 +169,8 @@ struct Generation<'a> {
     tools: &'a mut ToolStep,
     /// The generation's `response_id`, from its first event that names one.
     response_id: Option<String>,
+    /// The server's id of the generation's first message.
+    message_id: Option<String>,
     /// An empty round means released or interrupted.
     received: bool,
     /// The transcription output, and whether the words are what starts the agent speaking (no
@@ -208,7 +213,8 @@ impl Segment for Generation<'_> {
                 self.first_token_at = Some(self.shared.time.wall_secs());
             }
             match ev {
-                Event::MessageStarted(_) => {
+                Event::MessageStarted(m) => {
+                    self.message_id.get_or_insert(m.message_id);
                     self.end_message();
                     self.current = Some(self.segments.len());
                     self.segments.push(String::new());

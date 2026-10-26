@@ -614,7 +614,8 @@ impl Driver {
             h.item_added(&entry.item);
         }
         match outcome {
-            CommitOutcome::Added => {
+            // A frame-only item is the model's alone: the host's history never sees it.
+            CommitOutcome::Added if entry.visibility.history() => {
                 let run = self.run_of_item(&entry.source);
                 out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
                     item: Box::new(entry.item),
@@ -624,7 +625,7 @@ impl Driver {
                     run,
                 });
             }
-            CommitOutcome::Replaced | CommitOutcome::Filtered => {}
+            CommitOutcome::Added | CommitOutcome::Replaced | CommitOutcome::Filtered => {}
         }
         self.publish_activity();
     }
