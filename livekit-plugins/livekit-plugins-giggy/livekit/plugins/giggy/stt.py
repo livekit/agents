@@ -144,6 +144,7 @@ class STT(stt.STT):
         return "giggyspeech-stt"
 
     def _resolve_language(self, language: str | None) -> str | None:
+        """Return the supported language name, or None for automatic detection."""
         if language is None:
             return None
         name = LANGUAGES.get(LanguageCode(language).language)
@@ -152,6 +153,7 @@ class STT(stt.STT):
         return name
 
     def _ensure_session(self) -> aiohttp.ClientSession:
+        """Return a credential-free borrowed or context-managed HTTP session."""
         session = (
             self._http_session
             if self._http_session is not None
@@ -215,6 +217,7 @@ class STT(stt.STT):
             await asyncio.gather(*requests, return_exceptions=True)
 
     async def _read_json(self, response: aiohttp.ClientResponse, *, status: int) -> dict:
+        """Validate the expected HTTP status and read a bounded JSON object."""
         if response.status != status:
             raise APIStatusError(
                 "Giggy STT HTTP request failed.",
@@ -243,6 +246,7 @@ class STT(stt.STT):
     async def _sse_events(
         self, response: aiohttp.ClientResponse
     ) -> AsyncIterator[tuple[str, dict]]:
+        """Yield complete SSE event names and JSON objects within the size limit."""
         pending = b""
         event = ""
         data: list[str] = []
@@ -278,6 +282,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
+        """Validate and stage a recording, then return its verified final transcript event."""
         selected_language = (
             self._resolve_language(language) if is_given(language) else self._language
         )
@@ -543,6 +548,7 @@ class SpeechStream(stt.RecognizeStream):
         language: str | None,
         conn_options: APIConnectOptions,
     ) -> None:
+        """Initialize bounded live capture, endpoint detection and ordered turn delivery."""
         self._owner, self._detector, self._language = owner, detector, language
         self._turns: set[asyncio.Task[None]] = set()
         self._failure: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -555,6 +561,7 @@ class SpeechStream(stt.RecognizeStream):
         self._input_ch = utils.aio.Chan(maxsize=256)
 
     async def _run(self) -> None:
+        """Drain live input and pending turns, cancelling tasks on failure or closure."""
         producer = asyncio.create_task(self._feed_input())
         try:
             done, _ = await asyncio.wait(
@@ -575,6 +582,7 @@ class SpeechStream(stt.RecognizeStream):
             self._failure.cancel()
 
     async def _feed_input(self) -> None:
+        """Feed bounded real PCM frames into VAD and flush the detector at input boundaries."""
         detector = self._detector.stream()
         consumer = asyncio.create_task(self._consume_vad(detector))
         consumer.add_done_callback(self._turn_done)
@@ -605,6 +613,7 @@ class SpeechStream(stt.RecognizeStream):
             await detector.aclose()
 
     async def _consume_vad(self, detector: lk_vad.VADStream) -> None:
+        """Build utterances from ordered VAD events while preserving every captured PCM sample."""
         async for event in detector:
             if event.type == lk_vad.VADEventType.INFERENCE_DONE:
                 # Silero publishes START after INFERENCE_DONE for the same
@@ -661,6 +670,7 @@ class SpeechStream(stt.RecognizeStream):
         self._unprocessed.clear()
 
     def _begin_turn(self) -> None:
+        """Start a bounded transcription turn with pre-roll and ordered publication state."""
         if len(self._turns) >= 8:
             raise ValueError("Giggy live STT has too many pending turns.")
         turn: dict[str, Any] = {
@@ -689,6 +699,7 @@ class SpeechStream(stt.RecognizeStream):
         task.add_done_callback(self._turn_done)
 
     def _queue_audio(self, turn: dict[str, Any], pcm: bytes, quiet: bool) -> None:
+        """Queue real PCM and track tentative silence boundaries within the capture limits."""
         if not pcm:
             return
         turn["samples"] += len(pcm) // 2
@@ -703,6 +714,7 @@ class SpeechStream(stt.RecognizeStream):
             turn["queue"].put_nowait((pcm[start : start + 16000], turn["boundary"], False))
 
     def _finish_turn(self) -> None:
+        """Validate the active turn's minimum duration and queue its final input marker."""
         turn = self._active
         if turn is None:
             return
@@ -713,6 +725,7 @@ class SpeechStream(stt.RecognizeStream):
         self._active = None
 
     def _turn_done(self, task: asyncio.Task[None]) -> None:
+        """Retire a completed turn task and propagate its first failure to the stream."""
         self._turns.discard(task)
         if (
             not task.cancelled()
@@ -726,6 +739,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _send_audio(
         self, turn: dict[str, Any], socket: aiohttp.ClientWebSocketResponse
     ) -> None:
+        """Send queued PCM once, update decode preparation and stop at the turn boundary."""
         await turn["ready"].wait()
         sent_samples, prepared = 0, None
         while True:
@@ -755,6 +769,7 @@ class SpeechStream(stt.RecognizeStream):
                 return
 
     async def _transcribe_turn(self, turn: dict[str, Any]) -> None:
+        """Deliver one WebSocket turn in order, then verify its durable transcript result."""
         sender = None
         try:
             session = self._owner._ensure_session()
@@ -912,6 +927,7 @@ class SpeechStream(stt.RecognizeStream):
                 await asyncio.gather(sender, return_exceptions=True)
 
     async def _verify_result(self, turn: dict[str, Any], final_text: str) -> None:
+        """Verify canonical completion and match the signed artifact's text and PCM duration."""
         session = self._owner._ensure_session()
         timeout = aiohttp.ClientTimeout(total=10)
         async with session.get(
