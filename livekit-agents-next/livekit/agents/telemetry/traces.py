@@ -1361,13 +1361,13 @@ async def _upload_session_report(
                 severity_text=severity_text,
             )
 
-    for tag, entry in tagger._tags.items():
-        if entry.metadata:
+    for tag, tag_metadata, tagged_at in tagger._core.entries():
+        if tag_metadata:
             _log(
                 eval_logger,
                 body="tag",
-                timestamp=int(entry.timestamp * 1e9),
-                attributes={"tag": {"name": tag, "metadata": entry.metadata}},
+                timestamp=int(tagged_at * 1e9),
+                attributes={"tag": {"name": tag, "metadata": tag_metadata}},
             )
 
     if tagger.outcome:

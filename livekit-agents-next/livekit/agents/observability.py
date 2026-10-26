@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from . import _core
 
 if TYPE_CHECKING:
     from .evals import EvaluationResult
-
-
-@dataclass
-class _TagEntry:
-    metadata: dict[str, Any] | None = None
-    timestamp: float = field(default_factory=time.time)
 
 
 class Tagger:
@@ -45,81 +39,46 @@ class Tagger:
     """
 
     def __init__(self) -> None:
-        self._tags: dict[str, _TagEntry] = {}
+        self._core = _core.Tagger()
         self._evaluation_results: list[dict[str, Any]] = []
-        self._outcome_reason: str | None = None
 
     def success(self, reason: str | None = None) -> None:
-        """Mark the session as successful.
-
-        Args:
-            reason: Optional reason for the success (stored separately from the tag).
-        """
-        # Remove any existing outcome tag
-        self._tags.pop("lk.fail", None)
-        self._tags["lk.success"] = _TagEntry()
-        self._outcome_reason = reason
+        """Mark the session as successful; ``reason`` is kept apart from the tag."""
+        self._core.success(reason)
 
     def fail(self, reason: str | None = None) -> None:
-        """Mark the session as failed.
-
-        Args:
-            reason: Optional reason for the failure (stored separately from the tag).
-        """
-        # Remove any existing outcome tag
-        self._tags.pop("lk.success", None)
-        self._tags["lk.fail"] = _TagEntry()
-        self._outcome_reason = reason
+        """Mark the session as failed; ``reason`` is kept apart from the tag."""
+        self._core.fail(reason)
 
     def add(self, tag: str, *, metadata: dict[str, Any] | None = None) -> None:
-        """Add a tag to the session with optional structured metadata.
-
-        Args:
-            tag: The tag string in "key:value" format (e.g., "voicemail:true", "language:es").
-            metadata: Optional dict of structured metadata associated with this tag.
-        """
-        self._tags[tag] = _TagEntry(metadata=metadata)
+        """Add a ``key:value`` tag, with optional structured metadata."""
+        self._core.add(tag, metadata)
 
     def remove(self, tag: str) -> None:
-        """Remove a tag from the session.
-
-        Args:
-            tag: The tag string to remove.
-        """
-        self._tags.pop(tag, None)
+        self._core.remove(tag)
 
     @property
     def tags(self) -> set[str]:
-        """All current tag strings."""
-        return set(self._tags.keys())
+        return set(self._core.tags())
 
     @property
     def evaluations(self) -> list[dict[str, Any]]:
-        """All evaluation results."""
         return self._evaluation_results.copy()
 
     @property
     def outcome(self) -> str | None:
-        """The session outcome: 'success', 'fail', or None if not set."""
-        if "lk.success" in self._tags:
-            return "success"
-        elif "lk.fail" in self._tags:
-            return "fail"
-        return None
+        """``"success"``, ``"fail"`` or ``None``."""
+        return self._core.outcome()  # type: ignore[no-any-return]
 
     @property
     def outcome_reason(self) -> str | None:
-        """Reason for success/failure outcome."""
-        return self._outcome_reason
+        return self._core.outcome_reason()  # type: ignore[no-any-return]
 
     def _evaluation(self, result: EvaluationResult) -> None:
-        """Tag the session with evaluation results (internal use only).
-
-        Called automatically by JudgeGroup.evaluate().
-        """
+        """Tag the session with a judge group's results (called by ``JudgeGroup.evaluate``)."""
         for name, judgment in result.judgments.items():
             tag = f"lk.judge.{name}:{judgment.verdict}"
-            self._tags[tag] = _TagEntry()
+            self._core.add(tag, None)
             self._evaluation_results.append(
                 {
                     "name": name,
