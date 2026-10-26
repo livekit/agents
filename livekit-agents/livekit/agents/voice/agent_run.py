@@ -109,7 +109,8 @@ class RunHooks:
     ``answer_tool`` names the tool the message is handed to before the model runs: the last
     turn's ``InputRequired(tool=)`` named it, and this message is its answer. ``delegated``
     says the turn's message came from another agent: the run does not phrase its questions,
-    the agent facing the person does.
+    the agent facing the person does. ``lane`` is the door's lane of the thread, what
+    ``A2ADelegate`` names as the caller's.
     """
 
     boundary: Callable[[], Awaitable[bool]] | None = None
@@ -121,6 +122,7 @@ class RunHooks:
     rebuild: Callable[[Ref], Agent | None] | None = None
     answer_tool: str | None = None
     delegated: bool = False
+    lane: str | None = None
 
 
 _run_hooks = contextvars.ContextVar[RunHooks | None]("agents_run_hooks", default=None)
@@ -394,6 +396,8 @@ class AgentRun(Generic[Run_T]):
                 if input_required is not None:
                     input_required = composed(input_required)
                 else:
+                    result._segments = [(text, True) for text in verbatim]
+                    result._segments += [(output, False)] if output else []
                     output = composed(output)
             result._verbatim = "\n\n".join(verbatim) if verbatim else None
             result._run_output = output

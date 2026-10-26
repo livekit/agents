@@ -10,7 +10,7 @@ alike. The server writes the extension's keys (``livekit/``) per request, when t
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,6 +24,7 @@ from .extension import (
     ANSWER_ARTIFACT_NAME,
     KIND,
     KIND_CHAT_CTX,
+    VERBATIM,
     Extensions,
     Metadata,
     as_dict,
@@ -36,6 +37,9 @@ from .extension import (
 
 StoredMessage = dict[str, Any]  # typed by the _core stub: TaskRecord.status_message, history items
 """A message as the storage layer holds it; the codec reads and builds it, the stub owns it."""
+
+Segment = tuple[str, bool]
+"""A piece of an answer and whether it reaches the person exactly as written."""
 
 StoredPart = dict[str, Any]  # typed by the _core stub: one entry of a stored message's parts
 """One part of a stored message, tagged with ``kind``."""
@@ -368,10 +372,17 @@ def artifact_event(
     append: bool,
     last_chunk: bool,
     exts: Extensions,
+    segments: Sequence[Segment] = (),
 ) -> pb.TaskArtifactUpdateEvent:
-    """One chunk of the answer artifact; the final chunk sets ``lastChunk``."""
+    """One chunk of the answer artifact; the final chunk sets ``lastChunk``. With ``segments``
+    the chunk is one text part per segment, a verbatim one flagged ``livekit/verbatim``."""
     artifact = pb.Artifact(artifact_id=artifact_id, name=ANSWER_ARTIFACT_NAME)
-    if text or not append:
+    for piece, exact in segments:
+        part = pb.Part(text=piece)
+        if exact:
+            part.metadata.CopyFrom(struct(metadata_to_wire({VERBATIM: True})))
+        artifact.parts.append(part)
+    if not segments and (text or not append):
         artifact.parts.append(pb.Part(text=text))
 
     return pb.TaskArtifactUpdateEvent(
@@ -452,6 +463,9 @@ class TaskUpdate:
     task_id: str = ""
     context_id: str = ""
     metadata: Metadata = field(default_factory=dict)
+    segments: list[Segment] = field(default_factory=list)
+    """The answer artifact's text parts in order, a verbatim one flagged; appended chunks
+    continue the part before them."""
 
 
 @dataclass
@@ -460,24 +474,47 @@ class _Answer:
 
     bodies: dict[str, str] = field(default_factory=dict)
     names: dict[str, str] = field(default_factory=dict)
+    segments: dict[str, list[Segment]] = field(default_factory=dict)
+    last: str | None = None
+    """The artifact whose last chunk arrived last: the whole answer, not a partial."""
 
-    def collect(self, artifact: pb.Artifact, append: bool) -> None:
+    def collect(self, artifact: pb.Artifact, append: bool, last_chunk: bool = False) -> None:
         chunk = _text(artifact.parts)
         if append:
             chunk = self.bodies.get(artifact.artifact_id, "") + chunk
         self.bodies[artifact.artifact_id] = chunk
 
+        pieces = self.segments.get(artifact.artifact_id, []) if append else []
+        texts = [part for part in artifact.parts if part.WhichOneof("content") == "text"]
+        for i, part in enumerate(texts):
+            exact = metadata_from_wire(as_dict(part.metadata)).get(VERBATIM) is True
+            if i == 0 and append and pieces and pieces[-1][1] == exact:
+                # a streamed chunk continues the piece before it
+                pieces[-1] = (pieces[-1][0] + part.text, exact)
+            else:
+                pieces.append((part.text, exact))
+        self.segments[artifact.artifact_id] = pieces
+
         if artifact.name:
             self.names[artifact.artifact_id] = artifact.name
+        if last_chunk:
+            self.last = artifact.artifact_id
+
+    def _answer_ids(self) -> list[str]:
+        """The ``answer`` artifact that ended last; every ``answer`` artifact when none ended,
+        every artifact when none carries that name."""
+        named = [i for i in self.bodies if self.names.get(i) == ANSWER_ARTIFACT_NAME]
+        if self.last is not None and (not named or self.last in named):
+            return [self.last]
+        return named or list(self.bodies)
 
     def text(self) -> str:
-        """The ``answer`` artifact; every artifact joined when none carries that name."""
-        named = [
-            body
-            for artifact_id, body in self.bodies.items()
-            if self.names.get(artifact_id) == ANSWER_ARTIFACT_NAME
-        ]
-        return "\n".join(named or self.bodies.values())
+        """The answer's text."""
+        return "\n".join(self.bodies[i] for i in self._answer_ids())
+
+    def pieces(self) -> list[Segment]:
+        """The answer's text parts, a verbatim one flagged."""
+        return [piece for i in self._answer_ids() for piece in self.segments.get(i, [])]
 
 
 @dataclass
@@ -532,6 +569,7 @@ def _status_update(
         task_id=ids.task_id,
         context_id=ids.context_id,
         metadata=metadata,
+        segments=answer.pieces() if answer_text else [],
     )
 
 
@@ -558,7 +596,7 @@ async def updates_from_events(
 
         ids.note(event)
         if isinstance(event, pb.TaskArtifactUpdateEvent):
-            answer.collect(event.artifact, event.append)
+            answer.collect(event.artifact, event.append, event.last_chunk)
             continue
 
         if isinstance(event, pb.Task):
@@ -575,6 +613,7 @@ async def updates_from_events(
 
 
 __all__ = [
+    "Segment",
     "StoredMessage",
     "StoredPart",
     "StreamEvent",

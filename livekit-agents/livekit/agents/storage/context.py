@@ -43,7 +43,8 @@ class A2ASessionContext(Generic[S]):
     report back. ``message`` is the batch as one user message, ``messages`` each message with its
     channel and time; ``message_history`` the lane's history, ``state`` the lane's state, which
     the handler mutates in place; ``caller_history`` a delegating caller's conversation when it
-    sent one (plan 7.5)."""
+    sent one (plan 7.5), ``caller_lane`` its lane of this thread when it named it, whose history
+    holds the person's own words: ``await ctx.thread.chat_history(ctx.caller_lane)``."""
 
     def __init__(
         self,
@@ -65,6 +66,10 @@ class A2ASessionContext(Generic[S]):
         self.caller_history: ChatContext | None = (
             ChatContext.from_dict(turn.caller_history) if turn.caller_history is not None else None
         )
+        from ..a2a.extension import CALLER_LANE
+
+        lane = turn.batch[-1].metadata.get(CALLER_LANE) if turn.batch else None
+        self.caller_lane: str | None = lane if isinstance(lane, str) else None
         self.metadata: dict[str, JsonValue] = {}
         """What goes on the task's terminal row and final status event, under short keys."""
         self.events: list[HostEvent] = []
@@ -128,6 +133,9 @@ class TurnHost(Generic[S]):
         self._agents = agents if agents is not None else AgentRegistry()
         self._on_update = on_update
         self._on_token = on_token
+        self.segments: list[tuple[str, bool]] | None = None
+        """The last run's output in pieces, a verbatim one flagged, when a verbatim result
+        leads it: the door sends each as a part of the answer artifact."""
 
     async def handle(self, ctx: TurnContext, boundary: Boundary) -> HandlerOutput:
         """The developer's handler on one turn, the run hooks installed around it."""
@@ -150,6 +158,7 @@ class TurnHost(Generic[S]):
             rebuild=self._agents.rebuild,
             answer_tool=ctx.answer_tool,
             delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
+            lane=ctx.lane,
         )
 
         token = set_run_hooks(hooks)
@@ -207,6 +216,7 @@ class TurnHost(Generic[S]):
         if last is not None and last.verbatim is not None:
             # what must reach the person as written: the delegate relays it unchanged
             metadata.setdefault(VERBATIM, last.verbatim)
+        self.segments = last._segments if last is not None else None
         pending = None
         if asked is not None and (call := asked.pending_call) is not None:
             pending = PendingCall(

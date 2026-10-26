@@ -183,6 +183,49 @@ class AgentClient:
         result = await self._rpc("CancelTask", params)
         return json_format.ParseDict(result, pb.Task(), ignore_unknown_fields=True)
 
+    def resubscribe(self, task_id: str, *, thread_id: str | None = None) -> Reply:
+        """``tasks/resubscribe``: the task's answer stream again from the start, followed to its
+        last frame, and the task as it is now when the replay ends without one. The task's
+        session rides as ``contextId`` when the card offers the extension."""
+        params: dict[str, JsonValue] = {"id": task_id}
+        context_id = thread_id or self._thread_id
+        if context_id and self.offers_extension:
+            params["contextId"] = context_id
+
+        async def replay() -> AsyncIterator[pb.StreamResponse]:
+            # the task as it is now comes first and is read last: a finished task's snapshot
+            # holds its answer, not its progress or its flagged parts, which the replay has
+            snapshot: pb.StreamResponse | None = None
+            async for frame in self._stream_rpc("SubscribeToTask", params):
+                if snapshot is None:
+                    snapshot = frame
+                else:
+                    yield frame
+            if snapshot is not None:
+                yield snapshot
+
+        return Reply(task_id, context_id or "", updates_from_events(replay()))
+
+    async def _stream_rpc(
+        self, method: str, params: dict[str, JsonValue]
+    ) -> AsyncIterator[pb.StreamResponse]:
+        """One streamed JSON-RPC call over SSE, its results as ``StreamResponse`` frames."""
+        await self.connect()
+        headers = dict(self._call_context(None).service_parameters or {})
+        headers["Accept"] = "text/event-stream"
+        body = {"jsonrpc": "2.0", "id": shortuuid("rpc_"), "method": method, "params": params}
+        async with self._http.stream("POST", self._rpc_url, json=body, headers=headers) as r:
+            r.raise_for_status()
+            async for line in r.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                answer = json.loads(line[len("data:") :])
+                if "error" in answer:
+                    raise A2AClientError(f"{method}: {json.dumps(answer['error'])}")
+                yield json_format.ParseDict(
+                    answer.get("result") or {}, pb.StreamResponse(), ignore_unknown_fields=True
+                )
+
     async def _rpc(self, method: str, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
         """One JSON-RPC call the a2a-sdk's typed requests cannot carry; the result object."""
         headers = self._call_context(None).service_parameters
@@ -227,7 +270,8 @@ class AgentClient:
     ) -> StoredMessage:
         msg = _as_stored_message(message)
 
-        context_id = thread_id or msg.get("contextId") or self._thread_id
+        # the session is the one named, never the last one: a delegate sends for many threads
+        context_id = thread_id or msg.get("contextId")
         if context_id:
             msg["contextId"] = context_id
         if task_id:

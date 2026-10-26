@@ -183,9 +183,13 @@ class WireHost(Generic[S]):
 
     def _answer(self, outcome: TurnOutcome, artifact_id: str) -> pb.TaskArtifactUpdateEvent:
         """The answer artifact's last chunk: empty when the streamed tokens spelled the answer
-        already, the whole answer under the row's artifact id otherwise."""
+        already, the whole answer under the row's artifact id otherwise, in its pieces when a
+        verbatim result leads it."""
         output = outcome.result.output
         text = output if isinstance(output, str) else json.dumps(output, separators=(",", ":"))
+        pieces = self._host.segments or []
+        if "\n\n".join(piece for piece, _ in pieces) != text:
+            pieces = []  # the handler answered with text of its own, not the run's output
         if self._streamed and "".join(self._streamed) == text:
             return artifact_event(
                 self._task_id,
@@ -205,6 +209,7 @@ class WireHost(Generic[S]):
             append=False,
             last_chunk=True,
             exts=self._exts,
+            segments=pieces,
         )
 
 

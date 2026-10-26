@@ -73,6 +73,7 @@ ignored.
 | ---------------------------- | -- | ------ | ----- |
 | `livekit/channel`            | a message | the client | string: `a2a` (the default when absent), or the channel the platform's ingress received it on |
 | `livekit/kind`               | a message | a delegating agent | string: `delegation` |
+| `livekit/callerLane`         | a delegation in the caller's thread | a delegating agent | string: the caller's lane, whose history holds the person's own words; the expert's handler may read it |
 | `livekit/kind`               | a `DataPart` | a delegating agent | string: `chat_ctx` |
 | `livekit/reason`             | the `CancelTask` request's metadata | the client | string: why |
 | `livekit/reason`             | the final `TaskStatusUpdateEvent` of a task a client canceled; the status message of a `failed` task | the server | string: the client's reason, or section 5's |
@@ -80,6 +81,7 @@ ignored.
 | `livekit/interruptionReason` | the same event | the server | string: `new-message` |
 | `livekit/mergedInto`         | the final `TaskStatusUpdateEvent` of a `completed` task | the server | string: a task id |
 | `livekit/verbatim`           | the final `TaskStatusUpdateEvent` of a `completed` or `input-required` task | the server | string: the part of the answer or the question that reaches the person exactly as written; it leads the text |
+| `livekit/verbatim`           | a text `Part` of the answer artifact's last chunk | the server | `true`: this part reaches the person exactly as written; the agent facing them words the other parts |
 
 ## 5. Server-set keys, sent either way
 

@@ -164,6 +164,8 @@ class RunResult(Generic[Run_T]):
         self._pending_call: llm.FunctionCall | None = None
         self._answer_tool: str | None = None  # the tool the answer is handed to, if named
         self._verbatim: str | None = None
+        # the output in pieces, a verbatim one flagged, when a verbatim result leads it
+        self._segments: list[tuple[str, bool]] | None = None
         self._agent_stack: list[Ref] | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
