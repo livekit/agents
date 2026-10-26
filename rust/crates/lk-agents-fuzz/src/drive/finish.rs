@@ -78,6 +78,15 @@ impl Run {
                 out.push(Input::VadEnd { vad: Ref::new(nth), silence_ms: Millis(500) });
             }
         }
+        // A recogniser swapped out mid-utterance took that utterance with it, and the driver still
+        // hears the person speaking: the new recogniser hears them out, an utterance the next
+        // round ends.
+        if self.recogniser_left_speaking()
+            && self.record.live().of(Kind::Utterance).is_empty()
+            && let Some(stt) = self.record.live().of(Kind::Stt).first().copied()
+        {
+            out.push(Input::SttStart { stt: Ref::new(stt) });
+        }
         // A running tool is answered; one that detached is ended by the host's final update.
         for nth in self.record.live().of(Kind::Tool) {
             out.push(if self.tool_detached(nth) {
@@ -194,6 +203,29 @@ impl Run {
             .map(|(_, (periodic, at))| {
                 (periodic, at.saturating_duration_since(Ts::ZERO).as_millis() as u64)
             })
+    }
+
+    /// Whether the person's speech the driver last heard of began on the recogniser's word, has
+    /// not ended, and no utterance was opened since. Once only: a recogniser the driver no longer
+    /// takes the end of speech from (another turn detection) cannot end it, and asking again
+    /// would never go quiet.
+    fn recogniser_left_speaking(&self) -> bool {
+        let Some((began, true)) = self
+            .record
+            .journal_where(|step| match step {
+                Step::Emitted(SessionEvent::StartOfSpeech(ev)) => Some(!ev.from_vad),
+                Step::Emitted(SessionEvent::EndOfSpeech(_)) => Some(false),
+                _ => None,
+            })
+            .last()
+        else {
+            return false;
+        };
+        !self
+            .record
+            .applied()
+            .iter()
+            .any(|a| a.accepted && a.at > began && matches!(a.input, Input::SttStart { .. }))
     }
 
     /// Whether the driver is still holding a turn open.
