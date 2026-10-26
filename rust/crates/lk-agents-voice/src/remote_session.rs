@@ -1,5 +1,6 @@
 pub mod console;
 pub mod driver;
+pub mod room;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::HostError;
@@ -213,6 +214,85 @@ pub fn encode_wire(ev: WireEvent) -> Result<Option<proto::agent_session_event::E
             Event::AgentFalseInterruption(pb::AgentFalseInterruption { resumed: v.resumed })
         }
     }))
+}
+
+/// The session events `SessionHost` forwards to the client (`register_session`'s handlers, and the
+/// AMD and end-of-turn back-channels), in their wire shapes, each with the stamp it keeps: a user
+/// state change is back-dated to the speech boundary, every other event is sent stamped now. The
+/// conversation items are the ones `conversation_item_added` is emitted for (messages and
+/// handoffs); the core's other session events have no wire form here.
+pub fn session_event(
+    wire: &lk_agents_abi::voice::events::HostWire,
+) -> Option<(WireEvent, Option<f64>)> {
+    use lk_agents_abi::voice::events::{HostWire as W, ToolUpdate};
+    use lk_agents_abi::worker::remote_session::{
+        AmdPredictionWire, ErrorWire, ToolCallStartedWire,
+    };
+    let event = match wire {
+        W::AgentStateChanged(ev) => WireEvent::AgentStateChanged(ev.clone()),
+        W::UserStateChanged(ev) => {
+            return Some((WireEvent::UserStateChanged(ev.clone()), Some(ev.created_at)));
+        }
+        W::UserTranscript(ev) => WireEvent::UserInputTranscribed(ev.clone()),
+        W::EotPrediction(ev) => WireEvent::EotPrediction(ev.clone()),
+        W::AmdResult(p) => WireEvent::AmdPrediction(AmdPredictionWire {
+            speech_duration: p.speech_duration.as_secs_f64(),
+            category: p.category,
+            reason: p.reason.as_str().to_owned(),
+            transcript: p.transcript.clone(),
+            delay: p.delay.as_secs_f64(),
+        }),
+        W::AgentFalseInterruption(ev) => WireEvent::AgentFalseInterruption(ev.clone()),
+        W::ItemAdded(ev) if matches!(ev.item, ChatItem::Message(_) | ChatItem::AgentHandoff(_)) => {
+            WireEvent::ConversationItemAdded(ev.clone())
+        }
+        W::Error(ev) => WireEvent::Error(ErrorWire { message: ev.error.to_string() }),
+        W::ToolExecutionUpdated(ev) => WireEvent::ToolExecutionUpdated(ToolExecutionUpdatedWire {
+            update: match &ev.update {
+                ToolUpdate::Started(started) => {
+                    let call = &started.function_call;
+                    ToolUpdateWire::Started(ToolCallStartedWire {
+                        id: call.id.clone(),
+                        call_id: call.call_id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    })
+                }
+                ToolUpdate::Updated(updated) => ToolUpdateWire::CallUpdated(updated.clone()),
+                ToolUpdate::Ended(ended) => ToolUpdateWire::Ended(ended.clone()),
+                ToolUpdate::Reply(reply) => ToolUpdateWire::ReplyUpdated(reply.clone()),
+            },
+        }),
+        W::FunctionToolsExecuted(ev) => tools_executed(ev),
+        _ => return None,
+    };
+    Some((event, None))
+}
+
+/// `function_tools_executed`, as `SessionHost` forwards it: names, arguments and outputs only.
+pub fn tools_executed(ev: &lk_agents_abi::voice::events::ToolsExecutedEvent) -> WireEvent {
+    use lk_agents_abi::worker::remote_session::{FunctionCallOutputRef, FunctionToolsExecutedWire};
+    WireEvent::FunctionToolsExecuted(FunctionToolsExecutedWire {
+        function_calls: ev
+            .function_calls
+            .iter()
+            .map(|c| FunctionCallRef {
+                name: c.name.clone(),
+                arguments: c.arguments.clone(),
+                call_id: c.call_id.clone(),
+            })
+            .collect(),
+        function_call_outputs: ev
+            .function_call_outputs
+            .iter()
+            .map(|o| FunctionCallOutputRef {
+                call_id: o.call_id.clone(),
+                name: o.name.clone(),
+                output: o.output.clone(),
+                is_error: o.is_error,
+            })
+            .collect(),
+    })
 }
 
 /// The name a client emits an arriving event under: `msg.event.WhichOneof("event")`

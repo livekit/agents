@@ -1,0 +1,216 @@
+//! The room's `lk.agent.session` byte streams as a [`SessionTransport`] (`RoomSessionTransport`):
+//! one message per stream, read in the order the streams opened, written one stream at a time.
+
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use lk_agents_abi::errors::HostError;
+use lk_agents_abi::{Spawner, SpawnerExt};
+use lk_agents_rtc::{ByteStream, Receiver, RtcRoom, StreamBytesOptions};
+use prost::Message as _;
+use tokio::sync::Mutex as AsyncMutex;
+
+use super::{SessionTransport, TOPIC_SESSION_MESSAGES, proto};
+
+/// The Python logger every line here lands on.
+const LOG: &str = "livekit.agents";
+
+pub struct RoomTransport(Arc<Inner>);
+
+struct Inner {
+    room: Arc<dyn RtcRoom>,
+    spawner: Arc<dyn Spawner>,
+    state: Mutex<State>,
+    /// The streams the topic delivers; only the receive loop reads.
+    incoming: AsyncMutex<Option<Receiver<ByteStream>>>,
+    /// One stream at a time: concurrent writers interleave on the same topic.
+    sending: AsyncMutex<()>,
+}
+
+#[derive(Default)]
+struct State {
+    registered: bool,
+    closed: bool,
+}
+
+impl RoomTransport {
+    pub fn new(room: Arc<dyn RtcRoom>, spawner: Arc<dyn Spawner>) -> Self {
+        RoomTransport(Arc::new(Inner {
+            room,
+            spawner,
+            state: Mutex::default(),
+            incoming: AsyncMutex::new(None),
+            sending: AsyncMutex::new(()),
+        }))
+    }
+}
+
+impl Inner {
+    fn closed(&self) -> bool {
+        self.state.lock().expect("transport state").closed
+    }
+
+    async fn send(&self, msg: &proto::AgentSessionMessage) -> Result<(), HostError> {
+        if self.closed() || !self.room.connection_state().is_connected() {
+            return Err(HostError::new("room session transport is closed"));
+        }
+        let data = msg.encode_to_vec();
+        let _turn = self.sending.lock().await;
+        let opts = StreamBytesOptions {
+            name: stream_name(),
+            topic: TOPIC_SESSION_MESSAGES.to_owned(),
+            ..StreamBytesOptions::default()
+        };
+        let sent = async {
+            let writer = self.room.local().stream_bytes(opts).await?;
+            writer.write(&data).await?;
+            writer.close().await
+        };
+        sent.await.map_err(|e| HostError::new(format!("failed to send binary stream message: {e}")))
+    }
+}
+
+#[async_trait]
+impl SessionTransport for RoomTransport {
+    async fn start(&self) -> Result<(), HostError> {
+        let this = &self.0;
+        {
+            let mut state = this.state.lock().expect("transport state");
+            if state.registered || state.closed {
+                return Ok(());
+            }
+            state.registered = true;
+        }
+        let streams = this
+            .room
+            .byte_streams(TOPIC_SESSION_MESSAGES)
+            .map_err(|e| HostError::new(e.to_string()))?;
+        *this.incoming.lock().await = Some(streams);
+        Ok(())
+    }
+
+    /// A dropped message is a request the client waits out in full, so a failure is raised.
+    async fn send_message(&self, msg: &proto::AgentSessionMessage) -> Result<(), HostError> {
+        self.0.send(msg).await
+    }
+
+    fn send_message_nowait(&self, msg: &proto::AgentSessionMessage) {
+        let (this, msg) = (Arc::clone(&self.0), msg.clone());
+        self.0.spawner.spawn_unboxed(async move {
+            let _ = this.send(&msg).await;
+        });
+    }
+
+    async fn recv(&self) -> Result<Option<proto::AgentSessionMessage>, HostError> {
+        let mut incoming = self.0.incoming.lock().await;
+        let Some(streams) = incoming.as_mut() else { return Ok(None) };
+        while let Some(mut stream) = streams.recv().await {
+            let mut data = Vec::new();
+            while let Some(chunk) = stream.chunks.recv().await {
+                data.extend_from_slice(&chunk);
+            }
+            match proto::AgentSessionMessage::decode(data.as_slice()) {
+                Ok(msg) => return Ok(Some(msg)),
+                Err(e) => {
+                    log::warn!(target: LOG, error = e.to_string().as_str();
+                        "failed to read binary stream message");
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    async fn close(&self) {
+        let registered = {
+            let mut state = self.0.state.lock().expect("transport state");
+            if state.closed {
+                return;
+            }
+            state.closed = true;
+            std::mem::take(&mut state.registered)
+        };
+        // The handler's sender goes with it, which ends a receive waiting on the next stream.
+        if registered {
+            self.0.room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES);
+        }
+        if let Ok(mut incoming) = self.0.incoming.try_lock() {
+            incoming.take();
+        }
+    }
+}
+
+/// `utils.shortuuid("AS_")`.
+fn stream_name() -> String {
+    use std::hash::BuildHasher;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = std::collections::hash_map::RandomState::new()
+        .hash_one(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    format!("AS_{:012x}", n & 0xffff_ffff_ffff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lk_agents_rtc::{ConnectionState, FakeRtc, StreamInfo};
+    use proto::agent_session_message::Message;
+
+    fn ping(id: &str) -> proto::AgentSessionMessage {
+        proto::AgentSessionMessage {
+            message: Some(Message::Request(proto::SessionRequest {
+                request_id: id.to_owned(),
+                request: Some(proto::session_request::Request::Ping(
+                    proto::session_request::Ping {},
+                )),
+            })),
+        }
+    }
+
+    // Catches: messages read out of order or lost to a malformed one, a sent message not on the
+    // topic as one closed stream, a send on a disconnected room not raised, or a close leaving
+    // the topic registered or a receive waiting.
+    #[tokio::test]
+    async fn the_room_carries_one_message_per_stream() {
+        let (rtc, _clock) = FakeRtc::with_virtual_clock();
+        let room = rtc.room("call");
+        let transport = RoomTransport::new(
+            room.clone() as Arc<dyn RtcRoom>,
+            Arc::new(lk_agents_abi::TokioSpawner::current()),
+        );
+        transport.start().await.unwrap();
+        transport.start().await.expect("idempotent");
+        let info = || StreamInfo { topic: TOPIC_SESSION_MESSAGES.into(), ..StreamInfo::default() };
+        let first = ping("req_1").encode_to_vec();
+        let (head, tail) = first.split_at(3);
+        room.send_byte_stream("cli", info(), [head.to_vec(), tail.to_vec()]).unwrap();
+        room.send_byte_stream("cli", info(), [vec![0xff, 0xff]]).unwrap();
+        room.send_byte_stream("cli", info(), [ping("req_2").encode_to_vec()]).unwrap();
+        let id = |m: proto::AgentSessionMessage| match m.message {
+            Some(Message::Request(r)) => r.request_id,
+            _ => panic!("not a request"),
+        };
+        assert_eq!(id(transport.recv().await.unwrap().unwrap()), "req_1");
+        assert_eq!(id(transport.recv().await.unwrap().unwrap()), "req_2");
+
+        transport.send_message(&ping("req_3")).await.unwrap();
+        let sent = room.local_participant().byte_streams();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].opts.topic, TOPIC_SESSION_MESSAGES);
+        assert!(sent[0].opts.name.starts_with("AS_") && sent[0].closed);
+        assert_eq!(
+            id(proto::AgentSessionMessage::decode(sent[0].chunks.concat().as_slice()).unwrap()),
+            "req_3"
+        );
+
+        room.set_connection_state(ConnectionState::Disconnected);
+        assert!(transport.send_message(&ping("req_4")).await.is_err());
+
+        let waiting = {
+            let transport = RoomTransport(Arc::clone(&transport.0));
+            tokio::spawn(async move { transport.recv().await })
+        };
+        tokio::task::yield_now().await;
+        transport.close().await;
+        assert!(waiting.await.unwrap().unwrap().is_none());
+        room.byte_streams(TOPIC_SESSION_MESSAGES).expect("the topic is free again");
+    }
+}

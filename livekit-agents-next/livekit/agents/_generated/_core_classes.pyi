@@ -773,6 +773,9 @@ class LiveSession:
         keyterm_tools: Any | None = None,
         agent_expressive: NotGivenOr[Any] = ...,
         session_id: str | None = None,
+        remote_session: Any | None = None,
+        console: ConsoleIo | None = None,
+        job: Any | None = None,
     ) -> None: ...
     async def start(self, *, capture_run: bool = False) -> None: ...
     @property

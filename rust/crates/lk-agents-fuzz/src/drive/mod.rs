@@ -44,8 +44,6 @@ use lk_agents_abi::{
 use lk_agents_rtc::{FakeRoom, ParticipantKind};
 use lk_agents_abi::TokioSpawner;
 use lk_agents_voice::background_audio::BackgroundAudioPlayer;
-use lk_agents_voice::remote_session::driver::HostRuntime as RemoteSessionHost;
-use lk_agents_abi::worker::remote_session::WireEvent;
 use lk_agents_voice::remote_session::{
     proto,
     proto::agent_session_message::{Message, console_io},
@@ -192,8 +190,8 @@ pub struct Setup {
     /// speaks into a microphone track, and the agent's voice plays out on the room's clock.
     /// `None` is the host's own legs, the fakes.
     pub room_legs: Option<RoomLegs>,
-    /// `lk agent console`: the CLI's socket is the session's microphone and speaker, and a
-    /// `RemoteSessionHost` on it forwards the session's events and answers the CLI's requests,
+    /// `lk agent console`: the CLI's socket is the session's microphone and speaker, and
+    /// the session's remote session host on it forwards its events and answers the CLI's requests,
     /// as `voice/console.py` runs it. Never with the room's legs.
     pub console: bool,
     /// The turn keywords a host still writes the pre-`turn_handling` way (`min_endpointing_delay`,
@@ -531,8 +529,8 @@ pub struct Run {
     host_mic: bool,
     /// How many times the person joined the room, which names their microphone track.
     joins: u32,
-    /// The console's session host and the CLI on the other end of its socket.
-    console: Option<(Arc<RemoteSessionHost>, fakes::FakeCli)>,
+    /// The CLI on the other end of the console's socket.
+    console: Option<fakes::FakeCli>,
     /// The next console request's id.
     next_request: u64,
     /// The background audio player, as `background_audio.py` runs it beside the session.

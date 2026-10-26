@@ -524,7 +524,7 @@ The legs a seed runs on, drawn per seed (`search/setup.rs`):
 - **The host's legs** (the fakes): every frame and sink call is tagged, so the conservation
   rules see exactly what went where. A third of these seeds run as **`lk agent console`**: the
   console's socket (`ConsoleIo`, over an in-process stream) is the microphone and the speaker, a
-  `RemoteSessionHost` on it forwards what `ConsoleCall.forward` forwards and answers the CLI's
+  the session's remote session host on it forwards the session's events and answers the CLI's
   requests through a port that answers as the host would, and a fake CLI on the other end sends
   the microphone and the requests and acks each flushed segment once it has played on the clock.
 - **The room's own legs** (half the seeds), as `agent_session.py` runs by default when the host
@@ -749,8 +749,8 @@ The justified gaps, outside the production-reachable figure:
 
 Production-reachable code still unreached, by size: the session API's rarer host calls
 (`set_participant`, `resolved_options`, the AMD and DTMF accessors), `speech_handle.rs`'s
-`hold_interruptions` and the host's `interrupt`, the remote-session encoders of events the job's
-`SessionHost` forwards and the console does not (function calls, agent config updates), and the
+`hold_interruptions` and the host's `interrupt`, the remote-session encoders of the events no
+seed emits (agent config updates), the room's session transport, and the
 avatar sink's interrupted path after a give-up timer.
 
 ## 11. Outside this suite

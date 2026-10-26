@@ -196,7 +196,7 @@ impl Run {
         use lk_agents_rtc::AudioSource as _;
         let sources = self.room.local_participant().sources();
         let room = sources.iter().map(|source| source.queued_duration()).max().unwrap_or_default();
-        self.console.as_ref().map_or(room, |(_, cli)| room.max(cli.queued()))
+        self.console.as_ref().map_or(room, |cli| room.max(cli.queued()))
     }
 
     /// Every deadline the driver journalled, in milliseconds, and whether it is the recorder's

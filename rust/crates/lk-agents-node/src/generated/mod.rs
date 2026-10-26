@@ -150,6 +150,7 @@
 //! - `lk_agents_voice::background_audio::RandomDraw`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::tool_executor::HostToolRunner`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::SessionEvents`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::agent_session::SessionJob`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::SessionHooks`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::HostRoom`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::NodeFactory`: not yet: a bare proxy (every method calls `_core_<method>`)

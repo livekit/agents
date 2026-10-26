@@ -220,7 +220,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
 def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
     """``python myagent.py console --connect-addr``: one call over the ``lk`` CLI's socket, run
     as a fake job in this process."""
-    from ..voice.console import ConsoleCall
+    from ..voice.remote_session import ConsoleCall
 
     setup_logging("DEBUG", devmode=True, console=True)
     ConsoleCall.addr, ConsoleCall.record = connect_addr, record

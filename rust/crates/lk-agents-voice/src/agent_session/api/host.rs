@@ -5,7 +5,7 @@ use super::{
     CLOSE_TIMEOUT, CommandRefused, HostMetricsRecord, HostParts,
     InterruptionPortFactory, ModelRefs, NodeFactory, NotAnImage, NotInterruptible, OpenRefused,
     Ready, Reply, SessionApi, SessionBuildError, SessionEvents, SessionRefused, SessionRoom,
-    SessionRunner, Stage, StartFailed, UnknownCloseReason, UpdateAgentArgs,
+    SessionJob, SessionRunner, Stage, StartFailed, UnknownCloseReason, UpdateAgentArgs,
     host_toolset, llm_leg, origin_of, session_tools, stt_leg, tts_leg,
 };
 use crate::agent_activity::DriverConfig;
@@ -119,6 +119,15 @@ impl SessionApi {
         agent_expressive: Maybe<crate::agent_activity::options::Expressive>,
         // Prefixes the ids the session mints for chat items; `None` mints a random one.
         session_id: Option<String>,
+        // Serve the remote session protocol (`lk agent simulate`, the dashboard, `lk agent
+        // console`) on the room's byte streams, or on `console`: what a client asks that needs the
+        // host's objects is the port's to answer.
+        remote_session: Option<Arc<dyn crate::remote_session::SessionPort>>,
+        // `lk agent console`'s socket: the session's audio input and output, and the remote
+        // session's transport.
+        console: Option<Arc<crate::remote_session::console::ConsoleIo>>,
+        // The job whose room this is: `start()` connects it beside the opening.
+        job: Option<Arc<dyn SessionJob>>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
     ) -> Result<Self, SessionBuildError> {
         use crate::room_io::{
@@ -145,6 +154,10 @@ impl SessionApi {
             text_output: text_output.then(TextOutputConfig::default),
             ..RoomIoConfig::default()
         });
+        let host_audio_input =
+            host_audio_input.or_else(|| console.as_ref().map(|c| c.as_audio_input()));
+        let host_audio_output =
+            host_audio_output.or_else(|| console.as_ref().map(|c| c.as_audio_output()));
         // A host sink's playback reports are stamped on the session's clock.
         if let Some(out) = &host_audio_output {
             out.tracker().anchor_to(anchor);
@@ -188,6 +201,24 @@ impl SessionApi {
         let toolset = host_toolset(tools, tools_host, tool_runner);
         let offline = room.offline();
         let room = room.rtc();
+        let remote = remote_session.map(|port| {
+            let transport = match &console {
+                Some(console) => console.as_transport(),
+                None => Arc::new(crate::remote_session::room::RoomTransport::new(
+                    Arc::clone(&room),
+                    spawner.clone(),
+                )) as Arc<dyn crate::remote_session::SessionTransport>,
+            };
+            let wall = time.clone();
+            Arc::new(crate::remote_session::driver::Hosting::new(
+                port,
+                transport,
+                console.as_ref().map(|c| c.as_console()),
+                clock.clone(),
+                spawner.clone(),
+                Box::new(move || wall.wall_secs()),
+            ))
+        });
 
         // **Nothing starts here**; the loop begins at `start()`. Synchronous so a host can bind the
         // room's legs and recorder before starting. Read before the config moves into `RoomIo`.
@@ -367,6 +398,8 @@ impl SessionApi {
             eot: turn_detector,
             has_options: options.is_some(),
             call_room: (!offline).then(|| Arc::clone(&room)),
+            remote,
+            job,
         };
         Ok(api)
     }
@@ -379,7 +412,10 @@ impl SessionApi {
     /// `on_enter`.
     #[host(method(kw_only, defaults(capture_run = false)))]
     pub fn start(&self, capture_run: bool) -> Result<Reply<Result<(), StartFailed>>, OpenRefused> {
+        let job = self.host.job.clone();
         let events = self.host.events.clone();
+        let remote = self.host.remote.clone();
+        let forwarding = remote.clone();
         let hooks = self.host.hooks.clone();
         let anchor = self.anchor;
         let agents = self.agents.clone();
@@ -392,6 +428,12 @@ impl SessionApi {
                 while let Some(ev) = runner.next_host_event().await {
                     match ev {
                         HostEvent::Hook(call) => {
+                            use crate::agent_session::HookCall;
+                            if let (Some(remote), HookCall::FunctionToolsExecuted { event, .. }) =
+                                (&forwarding, &call)
+                            {
+                                remote.forward_tools_executed(event);
+                            }
                             let Some(hooks) = &hooks else { continue };
                             let answer = super::answer_hook(
                                 Arc::clone(hooks),
@@ -411,7 +453,14 @@ impl SessionApi {
                             }
                         }
                         ev => {
-                            if let (Some(events), Some(mut wire)) = (&events, ev.wire(anchor)) {
+                            if events.is_none() && forwarding.is_none() {
+                                continue;
+                            }
+                            let Some(mut wire) = ev.wire(anchor) else { continue };
+                            if let Some(remote) = &forwarding {
+                                remote.forward(&wire);
+                            }
+                            if let Some(events) = &events {
                                 agents.resolve(&mut wire);
                                 events.event(&wire);
                             }
@@ -420,9 +469,30 @@ impl SessionApi {
                 }
                 running.iter().for_each(lk_agents_abi::AbortHandle::abort);
                 // Dropping the runner tells `aclose()` the host has seen everything.
+                drop(runner);
+                // However the session closed, its remote session host closes with it.
+                if let Some(remote) = forwarding {
+                    remote.aclose().await;
+                }
             })
         })?;
-        Ok(Reply::new(async move { opening.await.map_err(StartFailed) }))
+        // The job's room connects beside the opening; the remote session starts once both are
+        // done, so what it queued meanwhile goes out on a connected room.
+        Ok(Reply::new(async move {
+            let connect = async {
+                match &job {
+                    Some(job) => job.connect().await,
+                    None => Ok(()),
+                }
+            };
+            let (opened, connected) = tokio::join!(opening, connect);
+            opened.map_err(StartFailed::Driver)?;
+            connected.map_err(StartFailed::Host)?;
+            if let Some(remote) = remote {
+                remote.start().await.map_err(StartFailed::Host)?;
+            }
+            Ok(())
+        }))
     }
 
     /// The session's clock, as the handle a provider's `_bind_session_clock` takes.
@@ -759,11 +829,11 @@ impl SessionApi {
     }
 
     /// `_aclose_impl`: the hooks' `closing` (AMD), `Command::Close { reason, drain, error }`, the
-    /// turn-detector stream, the hooks' `closed` (the remote session host), the room io, then the
-    /// session's toolsets. Resolves once all of it ran; the loop's `close` handlers ran before the
-    /// room io (the reference's "close room io after close event is emitted"). `has_error` says
-    /// whether an error close carries one (the object stays with the host). An unknown `reason` is
-    /// a `ValueError`. Idempotent: a second call waits for the first.
+    /// turn-detector stream, the remote session host, the room io, then the session's toolsets.
+    /// Resolves once all of it ran; the loop's `close` handlers ran before the room io (the
+    /// reference's "close room io after close event is emitted"). `has_error` says whether an
+    /// error close carries one (the object stays with the host). An unknown `reason` is a
+    /// `ValueError`. Idempotent: a second call waits for the first.
     #[host(method(kw_only, defaults(reason = "user_initiated", drain = false, has_error = false)))]
     pub fn aclose(
         &self,
@@ -785,6 +855,7 @@ impl SessionApi {
         let clock = self.time.clock();
         let eot = self.host.eot.clone().filter(|_| was_running);
         let hooks = self.host.hooks.clone().filter(|_| was_running);
+        let remote = self.host.remote.clone();
         let closed = Arc::clone(&self.host.closed);
         Ok(Reply::new(async move {
             closed
@@ -798,10 +869,8 @@ impl SessionApi {
                     if let Some(eot) = eot {
                         let _ = lk_agents_abi::timeout(&*clock, CLOSE_TIMEOUT, eot.aclose()).await;
                     }
-                    if let Some(hooks) = &hooks
-                        && let Err(e) = hooks.closed().await
-                    {
-                        hooks.hook_failed("closed", e.host_ref.clone());
+                    if let Some(remote) = remote {
+                        remote.aclose().await;
                     }
                     close_io.await;
                     if let Some(hooks) = &hooks {

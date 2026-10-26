@@ -247,6 +247,10 @@ impl HostRuntime {
         }
         transport.start().await?;
         let sh = &self.shared;
+        // Closed while the transport started: nothing is left to run.
+        if !self.started() {
+            return Ok(());
+        }
         if let Some(rx) = sh.events_rx.lock().expect("event queue").take() {
             sh.writer.spawn(
                 &*sh.spawner,
@@ -292,6 +296,92 @@ impl HostRuntime {
         cancelled.sort();
         cancelled.dedup();
         cancelled
+    }
+}
+
+/// How long the host's close waits for in-flight requests (`_SHUTDOWN_DRAIN_TIMEOUT`), the
+/// writer's flush included: well under the worker's shutdown allowance.
+pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(3);
+
+/// A session's remote session protocol, as the session runs it: the host on its transport (the
+/// room's byte streams, or the console's socket), fed the session's events as they are emitted,
+/// started once the session is up and closed with it.
+pub struct Hosting {
+    host: Arc<HostRuntime>,
+    spawner: Arc<dyn Spawner>,
+    /// Set by the first close: a start after it (the session closed while opening) is a no-op.
+    closing: std::sync::atomic::AtomicBool,
+    /// Whether the close has run to its end; every close waits for it.
+    closed: tokio::sync::watch::Sender<bool>,
+    transport: Arc<dyn SessionTransport>,
+    console: Option<Arc<dyn ConsoleSink>>,
+    /// `time.time()` on the session's clock, for the events stamped now.
+    now: Box<dyn Fn() -> f64 + Send + Sync>,
+}
+
+impl Hosting {
+    pub fn new(
+        port: Arc<dyn SessionPort>,
+        transport: Arc<dyn SessionTransport>,
+        console: Option<Arc<dyn ConsoleSink>>,
+        clock: Arc<dyn Clock>,
+        spawner: Arc<dyn Spawner>,
+        now: Box<dyn Fn() -> f64 + Send + Sync>,
+    ) -> Self {
+        let host = Arc::new(HostRuntime::new(clock, Arc::clone(&spawner)));
+        host.set_port(port);
+        Hosting {
+            host,
+            spawner,
+            closing: Default::default(),
+            closed: tokio::sync::watch::Sender::new(false),
+            transport,
+            console,
+            now,
+        }
+    }
+
+    /// One of the session's events, sent if the client is sent it.
+    pub fn forward(&self, wire: &lk_agents_abi::voice::events::HostWire) {
+        if let Some((event, at)) = super::session_event(wire) {
+            self.send(event, at);
+        }
+    }
+
+    /// `function_tools_executed`, emitted by the host's hook rather than as an event.
+    pub fn forward_tools_executed(&self, ev: &lk_agents_abi::voice::events::ToolsExecutedEvent) {
+        self.send(super::tools_executed(ev), None);
+    }
+
+    fn send(&self, event: WireEvent, at: Option<f64>) {
+        if let Err(e) = self.host.send_wire(event, Some(at.unwrap_or_else(|| (self.now)()))) {
+            log::error!(target: LOG, error = e.as_str();
+                "failed to forward a session event to the remote client");
+        }
+    }
+
+    pub async fn start(&self) -> Result<(), HostError> {
+        if self.closing.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.host.start(Arc::clone(&self.transport), self.console.clone()).await
+    }
+
+    /// Once the session's loop has returned. The close runs on a task of its own, so a caller
+    /// cancelled midway leaves it to finish; every call waits for its end.
+    pub async fn aclose(&self) {
+        if !self.closing.swap(true, Ordering::AcqRel) {
+            let (host, closed) = (Arc::clone(&self.host), self.closed.clone());
+            self.spawner.spawn_unboxed(async move {
+                let cancelled = host.aclose(SHUTDOWN_DRAIN).await;
+                if !cancelled.is_empty() {
+                    log::warn!(target: LOG, request_types = cancelled.join(", ").as_str();
+                        "cancelled in-flight session requests while closing");
+                }
+                closed.send_replace(true);
+            });
+        }
+        let _ = self.closed.subscribe().wait_for(|closed| *closed).await;
     }
 }
 

@@ -39,8 +39,13 @@ pub fn open_refused_to_node(e: lk_agents_voice::agent_session::OpenRefused) -> J
 }
 
 /// `StartFailed` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/agent_session/api.rs`).
+#[allow(unreachable_patterns)]
 pub fn start_failed_to_node(e: lk_agents_voice::agent_session::StartFailed) -> JsError {
-    JsError::new("RuntimeError", e.to_string())
+    let kind = match &e {
+        lk_agents_voice::agent_session::StartFailed::Host(inner) => "=HostError",
+        _ => "RuntimeError",
+    };
+    JsError::new(kind, e.to_string())
 }
 
 /// `SessionRefused` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/agent_session/api.rs`).

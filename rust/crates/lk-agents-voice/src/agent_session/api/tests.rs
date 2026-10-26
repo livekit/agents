@@ -44,7 +44,7 @@ fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
         Some(crate::room_io::RoomIoConfig::default()), None, None, None, None, None, None,
         None, None,
         None, None, None, None, false, None, false, hook_bound, 3, None, None, None, Maybe::NotGiven, None,
-        spawner,
+        None, None, None, spawner,
     );
     api.expect("a room-only session assembles")
 }

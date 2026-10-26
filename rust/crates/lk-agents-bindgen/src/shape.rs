@@ -302,6 +302,18 @@ pub fn input(name: &syn::Ident, label: &str, t: &syn::Type) -> In {
         i.arg = quote!(#name.as_ref());
         return i;
     }
+    // An `arc`-cell class's shared value, or `None`.
+    if let Some(inner) = one(t, "Option")
+        .and_then(|i| one(i, "Arc"))
+        .filter(|i| !matches!(i, syn::Type::TraitObject(_)))
+    {
+        return In {
+            ty: quote!(::std::option::Option<::pyo3::Bound<'py, ::pyo3::PyAny>>),
+            prelude: Some(quote!(let #name = #name.map(|v| <#inner as ::lk_agents_abi::python::ArcClass>::shared(&v)).transpose()?;)),
+            arg: quote!(#name),
+            py: true,
+        };
+    }
     // A host object as the core's `Arc<dyn Trait>`: a native class registered for the trait, else
     // its `#[host(proxy)]` over the object and the loop running now.
     if let Some(tr) = arc_dyn(t) {

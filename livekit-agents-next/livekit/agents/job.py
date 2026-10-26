@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import datetime
 import functools
 import inspect
+import json
 import logging
 import multiprocessing as mp
 import os
@@ -314,6 +316,22 @@ class JobContext:
         otel_metrics.flush_turn_metrics(session.history)
 
         report = self.make_session_report(session)
+
+        from .voice.remote_session import ConsoleCall
+
+        # console recording, the report beside the session's other local files
+        if ConsoleCall.record:
+            directory = Path(
+                "console-recordings",
+                f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
+            )
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / "session_report.json").write_text(
+                    json.dumps(report.to_dict(), indent=2)
+                )
+            except Exception:
+                logger.exception("failed to save session report")
 
         has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)
@@ -640,6 +658,10 @@ class JobContext:
                 single_peer_connection,
             )
         )
+
+    async def _core_connect(self) -> None:
+        # a session on the job's room connects it beside its start (`_core.SessionJob`)
+        await self.connect()
 
     async def _connect(
         self,

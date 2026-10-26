@@ -52,11 +52,6 @@ impl Run {
             let (mic, frames) = fakes::FakeAudioInput::new();
             (mic, frames, registry.new_mic())
         });
-        let session_host = console.as_ref().map(|_| {
-            let host = RemoteSessionHost::new(time.clock(), Arc::new(TokioSpawner::current()));
-            host.set_port(Arc::new(fakes::FakeConsolePort));
-            Arc::new(host)
-        });
         let options = HostOptions::new(session_kwargs(setup));
         let room_io = RoomIoConfig {
             close_on_disconnect: setup.room.is_some_and(|r| r.close_on_disconnect),
@@ -108,7 +103,7 @@ impl Run {
                 }),
                 None,
                 tts,
-                Some(Arc::new(WireSink { console: session_host.clone(), time: time.clone() })),
+                Some(Arc::new(WireSink)),
                 // The run answers the hook calls itself (`HookAnswer`).
                 None,
                 None,
@@ -195,6 +190,13 @@ impl Run {
                 None,
                 lk_agents_abi::Maybe::NotGiven,
                 Some("AS_fuzz".into()),
+                // `ConsoleCall`: the session hosts the CLI's requests on the console's socket.
+                console.as_ref().map(|_| {
+                    Arc::new(fakes::FakeConsolePort)
+                        as Arc<dyn lk_agents_voice::remote_session::SessionPort>
+                }),
+                console.as_ref().map(|(io, _)| io.clone()),
+                None,
                 tasks.clone(),
             )
             .expect("assemble the session"),
@@ -239,17 +241,9 @@ impl Run {
         }
         api.start(false).expect("a new session starts").await.expect("the session started");
         let runtime = runtime_rx.await.expect("the probe takes the session's cores");
-        // `ConsoleCall.start()`: the host runs on the socket, which then carries the microphone.
-        let console = match (console, session_host) {
-            (Some((io, cli)), Some(host)) => {
-                host.start(io.as_transport(), Some(io.as_console()))
-                    .await
-                    .expect("the console's socket is open");
-                Some((host, cli))
-            }
-            _ => None,
-        };
-        let console_mic = console.as_ref().map(|(_, cli)| (registry.new_mic(), cli.clone()));
+        // The session started its host on the console's socket, which then carries the microphone.
+        let console = console.map(|(_, cli)| cli);
+        let console_mic = console.as_ref().map(|cli| (registry.new_mic(), cli.clone()));
         // The answering-machine detector, as `AMD.__aenter__` attaches it once the call is up:
         // its config as the host resolves it; it then awaits the callee in the room.
         if let Some(amd) = setup.amd {
@@ -404,77 +398,11 @@ pub(super) const AVATAR: &str = "avatar";
 pub(super) const CALLER: &str = "caller";
 
 /// `on_event`: the host's sink, handed each event's wire form. What the run reads is the typed
-/// event the probe saw first; a console forwards what the CLI renders.
-struct WireSink {
-    console: Option<Arc<RemoteSessionHost>>,
-    time: Timebase,
-}
+/// event the probe saw first; a console's events are the session's own to forward.
+struct WireSink;
 
 impl SessionEvents for WireSink {
-    fn event(&self, wire: &lk_agents_abi::voice::events::HostWire) {
-        let (Some(host), Some(event)) = (&self.console, console_event(wire)) else { return };
-        let _ = host.send_wire(event, Some(self.time.wall_secs()));
-    }
-}
-
-/// `ConsoleCall.forward` and `_tools_executed`: the events the CLI renders, in its shapes.
-fn console_event(wire: &lk_agents_abi::voice::events::HostWire) -> Option<WireEvent> {
-    use lk_agents_abi::voice::events::{HostWire as W, ToolUpdate};
-    use lk_agents_abi::worker::remote_session::{
-        ErrorWire, FunctionCallOutputRef, FunctionCallRef, FunctionToolsExecutedWire,
-        ToolCallStartedWire, ToolExecutionUpdatedWire, ToolUpdateWire,
-    };
-    Some(match wire {
-        W::AgentStateChanged(ev) => WireEvent::AgentStateChanged(ev.clone()),
-        W::UserStateChanged(ev) => WireEvent::UserStateChanged(ev.clone()),
-        W::UserTranscript(ev) => WireEvent::UserInputTranscribed(ev.clone()),
-        W::EotPrediction(ev) => WireEvent::EotPrediction(ev.clone()),
-        W::AgentFalseInterruption(ev) => WireEvent::AgentFalseInterruption(ev.clone()),
-        W::ItemAdded(ev)
-            if matches!(ev.item, ChatItem::Message(_) | ChatItem::AgentHandoff(_)) =>
-        {
-            WireEvent::ConversationItemAdded(ev.clone())
-        }
-        W::Error(ev) => WireEvent::Error(ErrorWire { message: ev.error.to_string() }),
-        W::ToolExecutionUpdated(ev) => WireEvent::ToolExecutionUpdated(ToolExecutionUpdatedWire {
-            update: match &ev.update {
-                ToolUpdate::Started(started) => {
-                    let call = &started.function_call;
-                    ToolUpdateWire::Started(ToolCallStartedWire {
-                        id: call.id.clone(),
-                        call_id: call.call_id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                    })
-                }
-                ToolUpdate::Updated(updated) => ToolUpdateWire::CallUpdated(updated.clone()),
-                ToolUpdate::Ended(ended) => ToolUpdateWire::Ended(ended.clone()),
-                ToolUpdate::Reply(reply) => ToolUpdateWire::ReplyUpdated(reply.clone()),
-            },
-        }),
-        W::FunctionToolsExecuted(ev) => WireEvent::FunctionToolsExecuted(FunctionToolsExecutedWire {
-            function_calls: ev
-                .function_calls
-                .iter()
-                .map(|c| FunctionCallRef {
-                    name: c.name.clone(),
-                    arguments: c.arguments.clone(),
-                    call_id: c.call_id.clone(),
-                })
-                .collect(),
-            function_call_outputs: ev
-                .function_call_outputs
-                .iter()
-                .map(|o| FunctionCallOutputRef {
-                    call_id: o.call_id.clone(),
-                    name: o.name.clone(),
-                    output: o.output.clone(),
-                    is_error: o.is_error,
-                })
-                .collect(),
-        }),
-        _ => return None,
-    })
+    fn event(&self, _wire: &lk_agents_abi::voice::events::HostWire) {}
 }
 
 pub(super) fn turn_detection(mode: TurnMode) -> Option<TurnDetection> {

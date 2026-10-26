@@ -959,6 +959,87 @@ async def room_camera() -> None:
     await session.aclose()
 
 
+async def console() -> None:
+    """``lk agent console``: the CLI's socket is the session's audio and its remote session's
+    transport. The CLI asks for the session's state and a typed turn, sees the session's events,
+    acks the played audio, and the socket ends when the session closes."""
+    import struct
+
+    from livekit.agents.voice.remote_session import ConsoleCall
+    from livekit.protocol.agent_pb import agent_session as pb
+
+    print("== console")
+    accepted: asyncio.Future[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = (
+        asyncio.get_running_loop().create_future()
+    )
+    server = await asyncio.start_server(lambda r, w: accepted.set_result((r, w)), "127.0.0.1", 0)
+    ConsoleCall.addr = f"127.0.0.1:{server.sockets[0].getsockname()[1]}"
+    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    await session.start(FrontDesk())
+    reader, writer = await asyncio.wait_for(accepted, 10)
+
+    def send(msg: pb.AgentSessionMessage) -> None:
+        data = msg.SerializeToString()
+        writer.write(struct.pack(">I", len(data)) + data)
+
+    async def recv() -> pb.AgentSessionMessage | None:
+        try:
+            (size,) = struct.unpack(">I", await reader.readexactly(4))
+            return pb.AgentSessionMessage.FromString(await reader.readexactly(size))
+        except asyncio.IncompleteReadError:
+            return None
+
+    events: list[str] = []
+    responses: dict[str, pb.SessionResponse] = {}
+
+    async def until(request_id: str) -> pb.SessionResponse:
+        while request_id not in responses:
+            msg = await asyncio.wait_for(recv(), 10)
+            assert msg is not None, "the socket ended early"
+            kind = msg.WhichOneof("message")
+            if kind == "event":
+                events.append(msg.event.WhichOneof("event"))
+            elif kind == "response":
+                responses[msg.response.request_id] = msg.response
+            elif kind == "audio_playback_flush":
+                send(
+                    pb.AgentSessionMessage(
+                        audio_playback_finished=pb.AgentSessionMessage.ConsoleIO.AudioPlaybackFinished()
+                    )
+                )
+        return responses[request_id]
+
+    send(
+        pb.AgentSessionMessage(
+            request=pb.SessionRequest(
+                request_id="req_state", get_session_state=pb.SessionRequest.GetSessionState()
+            )
+        )
+    )
+    state = await until("req_state")
+    assert not state.error and state.get_session_state.agent_id, state
+    send(
+        pb.AgentSessionMessage(
+            request=pb.SessionRequest(
+                request_id="req_run", run_input=pb.SessionRequest.RunInput(text="hello there")
+            )
+        )
+    )
+    run = await until("req_run")
+    assert not run.error, run.error
+    items = [i.WhichOneof("item") for i in run.run_input.items]
+    print(f"console run_input items {items}")
+    assert "message" in items, items
+    await session.aclose()
+    while (msg := await asyncio.wait_for(recv(), 10)) is not None:
+        if msg.WhichOneof("message") == "event":
+            events.append(msg.event.WhichOneof("event"))
+    print(f"console events {sorted(set(events))}")
+    assert {"agent_state_changed", "conversation_item_added"} <= set(events), events
+    writer.close()
+    server.close()
+
+
 async def job() -> None:
     """A console job, as a job process runs it: the entrypoint connects (twice: once is made) and
     waits for the participant in the room, for whom a participant entrypoint runs, an API call is
@@ -1189,6 +1270,7 @@ async def main() -> int:
     await filler()
     await keyterms()
     await room_camera()
+    await console()
     await job()
     log_transport()
     return 0

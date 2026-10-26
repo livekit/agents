@@ -673,6 +673,10 @@ struct HostParts {
     has_options: bool,
     /// Where `AMD` awaits the callee: the call's room, `None` on an offline (console) session.
     call_room: Option<Arc<dyn lk_agents_rtc::RtcRoom>>,
+    /// The remote session protocol this session serves, if it does.
+    remote: Option<Arc<crate::remote_session::driver::Hosting>>,
+    /// The job whose room the session runs in.
+    job: Option<Arc<dyn SessionJob>>,
 }
 
 /// One stream, in emission order, so ordering between items, handoffs and completions needs no
@@ -792,6 +796,15 @@ pub trait SessionEvents: Send + Sync {
     fn event(&self, wire: &HostWire);
 }
 
+/// The job a session runs in, as `start()` sequences it: the room connected beside the opening,
+/// before the remote session host starts on it.
+#[lk_agents_abi::host(proxy(cancel_on_drop))]
+#[async_trait::async_trait]
+pub trait SessionJob: Send + Sync {
+    /// `JobContext.connect()`: the room connected, once however many callers.
+    async fn connect(&self) -> Result<(), HostError>;
+}
+
 /// The agent's hooks, run by the host and awaited by the core: each hook call is answered with
 /// what its method returns, or `Failed` when it raises (after `hook_failed`). A hook still running
 /// when the loop has returned is cancelled.
@@ -813,9 +826,6 @@ pub trait SessionHooks: Send + Sync {
     ) -> Result<Vec<lk_agents_abi::ToolSpec>, HostError>;
     /// The session closes: what runs beside it (AMD) closes first.
     async fn closing(&self) -> Result<(), HostError>;
-    /// The loop has returned and the host's `close` handlers ran: the remote session host closes,
-    /// before the room io.
-    async fn closed(&self) -> Result<(), HostError>;
     /// `Agent.on_user_turn_completed(turn_ctx, new_message)` on the current agent: the message's
     /// text as the hook left it, the turn's items when it changed them, and whether it raised
     /// `StopResponse`.
@@ -1207,11 +1217,17 @@ pub enum SessionBuildError {
     Node(lk_agents_abi::errors::HostError),
 }
 
-/// `start()`'s awaited half failed.
+/// `start()`'s awaited half failed: the loop, or what the host does beside it (the room's
+/// connection, the remote session's transport), which raises as itself.
 #[lk_agents_abi::host(error(kind = "RuntimeError"))]
 #[derive(Debug, thiserror::Error)]
-#[error("the session failed to start: {0}")]
-pub struct StartFailed(DriverError);
+pub enum StartFailed {
+    #[error("the session failed to start: {0}")]
+    Driver(DriverError),
+    #[error(transparent)]
+    #[host(delegate)]
+    Host(HostError),
+}
 
 /// `aclose(reason=..)` with a reason that is no `CloseReason`.
 #[lk_agents_abi::host(error(kind = "ValueError"))]

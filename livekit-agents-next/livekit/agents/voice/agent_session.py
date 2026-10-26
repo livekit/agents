@@ -49,7 +49,6 @@ from ..types import (
 from ..utils.misc import is_dev_mode, is_given, is_hosted
 from . import io
 from .agent import Agent, ModelSettings, _BindingContextVar, _VoiceBinding
-from .console import ConsoleCall
 from .events import (
     AgentEvent,
     AgentState,
@@ -66,7 +65,7 @@ from .events import (
     UserState,
 )
 from .keyterm_detection import _detection_llm, _record_keyterms
-from .remote_session import SessionHost
+from .remote_session import ConsoleCall, SessionPort
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolRunner
@@ -243,7 +242,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._core: _core.LiveSession = None  # type: ignore[assignment]
         self._room: rtc.Room | _core.FakeRoom | _core.OfflineRoom | None = None
         self._amd: AMD | None = None
-        self._console: ConsoleCall | None = None
         self._agent: Agent | None = None
         self._chat_ctx = ChatContext.empty()
         self._agent_state: AgentState = "initializing"
@@ -264,7 +262,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # the job's telemetry parents its spans here; the core traces the session itself
         self._root_span_context = None
         self._session_start_context = None
-        self._host: SessionHost | None = None
 
     # --- state ---------------------------------------------------------------------------
 
@@ -388,14 +385,30 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         one) with ``agent`` driving."""
         if self._core is not None:
             return
-        self._console = self._host = ConsoleCall.claim(self)
+        console = ConsoleCall.claim()
         job_ctx = get_job_context(required=False)
-        if self._console is not None:
+        if console is not None:
             room = _core.OfflineRoom("console")
         elif not is_given(room):
             room = job_ctx.room if job_ctx is not None else _core.OfflineRoom("console")
         if chat_ctx is not None:
             self._chat_ctx = chat_ctx.copy()
+        # the job's session (on its room, or the console's) records and reports for the job and
+        # closes with it; the primary one, and the console's, serve the remote session protocol
+        in_job = job_ctx is not None and (console is not None or room is job_ctx.room)
+        hosting = console is not None
+        if in_job:
+            assert job_ctx is not None
+            plan = _core.plan_session_start(
+                job_default=job_ctx.job.enable_recording,
+                has_job_context=True,
+                another_session_is_primary=job_ctx._primary_agent_session is not None,
+            )
+            self._recording_options = plan["recording"]
+            if plan["is_primary"]:
+                job_ctx._primary_agent_session = self
+            hosting = hosting or plan["hosting"]
+            job_ctx.init_recording(self._recording_options)
 
         hooks = _AgentHooks(self)
         frame = self._frame(agent)
@@ -426,9 +439,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             realtime=native,
             realtime_host=realtime,
             tts=_core_leg(frame.get("tts", self._tts)),
-            host_audio_input=self._console.io if self._console else self._input.audio,
+            host_audio_input=self._input.audio,
             host_video_input=self._input.video,
-            host_audio_output=self._console.io if self._console else self._output.audio,
+            host_audio_output=self._output.audio,
             host_transcription_output=self._output.transcription,
             on_event=self,
             hooks=hooks,
@@ -451,37 +464,18 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             keyterm_llm=_core_leg(keyterm_llm) if keyterm_llm is not None else None,
             keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
             **{node: frame[node] for node in _NODES if node in frame},
+            remote_session=SessionPort(self) if hosting else None,
+            console=console,
+            # the core connects the job's room beside its opening
+            job=job_ctx if in_job and console is None else None,
         )
         self._agent = agent
         self._started_at = time.time()
-        if self._console is not None:
-            await self._start_core(capture_run)
-            await self._console.start()
-            return
-        if job_ctx is None or room is not job_ctx.room:
-            await self._start_core(capture_run)
-            return
-        # the job's room: this session records and reports for the job, connects the room,
-        # closes with it, and the primary one serves the remote session protocol there
-        plan = _core.plan_session_start(
-            job_default=job_ctx.job.enable_recording,
-            has_job_context=True,
-            another_session_is_primary=job_ctx._primary_agent_session is not None,
-        )
-        self._recording_options = plan["recording"]
-        if plan["is_primary"]:
-            job_ctx._primary_agent_session = self
-        if plan["hosting"]:
-            self._host = SessionHost.on_room(self, room)
-        job_ctx.init_recording(self._recording_options)
-        job_ctx.add_shutdown_callback(
-            lambda: self._core.aclose(reason=CloseReason.JOB_SHUTDOWN.value, drain=False)
-        )
-        await asyncio.gather(self._start_core(capture_run), job_ctx.connect())
-        if self._host is not None:
-            await self._host.start()
-
-    async def _start_core(self, capture_run: bool) -> None:
+        if in_job:
+            assert job_ctx is not None
+            job_ctx.add_shutdown_callback(
+                lambda: self._core.aclose(reason=CloseReason.JOB_SHUTDOWN.value, drain=False)
+            )
         await self._core.start(capture_run=capture_run)
         if self.options["ivr_detection"]:
             await self._start_ivr_detection()
@@ -742,8 +736,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _core_event(self, wire: dict[str, Any]) -> None:
         kind = wire["type"]
-        if self._host is not None:
-            self._host.forward(wire)
         if kind in IGNORED_EVENTS:
             return
         if (public := PUBLIC_EVENTS.get(kind)) is not None:
@@ -938,11 +930,6 @@ class _AgentHooks:
     async def _core_closing(self) -> None:
         if self._session._amd is not None:
             await self._session._amd.aclose()
-
-    async def _core_closed(self) -> None:
-        if (host := self._session._host) is not None:
-            self._session._host = None
-            await host.aclose()
 
     async def _core_on_user_turn_completed(
         self, new_transcript: str, transcript_confidence: float

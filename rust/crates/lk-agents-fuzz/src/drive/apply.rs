@@ -808,7 +808,7 @@ impl Run {
     /// The CLI asks the session something, as its TUI does; refused with no console.
     fn console_ask(&mut self, ask: ConsoleAsk) -> bool {
         use proto::session_request::{self as rq, Request};
-        let Some((_, cli)) = &self.console else { return false };
+        let Some(cli) = &self.console else { return false };
         let request = match ask {
             ConsoleAsk::Ping => Request::Ping(rq::Ping {}),
             ConsoleAsk::History => Request::GetChatHistory(rq::GetChatHistory {}),
