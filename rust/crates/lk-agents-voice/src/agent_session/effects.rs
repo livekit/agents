@@ -769,14 +769,41 @@ impl Driver {
                     }
                 }
             }
+            // `AgentOutput.audio` / `.transcription`'s setters (`io.py`): the sink replaced is
+            // detached, the new one attached or detached as its switch says. A synchroniser left
+            // behind would otherwise keep pacing into the old leaf.
             E::Audio(AudioOp::SetAudioOutput(id)) => {
                 let sink = id.and_then(|id| self.shared.resources.audio_output(id));
-                let previous = self.shared.output.set_audio(sink);
+                let previous = self.shared.output.set_audio(sink.clone());
+                if !same_sink(&previous, &sink) {
+                    if let Some(old) = &previous {
+                        old.on_detached();
+                    }
+                    if let Some(new) = &sink {
+                        if self.shared.output.audio_enabled() {
+                            new.on_attached()
+                        } else {
+                            new.on_detached()
+                        }
+                    }
+                }
                 self.observe_recorder(previous.as_deref());
             }
             E::Audio(AudioOp::SetTranscriptionOutput(id)) => {
                 let sink = id.and_then(|id| self.shared.resources.text_output(id));
-                self.shared.output.set_transcription(sink);
+                let previous = self.shared.output.set_transcription(sink.clone());
+                if !same_sink(&previous, &sink) {
+                    if let Some(old) = &previous {
+                        old.on_detached();
+                    }
+                    if let Some(new) = &sink {
+                        if self.shared.output.transcription_enabled() {
+                            new.on_attached()
+                        } else {
+                            new.on_detached()
+                        }
+                    }
+                }
             }
             E::Audio(AudioOp::SetOutputEnabled { output, enabled }) => match output {
                 crate::trace::OutputKind::Audio => {
@@ -809,5 +836,14 @@ impl Driver {
             // Journal-only: the owner's declaration, read by the rules.
             E::Decision(Decision::TurnDeclared { owner: _ }) => {}
         }
+    }
+}
+
+/// The setter's `if sink is self._sink: return`.
+fn same_sink<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => std::ptr::addr_eq(Arc::as_ptr(a), Arc::as_ptr(b)),
+        (None, None) => true,
+        _ => false,
     }
 }
