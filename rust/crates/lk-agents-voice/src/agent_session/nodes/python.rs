@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::python::{
-    Ambient, Convert, HostHandle, HostProxy, ItemSink, ItemStream, NodeCalls, NodeSource,
+    Ambient, Convert, HostHandle, HostProxy, ItemSink, ItemStream, NodeCallState, NodeCalls, NodeSource,
     captured, check_pid, item_stream, pyo3_async_runtimes,
 };
 use lk_agents_abi::{
@@ -233,7 +233,7 @@ fn caller_input<T: Send + 'static>(
 }
 
 /// The provider's stream fed from `input` and drained into `output`, until either side stops.
-/// The calls it makes itself go to `calls`, each before the item that follows it.
+/// Its calls are read through `calls` by the node's reader.
 async fn pump<I: Send + 'static, O: Send + 'static>(
     opened: Result<(Box<dyn lk_agents_abi::StreamSink<I>>, Box<dyn lk_agents_abi::StreamSource<O>>), ProviderError>,
     mut input: NodeSource<I>,
@@ -246,6 +246,15 @@ async fn pump<I: Send + 'static, O: Send + 'static>(
         Ok(halves) => halves,
         Err(e) => return output.fail(e),
     };
+    if let Some(calls) = &calls {
+        let mut calls = calls.lock().unwrap_or_else(|p| p.into_inner());
+        match (source.call_ledger(), &mut *calls) {
+            (_, NodeCallState::Streamed) => {}
+            (None, _) => *calls = NodeCallState::Streamed,
+            (Some(ledger), NodeCallState::Metered(ledgers)) => ledgers.push(ledger),
+            (Some(ledger), NodeCallState::Unused) => *calls = NodeCallState::Metered(vec![ledger]),
+        }
+    }
     let feed_clock = Arc::clone(&clock);
     let feed = async move {
         while let Ok(Some(item)) = input.next().await {
@@ -259,17 +268,10 @@ async fn pump<I: Send + 'static, O: Send + 'static>(
         // fed: what remains is the provider's
         std::future::pending::<()>().await
     };
-    let record = |source: &mut Box<dyn lk_agents_abi::StreamSource<O>>| {
-        let Some(calls) = &calls else { return };
-        let Some(records) = source.take_call_metrics(false) else { return };
-        let mut calls = calls.lock().unwrap_or_else(|p| p.into_inner());
-        calls.get_or_insert_with(Vec::new).extend(records);
-    };
     let drain = async {
         loop {
             match source.next().await {
                 Ok(Some(item)) => {
-                    record(&mut source);
                     if !output.send(&item) {
                         return;
                     }

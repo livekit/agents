@@ -164,8 +164,12 @@ impl Tts for StreamAdapter {
             duration: 0.0,
             pending_transcript: Vec::new(),
             held: None,
-            call: None,
-            calls: Vec::new(),
+            ledger: Arc::new(Mutex::new(Ledger {
+                tts: self.tts.clone(),
+                clock: Arc::clone(&self.clock),
+                call: None,
+                calls: Vec::new(),
+            })),
             request_id: stream_uid(),
             segment_id: stream_uid(),
         };
@@ -238,11 +242,9 @@ struct AdapterSource {
     /// Ride on the next frame sent (`tts/tts.py:1104`).
     pending_transcript: Vec<TimedString>,
     held: Option<SynthesizedAudio>,
-    /// The sentence being synthesized, metered as its own call (`ChunkedStream`'s
-    /// `_metrics_monitor_task`): the reference's adapter forwards each one's `TTSMetrics`.
-    call: Option<Call>,
-    /// The calls finished and not yet read.
-    calls: Vec<AgentMetrics>,
+    /// Each sentence metered as its own call; shared, so a node's reader can end the one in
+    /// flight while the node's pump waits on it.
+    ledger: Arc<Mutex<Ledger>>,
     /// One request and one segment for the whole stream (`stream_adapter.py:96`).
     request_id: String,
     segment_id: String,
@@ -259,7 +261,17 @@ fn wall_secs(clock: &dyn Clock) -> f64 {
     clock.wall().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()
 }
 
-impl AdapterSource {
+/// The sentence being synthesized, metered as its own call (`ChunkedStream`'s
+/// `_metrics_monitor_task`): the reference's adapter forwards each one's `TTSMetrics`.
+struct Ledger {
+    tts: Arc<dyn Tts>,
+    clock: Arc<dyn Clock>,
+    call: Option<Call>,
+    /// The calls finished and not yet read.
+    calls: Vec<AgentMetrics>,
+}
+
+impl Ledger {
     /// The sentence's record; none for a failed one (`_current_attempt_has_error`).
     fn end_call(&mut self, cancelled: bool) {
         let Some(mut call) = self.call.take() else { return };
@@ -269,6 +281,19 @@ impl AdapterSource {
         let context = Context { timestamp: now, label, cancelled, metadata: Some(id.metadata()) };
         let record = call.fold.finish(now, call.start, &call.text, 0, 0, 0.0, false, context);
         self.calls.extend(record.map(AgentMetrics::Tts));
+    }
+
+    fn take(&mut self, in_flight: bool) -> Vec<AgentMetrics> {
+        if in_flight {
+            self.end_call(true);
+        }
+        std::mem::take(&mut self.calls)
+    }
+}
+
+impl AdapterSource {
+    fn ledger(&self) -> std::sync::MutexGuard<'_, Ledger> {
+        self.ledger.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Bounded on the session clock; a timeout is remembered for `close`.
@@ -336,14 +361,15 @@ impl AdapterSource {
             if let Some(cur) = self.current.as_mut() {
                 match cur.next().await {
                     Ok(Some(a)) => {
-                        if let Some(call) = self.call.as_mut() {
-                            let (clock, start) = (&self.clock, call.start);
-                            call.fold.observe(&a, || wall_secs(&**clock) - start);
+                        let clock = Arc::clone(&self.clock);
+                        if let Some(call) = self.ledger().call.as_mut() {
+                            let start = call.start;
+                            call.fold.observe(&a, || wall_secs(&*clock) - start);
                         }
                         return Ok(Some(a));
                     }
                     Ok(None) => {
-                        self.end_call(false);
+                        self.ledger().end_call(false);
                         // Dropping a host stream does not cancel its task; close it, bounded.
                         self.close_current().await;
                         continue;
@@ -351,7 +377,7 @@ impl AdapterSource {
                     // Close a failed inner source too, or it counts as open after the retry
                     // decision.
                     Err(e) => {
-                        self.call = None;
+                        self.ledger().call = None;
                         self.close_current().await;
                         return Err(e);
                     }
@@ -380,7 +406,7 @@ impl AdapterSource {
             }
             let start = wall_secs(&*self.clock);
             self.current = Some(self.tts.synthesize(&text).await?);
-            self.call = Some(Call { text, start, fold: TtsMetricState::for_host(false) });
+            self.ledger().call = Some(Call { text, start, fold: TtsMetricState::for_host(false) });
         }
     }
 }
@@ -439,10 +465,14 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
     }
 
     fn take_call_metrics(&mut self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
-        if in_flight {
-            self.end_call(true);
-        }
-        Some(std::mem::take(&mut self.calls))
+        Some(self.ledger().take(in_flight))
+    }
+
+    fn call_ledger(&self) -> Option<crate::utils::stream::CallLedger> {
+        let ledger = Arc::clone(&self.ledger);
+        Some(Arc::new(move |in_flight| {
+            ledger.lock().unwrap_or_else(|p| p.into_inner()).take(in_flight)
+        }))
     }
 
     /// `TimedOut` if any inner stream did not ack.

@@ -90,6 +90,10 @@ impl<T: Send> StreamSource<T> for Final<T> {
     ) -> Option<Vec<lk_agents_abi::metrics::base::AgentMetrics>> {
         self.0.take_call_metrics(in_flight)
     }
+
+    fn call_ledger(&self) -> Option<lk_agents_abi::utils::stream::CallLedger> {
+        self.0.call_ledger()
+    }
 }
 
 fn duplex<I, T: Send + 'static>(

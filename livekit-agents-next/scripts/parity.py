@@ -1287,6 +1287,47 @@ async def sc_tts_node(call: Call) -> None:
     await _close(call)
 
 
+async def sc_tts_node_own_audio(call: Call) -> None:
+    """A tts_node that makes its own audio and never calls a TTS: nothing is metered for it."""
+    from livekit import rtc
+    from livekit.agents import Agent
+
+    class Beep(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You beep.")
+
+        async def tts_node(self, text: Any, model_settings: Any) -> Any:
+            n = SAMPLE_RATE // 50
+            async for chunk in text:
+                for _ in range(max(1, len(chunk))):
+                    yield rtc.AudioFrame(b"\x00\x00" * n, SAMPLE_RATE, 1, n)
+
+    session = await _pipeline(call, agent=Beep())
+    call.handle("say", session.say("Twenty characters... And a second sentence."))
+    await call.settle(3)
+    await _close(call)
+
+
+async def sc_tts_node_interruption(call: Call) -> None:
+    """A tts_node over the default one, cut mid-sentence: the cut sentence is metered too."""
+    from livekit.agents import Agent
+
+    class Through(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You pass through.")
+
+        async def tts_node(self, text: Any, model_settings: Any) -> Any:
+            async for frame in Agent.default.tts_node(self, text, model_settings):
+                yield frame
+
+    session = await _pipeline(call, agent=Through())
+    call.handle("long", session.generate_reply(user_input="tell me something long"))
+    await call.settle(1)
+    call.speak("wait, stop")
+    await call.settle(5)
+    await _close(call)
+
+
 async def sc_stt_node(call: Call) -> None:
     from livekit.agents import Agent, stt
 
@@ -1572,6 +1613,8 @@ SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "llm_node": sc_llm_node,
     "llm_node_str": sc_llm_node_str,
     "tts_node": sc_tts_node,
+    "tts_node_own_audio": sc_tts_node_own_audio,
+    "tts_node_interruption": sc_tts_node_interruption,
     "stt_node": sc_stt_node,
     "user_away": sc_user_away,
     "preemptive": sc_preemptive,

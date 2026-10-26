@@ -51,7 +51,18 @@ pub trait StreamSource<T>: Send {
     fn take_call_metrics(&mut self, _in_flight: bool) -> Option<Vec<crate::metrics::base::AgentMetrics>> {
         None
     }
+
+    /// [`take_call_metrics`](Self::take_call_metrics) for another task, readable while this
+    /// stream's reader waits on it (a node's default `tts_node` pumps it on its own task).
+    fn call_ledger(&self) -> Option<CallLedger> {
+        None
+    }
 }
+
+/// A stream's provider calls, read by another task: `take(in_flight)` is
+/// [`StreamSource::take_call_metrics`].
+pub type CallLedger =
+    std::sync::Arc<dyn Fn(bool) -> Vec<crate::metrics::base::AgentMetrics> + Send + Sync>;
 
 /// The reference's `INTERRUPTION_TIMEOUT`. Real teardowns take under a millisecond.
 pub const HOST_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(5);

@@ -129,9 +129,20 @@ enum State {
     Done,
 }
 
-/// The provider calls a default node made for the node it runs in, `None` until one meters its
-/// calls (a `StreamAdapter`'s sentences): the node's own output is not a call.
-pub type NodeCalls = Arc<Mutex<Option<Vec<crate::metrics::base::AgentMetrics>>>>;
+/// The provider calls of the default nodes a node runs, as the reference meters a TTS's streams
+/// and not the node's output.
+#[derive(Default)]
+pub enum NodeCallState {
+    /// No default node: the node makes its own audio, which no provider call stands behind.
+    #[default]
+    Unused,
+    /// A provider stream that is one call: the node's output stands for it.
+    Streamed,
+    /// Providers that meter their own calls (a `StreamAdapter`'s sentences).
+    Metered(Vec<crate::utils::stream::CallLedger>),
+}
+
+pub type NodeCalls = Arc<Mutex<NodeCallState>>;
 
 /// A node's output as the core drains it, as the reference's node task does: an awaitable is
 /// awaited first, an async iterable is read to its end, a single value is the one item, `None` is
@@ -243,10 +254,16 @@ impl<T: Send> crate::StreamSource<T> for NodeSource<T> {
 
     fn take_call_metrics(
         &mut self,
-        _in_flight: bool,
+        in_flight: bool,
     ) -> Option<Vec<crate::metrics::base::AgentMetrics>> {
         let calls = self.calls.as_ref()?;
-        calls.lock().unwrap_or_else(|p| p.into_inner()).as_mut().map(std::mem::take)
+        match &*calls.lock().unwrap_or_else(|p| p.into_inner()) {
+            NodeCallState::Unused => in_flight.then(Vec::new),
+            NodeCallState::Streamed => None,
+            NodeCallState::Metered(ledgers) => {
+                Some(ledgers.iter().flat_map(|take| take(in_flight)).collect())
+            }
+        }
     }
 
     /// An iterator is closed (`aclose()`) in its context, bounded; a coroutine never awaited is

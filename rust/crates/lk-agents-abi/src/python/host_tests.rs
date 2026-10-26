@@ -282,7 +282,8 @@ out = (loop, context, [context.run(f) for f in (stream, one, nothing)])
 
     // Catches: a node's output metered as one call when the default node it ran metered its
     // provider's (a non-streaming TTS's sentences, as the reference's `ChunkedStream`s report
-    // theirs), or those records read twice. Until a default node meters, the node is its own call.
+    // theirs), or those records read twice; a node that ran no default node metered at all; the
+    // call in flight when the node is cut not ended.
     #[test]
     fn a_node_reports_the_calls_its_default_node_made() {
         use crate::StreamSource as _;
@@ -298,11 +299,24 @@ out = (loop, context, [context.run(f) for f in (stream, one, nothing)])
             assert!(source().take_call_metrics(false).is_none());
             let calls = crate::python::NodeCalls::default();
             let mut node = source().with_calls(calls.clone());
-            assert!(node.take_call_metrics(false).is_none(), "no default node metered yet");
+            assert!(node.take_call_metrics(false).is_none(), "no default node ran yet");
+            assert_eq!(node.take_call_metrics(true), Some(vec![]), "its own audio is no call");
             let record = crate::metrics::base::AgentMetrics::Tts(crate::metrics::testkit::tts());
-            *calls.lock().unwrap() = Some(vec![record.clone(), record]);
+            let ledger = std::sync::Arc::new(std::sync::Mutex::new(vec![record.clone(), record]));
+            let cut = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let take: crate::utils::stream::CallLedger = {
+                let (ledger, cut) = (ledger.clone(), cut.clone());
+                std::sync::Arc::new(move |in_flight| {
+                    cut.fetch_or(in_flight, std::sync::atomic::Ordering::Relaxed);
+                    std::mem::take(&mut *ledger.lock().unwrap())
+                })
+            };
+            *calls.lock().unwrap() = crate::python::NodeCallState::Metered(vec![take]);
             assert_eq!(node.take_call_metrics(false).map(|r| r.len()), Some(2));
             assert_eq!(node.take_call_metrics(true).map(|r| r.len()), Some(0));
+            assert!(cut.load(std::sync::atomic::Ordering::Relaxed), "the call in flight is ended");
+            *calls.lock().unwrap() = crate::python::NodeCallState::Streamed;
+            assert!(node.take_call_metrics(true).is_none(), "a one-call stream: the node meters");
             event_loop.call_method0("close").unwrap();
         });
     }
