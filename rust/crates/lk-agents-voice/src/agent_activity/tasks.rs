@@ -581,8 +581,15 @@ impl Driver {
             let open: Vec<SpeechId> = (self.activity.speech_scheduler.speech_ids())
                 .filter(|s| !blocked.contains(*s))
                 .collect();
+            // The close cancels the tasks it winds down (`AgentTask.cancel()`): its cut, not the
+            // host's.
+            let cause = if self.session.closing.is_some() {
+                InterruptCause::Closing
+            } else {
+                InterruptCause::Host
+            };
             for speech in open {
-                match self.interrupt_speech(now, speech, InterruptCause::Host, true, out) {
+                match self.interrupt_speech(now, speech, cause, true, out) {
                     Ok(InterruptOutcome::Now { .. } | InterruptOutcome::Already) => {}
                     Err(_) => out.trace(CoreStep::PortFailure(
                         "a cancelled task's forced interrupt was refused",
