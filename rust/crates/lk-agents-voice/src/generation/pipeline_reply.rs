@@ -177,6 +177,11 @@ pub(crate) fn finish_step_with(
     tools_running: bool,
     provider_request_ids: Option<Vec<String>>,
 ) -> Finished {
+    let mut acc = acc;
+    // A preemptive reply learns its user turn's metrics when it is adopted, after it started.
+    if let Some(metrics) = handle.user_metrics() {
+        acc.user_metrics = Some(metrics);
+    }
     let mut outcome = acc.finish(FinishInputs {
         stopped_speaking_at: shared.time.wall_secs(),
         interrupted,

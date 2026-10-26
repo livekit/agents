@@ -426,6 +426,8 @@ struct Inner {
     chat_items: Vec<ChatItem>,
     tasks: Vec<Arc<dyn Cancellable>>,
     watchdog_armed: bool,
+    /// The metrics of the user turn a preemptive reply was adopted for.
+    user_metrics: Option<lk_agents_abi::MetricsReport>,
 }
 
 pub struct SpeechHandle {
@@ -488,6 +490,7 @@ impl SpeechHandle {
                 chat_items: Vec::new(),
                 tasks: Vec::new(),
                 watchdog_armed: false,
+                user_metrics: None,
             }),
         }
     }
@@ -797,6 +800,15 @@ impl SpeechHandle {
     /// `chat_items`, as a clone.
     pub fn chat_items(&self) -> Vec<ChatItem> {
         self.inner.lock().unwrap().chat_items.clone()
+    }
+
+    /// `preemptive.user_message.metrics = metrics_report`: the turn a preemptive reply answers.
+    pub(crate) fn set_user_metrics(&self, metrics: lk_agents_abi::MetricsReport) {
+        self.inner.lock().unwrap().user_metrics = Some(metrics);
+    }
+
+    pub(crate) fn user_metrics(&self) -> Option<lk_agents_abi::MetricsReport> {
+        self.inner.lock().unwrap().user_metrics.clone()
     }
 }
 

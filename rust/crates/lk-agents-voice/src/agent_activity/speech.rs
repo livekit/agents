@@ -454,6 +454,9 @@ impl Driver {
         let TurnEdits { instructions, chat_ctx, user_text } = edits;
         let user = self.user_turn_item(info, user_text.as_deref());
         if let Some(preemptive) = adopted {
+            if let Some(handle) = self.activity.speech_scheduler.handle(preemptive) {
+                handle.set_user_metrics(user.metrics.clone());
+            }
             self.commit_item(
                 ChatItem::Message(user),
                 Source::UserTurn { turn: info.turn_id },
