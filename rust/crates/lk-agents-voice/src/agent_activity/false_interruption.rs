@@ -330,7 +330,7 @@ impl Driver {
         }
         // A realtime server keeps generating (into its own mirror) until told not to.
         if realtime {
-            self.realtime_interrupt(out);
+            self.realtime_interrupt(cause, out);
         }
         Ok(InterruptOutcome::Now)
     }
@@ -714,7 +714,7 @@ impl Driver {
         }
         // `self._rt_session.interrupt()`, unconditional and once.
         if !socket_told {
-            self.realtime_interrupt(out);
+            self.realtime_interrupt(cause, out);
         }
         // Speeches whose step is spoken and tools running: still `_current_speech` to the
         // reference, so they end (outputs commit, no follow-up).

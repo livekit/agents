@@ -13,7 +13,7 @@ use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::generation::ReplySource;
 use crate::generation::pipeline_reply::fatal;
 use crate::speech_handle::{InputDetails, SpeechHandle};
-use crate::trace::RealtimeStep;
+use crate::trace::{InterruptCause, InterruptStep, RealtimeStep};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::realtime::{
     Event, PushAudio, RealtimeCapabilities, RealtimeCommand, RealtimeError, RealtimeSession,
@@ -104,8 +104,10 @@ pub(crate) mod realtime_state {
         Failed(RealtimeError),
         /// A late answer is discarded.
         TimedOut(RealtimeError),
-        Interrupted,
-        Closing,
+        /// Cut by the interruption that also cut the server's turn, or by the close, for its cause.
+        Interrupted(crate::trace::InterruptCause),
+        /// The socket is gone: the reference's pending `generate_reply()` future fails with a
+        /// `RealtimeError`, which `_realtime_reply_task` logs, as it does a timeout.
         Ended,
     }
 
@@ -347,6 +349,8 @@ pub const AUTO_TOOL_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 /// `"timed out waiting for realtime auto tool reply from %s"`.
 pub const AUTO_TOOL_REPLY_TIMED_OUT: &str = "timed out waiting for realtime auto tool reply";
 
+const REALTIME_SESSION_ENDED: &str = "the realtime session ended";
+
 /// `flush` is a no-op, not `CommitAudio`: an input boundary means the gate substituted silence, not
 /// that the user ended a turn.
 pub(crate) struct RealtimeAudioSink {
@@ -557,7 +561,7 @@ impl Driver {
                 }
                 self.rt_send(bare_reply(&req_id), out);
             }
-            return self.settle(request, call, Settled::Closing, out);
+            return self.settle(request, call, Settled::Interrupted(InterruptCause::Closing), out);
         }
         let cmd = match &request {
             Request::Say { .. } if !t.caps.supports_say => {
@@ -913,7 +917,9 @@ impl Driver {
             Settled::Failed(err) | Settled::TimedOut(err) => {
                 handle.mark_done(Some(fatal(err.message)))
             }
-            Settled::Interrupted | Settled::Closing | Settled::Ended => {
+            Settled::Ended => handle.mark_done(Some(fatal(REALTIME_SESSION_ENDED.to_owned()))),
+            Settled::Interrupted(cause) => {
+                out.trace(InterruptStep::Interrupted { speech: id, cause, force: true });
                 let _ = handle.interrupt(true);
                 handle.mark_done(None);
             }
@@ -1053,7 +1059,7 @@ impl Driver {
 
     /// The open generation cancelled and truncated to what was heard. The interruption decision is
     /// `decide_interrupt`'s; this only actuates it.
-    pub(crate) fn realtime_interrupt(&mut self, out: &mut Out) {
+    pub(crate) fn realtime_interrupt(&mut self, cause: InterruptCause, out: &mut Out) {
         if self.activity.rt_session.is_none() {
             return;
         }
@@ -1089,7 +1095,7 @@ impl Driver {
                 self.activity.realtime_state.truncate_on_clear = Some((speech, message_id));
             }
         }
-        self.settle_all(Settled::Interrupted, true, out);
+        self.settle_all(Settled::Interrupted(cause), true, out);
     }
 
     /// The cleared buffer reports where playback stopped: the interrupted message is truncated to
@@ -1122,7 +1128,7 @@ impl Driver {
         for (cmd, ..) in self.activity.realtime_state.cancel_where(|_| true) {
             self.rt_send(cmd, out);
         }
-        self.settle_all(Settled::Closing, true, out);
+        self.settle_all(Settled::Interrupted(InterruptCause::Closing), true, out);
     }
 }
 

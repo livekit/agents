@@ -444,7 +444,7 @@ impl Driver {
                         None => false,
                     };
                     if !socket_told {
-                        self.realtime_interrupt(out);
+                        self.realtime_interrupt(InterruptCause::Host, out);
                     }
                 }
                 // `can_pause` and "audio enabled" are the new sink's; release a pause it can't hold.

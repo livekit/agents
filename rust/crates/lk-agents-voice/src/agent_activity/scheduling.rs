@@ -800,7 +800,7 @@ impl Driver {
         let _ = self.interrupt_speech(now, speech, cause, true, out);
         // The server keeps generating a cancelled realtime turn until told.
         if self.activity.rt_session.is_some() {
-            self.realtime_interrupt(out);
+            self.realtime_interrupt(cause, out);
         }
         // Born past the close's edge: released here, since the loop may stop first.
         if reason == Rejected::Stopped {

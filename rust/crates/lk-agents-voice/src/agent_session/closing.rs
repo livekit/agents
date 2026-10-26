@@ -603,7 +603,7 @@ impl Driver {
         // Release a held pause so no turn during the transcript wait resolves it as false.
         self.cancel_speech_pause(now, out);
         // The socket too, settling every `generate_reply()` still awaiting `GenerationCreated`.
-        self.realtime_interrupt(out);
+        self.realtime_interrupt(InterruptCause::Closing, out);
     }
 
     pub(crate) fn settle_waiters_at_end(&mut self) {

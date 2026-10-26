@@ -323,7 +323,7 @@ impl Driver {
                     }
                 };
                 if tell_socket {
-                    self.realtime_interrupt(out);
+                    self.realtime_interrupt(InterruptCause::Host, out);
                 }
                 // The user taking the floor back invalidates a preemptive generation about what
                 // they were saying.
