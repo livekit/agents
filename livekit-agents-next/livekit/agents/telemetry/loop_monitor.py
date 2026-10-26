@@ -5,7 +5,8 @@ synchronous work on it (a blocking HTTP client inside a tool, a large numpy oper
 ``time.sleep``) is audible as latency or jitter. asyncio only reports slow callbacks in debug
 mode, which is far too expensive for production and only logs.
 
-This module observes a single loop without patching asyncio:
+The watchdog is the core's (``_core.LoopMonitor``); this module turns its reports into the
+span, log and metric. It observes a single loop without patching asyncio:
 
 * a **heartbeat** scheduled with ``loop.call_later`` every ``tick_interval`` records the time.
   When the loop is blocked, the tick fires late by the length of the block (to within one
@@ -48,22 +49,17 @@ loop waiting in ``select``; both leave the heartbeat on time.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import contextvars
-import gc
 import math
 import os
-import sys
 import threading
-import time
-import traceback
-from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from opentelemetry import context as otel_context, trace
 
+from .. import _core
 from ..log import logger
 from . import otel_metrics, session_context, trace_types
 from .traces import tracer
@@ -87,9 +83,6 @@ ENV_ERROR_THRESHOLD_MS = "LIVEKIT_AGENTS_LOOP_BLOCK_ERROR_MS"
 
 MAX_SPANS_PER_MINUTE = 30
 MAX_LOGS_PER_MINUTE = 5
-MAX_STACK_FRAMES = 20
-# a second stack sample once a block has lasted this many warn thresholds
-_LATE_SAMPLE_FACTOR = 10
 
 SPAN_NAME = "event_loop_blocked"
 
@@ -141,48 +134,24 @@ def _env_seconds(name: str, default: float) -> float:
     return value_ms / 1000.0
 
 
-class _RateLimiter:
-    """Allow at most ``limit`` events per rolling 60 s window; count what was refused."""
-
-    def __init__(self, limit: int) -> None:
-        self._limit = limit
-        self._events: deque[float] = deque()
-        self.suppressed = 0
-
-    def allow(self, now: float) -> bool:
-        window_start = now - 60.0
-        while self._events and self._events[0] < window_start:
-            self._events.popleft()
-        if len(self._events) >= self._limit:
-            self.suppressed += 1
-            return False
-        self._events.append(now)
-        return True
-
-    def take_suppressed(self) -> int:
-        n, self.suppressed = self.suppressed, 0
-        return n
-
-
 @dataclass
-class _StackSample:
-    lag: float
+class BlockedReport:
+    duration: float
+    started_at: float
+    warn_threshold: float
+    severity: str
+    gc_time: float
+    cpu_time: float
+    watchdog_gap: float
+    process_descheduled: bool
     task_name: str | None
-    frames: list[traceback.FrameSummary]
-    # the span that was current in the blocked task (Python 3.12+ exposes a task's context)
-    span_context: trace.SpanContext | None = None
-    # the module a lazy import was loading when sampled; the import machinery's frames say
-    # nothing useful by themselves
+    stacks: list[str]
     importing: str | None = None
-
-
-@dataclass
-class _Incident:
-    """Watchdog-side view of one block, keyed by the heartbeat sequence it interrupted."""
-
-    tick_seq: int
-    samples: list[_StackSample] = field(default_factory=list)
-    late_sampled: bool = False
+    """The module a lazy import was loading when the loop thread was sampled."""
+    parent_span_context: trace.SpanContext | None = None
+    """The span current in the blocked task when sampled; the stall span nests under it."""
+    location: str | None = None
+    """The innermost frame of the last sample that is not the import machinery."""
 
 
 class EventLoopMonitor:
@@ -198,62 +167,28 @@ class EventLoopMonitor:
         name: str = "event-loop",
         emit_spans: bool = True,
     ) -> None:
-        if warn_threshold <= 0:
-            raise ValueError("warn_threshold must be > 0")
-        if error_threshold < warn_threshold:
-            raise ValueError("error_threshold must be >= warn_threshold")
-        if tick_interval <= 0 or tick_interval > warn_threshold:
-            raise ValueError("tick_interval must be > 0 and <= warn_threshold")
-
-        self._loop = loop
-        self._warn = warn_threshold
-        self._error = error_threshold
-        self._tick = tick_interval
-        # the watchdog samples one interval before the threshold, so a block that only just
-        # crosses it has a sample rather than ending before the watchdog looks; a lag under
-        # that is never sampled, so ordinary sub-threshold jitter costs nothing
-        self._first_sample_lag = max(warn_threshold - tick_interval, tick_interval)
-        self._name = name
         self._emit_spans = emit_spans  # False on the worker loop: no job to attach spans to
-
-        # written by the loop thread, read by the watchdog
-        self._last_tick_at: float = 0.0
-        self._tick_seq: int = 0
-        self._loop_thread_ident: int | None = None
-
-        # written by the watchdog, read by the loop thread under _lock
-        self._lock = threading.Lock()
-        self._incident: _Incident | None = None
-
-        self._gc_started_at: float | None = None
-        self._gc_time: float = 0.0
-        self._last_thread_cpu: float = 0.0
-        # the watchdog's worst late wake-up since the last tick, and when it last ran at all:
-        # a watchdog starved along with the loop means the process was not being scheduled
-        # (see _consume_watchdog_gap)
-        self._watchdog_late: tuple[float, float] | None = None  # (woke_at, gap)
-        self._watchdog_last_wake: float = time.monotonic()
-
-        self._timer: asyncio.TimerHandle | None = None
-        self._watchdog: threading.Thread | None = None
-        self._stop_event = threading.Event()
-        self._started = False
-        self._closed = False
-
-        self._span_limiter = _RateLimiter(MAX_SPANS_PER_MINUTE)
-        self._log_limiter = _RateLimiter(MAX_LOGS_PER_MINUTE)
+        self._core = _core.LoopMonitor(
+            loop,
+            warn_threshold=warn_threshold,
+            error_threshold=error_threshold,
+            tick_interval=tick_interval,
+            name=name,
+            emit_spans=emit_spans,
+            report=self._report,
+            span_of=_current_span_in,
+        )
         self._report_context: contextvars.Context | None = None
-
         # tests and integrations may observe reports without going through OTel
         self._on_report: Callable[[BlockedReport], None] | None = None
 
     @property
     def warn_threshold(self) -> float:
-        return self._warn
+        return self._core.warn_threshold  # type: ignore[no-any-return]
 
     @property
     def error_threshold(self) -> float:
-        return self._error
+        return self._core.error_threshold  # type: ignore[no-any-return]
 
     def set_report_context(self, ctx: contextvars.Context | None) -> None:
         """Emit reports inside ``ctx``, a copy of the job's context taken inside ``job_entrypoint``:
@@ -263,129 +198,16 @@ class EventLoopMonitor:
 
     def start(self) -> None:
         """Arm the heartbeat. Safe to call from any thread, before or after the loop runs."""
-        if self._started or self._closed:
-            return
-        self._started = True
-        self._loop.call_soon_threadsafe(self._arm)
+        self._core.start()
 
     def stop(self) -> None:
         """Stop the heartbeat and the watchdog. Idempotent."""
-        if self._closed:
-            return
-        self._closed = True
-        self._stop_event.set()
-        if self._timer is not None:
-            self._timer.cancel()
-            self._timer = None
-        with contextlib.suppress(ValueError):
-            gc.callbacks.remove(self._on_gc)
-        if self._watchdog is not None and self._watchdog is not threading.current_thread():
-            self._watchdog.join(timeout=1.0)
+        self._core.stop()
 
-    # -- loop thread --
-
-    def _arm(self) -> None:
-        if self._closed:
-            return
-        self._loop_thread_ident = threading.get_ident()
-        self._last_tick_at = time.monotonic()
-        self._last_thread_cpu = time.thread_time()
-        gc.callbacks.append(self._on_gc)
-        self._timer = self._loop.call_later(self._tick, self._on_tick)
-        self._watchdog = threading.Thread(
-            target=self._watchdog_main, name=f"livekit-loop-monitor-{self._name}", daemon=True
-        )
-        self._watchdog.start()
-
-    def _on_tick(self) -> None:
-        if self._closed:
-            return
-        now = time.monotonic()
-        expected_at = self._last_tick_at + self._tick
-        lag = now - expected_at
-        thread_cpu = time.thread_time()
-        cpu_time = thread_cpu - self._last_thread_cpu
-        gc_time, self._gc_time = self._gc_time, 0.0
-
-        blocked_seq = self._tick_seq
-        self._tick_seq += 1
-        self._last_tick_at = now
-        self._last_thread_cpu = thread_cpu
-        watchdog_gap = self._consume_watchdog_gap(now, window_start=expected_at - self._tick)
-        self._timer = self._loop.call_later(self._tick, self._on_tick)
-
-        with self._lock:
-            incident = self._incident
-            self._incident = None
-        if lag < self._warn:
-            return
-        samples = (
-            incident.samples if incident is not None and incident.tick_seq == blocked_seq else []
-        )
-
-        self._report(self._build_report(lag, gc_time, cpu_time, watchdog_gap, samples))
-
-    def _build_report(
-        self,
-        lag: float,
-        gc_time: float,
-        cpu_time: float,
-        watchdog_gap: float,
-        samples: list[_StackSample],
-    ) -> BlockedReport:
-        # the watchdog is an independent thread: if it too woke late by most of the stall,
-        # either the process was not being scheduled (host contention, CPU quota, a suspended
-        # machine) or the loop thread held the GIL throughout (a native call that never
-        # releases it). CPU time tells them apart: a descheduled process burns none. Only
-        # descheduling is not the agent's fault, and it is never more than a warning.
-        watchdog_starved = watchdog_gap >= lag * 0.5
-        process_descheduled = watchdog_starved and cpu_time < lag * 0.5
-        stacks = [
-            f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
-            + _format_frames(s.frames, importing=s.importing)
-            for s in samples
-            if s.frames
-        ]
-        if not stacks and not process_descheduled:
-            stacks = [
-                "# no sample: the loop thread held the GIL for the whole stall, so the sampler "
-                "could not run (a native call that does not release the GIL)"
-                if watchdog_starved
-                else "# no sample: the block ended before the watchdog looked"
-            ]
-        return BlockedReport(
-            duration=lag,
-            # the block started no earlier than the last on-time tick
-            started_at=time.time() - lag,
-            warn_threshold=self._warn,
-            severity="error" if lag >= self._error and not process_descheduled else "warning",
-            gc_time=min(gc_time, lag),
-            cpu_time=cpu_time,
-            watchdog_gap=watchdog_gap,
-            process_descheduled=process_descheduled,
-            task_name=next((s.task_name for s in samples if s.task_name), None),
-            importing=next((s.importing for s in samples if s.importing), None),
-            stacks=stacks,
-            parent_span_context=next(
-                (s.span_context for s in samples if s.span_context is not None), None
-            ),
-        )
-
-    def _on_gc(self, phase: str, info: dict[str, Any]) -> None:
-        if threading.get_ident() != self._loop_thread_ident:
-            return
-        if phase == "start":
-            self._gc_started_at = time.monotonic()
-        elif phase == "stop" and self._gc_started_at is not None:
-            self._gc_time += time.monotonic() - self._gc_started_at
-            self._gc_started_at = None
-
-    def _report(self, report: BlockedReport) -> None:
-        now = time.monotonic()
-        emit_span = self._span_limiter.allow(now)
-        # host descheduling is nothing the developer can fix: no log, and it must not use up
-        # the log quota either. The span and the metric keep the record.
-        emit_log = not report.process_descheduled and self._log_limiter.allow(now)
+    def _report(self, raw: dict[str, Any]) -> None:
+        emit_span, emit_log = raw.pop("emit_span"), raw.pop("emit_log")
+        suppressed = raw.pop("suppressed")
+        report = BlockedReport(**raw)
 
         def _emit() -> None:
             # the metric and the session summary count every stall, including the ones the
@@ -404,7 +226,7 @@ class EventLoopMonitor:
             if not emit_span and not emit_log:
                 return
             if emit_span and self._emit_spans:
-                self._emit_span(report, suppressed=self._span_limiter.take_suppressed())
+                self._emit_span(report, suppressed=suppressed)
             if emit_log:
                 self._emit_log(report)
             if self._on_report is not None:
@@ -462,7 +284,7 @@ class EventLoopMonitor:
         span.end(end_time=end_ns)
 
     def _emit_log(self, report: BlockedReport) -> None:
-        location = _innermost_location(report.stacks[-1]) if report.stacks else None
+        location = report.location
         extra: dict[str, Any] = {
             "duration": round(report.duration, 4),
             "threshold": report.warn_threshold,
@@ -495,130 +317,6 @@ class EventLoopMonitor:
             extra=extra,
         )
 
-    # -- watchdog thread --
-
-    def _consume_watchdog_gap(self, now: float, *, window_start: float) -> float:
-        """How long the watchdog thread was kept from running during this tick's window.
-
-        Two sources, since the two threads race when a descheduled process resumes: the
-        watchdog's recorded late wake-up if it fell inside the window (an older one belongs to
-        a stall already reported), and the time since its last run if it has not run since
-        before the window opened."""
-        late, self._watchdog_late = self._watchdog_late, None
-        gap = 0.0
-        if late is not None and late[0] >= window_start:
-            gap = late[1]
-        if self._watchdog_last_wake < window_start:
-            gap = max(gap, now - self._watchdog_last_wake - self._tick)
-        return max(gap, 0.0)
-
-    def _watchdog_main(self) -> None:
-        while True:
-            before = time.monotonic()
-            if self._stop_event.wait(self._tick):
-                return
-            woke_at = time.monotonic()
-            gap = woke_at - before - self._tick
-            late = self._watchdog_late
-            if late is None or gap > late[1]:
-                self._watchdog_late = (woke_at, gap)
-            self._watchdog_last_wake = woke_at
-            try:
-                self._watchdog_check()
-            except Exception:
-                logger.exception("event loop watchdog failed")
-
-    def _watchdog_check(self) -> None:
-        # snapshot both together: the tick updates seq then time, so a torn read can only
-        # make the lag look smaller for one iteration
-        seq = self._tick_seq
-        lag = time.monotonic() - (self._last_tick_at + self._tick)
-        if lag < self._first_sample_lag:
-            return
-
-        with self._lock:
-            incident = self._incident
-            if incident is None or incident.tick_seq != seq:
-                incident = self._incident = _Incident(tick_seq=seq)
-            want_first = not incident.samples
-            want_late = not incident.late_sampled and lag >= self._warn * _LATE_SAMPLE_FACTOR
-        if not (want_first or want_late):
-            return
-
-        sample = self._sample_loop_thread(lag)
-        with self._lock:
-            if self._incident is incident:
-                incident.samples.append(sample)
-                if want_late:
-                    incident.late_sampled = True
-
-    def _sample_loop_thread(self, lag: float) -> _StackSample:
-        task_name: str | None = None
-        span_context: trace.SpanContext | None = None
-        task: asyncio.Task[Any] | None = None
-        with contextlib.suppress(Exception):
-            task = asyncio.current_task(loop=self._loop)
-            if task is not None:
-                task_name = task.get_name()
-                # Task.get_context() is 3.12+; older interpreters fall back to the session root
-                get_context = getattr(task, "get_context", None)
-                if get_context is not None:
-                    span_context = _current_span_in(get_context())
-
-        frames: list[traceback.FrameSummary] = []
-        current_frames = sys._current_frames()
-        # the entry for this thread is this function's own frame, which holds the dict in a
-        # local: the cycle would keep every thread's frame and locals alive until a gc pass
-        current_frames.pop(threading.get_ident(), None)
-        frame = current_frames.get(self._loop_thread_ident) if self._loop_thread_ident else None
-        if frame is None and task is not None:
-            # the loop moved to another thread since the heartbeat was armed: find the thread
-            # whose stack contains the blocked task's coroutine frame, and remember it
-            coro_frame = getattr(task.get_coro(), "cr_frame", None)
-            for ident, candidate in current_frames.items():
-                f: Any = candidate
-                while f is not None and f is not coro_frame:
-                    f = f.f_back
-                if f is not None:
-                    frame = candidate
-                    self._loop_thread_ident = ident
-                    break
-        importing: str | None = None
-        if frame is not None:
-            importing = _module_being_imported(frame)
-            # no source lookup here: the watchdog holds the GIL while it samples, and the loop
-            # thread is what it is taking it from. Its wake-ups also measure host starvation,
-            # so it must never wait on a file.
-            frames = list(
-                traceback.StackSummary.extract(traceback.walk_stack(frame), lookup_lines=False)
-            )
-            frames.reverse()  # outermost first, like extract_stack
-        return _StackSample(
-            lag=lag,
-            task_name=task_name,
-            frames=frames,
-            span_context=span_context,
-            importing=importing,
-        )
-
-
-@dataclass
-class BlockedReport:
-    duration: float
-    started_at: float
-    warn_threshold: float
-    severity: str
-    gc_time: float
-    cpu_time: float
-    watchdog_gap: float
-    process_descheduled: bool
-    task_name: str | None
-    stacks: list[str]
-    importing: str | None = None
-    """The module a lazy import was loading when the loop thread was sampled."""
-    parent_span_context: trace.SpanContext | None = None
-    """The span current in the blocked task when sampled; the stall span nests under it."""
-
 
 def _current_span_in(task_context: contextvars.Context) -> trace.SpanContext | None:
     """The span current in another task's context, read without entering it.
@@ -631,81 +329,6 @@ def _current_span_in(task_context: contextvars.Context) -> trace.SpanContext | N
             current = trace.get_current_span(value).get_span_context()
             return current if current.is_valid else None
     return None
-
-
-_ASYNCIO_DIR = os.path.dirname(asyncio.__file__) + os.sep
-_IPC_DIR_FRAGMENT = os.sep + os.path.join("livekit", "agents", "ipc") + os.sep
-
-
-def _is_import_machinery(frame: traceback.FrameSummary) -> bool:
-    return (frame.filename or "").startswith("<frozen importlib")
-
-
-def _module_being_imported(frame: Any) -> str | None:
-    """The innermost module the import system is loading in this frame stack, if any.
-
-    ``importlib._bootstrap._find_and_load(name, import_)`` is on the stack for every module
-    being imported; nested imports stack these, innermost last."""
-    f = frame
-    while f is not None:
-        if f.f_code.co_name == "_find_and_load" and f.f_code.co_filename.startswith(
-            "<frozen importlib"
-        ):
-            name = f.f_locals.get("name")
-            return name if isinstance(name, str) else None
-        f = f.f_back
-    return None
-
-
-def _format_frames(frames: list[traceback.FrameSummary], *, importing: str | None = None) -> str:
-    # drop the event loop machinery (the same in every sample), but never the innermost frame:
-    # a C call scheduled directly as a callback has no frame of its own
-    trimmed = [
-        f
-        for i, f in enumerate(frames)
-        if i == len(frames) - 1 or not (f.filename or "").startswith(_ASYNCIO_DIR)
-    ]
-    # cut through the innermost job-runner (ipc/) frame: everything above it is the same in
-    # every sample. A stall entirely inside the runner keeps its frames.
-    runner = [i for i, f in enumerate(trimmed) if _IPC_DIR_FRAGMENT in (f.filename or "")]
-    if runner and runner[-1] < len(trimmed) - 1:
-        trimmed = trimmed[runner[-1] + 1 :]
-    # collapse runs of importlib frames (a dozen per module level of a lazy import) so they do
-    # not push the caller that triggered the import out of the frame budget
-    entries: list[str] = []
-    run = 0
-    for i, f in enumerate(trimmed):
-        if _is_import_machinery(f) and i != len(trimmed) - 1:
-            run += 1
-            continue
-        if run:
-            entries.append(_import_run_line(run, importing))
-            run = 0
-        # file, line and function, like faulthandler: the source text would be read from the
-        # file here, on the loop thread that just unblocked
-        entries.append(f'  File "{f.filename}", line {f.lineno}, in {f.name}\n')
-    if run:
-        entries.append(_import_run_line(run, importing))
-    return "".join(entries[-MAX_STACK_FRAMES:]).rstrip()
-
-
-def _import_run_line(run: int, importing: str | None) -> str:
-    what = f", importing {importing}" if importing else ""
-    return f"  [import system: {run} frames{what}]\n"
-
-
-def _innermost_location(stack: str) -> str | None:
-    """The innermost frame of the sample that is the agent's or a library's own code: the
-    import machinery's frames are skipped, since the caller that triggered the import is
-    the actionable location."""
-    lines = [
-        ln
-        for ln in stack.splitlines()
-        if ln.lstrip().startswith("File ") and "<frozen importlib" not in ln
-    ]
-    if not lines:
-        return None
-    return lines[-1].strip().removeprefix("File ")
 
 
 # -- per-loop registry --

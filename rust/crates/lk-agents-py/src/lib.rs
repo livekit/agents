@@ -20,6 +20,7 @@ extern crate lk_agents_voice as _;
 extern crate lk_agents_worker as _;
 
 /// `init(role)` and the registration table.
+pub mod loop_monitor;
 pub mod runtime;
 /// `Storage`, `ThreadDb`, `Lease`, `Streams`, `StreamReader`, `Registry` and the storage errors.
 pub mod storage;
