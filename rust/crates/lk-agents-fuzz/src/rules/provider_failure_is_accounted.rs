@@ -2,17 +2,22 @@
 //!
 //! The fake fails only when the case tells it to, so every accepted failure is a known input. The
 //! driver may answer it in more than one legitimate way -- arm a retry for that leg, fail the
-//! speech and say so on the handle, or begin closing once its error tolerance is spent -- but it
-//! may not swallow it. The host's own close, which ends every run, is not the driver closing over
+//! speech and say so on the handle, report it as the session's `error` event naming the speech
+//! (all the reference does when the step's tools still run: `_on_error`), or begin closing once
+//! its error tolerance is spent -- but it may not swallow it. A speech interrupted in the turn
+//! that would read the failure abandons the request, and the failure with it. The host's own close, which ends every run, is not the driver closing over
 //! anything. This is the ownership half of provider failure; whether the retry count
 //! and tolerance are right is a separate contract that needs the configured values.
-use lk_agents_voice::trace::{GenerationStep, ProviderKind, Step};
+use lk_agents_voice::{
+    events::{ErrorSource, SessionEvent},
+    trace::{GenerationStep, ProviderKind, Step},
+};
 
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::{Input, Ref},
-    record::{Handle, Recording},
+    record::{Handle, Observed, Recording},
 };
 
 pub struct ProviderFailureIsAccounted;
@@ -20,7 +25,7 @@ pub struct ProviderFailureIsAccounted;
 impl Rule for ProviderFailureIsAccounted {
     const CONTRACT: Contract = Contract {
         id: "provider_failure_is_accounted",
-        guarantee: "Every injected model failure is retried, surfaced on its speech, or followed by the session closing.",
+        guarantee: "Every injected model failure is retried, surfaced on its speech or as an error event naming it, or followed by the session closing.",
         examples: &[failure_then_retry, failure_then_failed_speech],
         counterexamples: &[failure_swallowed],
         probe: None,
@@ -52,14 +57,24 @@ impl Rule for ProviderFailureIsAccounted {
                         Step::Generation(GenerationStep::RetryArmed { leg: ProviderKind::Llm, .. })
                     )
             });
-            let surfaced = speech.error().is_some();
+            let reported = internal.steps().iter().any(|(at, step)| {
+                *at > sent.at
+                    && matches!(step, Step::Emitted(SessionEvent::Error(ev))
+                        if ev.source == ErrorSource::Llm && ev.speech.is_some_and(|s| s.0 == id))
+            });
+            let surfaced = speech.error().is_some() || reported;
+            // Interrupted no later than the turn that would read the failure: the request was
+            // abandoned with its speech, as the reference cancels an interrupted reply's inference.
+            let end =
+                inputs.driver_turn_after(sent.at).and_then(|t| t.ended).unwrap_or(Observed::END);
+            let abandoned = internal.speech(id).interrupted_at().is_some_and(|at| at <= end);
             // Only the driver's own error close counts as closing over the failure: the host closing
             // the session at the end of every run says nothing about what the driver did with it.
             let closing = internal.error_close_requested_after(sent.at);
 
             check.expect(
                 &speech,
-                retried || surfaced || closing,
+                retried || surfaced || abandoned || closing,
                 format!(
                     "a model failure on {chat:?} for speech {id} was neither retried, surfaced nor \
                      closed over"

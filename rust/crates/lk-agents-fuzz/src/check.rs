@@ -97,7 +97,6 @@ impl Check {
 pub const KNOWN_FINDINGS: &[&str] = &[
     "forwarded_while_enabled",
     "output_replacement_is_clean",
-    "provider_failure_is_accounted",
     "speech_settles",
     "tool_lifecycle",
 ];
