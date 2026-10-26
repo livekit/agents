@@ -53,6 +53,7 @@ pub fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
                 ("prompt_cached_tokens", LogValue::Int(u64::from(m.prompt_cached_tokens))),
                 ("cache_creation_tokens", LogValue::Int(u64::from(m.cache_creation_tokens))),
                 ("completion_tokens", LogValue::Int(u64::from(m.completion_tokens))),
+                ("reasoning_tokens", LogValue::Int(u64::from(m.reasoning_tokens))),
                 ("tokens_per_second", LogValue::Float(round_to(m.tokens_per_second, 2))),
             ]);
             "LLM metrics"
@@ -106,7 +107,13 @@ pub fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
             "EOU metrics"
         }
         AgentMetrics::Stt(m) => {
-            fields.push(("audio_duration", LogValue::Float(round_to(m.audio_duration, 2))));
+            fields.extend([
+                ("audio_duration", LogValue::Float(round_to(m.audio_duration, 2))),
+                ("input_tokens", LogValue::Int(u64::from(m.input_tokens))),
+                ("output_tokens", LogValue::Int(u64::from(m.output_tokens))),
+                ("total_tokens", LogValue::Int(u64::from(m.total_tokens))),
+                ("input_audio_tokens", LogValue::Int(u64::from(m.input_audio_tokens))),
+            ]);
             "STT metrics"
         }
         AgentMetrics::Interruption(m) => {
@@ -193,7 +200,7 @@ mod tests {
     fn absent_metadata_omits_both_keys_while_empty_strings_become_unknown() {
         let mut m = tk::stt();
         let none = log_fields(&AgentMetrics::Stt(m.clone())).unwrap();
-        assert_eq!(keys(&none), ["audio_duration"]);
+        assert_eq!(keys(&none), ["audio_duration", "input_tokens", "output_tokens", "total_tokens", "input_audio_tokens"]);
 
         m.metadata = Some(Metadata { model_name: Some(String::new()), model_provider: None });
         let empty = log_fields(&AgentMetrics::Stt(m.clone())).unwrap();
