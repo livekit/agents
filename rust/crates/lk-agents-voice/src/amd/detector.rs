@@ -342,12 +342,12 @@ impl AmdSystem {
 
     pub fn step(&mut self, now: Ts, input: In) {
         let Some(machine) = self.machine.take() else { return };
-        let skipped = machine.skips_replies();
+        let skipped = machine.skips_turn_reply();
         let (next, out) = machine.step(now, input);
         self.machine = Some(next);
         self.perform(now, out);
         self.sync_tap();
-        let skips = self.machine.as_ref().is_some_and(Amd::skips_replies);
+        let skips = self.machine.as_ref().is_some_and(Amd::skips_turn_reply);
         if skips != skipped {
             let _ = self.peer.send(Origin::Amd, TurnCommand::SkipReplies(skips));
         }

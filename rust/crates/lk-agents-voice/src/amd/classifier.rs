@@ -315,6 +315,17 @@ impl Amd {
             if c.cfg.interrupt_on_machine && c.verdict.as_ref().is_some_and(|v| v.is_machine()))
     }
 
+    /// What `AMD._on_end_of_turn` answers for the next turn: the reference forwards the end of
+    /// turn to the classifier first, so a machine verdict that turn releases already skips its
+    /// reply. True as well while a machine verdict waits only on the end of turn.
+    pub fn skips_turn_reply(&self) -> bool {
+        self.skips_replies()
+            || matches!(self, Amd::Listening(c)
+                if c.cfg.interrupt_on_machine
+                    && c.verdict.as_ref().is_some_and(|v| v.is_machine())
+                    && (c.silence_reached || c.speech_ended_at.is_none()))
+    }
+
     /// The table. Closed takes nothing; `Close` from any other phase closes.
     pub fn step(self, now: Ts, input: In) -> (Amd, Out) {
         let mut out = Out::default();

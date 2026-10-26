@@ -70,6 +70,7 @@ mod wordless_audio_say;
 mod late_mic_released;
 mod llm_tokens_per_second;
 mod amd_consumes_turns;
+mod amd_releasing_turn_no_reply;
 mod amd_tap_opened_late;
 mod launch_held_by_unheard_speaker;
 mod handoff_refused_releases;
