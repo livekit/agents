@@ -1469,9 +1469,12 @@ async def test_fragments_are_forwarded_and_mirrored_as_growing_messages(
         await model.aclose()
 
 
-async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.MonkeyPatch) -> None:
-    """There are no turn events: the caller's fragments accumulate, and a second of their audio
-    pushed with no new fragment ends the turn."""
+async def test_the_callers_turn_ends_on_their_audio_once_the_model_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """There are no turn events: the caller's fragments accumulate however long they pause, and
+    once the model answers, their audio pushed with no new fragment ends the turn. Their last
+    words, transcribed behind the model's answer, still join it."""
     _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
@@ -1494,11 +1497,19 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         assert isinstance(interim, llm.InputTranscriptionCompleted)
         assert (interim.transcript, interim.is_final) == (" What is the", False)
 
+        for _ in range(30):
+            session.push_audio(_silence(100))
+        assert len(events) == 3  # a pause alone is not the end of the turn
+
+        session._handle_event(_transcript("assistant", "Let me", 5600))
+        session._handle_event(_transcript("user", " weather", 2200))
+        assert len(events) == 4
+
         # every frame but the last leaves the pause just short of ending the turn
         frames = int(gpt_live_model._MIN_SILENCE_MS // 100)
         for _ in range(frames - 1):
             session.push_audio(_silence(100))
-        assert len(events) == 3  # quiet, but not yet for the whole pause
+        assert len(events) == 4  # quiet, but not yet for the whole pause
 
         session.push_audio(_silence(100))
         assert [name for name, _ in events[-2:]] == [
@@ -1507,7 +1518,7 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         ]
         final = events[-2][1]
         assert isinstance(final, llm.InputTranscriptionCompleted)
-        assert (final.transcript, final.is_final) == (" What is the", True)
+        assert (final.transcript, final.is_final) == (" What is the weather", True)
         assert final.item_id == interim.item_id
         assert final.turn_started_at == interim.turn_started_at
     finally:
@@ -1515,10 +1526,11 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         await model.aclose()
 
 
-async def test_a_pause_on_the_models_clock_splits_fragments_that_arrive_together(
+async def test_the_models_answer_splits_the_callers_turns_and_a_pause_does_not(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bursty delivery must not merge two utterances into one turn."""
+    """Everything the caller says before the model answers is one turn; speech the model began
+    before the caller did is no answer to them."""
     _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
@@ -1528,17 +1540,25 @@ async def test_a_pause_on_the_models_clock_splits_fragments_that_arrive_together
         await session._update_session()
         await asyncio.sleep(0.05)
         session._handle_event(_transcript("user", "Hello", 1000))
-        session._handle_event(_transcript("user", "Again", 4000))
+        session._handle_event(_transcript("assistant", "So", 500))
+        session._handle_event(_transcript("user", " again", 4000))
+        session._handle_event(_transcript("assistant", "Hi", 4500))
+        session._handle_event(_transcript("user", "Next", 6000))
 
         finals = [
             ev.transcript
             for name, ev in events
             if name == "input_audio_transcription_completed" and ev.is_final
         ]
-        assert finals == ["Hello"]
+        assert finals == ["Hello again"]
         assert [name for name, _ in events].count("input_speech_started") == 2
         history = session._session_start_event().session.input or []
-        assert [m.content[0].text for m in history] == ["Hello", "Again"]
+        assert [(m.role, m.content[0].text) for m in history] == [
+            ("user", "Hello again"),
+            ("assistant", "So"),
+            ("assistant", "Hi"),
+            ("user", "Next"),
+        ]
     finally:
         await session.aclose()
         await model.aclose()
