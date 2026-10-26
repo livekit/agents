@@ -173,6 +173,25 @@ impl Run {
         Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
     }
 
+    /// Whether the driver armed a deadline the clock has not reached: a speech queued behind
+    /// `min_consecutive_speech_delay` waits on the driver's own timer, not on the case, so a round
+    /// that leaves one ahead is not quiet. The recorder's flush re-arms for as long as the session
+    /// lives and owes nobody anything.
+    fn deadline_ahead(&self) -> bool {
+        use lk_agents_voice::{agent_session::effects::Timer, trace::TimerName};
+        let now = self.record.now().at_ms;
+        self.record
+            .journal_where(|step| match step {
+                Step::Core(CoreStep::TimerArmed { timer, at })
+                    if *timer != TimerName::Session(Timer::RecorderFlush) =>
+                {
+                    Some(*at)
+                }
+                _ => None,
+            })
+            .any(|(_, at)| at.saturating_duration_since(Ts::ZERO).as_millis() as u64 > now)
+    }
+
     /// Whether the driver is still holding a turn open.
     ///
     /// Read from the driver's own decisions rather than from the case's inputs: an end of speech
@@ -319,7 +338,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
         let applied = run.record.applied();
         let taken =
             applied[applied.len() - 1 - releases..applied.len() - 1].iter().any(|a| a.accepted);
-        if releases == 0 || (run.record.driver_finished() && !taken) {
+        if (releases == 0 && !run.deadline_ahead()) || (run.record.driver_finished() && !taken) {
             quiet += 1;
         } else {
             quiet = 0;
