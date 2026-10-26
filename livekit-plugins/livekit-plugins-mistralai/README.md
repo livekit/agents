@@ -75,6 +75,42 @@ ref_audio_b64 = base64.b64encode(open("sample.mp3", "rb").read()).decode()
 tts = mistralai.TTS(ref_audio=ref_audio_b64)
 ```
 
+#### Voxtral 3
+
+The Voxtral 3 model (`voxtral-mini-tts-3`) is the default. By default the text is synthesized over http, sentence
+by sentence. The speech starts as soon as the first sentence of the LLM reply is complete.
+
+```python
+from livekit.plugins import mistralai
+
+tts = mistralai.TTS(model="voxtral-mini-tts-3", voice="en_paul_neutral")
+
+# Voxtral 3 adds multilingual voices (`voice_<n>`, see `TTSVoxtral3Voices`) and still accepts the older ones.
+# The older models only accept the older voices, anything else raises a ValueError.
+tts = mistralai.TTS(model="voxtral-mini-tts-3", voice="voice_447")  # Margaret, en-US
+
+# How expressive the speech is, between 1 and 5 (Voxtral 3 only)
+tts = mistralai.TTS(model="voxtral-mini-tts-3", expressiveness=3)
+
+# Pronunciation hints, as IPA phones per word (Voxtral 3 only, http only)
+tts = mistralai.TTS(phoneme_hints={"tomato": ["t", "ə", "m", "ɑ", "t", "oʊ"]})
+```
+
+##### Realtime websocket
+
+With `use_realtime=True` the speech is streamed over the realtime websocket api while the LLM generates the text,
+using a pool of connections reused between the requests. In our benchmarks it shortens the total time of long
+replies, but the speech starts later than with http when the text comes token by token from an LLM, and
+`phoneme_hints` isn't supported.
+
+```python
+tts = mistralai.TTS(use_realtime=True)
+```
+
+The streamed speech is always PCM, `response_format` only applies to the http mode. The realtime engine can't
+handle a single request of more than about 3,500 characters, so a longer reply is automatically split in several
+requests.
+
 ### LLM
 
 ```python
