@@ -1,8 +1,9 @@
-//! `#[host(proxy(host = ".."))]` on a core trait: the core calling a host object. Expands to
+//! `#[host(proxy)]` on a core trait: the core calling a host object. Expands to
 //! `Py<Trait><B: HostBridge = HostHandle>`, `impl Trait` for it, and `HostProxy for dyn Trait`
-//! (a registered native class first, else the proxy).
+//! (a registered native class first, else the proxy). `host = ".."` names the base class whose
+//! subclasses (plugins, io legs) lack the surface and are seen through `_core_view.duck`.
 //!
-//! Every method calls `_core_<method>`, crossing by signature: `fn m(&self) -> T` is read once at
+//! An unmarked method calls `_core_<method>`, crossing by signature: `fn m(&self) -> T` is read once at
 //! construction (every call on a `live` trait, unless it lends a borrow); `fn m(&self, ..)` is
 //! `call_soon_threadsafe`; `-> T` is called now under the GIL; `async` awaits on the host loop.
 //! Returned `dyn` streams/views wrap the returned object on this proxy's loop; errors are the
@@ -56,21 +57,15 @@ fn read(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<Proxy> {
         return Err(syn::Error::new_spanned(&tr.generics, "a generic trait has no single proxy"));
     }
     let host = m.text("proxy.host")?.map(str::to_owned);
-    let name = match (m.ident("proxy.name")?, &host) {
-        (Some(n), _) => n,
-        (None, Some(_)) => format_ident!("Py{}", tr.ident),
-        (None, None) => return Err(syn::Error::new_spanned(at, "proxy(name = \"..\") names the struct of a trait without `host`")),
-    };
+    let name = m.ident("proxy.name")?.unwrap_or_else(|| format_ident!("Py{}", tr.ident));
     let async_trait = tr.attrs.iter().any(|a| a.path().segments.last().is_some_and(|s| s.ident == "async_trait"));
     let mut methods = Vec::new();
     for item in &tr.items {
         let syn::TraitItem::Fn(f) = item else { continue };
         let fm = Metas::of(&f.attrs)?;
         let action = match (fm.head(), &host) {
-            ("", Some(_)) => Action::Core,
+            ("", _) => Action::Core,
             ("soon", None) => Action::Soon(fm.text("soon")?.unwrap_or_default().to_owned()),
-            ("", None) if f.default.is_some() => continue,
-            ("", None) => return Err(syn::Error::new_spanned(&f.sig.ident, "a required method with no marker: the proxy cannot implement it")),
             (other, Some(_)) => {
                 return Err(syn::Error::new_spanned(&f.sig.ident, format!("host({other}): a bare proxy's methods carry no marker")));
             }

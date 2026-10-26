@@ -13,6 +13,7 @@ use crate::agent_session::commands::{
 };
 use crate::agent_session::driver::{DriverError, PeerHandle, Rx, SessionHandle, Tx, start_ivr};
 use crate::agent_session::host_events::HostEvent;
+use crate::agent_session::nodes::Nodes;
 use crate::agent_session::time::Timebase;
 use crate::events::SessionEvent;
 use crate::generation::Instructions;
@@ -21,7 +22,10 @@ use crate::trace::{CoreStep, Step, Trace};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::HostWire;
 use lk_agents_abi::voice::session_effects::StartPlan;
-use lk_agents_abi::{Clock, Llm, Maybe, Spawner, SpawnerExt, Stt, Tts, Vad};
+use lk_agents_abi::{
+    Clock, Llm, LlmStream, Maybe, Spawner, SpawnerExt, Stt, SttSink, SttSource, Tts, TtsSink,
+    TtsSource, Vad,
+};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -331,13 +335,15 @@ pub(super) struct ModelRefs {
 
 impl SessionApi {
     /// Given present, given `None` clears, not-given keeps.
-    /// Each provider given is wrapped and registered: the command carries its reference.
+    /// Each provider given is wrapped, under the agent's node when it overrides one, and
+    /// registered: the command carries its reference.
     fn swap(
         &self,
         llm: Leg<dyn Llm>,
         tts: Leg<dyn Tts>,
         stt: Leg<dyn Stt>,
         vad: Leg<dyn Vad>,
+        nodes: &Nodes,
     ) -> ModelRefs {
         fn map<T: ?Sized, R>(leg: Leg<T>, f: impl FnOnce(Arc<T>) -> R) -> Maybe<Option<R>> {
             match leg {
@@ -353,9 +359,9 @@ impl SessionApi {
         let clock = self.time.clock();
         let r = &self.resources;
         let models = ModelRefs {
-            llm: map(llm, |l| r.register_llm(llm_leg(l))),
-            tts: map(tts, |t| r.register_tts(tts_leg(t, clock))),
-            stt: map(stt, |s| r.register_stt(stt_leg(s))),
+            llm: map(llm, |l| r.register_llm(nodes.llm(llm_leg(l)))),
+            tts: map(tts, |t| r.register_tts(nodes.tts(tts_leg(t, clock)))),
+            stt: map(stt, |s| r.register_stt(nodes.stt(stt_leg(s)))),
             vad: map(vad, |v| r.register_vad(v)),
         };
         {
@@ -385,10 +391,14 @@ impl SessionApi {
             stt,
             vad,
             turn_handling,
+            llm_node,
+            tts_node,
+            stt_node,
         } = frame;
         let options = turn_handling.as_ref().map(crate::turn::agent_patch).unwrap_or_default();
         self.set_agent_layer(Some(options));
-        let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad);
+        let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
+        let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);
         AgentUpdate {
             agent,
             instructions,
@@ -659,8 +669,8 @@ fn origin_of(origin: Option<&str>) -> Result<Origin, CommandRefused> {
 
 /// Where a host session's events go: one call per event, in driver order, on the host loop
 /// (`call_soon_threadsafe`: a callback touching `asyncio` from a tokio worker lands in `_ready`
-/// without waking the selector). A plain callable is seen through `_CoreEventSink`, which calls it.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.agent_session._CoreEventSink"))]
+/// without waking the selector).
+#[lk_agents_abi::host(proxy)]
 pub trait SessionEvents: Send + Sync {
     fn event(&self, wire: &HostWire);
     /// The stream has ended: said once, so a host awaiting a `speech_done` that can no longer come
@@ -779,11 +789,13 @@ impl SessionRoom for FixedRoom {
     }
 }
 
-/// `Agent.transcription_node` / `Agent.realtime_audio_output_node`, as assembly calls them: handed
-/// the core leg below, each builds the host node over it (`voice/agent_nodes.py`'s factories; a
-/// plain callable is seen through `_NodeFactory`, which calls it). Called under the GIL, at
-/// assembly; what one raises comes back as the exception it raised.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.agent_nodes._NodeFactory"))]
+/// An `Agent`'s overridden nodes, as the core calls them. `transcription_node` and
+/// `realtime_audio_output_node` are built once at assembly over the core leg below (called under
+/// the GIL; what one raises comes back as the exception it raised). `llm_node`, `tts_node` and
+/// `stt_node` are opened per request in place of the provider ([`Node`](super::nodes)): one
+/// completion, one segment's synthesis, one recognition stream.
+#[lk_agents_abi::host(proxy(clock))]
+#[async_trait::async_trait]
 pub trait NodeFactory: Send + Sync {
     fn text_node(
         &self,
@@ -793,12 +805,20 @@ pub trait NodeFactory: Send + Sync {
         &self,
         below: crate::io::CoreAudioSink,
     ) -> Result<Arc<dyn crate::io::RealtimeAudioNode>, lk_agents_abi::errors::HostError>;
+    /// `llm_node(chat_ctx, tools, model_settings)`: its chunks, strings and flushes as chunks.
+    async fn llm_node(&self, req: &lk_agents_abi::ChatRequest) -> Result<LlmStream, ProviderError>;
+    /// `tts_node(text, model_settings)`: text pushed in, its frames out.
+    async fn tts_node(&self) -> Result<(TtsSink, TtsSource), ProviderError>;
+    /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out.
+    async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError>;
 }
 
 /// The frame a host `Agent` describes (`AgentActivity._frame_kwargs`), as `update_agent`,
 /// `hook_described` and `enter_task` take it. Each provider is three-state: absent keeps the leg,
 /// `None` removes it, an object replaces it. `chat_ctx` replaces when present. The tools are one
 /// toolset, replaced together because the runner is per-agent. `turn_handling` is the agent layer.
+/// `llm_node`, `tts_node` and `stt_node` are the agent's overrides, each over the leg given beside
+/// it: a leg kept from the previous frame keeps that frame's node.
 #[lk_agents_abi::host(kwargs)]
 pub struct UpdateAgentArgs {
     pub instructions: Instructions,
@@ -820,6 +840,12 @@ pub struct UpdateAgentArgs {
     pub vad: Maybe<Option<Arc<dyn Vad>>>,
     #[host(kwarg(default = None))]
     pub turn_handling: Option<crate::agent_activity::options::TurnHandlingKwargs>,
+    #[host(kwarg(default = None))]
+    pub llm_node: Option<Arc<dyn NodeFactory>>,
+    #[host(kwarg(default = None))]
+    pub tts_node: Option<Arc<dyn NodeFactory>>,
+    #[host(kwarg(default = None))]
+    pub stt_node: Option<Arc<dyn NodeFactory>>,
 }
 
 /// A host-backed LLM needs the host's own tool objects: Rust cannot rebuild a `Tool` from a spec.

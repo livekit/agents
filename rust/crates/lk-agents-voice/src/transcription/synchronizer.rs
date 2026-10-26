@@ -379,7 +379,7 @@ impl Pacer {
 /// Counts syllable-like pieces used to pace transcript words. The default is [`Liang`]; a caller's
 /// own `hyphenate_word=` is this trait through `synchronizer.py`'s `_Hyphenator` (a GIL hop per
 /// word).
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.transcription.synchronizer._Hyphenator"))]
+#[lk_agents_abi::host(proxy)]
 pub trait Hyphenator: Send + Sync {
     /// `len(hyphenate_word(word))`. Never zero, including for the empty string.
     fn hyphens(&self, word: &str) -> usize;

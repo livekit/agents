@@ -2,7 +2,9 @@
 a scripted STT and a silent TTS written as plugins (so all three cross the core's provider views).
 It starts, says something, replies, runs a tool, runs an ``AgentTask`` the user answers by
 speaking into the room, hands off to a second agent whose ``on_enter`` speaks, and closes.
-Then a second session on a scripted realtime model replies through the core's realtime leg.
+Then a second session on a scripted realtime model replies through the core's realtime leg, and
+one session per overridden node shows the core calling it: an ``llm_node`` that rewrites the
+text, a ``tts_node`` that doubles the audio and an ``stt_node`` that redacts the transcript.
 
     python livekit-agents-next/scripts/smoke.py
 """
@@ -12,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import AsyncIterable, AsyncIterator, Callable
+from typing import Any
 
 from livekit import rtc
 from livekit.agents import (
@@ -19,7 +23,9 @@ from livekit.agents import (
     AgentTask,
     APIConnectOptions,
     Completed,
+    FlushSentinel,
     LiveSession,
+    ModelSettings,
     RunContext,
     _core,
     function_tool,
@@ -301,6 +307,107 @@ async def realtime() -> None:
     print(f"played_bytes={room.played_bytes()}")
 
 
+class Shouting(Agent):
+    """Rewrites the model's text, and ends the spoken segment after it."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="You shout.", name="shouting")
+
+    async def llm_node(
+        self, chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+    ) -> AsyncIterator[str | FlushSentinel]:
+        async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            if isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.content:
+                yield chunk.delta.content.upper()
+        yield FlushSentinel()
+
+
+class Repeated(Agent):
+    """Plays every synthesized frame ``copies`` times."""
+
+    def __init__(self, copies: int) -> None:
+        super().__init__(instructions="You echo.", name=f"repeated_{copies}")
+        self._copies = copies
+
+    async def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterator[rtc.AudioFrame]:
+        async for frame in Agent.default.tts_node(self, text, model_settings):
+            for _ in range(self._copies):
+                yield frame
+
+
+class Redacting(Agent):
+    """Hides the caller's name in what the STT heard."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="You redact.", name="redacting")
+
+    async def stt_node(
+        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+    ) -> AsyncIterator[stt.SpeechEvent]:
+        async for ev in Agent.default.stt_node(self, audio, model_settings):
+            for alt in ev.alternatives:
+                alt.text = alt.text.replace("Theo", "[name]")
+            yield ev
+
+
+async def node_session(agent: Agent, act: Callable[[LiveSession, _core.FakeRoom], Any]) -> int:
+    """Run ``act`` on a session started on ``agent``; the bytes the room played."""
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    session.on(
+        "conversation_item_added",
+        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
+    )
+    session.on("user_input_transcribed", lambda ev: print(f"user_input {ev.transcript!r}"))
+    await session.start(agent, room=room)
+    await settle(room, 1)
+    await act(session, room)
+    await session.aclose()
+    played: int = room.played_bytes()
+    return played
+
+
+async def nodes() -> None:
+    print("== llm_node")
+    said: list[str] = []
+
+    def record(session: LiveSession) -> None:
+        session.on("conversation_item_added", lambda ev: said.append(ev.item.text_content or ""))
+
+    async def reply(session: LiveSession, room: _core.FakeRoom) -> None:
+        record(session)
+        session.generate_reply(user_input="hello there")
+        await settle(room, 3)
+
+    await node_session(Shouting(), reply)
+    assert "YOU SAID: HELLO THERE" in said, said
+
+    async def say(session: LiveSession, room: _core.FakeRoom) -> None:
+        handle = session.say("Twenty characters...")
+        await settle(room, 3)
+        assert handle.done(), "say() did not finish"
+
+    print("== tts_node")
+    once = await node_session(Repeated(1), say)
+    twice = await node_session(Repeated(2), say)
+    print(f"played_bytes once={once} twice={twice}")
+    assert twice == 2 * once, (once, twice)
+
+    print("== stt_node")
+    heard: list[str] = []
+
+    async def speak(session: LiveSession, room: _core.FakeRoom) -> None:
+        session.on("user_input_transcribed", lambda ev: heard.append(ev.transcript))
+        room.speak(frames=40)
+        await settle(room, 4)
+
+    await node_session(Redacting(), speak)
+    assert heard == ["my name is [name]"], heard
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -382,6 +489,8 @@ async def main() -> int:
 
     print("== realtime")
     await realtime()
+
+    await nodes()
     return 0
 
 

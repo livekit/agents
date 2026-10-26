@@ -26,7 +26,7 @@ use super::{HttpTransport, McpError, conn};
 const LOG: &str = "livekit.agents";
 
 /// A subclass's `client_streams()`, as the host adapter's four calls (`llm/mcp.py`'s `_Streams`).
-#[lk_agents_abi::host(proxy(host = "livekit.agents.llm.mcp._Streams"))]
+#[lk_agents_abi::host(proxy)]
 #[async_trait::async_trait]
 pub trait McpTransport: Send + Sync {
     async fn start(&self) -> Result<(), HostError>;
@@ -37,7 +37,7 @@ pub trait McpTransport: Send + Sync {
 }
 
 /// An injected `_client`: a `ClientSession` stand-in answering the two calls itself (`_Client`).
-#[lk_agents_abi::host(proxy(host = "livekit.agents.llm.mcp._Client"))]
+#[lk_agents_abi::host(proxy)]
 #[async_trait::async_trait]
 pub trait McpClient: Send + Sync {
     async fn list_tools(&self) -> Result<Value, HostError>;
@@ -45,7 +45,7 @@ pub trait McpClient: Send + Sync {
 }
 
 /// Where a `report_progress` tool's messages go: the tool's `RunContext` (`_Progress`).
-#[lk_agents_abi::host(proxy(host = "livekit.agents.llm.mcp._Progress"))]
+#[lk_agents_abi::host(proxy)]
 #[async_trait::async_trait]
 pub trait McpProgress: Send + Sync {
     async fn update(&self, message: &str) -> Result<(), HostError>;

@@ -661,7 +661,7 @@ pub struct Truncate {
 
 /// A host `RealtimeModel` (`llm/realtime.py`'s base class, or the session's `RealtimeBridge` over
 /// one): the model half, through its `_core_*` surface.
-#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeModel"))]
+#[crate::host(proxy)]
 #[async_trait::async_trait]
 pub trait HostRealtime: Send + Sync {
     fn label(&self) -> String;
@@ -677,7 +677,7 @@ pub trait HostRealtime: Send + Sync {
 }
 
 /// A host `RealtimeSession`, flattened: commands in, one event at a time out.
-#[crate::host(proxy(host = "livekit.agents.llm.realtime.RealtimeSession"))]
+#[crate::host(proxy)]
 #[async_trait::async_trait]
 pub trait HostRealtimeSession: Send + Sync {
     /// Queued on the host loop, in order; a command after close is dropped there.

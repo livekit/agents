@@ -753,15 +753,8 @@ fn proxy(
     if !tr.generics.params.is_empty() {
         return Err(format!("{at}: a generic trait has no single proxy"));
     }
-    // A bare proxy: every method, defaulted or not, calls `_core_<method>` on the host object.
-    let host = meta_str(m, "proxy.host");
-    let name = match (meta_rust(m, "proxy.name"), &host) {
-        (Some(n), _) => n,
-        (None, Some(_)) => format!("Py{}", tr.ident),
-        (None, None) => {
-            return Err(format!("{at}: proxy(name = \"..\") names the generated struct"));
-        }
-    };
+    // Every unmarked method, defaulted or not, calls `_core_<method>` on the host object.
+    let name = meta_rust(m, "proxy.name").unwrap_or_else(|| format!("Py{}", tr.ident));
     let state: Vec<(String, String)> = m
         .iter()
         .any(|x| x.key == "proxy.clock")
@@ -775,24 +768,7 @@ fn proxy(
         let syn::TraitItem::Fn(f) = inner else { continue };
         let rust = f.sig.ident.to_string();
         let mat = format!("{at}::{rust}");
-        let marker = host_attr_strict(label, &f.attrs)?;
-        if host.is_some() && marker.as_ref().is_some_and(|m| m.iter().any(|x| x.key != "soon")) {
-            return Err(format!(
-                "{mat}: a bare proxy's methods carry no marker but `soon` -- each calls `_core_{rust}` and crosses by its signature"
-            ));
-        }
-        let fm = match marker {
-            Some(fm) => fm,
-            None if host.is_some() => Vec::new(),
-            None => {
-                if f.default.is_none() {
-                    return Err(format!(
-                        "{mat}: a required method with no host marker -- the proxy cannot implement it (soon)"
-                    ));
-                }
-                continue;
-            }
-        };
+        let fm = host_attr_strict(label, &f.attrs)?.unwrap_or_default();
         let (ret, ret_result, ret_ref) = match &f.sig.output {
             syn::ReturnType::Default => (String::new(), false, false),
             syn::ReturnType::Type(_, t) => (
@@ -844,7 +820,6 @@ fn proxy(
     Ok(Proxy {
         trait_path: format!("{module}::{}", tr.ident),
         name,
-        host,
         source: label.to_owned(),
         async_trait,
         uses,

@@ -602,8 +602,6 @@ pub struct Proxy {
     pub trait_path: String,
     /// `<name><B: HostBridge = bridge>`.
     pub name: String,
-    /// `host = ".."`: a bare proxy; every method calls `_core_<method>` ([`ProxyAction::Core`]).
-    pub host: Option<String>,
     pub source: String,
     pub async_trait: bool,
     /// The trait file's `use` lines made absolute, plus a glob of its module: the copied

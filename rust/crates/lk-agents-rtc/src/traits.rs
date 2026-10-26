@@ -83,10 +83,7 @@ impl dyn RtcRoom + '_ {
 }
 
 /// The agent itself in the room.
-#[lk_agents_abi::host(proxy(
-    host = "livekit.agents.voice.room_io._core_rtc.LocalParticipant",
-    live
-))]
+#[lk_agents_abi::host(proxy(live))]
 #[async_trait]
 pub trait LocalParticipant: Send + Sync {
     /// Needed by three readers, all comparing against it: `_init_task` sets the agent transcript's
@@ -136,7 +133,7 @@ pub trait LocalParticipant: Send + Sync {
 /// afterwards. §1.6 #7: dropping a host stream does not close it, so the close must be explicit
 /// and structural rather than remembered -- the reference's own pattern is
 /// `writer = self._writer; self._writer = None; await writer.aclose()`.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io._core_rtc.TextStreamWriter"))]
+#[lk_agents_abi::host(proxy)]
 #[async_trait]
 pub trait TextStreamWriter: Send + Sync {
     async fn write(&self, text: &str) -> Result<()>;
@@ -149,7 +146,7 @@ pub trait TextStreamWriter: Send + Sync {
 /// It is separate from [`LocalParticipant`] because "clear the buffer on *this* track" has to be
 /// expressible: the avatar path publishes its own source alongside `RoomIO`'s, and an interruption
 /// must truncate one and not the other.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io._core_rtc.AudioSource", live))]
+#[lk_agents_abi::host(proxy(live))]
 #[async_trait]
 pub trait AudioSource: Send + Sync {
     /// Push one frame. **Awaits when the source's queue is full**, and that is the point: the
@@ -197,10 +194,7 @@ pub trait AudioSource: Send + Sync {
 }
 
 /// Someone else in the room.
-#[lk_agents_abi::host(proxy(
-    host = "livekit.agents.voice.room_io._core_rtc.RemoteParticipant",
-    live
-))]
+#[lk_agents_abi::host(proxy(live))]
 pub trait RemoteParticipant: Send + Sync {
     fn identity(&self) -> &ParticipantIdentity;
 
@@ -221,10 +215,7 @@ pub trait RemoteParticipant: Send + Sync {
 /// where both derive from `TrackPublication`. The two side-specific methods default to
 /// [`RtcError::Unsupported`] so a shim implements only its own half; see that variant for why this
 /// is one trait and not two.
-#[lk_agents_abi::host(proxy(
-    host = "livekit.agents.voice.room_io._core_rtc.TrackPublication",
-    live
-))]
+#[lk_agents_abi::host(proxy(live))]
 #[async_trait]
 pub trait TrackPublication: Send + Sync {
     fn sid(&self) -> &TrackSid;

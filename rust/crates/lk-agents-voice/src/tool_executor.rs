@@ -648,9 +648,9 @@ impl std::fmt::Debug for RunnerRef {
     }
 }
 
-/// `voice/tool_executor.py`'s `_ToolExecutor`: runs one call and reports the marshal's dict. A
+/// `voice/tool_executor.py`'s `ToolRunner`: runs one call and reports the marshal's dict. A
 /// report, not a decision; [`decide`] owns the output.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.tool_executor._ToolExecutor"))]
+#[lk_agents_abi::host(proxy)]
 #[async_trait::async_trait]
 pub trait HostToolRunner: Send + Sync {
     async fn run(
