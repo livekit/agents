@@ -1,10 +1,11 @@
+import json
 import warnings
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from livekit.agents.utils import http_context
-from livekit.plugins.tavus.api import DEFAULT_PAL_ID, TavusAPI
+from livekit.plugins.tavus.api import DEFAULT_FACE_ID, DEFAULT_PAL_ID, TavusAPI
 from livekit.plugins.tavus.avatar import AvatarSession
 
 pytestmark = pytest.mark.unit
@@ -118,14 +119,34 @@ async def test_pal_id_only_skips_pal_creation_and_omits_face():
     assert "face_id" not in payload
 
 
-async def test_defaults_to_stock_pal_when_neither_given():
+async def test_defaults_to_stock_pal_and_face_when_neither_given():
     api = _api()
     with patch.object(api, "_post", new=_mock_post()) as m:
         await api.create_conversation()
     assert "pals" not in [c.args[0] for c in m.call_args_list]  # no pal is created
     payload = m.call_args.args[1]
     assert payload["pal_id"] == DEFAULT_PAL_ID
+    assert payload["face_id"] == DEFAULT_FACE_ID
+
+
+async def test_extra_payload_pal_keeps_its_own_face():
+    api = _api()
+    with patch.object(api, "_post", new=_mock_post()) as m:
+        await api.create_conversation(extra_payload={"pal_id": "custom-pal"})
+    payload = m.call_args.args[1]
+    # extra_payload replaces the pal, so the stock face must not be attached to it
+    assert payload["pal_id"] == "custom-pal"
     assert "face_id" not in payload
+
+
+async def test_env_face_wins_over_default_face(monkeypatch):
+    monkeypatch.setenv("TAVUS_FACE_ID", "envf")
+    api = _api()
+    with patch.object(api, "_post", new=_mock_post()) as m:
+        await api.create_conversation()
+    payload = m.call_args.args[1]
+    assert payload["pal_id"] == DEFAULT_PAL_ID
+    assert payload["face_id"] == "envf"
 
 
 async def test_avatar_session_resolves_new_and_deprecated_args():
@@ -138,3 +159,25 @@ async def test_avatar_session_resolves_new_and_deprecated_args():
         renamed = AvatarSession(face_id="f9", pal_id="p9")
         assert renamed._face_id == "f9"
         assert renamed._pal_id == "p9"
+
+
+async def test_set_emotion_sends_set_emotion_app_message_to_the_avatar():
+    async with http_context.open():
+        avatar = AvatarSession(face_id="f1", avatar_participant_identity="tavus-1")
+    room = MagicMock()
+    room.local_participant.publish_data = AsyncMock()
+    # the base AvatarSession.start() keeps the room it was started in
+    avatar._room = room
+
+    await avatar.set_emotion("happiness")
+
+    publish = room.local_participant.publish_data
+    publish.assert_awaited_once()
+    assert json.loads(publish.call_args.args[0]) == {
+        "message_type": "conversation",
+        "event_type": "conversation.set_emotion",
+        "properties": {"emotion": "happiness"},
+    }
+    assert publish.call_args.kwargs["topic"] == "app_messages"
+    assert publish.call_args.kwargs["destination_identities"] == ["tavus-1"]
+    assert publish.call_args.kwargs["reliable"] is True

@@ -191,6 +191,42 @@ async def test_flux_configure_noop_when_disconnected():
     assert stream._opts.keyterm == ["LiveKit"]
 
 
+def test_flux_turn_resumed_reaches_the_pipeline_as_an_interim():
+    # the pipeline drops a preemptive reply when an interim moves past the preflight
+    # transcript, so TurnResumed has to arrive as one, carrying what the user went on to say
+    from livekit.agents.stt import SpeechEvent, SpeechEventType
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    events: list[SpeechEvent] = []
+    stream = SimpleNamespace(
+        _opts=SimpleNamespace(language="en"),
+        _request_id="",
+        _speaking=False,
+        start_time_offset=0.0,
+        _event_ch=SimpleNamespace(send_nowait=events.append),
+    )
+    stream._send_transcript_event = SpeechStreamv2._send_transcript_event.__get__(stream)
+
+    # the payloads of https://developers.deepgram.com/docs/flux/state, trimmed
+    for event, transcript in [
+        ("StartOfTurn", "I need to"),
+        ("EagerEndOfTurn", "I need to cancel my subscription."),
+        ("TurnResumed", "I need to cancel my subscription please"),
+    ]:
+        words = [{"word": w, "confidence": 0.9} for w in transcript.split()]
+        SpeechStreamv2._process_stream_event(
+            stream,
+            {"type": "TurnInfo", "event": event, "transcript": transcript, "words": words},
+        )
+
+    assert [(e.type, [a.text for a in e.alternatives]) for e in events] == [
+        (SpeechEventType.START_OF_SPEECH, []),
+        (SpeechEventType.INTERIM_TRANSCRIPT, ["I need to"]),
+        (SpeechEventType.PREFLIGHT_TRANSCRIPT, ["I need to cancel my subscription."]),
+        (SpeechEventType.INTERIM_TRANSCRIPT, ["I need to cancel my subscription please"]),
+    ]
+
+
 class _LiveWS:
     """Records what the send loop writes. receive() parks so recv_task stays alive."""
 
@@ -289,5 +325,295 @@ async def test_flush_finalizes_after_the_buffered_audio():
         stream.push_frame(_frame(30))
         stream.flush()
         await _wait_until(lambda: ws.sent() == ["audio", "Finalize"])
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("audio_chunk_duration_ms", [0, -1, 1.5, True])
+def test_flux_rejects_invalid_chunk_size(audio_chunk_duration_ms):
+    from livekit.plugins.deepgram import STTv2
+
+    with pytest.raises(ValueError, match="audio_chunk_duration_ms"):
+        STTv2(api_key="test-key", audio_chunk_duration_ms=audio_chunk_duration_ms)
+
+
+def test_flux_rejects_chunk_size_smaller_than_one_sample():
+    from livekit.plugins.deepgram import STTv2
+
+    with pytest.raises(ValueError, match="audio_chunk_duration_ms"):
+        STTv2(api_key="test-key", sample_rate=100, audio_chunk_duration_ms=1)
+
+
+@pytest.mark.parametrize("audio_chunk_duration_ms", [None, 20, 80])
+@pytest.mark.parametrize("sample_rate", [8000, 16000, 48000])
+@pytest.mark.parametrize("duration_ms", [400, 410])
+async def test_flux_chunk_size_preserves_audio_and_flushes_tail(
+    audio_chunk_duration_ms, sample_rate, duration_ms
+):
+    from typing import Any, cast
+
+    from livekit import rtc
+    from livekit.plugins.deepgram import STTv2
+
+    class AudioWS(_LiveWS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.audio: list[bytes] = []
+
+        async def send_bytes(self, data: bytes) -> None:
+            self.audio.append(data)
+            await super().send_bytes(data)
+
+    ws = AudioWS()
+    # Omitting the argument exercises the public constructor's existing default.
+    options = (
+        {}
+        if audio_chunk_duration_ms is None
+        else {"audio_chunk_duration_ms": audio_chunk_duration_ms}
+    )
+    instance = STTv2(
+        api_key="test-key",
+        sample_rate=sample_rate,
+        http_session=cast(Any, SimpleNamespace(closed=False)),
+        **options,
+    )
+    stream = instance.stream()
+
+    async def connect():
+        return ws
+
+    # Replace only the network connection; exercise the real stream and send loop.
+    stream._connect_ws = connect
+    try:
+        assert "audio_chunk_duration_ms" not in stream._live_config()
+        input_samples = sample_rate // 100  # 10 ms RTC frames
+        input_bytes = input_samples * 2
+        pcm = bytes(i % 256 for i in range(sample_rate * duration_ms // 1000 * 2))
+        for offset in range(0, len(pcm), input_bytes):
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=pcm[offset : offset + input_bytes],
+                    sample_rate=sample_rate,
+                    num_channels=1,
+                    samples_per_channel=input_samples,
+                )
+            )
+        stream.end_input()
+        await _wait_until(lambda: "CloseStream" in ws.wire)
+
+        chunk_bytes = sample_rate * (audio_chunk_duration_ms or 50) // 1000 * 2
+        full_chunks, remainder = divmod(len(pcm), chunk_bytes)
+        expected_sizes = [chunk_bytes] * full_chunks
+        if remainder:
+            expected_sizes.append(remainder)
+        assert [len(data) for data in ws.audio] == expected_sizes
+        assert b"".join(ws.audio) == pcm
+        assert ws.sent() == ["audio"] * len(expected_sizes) + ["CloseStream"]
+    finally:
+        await stream.aclose()
+        await instance.aclose()
+
+
+class _RecordingSession:
+    """Stands in for the aiohttp session so the connect kwargs are assertable."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.kwargs: dict = {}
+        self._ws = _LiveWS()
+
+    async def ws_connect(self, url: str, **kwargs):
+        self.kwargs = kwargs
+        return self._ws
+
+
+class _URLRecordingSession:
+    """Hands out a fresh socket per connect and keeps every URL it was asked to open."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.urls: list[str] = []
+
+    async def ws_connect(self, url: str, **kwargs):
+        self.urls.append(url)
+        ws = _LiveWS()
+        ws._response = SimpleNamespace(headers={})  # read for the dg- response headers
+        return ws
+
+
+async def test_stt_update_options_reaches_open_streams_diarization_and_tags():
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.deepgram import STT
+
+    session = _URLRecordingSession()
+    instance = STT(api_key="test-key", language="en-US", http_session=session)
+    stream = instance.stream()
+    try:
+        await _wait_until(lambda: len(session.urls) == 1)
+        assert "diarize" not in parse_qs(urlparse(session.urls[0]).query)
+
+        instance.update_options(enable_diarization=True, tags=["prod"])
+
+        await _wait_until(lambda: len(session.urls) == 2)
+        query = parse_qs(urlparse(session.urls[1]).query)
+        assert query["diarize"] == ["true"]
+        assert query["tag"] == ["prod"]
+    finally:
+        await stream.aclose()
+        await instance.aclose()
+
+
+async def test_update_options_keeps_diarization_capability_in_sync():
+    from livekit.agents.stt import MultiSpeakerAdapter
+    from livekit.plugins.deepgram import STT
+
+    instance = STT(api_key="test-key")
+    try:
+        assert not instance.capabilities.diarization
+
+        instance.update_options(enable_diarization=True)
+        assert instance.capabilities.diarization
+        MultiSpeakerAdapter(stt=instance)
+
+        instance.update_options(enable_diarization=False)
+        assert not instance.capabilities.diarization
+    finally:
+        await instance.aclose()
+
+
+class _DeadSocket:
+    """A socket that has silently gone away: writes fail, the read side never notices.
+
+    This is the half-open case (no FIN, no RST). recv_task can only park, so the
+    keepalive write is the one place the drop can surface.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        import aiohttp
+
+        raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    async def send_bytes(self, data: bytes) -> None:
+        import aiohttp
+
+        raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    async def receive(self):
+        await self._closed.wait()
+        raise AssertionError("the test should never let recv_task resume")
+
+    async def close(self) -> None:
+        self._closed.set()
+
+
+def _v1_stream(*, http_session=None, connect=None):
+    """A real v1 SpeechStream running its real _run loop."""
+    import dataclasses
+    from typing import Any, cast
+
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.deepgram.stt import STT, SpeechStream
+
+    instance = STT(api_key="test-key", language="en-US", sample_rate=16000)
+    stream = SpeechStream(
+        stt=instance,
+        opts=dataclasses.replace(instance._opts, sample_rate=16000),
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        api_key="test-key",
+        http_session=cast(Any, http_session or SimpleNamespace(closed=False)),
+        base_url="wss://api.deepgram.com/v1/listen",
+    )
+    if connect is not None:
+        stream._connect_ws = connect
+    return stream
+
+
+async def test_v1_socket_is_opened_with_a_heartbeat():
+    # aiohttp defaults heartbeat and receive_timeout to None, so without this the
+    # read side of a half-open socket parks forever and the reconnect loop in _run,
+    # which only runs when something raises, never gets a turn. stt_v2 already does
+    # this; v1 is the Nova-3 path and was the only Deepgram stream left unbounded.
+    session = _RecordingSession()
+    stream = _v1_stream(http_session=session)
+    try:
+        await _wait_until(lambda: "heartbeat" in session.kwargs)
+        assert session.kwargs["heartbeat"] == 30.0
+    finally:
+        await stream.aclose()
+
+
+async def test_keepalive_write_drop_reconnects_instead_of_stalling():
+    # the keepalive used to swallow every exception and return, which left send_task
+    # parked on the input channel and recv_task parked on receive(): _run stayed
+    # alive on a socket that was gone, and the session went quiet with no error.
+    sockets: list[_DeadSocket] = []
+
+    async def _connect():
+        ws = _DeadSocket()
+        sockets.append(ws)
+        return ws
+
+    stream = _v1_stream(connect=_connect)
+    try:
+        await _wait_until(lambda: len(sockets) > 1)
+    finally:
+        await stream.aclose()
+
+
+class _HeartbeatTimeoutSocket:
+    """A socket in the state aiohttp leaves it in when a ping goes unanswered.
+
+    The heartbeat closes the connection itself, so this arrives as WSMsgType.ERROR
+    rather than as a close frame, and the reason lives only on ws.exception().
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.receives = 0
+
+    async def send_str(self, data: str) -> None:
+        pass
+
+    async def send_bytes(self, data: bytes) -> None:
+        pass
+
+    def exception(self):
+        import aiohttp
+
+        return aiohttp.ServerTimeoutError("No PONG received after 15.0s")
+
+    async def receive(self):
+        import aiohttp
+
+        self.receives += 1
+        # yield, so that a recv loop which steps over this rather than ending
+        # fails the test instead of starving the event loop and hanging it
+        await asyncio.sleep(0)
+        return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, self.exception(), None)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_heartbeat_timeout_reconnects_without_spinning():
+    # the ERROR has to end the recv loop. logging it as an unexpected type and
+    # continuing only works because aiohttp happens to report CLOSED next, and it
+    # throws away the one value that says why the socket went away.
+    sockets: list[_HeartbeatTimeoutSocket] = []
+
+    async def _connect():
+        ws = _HeartbeatTimeoutSocket()
+        sockets.append(ws)
+        return ws
+
+    stream = _v1_stream(connect=_connect)
+    try:
+        await _wait_until(lambda: len(sockets) > 1)
+        assert sockets[0].receives == 1
     finally:
         await stream.aclose()

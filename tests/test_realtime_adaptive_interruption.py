@@ -113,7 +113,7 @@ def test_audio_activity_waits_for_min_words() -> None:
     activity._audio_recognition._current_transcript = "now enough words"
     activity._interrupt_by_audio_activity()
 
-    activity._current_speech.interrupt.assert_called_once_with()
+    activity._current_speech.interrupt.assert_called_once_with(source="audio_activity")
 
 
 def test_rejected_audio_interruption_clears_confirmed_verdict() -> None:
@@ -677,3 +677,31 @@ async def test_real_end_of_agent_speech_still_tears_down() -> None:
         "_AgentSpeechEndedSentinel",
     ]
     assert ch.sent[0]._agent_ended is True  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("realtime", [False, True])
+async def test_text_simulation_disables_audio_turn_handling_without_warnings(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, realtime: bool
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+    monkeypatch.setattr(AgentSession, "_text_only", property(lambda self: True))
+
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False))
+        if realtime
+        else FakeLLM(fake_responses=[]),
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            interruption={"mode": "adaptive"},
+        ),
+    )
+
+    with caplog.at_level("WARNING", logger="livekit.agents"):
+        activity = _make_activity(session)
+
+    assert activity._turn_detection is None
+    assert activity._interruption_detector is None
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]

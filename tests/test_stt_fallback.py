@@ -20,6 +20,7 @@ from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import AudioBuffer
 
 from .fake_stt import FakeSTT
+from .fake_vad import FakeVAD
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -73,6 +74,33 @@ class _NamedSTT(FakeSTT):
         return self._provider_name
 
 
+class _NonStreamingSTT(FakeSTT):
+    def __init__(self) -> None:
+        super().__init__()
+        self._capabilities = STTCapabilities(streaming=False, interim_results=False)
+        self.close_count = 0
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+
+
+def _metrics_listener_count(stt: STT) -> int:
+    return len(stt._events.get("metrics_collected", set()))
+
+
+async def test_aclose_closes_automatically_created_stream_adapters() -> None:
+    stt = _NonStreamingSTT()
+    baseline = _metrics_listener_count(stt)
+    fallback = FallbackAdapter([stt], vad=FakeVAD())
+
+    assert _metrics_listener_count(stt) == baseline + 1
+
+    await fallback.aclose()
+
+    assert _metrics_listener_count(stt) == baseline
+    assert stt.close_count == 0
+
+
 async def test_reports_active_instance_model_and_provider() -> None:
     fake1 = _NamedSTT(
         model="primary-model",
@@ -97,6 +125,13 @@ async def test_reports_active_instance_model_and_provider() -> None:
         "model_name": "fallback-model",
         "model_provider": "fallback",
     }
+    # once the primary recovers (its recovery task flips it back to available) the next
+    # request goes to it first, so that is what model and provider report
+    fallback_adapter._status[0].available = True
+    assert fallback_adapter.model == "primary-model"
+    assert fallback_adapter.provider == "primary"
+    fallback_adapter._status[0].available = False
+    assert fallback_adapter.model == "fallback-model"
 
     assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
 
@@ -356,3 +391,20 @@ async def test_stt_stream_recovery_failure_doesnt_block_main() -> None:
     assert events[0].alternatives[0].text == "hello world"
 
     await fallback.aclose()
+
+
+@pytest.mark.parametrize("supports_flush", [(True, True), (True, False), (False, True)])
+async def test_manual_flush_requires_support_from_every_fallback(supports_flush) -> None:
+    instances = [FakeSTT(), FakeSTT()]
+    for instance, supported in zip(instances, supports_flush, strict=True):
+        instance.capabilities.manual_flush = supported
+    adapter = FallbackAdapter(instances)
+    try:
+        assert adapter.capabilities.manual_flush is all(supports_flush)
+        instances[0].capabilities.manual_flush = False
+        assert adapter.capabilities.manual_flush is False
+        for instance in instances:
+            instance.capabilities.manual_flush = True
+        assert adapter.capabilities.manual_flush is True
+    finally:
+        await adapter.aclose()

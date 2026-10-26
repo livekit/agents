@@ -54,6 +54,7 @@ class STTOptions:
     sample_rate: int
     keyterm: str | Sequence[str]
     endpoint_url: str
+    audio_chunk_duration_ms: int = 50
     language: str = "en"
     eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN
     eot_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -72,6 +73,7 @@ class STTv2(stt.STT):
         *,
         model: V2Models | str = "flux-general-en",
         sample_rate: int = 16000,
+        audio_chunk_duration_ms: int = 50,
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_threshold: NotGivenOr[float] = NOT_GIVEN,
         eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -93,6 +95,10 @@ class STTv2(stt.STT):
         Args:
             model: The Deepgram model to use for speech recognition. Defaults to "flux-general-en".
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
+            audio_chunk_duration_ms: Duration of outgoing PCM audio chunks in milliseconds. Defaults to 50.
+                Deepgram recommends 80 ms for Flux. This controls WebSocket audio batching,
+                independently of incoming RTC frame size and endpointing delay. Set at creation time.
+                See https://developers.deepgram.com/docs/flux/quickstart.
             eager_eot_threshold: The threshold for eager end of turn to enable preemptive generation. Disabled by default. Set to 0.3-0.9 to enable preemptive generation.
             eot_threshold: The threshold for end of speech detection, ranges 0.5-0.9. Defaults to 0.7. If using eager_eot_threshold, set this higher to allow a higher eager value.
             eot_timeout_ms: The timeout for end of speech detection. Defaults to 3000.
@@ -108,7 +114,8 @@ class STTv2(stt.STT):
             redact: Redact numbers from the transcription, "numbers" or "aggressive_numbers". Flux does not support entity redaction (pci, pii, ...). Applied at connection time. Defaults to NOT_GIVEN.
 
         Raises:
-            ValueError: If no API key is provided or found in environment variables.
+            ValueError: If no API key is provided or found in environment variables, or
+                audio_chunk_duration_ms is not a positive integer that yields at least one audio sample.
 
         Note:
             The api_key must be set either through the constructor argument or by setting
@@ -124,6 +131,16 @@ class STTv2(stt.STT):
                 keyterms=True,
             )
         )
+
+        if (
+            isinstance(audio_chunk_duration_ms, bool)
+            or not isinstance(audio_chunk_duration_ms, int)
+            or audio_chunk_duration_ms <= 0
+            or sample_rate * audio_chunk_duration_ms // 1000 < 1
+        ):
+            raise ValueError(
+                "audio_chunk_duration_ms must be a positive integer yielding at least one sample"
+            )
 
         deepgram_api_key = api_key if is_given(api_key) else os.environ.get("DEEPGRAM_API_KEY")
         if not deepgram_api_key:
@@ -152,6 +169,7 @@ class STTv2(stt.STT):
         self._opts = STTOptions(
             model=model,
             sample_rate=sample_rate,
+            audio_chunk_duration_ms=audio_chunk_duration_ms,
             keyterm=([keyterm] if isinstance(keyterm, str) else list(keyterm))
             if is_given(keyterm)
             else [],
@@ -462,12 +480,12 @@ class SpeechStreamv2(stt.SpeechStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
-            # forward audio to deepgram in chunks of 50ms
-            samples_50ms = self._opts.sample_rate // 20
+            # Repack incoming frames into the configured outgoing PCM chunk duration.
+            chunk_samples = self._opts.sample_rate * self._opts.audio_chunk_duration_ms // 1000
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
-                samples_per_channel=samples_50ms,
+                samples_per_channel=chunk_samples,
             )
 
             has_ended = False
@@ -521,6 +539,15 @@ class SpeechStreamv2(stt.SpeechStream):
                         status_code=ws.close_code or -1,
                         body=f"{msg.data=} {msg.extra=}",
                     )
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws or self._session.closed:
+                        return
+
+                    # the heartbeat closes the socket when a ping goes unanswered,
+                    # and that surfaces here rather than as a close frame.
+                    # ws.exception() is the only place the reason survives.
+                    raise APIConnectionError("deepgram connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -696,7 +723,8 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._send_transcript_event(stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, data)
 
             elif event_type == "TurnResumed":
-                # sending interim transcript will abort eager end of turn
+                # the interim stops the preemptive generation started for the eager end of turn
+                # once the transcript has moved past it
                 self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
 
             elif event_type == "EndOfTurn":

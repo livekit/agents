@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import json
 import logging
 import ssl
 import time
@@ -17,12 +18,17 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
+from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.agents.metrics import LLMModelUsage
+from livekit.agents.observability import Tagger
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
+from livekit.agents.voice.events import CloseEvent, CloseReason
+from livekit.agents.voice.report import SessionReport
 from livekit.protocol import metrics as proto_metrics
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
@@ -81,8 +87,14 @@ def _make_mock_job_ctx(enable_recording: bool = True) -> MagicMock:
 
 
 @contextlib.contextmanager
-def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iterator[None]:
-    """Patch get_job_context and optionally RecorderIO."""
+def _patch_job_ctx(
+    mock_ctx: MagicMock, *, patch_recorder: bool = False
+) -> Iterator[MagicMock | None]:
+    """Patch get_job_context and optionally RecorderIO.
+
+    Yields the mocked RecorderIO class when patch_recorder=True (so a test can assert on its
+    constructor args via mock_cls.call_args), otherwise None.
+    """
     with patch(f"{_AGENT_SESSION_MOD}.get_job_context", return_value=mock_ctx):
         if patch_recorder:
             with patch(f"{_AGENT_SESSION_MOD}.RecorderIO") as mock_cls:
@@ -92,9 +104,9 @@ def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iter
                 recorder.start = AsyncMock()
                 recorder.aclose = AsyncMock()
                 mock_cls.return_value = recorder
-                yield
+                yield mock_cls
         else:
-            yield
+            yield None
 
 
 def _make_mock_report(recording_options: RecordingOptions | None = None) -> MagicMock:
@@ -109,10 +121,17 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.audio_recording_path = None
     report.audio_recording_started_at = None
     report.duration = 10.0
+    report.sdk_version = "1.0.0"
     report.started_at = 1000.0
     report.timestamp = 1010.0
     report.options = MagicMock()
     report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
+    # a fresh dict per call: the session summary edits the one it gets
+    report.to_dict.side_effect = lambda **_: {
+        "job_id": "job-1",
+        "audio_recording_path": None,
+        "usage": None,
+    }
     return report
 
 
@@ -661,6 +680,22 @@ def test_session_report_constructor_includes_recording_options_in_options() -> N
     assert report.options.recording_options["audio"] is False
 
 
+def test_make_session_report_duration_without_audio_recording() -> None:
+    from livekit.agents.job import JobContext
+
+    session = _create_simple_session()
+    session._started_at = time.time() - 5.0
+
+    ctx = object.__new__(JobContext)
+    ctx._info = SimpleNamespace(job=_make_mock_job_ctx().job)
+    ctx._tagger = Tagger()
+    report = ctx.make_session_report(session)
+
+    assert report.audio_recording_started_at is None
+    assert report.duration is not None
+    assert report.duration > 0
+
+
 async def test_upload_audio_only_no_file() -> None:
     """When transcript=False, audio=True but no audio file exists, no upload is made."""
     report = _make_mock_report({"audio": True, "traces": False, "logs": False, "transcript": False})
@@ -732,6 +767,67 @@ async def test_upload_multipart_header_carries_simulation_redaction() -> None:
     header = proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
     assert header.simulated is True
     assert header.redaction_enabled is True
+
+
+def _make_report(**kwargs: Any) -> SessionReport:
+    """Create a real SessionReport so the summary sees real ``to_dict`` output."""
+    options = AgentSession().options
+    options.recording_options = {"audio": False, "traces": False, "logs": False, "transcript": True}
+    return SessionReport(
+        job_id="job-1",
+        room_id="room-1",
+        room="test-room",
+        options=options,
+        events=kwargs.pop("events", []),
+        chat_history=ChatContext(kwargs.pop("chat_items", [])),
+        duration=12.5,
+        started_at=1000.0,
+        timestamp=1010.0,
+        sdk_version="1.0.0",
+        **kwargs,
+    )
+
+
+async def _upload_and_read_header(
+    report: SessionReport | MagicMock,
+) -> proto_metrics.MetricsRecordingHeader:
+    mock_http = _make_mock_http()
+    with _patch_upload_deps():
+        await _call_upload(report, http_session=mock_http)
+
+    mp_writer = mock_http.post.call_args.kwargs.get("data") or mock_http.post.call_args[1]["data"]
+    parts = _get_multipart_parts(mp_writer)
+    return proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
+
+
+def _expected_summary(report: SessionReport) -> dict[str, Any]:
+    return report.to_dict(include_chat_history=False, include_events=False)
+
+
+async def test_upload_header_carries_session_summary() -> None:
+    report = _make_report(
+        agent_name="support",
+        tags=["vip"],
+        chat_items=[ChatMessage(role="user", content=["hi"])],
+        model_usage=[LLMModelUsage(provider="openai", model="gpt-4o", input_tokens=10)],
+        events=[CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED)],
+    )
+
+    header = await _upload_and_read_header(report)
+
+    summary = json.loads(header.session_summary)
+    assert summary == _expected_summary(report)
+    assert "chat_history" not in summary
+    assert "events" not in summary
+    assert header.duration == 12500
+
+
+async def test_session_summary_empty_session() -> None:
+    report = _make_report()
+
+    header = await _upload_and_read_header(report)
+
+    assert json.loads(header.session_summary) == _expected_summary(report)
 
 
 def test_job_context_otel_metadata_includes_redaction_option() -> None:
@@ -855,7 +951,7 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
     """LoggerProvider should be set up even when enable_logs=False."""
     with (
         _stub_cloud_tracer_deps() as stubs,
-        patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
+        patch(f"{_TRACES_MOD}._resource") as mock_resource,
     ):
         _setup_cloud_tracer_for_job(
             enable_traces=False,
@@ -865,9 +961,7 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
 
     stubs.set_logger_provider.assert_called_once()
     service_resource_calls = [
-        call.args[0]
-        for call in mock_resource_create.call_args_list
-        if "service.name" in call.args[0]
+        call.args[0] for call in mock_resource.call_args_list if "service.name" in call.args[0]
     ]
     assert service_resource_calls
     assert not any(k.startswith("lk.simulation.") for k in service_resource_calls[0])
@@ -878,21 +972,21 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
 
 def _resource_attrs_for_env(env: dict[str, str]) -> dict[str, Any]:
     """Run _setup_cloud_tracer under the given os.environ and return the dict
-    passed to Resource.create."""
+    passed to _resource."""
     with (
         patch.dict("os.environ", env, clear=True),
         _stub_cloud_tracer_deps(),
-        patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
+        patch(f"{_TRACES_MOD}._resource") as mock_resource,
     ):
         _setup_cloud_tracer_for_job(enable_traces=False, enable_logs=False)
-    # Resource.create is also called internally by LoggerProvider() with an
-    # empty dict, so select the call that built the tracing resource (the one
+    # _resource also builds the LoggerProvider's resource from an empty dict,
+    # so select the call that built the tracing resource (the one
     # carrying service.name) rather than relying on call ordering.
-    for call in mock_resource_create.call_args_list:
+    for call in mock_resource.call_args_list:
         attrs = call.args[0]
         if "service.name" in attrs:
             return attrs
-    raise AssertionError("Resource.create was not called with the service resource")
+    raise AssertionError("_resource was not called with the service resource")
 
 
 def test_setup_cloud_tracer_adds_identity_from_env() -> None:
@@ -1030,12 +1124,12 @@ def test_slot_metadata_follows_job_lifecycle() -> None:
         _setup_cloud_tracer_for_job(job_id="job-1")
         cloud = traces_mod._cloud
         assert cloud._span_metadata_processor is not None
-        assert cloud._span_metadata_processor._metadata["job_id"] == "job-1"
+        assert cloud._span_metadata_processor._fallback_metadata["job_id"] == "job-1"
         assert cloud._log_metadata_processor is not None
         assert cloud._log_metadata_processor._metadata["job_id"] == "job-1"
 
         _shutdown_telemetry("job-1")
-        assert cloud._span_metadata_processor._metadata == {}
+        assert cloud._span_metadata_processor._fallback_metadata == {}
         assert cloud._log_metadata_processor._metadata == {}
 
 
@@ -1084,6 +1178,153 @@ def test_exporters_only_upload_records_of_registered_jobs() -> None:
     inner.export.assert_called_once_with([recorded_rec])
 
 
+def test_span_gate_holds_spans_of_undecided_jobs() -> None:
+    """A job's first spans end before session.start() decides whether it records. The gate
+    holds them while the job is open, uploads them when the job registers with traces on,
+    drops them when it registers with traces off or ends without registering."""
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    from livekit.agents.telemetry.traces import (
+        _MAX_PENDING_SPANS_PER_JOB,
+        _GatedSpanExporter,
+        _JobTelemetry,
+    )
+
+    export_jobs: dict[str, _JobTelemetry] = {}
+    inner = MagicMock()
+    requeue = MagicMock()  # the batch processor's on_end
+    gate = _GatedSpanExporter(inner, export_jobs, requeue=requeue)
+
+    def _span(job_id: str, name: str = "room_connect") -> SimpleNamespace:
+        return SimpleNamespace(name=name, attributes={"job_id": job_id})
+
+    # not open, not registered: dropped as before
+    assert gate.export([_span("job-unknown")]) is SpanExportResult.SUCCESS
+    inner.export.assert_not_called()
+
+    # open and undecided: held, oldest first, bounded
+    gate.open_job("job-1")
+    early = [_span("job-1", f"early-{i}") for i in range(3)]
+    assert gate.export(early) is SpanExportResult.SUCCESS
+    inner.export.assert_not_called()
+    gate.export([_span("job-1", "overflow") for _ in range(_MAX_PENDING_SPANS_PER_JOB)])
+    assert len(gate._pending["job-1"]) == _MAX_PENDING_SPANS_PER_JOB
+    assert gate._pending["job-1"][:3] == early
+
+    # the decision: traces on -> everything held goes back on the processor's queue, in
+    # order, and nothing is exported on the (event loop) thread that decided
+    export_jobs["job-1"] = _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True)
+    gate.job_registered("job-1", traces_enabled=True)
+    inner.export.assert_not_called()
+    flushed = [c.args[0] for c in requeue.call_args_list]
+    assert flushed[:3] == early and len(flushed) == _MAX_PENDING_SPANS_PER_JOB
+    assert "job-1" not in gate._pending
+    # the processor's export thread brings them back; the job is registered now
+    gate.export(flushed)
+    inner.export.assert_called_once_with(flushed)
+    # and later spans of the registered job pass straight through
+    inner.reset_mock()
+    requeue.reset_mock()
+    late = _span("job-1", "agent_turn")
+    gate.export([late])
+    inner.export.assert_called_once_with([late])
+
+    # traces off -> dropped
+    inner.reset_mock()
+    gate.open_job("job-2")
+    gate.export([_span("job-2")])
+    export_jobs["job-2"] = _JobTelemetry(attributes={}, traces_enabled=False, logs_enabled=True)
+    gate.job_registered("job-2", traces_enabled=False)
+    inner.export.assert_not_called()
+    requeue.assert_not_called()
+    assert "job-2" not in gate._pending
+
+    # never registered -> dropped at close, and no longer held afterwards
+    gate.open_job("job-3")
+    gate.export([_span("job-3")])
+    gate.close_job("job-3")
+    assert "job-3" not in gate._pending
+    gate.export([_span("job-3")])
+    inner.export.assert_not_called()
+
+
+def test_gate_redacts_held_spans_when_the_job_registers_redacted() -> None:
+    """A span that ended before session.start() decided on redaction went through the PII
+    processor with redaction off. If the session then enables redaction, the held span is
+    stripped before it is released, whatever the processor left in it."""
+    from opentelemetry.sdk.trace import ReadableSpan
+    from opentelemetry.trace import SpanContext, Status, StatusCode
+
+    from livekit.agents.telemetry import trace_types
+    from livekit.agents.telemetry.traces import _GatedSpanExporter, _JobTelemetry
+
+    export_jobs: dict[str, _JobTelemetry] = {}
+    requeue = MagicMock()
+    gate = _GatedSpanExporter(MagicMock(), export_jobs, requeue=requeue)
+    gate.open_job("job-1")
+    held = ReadableSpan(
+        name="rpc_handler",
+        context=SpanContext(trace_id=1, span_id=2, is_remote=False),
+        attributes={
+            "job_id": "job-1",
+            "lk.pii.rpc.payload": "the caller's private payload",
+            "lk.rpc.method": "test_call",
+            trace_types.ATTR_EXCEPTION_MESSAGE: "failed on 'private text'",
+        },
+        status=Status(StatusCode.ERROR, "failed on 'private text'"),
+    )
+    gate.export([held])
+    requeue.assert_not_called()
+
+    export_jobs["job-1"] = _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True)
+    gate.job_registered("job-1", traces_enabled=True, redacted=True)
+    (released,), _ = requeue.call_args
+    attrs = released.attributes or {}
+    assert "lk.pii.rpc.payload" not in attrs
+    assert attrs["lk.rpc.method"] == "test_call"
+    assert attrs[trace_types.ATTR_EXCEPTION_MESSAGE] != "failed on 'private text'"
+    assert released.status.description != "failed on 'private text'"
+
+
+def test_prepare_cloud_tracer_holds_early_spans_until_the_job_registers() -> None:
+    """The pipeline is prepared when the job starts, so its first spans record; they are
+    uploaded once init_recording registers the job, or dropped if the job never does."""
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.traces import _discard_cloud_tracer, _prepare_cloud_tracer
+
+    with _stub_cloud_tracer_deps() as stubs:
+        _prepare_cloud_tracer(
+            room_id="room-1", job_id="job-1", observability_url="https://obs.example.com"
+        )
+        gate = traces_mod._cloud._span_gate
+        assert gate is not None and "job-1" in gate._open_jobs
+        assert "job-1" not in traces_mod._cloud._export_jobs  # prepared, not registered
+
+        held = SimpleNamespace(name="job_entrypoint", attributes={"job_id": "job-1"})
+        gate.export([held])
+        inner = stubs.span_exporter.return_value
+        inner.export.assert_not_called()
+
+        # registering (on the event loop) re-queues the held span on the batch processor
+        # instead of exporting inline; the processor's thread then exports it
+        _setup_cloud_tracer_for_job("job-1")
+        processor = stubs.span_batch.return_value
+        processor.on_end.assert_called_once_with(held)
+        inner.export.assert_not_called()
+        gate.export([held])
+        inner.export.assert_called_once_with([held])
+
+        # a second job in the same process: same pipeline, its own hold
+        _prepare_cloud_tracer(
+            room_id="room-2", job_id="job-2", observability_url="https://obs.example.com"
+        )
+        assert traces_mod._cloud._span_gate is gate and "job-2" in gate._open_jobs
+        gate.export([SimpleNamespace(name="room_connect", attributes={"job_id": "job-2"})])
+        _discard_cloud_tracer("job-2")  # recording never enabled: cleanup drops it
+        assert "job-2" not in gate._pending and "job-2" not in gate._open_jobs
+        assert inner.export.call_count == 1
+
+
 def test_shutdown_telemetry_is_idempotent_and_safe_without_setup() -> None:
     """_on_cleanup runs for every job, including ones that never initialized
     recording; and a second teardown must not double-flush."""
@@ -1113,11 +1354,11 @@ def test_concurrent_jobs_keep_exporting_until_the_last_release() -> None:
 
         _shutdown_telemetry("job-a")  # job A ends; job B is still running
         assert cloud._span_metadata_processor is not None
-        assert cloud._span_metadata_processor._metadata  # slot still stamped
+        assert cloud._span_metadata_processor._fallback_metadata  # slot still stamped
         assert cloud.log_handler is not None and cloud.log_handler in root.handlers
 
         _shutdown_telemetry("job-b")  # job B ends
-        assert cloud._span_metadata_processor._metadata == {}
+        assert cloud._span_metadata_processor._fallback_metadata == {}
         assert cloud.log_handler not in root.handlers
 
 
@@ -1261,11 +1502,12 @@ def test_metric_measurements_carry_job_identity() -> None:
     assert "room_id" not in attrs and "job_id" not in attrs
 
 
-def test_provider_swap_still_shuts_down_current_span_pipeline_at_exit() -> None:
-    """If the integrator replaces a framework-created tracer provider
-    mid-process, process exit must shut down BOTH the old owned provider and the
-    batch processor attached to the integrator's provider, or its queued spans
-    are lost — and it must never shut down the integrator's provider itself."""
+def test_provider_swap_keeps_the_old_pipeline_and_shuts_both_down_at_exit() -> None:
+    """If the integrator replaces a framework-created tracer provider mid-process (a
+    ``set_tracer_provider`` in the entrypoint), the old batch processor must stay alive:
+    spans still open on the old provider, the job's root among them, end there. Both
+    pipelines share one gate and both are shut down at process exit; the integrator's
+    provider itself never is."""
     from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
     from opentelemetry.trace import NoOpTracerProvider
 
@@ -1283,31 +1525,33 @@ def test_provider_swap_still_shuts_down_current_span_pipeline_at_exit() -> None:
         _setup_cloud_tracer_for_job(job_id="job-1")
         owned = traces_mod.tracer._tracer_provider
         assert isinstance(owned, SdkTracerProvider) and len(batch_instances) == 1
+        gate = traces_mod._cloud._span_gate
         _shutdown_telemetry("job-1")
 
         # the integrator replaces the provider mid-process
         integrator = MagicMock(spec=SdkTracerProvider)
         set_tracer_provider(integrator)
 
-        # job 2: the pipeline re-attaches to the integrator's provider and the
-        # old one is retired (shut down on a background thread)
+        # job 2: a second pipeline on the integrator's provider, the old one kept
         _setup_cloud_tracer_for_job(job_id="job-2")
         assert len(batch_instances) == 2
         old_batch, new_batch = batch_instances
         integrator.add_span_processor.assert_any_call(new_batch)
-        for _ in range(50):  # retire happens on a daemon thread
-            if old_batch.shutdown.called:
-                break
-            time.sleep(0.02)
-        old_batch.shutdown.assert_called_once()
+        old_batch.shutdown.assert_not_called()
+        assert traces_mod._cloud._span_gate is gate  # one gate, one exporter, shared
+        assert gate._requeue == new_batch.on_end  # held spans go to the live pipeline
+        # releasing a job flushes both pipelines
         _shutdown_telemetry("job-2")
+        old_batch.force_flush.assert_called()
+        new_batch.force_flush.assert_called()
 
-        # the exit targets cover the owned provider AND the current pipeline on
-        # the integrator's provider — never the integrator's provider itself
+        # exit shuts down the owned provider and both processors, never the integrator's
+        # provider itself
         with patch(f"{_TRACES_MOD}._run_bounded") as mock_run_bounded:
             traces_mod._cloud.shutdown_at_exit()
         target_fns = [fn for _, fn in mock_run_bounded.call_args.args[1]]
         assert owned.shutdown in target_fns
+        assert old_batch.shutdown in target_fns
         assert new_batch.shutdown in target_fns
         assert integrator.shutdown not in target_fns
 
@@ -1351,7 +1595,7 @@ def _job_ctx_active(ctx: MagicMock) -> Iterator[None]:
         _JobContextVar.reset(token)
 
 
-def test_unconfigured_job_cleanup_does_not_release_telemetry() -> None:
+async def test_unconfigured_job_cleanup_does_not_release_telemetry() -> None:
     """_on_cleanup runs for every job, including ones that never configured
     telemetry (recording disabled, no observability URL). Such a job must not
     release a concurrent recorded job's registration — in THREAD mode that would
@@ -1375,11 +1619,11 @@ def test_unconfigured_job_cleanup_does_not_release_telemetry() -> None:
         return ctx
 
     with patch("livekit.agents.job._shutdown_telemetry") as mock_shutdown:
-        _make_ctx(configured=False)._on_cleanup()
+        await _make_ctx(configured=False)._on_cleanup()
     mock_shutdown.assert_not_called()
 
     with patch("livekit.agents.job._shutdown_telemetry") as mock_shutdown:
-        _make_ctx(configured=True)._on_cleanup()
+        await _make_ctx(configured=True)._on_cleanup()
     mock_shutdown.assert_called_once_with("job-x")
 
 
@@ -1513,3 +1757,47 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
     assert session._recorder_io is None
     await _cleanup(session)
+
+
+async def test_recorder_io_receives_bit_rate_options_from_record_dict() -> None:
+    """Ensure session.start forwards recorder options to RecorderIO."""
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+
+    with _patch_job_ctx(mock_ctx, patch_recorder=True) as mock_cls:
+        assert mock_cls is not None
+        await session.start(
+            SimpleAgent(),
+            record={"audio": True, "bit_rate": 32000, "constant_bit_rate": True},
+        )
+        assert mock_cls.call_args.kwargs["bit_rate"] == 32000
+        assert mock_cls.call_args.kwargs["constant_bit_rate"] is True
+        await _cleanup(session)
+
+
+async def test_recorder_io_defaults() -> None:
+    """record=True should leave bit rate defaults (None, False) to RecorderIO."""
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+
+    with _patch_job_ctx(mock_ctx, patch_recorder=True) as mock_cls:
+        assert mock_cls is not None
+        await session.start(SimpleAgent(), record=True)
+        assert mock_cls.call_args.kwargs["bit_rate"] is None
+        assert mock_cls.call_args.kwargs["constant_bit_rate"] is False
+        await _cleanup(session)
+
+
+@pytest.mark.parametrize("audio", [True, False])
+async def test_invalid_recorder_bit_rate_rejected(audio: bool) -> None:
+    """Invalid recorder options must fail before session startup creates room tasks."""
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+
+    with _patch_job_ctx(mock_ctx):
+        with pytest.raises(ValueError, match="bit_rate"):
+            await session.start(SimpleAgent(), record={"audio": audio, "bit_rate": 1_000_000})
+
+    assert mock_ctx._primary_agent_session is None
+    assert session._room_io is None
+    assert not session._started

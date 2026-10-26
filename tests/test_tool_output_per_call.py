@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, function_tool
+from livekit.agents import Agent, AgentSession, ToolResult, function_tool
 from livekit.agents.llm import FunctionCallOutput, FunctionToolCall, StopResponse
 
 from .fake_session import FakeActions, create_session, run_session
@@ -35,7 +35,9 @@ class ToolAgent(Agent):
         return self._behavior()
 
 
-async def _run(behavior: Callable[[], Any]) -> tuple[Agent, AgentSession, FunctionCallOutput]:
+async def _run(
+    behavior: Callable[[], Any], *, reply_to: str | None = None
+) -> tuple[Agent, AgentSession, FunctionCallOutput]:
     """Run one turn whose single tool call is answered, and return that answer."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Do the thing.")
@@ -44,6 +46,9 @@ async def _run(behavior: Callable[[], Any]) -> tuple[Agent, AgentSession, Functi
         tool_calls=[FunctionToolCall(name="do_the_thing", arguments="{}", call_id="1")],
     )
     actions.add_tts(1.0)
+    if reply_to is not None:
+        actions.add_llm(input=reply_to, content="Done.")
+        actions.add_tts(1.0)
 
     session = create_session(actions)
     agent = ToolAgent(behavior)
@@ -104,3 +109,99 @@ async def test_bare_handoff_answers_the_call_and_asks_for_no_reply() -> None:
     assert session.current_agent is not agent, "the handoff must be applied"
     assert output.output == ""
     assert not output.reply_required
+
+
+@pytest.mark.parametrize(
+    "result, expected_output, reply_required",
+    [
+        (
+            ToolResult("Successfully sent DTMF events: 1", reply_required=False),
+            "Successfully sent DTMF events: 1",
+            False,
+        ),
+        (ToolResult("ok", reply_required=True), "ok", True),
+        (ToolResult("ok"), "ok", True),
+        (ToolResult(None, reply_required=True), "", True),
+        (ToolResult(None, reply_required=False), "", False),
+        ("ok", "ok", True),
+        (None, "", False),
+    ],
+)
+async def test_tool_result_controls_follow_up_reply(
+    result: Any, expected_output: str, reply_required: bool
+) -> None:
+    agent, session, output = await _run(lambda: result, reply_to=expected_output)
+
+    assert not output.is_error
+    for items in (agent.chat_ctx.items, session.history.items):
+        outputs = [item for item in items if item.type == "function_call_output"]
+        assert outputs[0].output == expected_output
+        assert outputs[0].reply_required is reply_required
+        replies = [
+            item.text_content
+            for item in items
+            if item.type == "message" and item.role == "assistant"
+        ]
+        assert replies == (["Working on it.", "Done."] if reply_required else ["Working on it."])
+
+
+async def test_handoff_with_tool_result_keeps_output_without_requesting_reply() -> None:
+    next_agent = Agent(instructions="You are the next agent.")
+    _, session, output = await _run(
+        lambda: (next_agent, ToolResult("Transferred", reply_required=False)),
+        reply_to="Transferred",
+    )
+
+    assert session.current_agent is next_agent
+    assert output.output == "Transferred"
+    assert not output.is_error
+    assert not output.reply_required
+    assert not any(
+        item.type == "message" and item.text_content == "Done." for item in session.history.items
+    )
+
+
+async def test_tool_result_does_not_suppress_other_tools_replies() -> None:
+    class ParallelToolAgent(Agent):
+        @function_tool
+        async def send_dtmf(self) -> ToolResult:
+            """Send DTMF events."""
+            return ToolResult("Sent", reply_required=False)
+
+        @function_tool
+        async def lookup(self) -> str:
+            """Look something up."""
+            return "Found"
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Send DTMF and look it up.")
+    actions.add_llm(
+        content="Working on it.",
+        tool_calls=[
+            FunctionToolCall(name="send_dtmf", arguments="{}", call_id="1"),
+            FunctionToolCall(name="lookup", arguments="{}", call_id="2"),
+        ],
+    )
+    actions.add_tts(1.0)
+    for output in ("Sent", "Found"):
+        actions.add_llm(input=output, content="Done.")
+        actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = ParallelToolAgent(instructions="test")
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    outputs = {
+        item.call_id: item for item in session.history.items if item.type == "function_call_output"
+    }
+    assert set(outputs) == {"1", "2"}
+    assert outputs["1"].output == "Sent"
+    assert not outputs["1"].reply_required
+    assert outputs["2"].output == "Found"
+    assert outputs["2"].reply_required
+    replies = [
+        item.text_content
+        for item in session.history.items
+        if item.type == "message" and item.role == "assistant"
+    ]
+    assert replies == ["Working on it.", "Done."]

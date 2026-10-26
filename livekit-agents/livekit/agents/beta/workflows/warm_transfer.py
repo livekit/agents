@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from base64 import b64encode
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 from xml.sax.saxutils import quoteattr
 
 from livekit import api, rtc
@@ -29,7 +31,9 @@ from ...voice.background_audio import (
 from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
-    from ...voice.turn import TurnDetectionMode
+    import aiohttp
+
+    from ...voice.turn import TurnDetectionMode, TurnHandlingOptions
 
 
 @dataclass
@@ -51,6 +55,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -84,6 +89,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 with a ``ToolError`` and the caller conversation resumes.
             hold_audio: Audio played to the caller while they are on hold during the
                     transfer.
+            turn_handling: Turn handling options for the conversation with the human agent.
             extra_instructions: Extra instructions to append to the base instructions
                 that are used to summarize the conversation history.
         """
@@ -105,6 +111,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         super().__init__(
             instructions=instructions,
             chat_ctx=NOT_GIVEN,  # don't pass the chat_ctx
+            turn_handling=turn_handling,
             turn_detection=turn_detection,
             tools=tools or [],
             stt=stt,
@@ -316,50 +323,58 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             "connecting to human agent room",
             extra={"ws_url": ws_url, "human_agent_room_name": human_agent_room_name},
         )
-        await room.connect(ws_url, token)
-
-        # if human agent hung up for whatever reason, we'd resume the caller conversation
-        room.on("disconnected", self._on_human_agent_room_close)
+        agent_turn_handling = self._turn_handling.copy()
+        if is_given(self.turn_detection):
+            agent_turn_handling["turn_detection"] = self.turn_detection
+        session_turn_handling = agent_turn_handling.copy()
+        if "turn_detection" not in session_turn_handling:
+            caller_turn_detection = self.session.turn_detection
+            if caller_turn_detection is not None:
+                session_turn_handling["turn_detection"] = caller_turn_detection
 
         human_agent_sess: AgentSession = AgentSession(
             vad=self.session.vad or NOT_GIVEN,
             llm=self.session.llm or NOT_GIVEN,
             stt=self.session.stt or NOT_GIVEN,
             tts=self.session.tts or NOT_GIVEN,
-            turn_detection=self.session.turn_detection or NOT_GIVEN,
+            turn_handling=session_turn_handling,
         )
         # create a copy of this AgentTask
         human_agent_agent = Agent(
             instructions=self.instructions,
-            turn_detection=self.turn_detection,
+            turn_handling=agent_turn_handling,
             stt=self.stt,
             vad=self.vad,
             llm=self.llm,
             tts=self.tts,
             tools=self.tools,
             chat_ctx=self.chat_ctx,
-            allow_interruptions=self.allow_interruptions,
         )
-        await human_agent_sess.start(
-            agent=human_agent_agent,
-            room=room,
-            room_options=room_io.RoomOptions(
-                close_on_disconnect=True,
-                delete_room_on_close=True,
-                participant_identity=self._human_agent_identity,
-            ),
-            record=False,  # TODO: support recording on multiple sessions?
-        )
-
-        # dial the human agent
         try:
+            await room.connect(ws_url, token)
+            # Resume the caller conversation if the human agent hangs up.
+            room.on("disconnected", self._on_human_agent_room_close)
+
+            await human_agent_sess.start(
+                agent=human_agent_agent,
+                room=room,
+                room_options=room_io.RoomOptions(
+                    close_on_disconnect=True,
+                    delete_room_on_close=True,
+                    participant_identity=self._human_agent_identity,
+                ),
+                record=False,  # TODO: support recording on multiple sessions?
+            )
             await self._originate_human_agent(
                 room_name=human_agent_room_name,
                 identity=self._human_agent_identity,
                 room=room,
             )
-        except Exception:
-            human_agent_sess.shutdown()
+        except BaseException:
+            room.off("disconnected", self._on_human_agent_room_close)
+            human_agent_sess.shutdown(drain=False)
+            with contextlib.suppress(Exception):
+                await room.disconnect()
             raise
 
         return human_agent_sess
@@ -432,6 +447,16 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 # Twilio reports no-answer/failure only via async status webhooks (not consumed here),
 # so cap the wait to keep an unanswered transfer from hanging the caller
 _TWILIO_RINGING_TIMEOUT = 30.0
+_TWILIO_API_BASE = "https://api.twilio.com/2010-04-01"
+
+
+class _TwilioAPIError(RuntimeError):
+    def __init__(self, status: int, code: int | None) -> None:
+        self.status = status
+        self.code = code
+        super().__init__(
+            f"Twilio request failed (HTTP {status}, code {code if code is not None else 'unknown'})"
+        )
 
 
 class TwilioConnectorWarmTransferTask(WarmTransferTask):
@@ -442,10 +467,13 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         twilio_from_number: str,
         twilio_account_sid: NotGivenOr[str] = NOT_GIVEN,
         twilio_auth_token: NotGivenOr[str] = NOT_GIVEN,
+        twilio_call_token: NotGivenOr[str] = NOT_GIVEN,
+        original_caller_number: NotGivenOr[str] = NOT_GIVEN,
         ringing_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
+        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
@@ -455,8 +483,33 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         extra_instructions: str = "",
     ) -> None:
+        """Dial a human agent using Twilio's Calls API and the LiveKit Twilio Connector.
+
+        Args:
+            phone_number: The human agent's phone number to dial.
+            twilio_from_number: Agent/business Twilio number or verified caller ID.
+                Used when no token is supplied and for the caller-ID rejection fallback.
+            twilio_account_sid: Twilio account SID. Defaults to ``TWILIO_ACCOUNT_SID``.
+            twilio_auth_token: Twilio auth token. Defaults to ``TWILIO_AUTH_TOKEN``.
+            twilio_call_token: Nonempty ``CallToken`` from the inbound call's validated
+                webhook, letting Twilio place the outbound call from the original
+                caller's number. Requires ``original_caller_number``.
+                Keep it in server-side state for that call, outside prompts, logs and
+                participant attributes.
+            original_caller_number: The inbound call's ``From``. Used as the outbound
+                caller ID only together with a nonempty ``twilio_call_token``; otherwise
+                ``twilio_from_number`` is used.
+
+        Note:
+            If Twilio rejects the preserved caller ID (HTTP 400 with error 21210 or
+            21212), the call is retried once from ``twilio_from_number`` without the
+            token. Other failures propagate without a retry to avoid duplicate calls.
+            Other arguments have the same meaning as in ``WarmTransferTask``.
+        """
         self._phone_number = phone_number
         self._twilio_from_number = twilio_from_number
+        self._twilio_call_token = twilio_call_token
+        self._original_caller_number = original_caller_number
         self._twilio_account_sid = (
             twilio_account_sid
             if is_given(twilio_account_sid)
@@ -471,6 +524,12 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
                 " `twilio_auth_token` or set the TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN"
                 " environment variables"
             )
+        if (
+            is_given(twilio_call_token)
+            and twilio_call_token
+            and (not is_given(original_caller_number) or not original_caller_number)
+        ):
+            raise ValueError("twilio_call_token requires original_caller_number")
         super().__init__(
             ringing_timeout=(
                 ringing_timeout if is_given(ringing_timeout) else _TWILIO_RINGING_TIMEOUT
@@ -478,6 +537,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             hold_audio=hold_audio,
             instructions=instructions,
             chat_ctx=chat_ctx,
+            turn_handling=turn_handling,
             turn_detection=turn_detection,
             tools=tools,
             stt=stt,
@@ -487,21 +547,43 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             allow_interruptions=allow_interruptions,
             extra_instructions=extra_instructions,
         )
+        self._twilio_tasks = utils.aio.TaskSet()
 
     def _setup_origination(self, **_: object) -> None:
         pass  # dials via the Twilio connector; no SIP config needed
 
+    async def _twilio_request(
+        self, session: aiohttp.ClientSession, path: str, data: dict[str, str]
+    ) -> dict[str, Any]:
+        account_sid = quote(self._twilio_account_sid, safe="")
+        auth = b64encode(f"{self._twilio_account_sid}:{self._twilio_auth_token}".encode()).decode()
+        async with session.post(
+            f"{_TWILIO_API_BASE}/Accounts/{account_sid}{path}",
+            headers={"Authorization": f"Basic {auth}"},
+            data=data,
+            allow_redirects=False,
+        ) as response:
+            try:
+                body = await response.json(content_type=None)
+            except ValueError:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            if not 200 <= response.status < 300:
+                code = body.get("code")
+                raise _TwilioAPIError(response.status, code if isinstance(code, int) else None)
+            return body
+
     async def _originate_human_agent(
         self, *, room_name: str, identity: str, room: rtc.Room
     ) -> None:
-        # optional dep; keep SIP path import-free
-        try:
-            from twilio.rest import Client  # type: ignore
-        except ImportError as e:
-            raise ImportError(
-                "The 'twilio' package is required for Twilio connector warm transfer "
-                "but is not installed. To fix this, run: pip install twilio"
-            ) from e
+        session = utils.http_context.http_session()
+        call_options: dict[str, str] = {}
+        dial_from = self._twilio_from_number
+        if is_given(self._twilio_call_token) and self._twilio_call_token:
+            assert is_given(self._original_caller_number)
+            call_options["CallToken"] = self._twilio_call_token
+            dial_from = self._original_caller_number
 
         job_ctx = get_job_context()
         resp = await job_ctx.api.connector.connect_twilio_call(
@@ -515,20 +597,58 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             f"<Response><Connect><Stream url={quoteattr(resp.connect_url)}/></Connect></Response>"
         )
 
-        client = Client(self._twilio_account_sid, self._twilio_auth_token)
-        call = await asyncio.to_thread(
-            client.calls.create,
-            to=self._phone_number,
-            from_=self._twilio_from_number,
-            twiml=twiml,
-        )
+        # Retain late results without delaying cancellation or using process-global state.
+        tasks = self._twilio_tasks
 
+        async def create_call(from_number: str, **options: str) -> str:
+            call = await self._twilio_request(
+                session,
+                "/Calls.json",
+                {"To": self._phone_number, "From": from_number, "Twiml": twiml, **options},
+            )
+            sid = call.get("sid")
+            if not isinstance(sid, str) or not sid:
+                raise RuntimeError("Twilio call creation returned no call SID")
+            return sid
+
+        async def cancel_when_created(pending: asyncio.Task[str]) -> None:
+            try:
+                sid = await pending
+            except Exception:
+                return
+            path = f"/Calls/{quote(sid, safe='')}.json"
+            try:
+                try:
+                    await self._twilio_request(session, path, {"Status": "canceled"})
+                except _TwilioAPIError as error:
+                    if error.status != 400 or error.code != 21220:
+                        raise
+                    # The call was answered before cancellation reached Twilio.
+                    await self._twilio_request(session, path, {"Status": "completed"})
+            except Exception:
+                logger.warning("Failed to cancel Twilio call")
+
+        pending = tasks.create_task(create_call(dial_from, **call_options))
         try:
+            try:
+                await asyncio.shield(pending)
+            except _TwilioAPIError as error:
+                # 21210 = unverified From; 21212 = invalid From. Neither creates a call.
+                if (
+                    not self._twilio_call_token
+                    or error.status != 400
+                    or error.code not in (21210, 21212)
+                ):
+                    raise
+                logger.warning(
+                    "Twilio rejected preserved caller ID; retrying with business caller ID"
+                )
+                pending = tasks.create_task(create_call(self._twilio_from_number))
+                await asyncio.shield(pending)
             await self._wait_for_human_agent(room=room, identity=identity)
         except BaseException:
-            # we gave up waiting; cancel the still-ringing call so it doesn't linger
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(client.calls(call.sid).update, status="canceled")
+            # Twilio can create the call after the transfer is canceled.
+            tasks.create_task(cancel_when_created(pending))
             raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:

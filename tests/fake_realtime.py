@@ -18,6 +18,7 @@ from livekit.agents.llm import (
     RealtimeSession,
 )
 from livekit.agents.llm.tool_context import Tool, ToolChoice, ToolContext
+from livekit.agents.metrics import RealtimeModelMetrics
 
 from .fake_io import FakeAudioOutput
 
@@ -36,6 +37,8 @@ def fake_capabilities(**overrides: bool) -> RealtimeCapabilities:
         "mutable_tools": True,
         "per_response_tool_choice": True,
         "supports_say": True,
+        # a different interruption model rather than a richer one, so it stays off
+        "supports_overlapping_speech": False,
     }
     defaults.update(overrides)
     return RealtimeCapabilities(**defaults)
@@ -65,6 +68,8 @@ class FakeRealtimeSession(RealtimeSession):
         self.aclose_entered = asyncio.Event()
         self.block_aclose: asyncio.Event | None = None
         self.aclose_error: Exception | None = None
+        # a provider that only learns its usage as the connection drains reports it here
+        self.closing_metrics: RealtimeModelMetrics | None = None
         # test hook to fail bring-up (raised from update_chat_ctx during _update_session)
         self.update_error: Exception | None = None
 
@@ -142,6 +147,8 @@ class FakeRealtimeSession(RealtimeSession):
             await self.block_aclose.wait()
         if self.aclose_error is not None:
             raise self.aclose_error
+        if self.closing_metrics is not None:
+            self.emit("metrics_collected", self.closing_metrics)
         self.closed = True
 
     # --- test helpers -------------------------------------------------------

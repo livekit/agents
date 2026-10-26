@@ -1171,10 +1171,15 @@ def _streaming_recognize_response_to_speech_data(
 
     if text == "" or not words:
         if text and not words:
+            # No words to time the text with (e.g. chirp_3 forces
+            # enable_word_time_offsets=False): report the timing as unknown,
+            # like the REST path, instead of the stream offset. The SDK reads
+            # any end_time > 0 as the provider's end of speech, which would
+            # otherwise freeze the end-of-turn anchor in turn_detection="stt".
             data = stt.SpeechData(
                 language=lg,
-                start_time=start_time_offset,
-                end_time=start_time_offset,
+                start_time=0.0,
+                end_time=0.0,
                 confidence=confidence,
                 text=text,
             )

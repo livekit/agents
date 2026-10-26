@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
+from livekit.agents.llm._realtime.openai_types import RealtimeModels as RealtimeModels
 from openai.types import AudioModel
 
 # AudioModel covers the transcriptions endpoint; these two are served only over realtime
@@ -20,7 +21,6 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
-    "gpt-5.6",
     "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
@@ -63,18 +63,12 @@ ChatModels = Literal[
     "gpt-3.5-turbo-1106",
     "gpt-3.5-turbo-16k-0613",
 ]
-RealtimeModels = Literal[
-    "gpt-realtime",
-    "gpt-realtime-1.5",
-    "gpt-realtime-2",
-    "gpt-realtime-2025-08-28",
-    "gpt-4o-realtime-preview",
-]
 EmbeddingModels = Literal[
     "text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"
 ]
 
 AssistantTools = Literal["code_interpreter", "file_search", "function"]
+DecisionModels = Literal["gpt-6-luna-decisions"]
 
 # adapters for OpenAI-compatible LLMs
 
@@ -115,6 +109,7 @@ NebiusChatModels = Literal[
 
 CerebrasChatModels = Literal[
     "gpt-oss-120b",
+    "qwen-3.8-27b",
     "zai-glm-4.7",
     "gemma-4-31b",
 ]
@@ -170,17 +165,6 @@ CometAPIChatModels = Literal[
     # Qwen series
     "qwen3-30b-a3b",
     "qwen3-coder-plus-2025-07-22",
-]
-
-VertexModels = Literal[
-    "google/gemini-2.0-flash-exp",
-    "google/gemini-1.5-flash",
-    "google/gemini-1.5-pro",
-    "google/gemini-1.0-pro-vision",
-    "google/gemini-1.0-pro-vision-001",
-    "google/gemini-1.0-pro-002",
-    "google/gemini-1.0-pro-001",
-    "google/gemini-1.0-pro",
 ]
 
 TogetherChatModels = Literal[
@@ -295,7 +279,6 @@ SambaNovaChatModels = Literal[
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
-        "gpt-5.6",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
@@ -314,10 +297,10 @@ def _supports_reasoning_effort(model: ChatModels | str) -> bool:
 # to "minimal", which the gpt-5.6 family rejects outright.
 _REASONING_EFFORT_NONE_MODELS: frozenset[str] = frozenset(
     {
-        "gpt-5.6",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
+        "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5.2",
