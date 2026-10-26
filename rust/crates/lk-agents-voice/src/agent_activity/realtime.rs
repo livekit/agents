@@ -2,7 +2,7 @@
 //! generations), the driver's handling of the model's events, and the turn detection it agrees on.
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::false_interruption::AudioInterruptTrigger;
+use crate::agent_activity::false_interruption::InterruptRefusal;
 use crate::agent_activity::options::TurnDetection;
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
@@ -473,11 +473,13 @@ impl Driver {
         match ev {
             Event::InputSpeechStarted(_) => {
                 // Server-side VAD in the local `StartOfSpeech`'s position: the turn learns the
-                // onset, the resume timer is cancelled, then the guarded interruption.
+                // onset, then `interrupt(source="audio_activity")`, a barge-in that is never a
+                // pause; a speech that forbids it keeps playing.
                 let eff = self.activity.audio_recognition.on_server(now, ServerSpeech::Started);
                 out.machine().append(eff);
-                self.on_start_of_speech(out);
-                self.interrupt_by_audio_activity(now, out, AudioInterruptTrigger::ServerOnset);
+                if self.interrupt_all(now, false, InterruptCause::ByAudioActivity, out).is_err() {
+                    out.trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed));
+                }
             }
             Event::InputSpeechStopped(_) => {
                 let eff = self.activity.audio_recognition.on_server(now, ServerSpeech::Stopped);

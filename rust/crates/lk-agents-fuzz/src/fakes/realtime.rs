@@ -20,8 +20,8 @@ use lk_agents_abi::{
     ChatContext, ChatItem, ChatMessage, Realtime, RealtimeCommand, RealtimeSession, Role,
     errors::ProviderError,
     llm::realtime::{
-        Event, GenerationCreated, GenerationDone, InputTranscription, MessageDone, MessageStarted,
-        RealtimeCapabilities, RemoteItemAdded, TextDelta,
+        Event, GenerationCreated, GenerationDone, InputSpeechStarted, InputTranscription,
+        MessageDone, MessageStarted, RealtimeCapabilities, RemoteItemAdded, TextDelta,
     },
 };
 use tokio::sync::mpsc;
@@ -136,6 +136,8 @@ pub(super) fn deliver(socket: &Session, what: &Input) -> bool {
             delta: "...".into(),
             start_time: None,
         }),
+        // The server's VAD heard the user start speaking, over whatever is playing.
+        RtEvent::SpeechStarted => Event::InputSpeechStarted(InputSpeechStarted {}),
         // The server opens a generation of its own, over whatever is in progress. It is a turn
         // like any other: open until the case ends it.
         RtEvent::SecondGeneration => {

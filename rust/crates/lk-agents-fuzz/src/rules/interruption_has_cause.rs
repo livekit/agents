@@ -13,7 +13,7 @@ use lk_agents_voice::trace::{CloseStep, InterruptCause, InterruptStep::Interrupt
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
-    input::{DtmfInput, Input},
+    input::{DtmfInput, Input, RtEvent},
     record::{InputsView, Interruption, Observed, Recording},
 };
 
@@ -69,8 +69,9 @@ fn host_interrupted_before(inputs: &InputsView, at: Observed) -> bool {
     })
 }
 
-/// Any recognition or voice-activity event delivered, or a user-turn claim or commit issued,
-/// before `at`. The detector hearing speech is what `_interrupt_by_audio_activity` acts on.
+/// Any recognition or voice-activity event delivered (the realtime server's own onset among
+/// them), or a user-turn claim or commit issued, before `at`. The detector hearing speech is what
+/// `_interrupt_by_audio_activity` acts on.
 fn user_input_before(inputs: &InputsView, at: Observed) -> bool {
     // A recognition event the stream refused never reached the turn, so it permits nothing. A
     // turn command is judged by its issue: whether the driver acted on it is what is in question.
@@ -87,6 +88,7 @@ fn user_input_before(inputs: &InputsView, at: Observed) -> bool {
                     | Input::VadStart { .. }
                     | Input::VadInference { .. }
                     | Input::VadEnd { .. }
+                    | Input::RealtimeEvent { event: RtEvent::SpeechStarted, .. }
             )
     });
     let claimed = inputs.sent().iter().any(|sent| {

@@ -37,6 +37,7 @@ mod preemptive_reply_latency;
 mod realtime_close_interrupts;
 mod realtime_items_filled;
 mod realtime_reply_asked_when_authorized;
+mod realtime_server_onset_interrupts;
 mod realtime_transcript_forwarded;
 mod recogniser_failed_speaking;
 mod realtime_waiter_journalled;

@@ -202,8 +202,6 @@ pub enum AudioInterruptTrigger {
     SttInterim { words: usize },
     /// A final transcript: the failsafe for a VAD that missed the segment.
     SttFinal { words: usize },
-    /// The realtime server's own `input_speech_started`; exempt from guard 3.
-    ServerOnset,
     /// The adaptive detector ruled an interruption. The instant from which the user's words over
     /// the agent are not replayed into the next turn.
     DetectorVerdict { ignore_user_transcript_until: Ts },
@@ -442,8 +440,7 @@ impl Driver {
                     }
                     AudioInterruptTrigger::VadThreshold { .. }
                     | AudioInterruptTrigger::SttInterim { .. }
-                    | AudioInterruptTrigger::SttFinal { .. }
-                    | AudioInterruptTrigger::ServerOnset => now,
+                    | AudioInterruptTrigger::SttFinal { .. } => now,
                 };
                 // The record before the sink goes quiet, so the resume has something to resume.
                 let agent_state = self.session.states.agent_state();
@@ -521,7 +518,7 @@ impl Driver {
                     return Err(R::TooFewWords);
                 }
             }
-            AudioInterruptTrigger::ServerOnset | AudioInterruptTrigger::DetectorVerdict { .. } => {}
+            AudioInterruptTrigger::DetectorVerdict { .. } => {}
         }
         // Guard 1: the adaptive detector clears it while it owns interruption.
         if !session.by_audio_activity {
@@ -532,7 +529,7 @@ impl Driver {
         if !session.aec.remaining().is_zero() && session.aec.armed() {
             return Err(R::AecWarmup);
         }
-        // Guard 3: `_rt_turn_detection_enabled`, read at the call; the server's own onset is exempt.
+        // Guard 3: `_rt_turn_detection_enabled`, read at the call.
         let stt_enabled = turn.stt_enabled();
         let realtime_turn_detection = self.activity.rt_session.as_ref().is_some_and(|s| {
             let caps = s.capabilities;
@@ -541,7 +538,7 @@ impl Driver {
                     && (stt_enabled
                         || self.input.sinks.contains_key(&crate::audio::AudioChannel::Vad)))
         });
-        if realtime_turn_detection && trigger != AudioInterruptTrigger::ServerOnset {
+        if realtime_turn_detection {
             return Err(R::RealtimeTurnDetection);
         }
         // Guard 4: `min_words > 0` enables it; with no transcript source it is skipped. The

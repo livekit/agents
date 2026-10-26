@@ -392,8 +392,11 @@ plain_enum! {
 }
 plain_enum! {
     /// Something the realtime server did on its own: dropped the socket, came back, sent a delta
-    /// for no generation the driver knows, or opened a generation over the one in progress.
-    RtEvent { Disconnected, Reconnected, StrayDelta, SecondGeneration, GenerationDone }
+    /// for no generation the driver knows, opened a generation over the one in progress, or heard
+    /// the user start speaking (its own VAD's `input_speech_started`).
+    RtEvent {
+        Disconnected, Reconnected, StrayDelta, SecondGeneration, GenerationDone, SpeechStarted
+    }
 }
 plain_enum! {
     /// What the host answers a hook call with. Any answer may go to any hook; the driver decides
