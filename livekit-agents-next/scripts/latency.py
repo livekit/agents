@@ -21,6 +21,9 @@ Stages, per agent reply:
     first_audio_out   user stopped speaking -> agent audio out (``e2e_latency``)
     caller_heard      caller's audio played out -> first audible agent frame, at the caller
     llm_tps           LLM output tokens per second over the streaming window (``llm_node_tps``)
+
+With two agents, each stage also shows B - A at p50 and p90 with a 95% bootstrap interval. The
+gateway's time to first token is heavy-tailed: at ~40 replies a p90 gap of 0.2 s is still noise.
 """
 
 from __future__ import annotations
@@ -207,6 +210,16 @@ def p90(values: list[float]) -> float:
     return ordered[min(len(ordered) - 1, math.ceil(0.9 * len(ordered)) - 1)]
 
 
+def diff_ci(a: list[float], b: list[float], stat: Any) -> str:
+    """B - A of ``stat``, with its 95% bootstrap interval: a gap inside it is noise."""
+    rng = np.random.default_rng(0)
+    boot = [
+        stat(list(rng.choice(b, len(b)))) - stat(list(rng.choice(a, len(a)))) for _ in range(2000)
+    ]
+    lo, hi = np.quantile(boot, [0.025, 0.975])
+    return f"{stat(b) - stat(a):+.3f} [{lo:+.3f},{hi:+.3f}]"
+
+
 async def run_bench(agents: list[str], turns: int, out: str | None) -> None:
     speech = await synthesize(LINES)
     calls_each = math.ceil(turns / len(LINES))
@@ -223,15 +236,19 @@ async def run_bench(agents: list[str], turns: int, out: str | None) -> None:
         await lkapi.aclose()
 
     head = f"{'stage':<16}" + "".join(f"{a + ' p50':>18}{a + ' p90':>18}{'n':>5}" for a in agents)
+    if len(agents) == 2:
+        head += f"{'B-A p50 [95% CI]':>28}{'B-A p90 [95% CI]':>28}"
     print("\n" + head)
     for stage, (role, key) in STAGES.items():
         row = f"{stage:<16}"
-        for agent in agents:
-            values = stage_values(results[agent], role, key)
+        columns = [stage_values(results[agent], role, key) for agent in agents]
+        for values in columns:
             if values:
                 row += f"{statistics.median(values):>18.3f}{p90(values):>18.3f}{len(values):>5}"
             else:
                 row += f"{'-':>18}{'-':>18}{0:>5}"
+        if len(agents) == 2 and all(columns):
+            row += f"{diff_ci(*columns, statistics.median):>28}{diff_ci(*columns, p90):>28}"
         print(row)
     if out:
         with open(out, "w") as f:
