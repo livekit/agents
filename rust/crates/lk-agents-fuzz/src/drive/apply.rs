@@ -929,9 +929,12 @@ impl Run {
         let Some(handle) = self.handles.get(&speech.0).cloned() else { return false };
         let Some(api) = self.api.api().ok() else { return false };
         let host = Arc::new(HostSpeech::from_core(handle, api));
-        // `await handle`, then what a program reads off the handle it awaited.
+        // `await handle.wait_for_generation()`, `await handle`, then what a program reads off it.
         let waited = host.clone();
-        let done = self.drive(Some(self.budget()), async move { waited.wait_for_playout().await });
+        let done = self.drive(Some(self.budget()), async move {
+            let _ = waited.wait_for_generation(None).await;
+            waited.wait_for_playout().await
+        });
         if done.await.is_none() {
             return false;
         }

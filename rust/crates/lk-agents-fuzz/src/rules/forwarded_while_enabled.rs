@@ -26,7 +26,7 @@ impl Rule for ForwardedWhileEnabled {
     const CONTRACT: Contract = Contract {
         id: "forwarded_while_enabled",
         guarantee: "Every microphone frame pushed while audio input was enabled reached every open STT and VAD stream; none reached a stream while input was disabled.",
-        examples: &[reaches_both_legs, late_delivery_after_disable],
+        examples: &[reaches_both_legs, late_delivery_after_disable, crossed_a_recogniser_swap],
         counterexamples: &[stt_never_heard, forwarded_while_disabled],
         probe: None,
     };
@@ -247,6 +247,23 @@ fn late_delivery_after_disable() -> Recording {
         .sent(audio_input(false))
         .then_act()
         .forwarded(Kind::Stt, 0, heard(0))
+        .forwarded(Kind::Vad, 0, heard(0))
+        .done()
+}
+
+/// A frame pushed, the recogniser swapped before the driver's turn ended, and the old stream
+/// never hearing it: a room's input pump hands the frame over a hop later, to the new stream.
+/// Catches: the rule owing it to the old stream (survey seed 1862 on the room's legs).
+fn crossed_a_recogniser_swap() -> Recording {
+    mic_stt_vad()
+        .sent(frames(1))
+        .journal(Step::Input(InputStep::ModelsUpdated {
+            stt_given: true,
+            vad_given: false,
+            stt_reopened: true,
+            vad_reopened: false,
+        }))
+        .then_act()
         .forwarded(Kind::Vad, 0, heard(0))
         .done()
 }
