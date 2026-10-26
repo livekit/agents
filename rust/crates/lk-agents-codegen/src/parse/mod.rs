@@ -271,12 +271,20 @@ fn literal(
                     ty,
                     twin: None,
                     dispatch: None,
+                    mirror: None,
                     kind: None,
                 });
             }
             for v in values {
                 let ty = foreign(&format!("Literal[\"{v}\"]"), &format!("'{v}'"));
-                out.push(Variant { rust_name: v, ty, twin: None, dispatch: None, kind: None });
+                out.push(Variant {
+                    rust_name: v,
+                    ty,
+                    twin: None,
+                    dispatch: None,
+                    mirror: None,
+                    kind: None,
+                });
             }
             (Body::Union(out), Kind::Union, Kind::Union)
         }
@@ -468,12 +476,20 @@ fn enom(
                     (false, true) => Some(Dispatch::Ignored),
                     (false, false) => None,
                 };
+            let mirror = str_arg(&v.attrs, "python", "mirror")?;
+            if mirror.is_some() && dispatch != Some(Dispatch::Event) {
+                return Err(format!(
+                    "{label}: {rust_name}::{} mirrors a state but is not an event",
+                    v.ident
+                ));
+            }
             members.push(Variant {
                 rust_name: v.ident.to_string(),
                 ty: t,
                 twin: rust_arg(&v.attrs, "binding", "twin"),
                 kind: str_arg(&v.attrs, "python", "kind")?,
                 dispatch,
+                mirror,
             });
         }
         Body::Union(members)

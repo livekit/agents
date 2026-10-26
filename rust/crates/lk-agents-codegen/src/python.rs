@@ -64,6 +64,7 @@ fn dispatch(decls: &[Decl], d: &Decl, module: &str) -> Result<Out, String> {
             Ok((wire, md))
         };
     let mut events: Vec<(String, String, String, String)> = Vec::new();
+    let mut mirrors: Vec<(String, String)> = Vec::new();
     let mut ignored: Vec<String> = Vec::new();
     let mut kinds: Vec<String> = Vec::new();
     for m in members {
@@ -101,6 +102,9 @@ fn dispatch(decls: &[Decl], d: &Decl, module: &str) -> Result<Out, String> {
                 let public = py.tag.as_ref().map(|(_, v)| v.clone()).ok_or_else(|| {
                     format!("{at}: `{}` has no discriminant to emit it under", py.name)
                 })?;
+                if let Some(attr) = &m.mirror {
+                    mirrors.push((wire.clone(), attr.clone()));
+                }
                 events.push((wire, py.name.clone(), py.module.clone(), public));
             }
         }
@@ -137,13 +141,20 @@ fn dispatch(decls: &[Decl], d: &Decl, module: &str) -> Result<Out, String> {
         }
     }
     b.push_str(&format!(
-        "\n\n# `{}` members the host emits as a public session event and nothing more:\n\
+        "\n\n# `{}` members the host emits as a public session event:\n\
          # {{wire kind: (event class, event name)}}. The payload's keys are the class's fields.\n\
          PUBLIC_EVENTS: dict[str, tuple[type[Any], str]] = {{\n",
         d.rust_name
     ));
     for (wire, class, _, public) in &events {
         b.push_str(&format!("    \"{wire}\": ({class}, \"{public}\"),\n"));
+    }
+    b.push_str(
+        "}\n\n# Public events whose `new_state` the host keeps on the session: {wire kind: attribute}.\n\
+         MIRRORED_STATES: dict[str, str] = {\n",
+    );
+    for (wire, attr) in &mirrors {
+        b.push_str(&format!("    \"{wire}\": \"{attr}\",\n"));
     }
     b.push_str(&format!("}}\n\n# `{}` members the host receives and does not act on.\nIGNORED_EVENTS: frozenset[str] = frozenset(\n    {{\n", d.rust_name));
     for wire in &ignored {

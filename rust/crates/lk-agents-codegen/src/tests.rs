@@ -641,7 +641,7 @@ const ROUTED: &str = "#[derive(Host)]\n#[python(pydantic, module = \"events\", n
     #[derive(Host)]\n#[binding(emit, tag = \"type\", tag_value = \"done\", from = core::Done)]\n\
     pub struct Done { pub id: String }\n\
     #[derive(Host)]\n#[binding(emit, from = core::Stream)]\n#[python(dispatch = \"dispatch\")]\n\
-    pub enum Stream {\n    #[python(event)]\n    Timeout(Timeout),\n    #[python(ignored)]\n    Done(Done),\n}";
+    pub enum Stream {\n    #[python(event, mirror = \"_timeout\")]\n    Timeout(Timeout),\n    #[python(ignored)]\n    Done(Done),\n}";
 
 // Catches: a routing table keyed by the Python discriminant instead of the wire kind the binding
 // sends (they differ -- `transcription_timeout` is emitted as `user_transcription_timeout`), an
@@ -657,10 +657,16 @@ fn a_routed_union_generates_its_dispatch_table_keyed_by_the_wire_kind() {
         ),
         "{out}"
     );
+    assert!(
+        out.contains("MIRRORED_STATES: dict[str, str] = {\n    \"timeout\": \"_timeout\",\n}"),
+        "{out}"
+    );
     let e = refuse_python(&ROUTED.replace("#[python(dispatch = \"dispatch\")]\n", ""));
     assert!(e.contains("names no #[python(dispatch"), "{e}");
     let e = refuse_python(&ROUTED.replace("#[python(ignored)]", "#[python(event)]"));
     assert!(e.contains("needs a pydantic Python target"), "{e}");
+    let e = refuse_python(&ROUTED.replace("#[python(ignored)]", "#[python(ignored, mirror = \"_x\")]"));
+    assert!(e.contains("mirrors a state but is not an event"), "{e}");
 }
 
 // --- node targets --------------------------------------------------------------------------------

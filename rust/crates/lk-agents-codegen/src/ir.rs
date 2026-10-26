@@ -47,6 +47,9 @@ pub struct Variant {
     pub twin: Option<String>,
     /// `#[python(event)]` / `#[python(ignored)]`.
     pub dispatch: Option<Dispatch>,
+    /// `#[python(event, mirror = "_attr")]`: the session attribute the event's `new_state` is
+    /// written to before it is emitted, so the session's property reads what the event said.
+    pub mirror: Option<String>,
     /// `#[python(kind = "..")]`: the wire kind of a host-stream member whose record serialises by
     /// hand (`ToolsExecutedEvent`), so no declaration carries its tag. Only for such a member.
     pub kind: Option<String>,

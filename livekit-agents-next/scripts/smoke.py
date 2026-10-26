@@ -779,7 +779,12 @@ async def main() -> int:
         calls = [(c.name, o.output) for c, o in ev.zipped()]  # type: ignore[attr-defined]
         print(f"function_tools_executed {calls}")
 
-    session.on("agent_state_changed", lambda ev: print(f"agent_state {ev.new_state}"))
+    def on_state(ev: object) -> None:
+        # the session's state is the event's by the time a listener runs
+        assert session.agent_state == ev.new_state  # type: ignore[attr-defined]
+        print(f"agent_state {ev.new_state}")  # type: ignore[attr-defined]
+
+    session.on("agent_state_changed", on_state)
     session.on("user_input_transcribed", lambda ev: print(f"user_input {ev.transcript!r}"))
     session.on(
         "conversation_item_added",

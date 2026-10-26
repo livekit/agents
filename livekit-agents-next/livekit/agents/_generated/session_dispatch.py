@@ -12,17 +12,29 @@ from typing import Any
 
 from .events import (
     AgentFalseInterruptionEvent,
+    AgentStateChangedEvent,
+    UserInputTranscribedEvent,
+    UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
 
 
-# `HostWire` members the host emits as a public session event and nothing more:
+# `HostWire` members the host emits as a public session event:
 # {wire kind: (event class, event name)}. The payload's keys are the class's fields.
 PUBLIC_EVENTS: dict[str, tuple[type[Any], str]] = {
+    "user_input_transcribed": (UserInputTranscribedEvent, "user_input_transcribed"),
     "user_turn_exceeded": (UserTurnExceededEvent, "user_turn_exceeded"),
     "transcription_timeout": (UserTranscriptionTimeoutEvent, "user_transcription_timeout"),
+    "agent_state_changed": (AgentStateChangedEvent, "agent_state_changed"),
+    "user_state_changed": (UserStateChangedEvent, "user_state_changed"),
     "agent_false_interruption": (AgentFalseInterruptionEvent, "agent_false_interruption"),
+}
+
+# Public events whose `new_state` the host keeps on the session: {wire kind: attribute}.
+MIRRORED_STATES: dict[str, str] = {
+    "agent_state_changed": "_agent_state",
+    "user_state_changed": "_user_state",
 }
 
 # `HostWire` members the host receives and does not act on.

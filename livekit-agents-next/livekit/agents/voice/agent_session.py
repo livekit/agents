@@ -32,7 +32,7 @@ from .._core_view import (
     tool_specs,
 )
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
-from .._generated.session_dispatch import IGNORED_EVENTS, PUBLIC_EVENTS
+from .._generated.session_dispatch import IGNORED_EVENTS, MIRRORED_STATES, PUBLIC_EVENTS
 from ..job import get_job_context
 from ..llm import ChatContext, RealtimeModel, StopResponse
 from ..llm.chat_context import Instructions
@@ -54,7 +54,6 @@ from .console import ConsoleCall
 from .events import (
     AgentEvent,
     AgentState,
-    AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
@@ -65,9 +64,7 @@ from .events import (
     RunContext,
     SpeechCreatedEvent,
     ToolExecutionUpdatedEvent,
-    UserInputTranscribedEvent,
     UserState,
-    UserStateChangedEvent,
 )
 from .remote_session import SessionHost
 from .run_result import RunOutputOptions, RunResult
@@ -751,7 +748,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
         if (public := PUBLIC_EVENTS.get(kind)) is not None:
             cls, name = public
-            self.emit(name, cls(**{k: v for k, v in wire.items() if k != "type"}))
+            ev = cls(**{k: v for k, v in wire.items() if k != "type"})
+            if (attr := MIRRORED_STATES.get(kind)) is not None:
+                setattr(self, attr, ev.new_state)
+            self.emit(name, ev)
             return
         handler = _HANDLERS.get(kind)
         if handler is not None:
@@ -810,30 +810,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if wire["outcome"] == "closed":
             error = RuntimeError("the session closed before the run settled")
         run._settle(output=wire["final_output"], error=error)
-
-    def _on_agent_state(self, wire: dict[str, Any]) -> None:
-        self._agent_state = wire["new_state"]
-        self.emit(
-            "agent_state_changed",
-            AgentStateChangedEvent(old_state=wire["old_state"], new_state=wire["new_state"]),
-        )
-
-    def _on_user_state(self, wire: dict[str, Any]) -> None:
-        self._user_state = wire["new_state"]
-        self.emit(
-            "user_state_changed",
-            UserStateChangedEvent(old_state=wire["old_state"], new_state=wire["new_state"]),
-        )
-
-    def _on_transcript(self, wire: dict[str, Any]) -> None:
-        self.emit(
-            "user_input_transcribed",
-            UserInputTranscribedEvent(
-                transcript=wire["transcript"],
-                is_final=wire["is_final"],
-                language=wire.get("language"),
-            ),
-        )
 
     def _on_tool_update(self, wire: dict[str, Any]) -> None:
         self.emit(
@@ -941,50 +917,55 @@ def _in_hook(hook: str, session: LiveSession[Any], agent: Agent) -> Any:
 
 
 async def _answer_hook(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    """Run the hook the core called and answer it, exactly once."""
-    core, hook, hook_id = session._core, wire["hook"], wire["id"]
+    """Run the hook the core called and answer it, exactly once. ``render_tool_reply`` stays
+    unanswered: the core uses its default templates."""
     try:
-        if hook in ("on_enter", "on_exit"):
-            agent = session._agents[wire["agent"]]
-            with _in_hook(hook, session, agent):
-                if hook == "on_enter":
-                    await agent._enter(RunContext(function_call=None, session=session))
-                else:
-                    await agent.on_exit()
-            core.hook_returned(hook_id)
-            if hook == "on_exit":
-                await asyncio.gather(
-                    *(t.aclose() for t in agent.tools if isinstance(t, llm.Toolset))
-                )
-        elif hook == "on_user_turn_completed":
-            await _turn_completed(session, wire)
-        elif hook == "function_tools_executed":
-            ev = FunctionToolsExecutedEvent(
-                function_calls=[from_core_item(c) for c in wire["function_calls"]],
-                function_call_outputs=[from_core_item(o) for o in wire["function_call_outputs"]],
-            )
-            ev._handoff_required = wire["handoff_required"]
-            session.emit("function_tools_executed", ev)
-            core.hook_tools_executed(
-                hook_id,
-                [o.reply_required for o in ev.function_call_outputs],
-                ev.has_agent_handoff,
-            )
-        elif hook == "filler_source":
-            source = session._fillers.get(wire["filler"])
-            out = source(wire["step"]) if source is not None else None
-            if asyncio.iscoroutine(out):
-                out = await out
-            if isinstance(out, SpeechHandle):
-                core.hook_filler(hook_id, spoke=True)
-            else:
-                core.hook_filler(hook_id, text=out)
-        else:
-            # render_tool_reply: unanswered, the core uses its default templates
-            core.hook_failed(hook_id)
+        await _HOOKS.get(wire["hook"], _unanswered)(session, wire)
     except Exception:
-        logger.exception(f"error in the {hook} hook")
-        core.hook_failed(hook_id)
+        logger.exception(f"error in the {wire['hook']} hook")
+        session._core.hook_failed(wire["id"])
+
+
+async def _on_enter(session: LiveSession[Any], wire: dict[str, Any]) -> None:
+    agent = session._agents[wire["agent"]]
+    with _in_hook("on_enter", session, agent):
+        await agent._enter(RunContext(function_call=None, session=session))
+    session._core.hook_returned(wire["id"])
+
+
+async def _on_exit(session: LiveSession[Any], wire: dict[str, Any]) -> None:
+    agent = session._agents[wire["agent"]]
+    with _in_hook("on_exit", session, agent):
+        await agent.on_exit()
+    session._core.hook_returned(wire["id"])
+    await asyncio.gather(*(t.aclose() for t in agent.tools if isinstance(t, llm.Toolset)))
+
+
+async def _tools_executed(session: LiveSession[Any], wire: dict[str, Any]) -> None:
+    ev = FunctionToolsExecutedEvent(
+        function_calls=[from_core_item(c) for c in wire["function_calls"]],
+        function_call_outputs=[from_core_item(o) for o in wire["function_call_outputs"]],
+    )
+    ev._handoff_required = wire["handoff_required"]
+    session.emit("function_tools_executed", ev)
+    session._core.hook_tools_executed(
+        wire["id"], [o.reply_required for o in ev.function_call_outputs], ev.has_agent_handoff
+    )
+
+
+async def _filler_source(session: LiveSession[Any], wire: dict[str, Any]) -> None:
+    source = session._fillers.get(wire["filler"])
+    out = source(wire["step"]) if source is not None else None
+    if asyncio.iscoroutine(out):
+        out = await out
+    if isinstance(out, SpeechHandle):
+        session._core.hook_filler(wire["id"], spoke=True)
+    else:
+        session._core.hook_filler(wire["id"], text=out)
+
+
+async def _unanswered(session: LiveSession[Any], wire: dict[str, Any]) -> None:
+    session._core.hook_failed(wire["id"])
 
 
 async def _turn_completed(session: LiveSession[Any], wire: dict[str, Any]) -> None:
@@ -1129,6 +1110,15 @@ def _chat_chunk(item: llm.ChatChunk | str | FlushSentinel) -> llm.ChatChunk | _F
     return item
 
 
+_HOOKS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], Any]] = {
+    "on_enter": _on_enter,
+    "on_exit": _on_exit,
+    "on_user_turn_completed": _turn_completed,
+    "function_tools_executed": _tools_executed,
+    "filler_source": _filler_source,
+    "render_tool_reply": _unanswered,
+}
+
 _HANDLERS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], None]] = {
     "hook_call": LiveSession._on_hook,
     "speech_created": LiveSession._on_speech_created,
@@ -1138,9 +1128,6 @@ _HANDLERS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], None]] = {
     "run_item_added": LiveSession._on_run_item,
     "run_refused": LiveSession._on_run_refused,
     "run_settled": LiveSession._on_run_settled,
-    "agent_state_changed": LiveSession._on_agent_state,
-    "user_state_changed": LiveSession._on_user_state,
-    "user_input_transcribed": LiveSession._on_transcript,
     "tool_execution_updated": LiveSession._on_tool_update,
     "metrics_collected": LiveSession._on_metrics,
     "error": LiveSession._on_error,

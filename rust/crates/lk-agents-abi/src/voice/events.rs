@@ -1001,13 +1001,15 @@ pub struct DetectorErrorWire {
 
 /// Every event the session hands its host, as the record the host reads.
 ///
-/// `#[python(event)]` members are emitted as public session events and `#[python(ignored)]` ones
-/// are dropped, both via `_generated/session_dispatch.py`; the rest have host behaviour. Its
+/// `#[python(event)]` members are emitted as public session events (`mirror` keeps the event's
+/// `new_state` on the session) and `#[python(ignored)]` ones are dropped, both via
+/// `_generated/session_dispatch.py`; the rest have host behaviour. Its
 /// `EVENT_KINDS` also holds `stream_closed`, which the stream carries outside this union.
 #[derive(Host)]
 #[binding(emit)]
 #[python(dispatch = "session_dispatch", dispatch_also = "StreamClosedWire")]
 pub enum HostWire {
+    #[python(event)]
     UserTranscript(UserInputTranscribed),
     StartOfSpeech(StartOfSpeechEvent),
     EndOfSpeech(EndOfSpeechEvent),
@@ -1032,7 +1034,9 @@ pub enum HostWire {
     OverlapInterruption(OverlapInterruptionEvent),
     SpanStarted(SpanStartedWire),
     SpanEnded(SpanEndedWire),
+    #[python(event, mirror = "_agent_state")]
     AgentStateChanged(AgentStateChanged),
+    #[python(event, mirror = "_user_state")]
     UserStateChanged(UserStateChanged),
     #[python(event)]
     AgentFalseInterruption(AgentFalseInterruption),
