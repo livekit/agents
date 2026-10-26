@@ -27,6 +27,8 @@ use lk_agents_abi::{
 };
 use std::time::Duration;
 
+use crate::agent_activity::io::VadMetricsFold;
+
 impl Driver {
     /// `input_started_at` (`_STTPipeline.input_started_at`) is stamped on the first recogniser
     /// event after a frame was seen; `wall_anchor` pairs wall and monotonic clocks so server onsets
@@ -136,6 +138,7 @@ impl Driver {
     /// `interruption.min_duration` (`on_vad_inference_done`), so a cough doesn't cut the agent off.
     pub(crate) fn on_vad(&mut self, now: Ts, ev: VadEvent, out: &mut Out) {
         self.anchor_stt_stream(now);
+        self.fold_vad_metrics(&ev, out);
         // The VAD's edges for the peers (the AMD).
         if !self.watch.is_empty() {
             self.watch.publish(crate::agent_session::SystemTap::Vad(ev.clone()));
@@ -161,6 +164,38 @@ impl Driver {
                 );
             }
             VadEventType::EndOfSpeech => self.start_false_interruption_timer(now, out),
+        }
+    }
+
+    /// `VADStream._metrics_monitor_task`: one `VADMetrics` per `1 / update_interval` inferences,
+    /// with the time since speech last started or ended.
+    fn fold_vad_metrics(&mut self, ev: &VadEvent, out: &mut Out) {
+        let Some(vad) = &self.session.vad else { return };
+        let now = self.step.wall_secs();
+        let fold = &mut self.input.vad_metrics;
+        let activity_at = *fold.activity_at.get_or_insert(now);
+        match ev.kind {
+            VadEventType::StartOfSpeech | VadEventType::EndOfSpeech => fold.activity_at = Some(now),
+            VadEventType::InferenceDone => {
+                fold.count += 1;
+                fold.inference_total += ev.inference_duration;
+                if f64::from(fold.count) < 1.0 / vad.capabilities.update_interval {
+                    return;
+                }
+                let record = lk_agents_abi::metrics::base::VadMetrics {
+                    label: vad.provider.label.clone(),
+                    timestamp: now,
+                    idle_time: now - activity_at,
+                    inference_duration_total: fold.inference_total,
+                    inference_count: fold.count,
+                    metadata: Some(vad.provider.metadata()),
+                };
+                *fold = VadMetricsFold { activity_at: Some(activity_at), ..Default::default() };
+                out.machine().emit(crate::events::SessionEvent::MetricsCollected {
+                    metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Vad(record)),
+                    speech: None,
+                });
+            }
         }
     }
 

@@ -133,6 +133,8 @@ enum Msg {
         transcript: String,
         calls: Vec<FunctionToolCall>,
         failed: bool,
+        /// The classification's `LLMMetrics`, as the classifier's `LLMStream` reports them.
+        metrics: Option<Box<lk_agents_abi::metrics::base::LlmMetrics>>,
     },
     /// AMD's own STT stream opened -- or refused -- off the loop (`_run_stt`'s `stt.stream()`).
     SttOpened(Result<(SttSink, SttSource), ProviderError>),
@@ -317,7 +319,11 @@ impl AmdSystem {
                     self.closed = true;
                 }
             }
-            Msg::Answer { req, transcript, calls, failed } => {
+            Msg::Answer { req, transcript, calls, failed, metrics } => {
+                if let Some(m) = metrics {
+                    let metrics = Box::new(lk_agents_abi::metrics::base::AgentMetrics::Llm(*m));
+                    self.peer.emit(SessionEvent::MetricsCollected { metrics, speech: None });
+                }
                 self.on_answer(now, req, transcript, calls, failed)
             }
             Msg::Audio(frame) => {
@@ -644,13 +650,16 @@ async fn classify(
     transcript: String,
     mut cancelled: tokio::sync::watch::Receiver<bool>,
 ) {
+    let started_at = time.wall_secs();
     let mut stream = match llm.chat(&request).await {
         Ok(s) => s,
         Err(_) => {
-            let _ = tx.send(Msg::Answer { req, transcript, calls: Vec::new(), failed: true });
+            let (calls, metrics) = (Vec::new(), None);
+            let _ = tx.send(Msg::Answer { req, transcript, calls, failed: true, metrics });
             return;
         }
     };
+    let mut fold = lk_agents_abi::telemetry::provider::LlmMetricState::for_host(started_at);
     let mut calls: Vec<FunctionToolCall> = Vec::new();
     let mut failed = false;
     let mut aborted = false;
@@ -673,6 +682,7 @@ async fn classify(
         };
         match next {
             Ok(Some(chunk)) => {
+                fold.observe(&chunk, || time.wall_secs());
                 if let Some(delta) = &chunk.delta {
                     calls.extend(delta.tool_calls.iter().cloned());
                 }
@@ -690,5 +700,18 @@ async fn classify(
     if aborted {
         return;
     }
-    let _ = tx.send(Msg::Answer { req, transcript, calls, failed });
+    let metrics = fold.finish(failed, || {
+        let (id, now) = (llm.id(), time.wall_secs());
+        let label = id.label.clone();
+        let metadata = Some(id.metadata());
+        let context = lk_agents_abi::telemetry::provider::Context {
+            timestamp: now,
+            label,
+            cancelled: false,
+            metadata,
+        };
+        (now, context)
+    });
+    let metrics = metrics.map(Box::new);
+    let _ = tx.send(Msg::Answer { req, transcript, calls, failed, metrics });
 }

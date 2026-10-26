@@ -44,6 +44,17 @@ pub(crate) struct AgentInput {
     vad_open: u64,
     /// The STT being opened is the same recogniser as before.
     stt_open_same: bool,
+    /// The VAD stream's inferences since its last `VADMetrics`.
+    pub(crate) vad_metrics: VadMetricsFold,
+}
+
+/// `VADStream._metrics_monitor_task`'s fold: the inferences since the last record, and when the
+/// stream last heard speech start or end.
+#[derive(Default)]
+pub(crate) struct VadMetricsFold {
+    pub(crate) count: u32,
+    pub(crate) inference_total: f64,
+    pub(crate) activity_at: Option<f64>,
 }
 
 impl AgentInput {
@@ -76,6 +87,7 @@ impl AgentInput {
             stt_open: 0,
             vad_open: 0,
             stt_open_same: false,
+            vad_metrics: VadMetricsFold::default(),
         }
     }
 
@@ -182,6 +194,7 @@ impl Driver {
                 Some(vad) => {
                     let open = self.request_open(StreamKind::Vad, vad.id, out);
                     self.session.vad = Some(vad);
+                    self.input.vad_metrics = VadMetricsFold::default();
                     self.input.vad_open = open;
                     intent.vad = true;
                 }

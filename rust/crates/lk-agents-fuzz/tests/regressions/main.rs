@@ -28,6 +28,7 @@ mod left_at_close;
 mod live_options;
 mod mic_replaced_with_frames;
 mod model_failure_reported;
+mod model_metrics_reported;
 mod path_needs_both_switches;
 mod pause_outlives_its_speech;
 mod preemptive_parked;
