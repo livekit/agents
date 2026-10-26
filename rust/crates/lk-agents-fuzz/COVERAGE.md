@@ -718,7 +718,7 @@ VOICE_SEED=4372 cargo test -q --release -p lk-agents-fuzz --test survey -- --ign
 
 which prints that run's setup, every failure in full and the journal variants it reached;
 `VOICE_TRACE=1` adds every input as it is applied. The seed reproduces its run on the same code
-only: once the finding is understood, it becomes a hand-written regression test under `tests/`
+only: once the finding is understood, it becomes a hand-written regression test in `tests/regressions/`
 that reaches the bug through the fewest inputs, fails before the fix and passes after it, and
 holds whatever the search later changes.
 

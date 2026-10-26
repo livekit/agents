@@ -174,7 +174,7 @@ variant). Soak knobs: `VOICE_SOAK_SEEDS` (8), `VOICE_SOAK_BUDGET` (12,000).
    and that a case leaves the same recording twice.
 2. **Understand it** from the trace and the failure's subject (a speech by id, a resource by
    kind and index, or the session).
-3. **Write a regression test** under `rust/crates/lk-agents-fuzz/tests/`: a hand-written `Case`
+3. **Write a regression test** in `rust/crates/lk-agents-fuzz/tests/regressions/` (a file, plus its `mod` line in `main.rs`): a hand-written `Case`
    (or a `Run` driven input by input) that reaches the bug through the fewest inputs, fails
    before the fix and passes after it, with a `// Catches:` comment naming the defect and the
    seed it came from. It holds whatever the search later changes. See `hold_at_close.rs` or
