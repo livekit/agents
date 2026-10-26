@@ -1344,7 +1344,7 @@ async def test_a_language_change_while_the_stream_opens_closes_it_as_the_old_lan
 
 async def test_an_unstamped_retarget_before_any_audio_keeps_the_text_waiting_for_it() -> None:
     model = _FakeTranslationModel(retargetable=True)
-    session, _, audio_out, _ = _session(model)
+    session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
     counts = _Counts(audio_out)
     labels = _LabelRecorder()
     await session.start()
@@ -1353,10 +1353,43 @@ async def test_an_unstamped_retarget_before_any_audio_keeps_the_text_waiting_for
         # the translation's text arrives ahead of its audio, which has not come yet
         model.sessions[0].emit("output_transcript", OutputTranscript(text="hola", is_final=False))
         session.set_target_language("fr")
-        await _wait_for(lambda: labels.languages == ["fr"])
+        await asyncio.sleep(0.01)
 
-        # ending the empty segment would rotate the synchronizer and drop "hola"
+        # ending the empty segment would rotate the synchronizer and drop "hola", and
+        # relabelling now would publish it as French
         assert counts.flushes == 0
+        assert labels.languages == []
+
+        # "hola"'s audio comes and its segment ends; only then does the label change
+        model.sessions[0].speak()
+        await _wait_for(lambda: labels.languages == ["fr"])
+        assert counts.flushes == 1
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+async def test_an_unstamped_retarget_ends_speech_held_in_the_resampler() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    audio_out = FakeAudioOutput(sample_rate=48000)
+    session = TranslationSession(model=model, output_segment_timeout=60)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = audio_out
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        # a frame too short for the resampler to give anything back yet
+        model.sessions[0].speak(_frame(duration=0.001, sample_rate=16000))
+        await _wait_for(lambda: session._resampler is not None)
+        assert counts.frames == 0
+
+        session.set_target_language("fr")
+        await _wait_for(lambda: labels.languages == ["fr"])
+        # the held Spanish was drained into its own segment, which ended before the label
+        assert counts.flushes == 1
+        assert counts.frames >= 1
     finally:
         session._room_io = None
         await session.aclose()

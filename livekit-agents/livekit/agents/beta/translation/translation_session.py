@@ -136,6 +136,9 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._output_language_stamped = False
         # whether the open segment has any audio in it; an empty one is not worth ending
         self._segment_has_audio = False
+        # a label to apply once the open segment ends: requested while it held text waiting for
+        # audio that has not come, which is still in the old language
+        self._relabel_at_segment_end: str | None = None
 
     @property
     def model(self) -> TranslationModel:
@@ -368,6 +371,8 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if ev.language is not None:
                     self._output_language_stamped = True
+                    # the speech says what language it is in, so that drives the label
+                    self._relabel_at_segment_end = None
                     if ev.language != self._output_language:
                         # the old language's segment ends before speech in the new one, so
                         # neither is labelled with the other's language
@@ -502,6 +507,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         for frame in resampler.flush():
             await sink.capture_frame(frame)
+            self._segment_has_audio = True
 
     def _discard_resampler(self) -> None:
         """Forget the resampler and the pair it was built for, dropping anything it holds.
@@ -530,7 +536,12 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         await self._drain_resampler()
         if sink is not None:
             sink.flush()
-        self._segment_has_audio = False
+
+        had_audio, self._segment_has_audio = self._segment_has_audio, False
+        if had_audio and (language := self._relabel_at_segment_end) is not None:
+            # the text that was waiting on this segment's audio has gone out with it
+            self._relabel_at_segment_end = None
+            self._relabel_output(language)
 
     def _arm_segment_timer(self) -> None:
         """Restart the silence that ends a segment, for a model that marks none itself.
@@ -555,11 +566,20 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         For a provider that does not stamp its speech: the segment the old label covers has
         to end, or its playout never finishes and the new label never lands. A segment with no
         audio yet is left open, since ending it would discard the translation text already
-        waiting in it for that audio.
+        waiting in it for that audio; the label then changes once that segment ends.
         """
-        if self._segment_has_audio:
+        async with self._output_lock:
+            # speech the resampler still holds is the old language's too
+            await self._drain_resampler()
+            if not self._segment_has_audio:
+                # nothing to end yet: the label waits for this segment, and the old-language
+                # text in it, to go out
+                self._relabel_at_segment_end = language
+                return
+
             self._cancel_segment_timer()
-            await self._close_output_segment()
+            await self._close_segment_locked()
+
         self._relabel_output(language)
 
     def _close_output_segment_soon(self) -> None:
