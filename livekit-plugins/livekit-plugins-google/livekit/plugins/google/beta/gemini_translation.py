@@ -63,13 +63,29 @@ OUTPUT_AUDIO_CHANNELS = 1
 _SETUP_REJECTED_CLOSE_CODES = (1007, 1008)
 
 
+# client errors a retry can get past: rate limiting, and a request cancelled in transit
+_RETRYABLE_CLIENT_CODES = frozenset({429, 499})
+_TRANSIENT_AUTH_ERRORS = (
+    google.auth.exceptions.TransportError,
+    google.auth.exceptions.TimeoutError,
+)
+
+
 def _is_setup_error(e: Exception) -> bool:
     """Whether a connection that never opened failed on its setup, which a retry repeats."""
     if isinstance(e, ClientError):
-        return e.code != 429
+        return e.code not in _RETRYABLE_CLIENT_CODES
     if isinstance(e, APIError):
         return e.code in _SETUP_REJECTED_CLOSE_CODES
-    return isinstance(e, (google.auth.exceptions.GoogleAuthError, ValueError, TypeError))
+    if isinstance(e, google.auth.exceptions.GoogleAuthError):
+        # bad credentials stay bad, but a refresh lost on the network is worth another try
+        transient = (
+            e.retryable
+            or isinstance(e, _TRANSIENT_AUTH_ERRORS)
+            or isinstance(e.__cause__, _TRANSIENT_AUTH_ERRORS)
+        )
+        return not transient
+    return isinstance(e, (ValueError, TypeError))
 
 
 @dataclass

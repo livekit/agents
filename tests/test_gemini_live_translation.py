@@ -387,3 +387,58 @@ async def test_a_sample_rate_change_keeps_the_tail_of_the_old_rate(
     await session.aclose()
 
     assert sum(len(b.data or b"") for b in conns[0].sent) == 1600 * 2
+
+
+def test_transient_setup_failures_are_retried() -> None:
+    import google.auth.exceptions
+    from google.genai.errors import ClientError
+
+    from livekit.plugins.google.beta.gemini_translation import _is_setup_error
+
+    def _client_error(code: int) -> ClientError:
+        return ClientError(code, {"error": {"code": code, "message": "x", "status": "x"}})
+
+    # a cancelled request and rate limiting pass; a bad request does not
+    assert not _is_setup_error(_client_error(499))
+    assert not _is_setup_error(_client_error(429))
+    assert _is_setup_error(_client_error(400))
+
+    # a credential refresh lost on the network is worth another try
+    assert not _is_setup_error(google.auth.exceptions.TransportError("connection reset"))
+    refresh = google.auth.exceptions.RefreshError("refresh failed")
+    refresh.__cause__ = google.auth.exceptions.TransportError("connection reset")
+    assert not _is_setup_error(refresh)
+    assert not _is_setup_error(google.auth.exceptions.RefreshError("x", retryable=True))
+
+    # credentials that are simply wrong stay wrong
+    assert _is_setup_error(google.auth.exceptions.RefreshError("invalid_grant"))
+    assert _is_setup_error(google.auth.exceptions.DefaultCredentialsError("no credentials"))
+
+
+async def test_a_transient_handshake_failure_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    import google.auth.exceptions
+
+    conns: list[_FakeLiveSession] = []
+    attempts = 0
+
+    @contextlib.asynccontextmanager
+    async def _connect(
+        self: GeminiTranslationSession, config: types.LiveConnectConfig
+    ) -> AsyncIterator[_FakeLiveSession]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise google.auth.exceptions.TransportError("connection reset")
+        conn = _FakeLiveSession(config)
+        conns.append(conn)
+        yield conn
+
+    monkeypatch.setattr(GeminiTranslationSession, "_connect", _connect)
+    session = _model(conn_options=APIConnectOptions(max_retry=3, retry_interval=0)).session()
+    errors: list[TranslationModelError] = []
+    session.on("error", errors.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        assert [e.recoverable for e in errors] == [True]
+    finally:
+        await session.aclose()
