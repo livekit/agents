@@ -640,8 +640,11 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
@@ -663,6 +666,12 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     parsed = json.loads(msg.data)
                     self._process_stream_event(parsed)
+                    if parsed.get("message_type") in (
+                        "partial_transcript",
+                        "committed_transcript",
+                        "committed_transcript_with_timestamps",
+                    ):
+                        self._mark_provider_progress()
                 except APIError:
                     raise
                 except Exception:
@@ -773,6 +782,7 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     ws_url,
                     headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )

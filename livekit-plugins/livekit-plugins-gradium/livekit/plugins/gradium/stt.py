@@ -277,9 +277,12 @@ class SpeechStream(stt.SpeechStream):
             buffered_text: list[str] = []
             speaking = False
             remaining_vad_steps: int | None = None
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                 except asyncio.TimeoutError:
                     if closing_ws:
                         break
@@ -306,7 +309,6 @@ class SpeechStream(stt.SpeechStream):
                     data = json.loads(msg.data)
 
                     type_ = data.get("type", "")
-
                     if type_ == "text":
                         if speaking is False:
                             speaking = True
@@ -327,6 +329,7 @@ class SpeechStream(stt.SpeechStream):
 
                     elif type_ == "step":
                         if not speaking:
+                            self._mark_provider_progress()
                             continue
                         if vad_bucket := self._opts.vad_bucket:
                             positive_vad = (
@@ -375,6 +378,9 @@ class SpeechStream(stt.SpeechStream):
                     else:
                         logger.warning(f"Unknown message type from Gradium {type_}")
 
+                    if type_ in ("text", "step", "end_text"):
+                        self._mark_provider_progress()
+
                 except Exception:
                     logger.exception("Failed to process message from Gradium")
 
@@ -412,7 +418,9 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        ws = await self._session.ws_connect(self._model_endpoint, headers=ws_headers(self._api_key))
+        ws = await self._session.ws_connect(
+            self._model_endpoint, headers=ws_headers(self._api_key), autoping=False
+        )
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {

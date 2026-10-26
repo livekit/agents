@@ -352,8 +352,10 @@ class SpeechStream(stt.RecognizeStream):
             elif isinstance(event, TranscriptionStreamLanguage):
                 if event.audio_language:
                     self._detected_language = LanguageCode(event.audio_language)
+                self._mark_provider_progress()
 
             elif isinstance(event, TranscriptionStreamTextDelta):
+                self._mark_provider_progress()
                 current_text += event.text
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
@@ -369,6 +371,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
             elif isinstance(event, TranscriptionStreamDone):
+                self._mark_provider_progress()
                 current_text = ""
                 words = (
                     [

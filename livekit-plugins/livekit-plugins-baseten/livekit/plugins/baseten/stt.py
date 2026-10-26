@@ -466,9 +466,12 @@ class SpeechStream(stt.SpeechStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                 except asyncio.TimeoutError:
                     if closing_ws:
                         break
@@ -587,6 +590,9 @@ class SpeechStream(stt.SpeechStream):
                             self._final_events.append(event)
                             self._event_ch.send_nowait(event)
 
+                    if msg_type == "transcription" or "transcript" in data or "segments" in data:
+                        self._mark_provider_progress()
+
                 except Exception:
                     logger.exception("Failed to process message from Baseten")
 
@@ -634,7 +640,9 @@ class SpeechStream(stt.SpeechStream):
             "Authorization": f"Api-Key {self._api_key}",
         }
 
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers, ssl=ssl_context)
+        ws = await self._session.ws_connect(
+            self._model_endpoint, headers=headers, ssl=ssl_context, autoping=False
+        )
 
         # Build metadata matching Baseten's StreamingWhisperInput schema.
         # See: https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api

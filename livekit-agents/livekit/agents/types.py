@@ -1,3 +1,4 @@
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, TypeVar
@@ -143,6 +144,15 @@ class APIConnectOptions:
     Timeout for connecting to the API in seconds.
     """
 
+    liveness_timeout: float = 6.0
+    """
+    Maximum time, in seconds, without inbound transport activity before the connection fails.
+    Incoming data, PING, and PONG frames reset this timer. An idle connection is probed
+    after one-third of this interval.
+
+    Supported by streaming STT providers that use the framework WebSocket monitor.
+    """
+
     def __post_init__(self) -> None:
         if self.max_retry < 0:
             raise ValueError("max_retry must be greater than or equal to 0")
@@ -152,6 +162,9 @@ class APIConnectOptions:
 
         if self.timeout < 0:
             raise ValueError("timeout must be greater than or equal to 0")
+
+        if not math.isfinite(self.liveness_timeout) or self.liveness_timeout <= 0:
+            raise ValueError("liveness_timeout must be a finite number greater than 0")
 
     def _interval_for_retry(self, num_retries: int) -> float:
         """

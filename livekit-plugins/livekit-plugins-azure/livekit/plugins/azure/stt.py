@@ -352,6 +352,8 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.to_thread(_cleanup)
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
         detected_lg = LanguageCode(res.language or "")
         text = evt.result.text.strip()
@@ -405,6 +407,8 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
         detected_lg = LanguageCode(res.language or "")
         text = evt.result.text.strip()
@@ -432,6 +436,8 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_speech_start(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         if self._speaking:
             return
 
@@ -444,6 +450,8 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_speech_end(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         if not self._speaking:
             return
 

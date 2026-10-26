@@ -362,6 +362,9 @@ class _Socket:
     async def receive(self) -> aiohttp.WSMessage:
         return await self.messages.get()
 
+    async def ping(self) -> None:
+        self.messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", ""))
+
     async def close(self) -> None:
         self.closed = True
 
@@ -373,6 +376,66 @@ class _Socket:
                 "",
             )
         )
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("message", "progress"),
+    [
+        ("start_of_speech", True),
+        ("interim_transcript", True),
+        ("preflight_transcript", True),
+        ("final_transcript", True),
+        ("session.finalized", True),
+        ("session.created", False),
+        ("unknown", False),
+        ("pong", False),
+    ],
+)
+async def test_provider_events_reset_retries_but_setup_and_pongs_do_not(
+    monkeypatch: pytest.MonkeyPatch, message: str, progress: bool
+) -> None:
+    processed = asyncio.Event()
+
+    class Socket(_Socket):
+        async def receive(self) -> aiohttp.WSMessage:
+            if self.messages.empty():
+                processed.set()
+            return await super().receive()
+
+    socket = Socket()
+    if message == "pong":
+        socket.messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", ""))
+    else:
+        socket.send_event(message)
+    monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
+    async with aiohttp.ClientSession() as session:
+        stream = _make_stt("http://unused", session).stream()
+        stream._num_retries = 2
+        try:
+            await asyncio.wait_for(processed.wait(), 1)
+            assert stream._num_retries == (0 if progress else 2)
+        finally:
+            await stream.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("message", ["error", "session.closed"])
+async def test_provider_failure_events_do_not_reset_retries(
+    monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    socket = _Socket()
+    socket.send_event(message)
+    monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
+    async with aiohttp.ClientSession() as session:
+        stream = _make_stt("http://unused", session).stream()
+        stream._num_retries = 3
+        try:
+            with pytest.raises(APIError):
+                await asyncio.wait_for(stream._task, 1)
+            assert stream._num_retries == 3
+        finally:
+            await stream.aclose()
 
 
 @pytest.mark.virtual_time
@@ -563,16 +626,7 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     assert exc_info.value.retryable is False
 
 
-async def test_half_open_socket_raises_retryable_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    heartbeats: list[float | None] = []
-    ws_connect = aiohttp.ClientSession.ws_connect
-
-    def fast_heartbeat(self: aiohttp.ClientSession, *args: Any, **kwargs: Any) -> Any:
-        heartbeats.append(kwargs.get("heartbeat"))
-        kwargs["heartbeat"] = 0.2
-        return ws_connect(self, *args, **kwargs)
-
-    monkeypatch.setattr(aiohttp.ClientSession, "ws_connect", fast_heartbeat)
+async def test_half_open_socket_raises_retryable_error() -> None:
 
     async def handler(request: web.Request) -> web.WebSocketResponse:
         # accepts the session, then never sends anything or answers a ping
@@ -584,7 +638,7 @@ async def test_half_open_socket_raises_retryable_error(monkeypatch: pytest.Monke
 
     async with _gateway(handler) as (base_url, session):
         stream = _make_stt(base_url, session).stream(
-            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0, liveness_timeout=0.15)
         )
         try:
             with pytest.raises(APIConnectionError) as exc_info:
@@ -592,6 +646,5 @@ async def test_half_open_socket_raises_retryable_error(monkeypatch: pytest.Monke
         finally:
             await stream.aclose()
 
-    assert heartbeats == [30.0]
     assert exc_info.value.retryable is True
     assert isinstance(exc_info.value.__cause__, aiohttp.ServerTimeoutError)

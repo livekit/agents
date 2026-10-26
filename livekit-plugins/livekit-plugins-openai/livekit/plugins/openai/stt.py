@@ -590,7 +590,9 @@ class STT(stt.STT):
         session = self._ensure_session()
         # the config is sent once the stream acquires the connection, since the pool also
         # hands back sockets it opened earlier
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        return await asyncio.wait_for(
+            session.ws_connect(url, headers=headers, autoping=False), timeout
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -826,8 +828,11 @@ class SpeechStream(stt.SpeechStream):
             last_interim_at: float = 0
             connected_at = time.time()
             item_audio_timing: dict[str, dict[str, int]] = {}
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -952,6 +957,15 @@ class SpeechStream(stt.SpeechStream):
                             body=error_body,
                             retryable=False,
                         )
+
+                    if msg_type in (
+                        "input_audio_buffer.speech_started",
+                        "input_audio_buffer.speech_stopped",
+                        "input_audio_buffer.committed",
+                        "conversation.item.input_audio_transcription.delta",
+                        "conversation.item.input_audio_transcription.completed",
+                    ):
+                        self._mark_provider_progress()
 
                 except APIError:
                     raise

@@ -1186,8 +1186,11 @@ class SpeechStream(stt.SpeechStream):
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal session_closed
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -1204,7 +1207,7 @@ class SpeechStream(stt.SpeechStream):
                 if msg.type == aiohttp.WSMsgType.ERROR:
                     if input_ended.is_set() or http_session.closed:
                         return
-                    # a missed heartbeat pong surfaces here; the reason is only on ws.exception()
+                    # Preserve the underlying transport error.
                     raise APIConnectionError(
                         "LiveKit Inference STT connection lost"
                     ) from ws.exception()
@@ -1256,6 +1259,14 @@ class SpeechStream(stt.SpeechStream):
                         body={"code": code},
                         retryable=not input_ended.is_set(),
                     )
+                if msg_type in (
+                    "start_of_speech",
+                    "interim_transcript",
+                    "preflight_transcript",
+                    "final_transcript",
+                    "session.finalized",
+                ):
+                    self._mark_provider_progress()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
@@ -1351,8 +1362,7 @@ class SpeechStream(stt.SpeechStream):
                 http_session.ws_connect(
                     f"{base_url}/stt?{urlencode({'model': self._opts.model})}",
                     headers=headers,
-                    # without it a half-open socket parks recv_task forever
-                    heartbeat=30.0,
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
