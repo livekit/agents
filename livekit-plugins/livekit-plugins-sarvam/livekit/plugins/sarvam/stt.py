@@ -1229,6 +1229,7 @@ class SpeechStream(stt.SpeechStream):
             self._session.ws_connect(
                 ws_url,
                 headers=headers,
+                autoping=False,
             ),
             self._conn_options.timeout,
         )
@@ -1433,8 +1434,11 @@ class SpeechStream(stt.SpeechStream):
         )
 
         try:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
@@ -1547,11 +1551,15 @@ class SpeechStream(stt.SpeechStream):
 
             if msg_type == "data":
                 await self._handle_transcript_data(data)
+                if not _has_error_field(data):
+                    self._mark_provider_progress()
             elif msg_type in ("events", "event"):
                 if _has_error_field(data):
                     await self._handle_error_message(data)
                 else:
                     await self._handle_events(data)
+                    if data.get("data", {}).get("signal_type") in ("START_SPEECH", "END_SPEECH"):
+                        self._mark_provider_progress()
             elif msg_type in ("error", "errors"):
                 await self._handle_error_message(data)
             elif _has_error_field(data):

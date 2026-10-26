@@ -225,6 +225,7 @@ async def test_sarvam_stt_stream_error_message_preserves_raw_payload() -> None:
 @pytest.mark.asyncio
 async def test_sarvam_stt_process_messages_raises_on_non_json_error_text() -> None:
     stream = object.__new__(sarvam_stt.SpeechStream)
+    stream._conn_options = APIConnectOptions()
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
@@ -246,6 +247,7 @@ async def test_sarvam_stt_process_messages_raises_on_non_json_error_text() -> No
 @pytest.mark.asyncio
 async def test_sarvam_stt_process_messages_raises_on_error_close_reason() -> None:
     stream = object.__new__(sarvam_stt.SpeechStream)
+    stream._conn_options = APIConnectOptions()
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
@@ -275,6 +277,7 @@ async def test_sarvam_stt_process_messages_raises_on_error_close_reason() -> Non
 @pytest.mark.asyncio
 async def test_sarvam_stt_process_messages_raises_on_non_graceful_close() -> None:
     stream = object.__new__(sarvam_stt.SpeechStream)
+    stream._conn_options = APIConnectOptions()
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
@@ -304,6 +307,7 @@ async def test_sarvam_stt_process_messages_raises_on_non_graceful_close() -> Non
 @pytest.mark.asyncio
 async def test_sarvam_stt_process_messages_raises_on_post_loop_non_graceful_close() -> None:
     stream = object.__new__(sarvam_stt.SpeechStream)
+    stream._conn_options = APIConnectOptions()
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]

@@ -219,7 +219,7 @@ class RTZROpenAPIClient:
         session = self._ensure_http_session()
 
         try:
-            ws = await session.ws_connect(url, headers=ws_headers)
+            ws = await session.ws_connect(url, headers=ws_headers, autoping=False)
             logger.debug("Connected to RTZR WebSocket at %s", url)
             return ws
         except aiohttp.ClientResponseError as e:

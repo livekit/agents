@@ -533,16 +533,13 @@ def _v1_stream(*, http_session=None, connect=None):
     return stream
 
 
-async def test_v1_socket_is_opened_with_a_heartbeat():
-    # aiohttp defaults heartbeat and receive_timeout to None, so without this the
-    # read side of a half-open socket parks forever and the reconnect loop in _run,
-    # which only runs when something raises, never gets a turn. stt_v2 already does
-    # this; v1 is the Nova-3 path and was the only Deepgram stream left unbounded.
+async def test_v1_socket_exposes_control_frames_to_monitor():
+    # Control frames must reach the shared monitor to reset its silence deadline.
     session = _RecordingSession()
     stream = _v1_stream(http_session=session)
     try:
-        await _wait_until(lambda: "heartbeat" in session.kwargs)
-        assert session.kwargs["heartbeat"] == 30.0
+        await _wait_until(lambda: "autoping" in session.kwargs)
+        assert session.kwargs["autoping"] is False
     finally:
         await stream.aclose()
 

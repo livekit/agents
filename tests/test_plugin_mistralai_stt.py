@@ -63,3 +63,24 @@ async def test_recognize_language_override_keeps_auto_detection() -> None:
     assert second["language"] is None
     assert second["timestamp_granularities"] == ["segment"]
     assert batch_stt._opts.language is None
+
+
+@pytest.mark.parametrize("processing", [False, True])
+async def test_provider_progress_resets_retries_without_transcript(processing):
+    from livekit.plugins.mistralai import stt as mistral_stt
+
+    event = (
+        mistral_stt.TranscriptionStreamLanguage.model_construct(audio_language="en")
+        if processing
+        else mistral_stt.RealtimeTranscriptionSessionCreated.model_construct(session=None)
+    )
+
+    class Connection:
+        async def events(self):
+            yield event
+
+    stream = mistral_stt.SpeechStream.__new__(mistral_stt.SpeechStream)
+    stream._on_provider_progress = None
+    stream._num_retries = 2
+    await stream._recv_task(Connection())
+    assert stream._num_retries == (0 if processing else 2)

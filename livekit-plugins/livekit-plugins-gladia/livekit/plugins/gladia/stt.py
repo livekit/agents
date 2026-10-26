@@ -891,7 +891,7 @@ class SpeechStream(stt.SpeechStream):
                 backoff_time = 1.0
 
                 # Connect to the WebSocket
-                async with self._session.ws_connect(session_url) as ws:
+                async with self._session.ws_connect(session_url, autoping=False) as ws:
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
@@ -1019,11 +1019,15 @@ class SpeechStream(stt.SpeechStream):
         if not self._ws:
             return
 
-        async for msg in self._ws:
+        async for msg in utils.aio.WebSocketMonitor(
+            self._ws, liveness_timeout=self._conn_options.liveness_timeout
+        ):
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
                     self._process_gladia_message(data)
+                    if data.get("type") in ("transcript", "translation"):
+                        self._mark_provider_progress()
                 except Exception as e:
                     logger.exception(f"Error processing Gladia message: {e}")
             elif msg.type in (
