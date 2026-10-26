@@ -845,7 +845,10 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            # queued behind the session's events, so a client hears session_closed before
+            # the run that the close cut short fails
+            with contextlib.suppress(utils.aio.ChanClosed):
+                self._event_ch.send_nowait(resp)
 
         elif req.HasField("get_session_state"):
             agent = session.current_agent
