@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 280 core items bound (121 functions and consts, 75 classes, 83 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 277 core items bound (121 functions and consts, 72 classes, 83 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -109,10 +109,6 @@
 //! - `lk_agents_voice::room_io::_output::transcription::RoomTranscriptionLeg::standalone`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
 //! - `lk_agents_voice::room_io::_output::transcription::RoomTranscriptionLeg::set_participant`: parameter `identity`: not yet: `ParticipantIdentity` is an open string (#[host(string)])
 //! - `lk_agents_voice::room_io::rooms::ScriptedRoom::session_clock`: return: not yet: returning an exposed class
-//! - `lk_agents_voice::background_audio::Sound::for_host`: parameter `stream`: not yet: `Arc<dyn FrameStream>` (a host object behind a proxy)
-//! - `lk_agents_voice::background_audio::BackgroundAudioPlayer::start_for_host`: parameter `participant`: not yet: `Arc<dyn LocalParticipant>` (a host object behind a proxy)
-//! - `lk_agents_voice::background_audio::BackgroundAudioPlayer::play_for_host`: parameter `sounds`: Vec(Declared { name: "Sound", by_ref: false }) borrows inside a container
-//! - `lk_agents_voice::background_audio::BackgroundAudioPlayer::on_agent_state_for_host`: parameter `sounds`: Vec(Declared { name: "Sound", by_ref: false }) borrows inside a container
 //! - `lk_agents_inference::fallback::FallbackLlm::for_host`: parameter `llms`: not yet: `Arc<dyn Llm>` (a host object behind a proxy)
 //! - `lk_agents_inference::fallback::FallbackLlm::chat_for_host`: parameter `chat_ctx_host`: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_inference::fallback::FallbackStt::for_host`: parameter `stts`: not yet: `Arc<dyn Stt>` (a host object behind a proxy)
@@ -164,8 +160,6 @@
 //! - `lk_agents_rtc::AudioSource`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::RemoteParticipant`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::TrackPublication`: `lk_agents_rtc` is not linked by lk-agents-node
-//! - `lk_agents_voice::background_audio::FrameStream`: not yet: a bare proxy (every method calls `_core_<method>`)
-//! - `lk_agents_voice::background_audio::RandomDraw`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::Tts`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::Stt`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::Llm`: not yet: a bare proxy (every method calls `_core_<method>`)

@@ -1459,63 +1459,6 @@ class ReplaceTransform:
     def flush(self) -> list[str]: ...
 
 
-class Sound:
-    def __init__(
-        self,
-        path: str | None,
-        stream: Any | None = None,
-        volume: float = 1.0,
-        probability: float = 1.0,
-        fade_in: float = 0.0,
-        fade_out: float = 0.0,
-    ) -> None: ...
-
-
-class PlayState:
-    """`_core.PlayState`: what `PlayHandle` wraps."""
-
-    def __init__(self, fade_out: float = 0.0) -> None: ...
-    @property
-    def done(self) -> bool: ...
-    @property
-    def stop_requested(self) -> bool: ...
-    def stop(self) -> bool: ...
-    def mark_playout_done(self) -> bool: ...
-    async def wait_for_playout(self) -> None: ...
-
-
-class BackgroundAudioPlayer:
-    """`_core.BackgroundAudioPlayer`: the mixer and the published track, under `background_audio.py`."""
-
-    def __init__(
-        self,
-        sample_rate: int = 48000,
-        num_channels: int = 1,
-        *,
-        blocksize: int = 4800,
-        stream_timeout_ms: int = 200,
-    ) -> None: ...
-    async def start(self, participant: Any) -> str: ...
-    def play(
-        self,
-        sounds: list[Sound],
-        rand: Any,
-        *,
-        looping: bool = False,
-        ambient: bool = False,
-        choose: bool = True,
-    ) -> PlayState: ...
-    def on_agent_state(
-        self,
-        sounds: list[Sound],
-        rand: Any,
-        thinking: bool,
-        *,
-        choose: bool = True,
-    ) -> None: ...
-    async def aclose(self) -> None: ...
-
-
 class ChatRequest:
     """The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
     host objects cross as their side-table keys (`_core.resolve_host_ref`), and the context as its

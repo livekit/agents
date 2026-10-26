@@ -16,7 +16,6 @@ pub mod images;
 #[cfg(feature = "ffmpeg")]
 pub mod ffmpeg;
 pub mod mime;
-pub mod mixer;
 pub mod recorder;
 #[cfg(feature = "resample")]
 pub mod soxr;
@@ -28,7 +27,6 @@ pub use error::{CodecError, Result};
 pub use frame_resampler::{FrameResampler, OnChange};
 pub use lk_agents_abi::{LinearResampler, Quality, ResampleError, Resampler};
 pub use mime::{DecodePlan, UnknownMime, decode_plan, mime_to_av_format};
-pub use mixer::{Mixer, MixerCounters, StreamId};
 #[cfg(feature = "resample")]
 pub use soxr::SoxrResampler;
 pub use stream_buffer::StreamBuffer;

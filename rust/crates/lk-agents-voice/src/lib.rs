@@ -6,7 +6,6 @@ pub mod agent_session;
 pub mod amd;
 pub mod audio;
 pub mod audio_recognition;
-pub mod background_audio;
 pub mod data_plane;
 pub mod endpointing;
 pub mod events;

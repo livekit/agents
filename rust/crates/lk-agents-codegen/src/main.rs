@@ -206,7 +206,6 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
         "rust/crates/lk-agents-voice/src/transcription/text_transforms.rs",
         "lk_agents_voice::transcription::text_transforms",
     ),
-    ("rust/crates/lk-agents-voice/src/background_audio.rs", "lk_agents_voice::background_audio"),
     ("rust/crates/lk-agents-abi/src/errors/provider.rs", "lk_agents_abi::errors"),
     ("rust/crates/lk-agents-abi/src/tts/tts.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/stt/stt.rs", "lk_agents_abi"),
