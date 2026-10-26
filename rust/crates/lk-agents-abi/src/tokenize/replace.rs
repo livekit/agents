@@ -7,9 +7,9 @@ use crate::tokenize::word::{WordTokenizerOptions, is_punctuation, split_words};
 
 /// `replace_words`, case-insensitively, over one string. Returns the text and `processed_index`.
 // `hold_last_word` holds the final word for the next chunk and returns `None` below two words.
-// Reference details kept: an empty replacement is skipped (`if replacement:`); only trailing
-// punctuation is stripped for the lookup and it survives; the signed offset accumulates;
-// `processed_index` advances on every word.
+// An empty replacement deletes the word. Trailing punctuation is stripped one character at a
+// time for the lookup (a key may end in punctuation, e.g. Hebrew "ג׳"), the longest matching key
+// wins, and the stripped punctuation survives. `processed_index` advances on every word.
 #[crate::host(export(pid = false, defaults(hold_last_word = false)))]
 pub fn replace_words(
     text: &str,
@@ -43,13 +43,16 @@ pub fn replace_words(
     let mut processed_index: usize = 0;
 
     for (word, start, end) in words {
-        // `word.rstrip(PUNCTUATIONS)`: the surviving length.
-        let kept = word.iter().rposition(|c| !is_punctuation(*c)).map_or(0, |i| i + 1);
+        let lookup_at = |kept: usize| lookup.get(&word[..kept].iter().collect::<String>().to_lowercase()).copied();
+        let mut kept = word.len();
+        let mut replacement = lookup_at(kept);
+        while replacement.is_none() && kept > 0 && is_punctuation(word[kept - 1]) {
+            kept -= 1;
+            replacement = lookup_at(kept);
+        }
         let punctuation_off = word.len() - kept;
-        let key: String = word[..kept].iter().collect::<String>().to_lowercase();
 
-        // `if replacement:` -- see (1). A missing key and an empty value take the same branch.
-        if let Some(rep) = lookup.get(&key).copied().filter(|r| !r.is_empty()) {
+        if let Some(rep) = replacement {
             let rep_chars: Vec<char> = rep.chars().collect();
             let lo = (start as isize + offset) as usize;
             let hi = (end as isize + offset - punctuation_off as isize) as usize;
@@ -134,14 +137,18 @@ mod tests {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
     }
 
-    // Catches: applying an empty replacement, stripping punctuation from both ends before the
-    // lookup, or byte offsets.
+    // Catches: skipping an empty replacement, stripping punctuation from both ends or all at once
+    // before the lookup, or byte offsets.
     #[test]
-    fn replacements_skip_empties_strip_trailing_punctuation_and_count_characters() {
+    fn replacements_delete_on_empty_strip_trailing_punctuation_and_count_characters() {
         for (text, pairs, want) in [
-            ("hello world", &[("hello", "")][..], "hello world"),
+            ("hello world", &[("hello", "")][..], " world"),
             ("hello, (hello", &[("hello", "hi")][..], "hi, (hello"),
             ("héllo wörld héllo", &[("héllo", "hi")][..], "hi wörld hi"),
+            // A key ending in punctuation matches before the bare word does.
+            ("ג׳ ג", &[("ג׳", "gimel"), ("ג", "x")][..], "gimel x"),
+            ("ok?! no", &[("ok?", "fine")][..], "fine! no"),
+            ("مرحبا، صديقي", &[("مرحبا", "hello")][..], "hello، صديقي"),
         ] {
             assert_eq!(replace_words_all(text, &map(pairs)).0, want);
         }

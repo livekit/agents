@@ -138,9 +138,13 @@ fn scan<'a>(text: &'a str, opts: WordTokenizerOptions, mut sink: impl FnMut(Word
     emit(word_start, Pos { ch, by: text.len() });
 }
 
+/// `tokenizer.is_punctuation`: [`PUNCTUATIONS`] or any Unicode punctuation (`P*`), e.g. Arabic
+/// "،" and "؟", Devanagari "।", CJK "，" and "。".
 #[inline]
-pub(crate) fn is_punctuation(c: char) -> bool {
-    PUNCTUATIONS.contains(&c)
+pub fn is_punctuation(c: char) -> bool {
+    static UNICODE_PUNCTUATION: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^\p{P}$").expect("constant pattern"));
+    PUNCTUATIONS.contains(&c) || (!c.is_ascii() && UNICODE_PUNCTUATION.is_match(c.encode_utf8(&mut [0; 4])))
 }
 
 #[cfg(test)]
@@ -168,6 +172,17 @@ mod tests {
             "the span stays that of the punctuated source"
         );
         assert_eq!(spans(&split_words("\"quoted\",", DEFAULTS)), [("quoted", 0, 9)]);
+    }
+
+    // Catches: non-ASCII punctuation (Arabic, Devanagari, CJK) kept on the word.
+    #[test]
+    fn unicode_punctuation_is_dropped_like_ascii() {
+        assert_eq!(
+            spans(&split_words("مرحبا، كيف؟ नमस्ते। 你好，", DEFAULTS)),
+            [("مرحبا", 0, 6), ("كيف", 7, 11), ("नमस्ते", 12, 19), ("你好", 20, 23)]
+        );
+        assert!(is_punctuation('،') && is_punctuation('。') && !is_punctuation('a'));
+        assert!(!is_punctuation('€'), "a symbol outside the list is not punctuation");
     }
 
     // Catches: offsets recomputed from stripped text, or an all-punctuation token kept.

@@ -1067,6 +1067,16 @@ impl AudioByteStream {
         AudioByteStream { inner: lk_agents_abi::AudioByteStream::new(sample_rate, num_channels, samples_per_channel, progressive) }
     }
 
+    #[napi(getter, js_name = "bufferedDuration")]
+    pub fn buffered_duration(&self) -> f64 {
+        self.inner.buffered_duration()
+    }
+
+    #[napi(js_name = "resetProgressive")]
+    pub fn reset_progressive(&mut self) {
+        self.inner.reset_progressive();
+    }
+
     #[napi(js_name = "clear")]
     pub fn clear(&mut self) {
         self.inner.clear();
@@ -1293,6 +1303,17 @@ impl RemoteSessionClient {
             Err(e) => Err(e.into_napi(env)),
         })
     }
+}
+
+/// The `lk agent console` socket: pass it as the session's audio input and output and as a
+/// `RemoteSessionHost`'s transport and console.
+#[napi(js_name = "ConsoleIo")]
+pub struct ConsoleIo {
+    pub(crate) inner: std::sync::Arc<lk_agents_voice::remote_session::console::ConsoleIo>,
+}
+
+#[napi]
+impl ConsoleIo {
 }
 
 /// `TTS.Markup`, keyed by `_provider_key()`. An unknown key is the no-dialect markup.

@@ -101,7 +101,7 @@ impl EmitterHost for PyHost<'_, '_> {
             HostEffect::Dropped(n) => {
                 logger(py)?.call_method1(
                     "warning",
-                    (format!("AudioEmitter: incomplete frame during flush, dropping {n} bytes"),),
+                    (format!("incomplete PCM sample at end of segment, discarding {n} trailing bytes"),),
                 )?;
                 Ok(())
             }

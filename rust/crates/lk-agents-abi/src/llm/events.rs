@@ -22,6 +22,12 @@ pub struct CompletionUsage {
     /// The number of tokens read from the cache.
     #[python(default = "0")]
     pub cache_read_tokens: u32,
+    /// The number of completion tokens spent on hidden reasoning.
+    /// Already counted in ``completion_tokens``; do not add it to totals. Only reported by
+    /// providers that break reasoning out separately (e.g. OpenAI-compatible responses
+    /// carrying ``completion_tokens_details.reasoning_tokens``), 0 everywhere else.
+    #[python(default = "0")]
+    pub reasoning_tokens: u32,
     /// The total number of tokens used (completion + prompt tokens).
     // Reported by the provider, not derived: providers disagree on cache reads.
     pub total_tokens: u32,

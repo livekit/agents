@@ -36,7 +36,7 @@ pub fn to_chat_ctx(
                 "toolUse": {
                     "toolUseId": call.call_id,
                     "name": call.name,
-                    "input": parse_arguments(&call.arguments)?,
+                    "input": parse_arguments(call),
                 }
             }))
         },

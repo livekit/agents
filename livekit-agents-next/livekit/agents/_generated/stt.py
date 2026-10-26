@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from typing import Any, Literal
@@ -114,6 +115,10 @@ class SpeechEvent:
     """server-reported wall-clock time of speech onset, when the provider sends
     a separate speech-start signal carrying onset timing.
     """
+    created_at: float = field(default_factory=time.time)
+    """Wall-clock time when this event was created."""
+    speech_end_time: float | None = None
+    """Wall-clock time when the recognized speech ended, when known."""
 
 
 # --- the frozen public paths -----------------------------------------------------------------

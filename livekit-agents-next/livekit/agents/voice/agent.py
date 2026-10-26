@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import inspect
 import sys
@@ -24,7 +25,9 @@ from typing import (
 
 from typing_extensions import ParamSpec, TypeVar
 
-from .. import _core, inference, llm, stt, tts, vad
+from livekit import rtc
+
+from .. import _core, inference, llm, stt, tokenize, tts, vad
 from .._generated.tool_executor import ToolHandlingOptions
 from ..llm import (
     LLM,
@@ -45,8 +48,8 @@ from ..llm.tool_context import (
     function_tool,
 )
 from ..log import logger
-from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
-from ..utils import is_given, misc
+from ..types import NOT_GIVEN, APIConnectOptions, FlushSentinel, NotGivenOr
+from ..utils import aio, is_given, misc
 from .events import Context_T, UserTurnExceededEvent
 from .turn import TurnHandlingOptions
 
@@ -82,6 +85,27 @@ class _VoiceBinding(NamedTuple):
     origin: str | None = None
     # the core's id of the speech whose tool is running
     speech_id: int | None = None
+
+    # the providers the agent's default nodes call: its own, else the session's
+    @property
+    def stt(self) -> stt.STT | None:
+        return self.agent._stt if is_given(self.agent._stt) else self.session.stt
+
+    @property
+    def vad(self) -> vad.VAD | None:
+        return self.agent._vad if is_given(self.agent._vad) else self.session.vad
+
+    @property
+    def llm(self) -> LLM | RealtimeModel | None:
+        return self.agent._llm if is_given(self.agent._llm) else self.session.llm
+
+    @property
+    def tts(self) -> tts.TTS | None:
+        return self.agent._tts if is_given(self.agent._tts) else self.session.tts
+
+    @property
+    def llm_conn_options(self) -> APIConnectOptions:
+        return self.session.conn_options.llm_conn_options
 
 
 class _OnEnterHook:
@@ -577,13 +601,108 @@ class Agent(Generic[Context_T, Output_T]):
         | Coroutine[Any, Any, llm.ChatChunk]
         | Coroutine[Any, Any, None]
     ):
-        """One model request of ``agent.run()``: plain text, or ``llm.ChatChunk``s with text and
-        tool calls. Override it to change how the model is called. On a call the session's
-        core makes the request itself.
+        """One model request: plain text, or ``llm.ChatChunk``s with text and tool calls, in
+        ``agent.run()`` and on a call. Override it to change how the model is called; a
+        ``FlushSentinel`` ends the spoken segment there.
         """
         return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
+    def stt_node(
+        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+    ) -> (
+        AsyncIterable[stt.SpeechEvent]
+        | Coroutine[Any, Any, AsyncIterable[stt.SpeechEvent]]
+        | Coroutine[Any, Any, None]
+    ):
+        """The user's audio on a call, transcribed into speech events by the agent's STT.
+
+        Override it to pre-process the audio or filter the events. A non-streaming STT is
+        wrapped with the VAD.
+        """
+        return Agent.default.stt_node(self, audio, model_settings)
+
+    def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[rtc.AudioFrame] | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]:
+        """One spoken segment on a call: its text, synthesized into audio frames by the
+        agent's TTS.
+
+        Override it to change the text, the voice or the audio. A non-streaming TTS is fed
+        sentence by sentence.
+        """
+        return Agent.default.tts_node(self, text, model_settings)
+
     class default:
+        @staticmethod
+        async def stt_node(
+            agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+        ) -> AsyncGenerator[stt.SpeechEvent, None]:
+            """Default implementation for `Agent.stt_node`"""
+            binding = agent._get_voice_binding_or_raise()
+            recognizer = binding.stt
+            if recognizer is None:
+                raise RuntimeError("stt_node called but no STT is available")
+            adapter: stt.StreamAdapter | None = None
+            if not recognizer.capabilities.streaming:
+                if binding.vad is None:
+                    raise RuntimeError(
+                        f"the STT ({recognizer.label}) does not stream: add a VAD, or wrap it in "
+                        "an stt.StreamAdapter"
+                    )
+                recognizer = adapter = stt.StreamAdapter(stt=recognizer, vad=binding.vad)
+            try:
+                conn_options = binding.session.conn_options.stt_conn_options
+                async with recognizer.stream(conn_options=conn_options) as stream:
+
+                    async def _forward() -> None:
+                        async for frame in audio:
+                            stream.push_frame(frame)
+                        stream.end_input()
+
+                    forward = asyncio.create_task(_forward())
+                    try:
+                        async for ev in stream:
+                            yield ev
+                    finally:
+                        await aio.cancel_and_wait(forward)
+            finally:
+                if adapter is not None:
+                    await adapter.aclose()
+
+        @staticmethod
+        async def tts_node(
+            agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
+        ) -> AsyncGenerator[rtc.AudioFrame, None]:
+            """Default implementation for `Agent.tts_node`"""
+            binding = agent._get_voice_binding_or_raise()
+            synthesizer = binding.tts
+            if synthesizer is None:
+                raise RuntimeError("tts_node called but no TTS is available")
+            adapter: tts.StreamAdapter | None = None
+            if not synthesizer.capabilities.streaming:
+                synthesizer = adapter = tts.StreamAdapter(
+                    tts=synthesizer,
+                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+                )
+            try:
+                conn_options = binding.session.conn_options.tts_conn_options
+                async with synthesizer.stream(conn_options=conn_options) as stream:
+
+                    async def _forward() -> None:
+                        async for chunk in text:
+                            stream.push_text(chunk)
+                        stream.end_input()
+
+                    forward = asyncio.create_task(_forward())
+                    try:
+                        async for ev in stream:
+                            yield ev.frame
+                    finally:
+                        await aio.cancel_and_wait(forward)
+            finally:
+                if adapter is not None:
+                    await adapter.aclose()
+
         @staticmethod
         async def llm_node(
             agent: Agent,
@@ -635,12 +754,15 @@ class Agent(Generic[Context_T, Output_T]):
         return binding
 
     def _get_session_or_raise(self) -> LiveSession:
+        return self._get_voice_binding_or_raise().session
+
+    def _get_voice_binding_or_raise(self) -> _VoiceBinding:
         binding = self._get_binding_or_raise()
         if not isinstance(binding, _VoiceBinding):
             raise RuntimeError(
                 f"agent `{self.id}` is running in agent.run(), which has no live session"
             )
-        return binding.session
+        return binding
 
     @property
     def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:

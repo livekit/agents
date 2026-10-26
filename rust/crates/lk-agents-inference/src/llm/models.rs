@@ -30,6 +30,9 @@ const UNSUPPORTED_PARAMS: &[(&str, &[&str])] = &[
     ("grok-4.20-multi-agent", XAI_REASONING_UNSUPPORTED_PARAMS),
 ];
 
+/// Accepted by gpt-5.1+ only at reasoning effort `"none"`; see [`unsupported_params`].
+const SAMPLING_PARAMS: &[&str] = &["temperature", "top_p"];
+
 /// Models that don't support `reasoning_effort` when function tools are present.
 const REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: &[&str] = &["gpt-5.2", "gpt-5.4"];
 
@@ -40,6 +43,11 @@ const MIN_REASONING_EFFORT: &[(&str, &str)] = &[
     ("gpt-5.2", "none"),
     ("gpt-5.4", "none"),
     ("gpt-5.4-mini", "none"),
+    ("gpt-5.4-nano", "none"),
+    ("gpt-5.5", "none"),
+    ("gpt-5.6-luna", "none"),
+    ("gpt-5.6-sol", "none"),
+    ("gpt-5.6-terra", "none"),
     ("gpt-5", "minimal"),
     ("gpt-5-mini", "minimal"),
     ("gpt-5-nano", "minimal"),
@@ -54,25 +62,58 @@ pub fn bare_model_name(model: &str) -> &str {
     model.rsplit('/').next().unwrap_or(model)
 }
 
-/// Remove parameters the given model does not support. `has_tools` is `bool(tools)`.
+/// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort` is
+/// the request's `reasoning_effort` and `reasoning` the effort of its Responses `reasoning`.
+#[lk_agents_abi::host(export(
+    name = "llm_unsupported_params",
+    pid = false,
+    kw_only = "has_tools",
+    defaults(has_tools = false, reasoning_effort = None, reasoning = None)
+))]
+pub fn unsupported_params(
+    model: &str,
+    has_tools: bool,
+    reasoning_effort: Option<&str>,
+    reasoning: Option<&str>,
+) -> Vec<&'static str> {
+    let name = bare_model_name(model);
+    let mut out = Vec::new();
+    let drops_effort = has_tools
+        && REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES.iter().any(|p| name.starts_with(p));
+    if drops_effort {
+        out.push("reasoning_effort");
+    }
+    // The first matching prefix wins; a model is never stripped by two rows.
+    if let Some((_, unsupported)) =
+        UNSUPPORTED_PARAMS.iter().find(|(prefix, _)| name.starts_with(prefix))
+    {
+        // OpenAI accepts temperature/top_p on gpt-5.1+ only at effort "none", the model's
+        // lowest; a model missing from MIN_REASONING_EFFORT keeps them stripped.
+        let effort_none = (!drops_effort && reasoning_effort == Some("none"))
+            || reasoning == Some("none");
+        let keeps_sampling = std::ptr::eq(*unsupported, REASONING_UNSUPPORTED_PARAMS)
+            && min_reasoning_effort(name) == Some("none")
+            && effort_none;
+        out.extend(
+            unsupported.iter().filter(|p| !(keeps_sampling && SAMPLING_PARAMS.contains(p))),
+        );
+    }
+    out
+}
+
+/// Remove the parameters the given model refuses from a request body.
 pub fn drop_unsupported_params(
     model: &str,
     params: &mut serde_json::Map<String, serde_json::Value>,
     has_tools: bool,
 ) {
-    let name = bare_model_name(model);
-
-    // `break` on the first matching prefix -- a model is never stripped by two rows.
-    if let Some((_, unsupported)) =
-        UNSUPPORTED_PARAMS.iter().find(|(prefix, _)| name.starts_with(prefix))
-    {
-        params.retain(|k, _| !unsupported.contains(&k.as_str()));
-    }
-
-    if has_tools && REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES.iter().any(|p| name.starts_with(p))
-    {
-        params.remove("reasoning_effort");
-    }
+    let drop = unsupported_params(
+        model,
+        has_tools,
+        params.get("reasoning_effort").and_then(serde_json::Value::as_str),
+        params.get("reasoning").and_then(|r| r.get("effort")).and_then(serde_json::Value::as_str),
+    );
+    params.retain(|k, _| !drop.contains(&k.as_str()));
 }
 
 /// The lowest reasoning effort the model supports, or `None` if it has no such control.
@@ -151,13 +192,53 @@ mod tests {
         assert_eq!(keys(&p), ["max_completion_tokens"]);
     }
 
+    // Catches: stripping temperature/top_p from a gpt-5.1+ model at effort "none".
+    #[test]
+    fn effort_none_keeps_sampling_params_on_models_whose_lowest_effort_is_none() {
+        let mut p = params(&["temperature", "top_p", "n"]);
+        p.insert("reasoning_effort".into(), json!("none"));
+        drop_unsupported_params("openai/gpt-5.6-luna", &mut p, false);
+        assert_eq!(keys(&p), ["temperature", "top_p", "reasoning_effort"]);
+
+        // The Responses API carries the effort in `reasoning`.
+        let mut p = params(&["temperature"]);
+        p.insert("reasoning".into(), json!({"effort": "none"}));
+        drop_unsupported_params("gpt-5.1", &mut p, false);
+        assert_eq!(keys(&p), ["temperature", "reasoning"]);
+
+        // Any other effort, or a model whose lowest effort is "minimal", strips them.
+        let mut p = params(&["temperature"]);
+        p.insert("reasoning_effort".into(), json!("low"));
+        drop_unsupported_params("openai/gpt-5.1", &mut p, false);
+        assert_eq!(keys(&p), ["reasoning_effort"]);
+        let mut p = params(&["temperature"]);
+        p.insert("reasoning_effort".into(), json!("none"));
+        drop_unsupported_params("openai/gpt-5", &mut p, false);
+        assert_eq!(keys(&p), ["reasoning_effort"]);
+    }
+
+    // Catches: judging the effort before the tool rule removed it.
+    #[test]
+    fn an_effort_dropped_for_tools_does_not_keep_sampling_params() {
+        assert_eq!(
+            unsupported_params("openai/gpt-5.2", true, Some("none"), None),
+            ["reasoning_effort", "temperature", "top_p", "presence_penalty", "frequency_penalty",
+                "logit_bias", "logprobs", "top_logprobs", "n"]
+        );
+        assert_eq!(
+            unsupported_params("openai/gpt-5.2", false, Some("none"), None),
+            ["presence_penalty", "frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "n"]
+        );
+    }
+
     // Catches: turning MIN_REASONING_EFFORT into a prefix match.
     #[test]
     fn min_reasoning_effort_is_an_exact_match_not_a_prefix() {
         assert_eq!(min_reasoning_effort("openai/gpt-5.1"), Some("none"));
         assert_eq!(min_reasoning_effort("openai/gpt-5"), Some("minimal"));
         assert_eq!(min_reasoning_effort("openai/gpt-5-chat-latest"), None);
-        assert_eq!(min_reasoning_effort("openai/gpt-5.5"), None);
+        assert_eq!(min_reasoning_effort("openai/gpt-5.5"), Some("none"));
+        assert_eq!(min_reasoning_effort("openai/gpt-5.6"), None);
         assert_eq!(min_reasoning_effort("openai/gpt-4o"), None);
     }
 

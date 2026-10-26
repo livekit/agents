@@ -34,7 +34,8 @@ lk-agents-abi = { path = "../lk-agents-abi" }
 # realtime session resample their own input. The interruption window does **not** (DR-9): the
 # driver feeds it the session's one converted stream. Default features, so no ffmpeg -- `soxr.rs`
 # is not behind that gate.
-lk-agents-media = { path = "../lk-agents-media" }
+# `blingfire`: a fallback TTS member without a duplex path streams through its sentences.
+lk-agents-media = { path = "../lk-agents-media", features = ["blingfire"] }
 serde = { workspace = true }
 # `preserve_order` for the same reason `lk-agents-format` states it: gateway request bodies are
 # assembled as maps and the reference emits them in declaration order. Also unifies with the rest

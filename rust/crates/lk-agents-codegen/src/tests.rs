@@ -837,3 +837,26 @@ fn the_session_schema_renders_its_five_pydantic_row_models() {
     assert!(run.text.contains("    state: Any | None"), "{}", run.text);
     assert!(run.text.contains("    lease_until: int"), "{}", run.text);
 }
+
+// Catches: a host-only field's `default_factory` dropped, or written as pydantic's shared
+// `Field` in a dataclass, or its module left unimported.
+#[test]
+fn a_host_field_default_factory_is_a_dataclass_field_with_its_import() {
+    let out = generate_python(
+        r#"
+        #[derive(Host)]
+        #[python(
+            dataclass,
+            module = "m",
+            name = "Ev",
+            host_field(name = "created_at", ty = "float", default_factory = "time.time")
+        )]
+        pub struct Ev {
+            pub kind: String,
+        }
+        "#,
+    );
+    assert!(out.contains("created_at: float = field(default_factory=time.time)"), "{out}");
+    assert!(out.contains("import time\n"), "{out}");
+    assert!(out.contains("from dataclasses import dataclass, field"), "{out}");
+}

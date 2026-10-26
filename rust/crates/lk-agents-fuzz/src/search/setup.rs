@@ -54,6 +54,5 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         user_turn_max_words: rng.bool().then(|| rng.u32(1..12)),
         user_turn_max_ms: rng.bool().then(|| ms(rng)),
         transcription_timeout_ms: rng.bool().then(|| ms(rng)),
-        backchannel_threshold: rng.bool().then(|| rng.u8(0..=100)),
     }
 }

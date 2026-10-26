@@ -215,6 +215,13 @@ def avatar_payload(
     avatar_id: str | None,
     options: dict[str, Any],
 ) -> Any: ...
+def llm_unsupported_params(
+    model: str,
+    *,
+    has_tools: bool = False,
+    reasoning_effort: str | None = None,
+    reasoning: str | None = None,
+) -> list[str]: ...
 def min_reasoning_effort(model: str) -> str | None: ...
 def workflow_prompts() -> dict[str, Any]: ...
 def default_aec_warmup() -> float: ...
@@ -312,6 +319,12 @@ def to_provider_format(
     inject_trailing_user_message: bool = False,
     thought_signatures: dict[str, list[int]] | None = None,
 ) -> tuple[list[Any], Any]: ...
+def convert_mid_conversation_instructions(
+    items: list[ChatItem],
+    *,
+    role: str,
+    template: str,
+) -> list[tuple[int, ChatItem | None]]: ...
 def to_fnc_ctx(
     format: str,
     tools: list[Any],
@@ -400,6 +413,12 @@ def split_words(
     text: str,
     ignore_punctuation: bool = True,
     split_character: bool = False,
+    retain_format: bool = False,
+) -> list[tuple[str, int, int]]: ...
+def basic_split_sentences(
+    text: str,
+    min_sentence_len: int = 20,
+    *,
     retain_format: bool = False,
 ) -> list[tuple[str, int, int]]: ...
 def default_load_window() -> int: ...
@@ -677,6 +696,9 @@ class LiveSession:
         tool_runner: Any | None = None,
         transcription_node: Any | None = None,
         realtime_audio_output_node: Any | None = None,
+        llm_node: Any | None = None,
+        tts_node: Any | None = None,
+        stt_node: Any | None = None,
         tts_text_transforms: Any | None = None,
         host_audio_input: Any | None = None,
         host_audio_output: Any | None = None,
@@ -709,6 +731,9 @@ class LiveSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
+        llm_node: Any | None = None,
+        tts_node: Any | None = None,
+        stt_node: Any | None = None,
     ) -> None: ...
     async def update_agent(
         self,
@@ -725,6 +750,9 @@ class LiveSession:
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
+        llm_node: Any | None = None,
+        tts_node: Any | None = None,
+        stt_node: Any | None = None,
     ) -> bool: ...
     def set_audio_input(self, source: Any | None) -> None: ...
     def set_video_input(self, source: Any | None) -> None: ...
@@ -968,6 +996,9 @@ class AudioByteStream:
         samples_per_channel: int | None = None,
         progressive: bool = False,
     ) -> None: ...
+    @property
+    def buffered_duration(self) -> float: ...
+    def reset_progressive(self) -> None: ...
     def clear(self) -> None: ...
     def push(self, data: bytes | memoryview) -> list[rtc.AudioFrame]: ...
     def write(self, data: bytes | memoryview) -> list[rtc.AudioFrame]: ...
@@ -1035,6 +1066,14 @@ class RemoteSessionClient:
     async def aclose(self) -> None: ...
     async def request(self, request: list[int], timeout: float) -> bytes: ...
     async def wait_for_ready(self, timeout: float, retry_interval: float) -> None: ...
+
+
+class ConsoleIo:
+    """The `lk agent console` socket: pass it as the session's audio input and output and as a
+    `RemoteSessionHost`'s transport and console.
+    """
+
+    def __init__(self, addr: str) -> None: ...
 
 
 class Markup:
@@ -1558,6 +1597,7 @@ class FallbackLlm:
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
         retry_on_chunk_sent: bool = False,
+        sticky: bool = False,
         on_availability: Any | None = None,
     ) -> None: ...
     @property

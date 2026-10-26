@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 278 core items bound (119 functions and consts, 74 classes, 84 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 280 core items bound (121 functions and consts, 75 classes, 83 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -14,6 +14,7 @@
 //! - `lk_agents_abi::tts::markup::steering_instructions_of`: field `nonverbal_sounds`: `NonverbalSounds` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_abi::compute_chat_ctx_diff_of`: parameter `old`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::llm::provider_format::host::to_provider_format`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
+//! - `lk_agents_abi::llm::provider_format::host::convert_mid_conversation_instructions`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::tokenize::search::keyword_search`: parameter `docs`: Slice(Declared { name: "Document", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::adapter_stream`: parameter `provider`: not yet: `Arc<dyn Tts>` (a host object behind a proxy)
 //! - `lk_agents_abi::stt::stream_adapter::capabilities`: field `aligned_transcript`: `AlignedTranscript` has no Node shape (not a declared record, enum or JSON)
@@ -74,6 +75,7 @@
 //! - `lk_agents_voice::remote_session::driver::HostRuntime::start`: parameter `transport`: not yet: `Arc<dyn SessionTransport>` (a host object behind a proxy)
 //! - `lk_agents_voice::remote_session::driver::ClientRuntime::new`: parameter `clock`: not yet: `Arc<dyn Clock>` (a host object behind a proxy)
 //! - `lk_agents_voice::remote_session::driver::ClientRuntime::start`: parameter `transport`: not yet: `Arc<dyn SessionTransport>` (a host object behind a proxy)
+//! - `lk_agents_voice::remote_session::console::ConsoleIo::new`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)
 //! - `lk_agents_abi::tts::markup::Markup::llm_instructions`: field `nonverbal_sounds`: `NonverbalSounds` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_abi::ChatContent::text`: return: `Self` outside a constructor
 //! - `lk_agents_abi::ChatContent::image_url`: return: `Self` outside a constructor
@@ -140,41 +142,41 @@
 //! - `InferenceVadStream`: output: `VadOutput` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_inference::llm::LlmClientConfig`: not yet: a #[host(client)] constructor lands on a hand-written pyclass
 //! - `lk_agents_inference::tts::TtsClientConfig`: not yet: a #[host(client)] constructor lands on a hand-written pyclass
-//! - `lk_agents_voice::tool_executor::HostToolRunner`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::agent_session::SessionEvents`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::agent_session::HostRoom`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::agent_session::NodeFactory`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::remote_session::SessionPort`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::remote_session::SessionTransport`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::remote_session::ConsoleSink`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::remote_session::ClientSink`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::generation::HostInstructions`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::voice::io::PlaybackListener`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::voice::io::AudioInput`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::voice::io::VideoInput`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::voice::io::AudioOutput`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::voice::io::TextOutput`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::io::TextNode`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::Vad`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
+//! - `lk_agents_voice::tool_executor::HostToolRunner`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::agent_session::SessionEvents`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::agent_session::HostRoom`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::agent_session::NodeFactory`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::remote_session::SessionPort`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::remote_session::SessionTransport`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::remote_session::ConsoleSink`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::remote_session::ClientSink`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::generation::HostInstructions`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::voice::io::PlaybackListener`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::voice::io::AudioInput`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::voice::io::VideoInput`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::voice::io::AudioOutput`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::voice::io::TextOutput`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::io::TextNode`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::Vad`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_rtc::RtcRoom`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::LocalParticipant`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::TextStreamWriter`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::AudioSource`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::RemoteParticipant`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::TrackPublication`: `lk_agents_rtc` is not linked by lk-agents-node
-//! - `lk_agents_voice::background_audio::FrameStream`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::background_audio::RandomDraw`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::Tts`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::Stt`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::Llm`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::EotDetector`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_inference::fallback::ChainObserver`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::llm::realtime::HostRealtime`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_abi::llm::realtime::HostRealtimeSession`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_voice::transcription::synchronizer::Hyphenator`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_inference::mcp::session::McpTransport`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_inference::mcp::session::McpClient`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
-//! - `lk_agents_inference::mcp::session::McpProgress`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
+//! - `lk_agents_voice::background_audio::FrameStream`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::background_audio::RandomDraw`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::Tts`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::Stt`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::Llm`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::EotDetector`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_inference::fallback::ChainObserver`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::llm::realtime::HostRealtime`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_abi::llm::realtime::HostRealtimeSession`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::transcription::synchronizer::Hyphenator`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_inference::mcp::session::McpTransport`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_inference::mcp::session::McpClient`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_inference::mcp::session::McpProgress`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `VadEvent (record VADEvent)`: field `frames`: `MediaRef` has no Node shape (not a declared record, enum or JSON)
 //! - `AudioInputConfig (record AudioInputOptions)`: field `noise_cancellation`: `lk_agents_abi::HostRef` has no Node shape (not a declared record, enum or JSON)
 //! - `NoiseCancellationParams (record NoiseCancellationParams)`: field `participant`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)

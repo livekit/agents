@@ -11,43 +11,38 @@ use crate::llm::provider_format::FormatError;
 /// `utils.py:9`. `{content}` is the only placeholder.
 pub const DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE: &str = "<instructions>\n{content}\n</instructions>";
 
-/// The first system/developer message is the preamble; later ones are wrapped in `template` (#5287:
-/// otherwise Gemini, Anthropic and Bedrock hoist them). `{content}` only, not full `str.format`.
+/// A system/developer message is the preamble only when it is the first one and no message or
+/// tool call precedes it. Every other one is rewritten as a `role` message wrapped in `template`,
+/// in place, and dropped when it has no text. `{content}` only, not full `str.format`.
 pub fn convert_mid_conversation_instructions<'a>(
     chat_ctx: &'a ChatContext,
     role: Role,
     template: &str,
 ) -> Vec<Cow<'a, ChatItem>> {
-    let mut first_system_seen = false;
+    let mut preamble_allowed = true;
     let mut items: Vec<Cow<'a, ChatItem>> = Vec::with_capacity(chat_ctx.items.len());
 
     for item in &chat_ctx.items {
-        let instruction = item.is_instruction();
-        // A truthiness test, as the reference's `(text := item.raw_text_content)`: `Some("")`
-        // leaves the item a system message and still marks the preamble seen.
-        let text = if instruction && first_system_seen {
-            item.as_message().and_then(ChatMessage::raw_text_content).filter(|t| !t.is_empty())
-        } else {
-            None
-        };
-
-        match text {
-            Some(text) => {
-                let original = item.as_message().expect("is_instruction implies a message");
+        if let ChatItem::Message(message) = item
+            && item.is_instruction()
+        {
+            if preamble_allowed {
+                preamble_allowed = false;
+                items.push(Cow::Borrowed(item));
+            } else if let Some(text) = message.raw_text_content().filter(|t| !t.is_empty()) {
                 items.push(Cow::Owned(ChatItem::Message(ChatMessage::text(
-                    original.id.clone(),
+                    message.id.clone(),
                     role,
                     template.replace("{content}", &text),
-                    original.created_at,
+                    message.created_at,
                 ))));
             }
-            None => {
-                if instruction {
-                    first_system_seen = true;
-                }
-                items.push(Cow::Borrowed(item));
-            }
+            continue;
         }
+        if matches!(item, ChatItem::Message(_) | ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_)) {
+            preamble_allowed = false;
+        }
+        items.push(Cow::Borrowed(item));
     }
 
     items
@@ -244,23 +239,31 @@ mod tests {
             .collect()
     }
 
-    // Catches: reading `(text := item.raw_text_content)` as a presence test; an empty later system
-    // message would become a literal `<instructions>\n\n</instructions>` user turn.
+    // Catches: keeping a textless later instruction, which would shadow the preamble.
     #[test]
-    fn an_empty_later_system_message_is_left_alone_not_wrapped_in_the_template() {
+    fn an_empty_later_system_message_is_dropped_not_wrapped_in_the_template() {
         let c = ctx(vec![
             msg("s0", Role::System, &["preamble"]),
             msg("s1", Role::System, &[""]),
             msg("s2", Role::Developer, &[]),
         ]);
+        assert_eq!(roles_and_text(&convert(&c)), [("system".into(), Some("preamble".into()))]);
+    }
+
+    // Catches: a first instruction after the conversation began kept as the preamble (the
+    // per-turn instructions `generate_reply` appends on the first turn); a handoff does not count.
+    #[test]
+    fn an_instruction_after_conversation_content_is_never_the_preamble() {
+        let c = ctx(vec![msg("u0", Role::User, &["hi"]), msg("s1", Role::System, &["reply"])]);
         assert_eq!(
             roles_and_text(&convert(&c)),
             [
-                ("system".into(), Some("preamble".into())),
-                ("system".into(), Some("".into())),
-                ("developer".into(), None),
+                ("user".into(), Some("hi".into())),
+                ("user".into(), Some("<instructions>\nreply\n</instructions>".into())),
             ]
         );
+        let c = ctx(vec![handoff("h"), msg("s1", Role::System, &["preamble"])]);
+        assert_eq!(roles_and_text(&convert(&c))[1], ("system".into(), Some("preamble".into())));
     }
 
     // Catches: rewriting the first instruction too, or hoisting later ones out of position (#5287).
@@ -492,13 +495,13 @@ mod tests {
         assert_eq!(g.groups.len(), 2);
     }
 
-    // Catches: an image-only system message being rewritten, or not taking the preamble slot.
+    // Catches: a textless later instruction rewritten into an empty user turn.
     #[test]
-    fn an_image_only_instruction_is_not_rewritten() {
+    fn a_textless_later_instruction_is_dropped() {
         let c = ctx(vec![
             msg("s0", Role::System, &["p"]),
             msg_with("s1", Role::System, vec![text_content("")]),
         ]);
-        assert_eq!(roles_and_text(&convert(&c))[1].0, "system");
+        assert_eq!(convert(&c).len(), 1);
     }
 }

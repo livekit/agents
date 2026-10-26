@@ -701,7 +701,7 @@ inputs! {
     /// The realtime server did something of its own accord on this socket. `GenerationDone`
     /// ends its oldest open turn: a server takes time to finish speaking, and until the case says
     /// it has, the turn is open -- which is when a second generation over it is a real event.
-    RealtimeEvent { socket: Ref<Realtime>, event: RtEvent };
+    RealtimeEvent { socket: Ref<Realtime>, event: RtEvent } opens [Generation];
     /// Something the room did. Refused by a session with no room legs, which is most of them.
     Room { event: RoomIn };
 

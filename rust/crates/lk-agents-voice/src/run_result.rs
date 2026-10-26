@@ -213,7 +213,7 @@ impl Driver {
         out: &mut Out,
     ) {
         if self.activity.rt_session.is_some() {
-            self.realtime_reply(now, user_input, instructions, None, None, None, out);
+            self.realtime_reply(now, user_input, instructions, None, None, None, false, out);
             return;
         }
         let _ = self.generate_reply_speech(

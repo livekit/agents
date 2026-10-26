@@ -3,7 +3,9 @@
 //! any of them.
 //!
 //! Frames move through the audio pump on the driver's next turn, so each is judged after that
-//! turn, and one that raced a disable or a gate change inside the same turn is left alone. The
+//! turn. An enable or disable rides the command queue to that same turn while the frames go
+//! straight to the pump, so a frame pushed between a switch and the driver's turn that applies it,
+//! or one that raced a disable or a gate change inside its own turn, is left alone. The
 //! STT leg hears silence while the gate is closed, which the journal publishes; VAD always hears
 //! the room.
 use std::collections::BTreeMap;
@@ -38,19 +40,32 @@ impl Rule for ForwardedWhileEnabled {
         // them, and when it was first pushed: what a late delivery may be.
         let mut next_chunk: BTreeMap<u32, u16> = BTreeMap::new();
         let mut pushed_enabled: BTreeMap<(u32, u16), Observed> = BTreeMap::new();
+        // Every push of a frame, enabled or not, in order: a frame heard while disabled may be one
+        // pushed in the turn the disable was still on its way.
+        let mut pushed_at: BTreeMap<(u32, u16), Vec<Observed>> = BTreeMap::new();
+        // When each microphone was replaced or detached: its frames go with it.
+        let mic_closed: BTreeMap<u32, Observed> = r
+            .closed()
+            .iter()
+            .filter(|(_, kind, _)| *kind == Kind::Mic)
+            .map(|(at, _, nth)| (*nth, *at))
+            .collect();
         for sent in inputs.accepted() {
             let Input::MicFrames { mic, chunks: Count(chunks) } = &sent.input else { continue };
             let counter = next_chunk.entry(mic.nth).or_default();
             for _ in 0..*chunks {
                 let chunk = *counter % (Tag::MAX_CHUNK + 1);
                 *counter = counter.wrapping_add(1);
+                pushed_at.entry((mic.nth, chunk)).or_default().push(sent.at);
                 // Nothing pushed while input was disabled or the microphone detached is owed to
                 // any stream.
                 if !audio_input.on_at(sent.at) {
                     continue;
                 }
                 pushed_enabled.entry((mic.nth, chunk)).or_insert(sent.at);
-                expect_reached(&inputs, &inference, &gate_closed, check, (mic.nth, chunk), sent.at);
+                let replaced = mic_closed.get(&mic.nth).copied();
+                let frame = (mic.nth, chunk);
+                expect_reached(&inputs, &inference, &gate_closed, replaced, check, frame, sent.at);
             }
         }
 
@@ -64,7 +79,14 @@ impl Rule for ForwardedWhileEnabled {
                 let Tag::Mic { mic, chunk } = *tag else { continue };
                 let late =
                     pushed_enabled.get(&(mic, chunk)).is_some_and(|pushed| *pushed < heard.at);
-                check.expect_with(Subject::Resource(Kind::Mic, mic), late, || {
+                let raced = pushed_at.get(&(mic, chunk)).is_some_and(|pushes| {
+                    pushes
+                        .iter()
+                        .filter(|pushed| **pushed < heard.at)
+                        .next_back()
+                        .is_some_and(|pushed| switching(&inputs, *pushed))
+                });
+                check.expect_with(Subject::Resource(Kind::Mic, mic), late || raced, || {
                     format!(
                         "{:?} stream {} heard mic {mic} chunk {chunk} while audio input was disabled (seq {})",
                         heard.kind, heard.stream, heard.at.seq
@@ -73,6 +95,16 @@ impl Rule for ForwardedWhileEnabled {
             }
         }
     }
+}
+
+/// Whether the path's last switch before a frame was pushed had not yet reached the driver: the
+/// switch waits on the command queue for the driver's next turn while the frame goes straight to
+/// the pump, so the two land in the same turn in either order.
+fn switching(inputs: &InputsView, pushed: Observed) -> bool {
+    inputs
+        .audio_input()
+        .last_change(pushed)
+        .is_some_and(|(at, _)| inputs.driver_turn_after(at).is_none_or(|turn| turn.began > pushed))
 }
 
 /// The streams that listen to the microphone.
@@ -84,6 +116,7 @@ fn expect_reached(
     inputs: &InputsView,
     inference: &InferenceView,
     gate_closed: &[Window],
+    replaced: Option<Observed>,
     check: &mut Check,
     (mic, chunk): (u32, u16),
     pushed: Observed,
@@ -92,8 +125,13 @@ fn expect_reached(
     // moved the frame and nothing can be said about where it went.
     let Some(turn) = inputs.driver_turn_after(pushed) else { return };
     let end = turn.ended.unwrap_or(Observed::END);
-    // A disable landing in the same turn races the pump for the frame; either outcome is right.
-    if inputs.audio_input().off_within(pushed, end) {
+    // A switch landing in the same turn races the pump for the frame, and so does replacing the
+    // microphone it was pushed to (the reference cancels the old stream's reader with whatever it
+    // had not read); either outcome is right.
+    if inputs.audio_input().off_within(pushed, end)
+        || switching(inputs, pushed)
+        || replaced.is_some_and(|at| at <= end)
+    {
         return;
     }
     for kind in LISTENERS {
@@ -179,10 +217,11 @@ fn stt_never_heard() -> Recording {
     mic_stt_vad().sent(frames(1)).then_act().forwarded(Kind::Vad, 0, heard(0)).done()
 }
 
-/// Input disabled, a frame pushed, and the recognition stream heard it anyway.
+/// Input disabled and applied, a frame pushed after, and the recognition stream heard it anyway.
 fn forwarded_while_disabled() -> Recording {
     mic_stt_vad()
         .sent(audio_input(false))
+        .then_act()
         .sent(frames(1))
         .then_act()
         .forwarded(Kind::Stt, 0, heard(0))

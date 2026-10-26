@@ -48,4 +48,7 @@ pub struct UsageSummary {
     pub tts_characters_count: u64,
     pub tts_audio_duration: f64,
     pub stt_audio_duration: f64,
+    pub stt_input_tokens: u64,
+    pub stt_output_tokens: u64,
+    pub stt_input_audio_tokens: u64,
 }

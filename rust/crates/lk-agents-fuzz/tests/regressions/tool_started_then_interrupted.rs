@@ -5,7 +5,7 @@ use lk_agents_fuzz::input::{Input, Millis, Ref, ToolArgs};
 // Catches: the runner task of a scheduled speech's call racing adoption against interruption.
 // The start was already journalled hosted and `ToolExecutionUpdated::Started` emitted, but an
 // interruption landing before the task's first poll dropped the body unrun (survey seed 170).
-// Schedule 1 under `Pos` dispatches the call, then takes the interrupt before the task runs.
+// Schedule 3 under `Pos` dispatches the call, then takes the interrupt before the task runs.
 #[test]
 fn a_started_call_runs_though_its_speech_is_interrupted() {
     let inputs = [
@@ -19,8 +19,8 @@ fn a_started_call_runs_though_its_speech_is_interrupted() {
         Input::Interrupt { force: true, wait: false },
         Input::Advance { ms: Millis(20) },
     ];
-    let run = simulate_with(1, async {
-        let mut run = Run::start(&Setup::default(), 1, Policy::Pos).await;
+    let run = simulate_with(3, async {
+        let mut run = Run::start(&Setup::default(), 3, Policy::Pos).await;
         for input in &inputs {
             run.apply(input).await;
         }

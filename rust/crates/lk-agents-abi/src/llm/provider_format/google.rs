@@ -39,7 +39,7 @@ pub fn to_chat_ctx(
                 serde_json::json!({
                     "id": call.call_id,
                     "name": call.name,
-                    "args": parse_arguments(&call.arguments)?,
+                    "args": parse_arguments(call),
                 }),
             );
             if let Some(sig) = thought_signatures
@@ -99,57 +99,45 @@ fn to_image_part(img: &SerializedImage) -> Value {
     serde_json::json!({ "inline_data": { "data": data, "mime_type": img.mime_type } })
 }
 
-/// `google.py:121`. The caller has already simplified `parameters`. Gemini Live needs `parameters`
-/// (googleapis/python-genai#1147).
+/// `google.py:121`. An object schema without properties means no arguments. Gemini Live rejects
+/// `parameters_json_schema` (googleapis/python-genai#1147), so without `use_parameters_json_schema`
+/// the schema is simplified to Gemini's own `parameters`.
 pub fn to_fnc_ctx(
     tools: &[ToolSchema],
     // `google.py:118`, checked by the caller.
     tool_behavior: Option<&str>,
     use_parameters_json_schema: bool,
 ) -> Result<Vec<Value>, FormatError> {
+    let missing = |key: &str| FormatError::MalformedToolSchema { detail: format!("missing {key:?}") };
     let mut out = Vec::new();
     for tool in tools {
-        let mut schema = Map::new();
-        match tool {
-            ToolSchema::Raw { name, raw_schema } => {
-                schema.insert("name".into(), Value::String(name.clone()));
-                schema.insert(
-                    "description".into(),
-                    raw_schema.get("description").cloned().unwrap_or_else(|| "".into()),
-                );
-                let parameters = raw_schema
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| Value::Object(Map::new()));
-                if use_parameters_json_schema {
-                    schema.insert("parameters_json_schema".into(), parameters);
-                } else {
-                    schema.insert("parameters".into(), none_if_falsy(parameters));
-                }
-            }
+        let (name, description, json_schema) = match tool {
+            // A raw schema is author-written and goes through as it is.
+            ToolSchema::Raw { name, raw_schema } => (
+                Value::String(name.clone()),
+                raw_schema.get("description").cloned().unwrap_or_else(|| "".into()),
+                raw_schema.get("parameters").cloned().unwrap_or(Value::Null),
+            ),
             ToolSchema::Legacy(built) => {
-                schema.insert(
-                    "name".into(),
-                    built.get("name").cloned().ok_or_else(|| FormatError::MalformedToolSchema {
-                        detail: "missing \"name\"".into(),
-                    })?,
-                );
-                // Not coerced to `""` as Anthropic and Bedrock do: null reaches Gemini as null.
-                schema.insert(
-                    "description".into(),
-                    built.get("description").cloned().ok_or_else(|| {
-                        FormatError::MalformedToolSchema {
-                            detail: "missing \"description\"".into(),
-                        }
-                    })?,
-                );
-                // `json_schema or None`: an empty simplified schema becomes an explicit null.
-                schema.insert(
-                    "parameters".into(),
-                    none_if_falsy(built.get("parameters").cloned().unwrap_or(Value::Null)),
-                );
+                let parameters = built.get("parameters").cloned().unwrap_or(Value::Null);
+                let has_properties = parameters.get("properties").is_some_and(is_truthy);
+                (
+                    built.get("name").cloned().ok_or_else(|| missing("name"))?,
+                    // Not coerced to `""` as Anthropic and Bedrock do: null reaches Gemini as null.
+                    built.get("description").cloned().ok_or_else(|| missing("description"))?,
+                    if has_properties { parameters } else { Value::Null },
+                )
             }
             ToolSchema::Strict(_) | ToolSchema::Provider(_) => continue,
+        };
+        let mut schema = Map::new();
+        schema.insert("name".into(), name);
+        schema.insert("description".into(), description);
+        if use_parameters_json_schema {
+            schema.insert("parameters_json_schema".into(), none_if_falsy(json_schema));
+        } else {
+            let json_schema = if is_truthy(&json_schema) { json_schema } else { Value::Object(Map::new()) };
+            schema.insert("parameters".into(), none_if_falsy(simplify_schema(json_schema)?));
         }
         if let Some(behavior) = tool_behavior {
             schema.insert("behavior".into(), behavior.into());
@@ -161,6 +149,165 @@ pub fn to_fnc_ctx(
 
 fn none_if_falsy(value: Value) -> Value {
     if is_truthy(&value) { value } else { Value::Null }
+}
+
+/// Every key Gemini's `types.Schema` accepts (field name and camelCase alias), and the JSON Schema
+/// keywords the simplifier still reads. Gemini refuses any other key.
+const GEMINI_SCHEMA_KEYS: &[&str] = &[
+    "additional_properties", "additionalProperties", "any_of", "anyOf", "default", "defs",
+    "description", "enum", "example", "format", "items", "max_items", "maxItems", "max_length",
+    "maxLength", "max_properties", "maxProperties", "maximum", "min_items", "minItems",
+    "min_length", "minLength", "min_properties", "minProperties", "minimum", "nullable", "pattern",
+    "properties", "property_ordering", "propertyOrdering", "ref", "required", "title", "type",
+    "$ref", "prefixItems", "const",
+];
+
+const GEMINI_TYPES: &[(&str, &str)] = &[
+    ("string", "STRING"),
+    ("number", "NUMBER"),
+    ("integer", "INTEGER"),
+    ("boolean", "BOOLEAN"),
+    ("array", "ARRAY"),
+    ("object", "OBJECT"),
+];
+
+/// The google plugin's `_GeminiJsonSchema(schema).simplify()`: a JSON Schema in Gemini's dialect,
+/// `$ref`s inlined, or null for an object without properties.
+pub fn simplify_schema(mut schema: Value) -> Result<Value, FormatError> {
+    let defs = schema.as_object_mut().and_then(|o| o.remove("$defs")).unwrap_or_default();
+    simplify(&mut schema, &defs, &mut Vec::new())?;
+    if schema.get("type").and_then(Value::as_str) == Some("OBJECT")
+        && !schema.get("properties").is_some_and(is_truthy)
+    {
+        return Ok(Value::Null);
+    }
+    Ok(schema)
+}
+
+fn unsupported(detail: String) -> FormatError {
+    FormatError::MalformedToolSchema { detail }
+}
+
+fn simplify(schema: &mut Value, defs: &Value, refs: &mut Vec<String>) -> Result<(), FormatError> {
+    let Some(obj) = schema.as_object_mut() else {
+        return Err(unsupported(format!("a JSON Schema is an object, got {schema}")));
+    };
+    obj.retain(|k, _| GEMINI_SCHEMA_KEYS.contains(&k.as_str()));
+    for key in ["title", "default", "additionalProperties"] {
+        obj.remove(key);
+    }
+    if let Some(constant) = obj.remove("const").filter(|c| !c.is_null()) {
+        // Gemini has no const, but takes an enum of one value.
+        obj.insert("enum".into(), Value::Array(vec![constant]));
+    }
+
+    if let Some(reference) = obj.remove("$ref").filter(is_truthy) {
+        let reference = reference.as_str().unwrap_or_default();
+        let key = reference.strip_prefix("#/$defs/").unwrap_or(reference).to_owned();
+        if refs.contains(&key) {
+            return Err(unsupported("Recursive `$ref`s in JSON Schema are not supported by Gemini".into()));
+        }
+        let mut def = defs.get(&key).cloned().ok_or_else(|| unsupported(format!("unknown $ref {key:?}")))?;
+        refs.push(key);
+        let simplified = simplify(&mut def, defs, refs);
+        refs.pop();
+        simplified?;
+        if let Value::Object(def) = def {
+            obj.extend(def);
+        }
+        return Ok(());
+    }
+
+    if !obj.contains_key("type")
+        && let Some(first) = obj.get("enum").and_then(|e| e.get(0))
+    {
+        // Python's `isinstance(value, int)` holds for a bool too.
+        let inferred = match first {
+            Value::Number(n) if n.is_f64() => "number",
+            Value::Number(_) | Value::Bool(_) => "integer",
+            Value::String(_) => "string",
+            other => return Err(unsupported(format!("Unsupported type in Schema: {other}"))),
+        };
+        obj.insert("type".into(), inferred.into());
+    }
+
+    if let Some(json_type) = obj.get("type").filter(|t| t.as_str() != Some("null")) {
+        let gemini = json_type.as_str().and_then(|t| {
+            GEMINI_TYPES
+                .iter()
+                .find(|(json, gemini)| *json == t || *gemini == t)
+                .map(|(_, gemini)| *gemini)
+                .or(matches!(t, "TYPE_UNSPECIFIED" | "NULL").then_some(t))
+        });
+        let Some(gemini) = gemini else {
+            return Err(unsupported(format!("Unsupported type in JSON Schema: {json_type}")));
+        };
+        obj.insert("type".into(), gemini.to_owned().into());
+    }
+
+    for (json, gemini) in [
+        ("minLength", "min_length"),
+        ("maxLength", "max_length"),
+        ("minItems", "min_items"),
+        ("maxItems", "max_items"),
+        ("minProperties", "min_properties"),
+        ("maxProperties", "max_properties"),
+    ] {
+        if let Some(value) = obj.remove(json) {
+            obj.insert(gemini.into(), value);
+        }
+    }
+
+    if let Some(Value::Array(mut any_of)) = obj.remove("anyOf").filter(is_truthy) {
+        let total = any_of.len();
+        let mut has_null = false;
+        let mut non_null = None;
+        let mut mapped = Vec::new();
+        for item in &mut any_of {
+            simplify(item, defs, refs)?;
+            if *item == serde_json::json!({"type": "null"}) {
+                has_null = true;
+            } else {
+                non_null = Some(item.clone());
+                mapped.push(item.clone());
+            }
+        }
+        match non_null.filter(is_truthy) {
+            Some(Value::Object(non_null)) if has_null && total == 2 => {
+                obj.extend(non_null);
+                obj.insert("nullable".into(), true.into());
+            }
+            _ => {
+                obj.insert("any_of".into(), Value::Array(mapped));
+            }
+        }
+    }
+
+    match obj.get("type").and_then(Value::as_str) {
+        Some("OBJECT") => {
+            if let Some(Value::Object(properties)) = obj.get_mut("properties").filter(|p| is_truthy(p)) {
+                for value in properties.values_mut() {
+                    simplify(value, defs, refs)?;
+                }
+                let order: Vec<Value> = properties.keys().cloned().map(Value::String).collect();
+                if !obj.contains_key("property_ordering") && !obj.contains_key("propertyOrdering") {
+                    obj.insert("property_ordering".into(), Value::Array(order));
+                }
+            }
+        }
+        Some("ARRAY") => {
+            if let Some(Value::Array(prefix)) = obj.get_mut("prefixItems") {
+                for item in prefix {
+                    simplify(item, defs, refs)?;
+                }
+            }
+            if let Some(items) = obj.get_mut("items").filter(|i| is_truthy(i)) {
+                simplify(items, defs, refs)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -272,7 +419,7 @@ mod tests {
         );
     }
 
-    // Catches: coercing a null description to `""`, or `parameters: {}` instead of `null`.
+    // Catches: coercing a null description to `""`, or `{}` instead of `null`.
     #[test]
     fn a_falsy_parameters_schema_becomes_null_and_a_null_description_stays_null() {
         let legacy = ToolSchema::Legacy(
@@ -280,7 +427,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&to_fnc_ctx(&[legacy], None, true).unwrap()).unwrap(),
-            r#"[{"name":"t","description":null,"parameters":null}]"#
+            r#"[{"name":"t","description":null,"parameters_json_schema":null}]"#
         );
     }
 
@@ -302,7 +449,7 @@ mod tests {
                     .unwrap()
             )
             .unwrap(),
-            r#"[{"name":"t","description":"d","parameters":{"type":"object"},"behavior":"NON_BLOCKING"}]"#
+            r#"[{"name":"t","description":"d","parameters":null,"behavior":"NON_BLOCKING"}]"#
         );
     }
 
@@ -332,5 +479,77 @@ mod tests {
             text_of(&run(vec![msg("m", Role::User, &["a", "", "b"])], &no_images())),
             r#"[{"role":"user","parts":[{"text":"a"},{"text":"b"}]}]"#
         );
+    }
+
+    // Catches: sending `parameters` where Gemini takes the schema as written, or a schema for a
+    // tool without arguments.
+    #[test]
+    fn function_tools_send_parameters_json_schema_and_null_without_arguments() {
+        let with = ToolSchema::Legacy(serde_json::json!({
+            "name": "f", "description": "d",
+            "parameters": {"type": "object", "properties": {"x": {"type": "string", "title": "X"}}},
+        }));
+        let without = ToolSchema::Legacy(serde_json::json!({
+            "name": "g", "description": "d", "parameters": {"type": "object", "properties": {}},
+        }));
+        let tools = to_fnc_ctx(&[with, without], None, true).unwrap();
+        assert_eq!(
+            tools[0]["parameters_json_schema"],
+            serde_json::json!({"type": "object", "properties": {"x": {"type": "string", "title": "X"}}})
+        );
+        assert!(tools[0].get("parameters").is_none());
+        assert_eq!(tools[1]["parameters_json_schema"], Value::Null);
+    }
+
+    // Catches: Gemini Live getting a JSON Schema it rejects instead of the simplified one.
+    #[test]
+    fn live_tools_get_the_simplified_schema() {
+        let raw = ToolSchema::Raw {
+            name: "f".into(),
+            raw_schema: serde_json::json!({"parameters": {
+                "type": "object",
+                "$defs": {"Unit": {"enum": ["c", "f"], "title": "Unit"}},
+                "properties": {
+                    "unit": {"$ref": "#/$defs/Unit"},
+                    "n": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}], "default": null},
+                    "tags": {"type": "array", "items": {"type": "string", "maxLength": 5}, "readOnly": true},
+                    "kind": {"const": "a"},
+                },
+                "required": ["unit"],
+                "additionalProperties": false,
+            }}),
+        };
+        let tools = to_fnc_ctx(&[raw], Some("NON_BLOCKING"), false).unwrap();
+        assert_eq!(
+            tools[0],
+            serde_json::json!({
+                "name": "f", "description": "",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "unit": {"enum": ["c", "f"], "type": "STRING"},
+                        "n": {"type": "INTEGER", "minimum": 1, "nullable": true},
+                        "tags": {"type": "ARRAY", "items": {"type": "STRING", "max_length": 5}},
+                        "kind": {"enum": ["a"], "type": "STRING"},
+                    },
+                    "required": ["unit"],
+                    "property_ordering": ["unit", "n", "tags", "kind"],
+                },
+                "behavior": "NON_BLOCKING",
+            })
+        );
+        let empty = ToolSchema::Raw { name: "g".into(), raw_schema: serde_json::json!({}) };
+        assert_eq!(to_fnc_ctx(&[empty], None, false).unwrap()[0]["parameters"], Value::Null);
+    }
+
+    // Catches: a recursive model looping instead of failing.
+    #[test]
+    fn a_recursive_ref_is_refused() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "$defs": {"Node": {"type": "object", "properties": {"next": {"$ref": "#/$defs/Node"}}}},
+            "properties": {"root": {"$ref": "#/$defs/Node"}},
+        });
+        assert!(simplify_schema(schema).is_err());
     }
 }

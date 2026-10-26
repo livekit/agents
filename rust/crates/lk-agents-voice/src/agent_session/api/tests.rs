@@ -25,6 +25,7 @@ fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
         Arc::new(room), None, None, "agent".into(), None, None, None, None, None, None, None,
         None, None, true, 24_000, 24_000, None, None, None, false, None, true,
         Some(crate::room_io::types::RoomIoConfig::default()), None, None, None, None, None, None,
+        None, None, None,
         None, None, None, None, false, None, false, hook_bound, 3, None, None, None, spawner,
     );
     api.expect("a room-only session assembles")

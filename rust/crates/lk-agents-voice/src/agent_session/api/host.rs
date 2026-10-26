@@ -15,6 +15,7 @@ use crate::agent_session::commands::{
     HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand,
     ToolUpdate, TurnCommand,
 };
+use crate::agent_session::nodes::Nodes;
 use crate::agent_session::time::Timebase;
 use crate::agent_session::{Answer, CommitSuperseded};
 use crate::filler_scheduler::FillerId;
@@ -74,7 +75,7 @@ impl SessionApi {
         options: Option<&crate::agent_activity::options::HostOptions>,
         // The first agent's own `turn_handling`, as written: the agent layer of the stack.
         agent_turn_handling: Option<crate::agent_activity::options::TurnHandlingKwargs>,
-        // `voice.turn._CoreTurnDetector` over the user's `turn_detection`, and which protocol it
+        // `_core_view.TurnDetector` over the user's `turn_detection`, and which protocol it
         // speaks (`hasattr(detector, "stream")`).
         turn_detector: Option<Arc<dyn lk_agents_abi::EotDetector>>,
         turn_detector_streaming: bool,
@@ -90,6 +91,9 @@ impl SessionApi {
         tool_runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
         transcription_node: Option<Arc<dyn NodeFactory>>,
         realtime_audio_output_node: Option<Arc<dyn NodeFactory>>,
+        llm_node: Option<Arc<dyn NodeFactory>>,
+        tts_node: Option<Arc<dyn NodeFactory>>,
+        stt_node: Option<Arc<dyn NodeFactory>>,
         tts_text_transforms: Option<crate::transcription::text_transforms::TransformSpecs>,
         // The host's own io legs, replacing the room's (which `agent_session.py` has turned off).
         host_audio_input: Option<Arc<dyn AudioInput>>,
@@ -155,9 +159,10 @@ impl SessionApi {
             session: session_layer,
             agent: agent_turn_handling.as_ref().map(crate::turn::agent_patch),
         };
-        let stt = stt.map(stt_leg);
-        let llm = llm.map(llm_leg);
-        let tts = tts.map(|t| tts_leg(t, clock.clone()));
+        let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
+        let stt = stt.map(|s| nodes.stt(stt_leg(s)));
+        let llm = llm.map(|l| nodes.llm(llm_leg(l)));
+        let tts = tts.map(|t| nodes.tts(tts_leg(t, clock.clone())));
         let interruption = interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
         let toolset = host_toolset(tools, tools_host, tool_runner);
@@ -320,6 +325,8 @@ impl SessionApi {
             dtmf_reply: Mutex::new(None),
             host: HostParts::default(),
             resources,
+            #[cfg(feature = "dst")]
+            probe: Mutex::new(None),
         };
         // The reference's `@deprecate_params` warnings, as `Diagnostic` events, not Python logs.
         if let Some(events) = &on_event {
@@ -411,16 +418,22 @@ impl SessionApi {
     }
 
     /// `Agent.update_options(stt=.., vad=.., llm=.., tts=..)` on a running agent: an in-place
-    /// provider swap, not a handoff (same frame, no hook, no drain). Each leg is three-state.
+    /// provider swap, not a handoff (same frame, no hook, no drain). Each leg is three-state; a
+    /// given one goes under the agent's node when it overrides one (`llm_node=` and the others).
     #[host(method(kw_only))]
+    #[allow(clippy::too_many_arguments)]
     pub fn update_models(
         &self,
         llm: Maybe<Option<Arc<dyn Llm>>>,
         tts: Maybe<Option<Arc<dyn Tts>>>,
         stt: Maybe<Option<Arc<dyn Stt>>>,
         vad: Maybe<Option<Arc<dyn Vad>>>,
+        llm_node: Option<Arc<dyn NodeFactory>>,
+        tts_node: Option<Arc<dyn NodeFactory>>,
+        stt_node: Option<Arc<dyn NodeFactory>>,
     ) -> Result<(), SessionRefused> {
-        let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad);
+        let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
+        let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);
         self.send(ActivityCommand::UpdateModels { stt, vad, llm, tts })
     }
 

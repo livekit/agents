@@ -20,9 +20,8 @@ use std::{
 
 use lk_agents_abi::{Ts, resources::ResourceId};
 use lk_agents_voice::{
-    agent_activity::false_interruption::InterruptRefusal,
     agent_activity::scheduling::{SpeechId, SpeechKind},
-    agent_session::{HandoffRefused, HoldId, HookCall, HookId, IdleRefused, Timebase},
+    agent_session::{HoldId, HookCall, HookId, IdleRefused, Timebase},
     events::{SessionEvent, ToolLifecycle},
     filler_scheduler::FillerId,
     room_io::RoomIoEvent,
@@ -392,14 +391,16 @@ impl Tag {
 pub enum Answer {
     Speech(u64),
     InterruptOk,
-    InterruptRefused(InterruptRefusal),
+    /// `NotInterruptible`: the host learns that it was refused, not why.
+    InterruptRefused,
     IdleOk,
     IdleRefused(IdleRefused),
     Hold(u64),
     Committed(String),
     CommitSuperseded,
     HandoffOk,
-    HandoffRefused(HandoffRefused),
+    /// `update_agent` answered `False`.
+    HandoffRefused,
     DrainOk,
     DrainRefused(lk_agents_voice::agent_session::DrainRefused),
     /// What a driver-run DTMF collection answered its `Start` with.

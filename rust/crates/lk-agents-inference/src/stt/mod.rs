@@ -517,7 +517,7 @@ impl Pump {
                     }
                     bstream.push(&frame.data)
                 }
-                Some(SinkCmd::Flush) => bstream.flush().frames,
+                Some(SinkCmd::Flush) => bstream.flush(),
                 // `end_input()` or a dropped sink: both end the send half.
                 Some(SinkCmd::End) | None => break,
             };

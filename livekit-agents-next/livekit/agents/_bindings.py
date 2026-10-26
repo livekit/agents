@@ -40,6 +40,54 @@ def verify_lists_length(ev: FunctionToolsExecutedEvent) -> FunctionToolsExecuted
     return ev
 
 
+def chat_chunk_has_response(chunk: Any) -> bool:
+    return bool(chunk.delta and (chunk.delta.content or chunk.delta.tool_calls))
+
+
+def metrics_repr(metrics: BaseModel) -> str:
+    fields = metrics.model_dump(exclude_defaults=True)
+    return f"{type(metrics).__name__}({', '.join(f'{k}={v!r}' for k, v in fields.items())})"
+
+
+def model_usage_repr(usage: BaseModel) -> str:
+    # skip zeros for concise display
+    fields = {k: v for k, v in usage.model_dump().items() if v != 0 and v != 0.0}
+    return f"{type(usage).__name__}({', '.join(f'{k}={v!r}' for k, v in fields.items())})"
+
+
+def usage_summary_post_init(summary: Any) -> None:
+    import warnings
+
+    warnings.warn(
+        "UsageSummary is deprecated. Use LLMModelUsage, TTSModelUsage, "
+        "or STTModelUsage from metrics.model_usage instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+def usage_summary_llm_input_tokens(summary: Any) -> int:
+    return summary.llm_prompt_tokens  # type: ignore[no-any-return]
+
+
+def usage_summary_set_llm_input_tokens(summary: Any, value: int) -> None:
+    summary.llm_prompt_tokens = value
+
+
+def usage_summary_llm_output_tokens(summary: Any) -> int:
+    return summary.llm_completion_tokens  # type: ignore[no-any-return]
+
+
+def usage_summary_set_llm_output_tokens(summary: Any, value: int) -> None:
+    summary.llm_completion_tokens = value
+
+
+def _default_total_tokens(metrics: Any) -> Any:
+    if "total_tokens" not in metrics.model_fields_set:
+        metrics.total_tokens = metrics.input_tokens + metrics.output_tokens
+    return metrics
+
+
 def speech_data_post_init(data: Any) -> None:
     from .language import LanguageCode
 

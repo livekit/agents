@@ -165,6 +165,10 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
         "rust/crates/lk-agents-voice/src/remote_session/driver.rs",
         "lk_agents_voice::remote_session::driver",
     ),
+    (
+        "rust/crates/lk-agents-voice/src/remote_session/console.rs",
+        "lk_agents_voice::remote_session::console",
+    ),
     ("rust/crates/lk-agents-abi/src/errors/host.rs", "lk_agents_abi::errors"),
     ("rust/crates/lk-agents-abi/src/errors/api.rs", "lk_agents_abi::errors"),
     ("rust/crates/lk-agents-abi/src/tts/markup/mod.rs", "lk_agents_abi::tts::markup"),
@@ -248,6 +252,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-voice/src/room_io/_input.rs", "lk_agents_voice::room_io::_input"),
     ("rust/crates/lk-agents-media/src/images/encode.rs", "lk_agents_media::images"),
     ("rust/crates/lk-agents-abi/src/tokenize/word.rs", "lk_agents_abi::tokenize"),
+    ("rust/crates/lk-agents-abi/src/tokenize/sentence.rs", "lk_agents_abi::tokenize"),
     ("rust/crates/lk-agents-abi/src/evals/group.rs", "lk_agents_abi::evals"),
     ("rust/crates/lk-agents-worker/src/load.rs", "lk_agents_worker"),
     ("rust/crates/lk-agents-worker/src/hw/cpu.rs", "lk_agents_worker"),

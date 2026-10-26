@@ -187,19 +187,13 @@ impl Playout {
         true
     }
 
-    /// The output threw its playback count away: every segment still outstanding is forgotten
-    /// here and the tracker is reset, which is what releases a driver waiting on any of them.
+    /// The output threw its playback count away: every segment still outstanding is reported
+    /// interrupted, then the tracker is reset. Finished first, as the reference's only resetting
+    /// sink does (`DataStreamAudioOutput._clear_buffer_task._on_timeout`): a reset alone moves no
+    /// count above this output, and a wrapper waiting on the segment would wait forever.
     /// Returns the segments that were cut.
     pub(super) fn reset(&self) -> Vec<u32> {
-        let cut: Vec<u32> = {
-            let mut state = self.state.lock().unwrap();
-            let mut cut: Vec<u32> = std::mem::take(&mut state.flushed).into_keys().collect();
-            cut.extend(state.open.take());
-            state.duration = Duration::ZERO;
-            state.started.clear();
-            state.played.clear();
-            cut
-        };
+        let cut = self.cleared();
         self.tracker.reset();
         cut
     }

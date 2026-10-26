@@ -716,6 +716,7 @@ impl Driver {
                 };
                 let Some(pending) = pending else { return };
                 let tx = self.leg_opens.clone();
+                let time = self.shared.time.clone();
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     use crate::room_io::Opened;
                     use crate::room_io::StreamOpened;
@@ -733,6 +734,14 @@ impl Driver {
                             vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
                         }
                     };
+                    // Opened after the loop stopped: nobody will take it, so it is closed here.
+                    if tx.is_closed() {
+                        if let Ok(stream) = outcome {
+                            let teardown = lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
+                            stream.close(time.now().saturating_add(teardown)).await;
+                        }
+                        return;
+                    }
                     let _ = tx.send(StreamOpened { open, leg, outcome });
                 });
             }

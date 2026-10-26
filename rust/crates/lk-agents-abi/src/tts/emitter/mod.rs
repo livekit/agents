@@ -152,7 +152,7 @@ pub struct AudioEmitter {
     debug_frames: Vec<Frame>,
     pending_dumps: Vec<SegmentDump>,
 
-    /// Bytes `AudioByteStream::flush` discarded as a partial sample; the binding logs them.
+    /// Bytes of a partial sample an ended segment discarded; the binding logs them.
     dropped_bytes: usize,
 }
 
@@ -405,13 +405,14 @@ impl AudioEmitter {
             // `elif audio_byte_stream:`: a flush before the first byte does nothing.
             return Ok(());
         }
-        let flushed = self.abs.as_mut().expect("checked").flush();
-        self.dropped_bytes += flushed.dropped_bytes;
-        for f in flushed.frames {
+        let abs = self.abs.as_mut().expect("checked");
+        let flushed = abs.flush();
+        // More bytes can follow this flush: a partial sample stays for them.
+        abs.reset_progressive();
+        for f in flushed {
             self.emit_frame(Some(f), false, now, eff);
         }
         self.flush_frame(now, eff);
-        self.abs.as_mut().expect("checked").clear();
         Ok(())
     }
 
@@ -424,9 +425,10 @@ impl AudioEmitter {
             // the next `start_segment()` raises. Pinned by a test.
             return Ok(());
         }
-        let flushed = self.abs.as_mut().expect("checked").flush();
-        self.dropped_bytes += flushed.dropped_bytes;
-        for f in flushed.frames {
+        let abs = self.abs.as_mut().expect("checked");
+        let flushed = abs.flush();
+        self.dropped_bytes += abs.buffered_bytes();
+        for f in flushed {
             self.emit_frame(Some(f), false, now, eff);
         }
         self.emit_frame(None, true, now, eff);

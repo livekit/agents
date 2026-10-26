@@ -79,6 +79,9 @@ impl UsageCollector {
 
     fn collect_stt(&mut self, m: &SttMetrics) {
         self.summary.stt_audio_duration += m.audio_duration;
+        self.summary.stt_input_tokens += u64::from(m.input_tokens);
+        self.summary.stt_output_tokens += u64::from(m.output_tokens);
+        self.summary.stt_input_audio_tokens += u64::from(m.input_audio_tokens);
     }
 
     /// `get_summary`, which `deepcopy`s so a caller cannot mutate the collector's state.
@@ -173,6 +176,9 @@ mod tests {
                 tts_characters_count: 0,
                 tts_audio_duration: 0.0,
                 stt_audio_duration: 0.0,
+                stt_input_tokens: 0,
+                stt_output_tokens: 0,
+                stt_input_audio_tokens: 0,
             }
         );
     }
@@ -203,14 +209,15 @@ mod tests {
         assert_eq!(s.llm_input_cached_audio_tokens, 5);
     }
 
-    // Catches: adding the STT and TTS token counters.
+    // Catches: dropping the STT token counters, or adding the TTS ones.
     #[test]
-    fn stt_and_tts_token_counters_are_not_summarised() {
+    fn stt_token_counters_are_summarised_and_tts_ones_are_not() {
         let mut c = UsageCollector::new();
         let mut stt = tk::stt();
         stt.audio_duration = 3.0;
         stt.input_tokens = 100;
         stt.output_tokens = 50;
+        stt.input_audio_tokens = 80;
         c.collect(&AgentMetrics::Stt(stt));
 
         let mut tts = tk::tts();
@@ -223,6 +230,9 @@ mod tests {
             c.summary(),
             UsageSummary {
                 stt_audio_duration: 3.0,
+                stt_input_tokens: 100,
+                stt_output_tokens: 50,
+                stt_input_audio_tokens: 80,
                 tts_audio_duration: 1.5,
                 tts_characters_count: 42,
                 ..Default::default()

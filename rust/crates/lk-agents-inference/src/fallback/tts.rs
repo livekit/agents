@@ -6,7 +6,8 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use lk_agents_abi::{StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
+use lk_agents_abi::{StreamAdapter, StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
+use lk_agents_media::blingfire::SentenceBuffer;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -200,6 +201,7 @@ pub enum TtsReq {
 
 
 pub struct TtsBackend {
+    label: String,
     inner: Arc<dyn Tts>,
     probe: Arc<dyn Tts>,
     clock: Arc<dyn Clock>,
@@ -210,9 +212,14 @@ impl TtsBackend {
         &self.inner
     }
 
+    /// A member without a duplex path streams through BlingFire sentences (`tts:384-395`).
     pub fn new(tts: &Arc<dyn Tts>, policy: &ChainPolicy, clock: Arc<dyn Clock>) -> Arc<Self> {
         let (inner, probe) = bound_views(tts, policy, |conn| tts.with_conn_options(conn));
-        Arc::new(TtsBackend { inner, probe, clock })
+        let adapted = |t| {
+            StreamAdapter::adapted(t, SentenceBuffer::factory(), Arc::clone(&clock))
+        };
+        let (inner, probe) = (adapted(inner), adapted(probe));
+        Arc::new(TtsBackend { label: tts.label(), inner, probe, clock })
     }
 }
 
@@ -222,7 +229,7 @@ impl Backend for TtsBackend {
     type Session = TtsSource;
 
     fn label(&self) -> String {
-        self.inner.label()
+        self.label.clone()
     }
 
     async fn open(
@@ -234,8 +241,6 @@ impl Backend for TtsBackend {
         match req {
             TtsReq::OneShot { text } => tts.synthesize(text).await,
             TtsReq::Stream { log } => {
-                // No `StreamAdapter` substitution here (`tts:326-335`); a member without a duplex
-                // path fails its open.
                 let (sink, source) = tts.stream().await?;
                 log.set_main(sink);
                 Ok(source)
@@ -295,8 +300,7 @@ impl std::fmt::Display for TtsChainError {
 }
 impl std::error::Error for TtsChainError {}
 
-/// `tts:92-95`: `streaming` is `any`, `aligned_transcript` is `all`. Without the reference's
-/// `StreamAdapter` substitution, `any` over-promises for entries lacking a duplex path.
+/// `tts:92-95`: `streaming` is `any`, `aligned_transcript` is `all`, over the members as given.
 pub fn merge_capabilities(entries: &[TtsCapabilities]) -> TtsCapabilities {
     TtsCapabilities {
         streaming: entries.iter().any(|c| c.streaming),
@@ -324,6 +328,7 @@ impl FallbackTts {
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
     ) -> Result<Self, TtsChainError> {
+        let capabilities = merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
         let entries: Vec<Arc<TtsBackend>> =
             ttss.iter().map(|t| TtsBackend::new(t, &policy, Arc::clone(&clock))).collect();
         let channels: Vec<u16> = entries.iter().map(|b| b.inner.num_channels()).collect();
@@ -333,8 +338,6 @@ impl FallbackTts {
         }
         let entry_rates: Vec<u32> = entries.iter().map(|b| b.inner.sample_rate()).collect();
         let (target, needs_resampling) = resampling_plan(&entry_rates, sample_rate);
-        let capabilities =
-            merge_capabilities(&entries.iter().map(|b| b.inner.capabilities()).collect::<Vec<_>>());
         let chain = FallbackChain::new(entries, policy, clock, Arc::clone(&spawner), observer)
             .map_err(|NoBackends| TtsChainError::NoBackends)?;
         Ok(FallbackTts {

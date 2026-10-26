@@ -38,10 +38,10 @@ pub trait DetectorLeg: Send + Sync {
     async fn next(&self) -> LegEvent<Self::Verdict>;
 }
 
-/// A host `turn_detection` object is this trait through its bare `#[host(proxy)]` (`PyEotDetector`),
-/// over `voice.turn._CoreTurnDetector`, which speaks both reference protocols (batch
-/// `predict_end_of_turn`, streaming `stream()`) behind the `_core_*` surface.
-#[crate::host(proxy(host = "livekit.agents.voice.turn._CoreTurnDetector"))]
+/// A host `turn_detection` object is this trait through its `#[host(proxy)]` (`PyEotDetector`), over
+/// `_core_view.TurnDetector`, which speaks both reference protocols (batch `predict_end_of_turn`,
+/// streaming `stream()`) behind the `_core_*` surface.
+#[crate::host(proxy)]
 #[async_trait::async_trait]
 pub trait EotDetector: Send + Sync + 'static {
     /// The detector's `model`/`provider`, as `EOUMetrics.metadata` names them.

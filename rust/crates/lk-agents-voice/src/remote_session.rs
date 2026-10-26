@@ -1,3 +1,4 @@
+pub mod console;
 pub mod driver;
 
 use async_trait::async_trait;
@@ -250,10 +251,7 @@ pub fn decode_debug_message(raw: &[u8]) -> Result<Option<proto::Struct>, prost::
 /// `AgentSession` become (`voice/remote_session.py`'s `_SessionPort`). An `Err` is a host failure
 /// (answered `"internal error"`); a `(value, error)` row's error becomes the response's `error`
 /// verbatim. The rows are the host's tuples, so each crosses as it is.
-#[lk_agents_abi::host(proxy(
-    host = "livekit.agents.voice.remote_session._SessionPort",
-    cancel_on_drop
-))]
+#[lk_agents_abi::host(proxy(cancel_on_drop))]
 #[async_trait]
 pub trait SessionPort: Send + Sync {
     /// `session.history.items`.
@@ -529,10 +527,7 @@ pub struct NonFiniteStamp;
 
 /// `SessionTransport` (`remote_session.py:78`), as `voice/remote_session.py`'s `_CoreTransport`
 /// sees it. A host failure keeps the original exception.
-#[lk_agents_abi::host(proxy(
-    host = "livekit.agents.voice.remote_session._CoreTransport",
-    cancel_on_drop
-))]
+#[lk_agents_abi::host(proxy(cancel_on_drop))]
 #[async_trait]
 pub trait SessionTransport: Send + Sync {
     /// `start()`; idempotent.
@@ -555,7 +550,7 @@ pub trait SessionTransport: Send + Sync {
 
 /// The console's local legs (`TcpAudioInput.push_frame`, `TcpAudioOutput.notify_playout_finished`),
 /// on `SessionHost`.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.remote_session.SessionHost"))]
+#[lk_agents_abi::host(proxy)]
 pub trait ConsoleSink: Send + Sync {
     fn push_input_frame(&self, frame: &proto::agent_session_message::console_io::AudioFrame);
 
@@ -563,7 +558,7 @@ pub trait ConsoleSink: Send + Sync {
 }
 
 /// Where a client's arriving events go: `RemoteSession.emit(name, event)`.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.remote_session.RemoteSession"))]
+#[lk_agents_abi::host(proxy)]
 pub trait ClientSink: Send + Sync {
     fn event(&self, name: &str, event: &proto::AgentSessionEvent);
 }

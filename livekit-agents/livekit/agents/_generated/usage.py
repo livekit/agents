@@ -53,6 +53,8 @@ class LLMModelUsage(_BaseModelUsage):
     """Output audio tokens (for multimodal models)."""
     output_text_tokens: int = 0
     """Output text tokens."""
+    output_reasoning_tokens: int = 0
+    """Output tokens spent on hidden reasoning. Already counted in ``output_tokens``."""
     session_duration: float = 0.0
     """Total session connection duration in seconds (for session-based billing like xAI)."""
 
@@ -84,7 +86,9 @@ class STTModelUsage(_BaseModelUsage):
     model: str
     """The model name (e.g., 'nova-2', 'best')."""
     input_tokens: int = 0
-    """Input audio tokens (for token-based STT billing)."""
+    """Total input tokens, including both audio and text (for token-based STT billing)."""
+    input_audio_tokens: int = 0
+    """Audio input tokens, a subset of input_tokens when reported by the provider."""
     output_tokens: int = 0
     """Output text tokens (for token-based STT billing)."""
     audio_duration: float = 0.0

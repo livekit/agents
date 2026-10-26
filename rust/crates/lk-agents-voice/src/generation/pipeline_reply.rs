@@ -218,6 +218,15 @@ async fn pipeline_reply_task_impl(
     let llm_gen_data = match words {
         Ok(data) => data,
         Err(e) => {
+            // A step that took the floor gives it back before its tools are waited for, as
+            // `_mark_generation_done` precedes `await exe_task`: a tool waiting for idle would
+            // otherwise wait on its own speech.
+            if matches!(spoken, Ok(Some(_))) {
+                let has_tools = !tools.is_empty();
+                let tools_running = has_tools && !handle.interrupted_speech();
+                mark_generation_done(handle);
+                step_spoken(shared, handle, handle.interrupted(), has_tools, tools_running, None);
+            }
             let _ = run_tools(shared, handle, ctx, tools, true).await;
             return Err(e);
         }

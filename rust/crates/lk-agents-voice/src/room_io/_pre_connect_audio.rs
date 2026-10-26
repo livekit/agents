@@ -197,7 +197,7 @@ impl PreConnectAudioHandler {
                 }
             }
         }
-        for f in bstream.flush().frames {
+        for f in bstream.flush() {
             frames.push(AudioFrame::new(f.data, sample_rate, num_channels, f.samples_per_channel));
         }
 

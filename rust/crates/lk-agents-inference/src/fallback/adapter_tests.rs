@@ -99,12 +99,14 @@ struct FakeLlm {
     chunks: Option<Vec<LlmChunk>>,
     /// The stream dies after the scripted chunks instead of ending cleanly.
     fail_after: bool,
+    /// `chat()` raises this many more times before it serves.
+    outages: AtomicUsize,
 }
 
 impl FakeLlm {
     fn build(label: &str, model: Option<&str>, chunks: Option<Vec<LlmChunk>>, fail_after: bool) -> Arc<Self> {
         let (label, model, seen) = (label.into(), model.map(Into::into), Mutex::new(vec![]));
-        Arc::new(FakeLlm { label, model, seen, chunks, fail_after })
+        Arc::new(FakeLlm { label, model, seen, chunks, fail_after, outages: AtomicUsize::new(0) })
     }
     fn new(label: &str, chunks: Option<Vec<LlmChunk>>) -> Arc<Self> {
         Self::build(label, None, chunks, false)
@@ -143,6 +145,10 @@ impl Llm for FakeLlm {
     }
     async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
         self.seen.lock().expect("seen").push(req.conn_options);
+        if self.outages.load(Ordering::SeqCst) > 0 {
+            self.outages.fetch_sub(1, Ordering::SeqCst);
+            return Err(boom(&format!("{} is down for now", self.label)));
+        }
         match &self.chunks {
             None => Err(boom(&format!("{} is down", self.label))),
             Some(c) => Ok(Box::new(VecStream {
@@ -156,6 +162,31 @@ impl Llm for FakeLlm {
 fn llm_chain(entries: Vec<Arc<dyn Llm>>) -> FallbackLlm {
     let (clock, spawner, obs) = parts();
     FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs).expect("entries")
+}
+
+// Catches: `sticky` going back to a recovered primary instead of the entry that served
+// (`llm:96-105`), or the default leaving a recovered primary behind.
+#[tokio::test]
+async fn a_sticky_chain_keeps_the_entry_that_served_after_the_primary_recovers() {
+    for sticky in [false, true] {
+        let primary = FakeLlm::new("p", Some(vec![chunk("primary")]));
+        primary.outages.store(1, Ordering::SeqCst);
+        let backup = FakeLlm::new("b", Some(vec![chunk("backup")]));
+        let (clock, spawner, obs) = parts();
+        let policy = ChainPolicy { sticky, ..ChainPolicy::llm_defaults() };
+        let fb = FallbackLlm::new(vec![primary.clone(), backup.clone()], policy, clock, spawner, obs)
+            .expect("entries");
+
+        let text = |chunks: Vec<LlmChunk>| chunks[0].delta.as_ref().unwrap().content.clone();
+        let mut stream = within("chat", fb.chat(&ChatRequest::default())).await.expect("served");
+        assert_eq!(text(drain_llm(&mut stream).await).as_deref(), Some("backup"));
+        until("the primary's probe to bring it back", || fb.chain().is_available(0)).await;
+
+        let mut stream = within("chat", fb.chat(&ChatRequest::default())).await.expect("served");
+        let want = if sticky { "backup" } else { "primary" };
+        assert_eq!(text(drain_llm(&mut stream).await).as_deref(), Some(want), "sticky={sticky}");
+        fb.aclose();
+    }
 }
 
 fn chunk(text: &str) -> LlmChunk {
@@ -825,6 +856,8 @@ struct FakeTts {
     /// The source raises after its scripted frames instead of ending cleanly.
     dies: bool,
     pushed: Arc<Mutex<Vec<String>>>,
+    /// Without a duplex path, `stream()` refuses.
+    streaming: bool,
 }
 
 struct Frames {
@@ -878,7 +911,7 @@ impl Tts for FakeTts {
         self.label.clone()
     }
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: true, aligned_transcript: false }
+        TtsCapabilities { streaming: self.streaming, aligned_transcript: false }
     }
     fn sample_rate(&self) -> u32 {
         self.rate
@@ -886,10 +919,14 @@ impl Tts for FakeTts {
     fn num_channels(&self) -> u16 {
         self.channels
     }
-    async fn synthesize(&self, _text: &str) -> Result<TtsSource, ProviderError> {
+    async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
+        self.pushed.lock().expect("pushed").push(text.to_owned());
         Ok(Box::new(self.frames()))
     }
     async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
+        if !self.streaming {
+            return Err(boom("no duplex path"));
+        }
         let left = self.refusals.load(Ordering::SeqCst);
         if left > 0 {
             self.refusals.store(left.saturating_sub(1), Ordering::SeqCst);
@@ -926,9 +963,38 @@ fn built(
             refusals: AtomicUsize::new(refusals),
             dies,
             pushed: Arc::clone(&pushed),
+            streaming: true,
         }),
         pushed,
     )
+}
+
+// Catches: a member without a duplex path failing every streamed request (`tts:384-395`).
+#[tokio::test]
+async fn a_batch_only_member_streams_through_sentences() {
+    let pushed = Arc::new(Mutex::new(Vec::new()));
+    let batch = Arc::new(FakeTts {
+        label: "batch".into(),
+        rate: 24_000,
+        channels: 1,
+        frames: 1,
+        refusals: AtomicUsize::new(0),
+        dies: false,
+        pushed: Arc::clone(&pushed),
+        streaming: false,
+    });
+    let fb = tts_chain(vec![batch]);
+    assert!(!fb.capabilities().streaming, "the members as given, not as adapted");
+    assert_eq!(fb.label(), "tts.FallbackAdapter");
+
+    let (sink, mut source) = within("stream", fb.stream()).await.expect("opened");
+    sink.push("Hello there, this is the first sentence. ".into()).expect("push");
+    sink.push("And this one is the second sentence.".into()).expect("push");
+    sink.end_input();
+    assert!(!drain_tts(&mut source).await.is_empty(), "the member served the stream");
+    assert_eq!(pushed.lock().expect("pushed").len(), 2, "one synthesis per sentence");
+    source.close(NO_DEADLINE).await;
+    fb.aclose();
 }
 
 // Catches: dropping `_pushed_tokens` replay on failover (`tts:428-434`).
