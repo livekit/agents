@@ -34,6 +34,7 @@ use crate::{
 mod eot;
 mod interruption;
 mod llm;
+mod nodes;
 mod output;
 mod realtime;
 mod stt;
@@ -44,6 +45,7 @@ mod vad;
 pub use eot::FakeEot;
 pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{COMPLETION_TOKENS, FakeLlm, request_of};
+pub use nodes::FakeNodes;
 pub use output::{
     room_camera,
     FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeSoundStream,

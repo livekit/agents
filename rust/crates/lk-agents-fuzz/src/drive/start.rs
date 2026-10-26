@@ -84,6 +84,13 @@ impl Run {
             ..RoomIoConfig::default()
         };
         let pipeline = setup.realtime.is_none();
+        // The providers, and the nodes an agent overriding them opens over each.
+        let stt = setup.stt.then(|| session_stt(setup, &registry, connect));
+        let llm = pipeline.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>);
+        let tts =
+            (setup.tts && pipeline).then(|| fakes::FakeTts::new(registry.clone()) as Arc<Tts>);
+        let (llm_node, tts_node, stt_node) = nodes(setup, &llm, &tts, &stt);
+        let providers = Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone() };
         let api = Arc::new(
             SessionApi::host_new(
                 Arc::new(FixedRoom { rtc: room.clone(), time: time.clone() }),
@@ -91,15 +98,15 @@ impl Run {
                 None,
                 "agent".into(),
                 None,
-                setup.stt.then(|| session_stt(setup, &registry, connect)),
+                stt,
                 setup.vad.then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
-                pipeline.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
+                llm,
                 setup.realtime.map(|server| {
                     fakes::FakeRealtime::new(registry.clone(), server.turn_detection)
                         as Arc<dyn Realtime>
                 }),
                 None,
-                (setup.tts && pipeline).then(|| fakes::FakeTts::new(registry.clone()) as Arc<Tts>),
+                tts,
                 Some(Arc::new(WireSink { console: session_host.clone(), time: time.clone() })),
                 None,
                 true,
@@ -120,9 +127,9 @@ impl Run {
                 Some(fakes::FakeTools::new(registry.clone()) as Arc<dyn HostToolRunner>),
                 None,
                 None,
-                None,
-                None,
-                None,
+                llm_node,
+                tts_node,
+                stt_node,
                 match &console {
                     Some((io, _)) => Some(io.as_audio_input()),
                     None => host_mic.as_ref().map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
@@ -311,6 +318,7 @@ impl Run {
             avatar: None,
             next_filler: 1,
             refs,
+            legs: providers,
             setup: setup.clone(),
             record: Recording::default(),
         };
@@ -571,7 +579,59 @@ pub(super) fn tool_specs(tools: &[String]) -> Vec<lk_agents_abi::ToolSpec> {
 /// A new agent with the same fakes behind it, as `update_agent` and `enter_task` take it. Every
 /// frame gets a fresh runner on the same registry, so a tool call after a handoff registers
 /// exactly like one before it.
+/// The session's providers as the host holds them.
+#[derive(Clone, Default)]
+pub(super) struct Legs {
+    pub(super) llm: Option<Arc<Llm>>,
+    pub(super) tts: Option<Arc<Tts>>,
+    pub(super) stt: Option<Arc<Stt>>,
+}
+
+/// The node factories the setup's agents install, each over the provider given beside it.
+pub(super) type NodeLegs =
+    (Option<Arc<dyn NodeFactory>>, Option<Arc<dyn NodeFactory>>, Option<Arc<dyn NodeFactory>>);
+
+pub(super) fn nodes(
+    setup: &Setup,
+    llm: &Option<Arc<Llm>>,
+    tts: &Option<Arc<Tts>>,
+    stt: &Option<Arc<Stt>>,
+) -> NodeLegs {
+    let Some(on) = setup.nodes else { return (None, None, None) };
+    let node = |wanted: bool, present: bool| {
+        (wanted && present).then(|| {
+            fakes::FakeNodes::new(llm.clone(), tts.clone(), stt.clone()) as Arc<dyn NodeFactory>
+        })
+    };
+    (node(on.llm, llm.is_some()), node(on.tts, tts.is_some()), node(on.stt, stt.is_some()))
+}
+
+/// A handoff's frame: the agent's tools and, when its agents override nodes, every leg a node
+/// wraps given again with the node over it (`_frame` gives the session's providers each time).
 pub(super) fn frame(
+    setup: &Setup,
+    legs: &Legs,
+    registry: &Arc<Registry>,
+    agent: &str,
+    instructions: &str,
+    tools: &[String],
+) -> UpdateAgentArgs {
+    let mut args = plain_frame(registry, agent, instructions, tools);
+    if setup.nodes.is_some() {
+        (args.llm_node, args.tts_node, args.stt_node) =
+            nodes(setup, &legs.llm, &legs.tts, &legs.stt);
+        args.stt = Maybe::Given(legs.stt.clone());
+        args.llm = if setup.realtime.is_none() {
+            Maybe::Given(legs.llm.clone())
+        } else {
+            Maybe::NotGiven
+        };
+        args.tts = Maybe::Given(legs.tts.clone());
+    }
+    args
+}
+
+fn plain_frame(
     registry: &Arc<Registry>,
     agent: &str,
     instructions: &str,

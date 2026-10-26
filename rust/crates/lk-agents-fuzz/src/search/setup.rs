@@ -4,8 +4,8 @@ use lk_agents_abi::voice::session_options::TextTransformSet;
 
 use crate::{
     drive::{
-        AmdAnswer, AmdSetup, KeytermDetectionSetup, PreConnect, RealtimeSetup, RoomLegs, RoomSetup,
-        Setup,
+        AmdAnswer, AmdSetup, KeytermDetectionSetup, NodeSetup, PreConnect, RealtimeSetup, RoomLegs,
+        RoomSetup, Setup,
     },
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
@@ -46,6 +46,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         amd: rng.bool().then_some(AmdSetup::default()),
         keyterms: if rng.bool() { names(rng) } else { vec![] },
         keyterm_detection: None,
+        nodes: None,
         room: rng.bool().then(|| RoomSetup {
             close_on_disconnect: rng.bool(),
             delete_room_on_close: rng.bool(),
@@ -115,5 +116,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     // `session.input.video` does: a seed that draws the room's has none of its own.
     setup.room_camera = setup.room_legs.is_some() && rng.u8(0..100) < 40;
     setup.video &= !setup.room_camera;
+    setup.nodes = (rng.u8(0..100) < 30)
+        .then(|| NodeSetup { llm: rng.bool(), tts: rng.bool(), stt: rng.bool() });
     setup
 }

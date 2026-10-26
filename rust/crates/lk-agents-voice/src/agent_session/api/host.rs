@@ -446,8 +446,9 @@ impl SessionApi {
     ) -> Result<Reply<bool>, SessionRefused> {
         // Always `_update_activity(previous_activity="close", new_activity="start")`; the
         // pause/resume pair is an inline task's (`enter_task`).
-        let mut update = self.frame(frame);
+        // The answer first: a refused handoff registers no provider it would never release.
         let (call, rx) = self.call(Answer::handoff)?;
+        let mut update = self.frame(frame);
         update.call = Some(call);
         self.send(ActivityCommand::Update(Box::new(update)))?;
         Ok(Reply::new(async move { matches!(rx.await, Ok(Ok(()))) }))

@@ -439,7 +439,14 @@ impl Run {
                 }
             }
             Input::Handoff { agent, instructions, tools } => api
-                .update_agent(frame(&registry, agent, &instructions.0, tools))
+                .update_agent(frame(
+                    &self.setup,
+                    &self.legs,
+                    &registry,
+                    agent,
+                    &instructions.0,
+                    tools,
+                ))
                 .map(|reply| {
                     wait(Pending::reply(reply, |ok| {
                         if ok { Answer::HandoffOk } else { Answer::HandoffRefused }
@@ -509,10 +516,27 @@ impl Run {
                     if on { Maybe::Given(Some(make())) } else { Maybe::NotGiven }
                 }
                 let connect = Duration::from_millis(self.setup.connect_ms.unwrap_or(0));
-                api.update_models(
+                let (llm, tts, stt) = (
                     given(llm, || fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
                     given(tts, || fakes::FakeTts::new(registry.clone()) as Arc<Tts>),
                     given(stt, || session_stt(&self.setup, &registry, connect)),
+                );
+                // What a later handoff gives again.
+                for (leg, held) in [(&llm, &mut self.legs.llm)] {
+                    if let Maybe::Given(new) = leg {
+                        *held = new.clone();
+                    }
+                }
+                if let Maybe::Given(new) = &tts {
+                    self.legs.tts = new.clone();
+                }
+                if let Maybe::Given(new) = &stt {
+                    self.legs.stt = new.clone();
+                }
+                api.update_models(
+                    llm,
+                    tts,
+                    stt,
                     Maybe::NotGiven,
                     None,
                     None,

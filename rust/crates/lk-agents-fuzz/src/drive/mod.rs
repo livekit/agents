@@ -60,7 +60,7 @@ use lk_agents_voice::{
     agent_session::{
         Event, FixedRoom, FramePusher, HoldId, HookId, HostEvent, IoKind, Origin, Probe,
         SessionApi, SessionEvents, SpeechCommand, TextPusher, Timebase, TurnCommand,
-        UpdateAgentArgs, effects::Decision,
+        UpdateAgentArgs, api::NodeFactory, effects::Decision,
     },
     events::SessionEvent,
     filler_scheduler::FillerId,
@@ -148,6 +148,9 @@ pub struct Setup {
     pub amd: Option<AmdSetup>,
     /// Static keyterms, which is also what makes the session have a keyterm pass at all.
     pub keyterms: Vec<String>,
+    /// The agent overrides `llm_node`, `tts_node` and `stt_node` (each as the default does), on
+    /// the first agent and on every agent a handoff installs.
+    pub nodes: Option<NodeSetup>,
     /// `stt_context_options["keyterm_detection"]` on, with the detection LLM the host resolves.
     pub keyterm_detection: Option<KeytermDetectionSetup>,
     /// What happens in the room: `None` is a room nothing happens in (a `Room` input is refused),
@@ -224,6 +227,14 @@ pub enum PreConnect {
     Sent,
     Never,
     Malformed,
+}
+
+/// Which of the three nodes the agents override.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NodeSetup {
+    pub llm: bool,
+    pub tts: bool,
+    pub stt: bool,
 }
 
 /// Keyterm detection as `KeytermDetectionOptions` sets it up, and whether the session's
@@ -325,6 +336,7 @@ impl Default for Setup {
             amd: None,
             keyterms: Vec::new(),
             keyterm_detection: None,
+            nodes: None,
             room: None,
             text_transforms: None,
             room_legs: None,
@@ -528,6 +540,8 @@ pub struct Run {
     /// The next inline task id to mint. Per-`Run` and not process-global, so two runs of one case
     /// journal the same `task_0001`, `task_0002`, ... -- the determinism suite reads those ids.
     refs: Arc<dyn RefRegistry>,
+    /// The session's providers, given again by a handoff whose agent overrides nodes.
+    legs: start::Legs,
     pub setup: Setup,
     pub record: Recording,
 }
