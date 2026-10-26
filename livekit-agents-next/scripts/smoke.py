@@ -1044,6 +1044,39 @@ def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
 
+def log_transport() -> None:
+    """A job process's log record whose ``extra`` holds an object pickle refuses (an ``Agent``)
+    reaches the supervisor with that field as its ``repr``, and no logging error."""
+    print("== log transport, a non-picklable extra")
+    import pickle
+    import socket
+
+    from livekit.agents.ipc.log_queue import LogQueueHandler
+    from livekit.agents.utils.aio import duplex_unix
+
+    child, parent = socket.socketpair()
+    parent.settimeout(5)  # a record never sent fails rather than hangs
+    handler = LogQueueHandler(duplex_unix._Duplex.open(child))
+    errors: list[logging.LogRecord] = []
+    handler.handleError = errors.append  # type: ignore[method-assign]
+
+    @function_tool
+    async def local_tool() -> str:
+        """A tool pickle cannot reach (a local function)."""
+        return ""
+
+    agent = Agent(instructions="x", name="pii", tools=[local_tool])
+    record = logging.LogRecord("livekit.agents", logging.WARNING, __file__, 1, "rejected", (), None)
+    record.__dict__["lk.pii.output"] = agent
+    handler.emit(record)
+    received = pickle.loads(duplex_unix._Duplex.open(parent).recv_bytes())
+    handler.close()
+    handler.thread.join()
+    assert not errors, errors
+    assert received.__dict__["lk.pii.output"] == repr(agent), received.__dict__
+    print("record received, extra as its repr")
+
+
 async def main() -> int:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
@@ -1157,6 +1190,7 @@ async def main() -> int:
     await keyterms()
     await room_camera()
     await job()
+    log_transport()
     return 0
 
 

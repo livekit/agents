@@ -107,12 +107,7 @@ class LogQueueHandler(logging.Handler):
             record.exc_text = record.exc_text
             record.stack_info = None
 
-            # https://websockets.readthedocs.io/en/stable/topics/logging.html#logging-to-json
-            # webosckets library add "websocket" attribute to log records, which is not pickleable
-            if hasattr(record, "websocket"):
-                record.websocket = None
-
-            self._send_q.put_nowait(pickle.dumps(record))
+            self._send_q.put_nowait(_pickled(record))
 
         except Exception:
             self.handleError(record)
@@ -120,3 +115,17 @@ class LogQueueHandler(logging.Handler):
     def close(self) -> None:
         super().close()
         self._send_q.put_nowait(self._sentinal)
+
+
+def _pickled(record: logging.LogRecord) -> bytes:
+    """``record`` pickled, any field that cannot be (an ``extra`` holding an ``Agent``, the
+    ``websocket`` the websockets library adds) sent as its ``repr``."""
+    try:
+        return pickle.dumps(record)
+    except Exception:
+        for key, value in list(vars(record).items()):
+            try:
+                pickle.dumps(value)
+            except Exception:
+                setattr(record, key, repr(value))
+        return pickle.dumps(record)
