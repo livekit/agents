@@ -255,6 +255,23 @@ class _EarlyFailureServer(_StubServer):
         raise AttributeError("'AgentServer' object has no attribute '_close_future'")
 
 
+class _DrainFailureServer(_StubServer):
+    """run() fails, then drain() raises a non-timeout error. aclose() must
+    still be called explicitly: it is the only teardown path for the
+    inference executor, HTTP session/server, Prometheus server, API client
+    and message channel."""
+
+    async def run(self, *, devmode: bool, unregistered: bool) -> None:
+        raise RuntimeError("worker failed at startup")
+
+    async def drain(self) -> None:
+        self.calls.append("drain")
+        raise RuntimeError("drain failed")
+
+    async def aclose(self) -> None:
+        self.calls.append("aclose")
+
+
 @pytest.mark.parametrize("dev", [False, True], ids=["start", "dev"])
 def test_worker_startup_failure_exits_nonzero(dev: bool) -> None:
     """A worker that fails to start must exit non-zero: supervisors (systemd,
@@ -291,3 +308,24 @@ def test_worker_startup_failure_before_init_is_not_masked(
     failure_logs = [r for r in caplog.records if r.getMessage() == "worker failed"]
     assert failure_logs, "the original startup error must be logged"
     assert isinstance(failure_logs[0].exc_info[1], RuntimeError)
+
+
+def test_worker_failure_still_closes_server_when_drain_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A secondary drain() error after run() failed must not skip aclose():
+    aclose() must still be called explicitly, even though the worker is
+    already exiting non-zero."""
+    server = _DrainFailureServer()
+    args = proto.CliArgs(log_level="DEBUG", dev=False)
+
+    with _run_worker_test_env(), caplog.at_level(logging.WARNING):
+        with pytest.raises(SystemExit) as exc_info:
+            _run_worker(server, args)  # type: ignore[arg-type]
+
+    assert exc_info.value.code != 0
+    assert server.calls == ["drain", "aclose"]
+    warnings = [
+        r for r in caplog.records if r.getMessage() == "error during shutdown after worker failure"
+    ]
+    assert warnings, "the secondary drain error must stay a warning, not mask the failure"
