@@ -1,25 +1,45 @@
+//! The warm transfer (`beta.workflows.WarmTransfer`): while the caller waits on hold, a second
+//! session in a room of its own dials a human agent, briefs them on the call, and either moves
+//! them into the caller's room or reports why not. The core runs the sequence and decides; the
+//! host (`TransferHost`) connects rooms, starts the second session, plays the hold music and
+//! makes the LiveKit and Twilio requests.
+
 use crate::workflows::instructions::{InstructionsArg, TemplateValue, WorkflowInstructions};
 use crate::workflows::prompts::warm_transfer as p;
 
-use lk_agents_abi::voice::workflows::SipParticipantRequest;
-use lk_agents_abi::{ChatContext, ToolFlags, ToolSpec};
-use lk_agents_rtc::{ParticipantIdentity, SipParticipantReq};
+use lk_agents_abi::errors::HostError;
+use lk_agents_abi::voice::workflows::{
+    IoEnableState, SipParticipantRequest, TwilioDial,
+};
+use lk_agents_abi::{ChatContext, HostRef, Maybe};
+use lk_agents_rtc::{DisconnectReason, ParticipantKind, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 use lk_agents_voice::generation::Instructions;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// `self._human_agent_identity`: the SIP participant's identity, the second session's
-/// `participant_identity`, and what `move_participant` names.
+const LOG: &str = "livekit.agents";
+
+/// The SIP participant's identity, the second session's `participant_identity`, and what
+/// `move_participant` names.
+#[lk_agents_abi::host(export(name = "WARM_TRANSFER_IDENTITY"))]
 pub const HUMAN_AGENT_IDENTITY: &str = "human-agent-sip";
 
-/// `room.name + "-human-agent"` (`warm_transfer.WarmTransferPlan._dial_human_agent`).
+/// Twilio reports no-answer and failure only through status webhooks, which nothing here reads,
+/// so an unanswered call is given up after this long unless `ringing_timeout` says otherwise.
+#[lk_agents_abi::host(export(name = "TWILIO_RINGING_TIMEOUT"))]
+pub const TWILIO_RINGING_TIMEOUT: f64 = 30.0;
+
+const TWILIO_API_BASE: &str = "https://api.twilio.com/2010-04-01";
+
+/// The human agent's room: the caller's, suffixed.
 pub fn human_agent_room_name(caller_room: &str) -> String {
     format!("{caller_room}-human-agent")
 }
 
-/// `_format_conversation_history`: skips non-user/assistant roles and messages with no text. Uses
-/// `raw_text_content`; callers with expressive TTS should strip markup first.
+/// The caller conversation as the briefing reads it: the caller's and the assistant's turns that
+/// have text, one per line.
 pub fn format_conversation_history(chat_ctx: &ChatContext) -> String {
     let mut out = String::new();
     for msg in chat_ctx.messages() {
@@ -40,68 +60,44 @@ pub fn format_conversation_history(chat_ctx: &ChatContext) -> String {
     out
 }
 
-// --------------------------------------------------------------------------------- the io gate
-
-pub use lk_agents_abi::voice::workflows::IoEnableState;
-
-/// `self._original_io_state`. The originals are saved once (a second disable would capture the
-/// muted values), and the restore is `enabled and original[..]`, so a channel off before the
-/// transfer stays off.
+/// The caller session's io while the transfer runs: off, then back to what it was. The originals
+/// are read once, so a leg off before the transfer stays off after it.
 #[derive(Debug, Default)]
 pub struct IoGate {
     original: Option<IoEnableState>,
 }
 
 impl IoGate {
-    /// What the five setters should be given. `current` is read only the first time.
+    /// What the setters should be given. `current` is read only the first time.
     pub fn desired(&mut self, enabled: bool, current: IoEnableState) -> IoEnableState {
         let original = *self.original.get_or_insert(current);
         IoEnableState {
             audio_input: enabled && original.audio_input,
-            video_input: enabled && original.video_input,
             audio_output: enabled && original.audio_output,
             transcription_output: enabled && original.transcription_output,
-            video_output: enabled && original.video_output,
         }
     }
 }
 
-// ------------------------------------------------------------------------------------ the SIP
-
-/// Filled into `CreateSIPParticipantRequest` (`WarmTransferPlan._dial_human_agent`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SipDialConfig {
-    /// `sip_call_to`. Required -- an empty one is [`WarmTransferError::NoSipCallTo`].
-    pub sip_call_to: String,
-    /// `sip_trunk_id`, after the env fallback.
-    pub sip_trunk_id: Option<String>,
-    /// `sip_connection is not None`; only presence is modelled (it decides the trunk fallback).
-    pub has_sip_connection: bool,
-    pub sip_number: String,
-    pub sip_headers: HashMap<String, String>,
-    pub dtmf: Option<String>,
-    pub ringing_timeout: Option<Duration>,
+/// What dials the human agent.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Origination {
+    /// `CreateSIPParticipant` on a trunk or a custom SIP connection, waiting until answered.
+    Sip {
+        sip_call_to: String,
+        sip_trunk_id: Option<String>,
+        sip_number: String,
+        sip_headers: HashMap<String, String>,
+        dtmf: Option<String>,
+    },
+    /// The LiveKit Twilio connector's stream, called through Twilio's Calls API.
+    Twilio(TwilioDial),
 }
 
-/// What the reference logs while building the plan; the host owns the wording.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Warning {
-    ExtraInstructionsIgnored,
-    TargetPhoneNumberDeprecated,
-}
-
-impl Warning {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Warning::ExtraInstructionsIgnored => "extra_instructions_ignored",
-            Warning::TargetPhoneNumberDeprecated => "target_phone_number_deprecated",
-        }
-    }
-}
-
-/// Config the reference rejects in `__init__` with a `ValueError`.
+/// A transfer the reference refuses to build (`ValueError`).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum WarmTransferError {
+#[lk_agents_abi::host(error(kind = "ValueError"))]
+pub enum WarmTransferRefused {
     #[error("`sip_call_to` must be set")]
     NoSipCallTo,
     #[error(
@@ -109,217 +105,115 @@ pub enum WarmTransferError {
          must be set"
     )]
     NoTrunk,
+    #[error(
+        "Twilio credentials are required: pass `twilio_account_sid` and `twilio_auth_token` or set \
+         the TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN environment variables"
+    )]
+    NoTwilioCredentials,
+    #[error("twilio_call_token requires original_caller_number")]
+    CallTokenWithoutCaller,
 }
 
-/// `WarmTransferPlan.__init__`'s parameters.
+/// Why a transfer did not connect: the person's agent hears it as the tool's error.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[lk_agents_abi::host(error(kind = "livekit.agents.llm.tool_context.ToolError"))]
+pub enum TransferFailed {
+    #[error("could not dial human agent")]
+    Dial,
+    #[error("human agent declined to connect: {0}")]
+    Declined(String),
+    #[error("voicemail detected")]
+    Voicemail,
+    #[error("room closed: {0}")]
+    RoomClosed(String),
+    #[error("the transfer is not running")]
+    #[host(kind = "RuntimeError")]
+    NotRunning,
+    #[error("unknown transfer tool {0:?}")]
+    #[host(kind = "ValueError")]
+    UnknownTool(String),
+    #[error(transparent)]
+    #[host(delegate)]
+    Host(#[from] HostError),
+}
+
+/// What the host does for a transfer. Each method is one SDK call or two.
+#[lk_agents_abi::host(proxy(live, cancel_on_drop))]
+#[async_trait::async_trait]
+pub trait TransferHost: Send + Sync {
+    /// Start the hold music on the caller's room, looping: what stops it, or nothing when there is
+    /// no hold music.
+    async fn start_hold(&self) -> Result<Option<HostRef>, HostError>;
+    /// Stop the hold music `start_hold` started.
+    fn stop_hold(&self, hold: HostRef);
+    /// The caller session's io flags, now.
+    fn io_state(&self) -> IoEnableState;
+    /// Set the caller session's io flags.
+    fn set_io(&self, state: IoEnableState);
+    /// Connect to the human agent's room as `identity` (the caller-side agent's).
+    async fn connect_human(
+        &self,
+        room_name: String,
+        identity: String,
+    ) -> Result<Arc<dyn RtcRoom>, HostError>;
+    /// Start the human agent's session (the briefing agent) on the connected room.
+    async fn start_human(&self) -> Result<(), HostError>;
+    /// Shut the human agent's session down, after its speech when `drain`.
+    fn close_human(&self, drain: bool);
+    /// Disconnect from the human agent's room.
+    async fn disconnect_human(&self) -> Result<(), HostError>;
+    /// `api.sip.create_sip_participant(request)`.
+    async fn create_sip_participant(&self, request: SipParticipantRequest) -> Result<(), HostError>;
+    /// `api.connector.connect_twilio_call(...)`, outbound into `room_name` as `identity`: the
+    /// stream URL Twilio connects to.
+    async fn connect_twilio_call(&self, room_name: String, identity: String) -> Result<String, HostError>;
+    /// A form `POST`, no redirect followed: the status and the body.
+    async fn http_post(
+        &self,
+        url: String,
+        headers: HashMap<String, String>,
+        form: Vec<(String, String)>,
+    ) -> Result<(u16, String), HostError>;
+    /// `api.room.move_participant(...)`.
+    async fn move_participant(
+        &self,
+        room: String,
+        identity: String,
+        destination: String,
+    ) -> Result<(), HostError>;
+    /// Delete the caller's room: the call is over.
+    async fn delete_caller_room(&self) -> Result<(), HostError>;
+}
+
+/// The run's shared state: who settles it, and what the tools reach.
 #[derive(Default)]
-pub struct WarmTransferConfig {
-    pub sip_call_to: Option<String>,
-    /// `NOT_GIVEN` is the outer `None`; an explicit `None` is `Some(None)`. See [`resolve_trunk`].
-    pub sip_trunk_id: Option<Option<String>>,
-    pub has_sip_connection: bool,
-    pub sip_number: Option<String>,
-    pub sip_headers: HashMap<String, String>,
-    pub dtmf: Option<String>,
-    pub ringing_timeout: Option<Duration>,
-    pub instructions: Option<InstructionsArg>,
-    /// `extra_instructions`, deprecated in favour of `instructions=`.
-    pub extra_instructions: String,
-    /// The caller conversation, summarised into the instructions; not the task's own context.
-    pub chat_ctx: Option<ChatContext>,
-    /// `target_phone_number`, deprecated in favour of `sip_call_to`.
-    pub target_phone_number: Option<String>,
-    /// `os.getenv("LIVEKIT_SIP_OUTBOUND_TRUNK", None)`, read by the driver.
-    pub env_sip_trunk: Option<String>,
-    /// `os.getenv("LIVEKIT_SIP_NUMBER", "")`, read by the driver.
-    pub env_sip_number: String,
-    pub tools: Vec<ToolSpec>,
-}
-
-/// The trunk fallback, with three arms: "explicit sip_connection: don't override with the env var
-/// trunk".
-pub fn resolve_trunk(
-    sip_trunk_id: &Option<Option<String>>,
-    has_sip_connection: bool,
-    env_sip_trunk: &Option<String>,
-) -> Option<String> {
-    match sip_trunk_id {
-        // `is_given(sip_trunk_id)`: an explicit `None` disables the trunk and is not overridden.
-        Some(explicit) => explicit.clone(),
-        None if has_sip_connection => None,
-        None => env_sip_trunk.clone(),
-    }
-}
-
-/// The transfer's plan: its prompt and tools, the SIP request, and the io gate. The host dials,
-/// moves the participant and settles.
-pub struct WarmTransferPlan {
-    instructions: Instructions,
-    user_tools: Vec<ToolSpec>,
-    sip: SipDialConfig,
+struct Running {
+    host: Option<Arc<dyn TransferHost>>,
+    caller: Option<Arc<dyn RtcRoom>>,
+    settled: bool,
+    /// The human agent's identity once they joined the caller, or why not.
+    outcome: Option<Result<String, TransferFailed>>,
+    /// The human agent's session is up and not yet closed.
+    human_open: bool,
+    hold: Option<HostRef>,
+    /// The human agent is being moved: their room closing is no longer a failure.
+    merging: bool,
+    watcher: Option<tokio::task::JoinHandle<()>>,
     io: IoGate,
 }
 
-impl WarmTransferPlan {
-    /// `__init__`. Returns the warnings the reference logs: the core has no logger.
-    pub fn new(cfg: WarmTransferConfig) -> Result<(Self, Vec<Warning>), WarmTransferError> {
-        let mut warnings = Vec::new();
-
-        // Resolved before the deprecation handling, as in the reference.
-        let history = cfg.chat_ctx.as_ref().map(format_conversation_history).unwrap_or_default();
-        let instructions = match &cfg.instructions {
-            None => {
-                WorkflowInstructions {
-                    persona: None,
-                    extra: Some(TemplateValue::plain(cfg.extra_instructions.clone())),
-                }
-                .resolve(
-                    p::INSTRUCTIONS_TEMPLATE,
-                    p::PERSONA,
-                    &[("_conversation_history", TemplateValue::plain(history))],
-                )
-                .instructions
-            }
-            Some(InstructionsArg::Workflow(w)) => {
-                if !cfg.extra_instructions.is_empty() {
-                    warnings.push(Warning::ExtraInstructionsIgnored);
-                }
-                w.resolve(
-                    p::INSTRUCTIONS_TEMPLATE,
-                    p::PERSONA,
-                    &[("_conversation_history", TemplateValue::plain(history))],
-                )
-                .instructions
-            }
-            Some(InstructionsArg::Fixed(i)) => {
-                if !cfg.extra_instructions.is_empty() {
-                    warnings.push(Warning::ExtraInstructionsIgnored);
-                }
-                i.clone()
-            }
-        };
-
-        // `if target_phone_number:` fills only a falsy `sip_call_to`.
-        let mut sip_call_to = cfg.sip_call_to.clone().unwrap_or_default();
-        if let Some(t) = cfg.target_phone_number.as_deref().filter(|t| !t.is_empty()) {
-            warnings.push(Warning::TargetPhoneNumberDeprecated);
-            if sip_call_to.is_empty() {
-                sip_call_to = t.to_owned();
-            }
-        }
-        if sip_call_to.is_empty() {
-            return Err(WarmTransferError::NoSipCallTo);
-        }
-
-        let sip_trunk_id =
-            resolve_trunk(&cfg.sip_trunk_id, cfg.has_sip_connection, &cfg.env_sip_trunk);
-        if sip_trunk_id.is_none() && !cfg.has_sip_connection {
-            return Err(WarmTransferError::NoTrunk);
-        }
-
-        Ok((
-            WarmTransferPlan {
-                instructions,
-                user_tools: cfg.tools,
-                sip: SipDialConfig {
-                    sip_call_to,
-                    sip_trunk_id,
-                    has_sip_connection: cfg.has_sip_connection,
-                    sip_number: cfg.sip_number.unwrap_or(cfg.env_sip_number),
-                    sip_headers: cfg.sip_headers,
-                    dtmf: cfg.dtmf,
-                    ringing_timeout: cfg.ringing_timeout,
-                },
-                io: IoGate::default(),
-            },
-            warnings,
-        ))
-    }
-
-    pub fn io(&mut self) -> &mut IoGate {
-        &mut self.io
-    }
-
-    /// The `CreateSIPParticipantRequest`: `sip_number or None` and `dtmf or ""`, as the reference.
-    pub fn sip_request(&self, human_agent_room: &str) -> SipParticipantReq {
-        SipParticipantReq {
-            sip_trunk_id: self.sip.sip_trunk_id.clone(),
-            sip_call_to: self.sip.sip_call_to.clone(),
-            room_name: human_agent_room.to_owned(),
-            participant_identity: ParticipantIdentity::from(HUMAN_AGENT_IDENTITY),
-            wait_until_answered: true,
-            sip_number: Some(self.sip.sip_number.clone()).filter(|s| !s.is_empty()),
-            headers: self.sip.sip_headers.clone(),
-            dtmf: self.sip.dtmf.clone().unwrap_or_default(),
-            ringing_timeout: self.sip.ringing_timeout,
-        }
-    }
-}
-
-// ------------------------------------------------------------------------------------ the tools
-
-/// All three tools are `IGNORE_ON_ENTER`: the entering turn summarises the call to the human, and
-/// connecting then would cut the summary off.
-fn tools_for_transfer() -> Vec<ToolSpec> {
-    fn tool(name: &str, description: &str, reason: Option<&str>) -> ToolSpec {
-        let (properties, required) = match reason {
-            Some(d) => {
-                (json!({ "reason": { "type": "string", "description": d } }), json!(["reason"]))
-            }
-            None => (json!({}), json!([])),
-        };
-        ToolSpec {
-            name: name.to_owned(),
-            description: description.to_owned(),
-            json_schema: json!({
-                "type": "object",
-                "properties": properties,
-                "required": required,
-                "additionalProperties": false,
-            }),
-            flags: ToolFlags { ignore_on_enter: true },
-        }
-    }
-    vec![
-        tool(p::CONNECT_TOOL, p::CONNECT_DESC, None),
-        tool(p::DECLINE_TOOL, p::DECLINE_DESC, Some(p::DECLINE_ARG_REASON)),
-        tool(p::VOICEMAIL_TOOL, p::VOICEMAIL_DESC, None),
-    ]
-}
-
-impl WarmTransferPlan {
-    pub fn instructions(&self) -> Instructions {
-        self.instructions.clone()
-    }
-    pub fn tools(&self) -> Vec<ToolSpec> {
-        let mut tools = self.user_tools.clone();
-        tools.extend(tools_for_transfer());
-        tools
-    }
-}
-
-/// A plan construction refusal (`ValueError`): both instruction forms, or no number or trunk.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum WarmTransferRefused {
-    #[error(transparent)]
-    Instructions(#[from] crate::workflows::instructions::BothInstructionForms),
-    #[error(transparent)]
-    Config(#[from] WarmTransferError),
-}
-
-/// `beta/workflows/warm_transfer.py`'s `__init__`, plus the two strings the transfer is built on.
-///
-/// The tool bodies stay Python (they drive host rooms, APIs and sessions); the decisions are here:
-/// the three-arm trunk fallback, `target_phone_number` filling in only for a falsy `sip_call_to`,
-/// and `sip_number or None` / `dtmf or ""`.
-#[lk_agents_abi::class(name = "WarmTransferPlan", mutable)]
+/// `_core.WarmTransfer`: the transfer's plan (its briefing instructions and tools, how it dials)
+/// and its run.
 pub struct HostWarmTransfer {
-    task: WarmTransferPlan,
-    warnings: Vec<Warning>,
+    instructions: Instructions,
+    origination: Origination,
+    ringing_timeout: Option<Duration>,
+    running: Mutex<Running>,
+    done: tokio::sync::Notify,
 }
 
-/// `[(role, text)]` as a context with just what `_format_conversation_history` reads. Anything that
-/// is not a `ChatRole` literal reads as `developer`, which the formatter skips like `system`.
+/// `[(role, text)]` as a context with just what [`format_conversation_history`] reads. Anything
+/// that is not a role literal reads as `developer`, which the briefing skips.
 fn conversation_of(items: Vec<(String, String)>) -> ChatContext {
     use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Role};
     ChatContext {
@@ -339,120 +233,559 @@ fn conversation_of(items: Vec<(String, String)>) -> ChatContext {
     }
 }
 
-#[lk_agents_abi::host(object(name = "WarmTransferPlan", pid = false))]
-impl HostWarmTransfer {
-    /// `conversation` is `[(role, text)]` off the caller's `ChatContext`, unfiltered; the core
-    /// keeps the `user`/`assistant` turns that have text. `sip_trunk_id_given` says whether an
-    /// explicit `sip_trunk_id=None` was passed: it disables the trunk and beats the env var.
-    #[host(new(
-        kw_only,
-        defaults(
-            sip_trunk_id_given = false,
-            has_sip_connection = false,
-            extra_instructions = String::new(),
-            env_sip_number = String::new()
-        )
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        sip_call_to: Option<String>,
-        sip_trunk_id: Option<String>,
-        sip_trunk_id_given: bool,
-        has_sip_connection: bool,
-        sip_number: Option<String>,
-        sip_headers: Option<HashMap<String, String>>,
-        dtmf: Option<String>,
-        ringing_timeout: Option<f64>,
-        instructions: Option<Instructions>,
-        sections: Option<(Option<Instructions>, Option<Instructions>)>,
-        extra_instructions: String,
-        conversation: Option<Vec<(String, String)>>,
-        target_phone_number: Option<String>,
-        env_sip_trunk: Option<String>,
-        env_sip_number: String,
-        tools: Option<Vec<ToolSpec>>,
-    ) -> Result<Self, WarmTransferRefused> {
-        let (task, warnings) = WarmTransferPlan::new(WarmTransferConfig {
-            sip_call_to,
-            sip_trunk_id: sip_trunk_id_given.then_some(sip_trunk_id),
-            has_sip_connection,
-            sip_number,
-            sip_headers: sip_headers.unwrap_or_default(),
-            dtmf,
-            ringing_timeout: ringing_timeout.map(Duration::from_secs_f64),
-            instructions: InstructionsArg::from_host(instructions, sections)?,
-            extra_instructions,
-            chat_ctx: conversation.map(conversation_of),
-            target_phone_number,
-            env_sip_trunk,
-            env_sip_number,
-            tools: tools.unwrap_or_default(),
-        })?;
-        Ok(HostWarmTransfer { task, warnings })
-    }
+/// `connect_to_caller`, `decline_transfer` and `voicemail_detected`, as raw function schemas.
+fn transfer_tools() -> Vec<Value> {
+    let tool = |name: &str, description: &str, reason: Option<&str>| {
+        let (properties, required) = match reason {
+            Some(d) => (json!({ "reason": { "type": "string", "description": d } }), json!(["reason"])),
+            None => (json!({}), json!([])),
+        };
+        json!({
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": false,
+            },
+        })
+    };
+    vec![
+        tool(p::CONNECT_TOOL, p::CONNECT_DESC, None),
+        tool(p::DECLINE_TOOL, p::DECLINE_DESC, Some(p::DECLINE_ARG_REASON)),
+        tool(p::VOICEMAIL_TOOL, p::VOICEMAIL_DESC, None),
+    ]
+}
 
-    #[host(getter)]
-    pub fn instructions(&self) -> (String, Option<String>, Option<String>) {
-        let i = self.task.instructions();
-        (i.common, i.audio, i.text)
-    }
-
-    #[host(getter)]
-    pub fn warnings(&self) -> Vec<String> {
-        self.warnings.iter().map(|w| w.as_str().to_owned()).collect()
-    }
-
-    /// `connect_to_caller`, `decline_transfer` and `voicemail_detected`, all three
-    /// `IGNORE_ON_ENTER`.
-    #[host(method)]
-    pub fn tools(&self) -> Vec<lk_agents_abi::voice::workflows::RawFunctionDescription> {
-        self.task.tools().iter().map(Into::into).collect()
-    }
-
-    /// `f"{caller_room}-human-agent"`. One place, so the dialer and the mover cannot disagree
-    /// about which room the human is in.
-    #[host(method)]
-    pub fn human_agent_room(caller_room: &str) -> String {
-        human_agent_room_name(caller_room)
-    }
-
-    /// `"human-agent-sip"` -- the identity the SIP participant joins under and the one
-    /// `move_participant` looks for.
-    #[host(method)]
-    pub fn human_agent_identity() -> String {
-        HUMAN_AGENT_IDENTITY.to_owned()
-    }
-
-    /// The `CreateSIPParticipantRequest`'s fields, after the reference's two normalisations.
-    #[host(method)]
-    pub fn sip_request(&self, human_agent_room: &str) -> SipParticipantRequest {
-        sip_request_record(&self.task.sip_request(human_agent_room))
-    }
-
-    /// `_set_io_enabled`'s five flags. The first `desired(False, ..)` remembers the session's io,
-    /// and `desired(True, ..)` restores that rather than enabling every leg.
-    #[host(method)]
-    pub fn io_enabled(
-        &mut self,
-        enabled: bool,
-        current: lk_agents_abi::voice::workflows::IoEnableState,
-    ) -> lk_agents_abi::voice::workflows::IoEnableState {
-        self.task.io().desired(enabled, current)
+/// The briefing instructions: the template over the persona, the extra section and the caller
+/// conversation, unless fixed instructions were given.
+fn briefing(instructions: Option<InstructionsArg>, conversation: Option<Vec<(String, String)>>) -> Instructions {
+    let history = conversation.map(conversation_of).as_ref().map(format_conversation_history);
+    let sections = [("_conversation_history", TemplateValue::plain(history.unwrap_or_default()))];
+    match instructions {
+        Some(InstructionsArg::Fixed(i)) => i,
+        Some(InstructionsArg::Workflow(w)) => {
+            w.resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections).instructions
+        }
+        None => WorkflowInstructions::default()
+            .resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections)
+            .instructions,
     }
 }
 
-/// A [`SipParticipantReq`] as the host fills the protobuf from it.
-pub fn sip_request_record(req: &SipParticipantReq) -> SipParticipantRequest {
-    SipParticipantRequest {
-        sip_trunk_id: req.sip_trunk_id.clone(),
-        sip_call_to: req.sip_call_to.clone(),
-        room_name: req.room_name.clone(),
-        participant_identity: req.participant_identity.to_string(),
-        wait_until_answered: req.wait_until_answered,
-        sip_number: req.sip_number.clone(),
-        headers: req.headers.clone(),
-        dtmf: req.dtmf.clone(),
-        ringing_timeout: req.ringing_timeout.map(|d| d.as_secs_f64()),
+#[lk_agents_abi::host(object(name = "WarmTransfer", cell = "arc"))]
+impl HostWarmTransfer {
+    /// An explicit `sip_trunk_id=None` means no trunk whatever the environment says; an absent
+    /// one is the environment's trunk, unless a SIP connection is given. `twilio` dials through
+    /// the Twilio connector instead of SIP. `instructions` is fixed instructions, or a
+    /// `WorkflowInstructions` whose persona and extra fill the built-in briefing; `conversation`
+    /// is the caller conversation as `[(role, text)]`, which the briefing summarises.
+    #[host(new(kw_only, defaults(has_sip_connection = false, env_sip_number = String::new())))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        sip_call_to: Option<String>,
+        sip_trunk_id: Maybe<Option<String>>,
+        has_sip_connection: bool,
+        sip_number: Maybe<String>,
+        sip_headers: Option<HashMap<String, String>>,
+        dtmf: Option<String>,
+        ringing_timeout: Option<f64>,
+        instructions: Maybe<InstructionsArg>,
+        conversation: Option<Vec<(String, String)>>,
+        env_sip_trunk: Option<String>,
+        env_sip_number: String,
+        twilio: Option<TwilioDial>,
+    ) -> Result<Self, WarmTransferRefused> {
+        let instructions = briefing(instructions.given(), conversation);
+        let origination = match twilio {
+            Some(t) => {
+                if t.account_sid.is_empty() || t.auth_token.is_empty() {
+                    return Err(WarmTransferRefused::NoTwilioCredentials);
+                }
+                if t.call_token.as_deref().is_some_and(|c| !c.is_empty())
+                    && t.original_caller_number.as_deref().is_none_or(str::is_empty)
+                {
+                    return Err(WarmTransferRefused::CallTokenWithoutCaller);
+                }
+                Origination::Twilio(t)
+            }
+            None => {
+                let sip_call_to = sip_call_to.filter(|s| !s.is_empty()).ok_or(WarmTransferRefused::NoSipCallTo)?;
+                let sip_trunk_id = match sip_trunk_id {
+                    Maybe::Given(id) => id,
+                    Maybe::NotGiven if has_sip_connection => None,
+                    Maybe::NotGiven => env_sip_trunk,
+                };
+                if sip_trunk_id.is_none() && !has_sip_connection {
+                    return Err(WarmTransferRefused::NoTrunk);
+                }
+                Origination::Sip {
+                    sip_call_to,
+                    sip_trunk_id,
+                    sip_number: sip_number.given().unwrap_or(env_sip_number),
+                    sip_headers: sip_headers.unwrap_or_default(),
+                    dtmf,
+                }
+            }
+        };
+        Ok(HostWarmTransfer {
+            instructions,
+            origination,
+            ringing_timeout: ringing_timeout.map(|s| Duration::from_secs_f64(s.max(0.0))),
+            running: Mutex::new(Running::default()),
+            done: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// The briefing agent's instructions, as `(common, audio, text)`.
+    #[host(getter)]
+    pub fn instructions(&self) -> (String, Option<String>, Option<String>) {
+        let i = self.instructions.clone();
+        (i.common, i.audio, i.text)
+    }
+
+    /// The briefing agent's three tools, as raw function schemas, each answered by
+    /// [`call_tool`](Self::call_tool). All three are hidden while the briefing is entered:
+    /// connecting then would cut the summary off.
+    #[host(method)]
+    pub fn tools(&self) -> Vec<Value> {
+        transfer_tools()
+    }
+
+    /// The transfer: the caller on hold with their session's io off, the human agent dialled and
+    /// briefed, until one of the tools or the human agent's room settles it; the human agent's
+    /// identity once they joined the caller. Whatever ends the
+    /// run, the human agent's session is closed, the hold stops and the io is restored.
+    #[host(method)]
+    pub async fn run(
+        self: &Arc<Self>,
+        host: Arc<dyn TransferHost>,
+        caller: Arc<dyn RtcRoom>,
+    ) -> Result<String, TransferFailed> {
+        {
+            let mut running = self.lock();
+            *running = Running { host: Some(host.clone()), caller: Some(caller.clone()), ..Running::default() };
+        }
+        let _restore = Restore(self.clone());
+        let hold = host.start_hold().await?;
+        self.lock().hold = hold;
+        self.set_io(&host, false);
+        let settled = self.done.notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
+        tokio::select! {
+            dialled = self.dial(&host, &caller) => {
+                if let Err(err) = dialled {
+                    log::error!(target: LOG, "could not dial human agent: {err}");
+                    self.abort_dial(&host).await;
+                    self.settle(Err(TransferFailed::Dial));
+                }
+            }
+            _ = &mut settled => {}
+        }
+        loop {
+            let settled = self.done.notified();
+            tokio::pin!(settled);
+            settled.as_mut().enable();
+            if let Some(outcome) = self.lock().outcome.take() {
+                return outcome;
+            }
+            settled.await;
+        }
+    }
+
+    /// One of [`tools`](Self::tools), called by the briefing agent: `connect_to_caller` moves
+    /// the human agent into the caller's room and settles the transfer, `decline_transfer` and
+    /// `voicemail_detected` settle it as failed.
+    #[host(method)]
+    pub async fn call_tool(self: &Arc<Self>, name: String, arguments: Value) -> Result<(), TransferFailed> {
+        match name.as_str() {
+            p::CONNECT_TOOL => self.connect().await,
+            p::DECLINE_TOOL => {
+                let reason = arguments.get("reason").and_then(Value::as_str).unwrap_or_default();
+                self.settle(Err(TransferFailed::Declined(reason.to_owned())));
+                Ok(())
+            }
+            p::VOICEMAIL_TOOL => {
+                self.settle(Err(TransferFailed::Voicemail));
+                Ok(())
+            }
+            _ => Err(TransferFailed::UnknownTool(name)),
+        }
+    }
+}
+
+/// The run's `finally`: the human agent's session closed without drain if still open, the hold
+/// stopped, the io restored.
+struct Restore(Arc<HostWarmTransfer>);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let host = {
+            let mut running = self.0.lock();
+            if let Some(watcher) = running.watcher.take() {
+                watcher.abort();
+            }
+            let close = std::mem::take(&mut running.human_open);
+            running.settled = true;
+            running.caller = None;
+            running.host.take().map(|host| (host, close, running.hold.take()))
+        };
+        if let Some((host, close, hold)) = host {
+            if close {
+                host.close_human(false);
+            }
+            if let Some(hold) = hold {
+                host.stop_hold(hold);
+            }
+            self.0.set_io(&host, true);
+        }
+    }
+}
+
+impl HostWarmTransfer {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Running> {
+        self.running.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn set_io(&self, host: &Arc<dyn TransferHost>, enabled: bool) {
+        let state = self.lock().io.desired(enabled, host.io_state());
+        host.set_io(state);
+    }
+
+    /// Settle once: the human agent's session closed after its speech, the hold stopped, the io
+    /// restored, then the outcome handed to the run. A later settle is ignored.
+    fn settle(&self, outcome: Result<String, TransferFailed>) {
+        let host = {
+            let mut running = self.lock();
+            if running.settled || running.host.is_none() {
+                return;
+            }
+            running.settled = true;
+            running.outcome = Some(outcome);
+            let close = std::mem::take(&mut running.human_open);
+            running.host.clone().map(|host| (host, close, running.hold.take()))
+        };
+        if let Some((host, close, hold)) = host {
+            if close {
+                host.close_human(true);
+            }
+            if let Some(hold) = hold {
+                host.stop_hold(hold);
+            }
+            self.set_io(&host, true);
+        }
+        self.done.notify_waiters();
+    }
+
+    /// The human agent's room connected and watched, their session started, and the call
+    /// placed; returns once they answered.
+    async fn dial(self: &Arc<Self>, host: &Arc<dyn TransferHost>, caller: &Arc<dyn RtcRoom>) -> Result<(), DialError> {
+        let room_name = human_agent_room_name(&caller.name());
+        let room = host.connect_human(room_name.clone(), caller.local().identity().to_string()).await?;
+        let events = room.events();
+        let this = self.clone();
+        {
+            let mut running = self.lock();
+            running.human_open = true;
+            running.watcher = Some(tokio::spawn(async move { this.watch_human(events).await }));
+        }
+        host.start_human().await?;
+        match &self.origination {
+            Origination::Sip { sip_call_to, sip_trunk_id, sip_number, sip_headers, dtmf } => {
+                let request = SipParticipantRequest {
+                    sip_trunk_id: sip_trunk_id.clone(),
+                    sip_call_to: sip_call_to.clone(),
+                    room_name,
+                    participant_identity: HUMAN_AGENT_IDENTITY.to_owned(),
+                    wait_until_answered: true,
+                    sip_number: Some(sip_number.clone()).filter(|s| !s.is_empty()),
+                    headers: sip_headers.clone(),
+                    dtmf: dtmf.clone().unwrap_or_default(),
+                    ringing_timeout: self.ringing_timeout.map(|d| d.as_secs_f64()),
+                };
+                host.create_sip_participant(request).await?;
+            }
+            Origination::Twilio(dial) => {
+                twilio_originate(host, dial, &room_name, &room, self.ringing_timeout).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A failed dial: the human agent's room no longer watched, their session closed without
+    /// drain and the room left.
+    async fn abort_dial(&self, host: &Arc<dyn TransferHost>) {
+        let close = {
+            let mut running = self.lock();
+            if let Some(watcher) = running.watcher.take() {
+                watcher.abort();
+            }
+            std::mem::take(&mut running.human_open)
+        };
+        if close {
+            host.close_human(false);
+            if let Err(err) = host.disconnect_human().await {
+                log::debug!(target: LOG, "leaving the human agent's room failed: {err}");
+            }
+        }
+    }
+
+    /// The human agent's room closing settles the transfer, unless they are being moved.
+    async fn watch_human(&self, mut events: lk_agents_rtc::Receiver<RoomEvent>) {
+        while let Some(event) = events.recv().await {
+            if let RoomEvent::Close { reason } = event {
+                log::debug!(target: LOG, "human agent's room closed: {reason:?}");
+                if !self.lock().merging {
+                    self.settle(Err(TransferFailed::RoomClosed(reason_name(reason))));
+                }
+                return;
+            }
+        }
+    }
+
+    /// `connect_to_caller`: the human agent moved into the caller's room, the transfer settled,
+    /// and the caller's room deleted once the caller or the human agent leaves it.
+    async fn connect(self: &Arc<Self>) -> Result<(), TransferFailed> {
+        let (host, caller) = {
+            let mut running = self.lock();
+            let (Some(host), Some(caller)) = (running.host.clone(), running.caller.clone()) else {
+                return Err(TransferFailed::NotRunning);
+            };
+            running.merging = true;
+            (host, caller)
+        };
+        let caller_room = caller.name();
+        log::debug!(target: LOG, "moving {HUMAN_AGENT_IDENTITY} to caller room {caller_room}");
+        host.move_participant(human_agent_room_name(&caller_room), HUMAN_AGENT_IDENTITY.to_owned(), caller_room)
+            .await?;
+        self.settle(Ok(HUMAN_AGENT_IDENTITY.to_owned()));
+        let mut events = caller.events();
+        tokio::spawn(async move {
+            while let Some(event) = events.recv().await {
+                let RoomEvent::ParticipantDisconnected { participant, .. } = event else { continue };
+                if matches!(
+                    participant.kind(),
+                    ParticipantKind::Connector | ParticipantKind::Sip | ParticipantKind::Standard
+                ) {
+                    log::info!(
+                        target: LOG,
+                        "participant disconnected from caller room: {}, closing",
+                        participant.identity()
+                    );
+                    if let Err(err) = host.delete_caller_room().await {
+                        log::warn!(target: LOG, "failed to delete the caller's room: {err}");
+                    }
+                    return;
+                }
+            }
+        });
+        Ok(())
+    }
+}
+
+/// `rtc.DisconnectReason.Name(reason)`.
+fn reason_name(reason: DisconnectReason) -> String {
+    reason.as_str().to_uppercase()
+}
+
+/// Why a dial failed: logged, while the transfer reports [`TransferFailed::Dial`].
+#[derive(Debug, thiserror::Error)]
+enum DialError {
+    #[error(transparent)]
+    Host(#[from] HostError),
+    #[error("Twilio request failed (HTTP {status}, code {})", code.map_or("unknown".to_owned(), |c| c.to_string()))]
+    Twilio { status: u16, code: Option<i64> },
+    #[error("Twilio call creation returned no call SID")]
+    NoCallSid,
+    #[error("supervisor did not answer")]
+    NoAnswer,
+    #[error(transparent)]
+    Rtc(#[from] lk_agents_rtc::RtcError),
+}
+
+/// A Twilio request: a form `POST` under the account, with basic auth; the JSON body, `{}` when it
+/// is not an object.
+async fn twilio_request(
+    host: &Arc<dyn TransferHost>,
+    dial: &TwilioDial,
+    path: &str,
+    form: Vec<(String, String)>,
+) -> Result<serde_json::Map<String, Value>, DialError> {
+    use base64::Engine as _;
+    let auth = base64::engine::general_purpose::STANDARD
+        .encode(format!("{}:{}", dial.account_sid, dial.auth_token));
+    let url = format!("{TWILIO_API_BASE}/Accounts/{}{path}", quote(&dial.account_sid));
+    let headers = HashMap::from([("Authorization".to_owned(), format!("Basic {auth}"))]);
+    let (status, body) = host.http_post(url, headers, form).await?;
+    let body = match serde_json::from_str(&body) {
+        Ok(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    if !(200..300).contains(&status) {
+        return Err(DialError::Twilio { status, code: body.get("code").and_then(Value::as_i64) });
+    }
+    Ok(body)
+}
+
+/// Create the outbound call, streaming into the connector: its SID.
+async fn twilio_create_call(
+    host: Arc<dyn TransferHost>,
+    dial: TwilioDial,
+    from: String,
+    twiml: String,
+    call_token: Option<String>,
+) -> Result<String, DialError> {
+    let mut form = vec![
+        ("To".to_owned(), dial.phone_number.clone()),
+        ("From".to_owned(), from),
+        ("Twiml".to_owned(), twiml),
+    ];
+    form.extend(call_token.map(|t| ("CallToken".to_owned(), t)));
+    let call = twilio_request(&host, &dial, "/Calls.json", form).await?;
+    match call.get("sid").and_then(Value::as_str) {
+        Some(sid) if !sid.is_empty() => Ok(sid.to_owned()),
+        _ => Err(DialError::NoCallSid),
+    }
+}
+
+/// A call the transfer gave up on, cancelled; one answered meanwhile (error 21220) is completed
+/// instead.
+async fn twilio_cancel(host: Arc<dyn TransferHost>, dial: TwilioDial, sid: String) {
+    let path = format!("/Calls/{}.json", quote(&sid));
+    let status = |s: &str| vec![("Status".to_owned(), s.to_owned())];
+    let cancelled = match twilio_request(&host, &dial, &path, status("canceled")).await {
+        Err(DialError::Twilio { status: 400, code: Some(21220) }) => {
+            twilio_request(&host, &dial, &path, status("completed")).await.map(drop)
+        }
+        other => other.map(drop),
+    };
+    if cancelled.is_err() {
+        log::warn!(target: LOG, "Failed to cancel Twilio call");
+    }
+}
+
+/// The outbound call while the dial waits on it: still being created, or created.
+enum Call {
+    Creating(tokio::task::JoinHandle<Result<String, DialError>>),
+    Created(String),
+}
+
+/// Cancels the call when the dial does not get past it, however it ends (a failure or the run
+/// dropped): Twilio can create the call after the transfer gave up.
+struct CancelOnDrop {
+    host: Arc<dyn TransferHost>,
+    dial: TwilioDial,
+    call: Option<Call>,
+}
+
+impl CancelOnDrop {
+    /// The creation's outcome; the guard then holds the call it made, if any. Awaited in place,
+    /// so a dial dropped meanwhile still cancels what the creation goes on to make.
+    async fn created(&mut self) -> Result<String, DialError> {
+        let Some(Call::Creating(task)) = &mut self.call else {
+            unreachable!("a creation is pending")
+        };
+        let result = task.await.unwrap_or_else(|err| Err(DialError::Host(HostError::new(err.to_string()))));
+        self.call = result.as_ref().ok().map(|sid| Call::Created(sid.clone()));
+        result
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        let (host, dial) = (self.host.clone(), self.dial.clone());
+        match self.call.take() {
+            Some(Call::Creating(task)) => {
+                tokio::spawn(async move {
+                    if let Ok(Ok(sid)) = task.await {
+                        twilio_cancel(host, dial, sid).await;
+                    }
+                });
+            }
+            Some(Call::Created(sid)) => {
+                tokio::spawn(twilio_cancel(host, dial, sid));
+            }
+            None => {}
+        }
+    }
+}
+
+/// Dial through Twilio: the connector's stream URL, the call created from the caller's number
+/// when a call token preserves it (from the business number again if Twilio rejects that caller
+/// ID, errors 21210 and 21212, which create no call), then the human agent's audio track awaited
+/// in their room, within `ringing_timeout`.
+async fn twilio_originate(
+    host: &Arc<dyn TransferHost>,
+    dial: &TwilioDial,
+    room_name: &str,
+    room: &Arc<dyn RtcRoom>,
+    ringing_timeout: Option<Duration>,
+) -> Result<(), DialError> {
+    let connect_url = host.connect_twilio_call(room_name.to_owned(), HUMAN_AGENT_IDENTITY.to_owned()).await?;
+    let twiml = format!("<Response><Connect><Stream url={}/></Connect></Response>", quoteattr(&connect_url));
+    let token = dial.call_token.clone().filter(|t| !t.is_empty());
+    let from = match &token {
+        Some(_) => dial.original_caller_number.clone().unwrap_or_default(),
+        None => dial.from_number.clone(),
+    };
+    let create = |from: String, token: Option<String>| {
+        tokio::spawn(twilio_create_call(host.clone(), dial.clone(), from, twiml.clone(), token))
+    };
+    let mut guard =
+        CancelOnDrop { host: host.clone(), dial: dial.clone(), call: Some(Call::Creating(create(from, token.clone()))) };
+    let mut created = guard.created().await;
+    if let Err(DialError::Twilio { status: 400, code: Some(21210 | 21212) }) = &created
+        && token.is_some()
+    {
+        log::warn!(target: LOG, "Twilio rejected preserved caller ID; retrying with business caller ID");
+        guard.call = Some(Call::Creating(create(dial.from_number.clone(), None)));
+        created = guard.created().await;
+    }
+    created?;
+    let answered = lk_agents_rtc::wait_for_track_publication(
+        room.clone(),
+        Some(HUMAN_AGENT_IDENTITY.to_owned()),
+        Some(vec![TRACK_KIND_AUDIO]),
+        false,
+        false,
+    );
+    match ringing_timeout {
+        Some(limit) => tokio::time::timeout(limit, answered).await.map_err(|_| DialError::NoAnswer)??,
+        None => answered.await?,
+    };
+    guard.call = None;
+    Ok(())
+}
+
+/// `urllib.parse.quote(s, safe="")`.
+fn quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// `xml.sax.saxutils.quoteattr`: escaped and quoted, in single quotes when the value holds a
+/// double quote but no single one.
+fn quoteattr(s: &str) -> String {
+    let escaped = s
+        .replace('&', "&amp;")
+        .replace('>', "&gt;")
+        .replace('<', "&lt;")
+        .replace('\n', "&#10;")
+        .replace('\r', "&#13;")
+        .replace('\t', "&#9;");
+    match (escaped.contains('"'), escaped.contains('\'')) {
+        (true, true) => format!("\"{}\"", escaped.replace('"', "&quot;")),
+        (true, false) => format!("'{escaped}'"),
+        _ => format!("\"{escaped}\""),
     }
 }
 
@@ -460,41 +793,59 @@ pub fn sip_request_record(req: &SipParticipantReq) -> SipParticipantRequest {
 mod tests {
     use super::*;
 
-    fn config(sip_call_to: &str, has_sip_connection: bool) -> WarmTransferConfig {
-        WarmTransferConfig {
-            sip_call_to: Some(sip_call_to.to_owned()),
+    fn sip(sip_call_to: Option<&str>, has_sip_connection: bool, env_trunk: Option<&str>) -> Result<HostWarmTransfer, WarmTransferRefused> {
+        HostWarmTransfer::new(
+            sip_call_to.map(str::to_owned),
+            Maybe::NotGiven,
             has_sip_connection,
-            env_sip_trunk: Some("env-trunk".to_owned()),
-            ..Default::default()
-        }
+            Maybe::NotGiven,
+            None,
+            None,
+            None,
+            Maybe::NotGiven,
+            None,
+            env_trunk.map(str::to_owned),
+            String::new(),
+            None,
+        )
     }
 
     // Catches: the trunk fallback losing its middle arm (an env trunk overriding an explicit
-    // `sip_connection`).
+    // `sip_connection`), or a transfer built with nothing to dial.
     #[test]
     fn an_explicit_sip_connection_beats_the_env_trunk() {
-        let (task, _) = WarmTransferPlan::new(config("+15550100", true)).unwrap();
-        let req = task.sip_request("room-human-agent");
-        assert!(
-            req.sip_trunk_id.is_none(),
-            "the env trunk must not override an explicit sip_connection"
-        );
-        // `sip_number=... or None`.
-        assert!(req.sip_number.is_none());
-        // `dtmf=... or ""`: absent becomes empty, because that field is not optional.
-        assert_eq!(req.dtmf, "");
+        let t = sip(Some("+15550100"), true, Some("env")).unwrap();
+        assert!(matches!(t.origination, Origination::Sip { sip_trunk_id: None, .. }));
+        let t = sip(Some("+15550100"), false, Some("env")).unwrap();
+        assert!(matches!(t.origination, Origination::Sip { sip_trunk_id: Some(ref id), .. } if id == "env"));
+        assert_eq!(sip(Some("+15550100"), false, None).err(), Some(WarmTransferRefused::NoTrunk));
+        assert_eq!(sip(None, false, Some("env")).err(), Some(WarmTransferRefused::NoSipCallTo));
     }
 
-    // Catches: `target_phone_number` winning over an explicit `sip_call_to`, or its deprecation
-    // warning not reaching the host.
+    // Catches: the briefing losing the caller conversation or the persona.
     #[test]
-    fn the_deprecated_number_only_fills_a_hole_and_still_warns() {
-        let (task, warnings) = WarmTransferPlan::new(WarmTransferConfig {
-            target_phone_number: Some("+15550999".to_owned()),
-            ..config("+15550100", false)
-        })
-        .unwrap();
-        assert!(warnings.contains(&Warning::TargetPhoneNumberDeprecated));
-        assert_eq!(task.sip_request("r").sip_call_to, "+15550100", "the explicit number wins");
+    fn the_briefing_carries_the_conversation() {
+        let i = briefing(None, Some(vec![("user".into(), "my order is late".into()), ("system".into(), "x".into())]));
+        assert!(i.common.contains("Caller: my order is late\n"), "{}", i.common);
+        assert!(i.common.contains("# Identity"));
+        assert!(!i.common.contains("x\n## End"));
+    }
+
+    #[test]
+    fn twiml_attributes_are_quoted_as_saxutils() {
+        assert_eq!(quoteattr("wss://x/y?a=1&b=2"), "\"wss://x/y?a=1&amp;b=2\"");
+        assert_eq!(quoteattr("a\"b"), "'a\"b'");
+        assert_eq!(quoteattr("a\"b'c"), "\"a&quot;b'c\"");
+        assert_eq!(quote("AC12/3"), "AC12%2F3");
+    }
+
+    // Catches: a restore that re-enables a leg the caller had off before the transfer.
+    #[test]
+    fn the_io_gate_restores_what_was_there() {
+        let mut gate = IoGate::default();
+        let before = IoEnableState { audio_input: true, audio_output: false, transcription_output: true };
+        let off = gate.desired(false, before);
+        assert_eq!(off, IoEnableState { audio_input: false, audio_output: false, transcription_output: false });
+        assert_eq!(gate.desired(true, off), before);
     }
 }

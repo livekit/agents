@@ -1,10 +1,8 @@
 //! What the prebuilt workflows hand the host and read back, and the prompt constants the
 //! reference's `beta/workflows/` modules publish. The workflows are `lk-agents-voice`'s.
 
-use crate::ToolSpec;
 use crate::utils::dates::{Date, Time};
 use lk_agents_host_derive::Host;
-use serde_json::Value;
 use std::collections::HashMap;
 
 // Each task's `complete(..)` value (a frozen dataclass in the reference). `GetDtmfResult` and
@@ -258,29 +256,6 @@ pub struct WarmTransferResult {
     pub human_agent_identity: String,
 }
 
-/// A [`ToolSpec`] in the shape `@function_tool(raw_schema=..)` takes: a `RawFunctionDescription`.
-// The schema is keyed `parameters` here and `json_schema` inbound; the wrong key gives the model a
-// tool with no parameters.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit)]
-pub struct RawFunctionDescription {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-    pub ignore_on_enter: bool,
-}
-
-impl From<&ToolSpec> for RawFunctionDescription {
-    fn from(spec: &ToolSpec) -> Self {
-        RawFunctionDescription {
-            name: spec.name.clone(),
-            description: spec.description.clone(),
-            parameters: spec.json_schema.clone(),
-            ignore_on_enter: spec.flags.ignore_on_enter,
-        }
-    }
-}
-
 /// `CreateSIPParticipantRequest`'s fields as the host fills the protobuf. `sip_number` is `None`
 /// when empty and `dtmf` `""` when absent, as in the reference.
 #[derive(Debug, Clone, PartialEq, Host)]
@@ -297,8 +272,8 @@ pub struct SipParticipantRequest {
     pub ringing_timeout: Option<f64>,
 }
 
-/// The five enable flags `WarmTransferTask._set_io_enabled` toggles, read and restored. Absent or
-/// `None` reads as `true`.
+/// The caller session's io legs the warm transfer turns off while the caller is on hold, read
+/// and restored. Absent or `None` reads as `true`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
 #[binding(extract, emit, from_items)]
 pub struct IoEnableState {
@@ -308,22 +283,28 @@ pub struct IoEnableState {
     pub audio_output: bool,
     #[binding(default = true)]
     pub transcription_output: bool,
-    #[binding(default = true)]
-    pub video_input: bool,
-    #[binding(default = true)]
-    pub video_output: bool,
 }
 
 impl Default for IoEnableState {
     fn default() -> Self {
-        IoEnableState {
-            audio_input: true,
-            audio_output: true,
-            transcription_output: true,
-            video_input: true,
-            video_output: true,
-        }
+        IoEnableState { audio_input: true, audio_output: true, transcription_output: true }
     }
+}
+
+/// How `TwilioConnectorWarmTransfer` reaches the human agent: Twilio's Calls API, streaming into
+/// the LiveKit Twilio connector. `call_token` (with `original_caller_number`) places the call from
+/// the caller's own number.
+#[derive(Debug, Clone, PartialEq, Eq, Host)]
+#[binding(extract, from_items)]
+pub struct TwilioDial {
+    pub phone_number: String,
+    pub from_number: String,
+    pub account_sid: String,
+    pub auth_token: String,
+    #[binding(default)]
+    pub call_token: Option<String>,
+    #[binding(default)]
+    pub original_caller_number: Option<String>,
 }
 
 // A workflow's collected value reaches the host (`CoreObject`) as its class, over a clone.

@@ -120,32 +120,27 @@ pub enum InstructionsArg {
     Fixed(Instructions),
 }
 
-/// Both a fixed `Instructions` and a `WorkflowInstructions` given; `Display` is the `ValueError` text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "pass either `instructions` (a fixed Instructions) or `sections` (a WorkflowInstructions' \
-     persona/extra), never both"
-)]
-pub struct BothInstructionForms;
+/// The `instructions` argument as the host passes it: a `WorkflowInstructions` (it carries
+/// `persona` and `extra`) fills the built-in template, anything else is fixed instructions.
+#[cfg(feature = "python")]
+impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for InstructionsArg {
+    type Error = pyo3::PyErr;
 
-impl InstructionsArg {
-    /// The parameter as the host classified it (`fixed` or `sections`, both `None` for
-    /// `NOT_GIVEN`). A persona is kept `Modal` so an `Instructions(audio=.., text=..)` survives.
-    pub fn from_host(
-        fixed: Option<Instructions>,
-        sections: Option<(Option<Instructions>, Option<Instructions>)>,
-    ) -> Result<Option<InstructionsArg>, BothInstructionForms> {
-        match (fixed, sections) {
-            (Some(_), Some(_)) => Err(BothInstructionForms),
-            (Some(i), None) => Ok(Some(InstructionsArg::Fixed(i))),
-            (None, Some((persona, extra))) => {
-                Ok(Some(InstructionsArg::Workflow(WorkflowInstructions {
-                    persona: persona.map(TemplateValue::Modal),
-                    extra: extra.map(TemplateValue::Modal),
-                })))
-            }
-            (None, None) => Ok(None),
+    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
+        use lk_agents_abi::python::MaybeNull;
+        use pyo3::types::PyAnyMethods as _;
+        if obj.hasattr("persona")? && obj.hasattr("extra")? {
+            let persona: MaybeNull<Instructions> = obj.getattr("persona")?.extract()?;
+            let extra: Instructions = obj.getattr("extra")?.extract()?;
+            return Ok(InstructionsArg::Workflow(WorkflowInstructions {
+                persona: match persona {
+                    MaybeNull::Given(persona) => Some(TemplateValue::Modal(persona)),
+                    MaybeNull::NotGiven | MaybeNull::Null => None,
+                },
+                extra: Some(TemplateValue::Modal(extra)),
+            }));
         }
+        Ok(InstructionsArg::Fixed(obj.extract()?))
     }
 }
 
@@ -177,48 +172,4 @@ pub fn render_checked(template: &str, data: &[(&str, &str)]) -> Rendered {
     let obj: Map<String, Value> =
         map.into_iter().map(|(k, v)| (k.to_owned(), Value::String(v.to_owned()))).collect();
     safe_render(template, &Value::Object(obj))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Catches: `instructions=` and `sections=` both being accepted.
-    #[test]
-    fn a_fixed_instruction_and_a_section_override_cannot_both_be_given() {
-        let err = InstructionsArg::from_host(Some(Instructions::plain("x")), Some((None, None)))
-            .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "pass either `instructions` (a fixed Instructions) or `sections` (a WorkflowInstructions' persona/extra), never both"
-        );
-
-        let fixed =
-            InstructionsArg::from_host(Some(Instructions::plain("verbatim")), None).unwrap();
-        assert!(matches!(fixed, Some(InstructionsArg::Fixed(_))));
-
-        let sections =
-            InstructionsArg::from_host(None, Some((Some(Instructions::plain("me")), None)))
-                .unwrap();
-        assert!(matches!(sections, Some(InstructionsArg::Workflow(_))));
-
-        assert!(
-            InstructionsArg::from_host(None, None).unwrap().is_none(),
-            "NOT_GIVEN stays absent"
-        );
-    }
-
-    // Catches: a persona crossing as `TemplateValue::Plain` (same text in both variants).
-    #[test]
-    fn a_modal_persona_reaches_both_variants_separately() {
-        let persona = Instructions {
-            common: String::new(),
-            audio: Some("spoken".into()),
-            text: Some("typed".into()),
-        };
-        let arg = InstructionsArg::from_host(None, Some((Some(persona.clone()), None))).unwrap();
-        let Some(InstructionsArg::Workflow(w)) = arg else { panic!("expected the workflow arm") };
-        assert_eq!(w.persona, Some(TemplateValue::Modal(persona)));
-        assert_eq!(w.extra, None);
-    }
 }

@@ -208,6 +208,8 @@ async def receive_dtmf(
     timeout: float,
     stop_event: str,
 ) -> GetDtmfResult: ...
+WARM_TRANSFER_IDENTITY: str
+TWILIO_RINGING_TIMEOUT: float
 def end_call_wait(realtime: bool, auto_reply: bool) -> float | None: ...
 DTMF_PUBLISH_DELAY: float
 def dtmf_result(events: list[str], failure: tuple[str, str] | None) -> str: ...
@@ -657,38 +659,28 @@ class GetDtmfResult:
     def from_dtmf_inputs(events: list[str]) -> GetDtmfResult: ...
 
 
-class WarmTransferPlan:
+class WarmTransfer:
     def __init__(
         self,
         *,
         sip_call_to: str | None = None,
-        sip_trunk_id: str | None = None,
-        sip_trunk_id_given: bool = False,
+        sip_trunk_id: NotGivenOr[str | None] = ...,
         has_sip_connection: bool = False,
-        sip_number: str | None = None,
+        sip_number: NotGivenOr[str] = ...,
         sip_headers: dict[str, str] | None = None,
         dtmf: str | None = None,
         ringing_timeout: float | None = None,
-        instructions: Any | None = None,
-        sections: tuple[Any | None, Any | None] | None = None,
-        extra_instructions: str = ...,
+        instructions: NotGivenOr[Any] = ...,
         conversation: list[tuple[str, str]] | None = None,
-        target_phone_number: str | None = None,
         env_sip_trunk: str | None = None,
         env_sip_number: str = ...,
-        tools: list[Any] | None = None,
+        twilio: Any | None = None,
     ) -> None: ...
     @property
     def instructions(self) -> tuple[str, str | None, str | None]: ...
-    @property
-    def warnings(self) -> list[str]: ...
-    def tools(self) -> list[dict[str, Any]]: ...
-    @staticmethod
-    def human_agent_room(caller_room: str) -> str: ...
-    @staticmethod
-    def human_agent_identity() -> str: ...
-    def sip_request(self, human_agent_room: str) -> dict[str, Any]: ...
-    def io_enabled(self, enabled: bool, current: Any) -> dict[str, Any]: ...
+    def tools(self) -> list[Any]: ...
+    async def run(self, host: Any, caller: Any) -> str: ...
+    async def call_tool(self, name: str, arguments: Any) -> None: ...
 
 
 class GetDOBResult:

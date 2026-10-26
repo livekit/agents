@@ -1223,6 +1223,133 @@ async def workflows() -> None:
         raise AssertionError("a short sequence completed")
 
 
+class _FakeTransferHost:
+    """The SDK side of a warm transfer, over fake rooms: records what the core asked for."""
+
+    def __init__(self, human: _core.FakeRoom, http: list[tuple[int, str]] | None = None) -> None:
+        self.human = human
+        self.http = http or []
+        self.calls: list[str] = []
+        self.io = {"audio_input": True, "audio_output": False, "transcription_output": True}
+
+    async def _core_start_hold(self) -> object:
+        self.calls.append("hold")
+        return "hold-handle"
+
+    def _core_stop_hold(self, hold: object) -> None:
+        self.calls.append(f"stop {hold}")
+
+    def _core_io_state(self) -> dict[str, bool]:
+        return dict(self.io)
+
+    def _core_set_io(self, state: dict[str, bool]) -> None:
+        self.io = state
+        self.calls.append(f"io {sorted(k for k, v in state.items() if v)}")
+
+    async def _core_connect_human(self, room_name: str, identity: str) -> _core.FakeRoom:
+        self.calls.append(f"connect {room_name} as {identity}")
+        return self.human
+
+    async def _core_start_human(self) -> None:
+        self.calls.append("start human")
+
+    def _core_close_human(self, drain: bool) -> None:
+        self.calls.append(f"close human drain={drain}")
+
+    async def _core_disconnect_human(self) -> None:
+        self.calls.append("disconnect human")
+
+    async def _core_create_sip_participant(self, request: dict[str, Any]) -> None:
+        self.calls.append(f"sip {request['sip_call_to']} trunk={request['sip_trunk_id']}")
+
+    async def _core_connect_twilio_call(self, room_name: str, identity: str) -> str:
+        return "wss://connector/stream?a=1&b=2"
+
+    async def _core_http_post(
+        self, url: str, headers: dict[str, str], form: list[tuple[str, str]]
+    ) -> tuple[int, str]:
+        fields = dict(form)
+        self.calls.append(f"post {url.rsplit('/', 1)[-1]} from={fields.get('From')}")
+        assert headers["Authorization"].startswith("Basic "), headers
+        assert fields.get("Twiml", "").count("&amp;") in (0, 1), fields
+        return self.http.pop(0)
+
+    async def _core_move_participant(self, room: str, identity: str, destination: str) -> None:
+        self.calls.append(f"move {identity} {room} -> {destination}")
+
+    async def _core_delete_caller_room(self) -> None:
+        self.calls.append("delete caller room")
+
+
+async def warm_transfer() -> None:
+    """The warm transfer the core runs over a host: dialled over SIP and connected (the caller
+    leaving then deletes their room), declined, and dialled through Twilio, whose rejected caller
+    ID is retried from the business number before the human agent's audio answers."""
+    from livekit.agents.beta import workflows as wf
+    from livekit.agents.llm import ChatContext, ToolError
+
+    print("== warm transfer")
+    history = ChatContext()
+    history.add_message(role="user", content="my order is late")
+    transfer = wf.WarmTransfer("+15550100", sip_trunk_id="ST_smoke", chat_ctx=history)
+    instructions = transfer._agent.instructions
+    assert "Caller: my order is late" in str(getattr(instructions, "common", instructions))
+    assert [t.id for t in transfer._agent.tools] == [
+        "connect_to_caller",
+        "decline_transfer",
+        "voicemail_detected",
+    ], transfer._agent.tools
+
+    caller = _core.FakeRoom(name="caller")
+    caller.join("user")
+    host = _FakeTransferHost(_core.FakeRoom(name="caller-human-agent"))
+    running = asyncio.ensure_future(transfer._transfer.run(host, caller))
+    await asyncio.sleep(0.05)
+    await transfer._transfer.call_tool("connect_to_caller", {})
+    identity = await running
+    caller.leave("user")
+    await asyncio.sleep(0.05)
+    print(f"connected {identity}: {host.calls}")
+    assert identity == "human-agent-sip"
+    assert host.calls[:5] == [
+        "hold",
+        "io []",
+        "connect caller-human-agent as agent",
+        "start human",
+        "sip +15550100 trunk=ST_smoke",
+    ], host.calls
+    assert host.calls[-1] == "delete caller room", host.calls
+    assert "io ['audio_input', 'transcription_output']" in host.calls, "the io comes back as was"
+
+    host = _FakeTransferHost(_core.FakeRoom(name="caller-human-agent"))
+    running = asyncio.ensure_future(transfer._transfer.run(host, caller))
+    await asyncio.sleep(0.05)
+    await transfer._transfer.call_tool("decline_transfer", {"reason": "busy"})
+    with contextlib.suppress(ToolError):
+        await running
+        raise AssertionError("a declined transfer connected")
+    assert "close human drain=True" in host.calls, host.calls
+
+    twilio = wf.TwilioConnectorWarmTransfer(
+        "+15550111",
+        twilio_from_number="+15550122",
+        twilio_account_sid="AC_smoke",
+        twilio_auth_token="token",
+        twilio_call_token="CT_smoke",
+        original_caller_number="+15550133",
+    )
+    human = _core.FakeRoom(name="caller-human-agent")
+    host = _FakeTransferHost(human, http=[(400, '{"code": 21210}'), (201, '{"sid": "CA_smoke"}')])
+    running = asyncio.ensure_future(twilio._transfer.run(host, caller))
+    await asyncio.sleep(0.05)
+    human.join("human-agent-sip")
+    await asyncio.sleep(0.05)
+    await twilio._transfer.call_tool("connect_to_caller", {})
+    print(f"twilio {await running}: {host.calls}")
+    posts = [c for c in host.calls if c.startswith("post")]
+    assert posts == ["post Calls.json from=+15550133", "post Calls.json from=+15550122"], posts
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -1375,6 +1502,7 @@ async def main() -> int:
     await console()
     await job()
     await workflows()
+    await warm_transfer()
     log_transport()
     return 0
 

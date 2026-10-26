@@ -441,43 +441,32 @@ impl GetDtmfResult {
     }
 }
 
-#[napi(js_name = "WarmTransferPlan")]
-pub struct WarmTransferPlan {
-    pub(crate) inner: lk_agents_voice::workflows::warm_transfer::HostWarmTransfer,
+#[napi(js_name = "WarmTransfer")]
+pub struct WarmTransfer {
+    pub(crate) inner: std::sync::Arc<lk_agents_voice::workflows::warm_transfer::HostWarmTransfer>,
 }
 
 #[napi]
-impl WarmTransferPlan {
+impl WarmTransfer {
     #[napi(getter, js_name = "instructions")]
     pub fn instructions(&self) -> (String, Option<String>, Option<String>) {
         self.inner.instructions()
     }
 
-    #[napi(getter, js_name = "warnings")]
-    pub fn warnings(&self) -> Vec<String> {
-        self.inner.warnings()
+    #[napi(js_name = "tools")]
+    pub fn tools(&self) -> Vec<serde_json::Value> {
+        self.inner.tools()
     }
 
-    #[napi(js_name = "humanAgentRoom")]
-    pub fn human_agent_room(caller_room: String) -> String {
-        lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::human_agent_room(&caller_room)
-    }
-
-    #[napi(js_name = "humanAgentIdentity")]
-    pub fn human_agent_identity() -> String {
-        lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::human_agent_identity()
-    }
-
-    #[napi(js_name = "sipRequest")]
-    pub fn sip_request(&self, human_agent_room: String) -> crate::generated::records::SipParticipantRequest {
-        crate::generated::records::SipParticipantRequest::from(&self.inner.sip_request(&human_agent_room))
-    }
-
-    #[napi(js_name = "ioEnabled")]
-    pub fn io_enabled(&mut self, env: Env, enabled: bool, current: crate::generated::records::IoEnableState) -> napi::Result<crate::generated::records::IoEnableState> {
-        crate::host_error::run(&env, || {
-            let current = current.try_into()?;
-            Ok(crate::generated::records::IoEnableState::from(&self.inner.io_enabled(enabled, current)))
+    #[napi(js_name = "callTool", ts_return_type = "Promise<void>")]
+    pub fn call_tool<'env>(&self, env: &'env Env, name: String, arguments: serde_json::Value) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+        let (name, arguments,) = crate::host_error::run(env, || {
+            Ok((name, arguments,))
+        })?;
+        let inner = std::sync::Arc::clone(&self.inner);
+        env.spawn_future_with_callback(async move { Ok(inner.call_tool(name, arguments).await.map_err(crate::generated::errors::transfer_failed_to_node)) }, |env, out| match out {
+            Ok(out) => Ok(()),
+            Err(e) => Err(e.into_napi(env)),
         })
     }
 }

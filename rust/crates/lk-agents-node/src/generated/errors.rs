@@ -33,6 +33,18 @@ pub fn speech_refused_to_node(e: lk_agents_voice::speech_handle::SpeechRefused) 
     JsError::new("RuntimeError", e.to_string())
 }
 
+/// `TransferFailed` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs`).
+#[allow(unreachable_patterns)]
+pub fn transfer_failed_to_node(e: lk_agents_voice::workflows::warm_transfer::TransferFailed) -> JsError {
+    let kind = match &e {
+        lk_agents_voice::workflows::warm_transfer::TransferFailed::NotRunning => "RuntimeError",
+        lk_agents_voice::workflows::warm_transfer::TransferFailed::UnknownTool(..) => "ValueError",
+        lk_agents_voice::workflows::warm_transfer::TransferFailed::Host(inner) => "=HostError",
+        _ => "livekit.agents.llm.tool_context.ToolError",
+    };
+    JsError::new(kind, e.to_string())
+}
+
 /// `OpenRefused` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/agent_session/api.rs`).
 pub fn open_refused_to_node(e: lk_agents_voice::agent_session::OpenRefused) -> JsError {
     JsError::new("RuntimeError", e.to_string())

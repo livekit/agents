@@ -18,6 +18,8 @@ lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 # BlingFire supplies sentence boundaries for the TTS leg's batching.
 lk-agents-media = { path = "../lk-agents-media", features = ["blingfire"] }
 async-trait.workspace = true
+# Twilio's basic auth (`workflows::warm_transfer`).
+base64.workspace = true
 log.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

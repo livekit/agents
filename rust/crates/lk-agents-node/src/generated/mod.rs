@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 268 core items bound (118 functions and consts, 74 classes, 75 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 268 core items bound (120 functions and consts, 74 classes, 73 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -42,8 +42,8 @@
 //! - `lk_agents_voice::speech_handle::SpeechHandle::interrupt_for_host`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)
 //! - `lk_agents_voice::workflows::dtmf::DtmfResult::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::workflows::dtmf::DtmfResult::from_dtmf_inputs`: return: `Self` outside a constructor
-//! - `lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::new`: parameter `instructions`: `Instructions` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::tools`: no core path: the IR names none (give the declaration #[node(from = "..")] or a binding target)
+//! - `lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::new`: parameter `instructions`: `InstructionsArg` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::run`: parameter `host`: not yet: `Arc<dyn TransferHost>` (a host object behind a proxy)
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::for_host`: parameter `date_of_birth`: `Date` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_date_of_birth`: return: `Date` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_time_of_birth`: return: `Time` is not a #[derive(Host)] type or a #[host(wire_enum)]
@@ -151,6 +151,7 @@
 //! - `lk_agents_voice::background_audio::FrameStream`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::background_audio::RandomDraw`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::tool_executor::HostToolRunner`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::workflows::warm_transfer::TransferHost`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::SessionEvents`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::SessionJob`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::SessionHooks`: not yet: a bare proxy (every method calls `_core_<method>`)

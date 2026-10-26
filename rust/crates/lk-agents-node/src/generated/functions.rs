@@ -294,6 +294,20 @@ pub fn format_dtmf(env: Env, symbols: Vec<String>) -> napi::Result<String> {
     })
 }
 
+/// The SIP participant's identity, the second session's `participant_identity`, and what
+/// `move_participant` names.
+#[napi(js_name = "WARM_TRANSFER_IDENTITY")]
+pub fn WARM_TRANSFER_IDENTITY() -> String {
+    lk_agents_voice::workflows::warm_transfer::HUMAN_AGENT_IDENTITY.to_string()
+}
+
+/// Twilio reports no-answer and failure only through status webhooks, which nothing here reads,
+/// so an unanswered call is given up after this long unless `ringing_timeout` says otherwise.
+#[napi(js_name = "TWILIO_RINGING_TIMEOUT")]
+pub fn TWILIO_RINGING_TIMEOUT() -> f64 {
+    lk_agents_voice::workflows::warm_transfer::TWILIO_RINGING_TIMEOUT
+}
+
 #[napi(js_name = "endCallWait")]
 pub fn end_call_wait(realtime: bool, auto_reply: bool) -> Option<f64> {
     lk_agents_abi::voice::host_policy::end_call_wait(realtime, auto_reply)
