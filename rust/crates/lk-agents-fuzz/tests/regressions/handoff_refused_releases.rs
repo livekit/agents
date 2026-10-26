@@ -10,7 +10,7 @@ use lk_agents_fuzz::input::{AgentText, Input};
 fn a_handoff_refused_after_the_end_releases_its_providers() {
     let setup = Setup {
         stt: true,
-        nodes: Some(NodeSetup { llm: true, tts: true, stt: true }),
+        nodes: Some(NodeSetup { llm: true, tts: true, stt: true, llm_text: None }),
         ..Setup::default()
     };
     let inputs = vec![

@@ -116,7 +116,11 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     // `session.input.video` does: a seed that draws the room's has none of its own.
     setup.room_camera = setup.room_legs.is_some() && rng.u8(0..100) < 40;
     setup.video &= !setup.room_camera;
-    setup.nodes = (rng.u8(0..100) < 30)
-        .then(|| NodeSetup { llm: rng.bool(), tts: rng.bool(), stt: rng.bool() });
+    setup.nodes = (rng.u8(0..100) < 30).then(|| NodeSetup {
+        llm: rng.bool(),
+        tts: rng.bool(),
+        stt: rng.bool(),
+        llm_text: None,
+    });
     setup
 }

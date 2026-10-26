@@ -236,6 +236,8 @@ pub struct NodeSetup {
     pub llm: bool,
     pub tts: bool,
     pub stt: bool,
+    /// The `llm_node` answers this text itself (a node returning a `str`), never calling the model.
+    pub llm_text: Option<&'static str>,
 }
 
 /// Keyterm detection as `KeytermDetectionOptions` sets it up, and whether the session's

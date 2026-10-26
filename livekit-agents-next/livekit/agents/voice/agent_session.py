@@ -1136,9 +1136,19 @@ class _Flush:
     flush: bool = True
 
 
-def _chat_chunk(item: llm.ChatChunk | str | FlushSentinel) -> llm.ChatChunk | _Flush:
+@dataclass(frozen=True)
+class _NodeText:
+    """Text the node answered itself, as the core reads a chunk: spoken, not a model call."""
+
+    id: str
+    delta: llm.ChoiceDelta
+    usage: None = None
+    node_text: bool = True
+
+
+def _chat_chunk(item: llm.ChatChunk | str | FlushSentinel) -> llm.ChatChunk | _Flush | _NodeText:
     if isinstance(item, str):
-        return llm.ChatChunk(
+        return _NodeText(
             id=shortuuid("chunk_"), delta=llm.ChoiceDelta(role="assistant", content=item)
         )
     if isinstance(item, FlushSentinel):

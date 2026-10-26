@@ -600,7 +600,8 @@ pub(super) fn nodes(
     let Some(on) = setup.nodes else { return (None, None, None) };
     let node = |wanted: bool, present: bool| {
         (wanted && present).then(|| {
-            fakes::FakeNodes::new(llm.clone(), tts.clone(), stt.clone()) as Arc<dyn NodeFactory>
+            fakes::FakeNodes::new(llm.clone(), tts.clone(), stt.clone(), on.llm_text)
+                as Arc<dyn NodeFactory>
         })
     };
     (node(on.llm, llm.is_some()), node(on.tts, tts.is_some()), node(on.stt, stt.is_some()))

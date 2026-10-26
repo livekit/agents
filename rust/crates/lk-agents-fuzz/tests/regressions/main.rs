@@ -70,6 +70,7 @@ mod vad_left_speaking;
 mod wordless_audio_say;
 mod late_mic_released;
 mod llm_tokens_per_second;
+mod node_text_not_metered;
 mod amd_consumes_turns;
 mod amd_releasing_turn_no_reply;
 mod amd_tap_opened_late;

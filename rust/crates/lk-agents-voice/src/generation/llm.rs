@@ -229,6 +229,7 @@ async fn read_llm_stream(
         if let Some(usage) = &chunk.usage {
             completion_tokens = Some(usage.completion_tokens);
         }
+        data.called |= !chunk.node_text;
         // After the calls are minted: their stamps come first.
         data.metrics.observe(&chunk, || shared.time.wall_secs());
         // `FlushSentinel` after the same chunk's content, which belongs to the closing segment.
@@ -253,17 +254,27 @@ pub(super) struct LlmGenerationData {
     pub(super) tps: Option<f64>,
     pub(super) started_at: f64,
     pub(super) metrics: LlmMetricState,
+    /// A model chunk came, not only an `llm_node`'s own text: there was a model call to meter.
+    called: bool,
 }
 
 impl LlmGenerationData {
     /// No time-to-first-token and no rate: `0.0` would skew averages.
     fn new(shared: &SessionShared) -> Self {
         let started_at = shared.time.wall_secs();
-        LlmGenerationData { tps: None, started_at, metrics: LlmMetricState::for_host(started_at) }
+        LlmGenerationData {
+            tps: None,
+            started_at,
+            metrics: LlmMetricState::for_host(started_at),
+            called: false,
+        }
     }
 
-    /// One `LLMMetrics` per request that ended cleanly having yielded a chunk.
+    /// One `LLMMetrics` per request that ended cleanly having yielded a model chunk.
     fn report(&self, shared: &SessionShared, llm: &dyn lk_agents_abi::Llm, handle: &SpeechHandle) {
+        if !self.called {
+            return;
+        }
         let stamp = || {
             let (id, now) = (llm.id(), shared.time.wall_secs());
             let context = Context {

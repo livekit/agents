@@ -304,7 +304,7 @@ mod tests {
     }
 
     fn chunk(id: &str, delta: Option<ChoiceDelta>) -> LlmChunk {
-        LlmChunk { id: id.into(), delta, usage: None, flush: false }
+        LlmChunk { id: id.into(), delta, ..LlmChunk::default() }
     }
 
     // Catches: an empty chunk id keeping the previous one, or ttft waiting for text past a tool

@@ -2012,6 +2012,9 @@ pub struct LlmChunk {
     pub usage: Option<crate::generated::records::CompletionUsage>,
     /// `FlushSentinel`: finish the current TTS segment at this point in the stream.
     pub flush: bool,
+    /// Text an `Agent.llm_node` answered itself (a `str`), not a model's: spoken, never metered as
+    /// a model call (the reference meters the `LLMStream`, and such a node opened none).
+    pub node_text: bool,
 }
 
 impl From<&lk_agents_abi::LlmChunk> for LlmChunk {
@@ -2021,6 +2024,7 @@ impl From<&lk_agents_abi::LlmChunk> for LlmChunk {
             delta: v.delta.as_ref().map(|v| crate::generated::records::ChoiceDelta::from(v)),
             usage: v.usage.as_ref().map(|v| crate::generated::records::CompletionUsage::from(v)),
             flush: v.flush,
+            node_text: v.node_text,
         }
     }
 }
@@ -2034,6 +2038,7 @@ impl TryFrom<LlmChunk> for lk_agents_abi::LlmChunk {
             delta: v.delta.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
             usage: v.usage.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
             flush: v.flush,
+            node_text: v.node_text,
         })
     }
 }

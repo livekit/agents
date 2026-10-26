@@ -131,6 +131,11 @@ pub struct LlmChunk {
     #[binding(skip, default)]
     #[python(skip)]
     pub flush: bool,
+    /// Text an `Agent.llm_node` answered itself (a `str`), not a model's: spoken, never metered as
+    /// a model call (the reference meters the `LLMStream`, and such a node opened none).
+    #[binding(skip, default)]
+    #[python(skip)]
+    pub node_text: bool,
 }
 
 /// `ChatChunk`'s host model asks whether a chunk delivered visible generation.

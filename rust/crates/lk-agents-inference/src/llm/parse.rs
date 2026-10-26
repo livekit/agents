@@ -206,8 +206,7 @@ impl ChoiceAccumulator {
                 tool_calls: Vec::new(),
                 extra: delta.extra_content.clone(),
             }),
-            usage: None,
-            flush: false,
+            ..Default::default()
         })
     }
 
@@ -259,7 +258,7 @@ pub fn usage_chunk(chunk: &WireChunk) -> Option<LlmChunk> {
             total_tokens: usage.total_tokens.unwrap_or(0),
             service_tier: chunk.service_tier.clone(),
         }),
-        flush: false,
+        ..Default::default()
     })
 }
 
