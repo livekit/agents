@@ -560,6 +560,7 @@ class GPTLiveSession(
                     raise error from None
                 reconnecting = True
         finally:
+            self._end_speech("user")
             self._audio_ch.close()
 
     def _reset_for_reconnect(self) -> None:

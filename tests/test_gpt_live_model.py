@@ -1544,6 +1544,32 @@ async def test_a_pause_on_the_models_clock_splits_fragments_that_arrive_together
         await model.aclose()
 
 
+async def test_closing_the_session_ends_the_callers_open_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller's last words reach the transcript even when the call ends before their turn."""
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_transcript("user", " Goodbye", 1000))
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+    assert [name for name, _ in events[-2:]] == [
+        "input_audio_transcription_completed",
+        "input_speech_stopped",
+    ]
+    final = events[-2][1]
+    assert isinstance(final, llm.InputTranscriptionCompleted)
+    assert (final.transcript, final.is_final) == (" Goodbye", True)
+
+
 @pytest.mark.parametrize("delegation", ["responses", "client"])
 async def test_a_typed_message_rides_in_the_ask_while_it_is_the_newest_thing_said(
     monkeypatch: pytest.MonkeyPatch, delegation: str
