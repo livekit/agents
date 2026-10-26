@@ -125,6 +125,8 @@ class FallbackLLMStream(LLMStream):
     def __init__(self, llm: FallbackAdapter, *, request: dict[str, Any], **kwargs: Any) -> None:
         super().__init__(llm, **kwargs)
         self._request = request
+        # a failure after output reaches the caller as final unless asked otherwise
+        self._retry_on_chunk_sent = llm._opts["retry_on_chunk_sent"]
 
     async def _run(self) -> None:
         from .._core_view import tool_specs
