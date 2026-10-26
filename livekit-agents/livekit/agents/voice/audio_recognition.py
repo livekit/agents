@@ -324,6 +324,9 @@ class AudioRecognition:
         self._final_transcript_confidence: list[float] = []
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        # set when a MultiSpeakerAdapter attributed the buffered interim to the
+        # primary speaker: a suppressed background segment cannot own that text
+        self._audio_interim_from_primary = False
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
         self._audio_preflight_transcript = ""
         self._last_language: LanguageCode | None = None
@@ -1054,6 +1057,7 @@ class AudioRecognition:
         self._stt_flush_requested = False
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        self._audio_interim_from_primary = False
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
         self._last_final_transcript_time = None
@@ -1147,6 +1151,7 @@ class AudioRecognition:
 
             transcript = self._audio_transcript
             self._audio_interim_transcript = ""
+            self._audio_interim_from_primary = False
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
                 chat_ctx,
@@ -1282,8 +1287,18 @@ class AudioRecognition:
                 # The transport cannot carry a wire-level clear, so drop the
                 # buffered text here: it must not stay in _current_transcript
                 # (min_words) or be appended by commit_user_turn.
-                self._audio_interim_transcript = ""
-                self._audio_preflight_transcript = ""
+                #
+                # The empty final does not identify a segment, so only drop
+                # interim text that can belong to the suppressed speaker. An
+                # interim the adapter attributed to the primary speaker is a
+                # different segment's in-progress words and must survive for
+                # commit_user_turn.
+                if not self._audio_interim_from_primary:
+                    self._audio_interim_transcript = ""
+                    self._audio_preflight_transcript = ""
+                # the suppressed segment still finalized in the wrapped STT, so
+                # the manual-commit freshness check must treat this as a final
+                self._last_final_transcript_time = time.time()
                 return
 
             self._hooks.on_final_transcript(
@@ -1309,6 +1324,7 @@ class AudioRecognition:
             self._final_transcript_confidence.append(confidence)
             transcript_changed = self._audio_transcript != self._audio_preflight_transcript
             self._audio_interim_transcript = ""
+            self._audio_interim_from_primary = False
             self._audio_preflight_transcript = ""
 
             if use_stt_speaking_time:
@@ -1365,6 +1381,7 @@ class AudioRecognition:
             # preflight transcript includes all pre-committed transcripts (including final transcript from the previous STT run)
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
+            self._audio_interim_from_primary = ev.alternatives[0].is_primary_speaker is True
 
             if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
@@ -1387,6 +1404,7 @@ class AudioRecognition:
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
+            self._audio_interim_from_primary = ev.alternatives[0].is_primary_speaker is True
 
             if self._audio_preflight_transcript and self._audio_interim_transcript:
                 # the user kept talking after the preflight (e.g. Deepgram Flux TurnResumed)
