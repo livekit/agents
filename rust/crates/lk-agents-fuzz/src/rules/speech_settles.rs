@@ -5,10 +5,12 @@
 //! going until nothing new appears. At that instant the driver waits on nobody but itself, so a
 //! speech created before it and not yet done was waiting on nothing: it was stuck, and only the
 //! close will end it.
+use lk_agents_voice::trace::{Step, TurnStep};
+
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
-    record::{Handle, Recording, SpeechView},
+    record::{Handle, Observed, Recording, SpeechView},
 };
 
 pub struct SpeechSettles;
@@ -31,10 +33,23 @@ impl Rule for SpeechSettles {
             if speech.created_at().is_some_and(|created| created > answered) {
                 continue;
             }
+            // A preemptive reply parked for a turn that never ended waits on the person's final
+            // words, which the case never sent: the reference parks it the same way.
+            if speech.is_speculative() && !speech.is_scheduled() && !turn_ended(r, &speech, answered) {
+                continue;
+            }
             let done = speech.done_at().is_some_and(|done| done <= answered);
             check.expect(&speech, done, format!("still running after everything was answered ({speech:?})"));
         }
     }
+}
+
+/// A turn ended after the speech was created and before everything was answered.
+fn turn_ended(r: &Recording, speech: &SpeechView, answered: Observed) -> bool {
+    let Some(created) = speech.created_at() else { return false };
+    r.internal_view().steps().iter().any(|(at, step)| {
+        *at > created && *at <= answered && matches!(step, Step::Turn(TurnStep::EndOfTurn { .. }))
+    })
 }
 
 /// The speech finished, then the test had answered everything.

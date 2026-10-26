@@ -29,6 +29,7 @@ mod mic_replaced_with_frames;
 mod model_failure_reported;
 mod path_needs_both_switches;
 mod pause_outlives_its_speech;
+mod preemptive_parked;
 mod realtime_items_filled;
 mod realtime_transcript_forwarded;
 mod recogniser_failed_speaking;
