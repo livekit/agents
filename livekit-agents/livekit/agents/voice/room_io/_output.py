@@ -23,6 +23,7 @@ from ...tts._provider_format import (
 from ...types import (
     ATTRIBUTE_PUBLISH_ON_BEHALF,
     ATTRIBUTE_TRANSCRIPTION_FINAL,
+    ATTRIBUTE_TRANSCRIPTION_LANGUAGE,
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
     CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS,
@@ -398,6 +399,8 @@ class _ParticipantLegacyTranscriptionOutput:
 
         # identity of the participant that on behalf of the current participant
         self._represented_by: str | None = None
+        # stamped on each segment, so a track carrying more than one language tells them apart
+        self._language = ""
 
         self._room.on("track_published", self._on_track_published)
         self._room.on("local_track_published", self._on_local_track_published)
@@ -411,9 +414,12 @@ class _ParticipantLegacyTranscriptionOutput:
         self,
         participant: rtc.Participant | str | None,
     ) -> None:
-        self._participant_identity = (
-            participant.identity if isinstance(participant, rtc.Participant) else participant
-        )
+        identity = participant.identity if isinstance(participant, rtc.Participant) else participant
+        if identity != self._participant_identity:
+            # closed under the identity that carried it, including when the link is cleared
+            self.flush()
+
+        self._participant_identity = identity
         self._represented_by = self._participant_identity
         if self._participant_identity is None:
             return
@@ -458,6 +464,17 @@ class _ParticipantLegacyTranscriptionOutput:
         self.flush()
         self._track_id = track_sid
         self._reset_state()
+
+    def set_attributes(self, attributes: dict[str, str]) -> None:
+        """Take the language from the attributes; a transcription carries no others."""
+        language = attributes.get(ATTRIBUTE_TRANSCRIPTION_LANGUAGE, "")
+        if language == self._language:
+            return
+
+        if self._is_delta_stream:
+            # a segment is in one language, so a change closes the one open under the old
+            self.flush()
+        self._language = language
 
     def _reset_state(self) -> None:
         self._current_id = utils.shortuuid("SG_")
@@ -504,6 +521,7 @@ class _ParticipantLegacyTranscriptionOutput:
                 participant_identity=self._participant_identity,
                 track_id=self._track_id,
                 represented_by=self._represented_by,
+                language=self._language,
             )
         )
         self._reset_state()
@@ -539,13 +557,15 @@ class _ParticipantLegacyTranscriptionOutput:
         participant_identity: str | None = None,
         track_id: str | None = None,
         represented_by: str | None = None,
+        language: str | None = None,
     ) -> None:
-        """``participant_identity``/``track_id``/``represented_by`` pin the packet to the
-        segment it closes; without them the live fields are used, which a switch mid-segment
-        has already moved on."""
+        """``participant_identity``/``track_id``/``represented_by``/``language`` pin the
+        packet to the segment it closes; without them the live fields are used, which a switch
+        mid-segment has already moved on."""
         participant_identity = participant_identity or self._participant_identity
         track_id = track_id or self._track_id
         represented_by = represented_by or self._represented_by
+        language = language if language is not None else self._language
         if participant_identity is None or track_id is None:
             return
 
@@ -567,7 +587,7 @@ class _ParticipantLegacyTranscriptionOutput:
                     start_time=0,
                     end_time=0,
                     final=final,
-                    language="",
+                    language=language,
                 )
             ],
         )
@@ -653,9 +673,12 @@ class _ParticipantStreamTranscriptionOutput:
         self,
         participant: rtc.Participant | str | None,
     ) -> None:
-        self._participant_identity = (
-            participant.identity if isinstance(participant, rtc.Participant) else participant
-        )
+        identity = participant.identity if isinstance(participant, rtc.Participant) else participant
+        if identity != self._participant_identity:
+            # closed under the identity that carried it, including when the link is cleared
+            self.flush()
+
+        self._participant_identity = identity
         if self._participant_identity is None:
             return
 
@@ -698,8 +721,19 @@ class _ParticipantStreamTranscriptionOutput:
         self._segment_tags: list[ExpressiveTag] = []
 
     def set_attributes(self, attributes: dict[str, str]) -> None:
-        """Replace the extra attributes stamped on segments opened from here on."""
-        self._additional_attributes = dict(attributes)
+        """Replace the extra attributes stamped on segments from here on.
+
+        A delta segment's header is written when it opens, so a change closes the open one
+        under its old attributes. A whole-text segment is republished on every capture and
+        simply carries the new ones.
+        """
+        attributes = dict(attributes)
+        if attributes == self._additional_attributes:
+            return
+
+        if self._is_delta_stream:
+            self.flush()
+        self._additional_attributes = attributes
 
     def _encode(self, clean_text: str, timing_src: str | None = None) -> str:
         """Wrap visible text for the wire (JSON TimedString when json_format, else raw)."""
@@ -723,6 +757,7 @@ class _ParticipantStreamTranscriptionOutput:
         attributes: dict[str, str] | None = None,
         extra: dict[str, str] | None = None,
         sender_identity: str | None = None,
+        additional_attributes: dict[str, str] | None = None,
     ) -> rtc.TextStreamWriter:
         sender_identity = sender_identity or self._participant_identity
         assert sender_identity is not None, "participant_identity is not set"
@@ -739,7 +774,9 @@ class _ParticipantStreamTranscriptionOutput:
         if extra:
             attributes.update(extra)
 
-        for key, val in self._additional_attributes.items():
+        if additional_attributes is None:
+            additional_attributes = self._additional_attributes
+        for key, val in additional_attributes.items():
             if key not in attributes:
                 attributes[key] = val
 
@@ -800,13 +837,17 @@ class _ParticipantStreamTranscriptionOutput:
         pending_text: str = "",
         track_id: str | None = None,
         sender_identity: str | None = None,
+        additional_attributes: dict[str, str] | None = None,
     ) -> None:
-        """``track_id``/``sender_identity`` belong to the segment being closed, taken when
-        the flush was scheduled rather than read now, which a switch has already moved on."""
+        """``track_id``/``sender_identity``/``additional_attributes`` belong to the segment
+        being closed, taken when the flush was scheduled rather than read now, which a switch
+        has already moved on."""
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
         if track_id:
             attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = track_id
         for key, val in (extra_attributes or {}).items():
+            attributes.setdefault(key, val)
+        for key, val in (additional_attributes or {}).items():
             attributes.setdefault(key, val)
 
         try:
@@ -818,7 +859,9 @@ class _ParticipantStreamTranscriptionOutput:
                         await writer.aclose(attributes=attributes)
                 else:
                     tmp_writer = await self._create_text_writer(
-                        attributes=attributes, sender_identity=sender_identity
+                        attributes=attributes,
+                        sender_identity=sender_identity,
+                        additional_attributes=additional_attributes,
                     )
                     await tmp_writer.write(self._latest_text)
                     await tmp_writer.aclose()
@@ -852,6 +895,7 @@ class _ParticipantStreamTranscriptionOutput:
                 pending_text,
                 track_id=self._track_id,
                 sender_identity=self._participant_identity,
+                additional_attributes=dict(self._additional_attributes),
             )
         )
 
@@ -945,13 +989,13 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             source.set_track(track_sid)
 
     def set_attributes(self, attributes: dict[str, str]) -> None:
-        """Replace the extra attributes stamped on segments opened from here on.
+        """Replace the extra attributes stamped on segments from here on.
 
-        Only text streams carry attributes; the legacy transcription has nowhere to put them.
+        A text stream carries them all; a legacy transcription only has a field for the
+        language, which it takes from ``lk.transcription_language``.
         """
         for source in self.__outputs:
-            if isinstance(source, _ParticipantStreamTranscriptionOutput):
-                source.set_attributes(attributes)
+            source.set_attributes(attributes)
 
     async def capture_text(self, text: str) -> None:
         await asyncio.gather(*[sink.capture_text(text) for sink in self.__outputs])

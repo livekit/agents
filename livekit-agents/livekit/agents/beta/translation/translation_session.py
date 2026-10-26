@@ -129,6 +129,11 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._resampler: rtc.AudioResampler | None = None
         self._resampler_key: tuple[int, int, int | None] | None = None
         self._resampler_sink: io.AudioOutput | None = None
+        # the language the room labels the translation with. It follows the language stamped
+        # on the speech itself, which trails a retarget until the provider applies it, and
+        # follows the request only for a provider that stamps nothing
+        self._output_language: str | None = None
+        self._output_language_stamped = False
 
     @property
     def model(self) -> TranslationModel:
@@ -184,8 +189,9 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._model_session.update_options(target_language=language)
 
         self._model.update_options(target_language=language)
-        if self._room_io is not None:
-            self._room_io._on_target_language_changed()
+        if self._model_session is None or not self._output_language_stamped:
+            # nothing stamps the speech with its language, so the label follows the request
+            self._relabel_output(language)
 
     async def start(
         self,
@@ -234,6 +240,8 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._job_context_cb_registered = True
 
             self._model_session = self._model.session()
+            self._output_language = self._model.target_language
+            self._output_language_stamped = False
             self._model_session.on("input_speech_started", self._on_input_speech_started)
             self._model_session.on("input_speech_stopped", self._on_input_speech_stopped)
             self._model_session.on("input_transcript", self._on_input_transcript)
@@ -350,6 +358,14 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     await self._close_output_segment()
                     continue
 
+                if ev.language is not None:
+                    self._output_language_stamped = True
+                    if ev.language != self._output_language:
+                        # the old language's segment ends before speech in the new one, so
+                        # neither is labelled with the other's language
+                        await self._close_output_segment()
+                        self._relabel_output(ev.language)
+
                 if self.output.audio is None or not self.output.audio_enabled:
                     continue
 
@@ -376,6 +392,12 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             await transcription_output.capture_text(ev.text)
             if ev.is_final:
                 transcription_output.flush()
+
+    def _relabel_output(self, language: str) -> None:
+        """Label the translation in the room with the language it is now spoken in."""
+        self._output_language = language
+        if self._room_io is not None:
+            self._room_io._on_output_language_changed(language)
 
     def _on_input_speech_started(self, _: InputSpeechStarted) -> None:
         self._update_user_state("speaking")

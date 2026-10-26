@@ -141,6 +141,9 @@ class TranslationRoomIO:
         self._tasks: set[asyncio.Task[Any]] = set()
         # the track whose speech is being translated, once linked
         self._source_track_sid: str | None = None
+        # the language the translation is labelled with; the session moves it once the model
+        # is actually speaking a new one
+        self._output_language: str | None = None
         # a name given outright is kept; otherwise it follows the source track and language
         audio_output_options = self._options.get_audio_output_options()
         self._fixed_track_name = audio_output_options is not None and is_given(
@@ -416,23 +419,31 @@ class TranslationRoomIO:
             self._output_tr_output.set_participant(None)
             self._output_tr_output.set_track(None)
 
-    def _on_target_language_changed(self) -> None:
-        """Retag the translation with the language the model now speaks, and rename its track."""
+    def _on_output_language_changed(self, language: str) -> None:
+        """Retag the translation with the language it is now spoken in, and rename its track."""
+        if language == self._output_language:
+            return
+
+        self._output_language = language
         if self._output_tr_output and self._source_track_sid is not None:
             self._output_tr_output.set_attributes(self._output_attributes())
 
         if self._init_atask is not None and self._init_atask.done():
             self._rename_output_track_soon()
 
+    @property
+    def _language(self) -> str:
+        return self._output_language or self._session.model.target_language
+
     def _output_attributes(self) -> dict[str, str]:
-        return {ATTRIBUTE_TRANSCRIPTION_LANGUAGE: self._session.model.target_language}
+        return {ATTRIBUTE_TRANSCRIPTION_LANGUAGE: self._language}
 
     def _output_track_name(self) -> str | None:
         """The name the translated track should carry, or ``None`` to leave it as it is."""
         if self._fixed_track_name or self._source_track_sid is None:
             return None
 
-        return translated_track_name(self._source_track_sid, self._session.model.target_language)
+        return translated_track_name(self._source_track_sid, self._language)
 
     def _rename_output_track_soon(self) -> None:
         if self._audio_output is None or (name := self._output_track_name()) is None:
