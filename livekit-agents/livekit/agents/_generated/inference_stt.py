@@ -52,19 +52,22 @@ AssemblyAIModels = Literal[
     "assemblyai/universal-streaming-multilingual",
     "assemblyai/u3-rt-pro",
     "assemblyai/universal-3-5-pro",
+    "assemblyai/universal-3-6-pro",
 ]
-
-
-ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime"]
 
 
 XaiModels = Literal["xai/stt-1"]
 
 
-SpeechmaticsModels = Literal["speechmatics/enhanced", "speechmatics/standard"]
+SpeechmaticsModels = Literal[
+    "speechmatics/enhanced", "speechmatics/standard", "speechmatics/linden-1"
+]
 
 
 InworldModels = Literal["inworld/inworld-stt-1"]
+
+
+GoogleModels = Literal["google/gemini-3.5-transcribe-live"]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -132,16 +135,6 @@ class AssemblyaiOptions(TypedDict, total=False):
     mode: Literal["min_latency", "balanced", "max_accuracy"]
 
 
-class ElevenlabsOptions(TypedDict, total=False):
-    commit_strategy: Literal["manual", "vad"]
-    include_timestamps: bool
-    vad_silence_threshold_secs: float
-    vad_threshold: float
-    min_speech_duration_ms: int
-    min_silence_duration_ms: int
-    language_code: str
-
-
 class SpeechmaticsOptions(TypedDict, total=False):
     domain: str
     output_locale: str
@@ -179,6 +172,11 @@ class InworldOptions(TypedDict, total=False):
     vad_threshold: float
 
 
+class GoogleOptions(TypedDict, total=False):
+    language_codes: list[str]
+    custom_vocabulary: list[str]
+
+
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
@@ -190,10 +188,10 @@ STTModels = (
     | DeepgramFluxModels
     | CartesiaModels
     | AssemblyAIModels
-    | ElevenlabsModels
     | XaiModels
     | SpeechmaticsModels
     | InworldModels
+    | GoogleModels
     | Literal["auto"]
 )
 
@@ -213,7 +211,7 @@ CartesiaOptions.__module__ = "livekit.agents.inference.stt"
 DeepgramOptions.__module__ = "livekit.agents.inference.stt"
 DeepgramFluxOptions.__module__ = "livekit.agents.inference.stt"
 AssemblyaiOptions.__module__ = "livekit.agents.inference.stt"
-ElevenlabsOptions.__module__ = "livekit.agents.inference.stt"
 SpeechmaticsOptions.__module__ = "livekit.agents.inference.stt"
 XaiOptions.__module__ = "livekit.agents.inference.stt"
 InworldOptions.__module__ = "livekit.agents.inference.stt"
+GoogleOptions.__module__ = "livekit.agents.inference.stt"

@@ -338,6 +338,14 @@ pub fn avatar_payload(fields: serde_json::Map<String, serde_json::Value>, avatar
     lk_agents_abi::voice::host_policy::avatar_payload(fields, avatar_id.as_deref(), options)
 }
 
+/// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort` is
+/// the request's `reasoning_effort` and `reasoning` the effort of its Responses `reasoning`.
+#[napi(js_name = "llmUnsupportedParams")]
+pub fn llm_unsupported_params(model: String, has_tools: Option<bool>, reasoning_effort: Option<String>, reasoning: Option<String>) -> Vec<String> {
+    let has_tools = has_tools.unwrap_or(false);
+    lk_agents_inference::llm::models::unsupported_params(&model, has_tools, reasoning_effort.as_deref(), reasoning.as_deref()).into_iter().map(|v| v.to_string()).collect::<Vec<_>>()
+}
+
 /// The lowest reasoning effort the model supports, or `None` if it has no such control.
 #[napi(js_name = "minReasoningEffort")]
 pub fn min_reasoning_effort(model: String) -> Option<String> {

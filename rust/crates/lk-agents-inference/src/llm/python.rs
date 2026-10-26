@@ -11,8 +11,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use serde_json::Value;
 
-use super::{LlmClientConfig, LlmOptions, NativeLlm, models, parse, request};
-use crate::python::{conn_options, json_from_py, json_map, register_class, register_fn, session_clock, transport};
+use super::{LlmClientConfig, LlmOptions, NativeLlm, parse, request};
+use crate::python::{conn_options, json_from_py, register_class, register_fn, session_clock, transport};
 
 /// `inference.LLM`'s Rust half.
 ///
@@ -148,23 +148,6 @@ impl InferenceLlm {
     }
 }
 
-/// `drop_unsupported_params`: a new dict without the parameters the model refuses.
-///
-/// The prefix scan stops at the first match, and an empty tool list does not count as tools.
-#[pyfunction]
-#[pyo3(signature = (model, params, *, has_tools = false))]
-pub fn llm_drop_unsupported_params<'py>(
-    py: Python<'py>,
-    model: &str,
-    params: &Bound<'py, PyAny>,
-    has_tools: bool,
-) -> PyResult<Bound<'py, PyAny>> {
-    check_pid()?;
-    let mut map = json_map(Some(params))?;
-    models::drop_unsupported_params(model, &mut map, has_tools);
-    value_to_py(py, &Value::Object(map))
-}
-
 /// `inference.llm`'s choice parser: accumulates a streamed completion's choices into chunks,
 /// filtering the model's thinking tags.
 #[pyclass(name = "LlmChoiceParser", module = "livekit.agents._core")]
@@ -207,7 +190,7 @@ fn llm_usage_chunk<'py>(py: Python<'py>, chunk: &Bound<'_, PyAny>) -> PyResult<O
     parse::usage_chunk(&chunk).map(|chunk| Ok(chunk.into_pyobject(py)?.into_any())).transpose()
 }
 
-register_fn!(llm_drop_unsupported_params, llm_normalize_tool_choice, llm_usage_chunk);
+register_fn!(llm_normalize_tool_choice, llm_usage_chunk);
 
 #[cfg(test)]
 mod tests {

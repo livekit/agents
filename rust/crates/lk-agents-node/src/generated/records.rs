@@ -435,7 +435,7 @@ impl From<SttFallbackModel> for lk_agents_abi::inference::fallback::SttFallbackM
 /// Inference Fallback Adapter: configuration for a fallback TTS model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 #[napi(object, js_name = "TtsFallbackModel")]
 pub struct TtsFallbackModel {
-    /// Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/coda").
+    /// Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda").
     #[napi(ts_type = "string")]
     pub model: String,
     /// Voice to use for the model.
@@ -1006,52 +1006,6 @@ impl From<AssemblyaiOptions> for lk_agents_abi::inference::gateway::stt::Assembl
     }
 }
 
-#[napi(object, js_name = "SttElevenlabsOptions")]
-pub struct SttElevenlabsOptions {
-    #[napi(ts_type = "'manual' | 'vad'")]
-    pub commit_strategy: Option<serde_json::Value>,
-    #[napi(ts_type = "boolean")]
-    pub include_timestamps: Option<bool>,
-    #[napi(ts_type = "number")]
-    pub vad_silence_threshold_secs: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub vad_threshold: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub min_speech_duration_ms: Option<i64>,
-    #[napi(ts_type = "number")]
-    pub min_silence_duration_ms: Option<i64>,
-    #[napi(ts_type = "string")]
-    pub language_code: Option<String>,
-}
-
-impl From<&lk_agents_abi::inference::gateway::stt::ElevenlabsOptions> for SttElevenlabsOptions {
-    fn from(v: &lk_agents_abi::inference::gateway::stt::ElevenlabsOptions) -> Self {
-        SttElevenlabsOptions {
-            commit_strategy: v.commit_strategy.as_ref().map(|v| v.clone()),
-            include_timestamps: v.include_timestamps,
-            vad_silence_threshold_secs: v.vad_silence_threshold_secs,
-            vad_threshold: v.vad_threshold,
-            min_speech_duration_ms: v.min_speech_duration_ms,
-            min_silence_duration_ms: v.min_silence_duration_ms,
-            language_code: v.language_code.as_ref().map(|v| v.to_string()),
-        }
-    }
-}
-
-impl From<SttElevenlabsOptions> for lk_agents_abi::inference::gateway::stt::ElevenlabsOptions {
-    fn from(v: SttElevenlabsOptions) -> Self {
-        lk_agents_abi::inference::gateway::stt::ElevenlabsOptions {
-            commit_strategy: v.commit_strategy,
-            include_timestamps: v.include_timestamps,
-            vad_silence_threshold_secs: v.vad_silence_threshold_secs,
-            vad_threshold: v.vad_threshold,
-            min_speech_duration_ms: v.min_speech_duration_ms,
-            min_silence_duration_ms: v.min_silence_duration_ms,
-            language_code: v.language_code,
-        }
-    }
-}
-
 #[napi(object, js_name = "SpeechmaticsOptions")]
 pub struct SpeechmaticsOptions {
     #[napi(ts_type = "string")]
@@ -1218,6 +1172,32 @@ impl From<SttInworldOptions> for lk_agents_abi::inference::gateway::stt::Inworld
     }
 }
 
+#[napi(object, js_name = "GoogleOptions")]
+pub struct GoogleOptions {
+    #[napi(ts_type = "string[]")]
+    pub language_codes: Option<Vec<String>>,
+    #[napi(ts_type = "string[]")]
+    pub custom_vocabulary: Option<Vec<String>>,
+}
+
+impl From<&lk_agents_abi::inference::gateway::stt::GoogleOptions> for GoogleOptions {
+    fn from(v: &lk_agents_abi::inference::gateway::stt::GoogleOptions) -> Self {
+        GoogleOptions {
+            language_codes: v.language_codes.as_ref().map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<_>>()),
+            custom_vocabulary: v.custom_vocabulary.as_ref().map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<_>>()),
+        }
+    }
+}
+
+impl From<GoogleOptions> for lk_agents_abi::inference::gateway::stt::GoogleOptions {
+    fn from(v: GoogleOptions) -> Self {
+        lk_agents_abi::inference::gateway::stt::GoogleOptions {
+            language_codes: v.language_codes,
+            custom_vocabulary: v.custom_vocabulary,
+        }
+    }
+}
+
 #[napi(object, js_name = "TtsCartesiaOptions")]
 pub struct TtsCartesiaOptions {
     #[napi(ts_type = "string")]
@@ -1286,80 +1266,6 @@ impl From<TtsDeepgramOptions> for lk_agents_abi::inference::gateway::tts::Deepgr
     fn from(v: TtsDeepgramOptions) -> Self {
         lk_agents_abi::inference::gateway::tts::DeepgramOptions {
             mip_opt_out: v.mip_opt_out,
-        }
-    }
-}
-
-#[napi(object, js_name = "TtsElevenlabsOptions")]
-pub struct TtsElevenlabsOptions {
-    #[napi(ts_type = "number")]
-    pub inactivity_timeout: Option<i64>,
-    #[napi(ts_type = "'auto' | 'off' | 'on'")]
-    pub apply_text_normalization: Option<serde_json::Value>,
-    #[napi(ts_type = "boolean")]
-    pub auto_mode: Option<bool>,
-    #[napi(ts_type = "boolean")]
-    pub enable_logging: Option<bool>,
-    #[napi(ts_type = "boolean")]
-    pub enable_ssml_parsing: Option<bool>,
-    #[napi(ts_type = "boolean")]
-    pub sync_alignment: Option<bool>,
-    #[napi(ts_type = "string")]
-    pub language_code: Option<String>,
-    #[napi(ts_type = "number")]
-    pub stability: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub similarity_boost: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub style: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub speed: Option<f64>,
-    #[napi(ts_type = "boolean")]
-    pub use_speaker_boost: Option<bool>,
-    #[napi(ts_type = "number[]")]
-    pub chunk_length_schedule: Option<Vec<f64>>,
-    #[napi(ts_type = "string")]
-    pub preferred_alignment: Option<String>,
-}
-
-impl From<&lk_agents_abi::inference::gateway::tts::ElevenlabsOptions> for TtsElevenlabsOptions {
-    fn from(v: &lk_agents_abi::inference::gateway::tts::ElevenlabsOptions) -> Self {
-        TtsElevenlabsOptions {
-            inactivity_timeout: v.inactivity_timeout,
-            apply_text_normalization: v.apply_text_normalization.as_ref().map(|v| v.clone()),
-            auto_mode: v.auto_mode,
-            enable_logging: v.enable_logging,
-            enable_ssml_parsing: v.enable_ssml_parsing,
-            sync_alignment: v.sync_alignment,
-            language_code: v.language_code.as_ref().map(|v| v.to_string()),
-            stability: v.stability,
-            similarity_boost: v.similarity_boost,
-            style: v.style,
-            speed: v.speed,
-            use_speaker_boost: v.use_speaker_boost,
-            chunk_length_schedule: v.chunk_length_schedule.as_ref().map(|v| v.iter().map(|v| *v).collect::<Vec<_>>()),
-            preferred_alignment: v.preferred_alignment.as_ref().map(|v| v.to_string()),
-        }
-    }
-}
-
-impl From<TtsElevenlabsOptions> for lk_agents_abi::inference::gateway::tts::ElevenlabsOptions {
-    fn from(v: TtsElevenlabsOptions) -> Self {
-        lk_agents_abi::inference::gateway::tts::ElevenlabsOptions {
-            inactivity_timeout: v.inactivity_timeout,
-            apply_text_normalization: v.apply_text_normalization,
-            auto_mode: v.auto_mode,
-            enable_logging: v.enable_logging,
-            enable_ssml_parsing: v.enable_ssml_parsing,
-            sync_alignment: v.sync_alignment,
-            language_code: v.language_code,
-            stability: v.stability,
-            similarity_boost: v.similarity_boost,
-            style: v.style,
-            speed: v.speed,
-            use_speaker_boost: v.use_speaker_boost,
-            chunk_length_schedule: v.chunk_length_schedule,
-            preferred_alignment: v.preferred_alignment,
         }
     }
 }
