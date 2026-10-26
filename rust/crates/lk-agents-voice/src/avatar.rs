@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use lk_agents_abi::voice::io::{AudioOutput, IoError, PlaybackTracker, Result};
@@ -22,9 +22,9 @@ pub const AUDIO_STREAM_TOPIC: &str = "lk.audio_stream";
 
 const LOG: &str = "livekit.agents";
 
-/// `time.time()`.
-fn wall() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+/// `time.time()` on `clock`.
+fn wall(clock: &dyn Clock) -> f64 {
+    clock.wall().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
 
 /// `utils.shortuuid("AUDIO_")`.
@@ -158,7 +158,7 @@ impl Inner {
 
     /// `_handle_playback_started`.
     fn on_playback_started(&self) -> String {
-        self.tracker.report_started(wall());
+        self.tracker.report_started(wall(&*self.clock));
         "ok".to_owned()
     }
 
@@ -340,7 +340,7 @@ impl AudioOutput for DataStreamAudioOutput {
                 *self.inner.pushed.lock().unwrap_or_else(|p| p.into_inner()) = 0.0;
                 if !self.inner.wait_playback_start {
                     // approximated: the avatar does not report lk.playback_started
-                    self.inner.tracker.report_started(wall());
+                    self.inner.tracker.report_started(wall(&*self.inner.clock));
                 }
                 w
             }

@@ -748,6 +748,33 @@ impl Run {
         }))
     }
 
+    /// The avatar worker reports on what reached it, as `DataStreamAudioReceiver` does: each closed
+    /// segment stream as played out, and each clear as an interrupted segment.
+    pub(super) fn avatar_reports(&mut self) {
+        let Some((played, cleared)) = self.avatar else { return };
+        let local = self.room.local_participant();
+        let streams = local.byte_streams();
+        let closed: Vec<_> = streams.iter().filter(|s| s.closed).skip(played).collect();
+        let clears = local
+            .rpc_calls()
+            .iter()
+            .filter(|(_, method, _)| method == lk_agents_voice::avatar::RPC_CLEAR_BUFFER)
+            .count();
+        let finished = |position: f64, interrupted: bool| {
+            let payload = serde_json::json!({"playback_position": position, "interrupted": interrupted});
+            let method = lk_agents_voice::avatar::RPC_PLAYBACK_FINISHED;
+            local.invoke_rpc(method, super::start::AVATAR, &payload.to_string());
+        };
+        for stream in &closed {
+            let bytes: usize = stream.chunks.iter().map(Vec::len).sum();
+            finished(bytes as f64 / f64::from(SAMPLE_RATE * 2), false);
+        }
+        for _ in cleared..clears {
+            finished(0.0, true);
+        }
+        self.avatar = Some((played + closed.len(), clears));
+    }
+
     /// The person's microphones in the room, which leave the room with them.
     fn room_mics(&self) -> Vec<u32> {
         self.mics.iter().filter(|(_, (leg, _))| matches!(leg, Mic::Room { .. })).map(|(n, _)| *n).collect()

@@ -197,6 +197,10 @@ pub struct Setup {
     /// `BackgroundAudioPlayer` on the room: an ambient sound from the start and a thinking sound
     /// while the agent thinks, mixed on its own published track. Only with the room's legs.
     pub background_audio: bool,
+    /// An avatar worker in the room: the agent's voice streams to it (`DataStreamAudioOutput`,
+    /// what an avatar plugin sets as `session.output.audio`) and it reports each segment played.
+    /// Only with the room's legs.
+    pub avatar: bool,
 }
 
 /// The room's legs, and whether the person's app sends the audio it buffered before the agent
@@ -287,6 +291,7 @@ impl Default for Setup {
             deprecated_turn: false,
             video_sampler: false,
             background_audio: false,
+            avatar: false,
         }
     }
 }
@@ -473,6 +478,8 @@ pub struct Run {
     next_request: u64,
     /// The background audio player, as `background_audio.py` runs it beside the session.
     background: Option<Arc<BackgroundAudioPlayer>>,
+    /// The avatar worker's acks so far: segments reported played, and clears answered.
+    avatar: Option<(usize, usize)>,
     /// The next filler id to mint. The host tells the driver the id rather than letting it
     /// choose, so a case can name a filler in the same burst that started it.
     next_filler: u64,

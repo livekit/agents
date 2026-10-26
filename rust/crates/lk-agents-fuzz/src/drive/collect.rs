@@ -41,6 +41,7 @@ impl Run {
             self.record.record_host(at, seen);
         }
         self.sync_fakes();
+        self.avatar_reports();
         let from_journal = self.record.journal().len();
         self.absorb_journal();
         self.attribute_chats(from_journal, from_host);

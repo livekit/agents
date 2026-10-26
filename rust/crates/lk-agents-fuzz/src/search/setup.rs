@@ -76,11 +76,13 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         deprecated_turn: false,
         video_sampler: false,
         background_audio: false,
+        avatar: false,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
     setup.deprecated_turn = rng.u8(0..100) < 25;
     setup.video_sampler = setup.video && rng.bool();
     setup.background_audio = setup.room_legs.is_some() && rng.bool();
+    setup.avatar = setup.room_legs.is_some() && rng.u8(0..100) < 30;
     setup
 }

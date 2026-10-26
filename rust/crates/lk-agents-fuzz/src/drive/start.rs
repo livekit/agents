@@ -16,7 +16,9 @@ impl Run {
         let stamps = Stamps::new(time.clone());
         let (registry, records) = Registry::new(stamps.clone());
         let tasks = Arc::new(Tasks { stamps: stamps.clone(), spawned: Mutex::default() });
-        let room = lk_agents_rtc::FakeRtc::new(time.clock()).room("room");
+        // Named by the schedule: a room's name keys process-wide tables (the avatar's RPC routes),
+        // and the survey runs seeds side by side in one process.
+        let room = lk_agents_rtc::FakeRtc::new(time.clock()).room(&format!("room-{schedule}"));
 
         // The host's own gate (`agent_session.py`) decides whether an adaptive detector is handed
         // over: a port under `Manual` turn detection, say, is a session no host ever assembles.
@@ -126,6 +128,21 @@ impl Run {
                 },
                 match &console {
                     Some((io, _)) => Some(io.as_audio_output()),
+                    None if setup.avatar => {
+                        // The worker is in the room before its stream is opened to it.
+                        room.add_participant(AVATAR, ParticipantKind::Agent);
+                        let sink = lk_agents_voice::avatar::DataStreamAudioOutput::new(
+                            room.clone(),
+                            AVATAR.into(),
+                            Some(SAMPLE_RATE),
+                            None,
+                            Some(Duration::from_secs(2)),
+                            false,
+                            time.clock(),
+                            tasks.clone(),
+                        );
+                        Some(Arc::new(sink).as_output())
+                    }
                     None => legs.is_none().then(|| {
                         fakes::FakeAudioOutput::new(
                             registry.clone(),
@@ -243,6 +260,7 @@ impl Run {
             console,
             next_request: 0,
             background: None,
+            avatar: setup.avatar.then_some((0, 0)),
             next_filler: 1,
             refs,
             setup: setup.clone(),
@@ -308,6 +326,9 @@ impl Run {
         self.mics.insert(nth, (Mic::Room { track: mic, burst: (0, 0) }, 0));
     }
 }
+
+/// The avatar worker the agent's voice streams to.
+pub(super) const AVATAR: &str = "avatar";
 
 /// The person on the call: who joins, leaves and speaks in the room.
 pub(super) const CALLER: &str = "caller";
