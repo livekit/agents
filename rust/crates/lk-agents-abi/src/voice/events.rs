@@ -679,9 +679,10 @@ pub struct ItemAddedWire {
     /// `"history"` (the handoff record).
     #[binding(extract_skip)]
     pub visibility: String,
-    /// The open run's id when an owned speech produced it or it is the handoff record, else `None`.
+    /// The open run's host object when an owned speech produced it or it is the handoff
+    /// record, else `None`.
     #[binding(extract_skip)]
-    pub run: Option<u64>,
+    pub run: Option<crate::HostRef>,
 }
 
 /// `function_tools_executed`, as the driver emits it; calls and outputs are parallel lists. A twin
@@ -753,8 +754,8 @@ pub struct DiagnosticWire {
 #[derive(Debug, Clone, Host)]
 #[binding(emit, tag = "type", tag_value = "run_item_added")]
 pub struct RunItemAddedWire {
-    /// The run's id (`RunId`).
-    pub run: u64,
+    /// The host's object for the run (its `RunResult`).
+    pub run: Option<crate::HostRef>,
     pub item: crate::ChatItem,
 }
 
@@ -762,14 +763,16 @@ pub struct RunItemAddedWire {
 #[derive(Debug, Clone, Host)]
 #[binding(emit, tag = "type", tag_value = "run_started")]
 pub struct RunStartedWire {
-    /// The run's id (`RunId`).
-    pub run: u64,
+    /// The host's object for the run (its `RunResult`); `None` for `start(capture_run=True)`.
+    pub run: Option<crate::HostRef>,
 }
 
 /// `run_refused`'s payload.
 #[derive(Debug, Clone, Host)]
 #[binding(emit, tag = "type", tag_value = "run_refused")]
 pub struct RunRefusedWire {
+    /// The host's object for the refused run (its `RunResult`).
+    pub run: Option<crate::HostRef>,
     /// `RunRefusal::as_str`: `"nested"` or `"closing"`.
     pub cause: String,
 }
@@ -779,7 +782,8 @@ pub struct RunRefusedWire {
 #[derive(Debug, Clone, Host)]
 #[binding(emit, tag = "type", tag_value = "run_settled")]
 pub struct RunSettledWire {
-    pub run: u64,
+    /// The host's object for the run (its `RunResult`).
+    pub run: Option<crate::HostRef>,
     /// `RunOutcome::as_str`: `"completed"`, `"failed"` or `"closed"`.
     pub outcome: String,
     /// The interned object a tool handed `AgentTask.complete()`, resolved; `None` otherwise.
@@ -911,8 +915,8 @@ pub struct OnUserTurnCompletedHookWire {
 pub struct FillerSourceHookWire {
     pub hook: String,
     pub id: u64,
-    /// The host's number for the `with_filler` scope (`FillerId`).
-    pub filler: u64,
+    /// The `with_filler` source, the host's callable.
+    pub source: Option<crate::HostRef>,
     pub step: u32,
 }
 

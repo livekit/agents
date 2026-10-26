@@ -62,6 +62,8 @@ pub enum HookCall {
         id: HookId,
         filler: FillerId,
         step: u32,
+        /// The host's callable.
+        source: Option<lk_agents_abi::HostRef>,
     },
     /// `function_tools_executed`, emitted by the host; answered with `HookOutcome::FunctionToolsExecuted`.
     /// Unanswered, the event stands as issued.
@@ -148,11 +150,11 @@ impl HookCall {
                 new_transcript: new_transcript.clone(),
                 transcript_confidence: *transcript_confidence,
             }),
-            HookCall::FillerSource { filler, step, .. } => {
+            HookCall::FillerSource { step, source, .. } => {
                 HostWire::HookFillerSource(w::FillerSourceHookWire {
                     hook,
                     id,
-                    filler: filler.0,
+                    source: source.clone(),
                     step: *step,
                 })
             }
@@ -291,7 +293,7 @@ impl SessionEvent {
                     item: (**item).clone(),
                     agent: agent.clone(),
                     visibility: visibility.as_str().to_owned(),
-                    run: run.map(|r| r.0),
+                    run: run.as_ref().and_then(|r| r.host.clone()),
                 })
             }
             // The host moves these ids between its context projections; no item crosses.
@@ -303,13 +305,19 @@ impl SessionEvent {
                 })
             }
             SessionEvent::RunStarted { run } => {
-                HostWire::RunStarted(w::RunStartedWire { run: run.0 })
+                HostWire::RunStarted(w::RunStartedWire { run: run.host.clone() })
             }
             SessionEvent::RunItemAdded { run, item } => {
-                HostWire::RunItemAdded(w::RunItemAddedWire { run: run.0, item: (**item).clone() })
+                HostWire::RunItemAdded(w::RunItemAddedWire {
+                    run: run.host.clone(),
+                    item: (**item).clone(),
+                })
             }
-            SessionEvent::RunRefused { cause } => {
-                HostWire::RunRefused(w::RunRefusedWire { cause: cause.as_str().to_owned() })
+            SessionEvent::RunRefused { cause, host } => {
+                HostWire::RunRefused(w::RunRefusedWire {
+                    run: host.clone(),
+                    cause: cause.as_str().to_owned(),
+                })
             }
             // What `RunResult._mark_done` reads; the binding resolves the refs off its side table.
             SessionEvent::RunSettled { run, outcome, speech } => {
@@ -319,7 +327,7 @@ impl SessionEvent {
                     RunOutcome::Failed(RunFailure::Speech) | RunOutcome::Closed => (None, None),
                 };
                 HostWire::RunSettled(w::RunSettledWire {
-                    run: run.0,
+                    run: run.host.clone(),
                     outcome: outcome.as_str().to_owned(),
                     final_output,
                     error,

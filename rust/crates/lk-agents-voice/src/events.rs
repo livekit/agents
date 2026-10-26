@@ -215,6 +215,14 @@ impl SpeechOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunId(pub u64);
 
+/// A run as its events name it: the driver's number and the host's own object for it (`None` for
+/// `start(capture_run=True)`, which no host call opened).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunRef {
+    pub id: RunId,
+    pub host: Option<lk_agents_abi::HostRef>,
+}
+
 /// Why a `Command::Run` opened nothing (`SessionEvent::RunRefused`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
 pub enum RunRefusal {
@@ -451,7 +459,7 @@ pub enum SessionEvent {
         source: crate::agent::Source,
         /// Which of the host's two projections take it; the host decides nothing by item kind.
         visibility: crate::agent::Visibility,
-        run: Option<RunId>,
+        run: Option<RunRef>,
     },
     /// A resumed frame took over the replaced frame's conversation (the reference's merge at an
     /// inline task's return). `items` already announced under `from`; no new `ItemAdded`.
@@ -462,21 +470,22 @@ pub enum SessionEvent {
     },
     /// `Command::Run` opened a run; everything asked for until `RunSettled` is the run's.
     RunStarted {
-        run: RunId,
+        run: RunRef,
     },
     /// A tool of a speech the open run owns started: its call is the run's from now, not when the
     /// call is committed (`speech_handle._item_added([fnc_call])`, agent_activity.py:3416).
     RunItemAdded {
-        run: RunId,
+        run: RunRef,
         item: Box<lk_agents_abi::ChatItem>,
     },
     /// `Command::Run` opened nothing; the host raises the reference's error for the cause.
     RunRefused {
         cause: RunRefusal,
+        host: Option<lk_agents_abi::HostRef>,
     },
     /// The run is over. `speech` is the last owned speech (`__last_speech_handle`).
     RunSettled {
-        run: RunId,
+        run: RunRef,
         outcome: RunOutcome,
         speech: Option<Arc<crate::speech_handle::SpeechHandle>>,
     },

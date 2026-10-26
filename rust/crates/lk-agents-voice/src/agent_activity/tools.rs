@@ -41,7 +41,7 @@ impl Driver {
         let closing = self.session.closing_past_edge();
         out.machine().append(self.session.states.on_tool_call_started(now, closing));
         // The call is the run's once it runs, whichever run is open when it is committed.
-        if let Some(run) = self.session.runs.id()
+        if let Some(run) = self.session.runs.current()
             && self.session.runs.owns(crate::run_result::Owned::Speech(speech))
         {
             let item = Box::new(lk_agents_abi::ChatItem::FunctionCall(call.clone()));
@@ -523,10 +523,10 @@ impl Driver {
                 Some(FillerSource::Text(text)) => {
                     self.fire_filler(now, id, step, Some(text), false, out)
                 }
-                Some(FillerSource::Host) => {
+                Some(FillerSource::Host(source)) => {
                     let hook = self.activity.hooks.mint();
                     let wait = self.hook_wait();
-                    let call = HookCall::FillerSource { id: hook, filler: id, step };
+                    let call = HookCall::FillerSource { id: hook, filler: id, step, source };
                     // A callable no host can run never produces: like one that raises, it ends
                     // the filler. Taken as a decline, the next fire could come in this instant.
                     if self.issue_hook(now, call, Some(wait), out) {

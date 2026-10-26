@@ -5,7 +5,7 @@ use crate::agent_activity::handoff::HandoffId;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Out;
 use crate::agent_session::{Driver, HoldId, HookId, Origin};
-use crate::events::{RunFailure, RunId, RunOutcome, RunRefusal, SessionEvent};
+use crate::events::{RunFailure, RunId, RunOutcome, RunRef, RunRefusal, SessionEvent};
 use crate::speech_handle::SpeechHandle;
 use crate::trace::HandoffStep;
 use lk_agents_abi::{HostRef, Ts};
@@ -23,6 +23,8 @@ pub struct RunSpec {
     pub max_retries: u32,
     /// `RunOutputOptions.retry_instructions`: the per-turn system message of the re-prompt.
     pub retry_instructions: String,
+    /// The host's own object for the run (its `RunResult`), handed back on every run event.
+    pub host: Option<HostRef>,
 }
 
 /// What a tool handed accepted output from inside a speech (`_maybe_run_final_output`).
@@ -48,7 +50,7 @@ pub enum Owned {
 }
 
 struct OpenRun {
-    id: RunId,
+    run: RunRef,
     owned: BTreeSet<Owned>,
     /// `__last_speech_handle`: its error and output decide the verdict.
     last: Option<Arc<SpeechHandle>>,
@@ -64,7 +66,7 @@ pub(super) enum Decided {
     /// Nothing is owned, the run expects an output and the last speech produced none: re-prompt.
     Retry { run: RunId, attempt: u32, instructions: String },
     /// Nothing is owned: the run is over.
-    Settled { run: RunId, outcome: RunOutcome, speech: Option<Arc<SpeechHandle>> },
+    Settled { run: RunRef, outcome: RunOutcome, speech: Option<Arc<SpeechHandle>> },
 }
 
 /// The driver's run state: at most one open run and the recorded tool outputs.
@@ -80,7 +82,7 @@ pub(super) struct Runs {
 
 impl Runs {
     /// `Command::Run`: open, or refuse: a run already open, or a closing session.
-    pub(super) fn open(&mut self, spec: &RunSpec, closing: bool) -> Result<RunId, RunRefusal> {
+    pub(super) fn open(&mut self, spec: &RunSpec, closing: bool) -> Result<RunRef, RunRefusal> {
         if self.open.is_some() {
             return Err(RunRefusal::Nested);
         }
@@ -88,9 +90,9 @@ impl Runs {
             return Err(RunRefusal::Closing);
         }
         self.next += 1;
-        let id = RunId(self.next);
+        let run = RunRef { id: RunId(self.next), host: spec.host.clone() };
         self.open = Some(OpenRun {
-            id,
+            run: run.clone(),
             owned: BTreeSet::new(),
             last: None,
             expects_output: spec.expects_output,
@@ -98,11 +100,12 @@ impl Runs {
             retries: 0,
             retry_instructions: spec.retry_instructions.clone(),
         });
-        Ok(id)
+        Ok(run)
     }
 
-    pub(super) fn id(&self) -> Option<RunId> {
-        self.open.as_ref().map(|r| r.id)
+    /// The open run, as its events name it.
+    pub(super) fn current(&self) -> Option<RunRef> {
+        self.open.as_ref().map(|r| r.run.clone())
     }
 
     pub(super) fn owns(&self, what: Owned) -> bool {
@@ -112,7 +115,7 @@ impl Runs {
     /// Own `what`, if a run is open and it is not owned already: `Some(run)` when newly owned.
     pub(super) fn own(&mut self, what: Owned) -> Option<RunId> {
         let r = self.open.as_mut()?;
-        r.owned.insert(what).then_some(r.id)
+        r.owned.insert(what).then_some(r.run.id)
     }
 
     /// Release `what`; `ended` becomes the verdict speech (`None` for an inline task's suspension).
@@ -129,7 +132,7 @@ impl Runs {
             r.last = Some(Arc::clone(h));
         }
         self.dirty = true;
-        Some(r.id)
+        Some(r.run.id)
     }
 
     pub(super) fn record_output(&mut self, speech: SpeechId, output: RunOutput) {
@@ -166,7 +169,7 @@ impl Runs {
                     r.retries_left -= 1;
                     r.retries += 1;
                     return Decided::Retry {
-                        run: r.id,
+                        run: r.run.id,
                         attempt: r.retries,
                         instructions: r.retry_instructions.clone(),
                     };
@@ -174,14 +177,14 @@ impl Runs {
                 RunOutcome::Completed { final_output: None }
             }
         };
-        let run = r.id;
+        let run = r.run.clone();
         self.open = None;
         Decided::Settled { run, outcome, speech }
     }
 
-    pub(super) fn close(&mut self) -> Option<(RunId, Option<Arc<SpeechHandle>>)> {
+    pub(super) fn close(&mut self) -> Option<(RunRef, Option<Arc<SpeechHandle>>)> {
         self.dirty = false;
-        self.open.take().map(|r| (r.id, r.last))
+        self.open.take().map(|r| (r.run, r.last))
     }
 }
 
@@ -193,7 +196,7 @@ impl Driver {
         let run = match self.session.runs.open(&spec, closing) {
             Ok(run) => run,
             Err(cause) => {
-                out.machine().emit(SessionEvent::RunRefused { cause });
+                out.machine().emit(SessionEvent::RunRefused { cause, host: spec.host });
                 return;
             }
         };
@@ -264,8 +267,8 @@ impl Driver {
     /// `run(user_input=)` user message is not the run's, as in the reference (`RunResult.events`
     /// opens with the reply), and neither is a committed call: a run call became the run's when it
     /// started (`RunItemAdded`); a call answered without running is no run's.
-    pub(crate) fn run_of_item(&self, source: &Source) -> Option<RunId> {
-        let open = self.session.runs.id()?;
+    pub(crate) fn run_of_item(&self, source: &Source) -> Option<RunRef> {
+        let open = self.session.runs.current()?;
         match source {
             Source::Reply { speech, .. }
             | Source::Say { speech }

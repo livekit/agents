@@ -316,7 +316,6 @@ impl Run {
             next_request: 0,
             background: None,
             avatar: None,
-            next_filler: 1,
             refs,
             legs: providers,
             setup: setup.clone(),

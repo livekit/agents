@@ -54,6 +54,8 @@ pub struct SessionApi {
     /// The read-back guard of the last DTMF collection, read by
     /// [`dtmf_reply_running`](Self::dtmf_reply_running).
     dtmf_reply: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
+    /// The last `with_filler` scope numbered by [`filler_start`](Self::filler_start).
+    last_filler: std::sync::atomic::AtomicU64,
     /// The monotonic-to-wall pair every `Ts`-carrying event converts against, read once so events
     /// never disagree about when `Ts::ZERO` was.
     anchor: lk_agents_abi::WallAnchor,
@@ -152,6 +154,7 @@ impl SessionApi {
                     expects_output: false,
                     max_retries: 0,
                     retry_instructions: String::new(),
+                    host: None,
                 });
             }
             if let Some(open_port) = interruption {

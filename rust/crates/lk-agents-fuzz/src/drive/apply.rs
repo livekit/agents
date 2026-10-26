@@ -377,16 +377,14 @@ impl Run {
                 else {
                     return false;
                 };
-                let id = self.next_filler;
-                self.next_filler += 1;
                 api.filler_start(
-                    id,
                     call_id,
                     &SpeechWireId(speech).to_string(),
                     secs(*delay),
                     interval.map(secs),
                     None,
                     text.clone().map(|AgentText(t)| t),
+                    None,
                 )
                 .is_ok()
             }
@@ -625,6 +623,7 @@ impl Run {
                     *expects_output,
                     retries.0,
                     "Please try again.".into(),
+                    None,
                     None,
                 )
                 .is_ok(),

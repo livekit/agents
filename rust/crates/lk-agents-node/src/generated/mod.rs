@@ -63,9 +63,11 @@
 //! - `lk_agents_voice::agent_session::SessionApi::ivr_start`: parameter `tools`: `ToolSpec` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::host_attach_amd`: field `source`: `TranscriptSource` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::agent_session::SessionApi::hook_turn_done`: parameter `items`: Option(Vec(Declared { name: "ChatItem", by_ref: false })) borrows inside a container
+//! - `lk_agents_voice::agent_session::SessionApi::filler_start`: parameter `source`: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_voice::agent_session::SessionApi::update_instructions`: parameter `instructions`: `Instructions` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::tool_update`: parameter `answer`: `ToolAnswer` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::update_chat_ctx`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
+//! - `lk_agents_voice::agent_session::SessionApi::run`: parameter `host`: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_voice::agent_session::SessionApi::say`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::agent_session::SessionApi::say_stream`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::agent_session::SessionApi::say_audio`: return: not yet: returning an exposed class

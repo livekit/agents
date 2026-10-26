@@ -196,22 +196,21 @@ class RunContext(Generic[Context_T]):
         (a callable taking the step count, returning text, a handle it spoke itself, or
         ``None`` to skip this fire); with ``interval`` set it repeats, up to ``max_steps``.
         """
-        session = self.session
-        filler = session._open_filler(None if isinstance(source, str) else source)
-        session._core.filler_start(
-            filler,
+        text = source if isinstance(source, str) else None
+        core = self.session._core
+        filler = core.filler_start(
             self.function_call.call_id,
             self.speech_handle.id,
             delay=delay,
             interval=interval,
             max_steps=max_steps,
-            text=source if isinstance(source, str) else None,
+            text=text,
+            source=None if text is not None else source,
         )
         try:
             yield
         finally:
-            session._core.filler_stop(filler)
-            session._close_filler(filler)
+            core.filler_stop(filler)
 
     @asynccontextmanager
     async def foreground(self) -> AsyncIterator[LiveSession[Any]]:

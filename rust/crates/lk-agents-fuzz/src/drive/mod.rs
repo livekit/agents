@@ -534,9 +534,6 @@ pub struct Run {
     background: Option<Arc<BackgroundAudioPlayer>>,
     /// The avatar worker the agent's voice streams to, in its own room.
     avatar: Option<Arc<fakes::FakeAvatarWorker>>,
-    /// The next filler id to mint. The host tells the driver the id rather than letting it
-    /// choose, so a case can name a filler in the same burst that started it.
-    next_filler: u64,
     /// The next inline task id to mint. Per-`Run` and not process-global, so two runs of one case
     /// journal the same `task_0001`, `task_0002`, ... -- the determinism suite reads those ids.
     refs: Arc<dyn RefRegistry>,

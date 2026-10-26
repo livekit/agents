@@ -446,9 +446,10 @@ impl Driver {
                 return;
             }
             // A run somebody awaits: refused as closing, on the stream.
-            Command::Run(_) => {
+            Command::Run(spec) => {
                 self.emit_now(SessionEvent::RunRefused {
                     cause: crate::events::RunRefusal::Closing,
+                    host: spec.host,
                 });
                 return;
             }

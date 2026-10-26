@@ -250,11 +250,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # every agent the core may name, by the id it was installed under
         self._agents: dict[str, Agent] = {}
         self._speeches: dict[str, SpeechHandle] = {}
-        # runs asked for and not yet started (the core starts them in order), and running ones
-        self._pending_runs: list[RunResult[Any]] = []
-        self._runs: dict[int, RunResult[Any]] = {}
-        self._fillers: dict[int, Callable[[int], Any] | None] = {}
-        self._next_filler = 0
         self._chat_ctx = ChatContext.empty()
         self._agent_state: AgentState = "initializing"
         self._user_state: UserState = "listening"
@@ -601,8 +596,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_retries=result._output_retries,
             retry_instructions=result._output_retry_instructions,
             origin=_origin(),
+            host=result,
         )
-        self._pending_runs.append(result)
         return result
 
     def say(
@@ -812,7 +807,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_item_added(self, wire: dict[str, Any]) -> None:
         item = from_core_item(wire["item"])
         self._chat_ctx.insert(item)
-        if (run := self._runs.get(wire["run"])) is not None:
+        if (run := wire["run"]) is not None:
             if item.type == "agent_handoff":
                 run._agent_handoff(
                     item=item,
@@ -824,19 +819,16 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if item.type in ("message", "agent_handoff"):
             self.emit("conversation_item_added", ConversationItemAddedEvent(item=item))
 
-    def _on_run_started(self, wire: dict[str, Any]) -> None:
-        self._runs[wire["run"]] = self._pending_runs.pop(0)
-
     def _on_run_item(self, wire: dict[str, Any]) -> None:
-        if (run := self._runs.get(wire["run"])) is not None:
+        if (run := wire["run"]) is not None:
             run._item_added(from_core_item(wire["item"]))
 
     def _on_run_refused(self, wire: dict[str, Any]) -> None:
-        run = self._pending_runs.pop(0)
-        run._settle(output=None, error=RuntimeError(f"run refused: {wire['cause']}"))
+        wire["run"]._settle(output=None, error=RuntimeError(f"run refused: {wire['cause']}"))
 
     def _on_run_settled(self, wire: dict[str, Any]) -> None:
-        run = self._runs.pop(wire["run"])
+        if (run := wire["run"]) is None:
+            return
         error = wire["error"]
         if wire["outcome"] == "failed" and error is None and wire["speech_handle"] is not None:
             error = wire["speech_handle"].exception()
@@ -887,14 +879,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _speech(self, speech_id: str) -> SpeechHandle | None:
         return self._speeches.get(speech_id)
-
-    def _open_filler(self, source: Callable[[int], Any] | None) -> int:
-        self._next_filler += 1
-        self._fillers[self._next_filler] = source
-        return self._next_filler
-
-    def _close_filler(self, filler: int) -> None:
-        self._fillers.pop(filler, None)
 
     def _spawn(self, coro: Any) -> asyncio.Task[Any]:
         task = asyncio.ensure_future(coro)
@@ -1007,7 +991,7 @@ async def _tools_executed(session: LiveSession[Any], wire: dict[str, Any]) -> No
 
 
 async def _filler_source(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    source = session._fillers.get(wire["filler"])
+    source = wire["source"]
     out = source(wire["step"]) if source is not None else None
     if asyncio.iscoroutine(out):
         out = await out
@@ -1177,7 +1161,6 @@ _HANDLERS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], None]] = {
     "speech_created": LiveSession._on_speech_created,
     "speech_done": LiveSession._on_speech_done,
     "conversation_item_added": LiveSession._on_item_added,
-    "run_started": LiveSession._on_run_started,
     "run_item_added": LiveSession._on_run_item,
     "run_refused": LiveSession._on_run_refused,
     "run_settled": LiveSession._on_run_settled,

@@ -339,6 +339,7 @@ impl SessionApi {
             anchor: lk_agents_abi::WallAnchor::of(&*clock),
             time,
             dtmf_reply: Mutex::new(None),
+            last_filler: std::sync::atomic::AtomicU64::new(0),
             host: HostParts::default(),
             resources,
             #[cfg(feature = "dst")]
@@ -827,19 +828,20 @@ impl SessionApi {
     }
 
     /// `RunContext.with_filler(..)` entered for tool `call_id` of `speech_id`: after `delay` s idle
-    /// say `text` (or ask the callable), then repeat every `interval`.
+    /// say `text` (or ask `source`, the host's callable), then repeat every `interval`. Returns the
+    /// scope's number, which `filler_stop` takes.
     #[host(method(kw_only = "delay"))]
     #[allow(clippy::too_many_arguments)]
     pub fn filler_start(
         &self,
-        id: u64,
         call_id: String,
         speech_id: &str,
         delay: f64,
         interval: Option<f64>,
         max_steps: Option<u32>,
         text: Option<String>,
-    ) -> Result<(), CommandRefused> {
+        source: Option<lk_agents_abi::HostRef>,
+    ) -> Result<u64, CommandRefused> {
         use crate::filler_scheduler::FillerError;
         let invalid = |e: FillerError| CommandRefused::Invalid(e.message().to_owned());
         if delay < 0.0 || delay.is_nan() {
@@ -854,8 +856,9 @@ impl SessionApi {
             .0;
         let source = match text {
             Some(text) => FillerSource::Text(text),
-            None => FillerSource::Host,
+            None => FillerSource::Host(source),
         };
+        let id = self.last_filler.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let origin = Origin::Tool { call_id: call_id.clone() };
         let cmd = SpeechCommand::FillerStart {
             id: FillerId(id),
@@ -866,7 +869,8 @@ impl SessionApi {
             max_steps,
             source,
         };
-        Ok(self.send_from(origin, cmd)?)
+        self.send_from(origin, cmd)?;
+        Ok(id)
     }
 
     /// `with_filler`'s exit.
@@ -1055,7 +1059,8 @@ impl SessionApi {
     #[host(method(send = SpeechCommand::ReleaseUserTurn))]
     pub fn release_user_turn(&self);
 
-    /// `AgentSession.run(user_input=, output_type=, output_options=)`, answered on the stream.
+    /// `AgentSession.run(user_input=, output_type=, output_options=)`, answered on the stream:
+    /// every run event carries `host`, the host's `RunResult`.
     #[host(method(kw_only))]
     pub fn run(
         &self,
@@ -1064,12 +1069,14 @@ impl SessionApi {
         max_retries: u32,
         retry_instructions: String,
         origin: Option<&str>,
+        host: Option<lk_agents_abi::HostRef>,
     ) -> Result<(), CommandRefused> {
         let spec = crate::run_result::RunSpec {
             user_input,
             expects_output,
             max_retries,
             retry_instructions,
+            host,
         };
         Ok(self.send_from(origin_of(origin)?, Command::Run(Box::new(spec)))?)
     }

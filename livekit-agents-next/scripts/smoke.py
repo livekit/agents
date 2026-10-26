@@ -54,6 +54,7 @@ SAMPLE_RATE = 24000
 TOOL_CALLS = [
     ("weather", "get_weather", lambda text: {"city": "Paris"}),
     ("billing", "to_billing", lambda text: {}),
+    ("order", "look_up_order", lambda text: {}),
 ]
 
 
@@ -833,6 +834,39 @@ async def amd() -> None:
     await session.aclose()
 
 
+async def filler() -> None:
+    """A tool's ``with_filler`` callable, asked by the core while the tool blocks."""
+    print("== filler")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    release = asyncio.Event()
+    steps: list[int] = []
+
+    def source(step: int) -> str:
+        steps.append(step)
+        return "One moment please."
+
+    @function_tool
+    async def look_up_order(ctx: RunContext) -> str:
+        """Look up the caller's order."""
+        async with ctx.with_filler(source, delay=0.5, interval=1.0, max_steps=2):
+            await release.wait()
+        return "shipped"
+
+    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    await session.start(Agent(instructions="You track orders.", tools=[look_up_order]), room=room)
+    session.generate_reply(user_input="where is my order?")
+    await settle(room, 4)
+    release.set()
+    await settle(room, 4)
+    spoken = [text for topic, text in room.text_streams() if topic == "lk.transcription"]
+    print(f"filler steps={steps} spoken={spoken}")
+    assert steps == [0, 1], steps
+    assert spoken.count("One moment please.") == 2, spoken
+    assert "The tool said: shipped" in spoken, spoken
+    await session.aclose()
+
+
 class KeytermSTT(ScriptedSTT):
     """``ScriptedSTT`` taking keyterms, recording each list it is handed."""
 
@@ -1019,6 +1053,7 @@ async def main() -> int:
     await expressive()
     await background_audio()
     await amd()
+    await filler()
     await keyterms()
     await room_camera()
     return 0

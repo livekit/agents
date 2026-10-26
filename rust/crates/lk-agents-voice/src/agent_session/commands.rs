@@ -371,8 +371,8 @@ pub enum SpeechCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FillerSource {
     Text(String),
-    /// Asked at every fire.
-    Host,
+    /// Asked at every fire: the host's callable, handed back on its `filler_source` hook.
+    Host(Option<lk_agents_abi::HostRef>),
 }
 
 #[derive(Debug)]

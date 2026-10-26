@@ -883,7 +883,6 @@ class LiveSession:
     ) -> None: ...
     def filler_start(
         self,
-        id: int,
         call_id: str,
         speech_id: str,
         *,
@@ -891,7 +890,8 @@ class LiveSession:
         interval: float | None = None,
         max_steps: int | None = None,
         text: str | None = None,
-    ) -> None: ...
+        source: Any | None = None,
+    ) -> int: ...
     def filler_stop(self, id: int) -> None: ...
     def clear_user_turn(self) -> None: ...
     def update_instructions(self, instructions: Any) -> None: ...
@@ -932,6 +932,7 @@ class LiveSession:
         max_retries: int,
         retry_instructions: str,
         origin: str | None = None,
+        host: Any | None = None,
     ) -> None: ...
     def say(
         self,

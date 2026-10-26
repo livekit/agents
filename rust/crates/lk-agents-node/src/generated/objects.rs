@@ -721,15 +721,6 @@ impl LiveSession {
         })
     }
 
-    #[napi(js_name = "fillerStart")]
-    pub fn filler_start(&self, env: Env, id: i64, call_id: String, speech_id: String, delay: f64, interval: Option<f64>, max_steps: Option<u32>, text: Option<String>) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            let id = <u64>::try_from(id).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("id: {e}")))?;
-            self.inner.filler_start(id, call_id, &speech_id, delay, interval, max_steps, text).map_err(crate::generated::errors::command_refused_to_node)?;
-            Ok(())
-        })
-    }
-
     #[napi(js_name = "fillerStop")]
     pub fn filler_stop(&self, env: Env, id: i64) -> napi::Result<()> {
         crate::host_error::run(&env, || {
@@ -854,14 +845,6 @@ impl LiveSession {
     #[napi(js_name = "releaseUserTurn")]
     pub fn release_user_turn(&self) {
         self.inner.release_user_turn();
-    }
-
-    #[napi(js_name = "run")]
-    pub fn run(&self, env: Env, user_input: Option<String>, expects_output: bool, max_retries: u32, retry_instructions: String, origin: Option<String>) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            self.inner.run(user_input, expects_output, max_retries, retry_instructions, origin.as_deref()).map_err(crate::generated::errors::command_refused_to_node)?;
-            Ok(())
-        })
     }
 
     #[napi(js_name = "ivrFinal")]
