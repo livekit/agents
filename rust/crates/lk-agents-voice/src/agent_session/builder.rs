@@ -331,10 +331,7 @@ impl DriverBuilder {
                 vad,
                 outputs,
                 max_unrecoverable_errors: self.max_unrecoverable_errors,
-                start_options: crate::agent_session::StartOptions {
-                    recorder: self.recorder,
-                    run: self.capture_run,
-                },
+                start_recorder: self.recorder,
                 room_link: self.room_link,
                 agent: self.agent.clone(),
                 chat_ctx: self.chat_ctx.clone(),
@@ -440,7 +437,7 @@ impl DriverBuilder {
             let mut out = driver.out();
             // `start(capture_run=True)`'s run exists before the opening handoff is recorded, so the
             // handoff and the opening `on_enter` are the run's.
-            if let Some(spec) = driver.session.start_options.run.take() {
+            if let Some(spec) = self.capture_run {
                 out.trace(CoreStep::CommandReceived { origin: Origin::Host, kind: "Command::Run" });
                 driver.on_run(driver.step.now, spec, &mut out);
             }

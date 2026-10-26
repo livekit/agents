@@ -68,7 +68,8 @@ pub(crate) struct LiveSession {
     pub(crate) keyterms: Option<crate::keyterm_detection::KeytermSlot>,
     /// `stt_context_options["forward_chat_context"]` (default on).
     pub(crate) forward_chat_context: bool,
-    pub(crate) start_options: StartOptions,
+    /// `start(record=..)`, attached by the opening.
+    pub(crate) start_recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
     pub(crate) room: crate::room_io::RoomLink,
     /// `_closing_task`: `_aclose_impl` in flight.
     pub(crate) closing: Option<Closing>,
@@ -93,7 +94,7 @@ pub(crate) struct SessionParts {
     pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
     pub(crate) outputs: Outputs,
     pub(crate) max_unrecoverable_errors: u32,
-    pub(crate) start_options: StartOptions,
+    pub(crate) start_recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
     pub(crate) room_link: Option<crate::room_io::RoomLinkConfig>,
     /// The opening agent, whose view the constructor context becomes (not announced: the host
     /// has it).
@@ -102,14 +103,6 @@ pub(crate) struct SessionParts {
     pub(crate) session_id: String,
 }
 
-/// What `start()` asked for, taken once by the opening.
-#[derive(Default)]
-pub(crate) struct StartOptions {
-    /// `start(record=..)`.
-    pub(crate) recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
-    /// `start(capture_run=True)`.
-    pub(crate) run: Option<crate::run_result::RunSpec>,
-}
 
 impl LiveSession {
     pub(crate) fn new(config: DriverConfig, parts: SessionParts) -> Self {
@@ -120,7 +113,7 @@ impl LiveSession {
             vad,
             outputs,
             max_unrecoverable_errors,
-            start_options,
+            start_recorder,
             room_link,
             agent,
             chat_ctx: opening_items,
@@ -148,7 +141,7 @@ impl LiveSession {
             tool_hosts: Vec::new(),
             keyterms: None,
             forward_chat_context: true,
-            start_options,
+            start_recorder,
             room: crate::room_io::RoomLink::new(room_link),
             closing: None,
             runs: Default::default(),

@@ -309,7 +309,7 @@ impl Driver {
             self.set_agent_state(now, AgentState::Listening, &mut out);
             let closing = self.session.closing_past_edge();
             out.machine().append(self.session.states.reconcile_away_timer(now, closing));
-            if let Some(recorder) = self.session.start_options.recorder.take() {
+            if let Some(recorder) = self.session.start_recorder.take() {
                 self.attach_recorder(now, recorder, &mut out);
             }
             self.issue_on_enter(now, &mut out);
