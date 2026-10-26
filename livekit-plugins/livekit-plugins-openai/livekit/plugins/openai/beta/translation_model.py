@@ -14,6 +14,7 @@ import base64
 import contextlib
 import json
 import os
+import re
 import time
 from collections.abc import AsyncIterable, Callable, Iterator
 from dataclasses import dataclass, replace
@@ -199,17 +200,18 @@ def _translation_url(base_url: str, model: str) -> str:
     return urlunparse((parsed_url.scheme, parsed_url.netloc, path, "", query, ""))
 
 
-# what ends a sentence, in the scripts the model speaks and hears. A transcript never opens
-# with these: arriving after the quiet that ended the last one, they are its closing
-# punctuation, and would otherwise lead the next one ("? What are you talking about?")
-_SENTENCE_END = ".?!…。？！؟।"
+# sentence-ending punctuation standing on its own at the start of a transcript, in the
+# scripts the model speaks and hears. Arriving just after a quiet ended the last transcript,
+# it is that one's closing punctuation, and would otherwise lead the next ("? What are you
+# talking about?"). Attached to a word (".NET") it is the new transcript's own
+_TRAILING_PUNCTUATION = re.compile(r"^\s*[.?!…。？！؟।]+(?=\s|$)")
 
 
 class _TranscriptSegmenter:
     """Ends a transcript once its deltas go quiet, since the server sends no end itself.
 
     The quiet that ends one is the boundary between utterances, kept as given; punctuation
-    that trails past it is dropped rather than opening the next. Each callback gets the delta
+    that trails just past it, on its own, is dropped rather than opening the next. Each callback gets the delta
     and the transcript so far, so a consumer can take either.
     """
 
@@ -226,11 +228,12 @@ class _TranscriptSegmenter:
         self._loop = loop
         self._timer: asyncio.TimerHandle | None = None
         self._text = ""
+        # when the quiet last ended a transcript, if nothing has started since
+        self._quiet_ended_at: float | None = None
 
     def push(self, delta: str) -> None:
         if not self._text:
-            # the last transcript's closing punctuation, or the space that leads a new one
-            delta = delta.lstrip(_SENTENCE_END + " ")
+            delta = self._strip_trailing_punctuation(delta).lstrip()
         if not delta:
             return
 
@@ -238,10 +241,26 @@ class _TranscriptSegmenter:
         self._on_text(delta, self._text)
         if self._timer is not None:
             self._timer.cancel()
-        self._timer = self._loop.call_later(self._timeout, self.flush)
+        self._timer = self._loop.call_later(self._timeout, self._on_quiet)
 
-    def flush(self) -> None:
+    def _on_quiet(self) -> None:
+        """End the transcript the quiet closed, noting when, for punctuation trailing past it."""
+        self._quiet_ended_at = self._loop.time()
+        self.flush(quiet=True)
+
+    def _strip_trailing_punctuation(self, text: str) -> str:
+        """Drop the last transcript's closing punctuation from the start of a new one."""
+        ended_at, self._quiet_ended_at = self._quiet_ended_at, None
+        if ended_at is None or self._loop.time() - ended_at > self._timeout:
+            return text
+
+        return _TRAILING_PUNCTUATION.sub("", text)
+
+    def flush(self, *, quiet: bool = False) -> None:
         """End the open transcript, if one is open."""
+        if not quiet:
+            # ended on purpose, so nothing that follows is its trailing punctuation
+            self._quiet_ended_at = None
         if self._timer is None:
             return
 

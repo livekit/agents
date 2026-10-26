@@ -411,3 +411,32 @@ async def test_utterances_apart_by_more_than_the_quiet_stay_apart(
         assert [t.text for t in heard if t.is_final] == ["hello", "goodbye"]
     finally:
         await session.aclose()
+
+
+async def test_punctuation_that_is_the_transcripts_own_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(transcript_segment_timeout=0.05).session()
+    heard: list[InputTranscript] = []
+    session.on("input_transcript", heard.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        # the session's first transcript: nothing earlier could own the period
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": ".NET ships today."})
+        await _wait_for(lambda: sum(t.is_final for t in heard) == 1)
+        # just after a quiet, but attached to a word, so it is this transcript's own
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": ".NET is fast."})
+        await _wait_for(lambda: sum(t.is_final for t in heard) == 2)
+        # on its own, but long after the quiet: not a trailing mark
+        await asyncio.sleep(0.15)
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": "... and so on"})
+        await _wait_for(lambda: sum(t.is_final for t in heard) == 3)
+
+        assert [t.text for t in heard if t.is_final] == [
+            ".NET ships today.",
+            ".NET is fast.",
+            "... and so on",
+        ]
+    finally:
+        await session.aclose()
