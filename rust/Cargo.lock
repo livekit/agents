@@ -1522,7 +1522,6 @@ name = "lk-agents-voice"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "jsonwebtoken 9.3.1",
  "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-media",
