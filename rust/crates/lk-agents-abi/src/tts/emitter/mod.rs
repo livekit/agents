@@ -314,17 +314,35 @@ impl AudioEmitter {
         if self.seg.is_none() {
             return Err(EmitterError::NoSegment);
         }
-        if self.abs.is_none() {
-            // `progressive=True`: the first frame is 20 ms so the agent starts talking sooner.
-            let spc = self.sample_rate / 1000 * self.frame_size_ms;
-            self.abs =
-                Some(AudioByteStream::new(self.sample_rate, self.num_channels, Some(spc), true));
-        }
-        let frames = self.abs.as_mut().expect("just set").push(data);
+        let frames = self.byte_stream().push(data);
         for f in frames {
             self.emit_frame(Some(f), false, now, eff);
         }
         Ok(())
+    }
+
+    /// `push_frame`: an already framed chunk, sent as it is, skipping the progressive re-chunking
+    /// of [`push`](Self::push). For adapters over a TTS whose emitter already framed its audio.
+    pub fn push_frame(&mut self, now: Ts, frame: Frame, eff: &mut Effects) -> Result<(), EmitterError> {
+        if !self.live()? {
+            return Ok(());
+        }
+        if self.seg.is_none() {
+            return Err(EmitterError::NoSegment);
+        }
+        // The segment has audio now, so its end is sent.
+        self.byte_stream();
+        self.emit_frame(Some(frame), false, now, eff);
+        Ok(())
+    }
+
+    /// The segment's byte stream, made on its first audio. `progressive=True`: the first frame is
+    /// 20 ms so the agent starts talking sooner.
+    fn byte_stream(&mut self) -> &mut AudioByteStream {
+        let spc = self.sample_rate / 1000 * self.frame_size_ms;
+        self.abs.get_or_insert_with(|| {
+            AudioByteStream::new(self.sample_rate, self.num_channels, Some(spc), true)
+        })
     }
 
     /// The words ride on the *next* frame this emitter sends.

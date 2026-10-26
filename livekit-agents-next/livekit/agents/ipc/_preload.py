@@ -49,10 +49,6 @@ def _step(name: str, fnc: Callable[[], Any]) -> None:
     logger.debug("preloaded %s", name, extra={"elapsed": round(time.perf_counter() - started, 3)})
 
 
-def _av() -> None:
-    import av  # noqa: F401
-
-
 def _local_inference_models() -> bool:
     value = os.environ.get(ENV_PRELOAD_LOCAL_INFERENCE)
     if value is not None and value.strip().lower() in _FALSY:
@@ -94,7 +90,6 @@ def _httpx_client() -> None:
     httpx2.AsyncClient()
 
 
-_step("av", _av)
 _step("the local inference models", _local_inference_models)
 _step("the livekit-rtc native library", _rtc_native_library)
 _step("the openai SDK resources", _openai_resources)

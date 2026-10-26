@@ -2,7 +2,7 @@
 //! decoder in front of it.
 
 use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::SynthesizedAudio as CoreAudio;
@@ -166,6 +166,7 @@ impl AudioEmitter {
         // Without a running loop the drift watchdog simply never fires.
         *me.event_loop.lock().unwrap_or_else(|e| e.into_inner()) =
             py.import("asyncio")?.call_method0("get_running_loop").ok().map(|l| l.unbind());
+        Self::drain_on_output(slf)?;
 
         me.driver
             .machine()
@@ -187,6 +188,13 @@ impl AudioEmitter {
     /// `bytes | bytearray | memoryview`, as the reference takes.
     fn push(slf: &Bound<'_, Self>, data: &Bound<'_, PyAny>) -> PyResult<()> {
         Self::submit(slf, Cmd::Push(Self::decoded(slf, pcm_arg(data)?)?))
+    }
+
+    /// An already framed `rtc.AudioFrame`, sent as it is.
+    fn push_frame(slf: &Bound<'_, Self>, frame: lk_agents_abi::AudioFrame) -> PyResult<()> {
+        let samples_per_channel = frame.samples_per_channel;
+        let frame = lk_agents_abi::Frame { data: frame.data.to_vec(), samples_per_channel };
+        Self::submit(slf, Cmd::Frame(frame))
     }
 
     /// `TimedString | list[TimedString]`.
@@ -240,11 +248,12 @@ impl AudioEmitter {
     fn end_input(slf: &Bound<'_, Self>) -> PyResult<()> {
         // Flush the decoder first, or the last packet's tail is lost. An empty tail is not pushed:
         // the machine counts pushes, and PCM streams never had that boundary.
+        // The decoder goes with its tail, and with it the callback holding this emitter.
         let tail = {
-            let mut guard = slf.get().decoder.lock().unwrap_or_else(|e| e.into_inner());
-            match guard.as_mut() {
+            let decoder = slf.get().decoder.lock().unwrap_or_else(|e| e.into_inner()).take();
+            match decoder {
                 None => Vec::new(),
-                Some(d) => d.flush().map(|pcm| crate::pcm_bytes(&pcm)).map_err(|e| {
+                Some(mut d) => slf.py().detach(move || d.flush()).map(|pcm| crate::pcm_bytes(&pcm)).map_err(|e| {
                     PyRuntimeError::new_err(format!("AudioEmitter: decode flush failed: {e}"))
                 })?,
             }
@@ -270,6 +279,7 @@ impl AudioEmitter {
         let py = slf.py();
         let me = slf.get();
         me.driver.stop();
+        me.decoder.lock().unwrap_or_else(|e| e.into_inner()).take();
         me.words.lock().unwrap_or_else(|e| e.into_inner()).clear();
         me.cancel_timer(py)?;
         py.import("asyncio")?.call_method1("sleep", (0.0,))
@@ -305,6 +315,48 @@ impl AudioEmitter {
 }
 
 impl AudioEmitter {
+    /// A container decodes on its own thread: each time it has PCM, the loop drains it into the
+    /// emitter, so decoded audio goes out as it is ready rather than at the next push.
+    fn drain_on_output(slf: &Bound<'_, Self>) -> PyResult<()> {
+        let py = slf.py();
+        let me = slf.get();
+        let Some(ev_loop) =
+            me.event_loop.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.clone_ref(py))
+        else {
+            return Ok(());
+        };
+        let this: Py<AudioEmitter> = slf.clone().unbind();
+        let on_output: crate::decoder::OnOutput = Arc::new(move || {
+            Python::attach(|py| {
+                let this = this.clone_ref(py);
+                let drain = pyo3::types::PyCFunction::new_closure(
+                    py,
+                    Some(c"_audio_emitter_decoded"),
+                    None,
+                    move |args, _kwargs| -> PyResult<()> {
+                        let bound = this.bind(args.py());
+                        let pcm = AudioEmitter::decoded(bound, Vec::new())?;
+                        if pcm.is_empty() {
+                            return Ok(());
+                        }
+                        AudioEmitter::submit(bound, Cmd::Push(pcm))
+                    },
+                );
+                let scheduled = drain.and_then(|drain| {
+                    ev_loop.bind(py).call_method1("call_soon_threadsafe", (drain,)).map(drop)
+                });
+                if let Err(err) = scheduled {
+                    // A closed loop: the synthesis is gone with it.
+                    err.print(py);
+                }
+            })
+        });
+        if let Some(decoder) = me.decoder.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            decoder.set_on_output(Some(on_output));
+        }
+        Ok(())
+    }
+
     /// Framing undecoded container bytes would be audible noise, so they pass through unchanged.
     fn decoded(slf: &Bound<'_, Self>, bytes: Vec<u8>) -> PyResult<Vec<u8>> {
         let mut guard = slf.get().decoder.lock().unwrap_or_else(|e| e.into_inner());

@@ -25,6 +25,7 @@
 #include <libavformat/avformat.h>
 #include <libavutil/audio_fifo.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/log.h>
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
 
@@ -94,6 +95,10 @@ struct LkDecoder *lk_dec_open(const char *format_short_name, /* NULL = probe */
     AVDictionary *opts = NULL;
     AVCodecParameters *par;
     const AVCodec *codec;
+
+    /* ffmpeg's own log goes to stderr; PyAV, which this replaces, kept it silent. Failures
+     * reach the caller through `err`. */
+    av_log_set_level(AV_LOG_QUIET);
 
     struct LkDecoder *d = av_mallocz(sizeof(*d));
     if (!d) { set_msg(err, errlen, "out of memory"); return NULL; }

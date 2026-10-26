@@ -13,6 +13,10 @@ enum Inner {
     Ffmpeg(crate::ffmpeg::FfmpegDecoder),
 }
 
+/// Called from the decoding thread when output (or an error) is ready to drain with an empty
+/// [`Decoder::push`]; must not block.
+pub type OnOutput = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// One decoder decodes one stream, as in the reference.
 pub struct Decoder {
     inner: Inner,
@@ -47,7 +51,11 @@ impl std::fmt::Debug for Decoder {
 }
 
 /// `AudioStreamDecoder`'s engine: bytes in, interleaved 16-bit PCM out, one decoder per stream.
-#[lk_agents_abi::host(object(name = "AudioDecoder", cell = "mutex"))]
+#[lk_agents_abi::host(object(
+    name = "AudioDecoder",
+    cell = "mutex",
+    stub = "def set_on_output(self, on_output: Any | None = None) -> None: ..."
+))]
 impl Decoder {
     /// `mime` is a media type, not a container name -- `"audio/mpeg"`, not `"mp3"`. An unknown
     /// or absent type asks ffmpeg to probe; without the `ffmpeg` feature it is an error, because
@@ -111,9 +119,20 @@ impl Decoder {
     }
 
     /// [`Decoder::flush`] as little-endian PCM bytes: the demuxer's and the resampler's tails.
-    #[host(method(name = "flush", err = "RuntimeError"))]
+    // The GIL is released while the decode thread finishes: its `on_output` may be waiting on it.
+    #[host(method(name = "flush", err = "RuntimeError", detach))]
     pub fn flush_bytes(&mut self) -> Result<Vec<u8>> {
         self.flush().map(|pcm| crate::pcm_bytes(&pcm))
+    }
+
+    /// A container decodes on its own thread, so its PCM is ready between pushes: `on_output`
+    /// says when. A WAV decodes inside `push` and never calls it.
+    pub fn set_on_output(&self, on_output: Option<OnOutput>) {
+        match &self.inner {
+            Inner::Wav(_) => drop(on_output),
+            #[cfg(feature = "ffmpeg")]
+            Inner::Ffmpeg(f) => f.set_on_output(on_output),
+        }
     }
 
     /// Routinely empty: a push that only carried a header decodes to nothing.
@@ -221,6 +240,26 @@ fn flush_tail(src: AudioFormat, target_rate: u32, r: &mut dyn Resampler) -> Resu
         to: target_rate,
         detail: e.to_string(),
     })
+}
+
+/// `on_output()` is called on the decoding thread when PCM is ready; the host hands itself over
+/// to its loop there and drains with an empty `push`.
+#[cfg(feature = "python")]
+#[pyo3::pymethods]
+impl PyAudioDecoder {
+    #[pyo3(signature = (on_output = None))]
+    fn set_on_output(&self, on_output: Option<pyo3::Py<pyo3::PyAny>>) {
+        let on_output = on_output.map(|callback| {
+            std::sync::Arc::new(move || {
+                pyo3::Python::attach(|py| {
+                    if let Err(err) = callback.call0(py) {
+                        err.print(py);
+                    }
+                })
+            }) as OnOutput
+        });
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).set_on_output(on_output);
+    }
 }
 
 #[cfg(test)]

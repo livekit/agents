@@ -15,6 +15,8 @@ pub enum Cmd {
     EndSegment,
     /// A decoding host decodes before queueing.
     Push(Vec<u8>),
+    /// An already framed chunk, sent as it is.
+    Frame(crate::Frame),
     Words(Vec<TimedString>),
     Flush,
     EndInput,
@@ -152,6 +154,7 @@ fn apply(m: &mut AudioEmitter, cmd: Cmd, now: Ts, eff: &mut Effects) -> Result<(
         Cmd::StartSegment(id) => m.start_segment(&id).map(|_| ()),
         Cmd::EndSegment => m.end_segment(now, eff),
         Cmd::Push(data) => m.push(now, &data, eff),
+        Cmd::Frame(frame) => m.push_frame(now, frame, eff),
         Cmd::Words(w) => m.push_timed_transcript(w),
         Cmd::Flush => m.flush(now, eff),
         Cmd::EndInput => m.end_input(now, eff),

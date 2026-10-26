@@ -493,3 +493,20 @@ fn the_dump_wav_header_describes_its_frames() {
     assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 200);
     assert_eq!(&wav[44..], &pcm[..]);
 }
+
+// Catches: a framed chunk re-chunked into progressive frames, or taken outside a segment.
+#[test]
+fn a_pushed_frame_goes_out_as_framed_with_only_the_tail_held() {
+    let mut fx = Fx::streaming("s");
+    let frame = crate::Frame { data: vec![0u8; 960 * 2], samples_per_channel: 960 };
+    fx.em.push_frame(fx.now, frame, &mut fx.eff).unwrap();
+    let out: u32 = sent(&fx.eff).iter().map(|a| a.frame.samples_per_channel).sum();
+    assert!(out < 960 && out > 0, "one frame out, its 10 ms tail held: {out}");
+    fx.end_segment();
+    let total: u32 = sent(&fx.eff).iter().map(|a| a.frame.samples_per_channel).sum();
+    assert_eq!(total, 960);
+
+    let mut idle = Fx::new(true);
+    let frame = crate::Frame { data: vec![0u8; 4], samples_per_channel: 2 };
+    assert_eq!(idle.em.push_frame(idle.now, frame, &mut idle.eff), Err(EmitterError::NoSegment));
+}

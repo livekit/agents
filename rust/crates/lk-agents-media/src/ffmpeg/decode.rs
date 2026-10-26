@@ -7,6 +7,17 @@ struct Shared {
     pcm: Mutex<Vec<i16>>,
     err: Mutex<Option<CodecError>>,
     src: Mutex<Option<AudioFormat>>,
+    /// Called from the decode thread when PCM or an error is ready to drain.
+    on_output: Mutex<Option<crate::decoder::OnOutput>>,
+}
+
+impl Shared {
+    fn ready(&self) {
+        let on_output = self.on_output.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(on_output) = on_output {
+            on_output();
+        }
+    }
 }
 
 /// Blocks in [`StreamBuffer::read`], as a demuxer requires; the C side turns a 0 into `AVERROR_EOF`.
@@ -30,6 +41,7 @@ extern "C" fn pcm_trampoline(opaque: *mut c_void, pcm: *const i16, n: c_int) {
     let shared = unsafe { &*(opaque as *const Shared) };
     let samples = unsafe { std::slice::from_raw_parts(pcm, n as usize) };
     shared.pcm.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(samples);
+    shared.ready();
 }
 
 pub struct FfmpegDecoder {
@@ -105,6 +117,7 @@ impl FfmpegDecoder {
                     if d.is_null() {
                         *shared.err.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some(err.take("open"));
+                        shared.ready();
                         return;
                     }
                     let (rate, ch) = unsafe { (lk_dec_src_rate(d), lk_dec_src_channels(d)) };
@@ -125,6 +138,8 @@ impl FfmpegDecoder {
                         if slot.is_none() {
                             *slot = Some(err.take("decode"));
                         }
+                        drop(slot);
+                        shared.ready();
                     }
                     unsafe { lk_dec_free(d) };
                 })
@@ -142,6 +157,12 @@ impl FfmpegDecoder {
         }
         self.saw_output = true;
         Ok(std::mem::take(&mut *g))
+    }
+
+    /// Called from the decode thread whenever output is ready, so a caller drains it then
+    /// instead of at its next push.
+    pub fn set_on_output(&self, on_output: Option<crate::decoder::OnOutput>) {
+        *self.shared.on_output.lock().unwrap_or_else(|e| e.into_inner()) = on_output;
     }
 
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<i16>> {
@@ -162,11 +183,10 @@ impl FfmpegDecoder {
 
 impl Drop for FfmpegDecoder {
     fn drop(&mut self) {
-        // `aclose()`: close the input so the blocking read returns, then join, or a worker leaks a
-        // thread per cancelled utterance.
+        // `aclose()`: close the input so the blocking read returns and the thread ends on its own.
+        // Not joined: a drop can run under the host's lock that a pending `on_output` waits on.
+        self.set_on_output(None);
         self.input.close();
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
-        }
+        self.handle.take();
     }
 }
