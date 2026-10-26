@@ -379,8 +379,9 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     """A streaming speech-to-text session connected to Baseten via WebSocket."""
 
-    # Used to close websocket
-    _CLOSE_MSG: str = json.dumps({"terminate_session": True})
+    # Asks the server to transcribe whatever audio it still has buffered. It replies
+    # with any remaining transcripts, then {"type": "end_audio", "body": {"status": "finished"}}.
+    _END_AUDIO_MSG: str = json.dumps({"type": "end_audio"})
 
     def __init__(
         self,
@@ -438,6 +439,7 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal closing_ws
             samples_per_buffer = 512
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -459,6 +461,12 @@ class SpeechStream(stt.SpeechStream):
 
                         int16_array = np.frombuffer(frame.data, dtype=np.int16)
                         await ws.send_bytes(int16_array.tobytes())
+
+                # input ended: send the partial last buffer, then ask the server to flush
+                for frame in audio_bstream.flush():
+                    await ws.send_bytes(frame.data.tobytes())
+                closing_ws = True
+                await ws.send_str(SpeechStream._END_AUDIO_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws or self._session.closed:
                     return
@@ -497,8 +505,14 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
 
-                    # Skip non-transcription messages (e.g. error, status)
                     msg_type = data.get("type")
+                    if msg_type == "end_audio":
+                        # every transcript for the flushed audio arrives before "finished"
+                        if (data.get("body") or {}).get("status") == "finished":
+                            return
+                        continue
+
+                    # Skip non-transcription messages (e.g. error, status)
                     if msg_type and msg_type not in ("transcription",):
                         logger.debug("Ignoring message type: %s", msg_type)
                         continue
