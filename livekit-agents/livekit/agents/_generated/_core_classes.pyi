@@ -371,9 +371,6 @@ async def tts_adapter_stream(
     interval: float,
     timeout: float,
 ) -> FallbackTtsStream: ...
-def stt_adapter_capabilities(inner: Any) -> dict[str, Any]: ...
-def stt_adapter_vad(kind: str) -> tuple[str | None, bool]: ...
-def stt_adapter_recognized(event: Any) -> dict[str, Any] | None: ...
 def provider_retry(
     kind: str,
     maximum: int,
@@ -1534,6 +1531,22 @@ class TurnContext:
     """
 
     def to_host_dict(self) -> Any: ...
+
+
+class SttStreamAdapter:
+    """`stt.StreamAdapter`'s engine, as the host builds it; the public class stays Python."""
+
+    def __init__(self, stt: Any, vad: Any) -> None: ...
+    async def recognize(
+        self,
+        frames: list[Any],
+        language: str | None = None,
+    ) -> dict[str, Any]: ...
+    async def stream(
+        self,
+        language: str | None = None,
+        start_time_offset: float | None = None,
+    ) -> FallbackSttStream: ...
 
 
 class Attempts:

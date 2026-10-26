@@ -636,15 +636,6 @@ pub fn video_queue_frames() -> i64 {
     i64::try_from(lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES).unwrap_or(i64::MAX)
 }
 
-/// The speech event a VAD event stands for, and whether it closes an utterance to recognize.
-#[napi(js_name = "sttAdapterVad", ts_return_type = "['start_of_speech' | 'interim_transcript' | 'preflight_transcript' | 'final_transcript' | 'recognition_usage' | 'end_of_speech' | null, boolean]")]
-pub fn stt_adapter_vad(env: Env, #[napi(ts_arg_type = "'start_of_speech' | 'inference_done' | 'end_of_speech'")] kind: String) -> napi::Result<(Option<String>, bool)> {
-    crate::host_error::run(&env, || {
-        let kind = kind.parse().map_err(|e| crate::host_error::JsError::new("ValueError", format!("kind: {e}")))?;
-        Ok({ let (t0, t1,) = lk_agents_abi::stt::stream_adapter::vad_event(kind); (t0.map(|v| v.as_str().to_owned()), t1) })
-    })
-}
-
 #[napi(js_name = "validateSynthesis")]
 pub fn validate_synthesis(env: Env, text: String, duration: f64, segments: Option<(i64, i64)>) -> napi::Result<Option<String>> {
     crate::host_error::run(&env, || {

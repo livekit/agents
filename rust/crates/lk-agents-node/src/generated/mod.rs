@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 275 core items bound (120 functions and consts, 73 classes, 81 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 275 core items bound (119 functions and consts, 74 classes, 81 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -21,8 +21,6 @@
 //! - `lk_agents_rtc::wait_for_participant_attribute`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::wait_for_track_publication`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_abi::adapter_stream`: parameter `provider`: not yet: `Arc<dyn Tts>` (a host object behind a proxy)
-//! - `lk_agents_abi::stt::stream_adapter::capabilities`: field `aligned_transcript`: `AlignedTranscript` has no Node shape (not a declared record, enum or JSON)
-//! - `lk_agents_abi::stt::stream_adapter::recognized`: parameter `event`: `SpeechEvent` cannot be built from JS: `kind`: a declared enum is read from JS only as a parameter (it has no `FromStr` to rely on)
 //! - `lk_agents_abi::types::retry::decide_for_host`: parameter `kind`: not yet: `RequestKind` is an open string (#[host(string)])
 //! - `lk_agents_abi::telemetry::provider::stt_batch_for_host`: parameter `event`: `SpeechEvent` cannot be built from JS: `kind`: a declared enum is read from JS only as a parameter (it has no `FromStr` to rely on)
 //! - `lk_agents_abi::telemetry::provider::stt_stream_for_host`: parameter `event`: `SpeechEvent` cannot be built from JS: `kind`: a declared enum is read from JS only as a parameter (it has no `FromStr` to rely on)
@@ -115,6 +113,9 @@
 //! - `lk_agents_abi::voice::rtc::Transcription::participant_identity`: return: not yet: `ParticipantIdentity` is an open string (#[host(string)])
 //! - `lk_agents_abi::voice::rtc::Transcription::track_sid`: return: not yet: `TrackSid` is an open string (#[host(string)])
 //! - `lk_agents_voice::room_io::rooms::ScriptedRoom::session_clock`: return: not yet: returning an exposed class
+//! - `lk_agents_abi::stt::stream_adapter::SttStreamAdapter::for_host`: parameter `stt`: not yet: `Arc<dyn Stt>` (a host object behind a proxy)
+//! - `lk_agents_abi::stt::stream_adapter::SttStreamAdapter::recognize_for_host`: parameter `frames`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_abi::stt::stream_adapter::SttStreamAdapter::stream_for_host`: parameter `language`: not yet: `LanguageCode` is an open string (#[host(string)])
 //! - `lk_agents_abi::types::retry::Attempts::for_host`: parameter `kind`: not yet: `RequestKind` is an open string (#[host(string)])
 //! - `lk_agents_abi::types::retry::Attempts::begin`: parameter `clock`: not yet: `Arc<dyn Clock>` (a host object behind a proxy)
 //! - `lk_agents_abi::types::retry::Attempts::failed`: parameter `error`: `ProviderError` is not a #[derive(Host)] type or a #[host(wire_enum)]

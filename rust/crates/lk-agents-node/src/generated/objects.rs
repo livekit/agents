@@ -1839,6 +1839,16 @@ impl TurnContext {
     }
 }
 
+/// `stt.StreamAdapter`'s engine, as the host builds it; the public class stays Python.
+#[napi(js_name = "SttStreamAdapter")]
+pub struct SttStreamAdapter {
+    pub(crate) inner: std::sync::Arc<lk_agents_abi::stt::stream_adapter::SttStreamAdapter>,
+}
+
+#[napi]
+impl SttStreamAdapter {
+}
+
 #[napi(js_name = "Attempts")]
 pub struct Attempts {
     pub(crate) inner: std::sync::Arc<lk_agents_abi::types::retry::Attempts>,

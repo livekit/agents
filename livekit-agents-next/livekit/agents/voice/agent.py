@@ -621,18 +621,10 @@ class Agent(Generic[Context_T, Output_T]):
         ) -> AsyncIterable[stt.SpeechEvent]:
             """Default implementation for `Agent.stt_node`"""
             binding = agent._get_voice_binding_or_raise()
-            recognizer = binding.stt
-            if recognizer is None:
+            if binding.stt is None:
                 raise RuntimeError("stt_node called but no STT is available")
-            if not recognizer.capabilities.streaming:
-                if binding.vad is None:
-                    raise RuntimeError(
-                        f"the STT ({recognizer.label}) does not stream: add a VAD, or wrap it in "
-                        "an stt.StreamAdapter"
-                    )
-                recognizer = stt.StreamAdapter(stt=recognizer, vad=binding.vad)
             conn_options = binding.session.conn_options.stt_conn_options
-            return _core.stt_node(recognizer, audio, conn_options=conn_options)
+            return _core.stt_node(binding.stt, audio, conn_options=conn_options, vad=binding.vad)
 
         @staticmethod
         def tts_node(

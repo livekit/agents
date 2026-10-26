@@ -84,6 +84,23 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for MediaRef {
     }
 }
 
+impl MediaRef {
+    /// The audio frames a host list holds (`VADEvent.frames`), read back; none without a host.
+    pub fn audio_frames(&self) -> Vec<crate::AudioFrame> {
+        #[cfg(feature = "python")]
+        {
+            use pyo3::types::PyAnyMethods as _;
+            pyo3::Python::attach(|py| {
+                crate::python::resolve(py, self.id())
+                    .and_then(|list| list.bind(py).extract::<Vec<crate::AudioFrame>>().ok())
+                    .unwrap_or_default()
+            })
+        }
+        #[cfg(not(feature = "python"))]
+        Vec::new()
+    }
+}
+
 /// Submitted (`inventory`) beside the class, so [`CoreObject`]'s `IntoPyObject` needs no table of
 /// every crate's types.
 #[cfg(feature = "python")]

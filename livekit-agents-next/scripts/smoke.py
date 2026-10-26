@@ -42,6 +42,7 @@ from livekit.agents import (
     room_io,
     stt,
     tts,
+    vad,
 )
 from livekit.agents.llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -119,6 +120,55 @@ class _Recognize(stt.RecognizeStream):
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(type=kind, alternatives=alternatives)
                     )
+
+
+class BatchSTT(stt.STT):
+    """A recognize-only STT: it hears "batch words" in any utterance of a tenth of a second."""
+
+    def __init__(self) -> None:
+        super().__init__(capabilities=stt.STTCapabilities(streaming=False, interim_results=False))
+        self.utterances: list[float] = []
+
+    async def _recognize_impl(self, buffer: object, **_: object) -> stt.SpeechEvent:
+        frames = buffer if isinstance(buffer, list) else [buffer]
+        self.utterances.append(sum(f.duration for f in frames))  # type: ignore[attr-defined]
+        said = stt.SpeechData(language="en", text="batch words", confidence=1.0)
+        return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[said])
+
+
+class ScriptedVAD(vad.VAD):
+    """Speech starts with the first frame and ends after half a second, its frames attached."""
+
+    def __init__(self) -> None:
+        super().__init__(capabilities=vad.VADCapabilities(update_interval=0.032))
+
+    def stream(self) -> vad.VADStream:
+        return _Detect(self)
+
+
+class _Detect(vad.VADStream):
+    async def _main_task(self) -> None:
+        speech: list[rtc.AudioFrame] = []
+        ended = False
+        async for frame in self._input_ch:
+            if not isinstance(frame, rtc.AudioFrame) or ended:
+                continue
+            kind = vad.VADEventType.START_OF_SPEECH if not speech else None
+            speech.append(frame)
+            if sum(f.duration for f in speech) >= 0.5:
+                kind = vad.VADEventType.END_OF_SPEECH
+            if kind is not None:
+                self._event_ch.send_nowait(
+                    vad.VADEvent(
+                        type=kind,
+                        samples_index=0,
+                        timestamp=0.0,
+                        speech_duration=0.0,
+                        silence_duration=0.0,
+                        frames=list(speech) if kind == vad.VADEventType.END_OF_SPEECH else [],
+                    )
+                )
+            ended = kind == vad.VADEventType.END_OF_SPEECH
 
 
 class SilentTTS(tts.TTS):
@@ -626,6 +676,22 @@ async def nodes() -> None:
 
     await node_session(Redacting(), speak)
     assert heard == ["my name is [name]"], heard
+
+    print("== recognize-only stt, over the vad")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    batch = BatchSTT()
+    session = LiveSession(stt=batch, llm=ScriptedLLM(), tts=SilentTTS(), vad=ScriptedVAD())
+    heard.clear()
+    session.on("user_input_transcribed", lambda ev: heard.append(ev.transcript))
+    await session.start(Agent(instructions="x", name="batch"), room=room)
+    await settle(room, 1)
+    room.speak(frames=40)
+    await settle(room, 4)
+    await session.aclose()
+    print(f"heard {heard} utterances {batch.utterances}")
+    assert heard == ["batch words"], heard
+    assert batch.utterances and batch.utterances[0] >= 0.5, batch.utterances
 
 
 async def avatar() -> None:

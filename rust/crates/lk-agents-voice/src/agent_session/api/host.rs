@@ -193,9 +193,10 @@ impl SessionApi {
             agent: agent_turn_handling.as_ref().map(crate::turn::agent_layer),
         };
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
-        let stt = stt.map(|s| nodes.stt(stt_leg(s)));
+        let stt = stt.map(|s| nodes.stt(stt_leg(s, vad.clone())));
         let llm = llm.map(|l| nodes.llm(llm_leg(l)));
         let tts = tts.map(|t| nodes.tts(tts_leg(t, clock.clone())));
+        let vad_leg = vad.clone();
         let interruption = interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
         let toolset = host_toolset(tools, tools_host, tool_runner);
@@ -370,6 +371,7 @@ impl SessionApi {
         let mut api = SessionApi {
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready { builder, interruption })))),
             legs: Mutex::new(legs),
+            vad: Mutex::new(vad_leg),
             stack: Mutex::new(stack),
             room_io,
             synchronizer,
@@ -821,7 +823,7 @@ impl SessionApi {
             prompt: cfg.prompt.unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
             llm: llm_leg(llm),
             tools_host: tools,
-            stt: stt.map(stt_leg),
+            stt: stt.map(|s| stt_leg(s, None)),
             room: self.host.call_room.clone(),
             participant: participant_identity,
         };

@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _core, utils
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..vad import VAD, VADEventType
+from ..vad import VAD
 from .stt import (
     STT,
     RecognizeStream,
     SpeechEvent,
-    SpeechEventType,
     STTCapabilities,
     _speech_event_from_core,
 )
@@ -90,7 +88,8 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
     @functools.cached_property
     def _native(self) -> _core.FallbackStt:
         # built on first use: the chain lives on the running loop
-        return _core.FallbackStt(self._stt_instances, on_availability=self, **self._opts)
+        stts = [t._native if isinstance(t, StreamAdapter) else t for t in self._stt_instances]
+        return _core.FallbackStt(stts, on_availability=self, **self._opts)
 
     def _core_availability_changed(self, ev: dict[str, Any]) -> None:
         self.emit(
@@ -154,7 +153,7 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
-        return FallbackRecognizeStream(stt=self, language=language)
+        return StreamAdapterWrapper(stt=self, native=self._native, language=language)
 
     def prewarm(self) -> None:
         self._stt_instances[0].prewarm()
@@ -164,16 +163,20 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
             await self._native.aclose()
 
 
-class FallbackRecognizeStream(RecognizeStream):
-    _stt: FallbackAdapter
+class StreamAdapterWrapper(RecognizeStream):
+    """A recognition stream the core runs: a ``FallbackAdapter``'s chain or a
+    ``StreamAdapter``'s VAD and recognitions."""
 
-    def __init__(self, *, stt: FallbackAdapter, language: NotGivenOr[str]) -> None:
-        # the chain retries each member itself
+    def __init__(
+        self, *, stt: STT, native: _core.FallbackStt | _core.SttStreamAdapter, language: Any
+    ) -> None:
+        # the core retries what it runs
         super().__init__(stt=stt, conn_options=APIConnectOptions(max_retry=0))
+        self._native = native
         self._language = language if language else None
 
     async def _run(self) -> None:
-        native = await self._stt._native.stream(self._language, self.start_time_offset)
+        native = await self._native.stream(self._language, self.start_time_offset)
 
         async def _push() -> None:
             async for item in self._input_ch:
@@ -194,7 +197,7 @@ class FallbackRecognizeStream(RecognizeStream):
 
 class StreamAdapter(STT):
     """A recognize-only STT as a streaming one: the VAD cuts the audio into utterances, each
-    recognized on its own."""
+    recognized on its own (``_core.SttStreamAdapter``)."""
 
     def __init__(self, *, stt: STT, vad: VAD) -> None:
         super().__init__(
@@ -208,6 +211,11 @@ class StreamAdapter(STT):
         )
         self._vad = vad
         self._stt = stt
+
+    @functools.cached_property
+    def _native(self) -> _core.SttStreamAdapter:
+        # built on first use, on the running loop
+        return _core.SttStreamAdapter(self._stt, self._vad)
 
     @property
     def wrapped_stt(self) -> STT:
@@ -244,61 +252,7 @@ class StreamAdapter(STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
-        return StreamAdapterWrapper(self, language=language, conn_options=conn_options)
+        return StreamAdapterWrapper(stt=self, native=self._native, language=language)
 
     def prewarm(self) -> None:
         self._stt.prewarm()
-
-
-class StreamAdapterWrapper(RecognizeStream):
-    def __init__(
-        self, stt: StreamAdapter, *, language: NotGivenOr[str], conn_options: APIConnectOptions
-    ) -> None:
-        # the wrapped STT's recognize() retries, so the stream does not
-        super().__init__(stt=stt, conn_options=APIConnectOptions(max_retry=0))
-        self._adapter = stt
-        self._wrapped_conn_options = conn_options
-        self._language = language
-
-    async def _run(self) -> None:
-        vad_stream = self._adapter._vad.stream()
-
-        async def _forward_input() -> None:
-            async for item in self._input_ch:
-                if isinstance(item, self._FlushSentinel):
-                    vad_stream.flush()
-                else:
-                    vad_stream.push_frame(item)
-            vad_stream.end_input()
-
-        async def _recognize() -> None:
-            async for event in vad_stream:
-                if event.type == VADEventType.START_OF_SPEECH:
-                    self._event_ch.send_nowait(SpeechEvent(SpeechEventType.START_OF_SPEECH))
-                    continue
-                if event.type != VADEventType.END_OF_SPEECH:
-                    continue
-                end = time.time() - event.silence_duration - event.inference_duration
-                self._event_ch.send_nowait(
-                    SpeechEvent(type=SpeechEventType.END_OF_SPEECH, speech_end_time=end)
-                )
-                recognized = await self._adapter._stt.recognize(
-                    buffer=utils.merge_frames(event.frames),
-                    language=self._language,
-                    conn_options=self._wrapped_conn_options,
-                )
-                if recognized.alternatives and recognized.alternatives[0].text:
-                    self._event_ch.send_nowait(
-                        SpeechEvent(
-                            type=SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[recognized.alternatives[0]],
-                            speech_end_time=recognized.speech_end_time or end,
-                        )
-                    )
-
-        tasks = [asyncio.create_task(_forward_input()), asyncio.create_task(_recognize())]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await utils.aio.cancel_and_wait(*tasks)
-            await vad_stream.aclose()

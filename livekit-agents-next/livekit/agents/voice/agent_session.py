@@ -162,7 +162,9 @@ def _core_leg(leg: Any) -> Any:
     the Python wrapper."""
     if isinstance(leg, (inference.STT, inference.LLM, inference.TTS)):
         return leg._core_native()
-    if isinstance(leg, (stt.FallbackAdapter, llm.FallbackAdapter, tts.FallbackAdapter)):
+    if isinstance(
+        leg, (stt.FallbackAdapter, stt.StreamAdapter, llm.FallbackAdapter, tts.FallbackAdapter)
+    ):
         return leg._native
     return leg
 

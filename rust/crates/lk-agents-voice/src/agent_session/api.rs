@@ -49,6 +49,8 @@ pub struct SessionApi {
     /// sends, so `session.options` resolves the instant a change is sent.
     stack: Mutex<crate::agent_activity::options::ConfigStack>,
     room_io: Arc<crate::room_io::RoomIo>,
+    /// The VAD the session runs on now, which a recognize-only STT given later goes over.
+    pub(super) vad: Mutex<Option<Arc<dyn Vad>>>,
     /// The transcript synchroniser, held only so `close_io` can close it.
     synchronizer: Option<Arc<crate::transcription::synchronizer::TranscriptSynchronizer>>,
     spawner: Arc<dyn Spawner>,
@@ -435,10 +437,17 @@ impl SessionApi {
         }
         let clock = self.time.clock();
         let r = &self.resources;
+        let vad_now = {
+            let mut current = self.vad.lock().unwrap_or_else(|p| p.into_inner());
+            if let Maybe::Given(given) = &vad {
+                current.clone_from(given);
+            }
+            current.clone()
+        };
         let models = ModelRefs {
             llm: map(llm, |l| r.register_llm(nodes.llm(llm_leg(l)))),
             tts: map(tts, |t| r.register_tts(nodes.tts(tts_leg(t, clock)))),
-            stt: map(stt, |s| r.register_stt(nodes.stt(stt_leg(s)))),
+            stt: map(stt, |s| r.register_stt(nodes.stt(stt_leg(s, vad_now)))),
             vad: map(vad, |v| r.register_vad(v)),
         };
         {
@@ -1189,8 +1198,10 @@ fn engine_retries() -> lk_agents_abi::ApiConnectOptions {
     lk_agents_abi::ApiConnectOptions { max_retry: 0, ..lk_agents_abi::ApiConnectOptions::default() }
 }
 
-fn stt_leg(stt: Arc<dyn Stt>) -> Arc<dyn Stt> {
-    stt.with_conn_options(&lk_agents_abi::ApiConnectOptions::default()).unwrap_or(stt)
+/// A recognize-only STT goes over `vad` (`Agent.stt_node`'s default `StreamAdapter`).
+fn stt_leg(stt: Arc<dyn Stt>, vad: Option<Arc<dyn Vad>>) -> Arc<dyn Stt> {
+    let stt = stt.with_conn_options(&lk_agents_abi::ApiConnectOptions::default()).unwrap_or(stt);
+    lk_agents_abi::stt::stream_adapter::SttStreamAdapter::adapted(stt, vad)
 }
 
 fn llm_leg(llm: Arc<dyn Llm>) -> Arc<dyn Llm> {
