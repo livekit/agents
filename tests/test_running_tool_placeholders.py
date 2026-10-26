@@ -24,6 +24,8 @@ def test_inject_adds_flagged_pair_for_inflight_call() -> None:
     assert len(calls) == 1 and len(outs) == 1
     assert calls[0].extra.get(_RUNNING_PLACEHOLDER_KEY) is True
     assert outs[0].output and outs[0].is_error is False
+    # ids of their own, the same on every turn the call is still running
+    assert (calls[0].id, outs[0].id) == (f"{running.id}_running", f"{running.id}_running_output")
     # the call must precede its output so the pair is valid for the LLM
     assert chat_ctx.items.index(calls[0]) < chat_ctx.items.index(outs[0])
 

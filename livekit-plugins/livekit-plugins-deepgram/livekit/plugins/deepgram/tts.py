@@ -31,6 +31,10 @@ from .models import TTSModels
 
 BASE_URL = "https://api.deepgram.com/v1/speak"
 NUM_CHANNELS = 1
+# Speaking rate bounds accepted by the Deepgram TTS API; values outside are rejected
+# with a 400, which on the WebSocket path surfaces only as a failed handshake.
+MIN_SPEED = 0.7
+MAX_SPEED = 1.5
 
 
 @dataclass
@@ -43,6 +47,7 @@ class _TTSOptions:
     api_key: str
     mip_opt_out: bool = False
     bit_rate: int | None = None
+    speed: float | None = None
 
 
 class TTS(tts.TTS):
@@ -53,6 +58,7 @@ class TTS(tts.TTS):
         encoding: str = "linear16",
         sample_rate: int = 24000,
         bit_rate: int | None = None,
+        speed: float | None = None,
         api_key: str | None = None,
         base_url: str = BASE_URL,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
@@ -69,6 +75,10 @@ class TTS(tts.TTS):
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3). Defaults to None.
                 See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
+            speed (float | None): Speaking rate, from 0.7 to 1.5; 1.0 is the normal rate. Defaults to None,
+                which leaves it out of the request. Deepgram supports it on Aura-2 English and Spanish
+                voices and rejects the request for other models.
+                See https://developers.deepgram.com/docs/tts-voice-controls
             api_key (str): Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY in environment.
             base_url (str): Base URL for Deepgram TTS API. Defaults to "https://api.deepgram.com/v1/speak"
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
@@ -85,6 +95,9 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
 
+        if speed is not None and not MIN_SPEED <= speed <= MAX_SPEED:
+            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
 
@@ -93,6 +106,7 @@ class TTS(tts.TTS):
             encoding=encoding,
             sample_rate=sample_rate,
             bit_rate=bit_rate,
+            speed=speed,
             word_tokenizer=word_tokenizer,
             base_url=base_url,
             api_key=api_key,
@@ -126,6 +140,8 @@ class TTS(tts.TTS):
         }
         if self._opts.bit_rate is not None:
             config["bit_rate"] = self._opts.bit_rate
+        if self._opts.speed is not None:
+            config["speed"] = self._opts.speed
         ws = await asyncio.wait_for(
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
@@ -173,6 +189,7 @@ class TTS(tts.TTS):
         encoding: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         bit_rate: NotGivenOr[int | None] = NOT_GIVEN,
+        speed: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -181,7 +198,12 @@ class TTS(tts.TTS):
             sample_rate (int): Sample rate of audio in Hz.
             bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3).
                 See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
+            speed (float | None): Speaking rate, from 0.7 to 1.5; None leaves it out of the request.
+                See https://developers.deepgram.com/docs/tts-voice-controls
         """
+        if is_given(speed) and speed is not None and not MIN_SPEED <= speed <= MAX_SPEED:
+            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+
         connection_params_changed = False
         if is_given(model):
             self._opts.model = model
@@ -196,11 +218,14 @@ class TTS(tts.TTS):
         if is_given(bit_rate):
             self._opts.bit_rate = bit_rate
             connection_params_changed = True
+        if is_given(speed):
+            self._opts.speed = speed
+            connection_params_changed = True
 
         if connection_params_changed:
             # These params are baked into the WebSocket URL at connection time, so any
             # existing pooled connection must be invalidated to avoid serving audio at
-            # the wrong rate/encoding.
+            # the wrong rate/encoding/speed.
             self._pool.invalidate()
 
     def synthesize(
@@ -244,6 +269,8 @@ class ChunkedStream(tts.ChunkedStream):
             }
             if self._opts.bit_rate is not None:
                 http_params["bit_rate"] = self._opts.bit_rate
+            if self._opts.speed is not None:
+                http_params["speed"] = self._opts.speed
             async with self._tts._ensure_session().post(
                 _to_deepgram_url(http_params, self._opts.base_url, websocket=False),
                 headers={

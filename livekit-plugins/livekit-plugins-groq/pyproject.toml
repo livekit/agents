@@ -21,9 +21,10 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs, openai]>=1.8.3",
+    "livekit-agents[codecs, openai]>=1.8.9",
     "aiohttp",
     "livekit",
+    "httpx2>=2.12,<3",
 ]
 
 [project.urls]

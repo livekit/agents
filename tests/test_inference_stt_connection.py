@@ -13,7 +13,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError
 from livekit.agents.inference import STT
 from livekit.agents.inference.stt import SpeechStream
 from livekit.agents.stt import RecognizeStream, SpeechEventType
@@ -110,6 +110,80 @@ async def test_input_end_preserves_delayed_final_after_session_finalized() -> No
     assert message_types == ["session.create", "session.finalize", "session.close"]
     assert transcripts == ["final words"]
     assert not close_before_transcript
+
+
+async def test_flux_language_hint_reaches_session_create() -> None:
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = STT(
+            model="deepgram/flux-general-multi",
+            api_key="test-key",
+            api_secret="test-secret",
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"language_hint": ["en", "es"]},
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            stream.end_input()
+            await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert extra["language_hint"] == ["en", "es"]
+
+
+async def test_linden_session_keyterms_reach_session_create() -> None:
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json({"type": "final_transcript", "transcript": "hi"})
+                await ws.close()
+        return ws
+
+    user_entry = {"content": "gnocchi", "sounds_like": ["nyohki"]}
+    async with _gateway(handler) as (base_url, session):
+        stt = STT(
+            model="speechmatics/linden-1",
+            api_key="test-key",
+            api_secret="test-secret",
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"additional_vocab": [user_entry]},
+        )
+        assert stt.capabilities.keyterms is True
+        stt._update_session_keyterms(["gnocchi", "LiveKit"])
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            stream.end_input()
+            await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    # the user's entry keeps its sounds_like; a session term it already covers is not duplicated
+    assert extra["additional_vocab"] == [user_entry, {"content": "LiveKit"}]
 
 
 @pytest.mark.parametrize("close_code", [1000, 1011])
@@ -288,6 +362,9 @@ class _Socket:
     async def receive(self) -> aiohttp.WSMessage:
         return await self.messages.get()
 
+    async def ping(self) -> None:
+        self.messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", ""))
+
     async def close(self) -> None:
         self.closed = True
 
@@ -299,6 +376,66 @@ class _Socket:
                 "",
             )
         )
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("message", "progress"),
+    [
+        ("start_of_speech", True),
+        ("interim_transcript", True),
+        ("preflight_transcript", True),
+        ("final_transcript", True),
+        ("session.finalized", True),
+        ("session.created", False),
+        ("unknown", False),
+        ("pong", False),
+    ],
+)
+async def test_provider_events_reset_retries_but_setup_and_pongs_do_not(
+    monkeypatch: pytest.MonkeyPatch, message: str, progress: bool
+) -> None:
+    processed = asyncio.Event()
+
+    class Socket(_Socket):
+        async def receive(self) -> aiohttp.WSMessage:
+            if self.messages.empty():
+                processed.set()
+            return await super().receive()
+
+    socket = Socket()
+    if message == "pong":
+        socket.messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", ""))
+    else:
+        socket.send_event(message)
+    monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
+    async with aiohttp.ClientSession() as session:
+        stream = _make_stt("http://unused", session).stream()
+        stream._num_retries = 2
+        try:
+            await asyncio.wait_for(processed.wait(), 1)
+            assert stream._num_retries == (0 if progress else 2)
+        finally:
+            await stream.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("message", ["error", "session.closed"])
+async def test_provider_failure_events_do_not_reset_retries(
+    monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    socket = _Socket()
+    socket.send_event(message)
+    monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
+    async with aiohttp.ClientSession() as session:
+        stream = _make_stt("http://unused", session).stream()
+        stream._num_retries = 3
+        try:
+            with pytest.raises(APIError):
+                await asyncio.wait_for(stream._task, 1)
+            assert stream._num_retries == 3
+        finally:
+            await stream.aclose()
 
 
 @pytest.mark.virtual_time
@@ -487,3 +624,27 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     assert exc_info.value.message == "LiveKit Inference STT returned an error"
     assert exc_info.value.body == {"code": error_code}
     assert exc_info.value.retryable is False
+
+
+async def test_half_open_socket_raises_retryable_error() -> None:
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        # accepts the session, then never sends anything or answers a ping
+        ws = web.WebSocketResponse(autoping=False)
+        await ws.prepare(request)
+        async for _ in ws:
+            pass
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session).stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0, liveness_timeout=0.15)
+        )
+        try:
+            with pytest.raises(APIConnectionError) as exc_info:
+                await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert exc_info.value.retryable is True
+    assert isinstance(exc_info.value.__cause__, aiohttp.ServerTimeoutError)
