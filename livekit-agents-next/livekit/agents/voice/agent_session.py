@@ -404,11 +404,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             plan = _core.plan_session_start(
                 job_default=job_ctx.job.enable_recording,
                 has_job_context=True,
-                another_session_is_primary=job_ctx._primary_agent_session is not None,
+                another_session_is_primary=not job_ctx._run.claim_session(self),
             )
             self._recording_options = plan["recording"]
-            if plan["is_primary"]:
-                job_ctx._primary_agent_session = self
             hosting = hosting or plan["hosting"]
             job_ctx.init_recording(self._recording_options)
 

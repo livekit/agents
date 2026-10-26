@@ -222,7 +222,7 @@ class _JobProc:
             run=self._run,
             inference_executor=self._client,
         )
-        # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
+        # Reachable from the remote session port (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
 
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")

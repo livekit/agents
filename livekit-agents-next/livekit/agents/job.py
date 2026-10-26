@@ -229,7 +229,6 @@ class JobContext:
         self._log_filter = _ContextLogFieldsFilter(self)
         self._handlers_with_filter: list[logging.Handler] = []
 
-        self._primary_agent_session: LiveSession | None = None
         self._thread: Thread | None = None
 
         # on_simulation_end callback, injected by the job runner from AgentServer.
@@ -382,6 +381,10 @@ class JobContext:
 
     def is_fake_job(self) -> bool:
         return self._info.fake_job
+
+    @property
+    def _primary_agent_session(self) -> LiveSession | None:
+        return self._run.primary_session  # type: ignore[no-any-return]
 
     @property
     def _redaction_enabled(self) -> bool:

@@ -877,6 +877,8 @@ struct JobRunState {
     /// Whether `init_recording` ran, and the redaction it resolved (the job's until then).
     recording_initialized: bool,
     redaction: bool,
+    /// The job's primary session: the first started for it.
+    primary_session: Option<Py<PyAny>>,
 }
 
 /// A job's run, for `JobContext` and `job_proc_lazy_main.py`'s `_JobProc`: what ends the job (the
@@ -1306,6 +1308,25 @@ impl PyJobRun {
         st.redaction = redaction;
         let uploads = ["traces", "logs", "audio", "transcript"].iter().any(|key| get(key, true));
         Ok((uploads && observability).then_some(redaction))
+    }
+
+    /// A session started for the job (on its room, or the console's): whether it is the job's
+    /// primary one, which the job closes and reports for. The first claims it.
+    fn claim_session(&self, py: Python<'_>, session: Py<PyAny>) -> bool {
+        let mut st = lock(&self.0.state);
+        match &st.primary_session {
+            Some(primary) => primary.is(&session),
+            None => {
+                st.primary_session = Some(session.clone_ref(py));
+                true
+            }
+        }
+    }
+
+    /// The job's primary session, once one started.
+    #[getter]
+    fn primary_session(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        lock(&self.0.state).primary_session.as_ref().map(|s| s.clone_ref(py))
     }
 
     /// Whether `init_recording` ran.
