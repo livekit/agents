@@ -1790,6 +1790,7 @@ class FallbackLlm:
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
         retry_on_chunk_sent: bool = False,
+        sticky: bool = False,
         on_availability: Any | None = None,
     ) -> None: ...
     @property

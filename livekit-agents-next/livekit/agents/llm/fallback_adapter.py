@@ -41,12 +41,11 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             max_retry_per_llm: Retries of each before moving to the next.
             retry_interval: The wait between retries.
             retry_on_chunk_sent: Whether a failure after output was sent moves to the next LLM.
-            sticky: Unsupported by the core's chain; a recovered LLM is preferred again.
+            sticky: Keep the LLM that last served until it fails, even once a preferred one
+                recovers; on failure the rest are tried in order.
         """
         if not llm:
             raise ValueError("at least one LLM instance must be provided.")
-        if sticky:
-            logger.warning("FallbackAdapter(sticky=True) is not supported; ignoring it")
         super().__init__()
         self._llm_instances = llm
         self._opts = {
@@ -54,6 +53,7 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             "max_retry_per_llm": max_retry_per_llm,
             "retry_interval": retry_interval,
             "retry_on_chunk_sent": retry_on_chunk_sent,
+            "sticky": sticky,
         }
 
     @functools.cached_property

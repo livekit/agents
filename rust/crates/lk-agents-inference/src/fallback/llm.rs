@@ -106,7 +106,7 @@ impl FallbackLlm {
     /// and a plugin's own would multiply it (N×M attempts).
     #[host(new(
         kw_only = "attempt_timeout",
-        defaults(attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, retry_on_chunk_sent = false)
+        defaults(attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, retry_on_chunk_sent = false, sticky = false)
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn for_host(
@@ -115,6 +115,7 @@ impl FallbackLlm {
         max_retry_per_llm: u32,
         retry_interval: f64,
         retry_on_chunk_sent: bool,
+        sticky: bool,
         on_availability: Option<Arc<dyn ChainObserver>>,
         #[host(ambient)] clock: Arc<dyn Clock>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
@@ -125,6 +126,7 @@ impl FallbackLlm {
             max_retry_per_backend: max_retry_per_llm,
             attempt_timeout: Some(attempt_timeout),
             retry_interval: Some(retry_interval),
+            sticky,
             ..ChainPolicy::llm_defaults()
         }
         .with_retry_on_chunk_sent(retry_on_chunk_sent);

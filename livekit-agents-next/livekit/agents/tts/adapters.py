@@ -67,19 +67,21 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         self._tts_instances = tts
         self._max_retry_per_tts = max_retry_per_tts
         sample_rate = sample_rate or max(t.sample_rate for t in tts)
-        # every member streams: the core's chain streams only through members that do
-        aligned = all(t.capabilities.aligned_transcript for t in tts)
         super().__init__(
-            capabilities=TTSCapabilities(streaming=True, aligned_transcript=aligned),
+            capabilities=TTSCapabilities(
+                streaming=any(t.capabilities.streaming for t in tts),
+                aligned_transcript=all(t.capabilities.aligned_transcript for t in tts),
+            ),
             sample_rate=sample_rate,
             num_channels=tts[0].num_channels,
         )
 
     @functools.cached_property
     def _native(self) -> _core.FallbackTts:
-        # built on first use: the chain lives on the running loop
+        # built on first use: the chain lives on the running loop; a member without a duplex
+        # path streams through the core's sentence adapter
         return _core.FallbackTts(
-            [t if t.capabilities.streaming else StreamAdapter(tts=t) for t in self._tts_instances],
+            self._tts_instances,
             max_retry_per_tts=self._max_retry_per_tts,
             sample_rate=self.sample_rate,
             on_availability=self,
