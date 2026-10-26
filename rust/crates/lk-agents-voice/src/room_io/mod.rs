@@ -82,7 +82,7 @@ impl Opened {
     }
 }
 
-/// The legs a frame has after `reopen_legs`: given, or the table's row where none was given.
+/// The legs an agent has after `reopen_legs`: given, or the table's row where none was given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InputProviders {
     pub(crate) stt: bool,

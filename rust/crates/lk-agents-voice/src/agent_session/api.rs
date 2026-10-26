@@ -43,7 +43,7 @@ pub struct SessionApi {
     stage: Arc<Mutex<Stage>>,
     /// The driver's legs, kept in step with every provider swap ([`swap`](Self::swap)).
     legs: Mutex<crate::agent_activity::options::LegSet>,
-    /// The driver's option stack, kept in step with every `Configure` and frame update a host
+    /// The driver's option stack, kept in step with every `Configure` and agent update a host
     /// sends, so `session.options` resolves the instant a change is sent.
     stack: Mutex<crate::agent_activity::options::ConfigStack>,
     room_io: Arc<crate::room_io::RoomIo>,
@@ -57,7 +57,7 @@ pub struct SessionApi {
     dtmf_reply: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
     /// The last `with_filler` scope numbered by [`filler_start`](Self::filler_start).
     last_filler: std::sync::atomic::AtomicU64,
-    /// Every frame's `Agent` by its id, as the host installed it: the events naming an agent hand
+    /// Every `Agent` by its id, as the host installed it: the events naming an agent hand
     /// it back ([`HostAgents::resolve`]).
     agents: HostAgents,
     /// The monotonic-to-wall pair every `Ts`-carrying event converts against, read once so events
@@ -856,7 +856,7 @@ impl SessionRoom for FixedRoom {
     }
 }
 
-/// The host's `Agent` objects by frame id. The hooks and the handoff record name an agent by
+/// The host's `Agent` objects by agent id. The hooks and the handoff record name an agent by
 /// id; the host reads the object it installed.
 #[derive(Clone, Default)]
 pub struct HostAgents(Arc<Mutex<std::collections::HashMap<String, lk_agents_abi::HostRef>>>);
@@ -913,20 +913,20 @@ pub trait NodeFactory: Send + Sync {
     async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError>;
 }
 
-/// The frame a host `Agent` describes (`AgentActivity._frame_kwargs`), as `update_agent`,
+/// The agent a host `Agent` describes (`AgentActivity._frame_kwargs`), as `update_agent`,
 /// Each provider is three-state: absent keeps the leg,
 /// `None` removes it, an object replaces it. `chat_ctx` replaces when present. The tools are one
 /// toolset, replaced together because the runner is per-agent. `turn_handling` is the agent layer.
 /// `llm_node`, `tts_node` and `stt_node` are the agent's overrides, each over the leg given beside
-/// it: a leg kept from the previous frame keeps that frame's node.
+/// it: a leg kept from the previous agent keeps that agent's node.
 #[lk_agents_abi::host(kwargs)]
 pub struct UpdateAgentArgs {
     pub instructions: Instructions,
     #[host(kwarg(default = None))]
     pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
-    /// The new frame's agent id.
+    /// The new agent's id.
     pub agent: String,
-    /// The new frame's `Agent`, handed back by the events that name it.
+    /// The new agent's `Agent`, handed back by the events that name it.
     #[host(kwarg(default = None))]
     pub agent_host: Option<lk_agents_abi::HostRef>,
     #[host(kwarg(default = None))]
@@ -969,7 +969,7 @@ fn host_toolset(
     }
 }
 
-/// The objects are the pool a host-backed LLM is handed beside the frame's.
+/// The objects are the pool a host-backed LLM is handed beside the agent's.
 fn session_tools(
     tools: Option<Vec<lk_agents_abi::ToolSpec>>,
     host: Option<lk_agents_abi::HostRef>,

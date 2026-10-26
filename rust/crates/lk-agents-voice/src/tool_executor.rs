@@ -66,9 +66,9 @@ impl Tools {
         self.running.iter().filter(move |r| r.speech == speech && !r.detached())
     }
 
-    /// `speech`'s call `call_id` ended: detached, it stays with its first update counted; otherwise
-    /// it leaves the set. `false` when no such call runs. By speech as well as id: a model may reuse
-    /// call ids.
+    /// `speech`'s call `call_id` ended: detached, it stays with its first update counted;
+    /// otherwise it leaves the set. `false` when no such call runs. By speech as well as id: a
+    /// model may reuse call ids.
     pub(crate) fn end(&mut self, speech: SpeechId, call_id: &str, detached: bool) -> bool {
         let Some(i) =
             self.running.iter().position(|r| r.speech == speech && r.call.call_id == call_id)
@@ -198,7 +198,7 @@ impl Batch {
         self.0.last().and_then(|p| p.items.last()).map(|i| i.id().to_owned())
     }
 
-    /// The items another frame's record got, to re-insert for this request only.
+    /// The items another agent's record got, to re-insert for this request only.
     pub(crate) fn foreign_items(&self, agent: &str) -> Vec<ChatItem> {
         self.0.iter().filter(|p| p.agent != agent).flat_map(|p| p.items.iter().cloned()).collect()
     }
@@ -413,7 +413,7 @@ impl std::fmt::Debug for Toolset {
     }
 }
 
-/// `_start_ivr_detection`'s `send_dtmf_events`. The frame's own tools win on a name clash; kept
+/// `_start_ivr_detection`'s `send_dtmf_events`. The agent's own tools win on a name clash; kept
 /// across handoffs.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SessionTools {
@@ -859,7 +859,7 @@ impl Driver {
         // behind by a handoff.
         let draining = self.activity.speech_scheduler.is_paused()
             || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent);
-        // The step's follow-up plans against the frame once this is published.
+        // The step's follow-up plans against the activity once this is published.
         self.activity.tools_committed.insert((speech, step), draining);
         self.activity.set_tools_in_flight(speech, false);
         self.publish_activity();

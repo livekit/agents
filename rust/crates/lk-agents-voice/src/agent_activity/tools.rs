@@ -318,7 +318,7 @@ impl Driver {
         out: &mut Out,
     ) {
         let update_ids = batch.update_ids();
-        // A previous frame's updates are re-inserted for this request only.
+        // A previous agent's updates are re-inserted for this request only.
         let foreign = batch.foreign_items(&self.activity.agent);
         let chat_ctx = (!foreign.is_empty()).then(|| {
             let mut ctx = self.session.chat_ctx.agent_chat_ctx();

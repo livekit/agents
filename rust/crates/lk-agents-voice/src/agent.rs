@@ -70,10 +70,10 @@ impl Source {
 /// Carried on `ItemAdded` so the host's projections decide nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum Visibility {
-    /// The frame's context only: a host-supplied item, not in `session.history`.
+    /// The agent's context only: a host-supplied item, not in `session.history`.
     Model,
     History,
-    /// The frame's context and `session.history`: everything said, and the config records.
+    /// The agent's context and `session.history`: everything said, and the config records.
     Both,
 }
 
@@ -115,7 +115,7 @@ impl Visibility {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum CommitOutcome {
-    /// New to the record, or a frame-only item (a realtime server's placeholder) now in history.
+    /// New to the record, or a context-only item (a realtime server's placeholder) now in history.
     Added,
     /// Replaced in place (a realtime server re-finalising one `item_id`); no second `ItemAdded`.
     Replaced,
@@ -144,8 +144,8 @@ pub enum TurnEdit {
 }
 
 /// `AgentSession._chat_ctx` (the history) and each agent's `chat_ctx` (its view) as one record:
-/// sorted by `created_at`, ties after; each id once. Items are stamped with their frame; the
-/// agent's view is the current frame's items, history is every frame's.
+/// sorted by `created_at`, ties after; each id once. Items are stamped with their agent; the
+/// agent's view is the current agent's items, history is every agent's.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionChatCtx {
     items: Vec<Committed>,
@@ -253,7 +253,7 @@ impl SessionChatCtx {
             self.items.insert(idx, entry.clone());
             CommitOutcome::Added
         } else {
-            // Replaced in place under the committing frame; an item in history stays there.
+            // Replaced in place under the committing agent; an item in history stays there.
             let idx = self
                 .items
                 .iter()
@@ -307,7 +307,7 @@ impl SessionChatCtx {
         )
     }
 
-    /// A realtime server's mirror: the agent's view minus items the server created and minus frame
+    /// A realtime server's mirror: the agent's view minus items the server created and minus agent
     /// records (`_detach_reusable_resources`).
     pub fn for_realtime(&self) -> ChatContext {
         ChatContext::new(

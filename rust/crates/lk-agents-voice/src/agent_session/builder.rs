@@ -40,7 +40,7 @@ pub struct DriverBuilder {
     /// `Some(bound)`: the hooks the sequence needs wait up to `bound`; an overrun is journalled and
     /// skipped. `None`: each hook is finished in place.
     pub hook_bound: Option<Duration>,
-    /// Opened before the opening frame's handoff record, so that record and the opening `on_enter`
+    /// Opened before the opening agent's handoff record, so that record and the opening `on_enter`
     /// are the run's.
     pub capture_run: Option<crate::run_result::RunSpec>,
     /// Consecutive unrecoverable errors of one leg tolerated before closing (default `3`).
@@ -246,7 +246,7 @@ impl DriverBuilder {
                     &session,
                 ))),
             );
-            // The opening frame is sent ungated by `mutable_*` (they govern mid-session changes)
+            // The opening agent is sent ungated by `mutable_*` (they govern mid-session changes)
             // through `push_frame` once the driver exists.
             crate::agent_activity::realtime::spawn_event_pump(
                 &self.spawner,
@@ -412,8 +412,8 @@ impl DriverBuilder {
         driver.step.set(self.time.read());
         driver.publish_activity();
 
-        // The first facts, in order: the gate, then the opening frame's records (the handoff from
-        // nobody, the starting config), and the opening frame on the realtime socket.
+        // The first facts, in order: the gate, then the opening agent's records (the handoff from
+        // nobody, the starting config), and the opening agent on the realtime socket.
         driver.publish_gate();
         {
             let mut out = driver.out();

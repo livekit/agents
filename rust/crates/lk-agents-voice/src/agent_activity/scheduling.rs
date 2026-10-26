@@ -384,7 +384,7 @@ mod speech_scheduler {
             }
         }
 
-        /// The pause a frame change or a host drain caused, lifted: its callers.
+        /// The pause a handoff or a host drain caused, lifted: its callers.
         pub(super) fn resume_activity_pause(&mut self) -> Option<Vec<PauseCause>> {
             let caused = |p: &mut Pause| matches!(p.cause, PauseCause::Handoff | PauseCause::Drain);
             self.paused.take_if(caused).map(|p| p.callers)
@@ -602,7 +602,7 @@ pub enum Rejected {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PauseCause {
     Handoff,
-    /// The host's `drain()`: nothing new is scheduled, lifted by the frame that replaces it.
+    /// The host's `drain()`: nothing new is scheduled, lifted by the agent that replaces it.
     Drain,
     /// Closing: speeches in flight finish (tools included); the hard edge follows the settle.
     Close,
@@ -871,8 +871,8 @@ impl Driver {
         self.settle_scheduling_pause(out);
     }
 
-    /// `_resume_scheduling_task` at the frame swap: a preemptive generation for the old frame is
-    /// discarded, and only the pause the frame change (or the host's drain) caused is lifted.
+    /// `_resume_scheduling_task` at the handoff's swap: a preemptive generation for the old agent
+    /// is discarded, and only the pause the handoff (or the host's drain) caused is lifted.
     pub(crate) fn resume_scheduling_task(&mut self, now: Ts, out: &mut Out) {
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
         if let Some(callers) = self.activity.speech_scheduler.resume_activity_pause() {

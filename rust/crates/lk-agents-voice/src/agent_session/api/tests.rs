@@ -167,7 +167,7 @@ fn answer_exit(api: &SessionApi, id: HookId) {
     api.send(Command::HookDone { id, outcome: HookOutcome::Returned }).expect("the loop runs");
 }
 
-/// The `on_exit`s issued, of `agent`'s frame or of any.
+/// The `on_exit`s issued, of `agent` or of any.
 fn on_exits(api: &SessionApi, agent: Option<&str>) -> usize {
     api.steps()
         .iter()
@@ -188,8 +188,8 @@ async fn settle() {
     }
 }
 
-// Catches: a `drain()` refused while a frame change is in flight; it must wait for the swap,
-// without running the arriving frame's `on_exit`.
+// Catches: a `drain()` refused while a handoff is in flight; it must wait for the swap,
+// without running the arriving agent's `on_exit`.
 #[tokio::test(start_paused = true)]
 async fn a_drain_during_a_handoff_joins_it_and_is_answered_at_the_swap() {
     let (api, mut exits) = session_holding_exits().await;

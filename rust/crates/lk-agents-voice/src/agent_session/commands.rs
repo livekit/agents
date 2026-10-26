@@ -244,7 +244,7 @@ impl From<TurnCommand> for Command {
     }
 }
 
-/// Outlives the frame across handoffs.
+/// Outlives the agent across handoffs.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum TurnCommand {
     /// Commit the turn now (`commit_user_turn`'s tail); a typed turn is
@@ -462,7 +462,7 @@ pub enum ActivityCommand {
     /// closing; `on_exit` before the pause; drain; closing re-check; swap; `on_enter` not awaited.
     /// A second queues.
     Update(Box<AgentUpdate>),
-    // --- the running frame, changed in place: not a handoff, which replaces the whole frame ---
+    // --- the running agent, changed in place: not a handoff, which replaces the whole agent ---
     /// Replies in flight keep theirs. Carries the full triple: workflow tasks put their persona in
     /// the modality variants.
     UpdateInstructions(Instructions),
@@ -478,7 +478,7 @@ pub enum ActivityCommand {
         leg: IoKind,
         enabled: bool,
     },
-    /// **Replaces** the running frame's context (already filtered host-side).
+    /// **Replaces** the running agent's context (already filtered host-side).
     UpdateChatCtx(Vec<lk_agents_abi::ChatItem>),
     /// A playing speech is **interrupted** (nobody can hear it); the pause facts are re-read at
     /// once.
@@ -493,7 +493,7 @@ pub enum ActivityCommand {
         llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
         tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
     },
-    /// Runs the driving frame's `on_exit` (once per frame), then pauses scheduling until the speech
+    /// Runs the driving agent's `on_exit` (once per agent), then pauses scheduling until the speech
     /// in flight finishes, tools included. A second joins. Refused only if the pause is lifted or
     /// the loop ends.
     Drain {
@@ -505,7 +505,7 @@ pub enum ActivityCommand {
 pub enum DrainRefused {
     /// The loop ended with no close to answer the drain.
     Closing,
-    /// Scheduling was resumed under the drain's pause: the frame runs again.
+    /// Scheduling was resumed under the drain's pause: the agent runs again.
     ActivityChanging,
 }
 

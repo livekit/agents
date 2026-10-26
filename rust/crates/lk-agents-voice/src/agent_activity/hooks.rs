@@ -152,8 +152,8 @@ impl Driver {
     }
 
     /// What waited on the callback goes on. `Failed` is also one that will not be answered (its
-    /// bound passed): an exit proceeds, a render or a filler source falls back to its default. A turn callback's bound is `pending_turn`'s. A mismatched answer
-    /// counts as unanswered.
+    /// bound passed): an exit proceeds, a render or a filler source falls back to its default. A
+    /// turn callback's bound is `pending_turn`'s. A mismatched answer counts as unanswered.
     fn hook_ended(
         &mut self,
         now: Ts,

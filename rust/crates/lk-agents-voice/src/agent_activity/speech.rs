@@ -67,7 +67,7 @@ pub(crate) struct SpeechSpec {
 }
 
 impl SpeechSpec {
-    /// Added to the context, planned against the record and the frame's prompt and tools.
+    /// Added to the context, planned against the record and the agent's prompt and tools.
     pub(crate) fn new(kind: SpeechKind, source: ReplySource, allow_interruptions: bool) -> Self {
         SpeechSpec {
             new_message: None,
@@ -553,7 +553,7 @@ impl Driver {
         // is not written.
         let record =
             spec.chat_ctx.clone().unwrap_or_else(|| self.session.chat_ctx.agent_chat_ctx());
-        // The frame's prompt for the modality, or a hook's edit for this turn.
+        // The agent's prompt for the modality, or a hook's edit for this turn.
         let instructions = spec
             .instructions_override
             .clone()

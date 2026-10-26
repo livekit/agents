@@ -541,9 +541,10 @@ pub enum RealtimeStep {
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum HandoffStep {
-    /// A host `drain()` began; `exit_hook` is the frame's `on_exit` it waits for (`None` if it ran).
+    /// A host `drain()` began; `exit_hook` is the agent's `on_exit` it waits for (`None` if it
+    /// ran).
     DrainStarted { exit_hook: Option<crate::agent_session::HookId> },
-    /// Every waiter of the frame's drain was answered; `refused` is `None` on success.
+    /// Every waiter of the agent's drain was answered; `refused` is `None` on success.
     Drained { refused: Option<crate::agent_session::DrainRefused> },
 
     /// The agent was replaced; `reopened` names the audio legs whose provider differed.

@@ -1,5 +1,5 @@
-//! `voice/agent_activity.py`'s `AgentActivity`: the running agent's frame and components, the
-//! driver's configuration, and the frame commands (prompt, tools, context, IO) the driver applies.
+//! `voice/agent_activity.py`'s `AgentActivity`: the running agent and its components, the driver's
+//! configuration, and the agent commands (prompt, tools, context, IO) the driver applies.
 
 pub mod drain;
 pub mod false_interruption;
@@ -30,7 +30,7 @@ use std::time::Duration;
 /// What the STT and VAD legs are fed: every model in the tree wants 16 kHz mono.
 pub const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 
-/// `voice/agent_activity.py`'s `AgentActivity`: the running agent's frame (its name, prompt and
+/// `voice/agent_activity.py`'s `AgentActivity`: the running agent (its name, prompt and
 /// tools), its audio recognition, the speech queue and the current speech, the false-interruption
 /// pause, the hooks, and the realtime session. The `Driver` orchestrates it
 /// together with the [`LiveSession`](crate::agent_session::LiveSession): what spans two of its
@@ -50,7 +50,7 @@ pub(crate) struct AgentActivity {
     pub(crate) speech_scheduler: SpeechScheduler,
     /// `_paused_speech` and the false-interruption timer.
     pub(crate) paused_speech: PausedSpeech,
-    /// The frame each speech was created in: late tool items belong to it.
+    /// The agent each speech was created under: late tool items belong to it.
     speech_agents: BTreeMap<SpeechId, String>,
     pub(crate) finished: BTreeSet<SpeechId>,
     /// Per tool step: whether the activity that made the speech drains, so the step's reply
@@ -102,7 +102,7 @@ pub(crate) struct AgentActivity {
     realtime_requested_detection: crate::agent_activity::options::TurnDetection,
 }
 
-/// What the builder hands the activity: the opening frame, its machines, and the realtime session
+/// What the builder hands the activity: the opening agent, its machines, and the realtime session
 /// it opened.
 pub(crate) struct ActivityParts {
     pub(crate) agent: String,
@@ -175,7 +175,7 @@ impl AgentActivity {
         }
     }
 
-    /// A frame change lands: the new agent, prompt and tools. The previous agent's id.
+    /// A handoff lands: the new agent, prompt and tools. The previous agent's id.
     pub(crate) fn set_agent(
         &mut self,
         agent: String,
@@ -189,8 +189,8 @@ impl AgentActivity {
         std::mem::replace(&mut self.agent, agent)
     }
 
-    /// What a request planned now is offered: the frame's toolset, then session additions whose
-    /// names the frame lacks (a provider refuses duplicates).
+    /// What a request planned now is offered: the agent's toolset, then session additions whose
+    /// names the agent lacks (a provider refuses duplicates).
     pub(crate) fn advertised_toolset(
         &self,
         session_tools: &crate::tool_executor::SessionTools,
@@ -209,12 +209,12 @@ impl AgentActivity {
         Arc::new(toolset)
     }
 
-    /// The speech is the running frame's: its late items are attributed to it.
+    /// The speech is the running agent's: its late items are attributed to it.
     pub(crate) fn note_speech_agent(&mut self, speech: SpeechId) {
         self.speech_agents.insert(speech, self.agent.clone());
     }
 
-    /// The frame `speech` was created in.
+    /// The agent `speech` was created under.
     pub(crate) fn speech_agent(&self, speech: SpeechId) -> Option<&str> {
         self.speech_agents.get(&speech).map(String::as_str)
     }
@@ -507,7 +507,7 @@ impl Driver {
         });
     }
 
-    /// The history records a frame leaves when it takes over: `AgentHandoff`, then
+    /// The history records an agent leaves when it takes over: `AgentHandoff`, then
     /// `AgentConfigUpdate` (skipped with neither instructions nor tools), in the reference's order.
     pub(crate) fn record_handoff(&mut self, previous_agent: Option<String>, out: &mut Out) {
         let handoff = lk_agents_abi::AgentHandoffItem {
@@ -583,8 +583,9 @@ impl Driver {
         );
     }
 
-    /// Put a frame record on the record. `AgentHandoff` is history-only; `AgentConfigUpdate` goes to
-    /// the frame's context and history (only the realtime view strips it).
+    /// Put a handoff or config record on the record. `AgentHandoff` is history-only;
+    /// `AgentConfigUpdate` goes to the agent's context and history (only the realtime view strips
+    /// it).
     pub(crate) fn commit_record(&mut self, item: ChatItem, out: &mut Out) {
         let (source, visibility) = match &item {
             ChatItem::AgentHandoff(_) => (Source::Handoff, Visibility::History),
@@ -594,7 +595,7 @@ impl Driver {
     }
 
     /// The one write to the record: inserted by its acoustic `created_at`, the speech told, the
-    /// host told via `ItemAdded{source}`, and the frame republished.
+    /// host told via `ItemAdded{source}`, and the activity republished.
     pub(crate) fn commit_item(
         &mut self,
         item: ChatItem,
@@ -602,8 +603,8 @@ impl Driver {
         visibility: Visibility,
         out: &mut Out,
     ) {
-        // Attributed to the frame that created the speech, not the driving one (a tool may commit
-        // after its agent was left); an item with no speech is the driving frame's.
+        // Attributed to the agent that created the speech, not the driving one (a tool may commit
+        // after its agent was left); an item with no speech is the driving agent's.
         let agent = source
             .speech()
             .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))
@@ -612,7 +613,7 @@ impl Driver {
         self.perform_commit(commit, out);
     }
 
-    /// The speech is told, the host learns of a new item, the frame is republished.
+    /// The speech is told, the host learns of a new item, the activity is republished.
     fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome), out: &mut Out) {
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
@@ -621,7 +622,7 @@ impl Driver {
             h.item_added(&entry.item);
         }
         match outcome {
-            // A frame-only item is the model's alone: the host's history never sees it.
+            // An item only in the agent's view is the model's: the host's history never sees it.
             CommitOutcome::Added if entry.visibility.history() => {
                 let run = self.run_of_item(&entry.source);
                 out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {

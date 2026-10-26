@@ -11,7 +11,7 @@ use lk_agents_abi::{
 };
 use std::sync::Arc;
 
-/// The nodes a frame's agent overrides; a leg without one is the provider itself.
+/// The nodes an agent overrides; a leg without one is the provider itself.
 #[derive(Default, Clone)]
 pub struct Nodes {
     pub llm: Option<Arc<dyn NodeFactory>>,

@@ -59,7 +59,7 @@ impl SessionApi {
         instructions: Option<Instructions>,
         dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
         agent: String,
-        // The first frame's `Agent`, handed back by the events that name it.
+        // The first agent's `Agent`, handed back by the events that name it.
         agent_host: Option<lk_agents_abi::HostRef>,
         chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
         stt: Option<Arc<dyn Stt>>,
@@ -365,7 +365,7 @@ impl SessionApi {
     /// the provider factories must be opened on the loop.
     ///
     /// Does not wait for a participant; await `wait_until_ready` for that. `capture_run=True` opens
-    /// `start(capture_run=True)`'s run before the opening frame's `AgentHandoff` record and its
+    /// `start(capture_run=True)`'s run before the opening agent's `AgentHandoff` record and its
     /// `on_enter`.
     #[host(method(kw_only, defaults(capture_run = false)))]
     pub fn start(&self, capture_run: bool) -> Result<Reply<Result<(), StartFailed>>, OpenRefused> {
@@ -431,7 +431,7 @@ impl SessionApi {
     }
 
     /// `Agent.update_options(stt=.., vad=.., llm=.., tts=..)` on a running agent: an in-place
-    /// provider swap, not a handoff (same frame, no hook, no drain). Each leg is three-state; a
+    /// provider swap, not a handoff (same agent, no hook, no drain). Each leg is three-state; a
     /// given one goes under the agent's node when it overrides one (`llm_node=` and the others).
     #[host(method(kw_only))]
     #[allow(clippy::too_many_arguments)]
@@ -450,7 +450,7 @@ impl SessionApi {
         self.send(ActivityCommand::UpdateModels { stt, vad, llm, tts })
     }
 
-    /// The handoff: replace the agent, keep the session. Resolves `True` once the frame is
+    /// The handoff: replace the agent, keep the session. Resolves `True` once the agent is
     /// installed (`on_enter` issued, not returned), `False` when it was refused (closing).
     ///
     /// The driver owns the providers, scheduler and buffered frames and outlives the swap, so there
@@ -628,7 +628,7 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<crate::speech_handle::HostSpeech, CommandRefused> {
         let origin = origin_of(origin)?;
-        // An empty toolset would tell the model about no tool at all; `None` keeps the frame's.
+        // An empty toolset would tell the model about no tool at all; `None` keeps the agent's.
         let toolset =
             tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, tool_runner)));
         let (call, rx) = self.call(Answer::speech)?;
@@ -890,7 +890,7 @@ impl SessionApi {
     pub fn clear_user_turn(&self) -> Result<(), SessionRefused>;
 
     /// `Agent.update_instructions()` on the agent that is already driving. Changes only the
-    /// prompt; `update_agent` would replace the whole frame.
+    /// prompt; `update_agent` would replace the whole agent.
     #[host(method(send = ActivityCommand::UpdateInstructions(instructions)))]
     pub fn update_instructions(&self, instructions: Instructions) -> Result<(), SessionRefused>;
 
@@ -964,7 +964,7 @@ impl SessionApi {
         }))
     }
 
-    /// `AgentSession.drain()`: the driving frame's `on_exit`, then scheduling paused until no
+    /// `AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
     /// speech is left; the session stays open. Answers `None`, `"activity_changing"` or `"closing"`.
     #[host(method)]
     pub fn drain(&self) -> Result<Reply<Option<String>>, SessionRefused> {

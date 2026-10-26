@@ -43,7 +43,7 @@ pub enum Owned {
     Speech(SpeechId),
     /// An `on_enter` issued during the run.
     Hook(HookId),
-    /// A frame change begun during the run, until it landed or was refused.
+    /// A handoff begun during the run, until it landed or was refused.
     Handoff(HandoffId),
     /// A foreground hold taken by an owned speech's tool, until released.
     Hold(HoldId),

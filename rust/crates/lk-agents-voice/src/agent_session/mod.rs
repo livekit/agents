@@ -83,7 +83,7 @@ pub(crate) struct LiveSession {
     pub(crate) amd_skips_replies: bool,
 }
 
-/// What the builder hands the session besides its options: the providers, the opening frame and
+/// What the builder hands the session besides its options: the providers, the opening agent and
 /// what `start()` asked for.
 #[derive(Default)]
 pub(crate) struct SessionParts {

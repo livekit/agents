@@ -938,8 +938,8 @@ impl Driver {
             return;
         }
         let id = self.session.ids.next_speech_id();
-        let handle =
-            Arc::new(SpeechHandle::new(id, self.session.config.effective.turn.interruption.enabled));
+        let allow_interruptions = self.session.config.effective.turn.interruption.enabled;
+        let handle = Arc::new(SpeechHandle::new(id, allow_interruptions));
         match how {
             Settled::Failed(err) | Settled::TimedOut(err) => {
                 handle.mark_done(Some(fatal(err.message)))
