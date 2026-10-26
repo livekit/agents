@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
-from .._exceptions import APIConnectionError, APIError
+from .. import _core
 from .._generated.stt import (
     RecognitionUsage,
     SpeechData,
@@ -57,6 +57,16 @@ def _speech_event_from_core(ev: dict[str, Any], *, offset: float = 0.0) -> Speec
         **ev,
         alternatives=alternatives,
         recognition_usage=RecognitionUsage(**usage) if usage else None,
+    )
+
+
+def _attempts(kind: str, conn_options: APIConnectOptions, label: str) -> _core.Attempts:
+    return _core.Attempts(
+        kind,
+        conn_options.max_retry,
+        conn_options.retry_interval,
+        conn_options.timeout,
+        label=label,
     )
 
 
@@ -123,31 +133,15 @@ class STT(
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
-        for i in range(conn_options.max_retry + 1):
+        """Recognize ``buffer``, retried as the core decides within ``conn_options``."""
+        attempts = _attempts("stt_batch", conn_options, self._label)
+        while True:
             try:
                 return await self._recognize_impl(
                     buffer, language=language, conn_options=conn_options
                 )
-            except APIError as e:
-                if conn_options.max_retry == 0 or not e.retryable:
-                    self._emit_error(e, recoverable=False)
-                    raise
-                if i == conn_options.max_retry:
-                    self._emit_error(e, recoverable=False)
-                    raise APIConnectionError(
-                        f"failed to recognize speech after {conn_options.max_retry + 1} attempts",
-                    ) from e
-                self._emit_error(e, recoverable=True)
-                retry_interval = conn_options._interval_for_retry(i)
-                logger.warning(
-                    f"failed to recognize speech: {e}, retrying in {retry_interval}s",
-                    extra={"stt": self._label, "attempt": i + 1, "streamed": False},
-                )
-                await asyncio.sleep(retry_interval)
             except Exception as e:
-                self._emit_error(e, recoverable=False)
-                raise
-        raise RuntimeError("unreachable")
+                await attempts.failed(e, self)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self.emit(
@@ -156,6 +150,9 @@ class STT(
                 timestamp=time.time(), label=self._label, error=api_error, recoverable=recoverable
             ),
         )
+
+    def _core_failed(self, error: Exception, recoverable: bool) -> None:
+        self._emit_error(error, recoverable)
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         """Set the framework-managed keyterms (session config and auto-detection), kept apart
@@ -240,7 +237,8 @@ class RecognizeStream(ABC):
         self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SpeechEvent]()
 
-        self._num_retries = 0
+        # the attempt loop, and the stream's clock: `start_time`, `start_time_offset`
+        self._attempts = _attempts("stt_stream", conn_options, stt._label)
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -248,8 +246,6 @@ class RecognizeStream(ABC):
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
 
-        self._start_time_offset: float = 0.0
-        self._start_time: float = time.time()
         self._context: BaseModel | None = None
 
     @property
@@ -263,25 +259,25 @@ class RecognizeStream(ABC):
 
     @property
     def start_time_offset(self) -> float:
-        return self._start_time_offset
+        return self._attempts.start_time_offset  # type: ignore[no-any-return]
 
     @start_time_offset.setter
     def start_time_offset(self, value: float) -> None:
         if value < 0:
             raise ValueError("start_time_offset must be non-negative")
-        self._start_time_offset = value
+        self._attempts.start_time_offset = value
 
     @property
     def start_time(self) -> float:
         """Wall-clock anchor of the stream, re-seeded on each retry; plugins may move it to when
         the first audio reached the provider, so stream-relative times convert accurately."""
-        return self._start_time
+        return self._attempts.start_time  # type: ignore[no-any-return]
 
     @start_time.setter
     def start_time(self, value: float) -> None:
         if value < 0:
             raise ValueError("start_time must be non-negative")
-        self._start_time = value
+        self._attempts.start_time = value
 
     def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
         """Connection timing; kept on the stream, the core measures its own."""
@@ -291,37 +287,15 @@ class RecognizeStream(ABC):
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
-        max_retries = self._conn_options.max_retry
-        # the offset accumulates across attempts, so transcripts keep linear timestamps
-        last_start_time = time.time()
-        while self._num_retries <= max_retries:
+        while True:
+            self._attempts.begin()
             try:
-                self._start_time_offset += time.time() - last_start_time
-                self._start_time = last_start_time = time.time()
                 return await self._run()
-            except APIError as e:
-                # an attempt that outlived the connect timeout had connected: the budget restarts
-                if time.time() - last_start_time > self._conn_options.timeout:
-                    self._num_retries = 0
-                if not e.retryable or max_retries == 0:
-                    self._emit_error(e, recoverable=False)
-                    raise
-                if self._num_retries == max_retries:
-                    self._emit_error(e, recoverable=False)
-                    raise APIConnectionError(
-                        f"failed to recognize speech after {self._num_retries} attempts",
-                    ) from e
-                self._emit_error(e, recoverable=True)
-                retry_interval = self._conn_options._interval_for_retry(self._num_retries)
-                logger.warning(
-                    f"failed to recognize speech: {e}, retrying in {retry_interval}s",
-                    extra={"stt": self._stt._label, "attempt": self._num_retries, "streamed": True},
-                )
-                await asyncio.sleep(retry_interval)
-                self._num_retries += 1
             except Exception as e:
-                self._emit_error(e, recoverable=False)
-                raise
+                await self._attempts.failed(e, self)
+
+    def _core_failed(self, error: Exception, recoverable: bool) -> None:
+        self._emit_error(error, recoverable)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt._emit_error(api_error, recoverable)
@@ -368,7 +342,7 @@ class RecognizeStream(ABC):
             raise StopAsyncIteration from None
         if val.type == SpeechEventType.FINAL_TRANSCRIPT:
             # a recognition succeeded: the retry budget restarts
-            self._num_retries = 0
+            self._attempts.reset()
         return val
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:

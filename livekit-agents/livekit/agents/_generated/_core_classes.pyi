@@ -1548,6 +1548,29 @@ class TurnContext:
     def to_host_dict(self) -> Any: ...
 
 
+class Attempts:
+    def __init__(
+        self,
+        kind: str,
+        maximum: int,
+        interval: float,
+        timeout: float,
+        *,
+        label: str,
+    ) -> None: ...
+    @property
+    def start_time(self) -> float: ...
+    @start_time.setter
+    def start_time(self, value: float) -> None: ...
+    @property
+    def start_time_offset(self) -> float: ...
+    @start_time_offset.setter
+    def start_time_offset(self, value: float) -> None: ...
+    def reset(self) -> None: ...
+    def begin(self) -> None: ...
+    async def failed(self, error: Any, report: Any) -> None: ...
+
+
 class LlmMetricState:
     """`LLMStream`'s metric fold as the host drives it (`_core.LlmMetricState`)."""
 

@@ -74,5 +74,34 @@ impl ProviderError {
     }
 }
 
+/// A host exception handed over as an argument, classified as a raised one is.
+#[cfg(feature = "python")]
+impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ProviderError {
+    type Error = pyo3::PyErr;
+
+    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
+        Ok(crate::python::capture_value(&obj.to_owned()))
+    }
+}
+
+/// `raise APIConnectionError(message) from cause`: the host's own exception with the chain the
+/// reference's `__str__` reads its root failure from; without a host, the bare connection error.
+pub fn chained_connection_error(message: String, cause: &ProviderError) -> ProviderError {
+    let local = ProviderError::Local(ApiError { kind: ApiErrorKind::Connection, ..ApiError::new(message) });
+    #[cfg(feature = "python")]
+    {
+        return pyo3::Python::attach(|py| {
+            let err = crate::python::raise_provider(py, local);
+            match crate::python::to_py_exception(py, cause) {
+                Ok(cause) => err.set_cause(py, Some(pyo3::PyErr::from_value(cause.into_bound(py)))),
+                Err(e) => drop(e),
+            }
+            crate::python::capture_value(err.value(py).as_any())
+        });
+    }
+    #[allow(unreachable_code)]
+    local
+}
+
 #[cfg(test)]
 mod tests;

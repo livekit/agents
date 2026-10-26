@@ -15,5 +15,5 @@ mod host;
 pub use host::{CapturedError, HostError, HostResult};
 pub use host_capture::{TaxonomyMatches, host_retryable};
 pub use payload_table::PayloadTable;
-pub use provider::ProviderError;
+pub use provider::{ProviderError, chained_connection_error};
 pub use side_table::RefRegistry;

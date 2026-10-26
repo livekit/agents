@@ -2021,6 +2021,39 @@ impl TurnContext {
     }
 }
 
+#[napi(js_name = "Attempts")]
+pub struct Attempts {
+    pub(crate) inner: std::sync::Arc<lk_agents_abi::types::retry::Attempts>,
+}
+
+#[napi]
+impl Attempts {
+    #[napi(getter, js_name = "startTime")]
+    pub fn start_time(&self) -> f64 {
+        self.inner.start_time()
+    }
+
+    #[napi(setter, js_name = "startTime")]
+    pub fn set_start_time(&self, value: f64) {
+        self.inner.set_start_time(value);
+    }
+
+    #[napi(getter, js_name = "startTimeOffset")]
+    pub fn start_time_offset(&self) -> f64 {
+        self.inner.start_time_offset()
+    }
+
+    #[napi(setter, js_name = "startTimeOffset")]
+    pub fn set_start_time_offset(&self, value: f64) {
+        self.inner.set_start_time_offset(value);
+    }
+
+    #[napi(js_name = "reset")]
+    pub fn reset(&self) {
+        self.inner.reset();
+    }
+}
+
 /// `LLMStream`'s metric fold as the host drives it (`_core.LlmMetricState`).
 #[napi(js_name = "LlmMetricState")]
 pub struct LlmMetricState {
