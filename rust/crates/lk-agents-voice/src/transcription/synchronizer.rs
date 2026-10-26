@@ -44,6 +44,8 @@ pub enum PaceEvent {
     },
     AudioEnd,
     Position(Duration),
+    /// The audio paused where the last position left it.
+    Paused,
     PlaybackFinished {
         position: Duration,
         interrupted: bool,
@@ -226,6 +228,7 @@ impl Pacer {
             (S::Finished, E::Close) => self.state = S::Closed,
             (S::Finished, _) => warn(&mut out, PaceWarning::AfterFinished),
             (_, E::Position(p)) => self.release(p, &mut out),
+            (_, E::Paused) => self.paused(&mut out),
             (_, E::Close) => self.cut(&mut out),
             (state, E::PlaybackFinished { position, interrupted }) => {
                 if state != S::InputsEnded {
@@ -367,6 +370,15 @@ impl Pacer {
             self.cursor = Some(end);
             self.forward(word, end, out);
         }
+    }
+
+    /// The word whose delay had begun is still shown: the reference's pacing loop sleeps through
+    /// a pause and waits only before the next word.
+    fn paused(&mut self, out: &mut Vec<PaceEffect>) {
+        let Some((_, end)) = self.front.take() else { return };
+        let word = self.queue.pop_front().expect("a started word is the queue's front");
+        self.cursor = Some(end);
+        self.forward(word, end, out);
     }
 
     fn forward(&mut self, word: Planned, end_time: f64, out: &mut Vec<PaceEffect>) {
@@ -833,6 +845,10 @@ impl AudioOutput for SyncedAudioOutput {
 
     fn pause(&self) {
         self.next.pause();
+        let mut state = self.core.state.lock().unwrap();
+        if state.enabled && !SyncCore::pacer(&state).is_over() {
+            self.core.apply(&mut state, PaceEvent::Paused);
+        }
     }
 
     fn resume(&self) {
@@ -1129,6 +1145,28 @@ mod tests {
         assert_eq!(shown(&effects), "one two");
         let (_, effects) = p.step(PaceEvent::PlaybackFinished {
             position: Duration::from_millis(160),
+            interrupted: true,
+        });
+        let heard = effects.iter().find_map(|e| match e {
+            PaceEffect::Heard(h) => Some(h.text.clone()),
+            _ => None,
+        });
+        assert_eq!(heard.as_deref(), Some("one"), "\"two\" was shown but still playing");
+    }
+
+    // The reference's pacing loop sleeps through a pause: the word whose delay began before it is
+    // still shown (not heard), and only the next word waits. Found by `parity.py
+    // realtime_interruption`.
+    #[test]
+    fn a_pause_shows_the_word_in_its_delay() {
+        let p = paced("one two three four", 0.4);
+        // "one" is out; "two" started at 0.1 and shows at 0.15.
+        let (p, effects) = p.step(PaceEvent::Position(Duration::from_millis(120)));
+        assert_eq!(shown(&effects), "one");
+        let (p, effects) = p.step(PaceEvent::Paused);
+        assert_eq!(shown(&effects), " two");
+        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
+            position: Duration::from_millis(120),
             interrupted: true,
         });
         let heard = effects.iter().find_map(|e| match e {
