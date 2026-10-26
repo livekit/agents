@@ -665,6 +665,10 @@ struct HostParts {
     events: Option<Arc<dyn SessionEvents>>,
     /// Without it the hook calls are the embedder's to answer (`Command::HookDone`).
     hooks: Option<Arc<dyn SessionHooks>>,
+    /// Set once the close sequence ran; a second `aclose()` waits for the first.
+    closed: Arc<tokio::sync::OnceCell<()>>,
+    /// Handoffs in call order: one waits for the previous one's toolset setup.
+    handoffs: Arc<tokio::sync::Mutex<()>>,
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     has_options: bool,
     /// Where `AMD` awaits the callee: the call's room, `None` on an offline (console) session.
@@ -798,8 +802,20 @@ pub trait SessionHooks: Send + Sync {
     async fn on_enter(&self, agent: &lk_agents_abi::HostRef) -> Result<(), HostError>;
     /// `Agent.on_exit()`.
     async fn on_exit(&self, agent: &lk_agents_abi::HostRef) -> Result<(), HostError>;
-    /// After `on_exit` was answered: the agent's own toolsets closed.
-    async fn close_toolsets(&self, agent: &lk_agents_abi::HostRef);
+    /// The toolsets of `agent` (after its `on_exit` was answered), or of the session (`None`, as
+    /// it closes) closed.
+    async fn close_toolsets(&self, agent: Option<&lk_agents_abi::HostRef>);
+    /// The toolsets among `tools` (an agent's and the session's, a list) set up; the specs of every
+    /// tool they hold then.
+    async fn setup_tools(
+        &self,
+        tools: &lk_agents_abi::HostRef,
+    ) -> Result<Vec<lk_agents_abi::ToolSpec>, HostError>;
+    /// The session closes: what runs beside it (AMD) closes first.
+    async fn closing(&self) -> Result<(), HostError>;
+    /// The loop has returned and the host's `close` handlers ran: the remote session host closes,
+    /// before the room io.
+    async fn closed(&self) -> Result<(), HostError>;
     /// `Agent.on_user_turn_completed(turn_ctx, new_message)` on the current agent: the message's
     /// text as the hook left it, the turn's items when it changed them, and whether it raised
     /// `StopResponse`.
@@ -873,7 +889,7 @@ async fn answer_hook(
                 let outcome = hooks.on_exit(&agent).await.map(|()| HookOutcome::Returned);
                 // The toolsets close after the answer, and outlive the hook's cancellation.
                 let hooks = Arc::clone(&hooks);
-                spawner.spawn_unboxed(async move { hooks.close_toolsets(&agent).await });
+                spawner.spawn_unboxed(async move { hooks.close_toolsets(Some(&agent)).await });
                 outcome
             }
             None => Ok(HookOutcome::Failed),

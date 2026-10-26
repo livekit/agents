@@ -261,7 +261,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "transcript": False,
             "redaction": False,
         }
-        self._tasks: set[asyncio.Task[Any]] = set()
         # the job's telemetry parents its spans here; the core traces the session itself
         self._root_span_context = None
         self._session_start_context = None
@@ -398,7 +397,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if chat_ctx is not None:
             self._chat_ctx = chat_ctx.copy()
 
-        frame = await self._frame(agent)
+        hooks = _AgentHooks(self)
+        frame = self._frame(agent)
+        frame["tools"] = await hooks._core_setup_tools(frame["tools_host"])
         model = frame.get("llm", self._llm)
         # an OpenAI-protocol model or a fallback chain runs in the core; any other one is a host
         # realtime model
@@ -430,7 +431,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             host_audio_output=self._console.io if self._console else self._output.audio,
             host_transcription_output=self._output.transcription,
             on_event=self,
-            hooks=_AgentHooks(self),
+            hooks=hooks,
             options=self._options,
             agent_turn_handling=frame.get("turn_handling"),
             agent_expressive=frame["expressive"],
@@ -474,7 +475,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._host = SessionHost.on_room(self, room)
         job_ctx.init_recording(self._recording_options)
         job_ctx.add_shutdown_callback(
-            lambda: self._close(drain=False, reason=CloseReason.JOB_SHUTDOWN)
+            lambda: self._core.aclose(reason=CloseReason.JOB_SHUTDOWN.value, drain=False)
         )
         await asyncio.gather(self._start_core(capture_run), job_ctx.connect())
         if self._host is not None:
@@ -541,29 +542,15 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return None
 
     async def aclose(self) -> None:
-        await self._close(drain=False)
+        if self._core is not None:
+            await self._core.aclose(drain=False)
 
     async def drain(self) -> None:
         await self._running.drain()
 
     def shutdown(self, *, drain: bool = True) -> None:
-        self._spawn(self._close(drain=drain))
-
-    async def _close(
-        self, *, drain: bool, reason: CloseReason = CloseReason.USER_INITIATED
-    ) -> None:
-        if self._core is None:
-            return
-        if self._amd is not None:
-            await self._amd.aclose()
-        await self._core.aclose(reason=reason.value, drain=drain)
-        if self._host is not None:
-            host, self._host = self._host, None
-            await host.aclose()
-        await self._core.close_io()
-        for task in list(self._tasks):
-            task.cancel()
-        await asyncio.gather(*(t.aclose() for t in self._tools if isinstance(t, llm.Toolset)))
+        if self._core is not None:
+            self._core.shutdown(drain=drain)
 
     async def __aenter__(self) -> LiveSession[Userdata_T]:
         return self
@@ -680,12 +667,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def update_agent(self, agent: Agent) -> None:
         """Hand the conversation to ``agent``; the session and its history stay."""
-
-        async def _update() -> None:
-            await self._running.update_agent(**await self._frame(agent))
-
-        self._spawn(_update())
         self._agent = agent
+        if self._core is not None:
+            self._core.update_agent(**self._frame(agent))
 
     def _update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         """Replace the context the running agent works on."""
@@ -703,13 +687,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _pool(self, agent: Agent) -> list[llm.Tool | llm.Toolset]:
         return [*agent.tools, *self._tools]
 
-    async def _frame(self, agent: Agent) -> dict[str, Any]:
-        """``agent`` as the core installs it (``update_agent``'s keywords), its toolsets set up."""
+    def _frame(self, agent: Agent) -> dict[str, Any]:
+        """``agent`` as the core installs it (``update_agent``'s keywords); the core has its
+        toolsets set up (``_AgentHooks._core_setup_tools``) and reads their tools then."""
         pool = self._pool(agent)
-        # a toolset that fails to set up is logged and the agent runs without it
-        await asyncio.gather(
-            *(_setup_toolset(t) for t in pool if isinstance(t, llm.Toolset)),
-        )
         frame: dict[str, Any] = {
             "instructions": _instructions(agent.instructions),
             "dynamic_instructions": (
@@ -717,7 +698,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ),
             "agent": agent.id,
             "agent_host": agent,
-            "tools": tool_specs(pool),
             "tools_host": pool,
             "tool_runner": ToolRunner(self, agent, pool),
             "turn_handling": agent._turn_handling or None,
@@ -866,14 +846,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._recorded_events.append(arg)
         super().emit(event, arg)
 
-    # --- tasks ---------------------------------------------------------------------------
-
-    def _spawn(self, coro: Any) -> asyncio.Task[Any]:
-        task = asyncio.ensure_future(coro)
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-        return task
-
 
 _ERROR_RECORDS: dict[str, tuple[Any, str]] = {
     "llm_error": (llm.LLMError, "llm"),
@@ -954,8 +926,23 @@ class _AgentHooks:
         with _in_hook("on_exit", self._session, agent):
             await agent.on_exit()
 
-    async def _core_close_toolsets(self, agent: Agent) -> None:
-        await asyncio.gather(*(t.aclose() for t in agent.tools if isinstance(t, llm.Toolset)))
+    async def _core_close_toolsets(self, agent: Agent | None) -> None:
+        tools = (agent or self._session).tools
+        await asyncio.gather(*(t.aclose() for t in tools if isinstance(t, llm.Toolset)))
+
+    async def _core_setup_tools(self, tools: list[llm.Tool | llm.Toolset]) -> list[Any]:
+        # a toolset that fails to set up is logged and the agent runs without it
+        await asyncio.gather(*(_setup_toolset(t) for t in tools if isinstance(t, llm.Toolset)))
+        return tool_specs(tools)
+
+    async def _core_closing(self) -> None:
+        if self._session._amd is not None:
+            await self._session._amd.aclose()
+
+    async def _core_closed(self) -> None:
+        if (host := self._session._host) is not None:
+            self._session._host = None
+            await host.aclose()
 
     async def _core_on_user_turn_completed(
         self, new_transcript: str, transcript_confidence: float

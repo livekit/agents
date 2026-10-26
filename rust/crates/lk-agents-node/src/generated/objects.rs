@@ -594,15 +594,10 @@ impl LiveSession {
         })
     }
 
-    #[napi(js_name = "closeIo", ts_return_type = "Promise<void>")]
-    pub fn close_io<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
-        let reply = crate::host_error::run(env, || {
-            Ok(self.inner.host_close_io())
-        })?;
-        env.spawn_future_with_callback(async move { Ok(Ok::<_, crate::host_error::JsError>(reply.await)) }, |env, out| match out {
-            Ok(out) => Ok(()),
-            Err(e) => Err(e.into_napi(env)),
-        })
+    #[napi(js_name = "shutdown")]
+    pub fn shutdown(&self, drain: Option<bool>) {
+        let drain = drain.unwrap_or(true);
+        self.inner.shutdown(drain);
     }
 
     #[napi(getter, js_name = "linkedParticipant")]

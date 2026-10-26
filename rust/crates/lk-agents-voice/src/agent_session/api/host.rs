@@ -362,6 +362,8 @@ impl SessionApi {
         api.host = HostParts {
             events: on_event,
             hooks,
+            closed: Arc::default(),
+            handoffs: Arc::default(),
             eot: turn_detector,
             has_options: options.is_some(),
             call_room: (!offline).then(|| Arc::clone(&room)),
@@ -496,8 +498,33 @@ impl SessionApi {
         let (call, rx) = self.call(Answer::handoff)?;
         let mut update = self.frame(frame);
         update.call = Some(call);
-        self.send(ActivityCommand::Update(Box::new(update)))?;
-        Ok(Reply::new(async move { matches!(rx.await, Ok(Ok(()))) }))
+        let answer = Reply::new(async move { matches!(rx.await, Ok(Ok(()))) });
+        let (Some(hooks), Some(tools)) = (self.host.hooks.clone(), update.toolset.host.clone())
+        else {
+            self.send(ActivityCommand::Update(Box::new(update)))?;
+            return Ok(answer);
+        };
+        // The new agent's toolsets set up first, in call order: the turn is taken now.
+        let api = self.running(|r| Ok(r.api.clone()))?;
+        let resources = self.resources.clone();
+        let turn = Arc::clone(&self.host.handoffs).lock_owned();
+        let mut handoff = Box::pin(async move {
+            let _turn = turn.await;
+            update.toolset.specs = hooks.setup_tools(&tools).await.unwrap_or_else(|e| {
+                hooks.hook_failed("setup_tools", e.host_ref.clone());
+                Vec::new()
+            });
+            let cmd: Command = ActivityCommand::Update(Box::new(update)).into();
+            let handed = cmd.resources();
+            if api.send_from(Origin::Host, cmd).is_err() {
+                handed.into_iter().for_each(|id| resources.release(id));
+            }
+        });
+        let waker = std::task::Waker::noop();
+        if handoff.as_mut().poll(&mut std::task::Context::from_waker(waker)).is_pending() {
+            self.spawner.spawn(handoff);
+        }
+        Ok(answer)
     }
 
     /// `session.input.audio = ..` after `start()`; `None` detaches. The reference delivers audio
@@ -731,11 +758,12 @@ impl SessionApi {
         Ok(self.attach_amd(setup)?)
     }
 
-    /// `_aclose_impl`'s close: `Command::Close { reason, drain, error }`. Resolves once the loop has
-    /// returned and the host loop has received `close`, so a `close` handler runs before the
-    /// caller's next line. `has_error` says whether an error close carries one (the object stays
-    /// with the host). An unknown `reason` is a `ValueError`. Idempotent. The room io's teardown is
-    /// `close_io`, called after the `close` handlers.
+    /// `_aclose_impl`: the hooks' `closing` (AMD), `Command::Close { reason, drain, error }`, the
+    /// turn-detector stream, the hooks' `closed` (the remote session host), the room io, then the
+    /// session's toolsets. Resolves once all of it ran; the loop's `close` handlers ran before the
+    /// room io (the reference's "close room io after close event is emitted"). `has_error` says
+    /// whether an error close carries one (the object stays with the host). An unknown `reason` is
+    /// a `ValueError`. Idempotent: a second call waits for the first.
     #[host(method(kw_only, defaults(reason = "user_initiated", drain = false, has_error = false)))]
     pub fn aclose(
         &self,
@@ -753,21 +781,43 @@ impl SessionApi {
         // host's to close.
         let was_running = self.api().is_ok();
         let closing = self.close(reason, drain, error);
+        let close_io = self.close_io();
         let clock = self.time.clock();
-        let eot = self.host.eot.clone();
+        let eot = self.host.eot.clone().filter(|_| was_running);
+        let hooks = self.host.hooks.clone().filter(|_| was_running);
+        let closed = Arc::clone(&self.host.closed);
         Ok(Reply::new(async move {
-            closing.await;
-            if let (true, Some(eot)) = (was_running, eot) {
-                let _ = lk_agents_abi::timeout(&*clock, CLOSE_TIMEOUT, eot.aclose()).await;
-            }
+            closed
+                .get_or_init(|| async move {
+                    if let Some(hooks) = &hooks
+                        && let Err(e) = hooks.closing().await
+                    {
+                        hooks.hook_failed("closing", e.host_ref.clone());
+                    }
+                    closing.await;
+                    if let Some(eot) = eot {
+                        let _ = lk_agents_abi::timeout(&*clock, CLOSE_TIMEOUT, eot.aclose()).await;
+                    }
+                    if let Some(hooks) = &hooks
+                        && let Err(e) = hooks.closed().await
+                    {
+                        hooks.hook_failed("closed", e.host_ref.clone());
+                    }
+                    close_io.await;
+                    if let Some(hooks) = &hooks {
+                        hooks.close_toolsets(None).await;
+                    }
+                })
+                .await;
         }))
     }
 
-    /// The room io's teardown, after the host's `close` handlers ran (the reference's "close room
-    /// io after close event is emitted"). Bounded, so a wedged host generator cannot hang shutdown.
-    #[host(method(name = "close_io"))]
-    pub fn host_close_io(&self) -> Reply<()> {
-        Reply::new(self.close_io())
+    /// `AgentSession.shutdown(drain=)`: [`aclose`](Self::aclose) without waiting for it.
+    #[host(method(kw_only, defaults(drain = true)))]
+    pub fn shutdown(&self, drain: bool) {
+        if let Ok(closing) = self.aclose("user_initiated", drain, false) {
+            self.spawner.spawn_unboxed(closing);
+        }
     }
 
     /// The identity `RoomIo` linked to, once it has.
