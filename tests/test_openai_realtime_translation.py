@@ -428,15 +428,17 @@ async def test_punctuation_that_is_the_transcripts_own_is_kept(
         # just after a quiet, but attached to a word, so it is this transcript's own
         conns[0].emit({"type": "session.input_transcript.delta", "delta": ".NET is fast."})
         await _wait_for(lambda: sum(t.is_final for t in heard) == 2)
-        # on its own, but long after the quiet: not a trailing mark
+        # on its own, and long after the quiet: the model holds a sentence's closing mark
+        # until the next speech starts, however long the pause
         await asyncio.sleep(0.15)
-        conns[0].emit({"type": "session.input_transcript.delta", "delta": "... and so on"})
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": "."})
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": " What happened?"})
         await _wait_for(lambda: sum(t.is_final for t in heard) == 3)
 
         assert [t.text for t in heard if t.is_final] == [
             ".NET ships today.",
             ".NET is fast.",
-            "... and so on",
+            "What happened?",
         ]
     finally:
         await session.aclose()

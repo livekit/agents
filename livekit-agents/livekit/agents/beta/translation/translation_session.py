@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from livekit import rtc
 
 from ...job import get_job_context
+from ...llm import AudioGate, FixedGate
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import aio, is_given, log_exceptions
@@ -134,6 +135,9 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._output_transcript_text = ""
         self._output_transcript_atask: asyncio.Task[None] | None = None
         self._segment_timer: asyncio.TimerHandle | None = None
+        # tells the model's speech from its silence, which a provider can stream without pause
+        self._gate: AudioGate | None = None
+        self._gate_open = False
         # set while a quiet segment waits for its transcript to go final before it ends
         self._awaiting_text = False
         self._text_wait_timeout = TEXT_WAIT_TIMEOUT
@@ -274,6 +278,11 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._output_language = self._model.target_language
             self._output_language_stamped = False
             self._reset_segment_state()
+            # digital silence unless the model knows its own; its quiet period is the segment's
+            self._gate = self._model.audio_gate() or FixedGate(
+                0.0, min_silence_duration=self._output_segment_timeout
+            )
+            self._gate_open = False
             self._model_session.on("input_speech_started", self._on_input_speech_started)
             self._model_session.on("input_speech_stopped", self._on_input_speech_stopped)
             self._model_session.on("input_transcript", self._on_input_transcript)
@@ -406,6 +415,13 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if self.output.audio is None or not self.output.audio_enabled:
                     continue
 
+                was_open = self._gate_open
+                self._gate_open = self._gate.update(ev.frame) if self._gate else True
+                if not self._gate_open and not self._segment_has_audio:
+                    # silence between translations, from a provider that streams it: there
+                    # is nothing to play, and played it would hold the next segment open
+                    continue
+
                 async with self._output_lock:
                     if (audio_output := self.output.audio) is None:
                         continue
@@ -418,7 +434,14 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     await self._capture_output_frame(ev.frame, audio_output)
 
                 if not marks_segments:
-                    self._arm_segment_timer()
+                    if self._gate_open:
+                        # the pauses inside a translation still play, and the timer still
+                        # ends it for a provider that stops sending rather than go quiet
+                        self._arm_segment_timer()
+                    elif was_open:
+                        # the gate has heard the speech stay quiet long enough
+                        self._cancel_segment_timer()
+                        self._on_output_silence()
         finally:
             self._cancel_segment_timer()
             async with self._output_lock:
@@ -493,7 +516,8 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # the model sends pieces; the event carries all of it, so a final is never empty
         self._output_transcript_text += ev.text
-        transcript = self._output_transcript_text
+        # the model's pieces carry their leading spaces, which open the transcript too
+        transcript = self._output_transcript_text.lstrip()
         if ev.is_final:
             self._output_transcript_text = ""
 
@@ -604,6 +628,10 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         had_audio, self._segment_has_audio = self._segment_has_audio, False
         self._segment_has_text = False
         self._text_open = False
+        if self._gate is not None:
+            # the next speech opens a segment of its own, however the last one ended
+            self._gate.deactivate()
+        self._gate_open = False
         if had_audio and self._output_transcript_ch is not None:
             # the text segment ends with its audio, behind the text already sent
             self._output_transcript_ch.send_nowait(_END_OF_SEGMENT)

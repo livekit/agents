@@ -201,9 +201,10 @@ def _translation_url(base_url: str, model: str) -> str:
 
 
 # sentence-ending punctuation standing on its own at the start of a transcript, in the
-# scripts the model speaks and hears. Arriving just after a quiet ended the last transcript,
-# it is that one's closing punctuation, and would otherwise lead the next ("? What are you
-# talking about?"). Attached to a word (".NET") it is the new transcript's own
+# scripts the model speaks and hears. After a quiet ended the last transcript it is that
+# one's closing punctuation: the model holds it back until the next speech starts, however
+# long the pause, and it would otherwise lead the next one (". What happened?"). Attached
+# to a word (".NET") it is the new transcript's own
 _TRAILING_PUNCTUATION = re.compile(r"^\s*[.?!…。？！؟।]+(?=\s|$)")
 
 
@@ -211,8 +212,8 @@ class _TranscriptSegmenter:
     """Ends a transcript once its deltas go quiet, since the server sends no end itself.
 
     The quiet that ends one is the boundary between utterances, kept as given; punctuation
-    that trails just past it, on its own, is dropped rather than opening the next. Each callback gets the delta
-    and the transcript so far, so a consumer can take either.
+    that trails past it, on its own, is dropped rather than opening the next. Each callback
+    gets the delta and the transcript so far, so a consumer can take either.
     """
 
     def __init__(
@@ -233,7 +234,9 @@ class _TranscriptSegmenter:
 
     def push(self, delta: str) -> None:
         if not self._text:
-            delta = self._strip_trailing_punctuation(delta).lstrip()
+            # only the punctuation is dropped: the space before the next words still
+            # separates them from the translation they may follow in the same caption
+            delta = self._strip_trailing_punctuation(delta)
         if not delta:
             return
 
@@ -251,7 +254,7 @@ class _TranscriptSegmenter:
     def _strip_trailing_punctuation(self, text: str) -> str:
         """Drop the last transcript's closing punctuation from the start of a new one."""
         ended_at, self._quiet_ended_at = self._quiet_ended_at, None
-        if ended_at is None or self._loop.time() - ended_at > self._timeout:
+        if ended_at is None:
             return text
 
         return _TRAILING_PUNCTUATION.sub("", text)
@@ -304,11 +307,12 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
 
         self._input_segmenter = _TranscriptSegmenter(
             self._opts.transcript_segment_timeout,
+            # the source transcript goes out whole each time, so its leading space can go
             on_text=lambda _, text: self.emit(
-                "input_transcript", InputTranscript(text=text, is_final=False)
+                "input_transcript", InputTranscript(text=text.lstrip(), is_final=False)
             ),
             on_final=lambda text: self.emit(
-                "input_transcript", InputTranscript(text=text, is_final=True)
+                "input_transcript", InputTranscript(text=text.lstrip(), is_final=True)
             ),
             loop=self._loop,
         )

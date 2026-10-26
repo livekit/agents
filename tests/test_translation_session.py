@@ -36,10 +36,13 @@ from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 pytestmark = pytest.mark.unit
 
 
-def _frame(duration: float = 0.02, sample_rate: int = 16000) -> rtc.AudioFrame:
+def _frame(
+    duration: float = 0.02, sample_rate: int = 16000, *, silent: bool = False
+) -> rtc.AudioFrame:
+    """Speech by default: a provider's silence is told apart from it by level."""
     num_samples = int(sample_rate * duration)
     return rtc.AudioFrame(
-        data=b"\x00\x00" * num_samples,
+        data=(b"\x00\x00" if silent else b"\x00\x10") * num_samples,
         sample_rate=sample_rate,
         num_channels=1,
         samples_per_channel=num_samples,
@@ -1579,3 +1582,43 @@ async def test_speech_resuming_while_waiting_for_text_carries_the_segment_on() -
         await _wait_for(lambda: counts.flushes == 1)
     finally:
         await session.aclose()
+
+
+async def test_a_provider_streaming_silence_still_ends_each_translation() -> None:
+    from livekit.agents.voice.transcription.synchronizer import TranscriptSynchronizer
+
+    model = _FakeTranslationModel()
+    audio_sink, text_sink = FakeAudioOutput(), FakeTextOutput()
+    synchronizer = TranscriptSynchronizer(
+        next_in_chain_audio=audio_sink, next_in_chain_text=text_sink
+    )
+    session = TranslationSession(model=model, output_segment_timeout=0.1)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = synchronizer.audio_output
+    session.output.transcription = synchronizer.text_output
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+
+        async def _stream(duration: float, *, silent: bool) -> None:
+            # as gpt-realtime-translate does: a chunk every 50ms, speaking or not
+            for _ in range(int(duration / 0.05)):
+                model_session.speak(_frame(duration=0.05, sample_rate=24000, silent=silent))
+                await asyncio.sleep(0.05)
+
+        await _stream(0.2, silent=True)
+        model_session.emit("output_transcript", OutputTranscript(text="Hola.", is_final=False))
+        await _stream(0.2, silent=False)
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+        # the speaker pauses; the provider keeps streaming, now silence
+        await _stream(0.6, silent=True)
+        model_session.emit("output_transcript", OutputTranscript(text=" Adiós.", is_final=False))
+        await _stream(0.2, silent=False)
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+        await _stream(0.6, silent=True)
+
+        await _wait_for(lambda: len(text_sink._messages) == 2, timeout=3)
+        assert [m.strip() for m in text_sink._messages] == ["Hola.", "Adiós."]
+    finally:
+        await session.aclose()
+        await synchronizer.aclose()
