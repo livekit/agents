@@ -284,7 +284,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             while (ev := await native.recv()) is not None:
                 self._event_ch.send_nowait(
-                    stt.SpeechEvent._from_core(ev, offset=self.start_time_offset)
+                    stt.stt._speech_event_from_core(ev, offset=self.start_time_offset)
                 )
         finally:
             self._native = None

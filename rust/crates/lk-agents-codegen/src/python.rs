@@ -370,6 +370,16 @@ fn imports(b: &mut String, all: &[Decl], mine: &[&Decl]) -> Result<(), String> {
         if t.host_fields.iter().any(|h| h.private) {
             needs_s(&mut third, "pydantic", "PrivateAttr");
         }
+        for factory in t.host_fields.iter().filter(|h| !h.private).filter_map(|h| h.default_factory.as_deref()) {
+            if t.kind == Kind::Dataclass {
+                needs(&mut stdlib, "dataclasses", "field");
+            } else {
+                needs_s(&mut third, "pydantic", "Field");
+            }
+            if factory == "time.time" && !plain.contains(&"time") {
+                plain.push("time");
+            }
+        }
         for f in d.fields().iter().filter(|f| !f.py_skip) {
             if f.literal.is_some() {
                 needs(&mut stdlib, "typing", "Literal");
@@ -822,7 +832,7 @@ fn class(all: &[Decl], d: &Decl) -> Result<String, String> {
                     b.push_str(&tag_line(name, value));
                 }
             }
-            Slot::Host(h) => host_field(&mut b, h),
+            Slot::Host(h) => host_field(&mut b, h, t.kind == Kind::Dataclass),
         }
         body = true;
     }
@@ -959,7 +969,7 @@ fn ordered<'a>(d: &'a Decl, t: &'a Target) -> Result<Vec<Slot<'a>>, String> {
     Ok(out)
 }
 
-fn host_field(b: &mut String, h: &HostField) {
+fn host_field(b: &mut String, h: &HostField, dataclass: bool) {
     if h.private {
         let arg = match (&h.default_factory, &h.default) {
             (Some(factory), _) => format!("default_factory={factory}"),
@@ -969,6 +979,12 @@ fn host_field(b: &mut String, h: &HostField) {
         b.push_str(&format!("    {}: {} = PrivateAttr({arg})\n", h.name, h.ty));
     } else {
         let value = match (&h.default, &h.deprecated_msg) {
+            // `dataclasses.field` in a dataclass: pydantic's `Field` there is a shared default.
+            (None, None) if h.default_factory.is_some() => {
+                let factory = h.default_factory.as_deref().unwrap_or_default();
+                let call = if dataclass { "field" } else { "Field" };
+                format!(" = {call}(default_factory={factory})")
+            }
             (d, Some(msg)) => {
                 let head = d.clone().unwrap_or_else(|| "...".to_owned());
                 format!(" = Field(default={head}, deprecated={msg:?})")

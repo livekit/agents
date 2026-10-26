@@ -4,7 +4,6 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
 
@@ -13,7 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 
 from .._exceptions import APIConnectionError, APIError
-from .._generated.stt import RecognitionUsage, SpeechData, SpeechEventType, STTCapabilities
+from .._generated.stt import (
+    RecognitionUsage,
+    SpeechData,
+    SpeechEvent,
+    SpeechEventType,
+    STTCapabilities,
+)
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import AudioBuffer, aio, is_given
@@ -36,38 +41,23 @@ __all__ = [
 ]
 
 
-@dataclass
-class SpeechEvent:
-    type: SpeechEventType
-    request_id: str = ""
-    alternatives: list[SpeechData] = field(default_factory=list)
-    recognition_usage: RecognitionUsage | None = None
-    speech_start_time: float | None = None
-    """server-reported wall-clock time of speech onset, when the provider sends
-    a separate speech-start signal carrying onset timing."""
-    created_at: float = field(default_factory=lambda: time.time())
-    """Wall-clock time when this event was created."""
-    speech_end_time: float | None = None
-    """Wall-clock time when the recognized speech ended, when known."""
-
-    @classmethod
-    def _from_core(cls, ev: dict[str, Any], *, offset: float = 0.0) -> SpeechEvent:
-        """An event the core emits as a dict, its times shifted by ``offset``."""
-        alternatives = []
-        for alt in ev.pop("alternatives"):
-            alt["start_time"] += offset
-            alt["end_time"] += offset
-            for word in alt["words"] or []:
-                word.start_time = (word.start_time or 0.0) + offset
-                word.end_time = (word.end_time or 0.0) + offset
-                word.start_time_offset = offset
-            alternatives.append(SpeechData(**alt))
-        usage = ev.pop("recognition_usage")
-        return cls(
-            **ev,
-            alternatives=alternatives,
-            recognition_usage=RecognitionUsage(**usage) if usage else None,
-        )
+def _speech_event_from_core(ev: dict[str, Any], *, offset: float = 0.0) -> SpeechEvent:
+    """An event the core emits as a dict, its times shifted by ``offset``."""
+    alternatives = []
+    for alt in ev.pop("alternatives"):
+        alt["start_time"] += offset
+        alt["end_time"] += offset
+        for word in alt["words"] or []:
+            word.start_time = (word.start_time or 0.0) + offset
+            word.end_time = (word.end_time or 0.0) + offset
+            word.start_time_offset = offset
+        alternatives.append(SpeechData(**alt))
+    usage = ev.pop("recognition_usage")
+    return SpeechEvent(
+        **ev,
+        alternatives=alternatives,
+        recognition_usage=RecognitionUsage(**usage) if usage else None,
+    )
 
 
 class STTError(BaseModel):
