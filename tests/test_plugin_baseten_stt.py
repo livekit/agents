@@ -38,8 +38,10 @@ class _FakeWhisperServer:
         self.metadata: dict[str, Any] | None = None
         self.audio_bytes = 0
         self.text_messages: list[dict[str, Any]] = []
+        self.connections = 0
 
     async def handle(self, request: web.Request) -> web.WebSocketResponse:
+        self.connections += 1
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         async for msg in ws:
@@ -74,7 +76,7 @@ class _FakeWhisperServer:
 
 
 async def _run_stream(
-    server: _FakeWhisperServer, samples: int, timeout: float = 10.0
+    server: _FakeWhisperServer, samples: int, timeout: float = 10.0, max_retry: int = 0
 ) -> list[stt.SpeechEvent]:
     app = web.Application()
     app.router.add_get("/ws", server.handle)
@@ -92,7 +94,9 @@ async def _run_stream(
                 http_session=session,
             )
             stream = baseten_stt.stream(
-                conn_options=APIConnectOptions(max_retry=0, timeout=timeout)
+                conn_options=APIConnectOptions(
+                    max_retry=max_retry, retry_interval=0.01, timeout=timeout
+                )
             )
             stream.push_frame(
                 rtc.AudioFrame(
@@ -147,13 +151,16 @@ async def test_end_input_completes_when_server_ignores_end_audio() -> None:
     assert _final_texts(events) == []
 
 
-async def test_close_before_finished_is_an_error() -> None:
+async def test_close_before_finished_is_an_error_and_not_retried() -> None:
+    # a retry would reconnect with the input already drained and flush nothing
     server = _FakeWhisperServer("drop")
     with pytest.raises(APIStatusError):
-        await _run_stream(server, samples=512)
+        await _run_stream(server, samples=512, max_retry=3)
+    assert server.connections == 1
 
 
 async def test_acknowledged_flush_that_never_finishes_times_out() -> None:
     server = _FakeWhisperServer("stall")
     with pytest.raises(APITimeoutError):
-        await _run_stream(server, samples=512, timeout=1.0)
+        await _run_stream(server, samples=512, timeout=1.0, max_retry=3)
+    assert server.connections == 1

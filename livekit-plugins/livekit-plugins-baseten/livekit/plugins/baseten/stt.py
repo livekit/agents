@@ -32,6 +32,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -438,7 +439,8 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
-        # set once end_audio is sent; flush_deadline is set when the server acknowledges it
+        # input_ended is set once the input channel is drained; flush_deadline once the
+        # server acknowledges end_audio
         input_ended = False
         flush_deadline: float | None = None
 
@@ -467,10 +469,10 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_bytes(int16_array.tobytes())
 
                 # input ended: send the partial last buffer, then ask the server to flush
+                input_ended = True
                 for frame in audio_bstream.flush():
                     await ws.send_bytes(frame.data.tobytes())
                 await ws.send_str(SpeechStream._END_AUDIO_MSG)
-                input_ended = True
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws or self._session.closed:
                     return
@@ -643,7 +645,14 @@ class SpeechStream(stt.SpeechStream):
                     )
                     for task in done:
                         if task != wait_reconnect_task:
-                            task.result()
+                            try:
+                                task.result()
+                            except APIError as e:
+                                # the input channel is drained, so a retry would reconnect
+                                # with no audio and report an empty flush as success
+                                if input_ended:
+                                    e.retryable = False
+                                raise
 
                     if wait_reconnect_task not in done:
                         break
