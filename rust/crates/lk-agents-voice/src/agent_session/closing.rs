@@ -331,7 +331,11 @@ impl Driver {
             return false;
         }
         let turn = &self.activity.audio_recognition;
-        if turn.user_speaking() || !turn.current_transcript().trim().is_empty() {
+        // A manual turn is committed whatever it holds: the reference's commit completes it even
+        // with no words.
+        let manual =
+            turn.turn_detection_mode() == crate::audio_recognition::TurnDetectionMode::Manual;
+        if manual || turn.user_speaking() || !turn.current_transcript().trim().is_empty() {
             return true;
         }
         match (turn.last_speaking_time(), turn.last_final_transcript_time()) {

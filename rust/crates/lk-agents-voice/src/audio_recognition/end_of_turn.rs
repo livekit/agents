@@ -373,8 +373,10 @@ impl AudioRecognition {
     pub fn commit_user_turn(&mut self, now: Ts, text: Option<String>, skip_reply: bool) -> Effects {
         let mut eff = Effects::new();
         eff.append(self.promote_interim(text));
-        // Past the close's edge nothing waits: commit what the turn holds, or nothing.
-        if self.closed && self.audio_transcript.is_empty() {
+        // Past the close's edge nothing waits: commit what the turn holds, or nothing; a manual
+        // turn completes even with no words, as the reference's commit runs it in that mode.
+        let manual = self.cfg.turn_detection_mode == super::TurnDetectionMode::Manual;
+        if self.closed && self.audio_transcript.is_empty() && !manual {
             return eff;
         }
         eff.append(self.run_eou_detection(now, Start::Manual { skip_reply }));

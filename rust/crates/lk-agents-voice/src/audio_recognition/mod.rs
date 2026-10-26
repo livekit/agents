@@ -407,7 +407,7 @@ pub enum CommitVerdict {
     TooFewWords,
     /// A realtime backchannel: transcript kept, the model's buffered audio cleared.
     RealtimeBackchannel,
-    /// A commit with no words: the turn is consumed and nothing is generated.
+    /// A turn with no words that asks for no reply: consumed, with no item.
     Empty,
     /// A final that landed after its turn committed, with no new onset. Commits like `Reply`.
     LateTranscript,
@@ -424,15 +424,6 @@ pub struct CommitDecision {
 
 /// `on_end_of_turn`'s guards, in the reference's order. Pure.
 pub fn decide_commit(i: &CommitInputs<'_>) -> CommitDecision {
-    // No item without content. A realtime session with no STT has no transcript by design.
-    if i.new_transcript.trim().is_empty() && (i.stt_enabled || !i.realtime_llm) {
-        return CommitDecision {
-            verdict: CommitVerdict::Empty,
-            committed: true,
-            cancel_false_interruption: false,
-        };
-    }
-
     if i.scheduling_paused {
         return CommitDecision {
             verdict: CommitVerdict::Dropped { append_user_message: i.closing },
@@ -467,6 +458,15 @@ pub fn decide_commit(i: &CommitInputs<'_>) -> CommitDecision {
         return CommitDecision {
             verdict: CommitVerdict::RealtimeBackchannel,
             committed: false,
+            cancel_false_interruption: false,
+        };
+    }
+
+    // `_user_turn_completed_impl`: a turn that asks for no reply keeps no item without words.
+    if i.skip_reply && i.new_transcript.is_empty() {
+        return CommitDecision {
+            verdict: CommitVerdict::Empty,
+            committed: true,
             cancel_false_interruption: false,
         };
     }

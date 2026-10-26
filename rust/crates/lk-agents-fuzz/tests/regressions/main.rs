@@ -27,6 +27,7 @@ mod late_leg_open_closed;
 mod left_at_close;
 mod live_options;
 mod mic_replaced_with_frames;
+mod manual_turn_closed_empty;
 mod model_failure_reported;
 mod model_metrics_reported;
 mod path_needs_both_switches;
