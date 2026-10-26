@@ -13,7 +13,7 @@ use lk_agents_voice::trace::{CloseStep, InterruptCause, InterruptStep::Interrupt
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
-    input::Input,
+    input::{DtmfInput, Input},
     record::{InputsView, Interruption, Observed, Recording},
 };
 
@@ -56,16 +56,18 @@ impl Rule for InterruptionHasCause {
 }
 
 /// Something the case did before `at` that the driver treats as the host interrupting: an
-/// interrupt call, or an audio-output swap, which cuts whatever is playing into the old sink.
+/// interrupt call, an audio-output swap, which cuts whatever is playing into the old sink, or a
+/// key pressed into a DTMF collection, whose reply interrupts first (`GetDtmfTask`).
 fn host_interrupted_before(inputs: &InputsView, at: Observed) -> bool {
     inputs.sent().iter().any(|sent| {
         sent.at < at
-            && matches!(
-                sent.input,
+            && match sent.input {
                 Input::Interrupt { .. }
-                    | Input::InterruptSpeech { .. }
-                    | Input::SetAudioOutput { .. }
-            )
+                | Input::InterruptSpeech { .. }
+                | Input::SetAudioOutput { .. } => true,
+                Input::Dtmf { input: DtmfInput::Digit, .. } => sent.accepted,
+                _ => false,
+            }
     })
 }
 
