@@ -247,8 +247,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._amd: AMD | None = None
         self._console: ConsoleCall | None = None
         self._agent: Agent | None = None
-        # every agent the core may name, by the id it was installed under
-        self._agents: dict[str, Agent] = {}
         self._speeches: dict[str, SpeechHandle] = {}
         self._chat_ctx = ChatContext.empty()
         self._agent_state: AgentState = "initializing"
@@ -422,6 +420,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             instructions=frame["instructions"],
             dynamic_instructions=frame["dynamic_instructions"],
             agent=frame["agent"],
+            agent_host=frame["agent_host"],
             chat_ctx=to_core_items(self._chat_ctx.items),
             stt=_core_leg(frame.get("stt", self._stt)),
             vad=frame.get("vad", self._vad),
@@ -718,7 +717,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     async def _frame(self, agent: Agent) -> dict[str, Any]:
         """``agent`` as the core installs it (``update_agent``'s keywords), its toolsets set up."""
-        self._agents[agent.id] = agent
         pool = self._pool(agent)
         # a toolset that fails to set up is logged and the agent runs without it
         await asyncio.gather(
@@ -730,6 +728,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 _DynamicInstructions(self, agent) if agent._instruction_fns else None
             ),
             "agent": agent.id,
+            "agent_host": agent,
             "tools": tool_specs(pool),
             "tools_host": pool,
             "tool_runner": ToolRunner(self, agent, pool),
@@ -811,8 +810,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if item.type == "agent_handoff":
                 run._agent_handoff(
                     item=item,
-                    old_agent=self._agents.get(item.old_agent_id or ""),
-                    new_agent=self._agents[item.new_agent_id],
+                    old_agent=wire["old_agent_host"],
+                    new_agent=wire["new_agent_host"],
                 )
             else:
                 run._item_added(item)
@@ -964,14 +963,14 @@ async def _answer_hook(session: LiveSession[Any], wire: dict[str, Any]) -> None:
 
 
 async def _on_enter(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    agent = session._agents[wire["agent"]]
+    agent = wire["agent_host"]
     with _in_hook("on_enter", session, agent):
         await agent._enter(RunContext(function_call=None, session=session))
     session._core.hook_returned(wire["id"])
 
 
 async def _on_exit(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    agent = session._agents[wire["agent"]]
+    agent = wire["agent_host"]
     with _in_hook("on_exit", session, agent):
         await agent.on_exit()
     session._core.hook_returned(wire["id"])

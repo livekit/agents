@@ -59,6 +59,8 @@ impl SessionApi {
         instructions: Option<Instructions>,
         dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
         agent: String,
+        // The first frame's `Agent`, handed back by the events that name it.
+        agent_host: Option<lk_agents_abi::HostRef>,
         chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
@@ -120,6 +122,8 @@ impl SessionApi {
         use crate::room_io::types::{
             AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig,
         };
+        let agents = super::HostAgents::default();
+        agents.install(&agent, agent_host);
         let time = room.timebase();
         let clock = time.clock();
         let anchor = lk_agents_abi::WallAnchor::of(&*clock);
@@ -340,6 +344,7 @@ impl SessionApi {
             time,
             dtmf_reply: Mutex::new(None),
             last_filler: std::sync::atomic::AtomicU64::new(0),
+            agents,
             host: HostParts::default(),
             resources,
             #[cfg(feature = "dst")]
@@ -366,13 +371,16 @@ impl SessionApi {
     pub fn start(&self, capture_run: bool) -> Result<Reply<Result<(), StartFailed>>, OpenRefused> {
         let events = self.host.events.clone();
         let anchor = self.anchor;
+        let agents = self.agents.clone();
         // The drain: one event per call, in driver order, then one last word.
         let opening = self.open(capture_run, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 let api = runner.api().clone();
                 while let Some(ev) = runner.next_host_event().await {
                     if let Some(events) = &events {
-                        events.event(&ev.wire(anchor, &api));
+                        let mut wire = ev.wire(anchor, &api);
+                        agents.resolve(&mut wire);
+                        events.event(&wire);
                     }
                 }
                 // Dropping the runner after it tells `aclose()` the host has seen everything.

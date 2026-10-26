@@ -56,6 +56,9 @@ pub struct SessionApi {
     dtmf_reply: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
     /// The last `with_filler` scope numbered by [`filler_start`](Self::filler_start).
     last_filler: std::sync::atomic::AtomicU64,
+    /// Every frame's `Agent` by its id, as the host installed it: the events naming an agent hand
+    /// it back ([`HostAgents::resolve`]).
+    agents: HostAgents,
     /// The monotonic-to-wall pair every `Ts`-carrying event converts against, read once so events
     /// never disagree about when `Ts::ZERO` was.
     anchor: lk_agents_abi::WallAnchor,
@@ -440,6 +443,7 @@ impl SessionApi {
             instructions,
             dynamic_instructions,
             agent,
+            agent_host,
             tools,
             tools_host,
             tool_runner,
@@ -454,6 +458,7 @@ impl SessionApi {
             tts_node,
             stt_node,
         } = frame;
+        self.agents.install(&agent, agent_host);
         let options = turn_handling.as_ref().map(crate::turn::agent_patch).unwrap_or_default();
         self.set_agent_layer(Some(options));
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
@@ -852,6 +857,39 @@ impl SessionRoom for FixedRoom {
     }
 }
 
+/// The host's `Agent` objects by frame id. The hooks and the handoff record name an agent by
+/// id; the host reads the object it installed.
+#[derive(Clone, Default)]
+pub struct HostAgents(Arc<Mutex<std::collections::HashMap<String, lk_agents_abi::HostRef>>>);
+
+impl HostAgents {
+    pub fn install(&self, agent: &str, host: Option<lk_agents_abi::HostRef>) {
+        if let Some(host) = host {
+            self.0.lock().unwrap_or_else(|p| p.into_inner()).insert(agent.to_owned(), host);
+        }
+    }
+
+    fn get(&self, agent: &str) -> Option<lk_agents_abi::HostRef> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).get(agent).cloned()
+    }
+
+    /// Fills in the `Agent`s of the wire records that name one.
+    pub fn resolve(&self, wire: &mut lk_agents_abi::voice::events::HostWire) {
+        use lk_agents_abi::voice::events::HostWire;
+        match wire {
+            HostWire::HookOnEnter(w) => w.agent_host = self.get(&w.agent),
+            HostWire::HookOnExit(w) => w.agent_host = self.get(&w.agent),
+            HostWire::ItemAdded(w) => {
+                if let lk_agents_abi::ChatItem::AgentHandoff(h) = &w.item {
+                    w.old_agent_host = h.old_agent_id.as_deref().and_then(|a| self.get(a));
+                    w.new_agent_host = self.get(&h.new_agent_id);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// An `Agent`'s overridden nodes, as the core calls them. `transcription_node` and
 /// `realtime_audio_output_node` are built once at assembly over the core leg below (called under
 /// the GIL; what one raises comes back as the exception it raised). `llm_node`, `tts_node` and
@@ -889,6 +927,9 @@ pub struct UpdateAgentArgs {
     pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
     /// The new frame's agent id.
     pub agent: String,
+    /// The new frame's `Agent`, handed back by the events that name it.
+    #[host(kwarg(default = None))]
+    pub agent_host: Option<lk_agents_abi::HostRef>,
     #[host(kwarg(default = None))]
     pub tools: Option<Vec<lk_agents_abi::ToolSpec>>,
     #[host(kwarg(default = None))]

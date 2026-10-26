@@ -135,12 +135,18 @@ impl HookCall {
         let hook = self.kind().as_str().to_owned();
         let id = self.id().0;
         match self {
-            HookCall::OnEnter { agent, .. } => {
-                HostWire::HookOnEnter(w::OnEnterHookWire { hook, id, agent: agent.clone() })
-            }
-            HookCall::OnExit { agent, .. } => {
-                HostWire::HookOnExit(w::OnExitHookWire { hook, id, agent: agent.clone() })
-            }
+            HookCall::OnEnter { agent, .. } => HostWire::HookOnEnter(w::OnEnterHookWire {
+                hook,
+                id,
+                agent: agent.clone(),
+                agent_host: None,
+            }),
+            HookCall::OnExit { agent, .. } => HostWire::HookOnExit(w::OnExitHookWire {
+                hook,
+                id,
+                agent: agent.clone(),
+                agent_host: None,
+            }),
             HookCall::OnUserTurnCompleted {
                 turn, new_transcript, transcript_confidence, ..
             } => HostWire::HookOnUserTurnCompleted(w::OnUserTurnCompletedHookWire {
@@ -294,6 +300,8 @@ impl SessionEvent {
                     agent: agent.clone(),
                     visibility: visibility.as_str().to_owned(),
                     run: run.as_ref().and_then(|r| r.host.clone()),
+                    old_agent_host: None,
+                    new_agent_host: None,
                 })
             }
             // The host moves these ids between its context projections; no item crosses.

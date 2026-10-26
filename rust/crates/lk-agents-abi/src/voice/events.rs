@@ -683,6 +683,11 @@ pub struct ItemAddedWire {
     /// record, else `None`.
     #[binding(extract_skip)]
     pub run: Option<crate::HostRef>,
+    /// A handoff record's two `Agent`s, as the host installed them.
+    #[binding(extract_skip)]
+    pub old_agent_host: Option<crate::HostRef>,
+    #[binding(extract_skip)]
+    pub new_agent_host: Option<crate::HostRef>,
 }
 
 /// `function_tools_executed`, as the driver emits it; calls and outputs are parallel lists. A twin
@@ -886,6 +891,8 @@ pub struct OnEnterHookWire {
     pub id: u64,
     /// The frame's agent id.
     pub agent: String,
+    /// The frame's `Agent`, as the host installed it.
+    pub agent_host: Option<crate::HostRef>,
 }
 
 /// `on_exit`: `Agent.on_exit()` on the frame being left.
@@ -895,6 +902,8 @@ pub struct OnExitHookWire {
     pub hook: String,
     pub id: u64,
     pub agent: String,
+    /// The frame's `Agent`, as the host installed it.
+    pub agent_host: Option<crate::HostRef>,
 }
 
 /// `on_user_turn_completed`: `Agent.on_user_turn_completed(turn_ctx, new_message)` for the turn.
