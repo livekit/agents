@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -117,3 +117,48 @@ class TestWaitForSimulationFinalize:
             timeout=1.0,
         )
 
+
+class TestRoomIODeleteRoomOnClose:
+    def _close(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        simulation: object | None,
+        job_room: bool = True,
+    ) -> tuple[MagicMock, Any]:
+        from livekit.agents.voice.events import CloseEvent, CloseReason
+        from livekit.agents.voice.room_io.room_io import RoomIO
+
+        job_ctx = MagicMock()
+        job_ctx.simulation_context.return_value = simulation
+        monkeypatch.setattr("livekit.agents.voice.room_io.room_io.get_job_context", lambda: job_ctx)
+        room_io = SimpleNamespace(
+            _options=SimpleNamespace(delete_room_on_close=True),
+            _delete_room_task=None,
+            _room=SimpleNamespace(name="room"),
+        )
+        if job_room:
+            job_ctx.room = room_io._room
+        RoomIO._on_agent_session_close(
+            cast(Any, room_io), CloseEvent(reason=CloseReason.USER_INITIATED)
+        )
+        return job_ctx, room_io
+
+    def test_defers_deletion_to_job_shutdown_under_a_simulation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job_ctx, _ = self._close(monkeypatch, simulation=object())
+        job_ctx.delete_room.assert_not_called()
+        job_ctx.add_shutdown_callback.assert_called_once()
+        job_ctx.shutdown.assert_called_once()
+
+    def test_deletes_another_room_right_away_under_a_simulation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job_ctx, _ = self._close(monkeypatch, simulation=object(), job_room=False)
+        job_ctx.delete_room.assert_called_once_with(room_name="room")
+        job_ctx.shutdown.assert_not_called()
+
+    def test_deletes_right_away_outside_a_simulation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        job_ctx, _ = self._close(monkeypatch, simulation=None)
+        job_ctx.delete_room.assert_called_once_with(room_name="room")
+        job_ctx.add_shutdown_callback.assert_not_called()
