@@ -634,7 +634,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """``agent`` as the core installs it (``update_agent``'s keywords), its toolsets set up."""
         self._agents[agent.id] = agent
         pool = self._pool(agent)
-        await asyncio.gather(*(t.setup() for t in pool if isinstance(t, llm.Toolset)))
+        # a toolset that fails to set up is logged and the agent runs without it
+        await asyncio.gather(
+            *(_setup_toolset(t) for t in pool if isinstance(t, llm.Toolset)),
+        )
         frame: dict[str, Any] = {
             "instructions": _instructions(agent.instructions),
             "dynamic_instructions": (
@@ -820,6 +823,13 @@ def __getattr__(name: str) -> Any:
         # deprecated alias, kept one release
         return LiveSession
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+async def _setup_toolset(toolset: llm.Toolset) -> None:
+    try:
+        await toolset.setup()
+    except Exception:
+        logger.exception("failed to set up a toolset", extra={"toolset": type(toolset).__name__})
 
 
 def _host_value(value: Any) -> Any:
