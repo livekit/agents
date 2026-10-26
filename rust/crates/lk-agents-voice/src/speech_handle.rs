@@ -732,6 +732,23 @@ impl SpeechHandle {
         let _ = rx.wait_for(|a| *a).await;
     }
 
+    /// Whether step `step` (counting as [`num_steps`](Self::num_steps) does) was authorized to
+    /// play: each authorization opens one generation.
+    pub fn step_authorized(&self, step: u32) -> bool {
+        self.generations.lock().unwrap().len() >= step as usize
+    }
+
+    /// Until [`step_authorized`](Self::step_authorized). Subscribed before the read: an
+    /// authorization opens its generation before it is sent.
+    pub async fn wait_for_step_authorized(&self, step: u32) {
+        let mut rx = self.authorized.subscribe();
+        while !self.step_authorized(step) {
+            if rx.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
     /// Wait for step `step`'s generation (absolute, from zero). `RunContext.wait_for_playout()`
     /// passes the step captured at tool-call time, so a long tool waits for its own step's playout.
     pub async fn wait_for_generation(&self, step: usize) -> Result<(), SpeechError> {

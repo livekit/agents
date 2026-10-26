@@ -900,6 +900,16 @@ async def sc_tool_call(call: Call) -> None:
     await _close(call)
 
 
+async def sc_say_then_tool_reply(call: Call) -> None:
+    """A reply queued behind a say calls a tool: it runs once the reply plays, so history keeps the
+    say's item first."""
+    session = await _pipeline(call)
+    call.handle("say", session.say("Let me say something."))
+    call.handle("reply", session.generate_reply(user_input="what's the weather like?"))
+    await call.settle(6)
+    await _close(call)
+
+
 async def sc_user_turn(call: Call) -> None:
     await _pipeline(call)
     call.speak("my name is Theo")
@@ -1588,6 +1598,7 @@ SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "say": sc_say,
     "generate_reply": sc_generate_reply,
     "tool_call": sc_tool_call,
+    "say_then_tool_reply": sc_say_then_tool_reply,
     "user_turn": sc_user_turn,
     "user_turn_default_detection": sc_user_turn_default_detection,
     "realtime_stt_default_detection": sc_realtime_stt_default_detection,
