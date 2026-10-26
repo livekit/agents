@@ -270,12 +270,18 @@ impl DriverBuilder {
             .clone()
             .map(|input| self.spawner.spawn_unboxed(video_parts.clone().pump(input)));
 
+        let resources = &self.resources;
+        let llm = self.llm.clone().map(|l| resources.register_llm(l));
+        let tts = self.tts.clone().map(|t| resources.register_tts(t));
+        let stt = self.stt.clone().map(|s| resources.register_stt(s));
+        let vad = self.vad.clone().map(|v| resources.register_vad(v));
+        let outputs = crate::agent_session::Outputs::new(
+            self.audio_out.clone().map(|o| resources.register_audio_output(o)),
+            self.text_out.clone().map(|o| resources.register_text_output(o)),
+        );
         let shared = Arc::new(SessionShared {
             time: self.time.clone(),
-            output: crate::agent_session::AgentOutput::new(
-                self.audio_out.clone(),
-                self.text_out.clone(),
-            ),
+            output: tokio::sync::watch::channel(outputs.clone()).0,
             recorder: Arc::new(std::sync::RwLock::new(None)),
             recorder_observer: std::sync::Mutex::new(None),
             launch: crate::audio::LaunchGate::new(),
@@ -296,17 +302,9 @@ impl DriverBuilder {
             activity:
                 tokio::sync::watch::channel(crate::agent_session::ActivitySnapshot::default()).0,
         });
-        let resources = &self.resources;
-        let llm = self.llm.clone().map(|l| resources.register_llm(l));
-        let tts = self.tts.clone().map(|t| resources.register_tts(t));
-        let stt = self.stt.clone().map(|s| resources.register_stt(s));
-        let vad = self.vad.clone().map(|v| resources.register_vad(v));
-        let outputs = crate::agent_session::Outputs::new(
-            self.audio_out.clone().map(|o| resources.register_audio_output(o)),
-            self.text_out.clone().map(|o| resources.register_text_output(o)),
-        );
 
-        let config = self.config.clone();
+        let config
+ = self.config.clone();
         let mut audio_recognition =
             AudioRecognition::new(&config.effective, &config.legs, self.thresholds);
         let paused_speech = {

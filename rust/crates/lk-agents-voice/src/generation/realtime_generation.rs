@@ -50,9 +50,9 @@ pub(crate) async fn realtime_generation_task(
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
     // Locked for the step by the one task that ever reads it; the channel outlives the step.
     let mut rx = events.lock().await;
-    let audio_out = shared.output.audio();
+    let audio_out = shared.audio_output();
     // `text_output`, read once for the step as the reference does: each message's words go down it.
-    let text_out = shared.output.transcription_enabled().then(|| shared.output.transcription());
+    let text_out = shared.transcription_enabled().then(|| shared.transcription_output());
     let text_out = text_out.flatten();
     // `realtime_audio_output_node`: frames go to the node, which emits into the sink itself.
     let node = shared.realtime_audio.clone();

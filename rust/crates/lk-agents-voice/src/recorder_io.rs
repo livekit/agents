@@ -69,7 +69,7 @@ impl Driver {
     ) {
         let tap = crate::recorder_io::RecorderTap::new(recorder, self.shared.time.clock());
         *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = Some(tap);
-        self.observe_recorder(None);
+        self.observe_recorder(None, self.session.outputs.audio.as_ref().map(|o| o.id));
         out.machine().arm(Timer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
     }
 
@@ -81,7 +81,9 @@ impl Driver {
         self.flush_recorder(now, false, out);
         if let Some(observer) =
             self.shared.recorder_observer.lock().unwrap_or_else(|p| p.into_inner()).take()
-            && let Some(out) = self.shared.output.audio()
+            && let Some(sink) = &self.session.outputs.audio
+            && let Some(out) = self.shared.resources.audio_output(sink.id)
+
         {
             out.tracker().unobserve(&observer);
         }
@@ -90,8 +92,12 @@ impl Driver {
         out.trace(PlayoutStep::RecorderDetached);
     }
 
-    /// Off `previous` first.
-    pub(crate) fn observe_recorder(&self, previous: Option<&dyn AudioOutput>) {
+    /// Off `previous` first, onto `sink`.
+    pub(crate) fn observe_recorder(
+        &self,
+        previous: Option<&dyn AudioOutput>,
+        sink: Option<lk_agents_abi::resources::ResourceId>,
+    ) {
         let Some(tap) = self.shared.recorder_tap() else { return };
         let mut slot = self.shared.recorder_observer.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(old) = slot.take()
@@ -99,7 +105,8 @@ impl Driver {
         {
             prev.tracker().unobserve(&old);
         }
-        if let Some(out) = self.shared.output.audio() {
+        if let Some(out) = sink.and_then(|id| self.shared.resources.audio_output(id)) {
+
             let observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
                 Arc::new(crate::recorder_io::RecorderPlaybackObserver(tap));
             out.tracker().observe(observer.clone());

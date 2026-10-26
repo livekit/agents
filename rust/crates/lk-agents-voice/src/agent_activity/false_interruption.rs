@@ -300,7 +300,7 @@ impl Driver {
         // answers it with where playback stopped.
         let in_the_sink = self.activity.speech_scheduler.current_speech() == Some(speech)
             || self.activity.paused_speech.paused_handle() == Some(speech);
-        let clears = in_the_sink && self.session.outputs.audio.is_some();
+        let sink = self.session.outputs.audio.as_ref().map(|a| a.id).filter(|_| in_the_sink);
         out.trace(InterruptStep::Interrupted { speech, cause, force });
         // A filler dies with the interruption of the speech that owns its tool.
         self.fillers_speech_ended(speech, out);
@@ -310,10 +310,9 @@ impl Driver {
         if !step_only && !self.activity.tools_in_flight.contains(&speech) {
             self.withdraw_idle_asks(speech, out);
         }
-        if clears {
-            let gate =
-                AudioOp::Gate { speech, op: GateOp::ClearBuffer, cause: GateCause::Interrupted };
-            out.machine().push(Effect::Audio(gate));
+        if let Some(output) = sink {
+            let (op, cause) = (GateOp::ClearBuffer, GateCause::Interrupted);
+            out.machine().push(Effect::Audio(AudioOp::Gate { speech, op, cause, output }));
         }
         let realtime = self.is_realtime_speech(speech);
         // Never authorized now; the watchdog is armed on the session clock. Nothing fires after
@@ -338,9 +337,10 @@ impl Driver {
     /// The one place the loop moves the playout sink, journalled as `PlayoutGate{speech, op,
     /// cause}`. No sink, no op, no step.
     fn gate_op(&self, out: &mut Out, speech: SpeechId, op: GateOp, cause: GateCause) {
-        if self.session.outputs.audio.is_some() {
-            out.machine().push(Effect::Audio(AudioOp::Gate { speech, op, cause }));
+        if let Some(output) = self.session.outputs.audio.as_ref().map(|a| a.id) {
+            out.machine().push(Effect::Audio(AudioOp::Gate { speech, op, cause, output }));
         }
+
     }
 
     /// Interrupt a paused speech the way `_cancel_speech_pause(interrupt=True)` does: refused for a

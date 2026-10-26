@@ -371,8 +371,8 @@ impl IdMint {
 
 pub struct SessionShared {
     pub time: Timebase,
-    /// `session.output`.
-    pub output: AgentOutput,
+    /// `session.output` as the core last published it.
+    pub output: tokio::sync::watch::Sender<Outputs>,
     pub recorder: Arc<std::sync::RwLock<Option<crate::recorder_io::RecorderTap>>>,
     pub recorder_observer:
         std::sync::Mutex<Option<Arc<dyn lk_agents_abi::voice::io::PlaybackObserver>>>,
@@ -425,69 +425,27 @@ impl SessionShared {
     pub fn recorder_tap(&self) -> Option<crate::recorder_io::RecorderTap> {
         self.recorder.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
-}
 
-/// `session.output`: the agent's audio and transcription outputs, each swappable while the session
-/// runs (a reply keeps the one it started with) and each with its switch.
-pub struct AgentOutput {
-    audio: std::sync::RwLock<Option<Arc<dyn AudioOutput>>>,
-    audio_enabled: std::sync::atomic::AtomicBool,
-    transcription: std::sync::RwLock<Option<Arc<dyn TextOutput>>>,
-    transcription_enabled: std::sync::atomic::AtomicBool,
-}
-
-impl AgentOutput {
-    pub fn new(
-        audio: Option<Arc<dyn AudioOutput>>,
-        transcription: Option<Arc<dyn TextOutput>>,
-    ) -> Self {
-        AgentOutput {
-            audio: std::sync::RwLock::new(audio),
-            audio_enabled: std::sync::atomic::AtomicBool::new(true),
-            transcription: std::sync::RwLock::new(transcription),
-            transcription_enabled: std::sync::atomic::AtomicBool::new(true),
-        }
+    /// The audio sink the core installed, switched on or not.
+    pub fn audio_output(&self) -> Option<Arc<dyn AudioOutput>> {
+        let id = self.output.borrow().audio.as_ref()?.id;
+        self.resources.audio_output(id)
     }
 
-    pub fn audio(&self) -> Option<Arc<dyn AudioOutput>> {
-        self.audio.read().unwrap_or_else(|p| p.into_inner()).clone()
-    }
-
-    pub fn transcription(&self) -> Option<Arc<dyn TextOutput>> {
-        self.transcription.read().unwrap_or_else(|p| p.into_inner()).clone()
+    /// The transcription sink the core installed, switched on or not.
+    pub fn transcription_output(&self) -> Option<Arc<dyn TextOutput>> {
+        let id = self.output.borrow().transcription.as_ref()?.id;
+        self.resources.text_output(id)
     }
 
     /// `output.audio_enabled`: the switch, which a speech freezes at its voice leg.
     pub fn audio_enabled(&self) -> bool {
-        self.audio_enabled.load(std::sync::atomic::Ordering::Relaxed)
+        self.output.borrow().audio_enabled
     }
 
-    /// `output.transcription_enabled`: the switch.
+    /// `output.transcription_enabled`.
     pub fn transcription_enabled(&self) -> bool {
-        self.transcription_enabled.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Whether it changed.
-    pub fn set_audio_enabled(&self, enabled: bool) -> bool {
-        self.audio_enabled.swap(enabled, std::sync::atomic::Ordering::Relaxed) != enabled
-    }
-
-    /// Whether it changed.
-    pub fn set_transcription_enabled(&self, enabled: bool) -> bool {
-        self.transcription_enabled.swap(enabled, std::sync::atomic::Ordering::Relaxed) != enabled
-    }
-
-    /// The old sink, for the driver to detach.
-    pub fn set_audio(&self, out: Option<Arc<dyn AudioOutput>>) -> Option<Arc<dyn AudioOutput>> {
-        std::mem::replace(&mut *self.audio.write().unwrap_or_else(|p| p.into_inner()), out)
-    }
-
-    /// The old sink.
-    pub fn set_transcription(
-        &self,
-        out: Option<Arc<dyn TextOutput>>,
-    ) -> Option<Arc<dyn TextOutput>> {
-        std::mem::replace(&mut *self.transcription.write().unwrap_or_else(|p| p.into_inner()), out)
+        self.output.borrow().transcription_enabled
     }
 }
 
@@ -503,16 +461,17 @@ pub struct ActivitySnapshot {
     pub tools_committed: std::collections::BTreeMap<(SpeechId, u32), bool>,
 }
 
-/// `session.output` as the core decides with it: the outputs by id and their switches. The data
-/// plane's copy ([`AgentOutput`]) changes only by the effects these changes raise.
-#[derive(Debug)]
-pub(crate) struct Outputs {
-    pub(crate) audio: Option<AudioOutputRef>,
+/// `session.output`: the outputs by id and their switches, decided by the core alone and published
+/// to the data plane, which reads its sinks from the core's word.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outputs {
+
+    pub audio: Option<AudioOutputRef>,
     /// `output.audio_enabled`: the switch, which a speech freezes at its voice leg.
-    pub(crate) audio_enabled: bool,
-    pub(crate) transcription: Option<TextOutputRef>,
+    pub audio_enabled: bool,
+    pub transcription: Option<TextOutputRef>,
     /// `output.transcription_enabled`.
-    pub(crate) transcription_enabled: bool,
+    pub transcription_enabled: bool,
 }
 
 /// No output, both switches on.
@@ -544,9 +503,19 @@ impl Outputs {
     }
 }
 
+impl Driver {
+    /// The one write of `session.output`, published to the data plane at once.
+    pub(crate) fn set_outputs<R>(&mut self, f: impl FnOnce(&mut Outputs) -> R) -> R {
+        let r = f(&mut self.session.outputs);
+        self.shared.output.send_replace(self.session.outputs.clone());
+        r
+    }
+}
+
 /// The providers the core holds by id: received in commands, kept by the session or a switch. One
 /// no longer held anywhere at the end of a step is released.
 impl Driver {
+
     /// What the core holds now.
     pub(crate) fn providers_held(&self) -> BTreeSet<ResourceId> {
         let s = &self.session;

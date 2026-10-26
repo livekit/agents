@@ -378,25 +378,30 @@ impl Driver {
             }
             IoKind::AudioOutput => {
                 let changed =
-                    std::mem::replace(&mut self.session.outputs.audio_enabled, enabled) != enabled;
+                    self.set_outputs(|o| std::mem::replace(&mut o.audio_enabled, enabled))
+                        != enabled;
                 if changed {
                     let output = OutputKind::Audio;
-                    out.machine()
-                        .push(Effect::Audio(AudioOp::SetOutputEnabled { output, enabled }));
+                    let sink = self.session.outputs.audio.as_ref().map(|a| a.id);
+                    let op = AudioOp::SetOutputEnabled { output, sink, enabled };
+
+                    out.machine().push(Effect::Audio(op));
                 }
                 changed
             }
             IoKind::Transcription => {
                 let changed =
-                    std::mem::replace(&mut self.session.outputs.transcription_enabled, enabled)
+                    self.set_outputs(|o| std::mem::replace(&mut o.transcription_enabled, enabled))
                         != enabled;
                 if changed {
                     let output = OutputKind::Transcription;
-                    out.machine()
-                        .push(Effect::Audio(AudioOp::SetOutputEnabled { output, enabled }));
+                    let sink = self.session.outputs.transcription.as_ref().map(|t| t.id);
+                    let op = AudioOp::SetOutputEnabled { output, sink, enabled };
+                    out.machine().push(Effect::Audio(op));
                 }
                 changed
             }
+
         };
         if !changed {
             return;

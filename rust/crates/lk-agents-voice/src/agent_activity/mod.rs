@@ -347,11 +347,14 @@ impl Driver {
                 let audio = output.is_some();
                 // A segment in flight keeps the sink it started with; an unstarted speech reads the
                 // new one at its next segment.
-                let id = output.as_ref().map(|o| o.id);
+                let next = output.as_ref().map(|o| o.id);
                 let now = self.step.now;
                 self.release_pause_before_swap(now, out);
-                self.session.outputs.audio = output;
-                out.machine().push(Effect::Audio(AudioOp::SetAudioOutput(id)));
+                let previous = self.set_outputs(|o| std::mem::replace(&mut o.audio, output));
+                let (previous, enabled) =
+                    (previous.map(|o| o.id), self.session.outputs.audio_enabled);
+                let op = AudioOp::SetAudioOutput { previous, next, enabled };
+                out.machine().push(Effect::Audio(op));
                 let playing = self.session.states.agent_state() == AgentState::Speaking;
                 if !audio || playing {
                     // A segment playing into the old sink can't move: force-interrupt it (and the
@@ -385,9 +388,15 @@ impl Driver {
             }
             ActivityCommand::SetTranscriptionOutput(output) => {
                 let transcription = output.is_some();
-                let id = output.as_ref().map(|o| o.id);
-                self.session.outputs.transcription = output;
-                out.machine().push(Effect::Audio(AudioOp::SetTranscriptionOutput(id)));
+                let next = output.as_ref().map(|o| o.id);
+                let previous =
+                    self.set_outputs(|o| std::mem::replace(&mut o.transcription, output));
+
+                let (previous, enabled) =
+                    (previous.map(|o| o.id), self.session.outputs.transcription_enabled);
+                let op = AudioOp::SetTranscriptionOutput { previous, next, enabled };
+                out.machine().push(Effect::Audio(op));
+
                 out.trace(PlayoutStep::OutputReplaced {
                     audio: self.session.outputs.plays_audio(),
                     transcription,

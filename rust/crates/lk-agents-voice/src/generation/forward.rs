@@ -42,8 +42,8 @@ pub(super) async fn voice_leg(
         tts.set_expressive(ctx.request.expressive.is_some());
     }
     let synthesis = matches!(voice, Voice::Tts(_))
-        && shared.output.audio_enabled()
-        && shared.output.audio().is_some();
+        && shared.audio_enabled()
+        && shared.audio_output().is_some();
     if synthesis {
         let early = matches!(ctx.source, ReplySource::Llm) && ctx.preemptive_tts;
         let ready = early
@@ -63,10 +63,10 @@ pub(super) async fn voice_leg(
         return Ok(None);
     }
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
-    let audio_enabled = shared.output.audio_enabled();
-    let text_enabled = shared.output.transcription_enabled();
+    let audio_enabled = shared.audio_enabled();
+    let text_enabled = shared.transcription_enabled();
     // No sink: the caller's frames are left undrained, so `say(audio=)` does not wait on them.
-    let has_sink = audio_enabled && shared.output.audio().is_some();
+    let has_sink = audio_enabled && shared.audio_output().is_some();
     let voice = if has_sink { voice } else { Voice::Silent };
     let mut pump = Pump {
         shared,
@@ -115,8 +115,8 @@ impl PlaybackGate {
         if ready {
             handle.clear_authorization();
             self.at = Some(shared.time.wall());
-            self.audio_enabled = shared.output.audio_enabled();
-            self.text_enabled = shared.output.transcription_enabled();
+            self.audio_enabled = shared.audio_enabled();
+            self.text_enabled = shared.transcription_enabled();
         }
         ready
     }
@@ -186,8 +186,8 @@ impl Pump<'_> {
         }
         // Re-read at every segment's start: a swap moves the next segment (only a playing one is
         // interrupted), and a synchroniser swapped in between segments gets their words.
-        let audio_out = self.audio_enabled.then(|| shared.output.audio()).flatten();
-        let text = self.text_enabled.then(|| shared.output.transcription()).flatten();
+        let audio_out = self.audio_enabled.then(|| shared.audio_output()).flatten();
+        let text = self.text_enabled.then(|| shared.transcription_output()).flatten();
         let synthesis = matches!(self.voice, Voice::Tts(_)) && audio_out.is_some();
         if !synthesis && !self.gate.wait(shared, self.handle).await {
             return Ok(unheard());

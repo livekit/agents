@@ -103,6 +103,7 @@ impl Out {
                     speech,
                     op,
                     cause,
+                    output: _,
                 }) => self.record(Step::Interrupt(InterruptStep::PlayoutGate {
                     speech: *speech,
                     op: *op,
@@ -111,8 +112,8 @@ impl Out {
                 // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
                 Effect::Audio(
                     crate::agent_session::effects::AudioOp::SetVideoInput
-                    | crate::agent_session::effects::AudioOp::SetAudioOutput(_)
-                    | crate::agent_session::effects::AudioOp::SetTranscriptionOutput(_)
+                    | crate::agent_session::effects::AudioOp::SetAudioOutput { .. }
+                    | crate::agent_session::effects::AudioOp::SetTranscriptionOutput { .. }
                     | crate::agent_session::effects::AudioOp::SetOutputEnabled { .. },
                 ) => {}
                 Effect::Decision(d) => self.record(Step::Decided(d.clone())),
@@ -389,6 +390,8 @@ impl FlushReason {
     }
 }
 
+/// The outputs are named by id, as the core decided them when it raised the op: the data plane
+/// keeps no record of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioOp {
     /// Pushed only when a sink exists, so the journal's `PlayoutGate` is exactly the sink's
@@ -397,14 +400,25 @@ pub enum AudioOp {
         speech: SpeechId,
         op: GateOp,
         cause: GateCause,
+        output: ResourceId,
     },
     SetVideoInput,
-    /// A reply in flight keeps the sink it started with.
-    SetAudioOutput(Option<ResourceId>),
-    SetTranscriptionOutput(Option<ResourceId>),
+    /// `AgentOutput.audio`'s setter (`io.py`): `previous` is detached, `next` attached or detached
+    /// as the switch says. A reply in flight keeps the sink it started with.
+    SetAudioOutput {
+        previous: Option<ResourceId>,
+        next: Option<ResourceId>,
+        enabled: bool,
+    },
+    SetTranscriptionOutput {
+        previous: Option<ResourceId>,
+        next: Option<ResourceId>,
+        enabled: bool,
+    },
     /// The output stays installed; its chain is told.
     SetOutputEnabled {
         output: crate::trace::OutputKind,
+        sink: Option<ResourceId>,
         enabled: bool,
     },
 }
@@ -775,8 +789,8 @@ impl Driver {
                     leg.close();
                 }
             }
-            E::Audio(AudioOp::Gate { speech, op, cause: _ }) => {
-                let Some(sink) = self.shared.output.audio() else { return };
+            E::Audio(AudioOp::Gate { speech, op, cause: _, output }) => {
+                let Some(sink) = self.shared.resources.audio_output(output) else { return };
                 match op {
                     GateOp::Pause => sink.pause(),
                     GateOp::Resume => sink.resume(),
@@ -793,56 +807,51 @@ impl Driver {
                     }
                 }
             }
-            // `AgentOutput.audio` / `.transcription`'s setters (`io.py`): the sink replaced is
-            // detached, the new one attached or detached as its switch says. A synchroniser left
-            // behind would otherwise keep pacing into the old leaf.
-            E::Audio(AudioOp::SetAudioOutput(id)) => {
-                let sink = id.and_then(|id| self.shared.resources.audio_output(id));
-                let previous = self.shared.output.set_audio(sink.clone());
-                if !same_sink(&previous, &sink) {
-                    if let Some(old) = &previous {
+            // A synchroniser left behind would otherwise keep pacing into the old leaf. The same
+            // sink set again (under a new id) is neither detached nor re-attached.
+            E::Audio(AudioOp::SetAudioOutput { previous, next, enabled }) => {
+                let resources = &self.shared.resources;
+                let old = previous.and_then(|id| resources.audio_output(id));
+                let new = next.and_then(|id| resources.audio_output(id));
+                if !same_sink(&old, &new) {
+                    if let Some(old) = &old {
                         old.on_detached();
                     }
-                    if let Some(new) = &sink {
-                        if self.shared.output.audio_enabled() {
-                            new.on_attached()
-                        } else {
-                            new.on_detached()
-                        }
+                    if let Some(new) = &new {
+                        if enabled { new.on_attached() } else { new.on_detached() }
                     }
                 }
-                self.observe_recorder(previous.as_deref());
+                self.observe_recorder(old.as_deref(), next);
             }
-            E::Audio(AudioOp::SetTranscriptionOutput(id)) => {
-                let sink = id.and_then(|id| self.shared.resources.text_output(id));
-                let previous = self.shared.output.set_transcription(sink.clone());
-                if !same_sink(&previous, &sink) {
-                    if let Some(old) = &previous {
+            E::Audio(AudioOp::SetTranscriptionOutput { previous, next, enabled }) => {
+                let resources = &self.shared.resources;
+                let old = previous.and_then(|id| resources.text_output(id));
+                let new = next.and_then(|id| resources.text_output(id));
+                if !same_sink(&old, &new) {
+                    if let Some(old) = &old {
                         old.on_detached();
                     }
-                    if let Some(new) = &sink {
-                        if self.shared.output.transcription_enabled() {
-                            new.on_attached()
-                        } else {
-                            new.on_detached()
-                        }
+                    if let Some(new) = &new {
+                        if enabled { new.on_attached() } else { new.on_detached() }
                     }
                 }
             }
-            E::Audio(AudioOp::SetOutputEnabled { output, enabled }) => match output {
-                crate::trace::OutputKind::Audio => {
-                    self.shared.output.set_audio_enabled(enabled);
-                    if let Some(sink) = self.shared.output.audio() {
-                        if enabled { sink.on_attached() } else { sink.on_detached() }
+
+            E::Audio(AudioOp::SetOutputEnabled { output, sink, enabled }) => {
+                let resources = &self.shared.resources;
+                match output {
+                    crate::trace::OutputKind::Audio => {
+                        if let Some(sink) = sink.and_then(|id| resources.audio_output(id)) {
+                            if enabled { sink.on_attached() } else { sink.on_detached() }
+                        }
+                    }
+                    crate::trace::OutputKind::Transcription => {
+                        if let Some(sink) = sink.and_then(|id| resources.text_output(id)) {
+                            if enabled { sink.on_attached() } else { sink.on_detached() }
+                        }
                     }
                 }
-                crate::trace::OutputKind::Transcription => {
-                    self.shared.output.set_transcription_enabled(enabled);
-                    if let Some(sink) = self.shared.output.transcription() {
-                        if enabled { sink.on_attached() } else { sink.on_detached() }
-                    }
-                }
-            },
+            }
             E::Forwarder(command) => {
                 let _ = self.forwarder_tx.send(command);
             }

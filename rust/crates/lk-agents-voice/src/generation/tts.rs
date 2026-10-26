@@ -448,8 +448,8 @@ impl SynthesisPlayout<'_> {
             let mut started_at = None;
             let result = if self.gate.wait(shared, handle).await {
                 // Outputs can change while a speculative reply waits for its turn.
-                let audio = self.gate.audio_enabled.then(|| shared.output.audio()).flatten();
-                let text = self.gate.text_enabled.then(|| shared.output.transcription()).flatten();
+                let audio = self.gate.audio_enabled.then(|| shared.audio_output()).flatten();
+                let text = self.gate.text_enabled.then(|| shared.transcription_output()).flatten();
                 let leg = TextLeg::new(text.as_deref(), None, shared, handle.id());
                 let mut buffered = SynthesizedSegment {
                     rx: &mut self.rx,
@@ -480,7 +480,7 @@ impl SynthesisPlayout<'_> {
         if !self.gate.wait(shared, handle).await {
             return;
         }
-        let out = self.gate.text_enabled.then(|| shared.output.transcription()).flatten();
+        let out = self.gate.text_enabled.then(|| shared.transcription_output()).flatten();
         let leg = TextLeg::new(out.as_deref(), None, shared, handle.id());
         while let Ok(event) = self.rx.try_recv() {
             leg.forward(event).await;
