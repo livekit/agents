@@ -71,6 +71,29 @@ class _TTSOptions:
         return f"{self.base_url.replace('http', 'ws', 1)}{path}"
 
 
+def _validate_options(
+    *,
+    chunk_length: NotGivenOr[int],
+    temperature: NotGivenOr[float],
+    top_p: NotGivenOr[float],
+    max_new_tokens: NotGivenOr[int],
+    min_chunk_length: NotGivenOr[int],
+    early_stop_threshold: NotGivenOr[float],
+) -> None:
+    if is_given(chunk_length) and not 100 <= chunk_length <= 300:
+        raise ValueError("chunk_length must be between 100 and 300")
+    if is_given(temperature) and not 0 <= temperature <= 1:
+        raise ValueError("temperature must be between 0 and 1")
+    if is_given(top_p) and not 0 <= top_p <= 1:
+        raise ValueError("top_p must be between 0 and 1")
+    if is_given(max_new_tokens) and max_new_tokens < 0:
+        raise ValueError("max_new_tokens must be non-negative")
+    if is_given(min_chunk_length) and not 0 <= min_chunk_length <= 100:
+        raise ValueError("min_chunk_length must be between 0 and 100")
+    if is_given(early_stop_threshold) and not 0 <= early_stop_threshold <= 1:
+        raise ValueError("early_stop_threshold must be between 0 and 1")
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -175,18 +198,14 @@ class TTS(tts.TTS):
                 "FISH_API_KEY environment variable"
             )
 
-        if not 100 <= chunk_length <= 300:
-            raise ValueError("chunk_length must be between 100 and 300")
-        if not 0 <= temperature <= 1:
-            raise ValueError("temperature must be between 0 and 1")
-        if not 0 <= top_p <= 1:
-            raise ValueError("top_p must be between 0 and 1")
-        if is_given(max_new_tokens) and max_new_tokens < 0:
-            raise ValueError("max_new_tokens must be non-negative")
-        if is_given(min_chunk_length) and not 0 <= min_chunk_length <= 100:
-            raise ValueError("min_chunk_length must be between 0 and 100")
-        if is_given(early_stop_threshold) and not 0 <= early_stop_threshold <= 1:
-            raise ValueError("early_stop_threshold must be between 0 and 1")
+        _validate_options(
+            chunk_length=chunk_length,
+            temperature=temperature,
+            top_p=top_p,
+            max_new_tokens=max_new_tokens,
+            min_chunk_length=min_chunk_length,
+            early_stop_threshold=early_stop_threshold,
+        )
         if is_given(normalize_loudness) and model == "s1":
             logger.warning("normalize_loudness is not supported by the s1 model, dropping")
             normalize_loudness = NOT_GIVEN
@@ -297,6 +316,17 @@ class TTS(tts.TTS):
         condition_on_previous_chunks: NotGivenOr[bool] = NOT_GIVEN,
         early_stop_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
+        # check every given value before changing anything, so a rejected update leaves
+        # the current options (and the pooled connections) as they were
+        _validate_options(
+            chunk_length=chunk_length,
+            temperature=temperature,
+            top_p=top_p,
+            max_new_tokens=max_new_tokens,
+            min_chunk_length=min_chunk_length,
+            early_stop_threshold=early_stop_threshold,
+        )
+
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
             # The model is sent as a connection header at ws-handshake time, not in the
@@ -312,20 +342,14 @@ class TTS(tts.TTS):
         if is_given(latency_mode):
             self._opts.latency_mode = latency_mode
         if is_given(chunk_length):
-            if not 100 <= chunk_length <= 300:
-                raise ValueError("chunk_length must be between 100 and 300")
             self._opts.chunk_length = chunk_length
         if is_given(speed):
             self._opts.speed = speed
         if is_given(volume):
             self._opts.volume = volume
         if is_given(temperature):
-            if not 0 <= temperature <= 1:
-                raise ValueError("temperature must be between 0 and 1")
             self._opts.temperature = temperature
         if is_given(top_p):
-            if not 0 <= top_p <= 1:
-                raise ValueError("top_p must be between 0 and 1")
             self._opts.top_p = top_p
         if is_given(mp3_bitrate):
             self._opts.mp3_bitrate = mp3_bitrate
@@ -339,18 +363,12 @@ class TTS(tts.TTS):
             else:
                 self._opts.normalize_loudness = normalize_loudness
         if is_given(max_new_tokens):
-            if max_new_tokens < 0:
-                raise ValueError("max_new_tokens must be non-negative")
             self._opts.max_new_tokens = max_new_tokens
         if is_given(min_chunk_length):
-            if not 0 <= min_chunk_length <= 100:
-                raise ValueError("min_chunk_length must be between 0 and 100")
             self._opts.min_chunk_length = min_chunk_length
         if is_given(condition_on_previous_chunks):
             self._opts.condition_on_previous_chunks = condition_on_previous_chunks
         if is_given(early_stop_threshold):
-            if not 0 <= early_stop_threshold <= 1:
-                raise ValueError("early_stop_threshold must be between 0 and 1")
             self._opts.early_stop_threshold = early_stop_threshold
 
     def synthesize(
