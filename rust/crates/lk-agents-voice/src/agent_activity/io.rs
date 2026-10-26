@@ -163,20 +163,8 @@ impl Driver {
 
     /// A stream nobody wants: closed on a bounded task (dropping a host stream doesn't cancel it).
     pub(crate) fn discard_open(&self, stream: Opened) {
-        let time = self.shared.time.clone();
-        let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        match stream {
-            Opened::Stt(_, source) => {
-                lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
-                    let _ = source.close(deadline).await;
-                });
-            }
-            Opened::Vad(_, source) => {
-                lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
-                    let _ = source.close(deadline).await;
-                });
-            }
-        }
+        let deadline = self.shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, stream.close(deadline));
     }
 
     /// Only a given leg is reopened.
