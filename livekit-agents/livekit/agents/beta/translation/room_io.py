@@ -450,6 +450,11 @@ class TranslationRoomIO:
     async def _relabel_after_playout(
         self, language: str, previous: asyncio.Task[None] | None
     ) -> None:
+        """Apply ``language`` once the speech captured so far has played out.
+
+        Waits for the change made before it, then for the synchronizer to release and close
+        the old language's words, so none of them go out under the new label.
+        """
         if previous is not None:
             # changes land in the order they were made
             with contextlib.suppress(Exception):
@@ -462,6 +467,7 @@ class TranslationRoomIO:
         self._apply_output_language(language)
 
     def _apply_output_language(self, language: str) -> None:
+        """Retag the translation transcript and rename its track for ``language``, now."""
         self._output_language = language
         if self._output_tr_output and self._source_track_sid is not None:
             self._output_tr_output.set_attributes(self._output_attributes())
@@ -471,9 +477,11 @@ class TranslationRoomIO:
 
     @property
     def _language(self) -> str:
+        """The language the translation is labelled with in the room."""
         return self._output_language or self._session.model.target_language
 
     def _output_attributes(self) -> dict[str, str]:
+        """The attributes stamped on the translation transcript."""
         return {ATTRIBUTE_TRANSCRIPTION_LANGUAGE: self._language}
 
     def _output_track_name(self) -> str | None:
@@ -484,6 +492,7 @@ class TranslationRoomIO:
         return translated_track_name(self._source_track_sid, self._language)
 
     def _rename_output_track_soon(self) -> None:
+        """Republish the translated track under its current name, in the background."""
         if self._audio_output is None or (name := self._output_track_name()) is None:
             return
 

@@ -134,6 +134,8 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # follows the request only for a provider that stamps nothing
         self._output_language: str | None = None
         self._output_language_stamped = False
+        # whether the open segment has any audio in it; an empty one is not worth ending
+        self._segment_has_audio = False
 
     @property
     def model(self) -> TranslationModel:
@@ -471,6 +473,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if target_rate is None or frame.sample_rate == target_rate:
             await audio_output.capture_frame(frame)
+            self._segment_has_audio = True
             return
 
         if self._resampler is None:
@@ -484,6 +487,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         for resampled in self._resampler.push(frame):
             await audio_output.capture_frame(resampled)
+            self._segment_has_audio = True
 
     async def _drain_resampler(self) -> None:
         """Push what the resampler still holds to the sink it was built for, then drop it.
@@ -526,6 +530,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         await self._drain_resampler()
         if sink is not None:
             sink.flush()
+        self._segment_has_audio = False
 
     def _arm_segment_timer(self) -> None:
         """Restart the silence that ends a segment, for a model that marks none itself.
@@ -545,8 +550,16 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._segment_timer = None
 
     async def _close_segment_and_relabel(self, language: str) -> None:
-        self._cancel_segment_timer()
-        await self._close_output_segment()
+        """End the open segment, then label the translation with ``language``.
+
+        For a provider that does not stamp its speech: the segment the old label covers has
+        to end, or its playout never finishes and the new label never lands. A segment with no
+        audio yet is left open, since ending it would discard the translation text already
+        waiting in it for that audio.
+        """
+        if self._segment_has_audio:
+            self._cancel_segment_timer()
+            await self._close_output_segment()
         self._relabel_output(language)
 
     def _close_output_segment_soon(self) -> None:

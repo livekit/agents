@@ -1340,3 +1340,23 @@ async def test_a_language_change_while_the_stream_opens_closes_it_as_the_old_lan
         assert french["text"] == ["bonjour"]
     finally:
         await sink.aclose()
+
+
+async def test_an_unstamped_retarget_before_any_audio_keeps_the_text_waiting_for_it() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    session, _, audio_out, _ = _session(model)
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        # the translation's text arrives ahead of its audio, which has not come yet
+        model.sessions[0].emit("output_transcript", OutputTranscript(text="hola", is_final=False))
+        session.set_target_language("fr")
+        await _wait_for(lambda: labels.languages == ["fr"])
+
+        # ending the empty segment would rotate the synchronizer and drop "hola"
+        assert counts.flushes == 0
+    finally:
+        session._room_io = None
+        await session.aclose()
