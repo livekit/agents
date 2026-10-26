@@ -18,6 +18,7 @@ from livekit.plugins.sarvam.llm.client import (
     SARVAM_LLM_BASE_URL_V2,
     USER_AGENT,
     _filter_extra_body,
+    _with_api_version,
 )
 
 pytestmark = pytest.mark.unit
@@ -706,3 +707,18 @@ async def test_model_switch_leaves_a_base_url_without_a_version() -> None:
 
     assert await _sent_url(llm) == f"{gateway}/chat/completions"
     await llm.aclose()
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://api.sarvam.ai/v2/", "https://api.sarvam.ai/v1/"),
+        (
+            "https://proxy.example.com/sarvam/v2/?tenant=acme",
+            "https://proxy.example.com/sarvam/v1/?tenant=acme",
+        ),
+        ("https://gateway.example.com/sarvam-llm/", "https://gateway.example.com/sarvam-llm/"),
+    ],
+)
+def test_with_api_version_swaps_only_the_path(base_url: str, expected: str) -> None:
+    assert str(_with_api_version(httpx.URL(base_url), "v1")) == expected

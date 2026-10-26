@@ -109,14 +109,14 @@ def _api_version(model: str) -> str:
     return "v1" if model in _V1_MODELS else "v2"
 
 
-def _with_api_version(base_url: str, version: str) -> str:
-    """Point *base_url* at *version* by swapping its trailing ``/v1`` or ``/v2``.
+def _with_api_version(base_url: httpx.URL, version: str) -> httpx.URL:
+    """Point *base_url* at *version* by swapping the trailing ``/v1`` or ``/v2`` of its path.
 
-    A base URL without a version segment is returned unchanged.
+    A base URL whose path has no version segment is returned unchanged.
     """
-    head, _, tail = base_url.rstrip("/").rpartition("/")
+    head, _, tail = base_url.path.rstrip("/").rpartition("/")
     if tail in ("v1", "v2"):
-        return f"{head}/{version}"
+        return base_url.copy_with(path=f"{head}/{version}/")
     return base_url
 
 
@@ -292,7 +292,7 @@ class LLM(OpenAILLM):
             # with_options shares the http client, so the timeout and connection pool
             # carry over and the client being replaced has nothing left to close
             self._client = self._client.with_options(
-                base_url=_with_api_version(str(self._client.base_url), new_version)
+                base_url=_with_api_version(self._client.base_url, new_version)
             )
             self._sarvam_api_version = new_version
 
