@@ -43,5 +43,9 @@ pyo3 = { workspace = true, optional = true }
 # Native resampling is enabled by default.
 default = ["native-audio"]
 native-audio = ["lk-agents-media/resample"]
+# Test-only: `SessionApi::probe`, what a deterministic simulation needs from a session it drives
+# through this API (the journal as it is written, the typed host events, and the session's cores
+# for a queue owner of its own). Only `lk-agents-fuzz` enables it.
+dst = []
 # The Python binding, expanded in place: only `lk-agents-py` enables it.
 python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-rtc/python", "lk-agents-media/python"]

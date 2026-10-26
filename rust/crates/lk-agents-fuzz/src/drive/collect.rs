@@ -17,9 +17,20 @@ impl Run {
                 self.record_answer(nth, settled);
             }
         }
+        // A close in flight is the host awaiting `aclose()`: it moves when the run looks.
+        if let Some(closing) = &mut self.closing
+            && super::apply::ready_now(closing.as_mut()).is_some()
+        {
+            self.closing = None;
+        }
         let from_host = self.record.host().len();
-        while let Ok(event) = self.session.events.try_recv() {
-            self.host_event(event);
+        let host = std::mem::take(&mut *self.host.lock().unwrap());
+        for (at, seen) in host {
+            // The handle is kept, not just recorded: `AwaitSpeech` needs the real object.
+            if let Host::Session(SessionEvent::SpeechCreated { speech, .. }) = &seen {
+                self.handles.entry(speech.id().0).or_insert_with(|| speech.clone());
+            }
+            self.record.record_host(at, seen);
         }
         self.sync_fakes();
         let from_journal = self.record.journal().len();
@@ -46,7 +57,7 @@ impl Run {
             );
         }
         self.record.set_driver_finished(self.runtime.is_none());
-        self.record.set_resources_left(self.resources.live());
+        self.record.set_resources_left(self.api.resources().live());
         self.record.set_now(now);
     }
 
@@ -57,22 +68,6 @@ impl Run {
         }
         self.record.record_result(at, nth, settled.answer);
         self.record.close(at, Kind::Answer, nth);
-    }
-
-    fn host_event(&mut self, event: HostEvent) {
-        let at = self.stamps.next();
-        let seen = match event {
-            HostEvent::Session(event) => {
-                // The handle is kept, not just recorded: `AwaitSpeech` needs the real object.
-                if let SessionEvent::SpeechCreated { speech, .. } = &event {
-                    self.handles.entry(speech.id().0).or_insert_with(|| speech.clone());
-                }
-                Host::Session(event)
-            }
-            HostEvent::Hook(call) => hook_of(&call),
-            HostEvent::Room(event) => Host::Room(event),
-        };
-        self.record.record_host(at, seen);
     }
 
     /// Take everything the fakes have recorded, and close whatever they no longer hold.

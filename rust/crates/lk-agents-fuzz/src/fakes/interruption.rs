@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use lk_agents_abi::{
     AudioFrame, LegEvent, ReqId, Ts,
     errors::ProviderError,
-    turn::interruption::{InterruptionPort, InterruptionSignal, OverlapVerdict},
+    turn::interruption::{InterruptionPort, InterruptionSignal, InterruptionSource, OverlapVerdict},
     utils::stream::StreamSink,
 };
 use tokio::sync::mpsc;
@@ -51,6 +51,15 @@ impl FakeInterruption {
 
     fn current_overlap(&self) -> Option<ReqId> {
         *self.overlap.lock().unwrap()
+    }
+}
+
+/// The detector as a host hands it to `LiveSession(interruption_detector=)`: opened at `start()`.
+pub struct FakeInterruptionSource(pub Arc<Registry>);
+
+impl InterruptionSource for FakeInterruptionSource {
+    fn open(&self, _anchor: lk_agents_abi::WallAnchor) -> Arc<dyn InterruptionPort> {
+        FakeInterruption::new(self.0.clone())
     }
 }
 

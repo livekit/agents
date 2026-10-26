@@ -1,18 +1,23 @@
 //! A real session with controlled dependencies, and one function that applies an [`Input`] to it.
 //!
-//! The only place that touches the product. It builds the driver with the fakes attached, turns
-//! each input into the production command, feed or delivery it mirrors, and writes down what
-//! happened. It decides nothing: rules read [`Recording`] and nothing else.
+//! The only place that touches the product, and only as a host does: the session is assembled
+//! with `LiveSession(...)` (`SessionApi::host_new`) over the fake room and the fakes, started,
+//! and every call is the host method a Python `AgentSession` makes, with its argument shapes;
+//! people join and leave through the fake room, which the real room io watches. What the host
+//! cannot do it does not do: the test-only probe (the `dst` feature) only watches the journal and
+//! the host events, and hands the session's cores to the run, which steps them as its own queue.
+//! It decides nothing: rules read [`Recording`] and nothing else.
 //!
 //! **Each resource is opened by whoever mints it.** Speeches, holds, fillers and hook calls come
 //! from the driver's own journal, the one account of them that cannot drift from what it did. The
 //! rest have no journal to read -- a chat exists because a fake was called, an answer because a
-//! command carried a channel -- and are opened here, from the side that knows.
+//! call returned a future -- and are opened here, from the side that knows.
 //!
 //! **Applying an input does not yield.** Only [`Input::Advance`] and the awaits reach the
 //! executor, so a case can build a burst the driver must untangle in one cycle.
 //! [`Recording::driver_ran_since`] is written against that, and breaking it would quietly weaken
-//! every rule that allows the driver one input of grace.//!
+//! every rule that allows the driver one input of grace.
+//!
 //! The module is split by what a run does, in order: [`start`] builds the session, [`apply`]
 //! turns one input into what the product sees, [`collect`] writes down what became true, and
 //! [`finish`] releases what a run owes and reports what it found. This file holds what they
@@ -23,54 +28,43 @@ use std::{
     time::Duration,
 };
 
-use lk_agents_abi::voice::io::{AudioOutput, TextOutput};
 use lk_agents_abi::{
     AudioFrame, BoxFuture, ChatItem, ChatMessage, HostRef, ImageContent, ImageSource, Maybe,
     MediaRef, Realtime, Spawner, Ts,
     errors::RefRegistry,
     metrics::base::AgentMetrics,
-    tokenize::language::ThresholdOverride,
-    voice::room_io::{ParticipantLinked, ParticipantUnlinked},
+    turn::interruption::InterruptionSource,
+    turn::keyterms::SttContextConfig,
+    voice::room_io::{RoomIoConfig, TextOutputConfig},
+    voice::session_options::{
+        EndpointingKwargs, HostValue, InterruptionKwargs, PreemptiveKwargs, SessionKwargs,
+        TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
+    },
 };
-use lk_agents_rtc::RoomEvent;
+use lk_agents_rtc::FakeRoom;
 use lk_agents_voice::{
-    DriverBuilder, Runtime, SessionHandle,
-    agent::TurnEdit,
-    agent_activity::DriverConfig,
-    agent_activity::false_interruption::InterruptRefusal,
-    agent_activity::options::{ConfigStack, LegSet, SessionPatch, TurnDetection},
+    Runtime,
     agent_activity::options::{
-        Deployment, InterruptionGate, InterruptionGateInputs, RealtimeGate, SttGate,
-        resolve_interruption_detector,
+        Deployment, HostOptions, InterruptionGate, InterruptionGateInputs, RealtimeGate,
+        SessionPatch, SttGate, TurnDetection, resolve_interruption_detector,
     },
     agent_activity::scheduling::SpeechId,
     agent_session::{
-        ActivityCommand, AgentUpdate, Answer as DriverAnswer, Close, Command, CommitSuperseded,
-        DrainRefused, DtmfCommand, Event, FillerSource, HandoffRefused, HoldId, HookId,
-        HookOutcome, HostAudio, HostEvent, HostRecorder, HostVideo, IdleRefused, IvrCommand,
-        NewActivity, PreviousActivity, RecorderCommand, SayText, SpeechCommand, TaskCommand,
-        TaskEntry, Timebase, ToolUpdate, TurnCommand, effects::Decision,
-    },
-    amd::{
-        classifier::{AmdConfig, In as AmdIn, Start as AmdStart},
-        detector::{AmdSetup, AmdSystem},
+        ActivityCommand, Event, FixedRoom, FramePusher, HoldId, HookId, HostEvent, IoKind, Origin,
+        Probe, SessionApi, SessionEvents, SpeechCommand, TextPusher, Timebase, TurnCommand,
+        UpdateAgentArgs, effects::Decision,
     },
     events::SessionEvent,
     filler_scheduler::FillerId,
     generation::Instructions,
-    keyterm_detection::{KeytermDetection, KeytermSetup},
-    room_io::RoomIoEvent,
-    room_io::link::RoomLinkConfig,
-    run_result::{RunOutput, RunSpec},
-    speech_handle::SpeechHandle,
-    tool_executor::{ToolAnswer as Answered, Toolset},
+    speech_handle::{HostSpeech, SpeechHandle},
+    tool_executor::{HostToolRunner, ToolAnswer as Answered},
     trace::{
         CoreStep, DetectorStep, GenerationStep, HandoffStep, PlayoutStep, SpeechStep, Step,
         ToolStep, TurnStep,
     },
     turn::Nullable,
-    workflows::TaskHandle,
-    workflows::builtins::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome},
+    workflows::HostTaskHandle,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -90,10 +84,7 @@ use crate::{
         hook_of,
     },
 };
-use lk_agents_abi::{
-    turn::interruption::InterruptionPort,
-    voice::session_options::{DetectorKind, EndpointingMode, InterruptionMode},
-};
+use lk_agents_abi::voice::session_options::{EndpointingMode, InterruptionMode};
 
 mod apply;
 mod collect;
@@ -143,14 +134,15 @@ pub struct Setup {
     /// `Realtime` journal family exists only under one. `Some` describes the server the session
     /// is built against.
     pub realtime: Option<RealtimeSetup>,
-    /// The IVR navigator: `None` starts none, `Some(detect)` starts one and navigates from the
-    /// session's start when `detect`. Without one an `Ivr` command is relayed to nobody.
+    /// `ivr_detection`: `Some(true)` navigates from the session's start. The navigator itself
+    /// runs in every session, as `start()` spawns it.
     pub ivr: Option<bool>,
     /// Attach the answering-machine detector, as `await amd.execute()` does.
     pub amd: bool,
     /// Static keyterms, which is also what makes the session have a keyterm pass at all.
     pub keyterms: Vec<String>,
-    /// Room legs: the room's events, the room io machine's, and the link's two switches.
+    /// What happens in the room: `None` is a room nothing happens in (a `Room` input is refused),
+    /// `Some` a room people join and leave, with `RoomOptions`' two switches.
     pub room: Option<RoomSetup>,
     /// An audio output that can pause: what makes a false interruption resumable at all, and so
     /// the whole pause machine reachable. The fake pauses by recording that it was told to.
@@ -165,10 +157,6 @@ pub struct Setup {
     /// `transcription_timeout`: how long after the detector's end of speech the driver waits for
     /// a transcript before giving up on one. `None` is the default of never.
     pub transcription_timeout_ms: Option<u64>,
-    /// The end-of-turn model's backchannel threshold, in percent: with one, a prediction whose
-    /// backchannel probability clears it while the turn is not over is an opportunity to
-    /// backchannel. `None` is no threshold, the default.
-    pub backchannel_threshold: Option<u8>,
     /// A TTS leg. Off, a pipeline session has an LLM and an audio output but no voice, which is
     /// the one configuration in which `say(words)` has nothing to speak with.
     pub tts: bool,
@@ -189,8 +177,7 @@ pub struct RealtimeSetup {
     pub turn_detection: bool,
 }
 
-/// `RoomOptions`' two session-level switches. `Some` is a session with room io attached, which
-/// is what gives the `Room` family anything to journal.
+/// `RoomOptions`' two session-level switches.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RoomSetup {
     pub close_on_disconnect: bool,
@@ -239,7 +226,6 @@ impl Default for Setup {
             user_turn_max_words: None,
             user_turn_max_ms: None,
             transcription_timeout_ms: None,
-            backchannel_threshold: None,
             tts: true,
             connect_ms: None,
             video: false,
@@ -373,10 +359,12 @@ impl RefRegistry for NoopRefs {
 
 /// A real session, the fakes behind it, and everything the run has learned.
 pub struct Run {
-    /// The transcript synchroniser, when the session has one: closed with the session, as the
-    /// session layer closes its own.
-    sync: Option<Arc<lk_agents_voice::transcription::synchronizer::TranscriptSynchronizer>>,
-    session: SessionHandle,
+    /// The session, as a host holds it.
+    api: Arc<SessionApi>,
+    /// The room it is in: people join and leave it as a case says.
+    room: Arc<FakeRoom>,
+    /// `aclose()` then `close_io()`, once a case asked for the close, until they resolve.
+    closing: Option<BoxFuture<'static, ()>>,
     /// The session's cores, stepped by the run itself: the run owns its queue. `None` once it
     /// finished, or panicked.
     runtime: Option<Runtime>,
@@ -385,8 +373,6 @@ pub struct Run {
     tasks: Arc<Tasks>,
     stamps: Stamps,
     pub registry: Arc<Registry>,
-    /// Where the fakes handed to the session are registered.
-    resources: lk_agents_abi::resources::Resources,
     /// What the fakes have done and not yet been read. Drained after every input; see [`Record`]
     /// for why reading it later still yields the order things happened in.
     records: mpsc::UnboundedReceiver<Record>,
@@ -395,9 +381,11 @@ pub struct Run {
     controls: BTreeMap<Slot, Control>,
     /// Which output each flushed segment sits on, kept after the segment is gone.
     segments: BTreeMap<u32, u32>,
-    /// Journal steps the observer stamped, waiting to be absorbed. The observer runs under the
+    /// Journal steps the probe stamped, waiting to be absorbed. The probe runs under the
     /// driver's own lock and cannot touch the recording, so it parks them here.
     steps: Arc<Mutex<Vec<(Observed, Step)>>>,
+    /// Host events the probe stamped as the session's drain handed them over.
+    host: Arc<Mutex<Vec<(Observed, Host)>>>,
     /// Set by the observer when it stopped a step for journaling without bound at one instant.
     livelock: Arc<Mutex<Option<String>>>,
     pending: BTreeMap<u32, Pending>,
@@ -408,17 +396,13 @@ pub struct Run {
     utterances: BTreeMap<u32, u32>,
     /// Each attached microphone's frame channel, and how many frames it has carried.
     mics: BTreeMap<u32, (mpsc::UnboundedSender<AudioFrame>, u16)>,
-    /// The next filler id to mint. The driver is told the id rather than choosing it, so a case can
-    /// name a filler in the same burst that started it.
+    /// The next filler id to mint. The host tells the driver the id rather than letting it
+    /// choose, so a case can name a filler in the same burst that started it.
     next_filler: u64,
     /// The next inline task id to mint. Per-`Run` and not process-global, so two runs of one case
     /// journal the same `task_0001`, `task_0002`, ... -- the determinism suite reads those ids.
     next_task: u64,
     refs: Arc<dyn RefRegistry>,
-    /// The room's own event channel, and the room io machine's. The harness holds the sending
-    /// end of both: a room event is something that happens to the session, so it is an input.
-    room: tokio::sync::mpsc::UnboundedSender<RoomEvent>,
-    room_io: tokio::sync::mpsc::UnboundedSender<RoomIoEvent>,
     pub setup: Setup,
     pub record: Recording,
 }

@@ -1,212 +1,135 @@
-//! Building the session, and the product objects a case's words become.
+//! Building the session through the host API, and the product objects a case's words become.
 //!
-//! [`Run::start`] wires a real driver to the fakes and installs the trace observer before the
-//! loop is spawned. Below it are the constructors the start and the commands share -- a toolset,
-//! a frame, a history, a patch -- the live objects a command carries, built from the case's terms.
+//! [`Run::start`] assembles a real `LiveSession` over the fake room and the fakes, as a host does,
+//! and installs the probe before `start()`. Below it are the constructors the start and the calls
+//! share: an agent, a history, a patch, built from the case's terms.
 use super::*;
 
 impl Run {
-    /// Start a real driver with the fakes attached, and record what it opens on the way up.
+    /// Build a session through the host's API, over the fake room and the fakes, and start it.
     ///
-    /// The trace observer is installed before the loop is spawned, so the first step the driver
-    /// decides is stamped from the same counter as everything else the case observes. That one
-    /// counter is what makes the recording a happens-before order rather than a pile of clocks.
+    /// The probe is installed before `start()`, so the first step the driver decides is stamped
+    /// from the same counter as everything else the case observes. That one counter is what makes
+    /// the recording a happens-before order rather than a pile of clocks.
     pub async fn start(setup: &Setup, schedule: u64, policy: Policy) -> Run {
         let time = Timebase::simulated();
         let stamps = Stamps::new(time.clone());
         let (registry, records) = Registry::new(stamps.clone());
         let tasks = Arc::new(Tasks { stamps: stamps.clone(), spawned: Mutex::default() });
+        let room = lk_agents_rtc::FakeRtc::new(time.clock()).room("room");
 
-        let mut config = ConfigStack::default();
-        config.session.turn.detection = match setup.turn {
-            TurnMode::Default => None,
-            TurnMode::Stt => Some(TurnDetection::Stt),
-            TurnMode::Manual => Some(TurnDetection::Manual),
-        };
-        if setup.preemptive {
-            config.session.turn.preemptive.enabled = Some(true);
-            config.session.turn.preemptive.preemptive_tts = Some(true);
-        }
-        config.session.speech.max_tool_steps = setup.max_tool_steps;
-        config.session.speech.min_consecutive_speech_delay =
-            setup.speech_gap_ms.map(Duration::from_millis);
-        config.session.turn.user_turn_limit.max_words =
-            setup.user_turn_max_words.map(Nullable::Value);
-        config.session.turn.user_turn_limit.max_duration =
-            setup.user_turn_max_ms.map(|ms| Nullable::Value(Duration::from_millis(ms)));
-        config.session.timers.transcription_timeout =
-            setup.transcription_timeout_ms.map(|ms| Nullable::Value(Duration::from_millis(ms)));
-        config.session.turn.ivr_detection = setup.ivr;
-        config.session.turn.endpointing.mode = Some(if setup.dynamic_endpointing {
-            EndpointingMode::Dynamic
-        } else {
-            EndpointingMode::Fixed
-        });
-        // The host asked for the adaptive detector, and the host's own gate -- the driver's
-        // calculator, condition for condition -- says whether it gets one. A port under `Manual`
-        // turn detection, say, is a session no host ever assembles: the gate refuses it because
-        // there is nothing to withhold transcripts with, and so does this harness.
-        let mut adaptive = false;
-        if setup.interruption {
-            config.session.turn.interruption.enabled = Some(true);
-            config.session.turn.interruption.mode = Some(InterruptionMode::Adaptive);
-            let gate = resolve_interruption_detector(&InterruptionGateInputs {
-                stt: (setup.stt && setup.realtime.is_none())
-                    .then_some(SttGate { aligned_transcript: true, streaming: true }),
-                realtime: setup
-                    .realtime
-                    .is_some()
-                    .then_some(RealtimeGate { server_turn_detection: !setup.vad && !setup.stt }),
-                has_vad: setup.vad,
-                turn_detection: config.session.turn.detection.unwrap_or(TurnDetection::Auto),
-                allow_interruptions: true,
-                asked: [None, Some(InterruptionMode::Adaptive)],
-                deployment: Deployment::Dev,
-            });
-            adaptive = matches!(gate, InterruptionGate::Build);
-        }
-        // The legs the driver resolves its defaults and derived switches from -- the turn owner,
-        // the endpointing base, whether an adaptive detector judges overlaps. What is handed to it
-        // below and what it is told it has must agree: a VAD it was not told about is one it
-        // never trusts for timing, and a detector it was not told about judges nothing.
+        // The host's own gate (`agent_session.py`) decides whether an adaptive detector is handed
+        // over: a port under `Manual` turn detection, say, is a session no host ever assembles.
+        let adaptive = setup.interruption
+            && matches!(
+                resolve_interruption_detector(&InterruptionGateInputs {
+                    stt: (setup.stt && setup.realtime.is_none())
+                        .then_some(SttGate { aligned_transcript: true, streaming: true }),
+                    realtime: setup.realtime.is_some().then_some(RealtimeGate {
+                        server_turn_detection: !setup.vad && !setup.stt
+                    }),
+                    has_vad: setup.vad,
+                    turn_detection: turn_detection(setup.turn).unwrap_or(TurnDetection::Auto),
+                    allow_interruptions: true,
+                    asked: [None, Some(InterruptionMode::Adaptive)],
+                    deployment: Deployment::Dev,
+                }),
+                InterruptionGate::Build
+            );
         let connect = Duration::from_millis(setup.connect_ms.unwrap_or(0));
-        // The two outputs, and the synchroniser between them when the session has one: the same
-        // wiring `SessionSpec` does, one layer up, so what the driver forwards to is the node
-        // whose word timing is under test.
-        let audio_leaf = fakes::FakeAudioOutput::new(registry.clone(), setup.pausable_output);
-        let text_leaf = fakes::FakeTextOutput::new(registry.clone());
-        let (audio_out, text_out, sync): (Arc<dyn AudioOutput>, Arc<dyn TextOutput>, _) =
-            if setup.sync_transcription {
-                use lk_agents_voice::transcription::synchronizer::{
-                    Liang, SyncConfig, TranscriptSynchronizer,
-                };
-                let sync = TranscriptSynchronizer::new(SyncConfig {
-                    audio_next: audio_leaf,
-                    text_next: Some(text_leaf),
-                    speed: 1.0,
-                    hyphenator: Arc::new(Liang),
-                    clock: time.clock(),
-                    spawner: tasks.clone(),
-                });
-                (sync.audio_output(), sync.text_output(), Some(sync))
-            } else {
-                (audio_leaf, text_leaf, None)
-            };
         let refs: Arc<dyn RefRegistry> = Arc::new(NoopRefs);
-        let legs = LegSet {
-            stt: setup.stt,
-            vad: setup.vad,
-            llm: true,
-            // The realtime socket is the voice: no TTS leg, and the model owns the reply.
-            tts: setup.tts && setup.realtime.is_none(),
-            realtime: setup.realtime.is_some(),
-            // The fake predictor takes the user's audio as it arrives and answers a request.
-            detector: setup.eot.then_some(DetectorKind::Streaming),
-            adaptive_detector: adaptive,
-            sink_can_pause: setup.pausable_output,
-            audio_output: true,
-            audio_enabled: true,
-            ..LegSet::none()
+        // A voice call always has a microphone; the legs are what listens to it. Minted like an
+        // output so its `nth` is what a `Ref<Mic>` names.
+        let (mic, frames) = fakes::FakeAudioInput::new();
+        let mic_nth = registry.new_mic();
+        let options = HostOptions::new(session_kwargs(setup));
+        let room_io = RoomIoConfig {
+            close_on_disconnect: setup.room.is_some_and(|r| r.close_on_disconnect),
+            delete_room_on_close: setup.room.is_some_and(|r| r.delete_room_on_close),
+            // The host's own legs replace the room's, which `agent_session.py` turns off.
+            audio_input: None,
+            audio_output: None,
+            text_output: Some(TextOutputConfig {
+                sync_transcription: Some(setup.sync_transcription),
+                ..TextOutputConfig::default()
+            }),
+            ..RoomIoConfig::default()
         };
-        // The room's two channels are the harness's to feed, and the link's are the session's to
-        // answer, so both ends are kept here for as long as the run lasts.
-        let (room_tx, room_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (room_io_tx, room_io_rx) = tokio::sync::mpsc::unbounded_channel();
-        let room = setup.room.map(|room| RoomLinkConfig {
-            close_on_disconnect: room.close_on_disconnect,
-            delete_room_on_close: room.delete_room_on_close,
-            room: "room".into(),
-        });
-
-        // A voice call always has a microphone; the legs -- STT, VAD, the end-of-turn model, the
-        // realtime socket -- are what listens to it. Minted like an output so its `nth` is what a
-        // `Ref<Mic>` names.
-        let mic = {
-            let (mic, frames) = fakes::FakeAudioInput::new();
-            Some((mic, (registry.new_mic(), frames)))
-        };
-        let resources = lk_agents_abi::resources::Resources::default();
-        let (mut runtime, session) = DriverBuilder {
-            resources: resources.clone(),
-            time: time.clone(),
-            spawner: tasks.clone(),
-            config: DriverConfig::new(config, legs),
-            thresholds: lk_agents_abi::tokenize::language::ThresholdOptions::new(
-                lk_agents_abi::tokenize::language::TurnDetectorModel::V1Mini,
+        let pipeline = setup.realtime.is_none();
+        let api = Arc::new(
+            SessionApi::host_new(
+                Arc::new(FixedRoom { rtc: room.clone(), time: time.clone() }),
+                Some(instructions(&setup.instructions)),
                 None,
+                "agent".into(),
+                None,
+                setup.stt.then(|| fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>),
+                setup.vad.then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
+                pipeline.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
+                setup.realtime.map(|server| {
+                    fakes::FakeRealtime::new(registry.clone(), server.turn_detection)
+                        as Arc<dyn Realtime>
+                }),
+                None,
+                (setup.tts && pipeline).then(|| fakes::FakeTts::new(registry.clone()) as Arc<Tts>),
+                Some(Arc::new(WireSink)),
+                None,
+                true,
+                SAMPLE_RATE,
+                SAMPLE_RATE,
+                Some(&options),
+                None,
+                setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
+                true,
+                adaptive.then(|| {
+                    Arc::new(fakes::FakeInterruptionSource(registry.clone()))
+                        as Arc<dyn InterruptionSource>
+                }),
+                true,
+                Some(room_io),
+                Some(tool_specs(&setup.tools)),
+                None,
+                Some(fakes::FakeTools::new(registry.clone()) as Arc<dyn HostToolRunner>),
+                None,
+                None,
+                None,
+                Some(mic as Arc<AudioIn>),
+                Some(fakes::FakeAudioOutput::new(registry.clone(), setup.pausable_output) as _),
                 setup
-                    .backchannel_threshold
-                    .map(|percent| ThresholdOverride::All(f64::from(percent) / 100.0)),
-            ),
-            agent: "agent".into(),
-            instructions: instructions(&setup.instructions),
-            dynamic_instructions: None,
-            chat_ctx: None,
-            hook_bound: setup.hook_bound_ms.map(Duration::from_millis),
-            capture_run: None,
-            max_unrecoverable_errors: setup.max_unrecoverable_errors,
-            llm: (setup.realtime.is_none())
-                .then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
-            tts: (setup.tts && setup.realtime.is_none())
-                .then(|| fakes::FakeTts::new(registry.clone()) as Arc<Tts>),
-            stt: setup.stt.then(|| fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>),
-            audio_in: mic.as_ref().map(|(mic, _)| mic.clone() as Arc<AudioIn>),
-            audio_out: Some(audio_out),
-            text_out: Some(text_out),
-            toolset: toolset(&registry, &setup.tools),
-            keyterms: (!setup.keyterms.is_empty()).then(|| KeytermSetup {
-                detection: KeytermDetection::default(),
-                static_keyterms: setup.keyterms.clone(),
-                llm: None,
-                tools_host: None,
-            }),
-            vad: setup.vad.then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
-            video_in: setup
-                .video
-                .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
-            recorder: None,
-            tts_text_transforms: vec![],
-            realtime_audio_node: None,
-            room_events: room.is_some().then_some(room_rx),
-            room_io_events: room.is_some().then_some(room_io_rx),
-            room_link: room,
-            eot: setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
-            interruption: adaptive.then(|| {
-                fakes::FakeInterruption::new(registry.clone()) as Arc<dyn InterruptionPort>
-            }),
-            video_sampler: None,
-            realtime: setup.realtime.map(|server| {
-                fakes::FakeRealtime::new(registry.clone(), server.turn_detection)
-                    as Arc<dyn Realtime>
-            }),
-        }
-        .start()
-        .await
-        .expect("start session");
-
-        // Tool bodies command the driver from their own origin through the session's queue.
-        registry.attach_api(session.api.clone());
+                    .video
+                    .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
+                None,
+                false,
+                Some(fakes::FakeTextOutput::new(registry.clone()) as _),
+                false,
+                setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
+                setup.max_unrecoverable_errors,
+                (!setup.keyterms.is_empty()).then(|| SttContextConfig {
+                    keyterms: Some(setup.keyterms.clone()),
+                    ..SttContextConfig::default()
+                }),
+                None,
+                None,
+                tasks.clone(),
+            )
+            .expect("assemble the session"),
+        );
+        registry.attach_session(api.clone());
 
         let steps: Arc<Mutex<Vec<(Observed, Step)>>> = Arc::default();
+        let host: Arc<Mutex<Vec<(Observed, Host)>>> = Arc::default();
         let livelock: Arc<Mutex<Option<String>>> = Arc::default();
+        let (runtime_tx, runtime_rx) = oneshot::channel();
         {
-            let (steps, stamps, livelock) = (steps.clone(), stamps.clone(), livelock.clone());
-            let mut trace = session.trace.lock().unwrap();
-            // What the driver wrote while it was being built -- the config it resolved, the wall
-            // epoch, the realtime socket's opening -- is journal too, and came before anyone
-            // was listening. Taken under the same lock the observer is installed under, so no
-            // step lands in between.
-            for step in trace.steps() {
-                steps.lock().unwrap().push((stamps.next(), step));
-            }
+            let (steps, step_stamps, livelock) = (steps.clone(), stamps.clone(), livelock.clone());
             // A step that journals forever never returns to the run's loop, which counts its own
             // iterations: the observer is the only one that sees it, and stops it the only way
             // anything can stop a step, by unwinding out of it.
             let mut instant = (tokio::time::Instant::now(), 0u32);
-            trace.observe(Box::new(move |step| {
+            let step = Box::new(move |step: &Step| {
                 let now = tokio::time::Instant::now();
                 instant = if now == instant.0 { (now, instant.1 + 1) } else { (now, 0) };
-                let at = stamps.next();
+                let at = step_stamps.next();
                 if instant.1 >= NO_PROGRESS_STEPS {
                     let detail = format!(
                         "{NO_PROGRESS_STEPS} journal steps at {} ms without virtual time moving, \
@@ -217,30 +140,33 @@ impl Run {
                     panic!("{detail}");
                 }
                 steps.lock().unwrap().push((at, step.clone()));
-            }));
+            });
+            let (host, stamps) = (host.clone(), stamps.clone());
+            let host_event = Box::new(move |event: &HostEvent| {
+                let seen = match event {
+                    HostEvent::Session(event) => Host::Session(event.clone()),
+                    HostEvent::Hook(call) => hook_of(call),
+                    HostEvent::Room(event) => Host::Room(event.clone()),
+                };
+                host.lock().unwrap().push((stamps.next(), seen));
+            });
+            api.probe(Probe { step, host_event, runtime: runtime_tx });
         }
-        // The systems are the host's to start, right after `start()`: the navigator so an `Ivr`
-        // command has a reader, the AMD as the reference's `await amd.execute()`.
-        if setup.ivr.is_some() {
-            lk_agents_voice::agent_session::start_ivr(&session.peer, session.ivr_detection);
-        }
+        api.start(false).expect("a new session starts").await.expect("the session started");
+        let runtime = runtime_rx.await.expect("the probe takes the session's cores");
+        // The answering-machine detector, as `await amd.execute()` runs it: attached, its budget
+        // armed and its listening window opened as soon as the call is up.
         if setup.amd {
             let llm = fakes::FakeLlm::new(registry.clone());
-            let amd =
-                AmdSystem::spawn(session.peer.clone(), AmdSetup::new(AmdConfig::default(), llm));
-            // `await amd.execute()`: the host arms the detection budget and opens the listening
-            // window as soon as the call is up. Attached but never started, the machine holds the
-            // agent's authorization and hears nothing, which no host leaves it doing.
-            let _ = amd.input(AmdIn::Start(AmdStart::DetectionTimer));
-            let _ = amd.input(AmdIn::Start(AmdStart::Listening));
+            api.host_attach_amd(Default::default(), llm, None, None).expect("attach the AMD");
+            api.amd_start_detection_timer().expect("a running session");
+            api.amd_start_listening().expect("a running session");
         }
-        runtime.driver.open(time.read());
         let mut run = Run {
-            sync,
-            room: room_tx,
-            room_io: room_io_tx,
-            session,
-            resources: resources.clone(),
+            api,
+            room,
+            closing: None,
+            host,
             runtime: Some(runtime),
             queue: super::queue::Queue::new(schedule, policy),
             time,
@@ -256,20 +182,80 @@ impl Run {
             streams: BTreeMap::new(),
             handles: BTreeMap::new(),
             utterances: BTreeMap::new(),
-            mics: BTreeMap::new(),
+            mics: BTreeMap::from([(mic_nth, (frames, 0))]),
             next_filler: 1,
             next_task: 1,
             refs,
             setup: setup.clone(),
             record: Recording::default(),
         };
-        // The two outputs the builder attached exist before any input is applied; collecting here
-        // is what registers them, together with whatever the first cycle has already decided.
-        if let Some((_, (nth, frames))) = mic {
-            run.mics.insert(nth, (frames, 0));
-        }
         run.collect();
         run
+    }
+}
+
+/// `on_event`: the host's sink, handed each event's wire form. What the run reads is the typed
+/// event the probe saw first.
+struct WireSink;
+
+impl SessionEvents for WireSink {
+    fn event(&self, _wire: &lk_agents_abi::voice::events::HostWire) {}
+    fn stream_closed(&self, _wire: &lk_agents_abi::voice::events::StreamClosedWire) {}
+}
+
+pub(super) fn turn_detection(mode: TurnMode) -> Option<TurnDetection> {
+    match mode {
+        TurnMode::Default => None,
+        TurnMode::Stt => Some(TurnDetection::Stt),
+        TurnMode::Manual => Some(TurnDetection::Manual),
+    }
+}
+
+/// `AgentSession(**kwargs)` for a setup: the reference's defaults, and what the setup changes.
+fn session_kwargs(setup: &Setup) -> SessionKwargs {
+    let secs = |ms: u64| ms as f64 / 1000.0;
+    let limit = setup.user_turn_max_words.is_some() || setup.user_turn_max_ms.is_some();
+    SessionKwargs {
+        turn_handling: Some(TurnHandlingKwargs {
+            turn_detection: turn_detection(setup.turn).map(TurnDetectionKwarg::Mode),
+            endpointing: Some(EndpointingKwargs {
+                mode: Some(if setup.dynamic_endpointing {
+                    EndpointingMode::Dynamic
+                } else {
+                    EndpointingMode::Fixed
+                }),
+                ..EndpointingKwargs::default()
+            }),
+            interruption: setup.interruption.then(|| InterruptionKwargs {
+                enabled: Some(true),
+                mode: Some(InterruptionMode::Adaptive),
+                ..InterruptionKwargs::default()
+            }),
+            preemptive_generation: setup.preemptive.then(|| PreemptiveKwargs {
+                enabled: Some(true),
+                preemptive_tts: Some(true),
+                ..PreemptiveKwargs::default()
+            }),
+            user_turn_limit: limit.then(|| UserTurnLimitKwargs {
+                max_words: Maybe::Given(setup.user_turn_max_words.map(i64::from)),
+                max_duration: Maybe::Given(setup.user_turn_max_ms.map(secs)),
+            }),
+        }),
+        stt_context_options: HostValue::NotGiven,
+        tool_handling: HostValue::NotGiven,
+        max_tool_steps: setup.max_tool_steps.map_or(3, i64::from),
+        use_tts_aligned_transcript: Maybe::NotGiven,
+        tts_text_transforms: Maybe::NotGiven,
+        min_consecutive_speech_delay: secs(setup.speech_gap_ms.unwrap_or(0)),
+        expressive: false,
+        aec_warmup_duration: Maybe::NotGiven,
+        ivr_detection: setup.ivr == Some(true),
+        user_away_timeout: Some(15.0),
+        transcription_timeout: setup.transcription_timeout_ms.map(secs),
+        session_close_transcript_timeout: 2.0,
+        conn_options: HostValue::NotGiven,
+        deprecated: Default::default(),
+        keyterms_options: HostValue::NotGiven,
     }
 }
 
@@ -281,57 +267,45 @@ pub(super) type VadLeg = dyn lk_agents_abi::Vad;
 pub(super) type EotDet = dyn lk_agents_abi::EotDetector;
 pub(super) type VideoIn = dyn lk_agents_abi::voice::io::VideoInput;
 
-/// `Maybe` spells "not mentioned" and "set to nothing" differently, and a leg the case did not
-/// name must be the former: `Given(None)` would tear the provider out.
-pub(super) fn given<T>(value: Option<T>) -> Maybe<Option<T>> {
-    value.map_or(Maybe::NotGiven, |value| Maybe::Given(Some(value)))
-}
-
 pub(super) fn instructions(common: &str) -> Instructions {
     Instructions { common: common.into(), audio: None, text: None }
 }
 
-/// A toolset over the controlled runner. Every frame gets a fresh runner on the same registry, so
-/// a tool call after a handoff registers exactly like one before it.
-pub(super) fn toolset(registry: &Arc<Registry>, tools: &[String]) -> Toolset {
-    Toolset {
-        specs: tools
-            .iter()
-            .map(|name| lk_agents_abi::ToolSpec {
-                name: name.clone(),
-                description: format!("fixture tool {name}"),
-                json_schema: serde_json::json!({"type": "object", "properties": {}}),
-                flags: Default::default(),
-            })
-            .collect(),
-        host: None,
-        runner: Some(fakes::FakeTools::new(registry.clone())),
-    }
+/// The tools advertised to the model; each is run by the controlled tool runner.
+pub(super) fn tool_specs(tools: &[String]) -> Vec<lk_agents_abi::ToolSpec> {
+    tools
+        .iter()
+        .map(|name| lk_agents_abi::ToolSpec {
+            name: name.clone(),
+            description: format!("fixture tool {name}"),
+            json_schema: serde_json::json!({"type": "object", "properties": {}}),
+            flags: Default::default(),
+        })
+        .collect()
 }
 
-/// A new frame with the same fakes behind it: a handoff and an inline task differ only in how they
-/// treat the frame they leave, which their own arms set.
+/// A new agent with the same fakes behind it, as `update_agent` and `enter_task` take it. Every
+/// frame gets a fresh runner on the same registry, so a tool call after a handoff registers
+/// exactly like one before it.
 pub(super) fn frame(
     registry: &Arc<Registry>,
     agent: &str,
     instructions: &str,
     tools: &[String],
-) -> AgentUpdate {
-    AgentUpdate {
-        agent: agent.into(),
+) -> UpdateAgentArgs {
+    UpdateAgentArgs {
         instructions: self::instructions(instructions),
         dynamic_instructions: None,
-        toolset: toolset(registry, tools),
+        agent: agent.into(),
+        tools: Some(tool_specs(tools)),
+        tools_host: None,
+        tool_runner: Some(fakes::FakeTools::new(registry.clone())),
         chat_ctx: None,
         llm: Maybe::NotGiven,
         tts: Maybe::NotGiven,
         stt: Maybe::NotGiven,
         vad: Maybe::NotGiven,
-        options: SessionPatch::default(),
-        previous: PreviousActivity::Pause,
-        next: NewActivity::Start,
-        call: None,
-        task: None,
+        turn_handling: None,
     }
 }
 

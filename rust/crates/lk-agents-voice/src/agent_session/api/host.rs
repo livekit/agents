@@ -321,6 +321,8 @@ impl SessionApi {
             dtmf_reply: Mutex::new(None),
             host: HostParts::default(),
             resources,
+            #[cfg(feature = "dst")]
+            probe: Mutex::new(None),
         };
         // The reference's `@deprecate_params` warnings, as `Diagnostic` events, not Python logs.
         if let Some(events) = &on_event {
