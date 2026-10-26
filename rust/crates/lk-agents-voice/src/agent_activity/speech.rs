@@ -530,6 +530,17 @@ impl Driver {
         let mut user =
             ChatMessage::text(self.session.ids.mint("item"), Role::User, text, created_at);
         user.transcript_confidence = Some(info.transcript_confidence);
+        // `_init_metrics_from_end_of_turn`: the reply's `e2e_latency` is measured from here.
+        let m = &info.metrics;
+        let secs = |d: Option<std::time::Duration>| d.map(|d| d.as_secs_f64());
+        user.metrics = lk_agents_abi::MetricsReport {
+            started_speaking_at: m.started_speaking_at.map(|at| self.step.wall_secs_at(at)),
+            stopped_speaking_at: m.stopped_speaking_at.map(|at| self.step.wall_secs_at(at)),
+            transcription_delay: secs(m.transcription_delay),
+            end_of_turn_delay: secs(m.end_of_turn_delay),
+            on_user_turn_completed_delay: secs(m.on_user_turn_completed_delay),
+            ..Default::default()
+        };
         user
     }
 
