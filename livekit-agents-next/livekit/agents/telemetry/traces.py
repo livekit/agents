@@ -78,7 +78,6 @@ from . import gen_ai, pii, trace_types, utils as telemetry_utils
 if TYPE_CHECKING:
     from ..llm import ChatItem
     from ..observability import Tagger
-    from ..voice.agent_session import AgentSessionOptions
     from ..voice.report import SessionReport
 
 
@@ -158,8 +157,8 @@ def _serialize_option_value(value: Any) -> Any:
     return _describe_option_object(value)
 
 
-def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
-    serialized = _serialize_option_value(vars(options))
+def _serialize_session_options(options: dict[str, Any]) -> dict[str, Any]:
+    serialized = _serialize_option_value(options)
     assert isinstance(serialized, dict)
     return serialized
 
@@ -1301,7 +1300,7 @@ async def _upload_session_report(
         )
 
     chat_logger = _get_logger("chat_history")
-    recording_options = report.options.recording_options
+    recording_options = report.options["recording_options"]
 
     if recording_enabled(recording_options):
         _log(

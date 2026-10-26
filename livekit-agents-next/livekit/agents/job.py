@@ -345,7 +345,7 @@ class JobContext:
                     tagger=self._tagger,
                     http_session=http_context.http_session(),
                     metadata=self._otel_metadata(
-                        report.options.recording_options,
+                        report.options["recording_options"],
                         redaction_enabled=self._redaction_enabled,
                     ),
                 )
@@ -419,7 +419,7 @@ class JobContext:
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
-            options=session.options,
+            options={**session.options, "recording_options": session._recording_options},
             started_at=session._started_at,
             events=session._recorded_events,
             chat_history=session.history.copy(),

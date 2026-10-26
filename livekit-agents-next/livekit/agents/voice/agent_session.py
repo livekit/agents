@@ -256,6 +256,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "redaction": False,
         }
         self._tasks: set[asyncio.Task[Any]] = set()
+        # the job's telemetry parents its spans here; the core traces the session itself
+        self._root_span_context = None
+        self._session_start_context = None
 
     # --- state ---------------------------------------------------------------------------
 
@@ -375,10 +378,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._core is not None:
             return
         self._console = ConsoleCall.claim(self)
+        job_ctx = get_job_context(required=False)
         if self._console is not None:
             room = _core.OfflineRoom("console")
         elif not is_given(room):
-            job_ctx = get_job_context(required=False)
             room = job_ctx.room if job_ctx is not None else _core.OfflineRoom("console")
         if chat_ctx is not None:
             self._chat_ctx = chat_ctx.copy()
@@ -425,9 +428,28 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
         self._agent = agent
         self._started_at = time.time()
-        await self._core.start(capture_run=capture_run)
         if self._console is not None:
+            await self._core.start(capture_run=capture_run)
             await self._console.start()
+            return
+        if job_ctx is None or room is not job_ctx.room:
+            await self._core.start(capture_run=capture_run)
+            return
+        # the job's room: this session records and reports for the job, connects the room,
+        # closes with it
+        plan = _core.plan_session_start(
+            job_default=job_ctx.job.enable_recording,
+            has_job_context=True,
+            another_session_is_primary=job_ctx._primary_agent_session is not None,
+        )
+        self._recording_options = plan["recording"]
+        if plan["is_primary"]:
+            job_ctx._primary_agent_session = self
+        job_ctx.init_recording(self._recording_options)
+        job_ctx.add_shutdown_callback(
+            lambda: self._close(drain=False, reason=CloseReason.JOB_SHUTDOWN)
+        )
+        await asyncio.gather(self._core.start(capture_run=capture_run), job_ctx.connect())
 
     async def aclose(self) -> None:
         await self._close(drain=False)
@@ -438,10 +460,12 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def shutdown(self, *, drain: bool = True) -> None:
         self._spawn(self._close(drain=drain))
 
-    async def _close(self, *, drain: bool) -> None:
+    async def _close(
+        self, *, drain: bool, reason: CloseReason = CloseReason.USER_INITIATED
+    ) -> None:
         if self._core is None:
             return
-        await self._core.aclose(reason=CloseReason.USER_INITIATED.value, drain=drain)
+        await self._core.aclose(reason=reason.value, drain=drain)
         await self._core.close_io()
         if (console := self._console) is not None:
             self._console = None
