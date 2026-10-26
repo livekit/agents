@@ -25,6 +25,7 @@ ChatModels = Literal[
     "gpt-6-astra",
     "gpt-6-luna",
     "gpt-6-sol",
+    "gpt-5.6",
     "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
@@ -287,6 +288,7 @@ def _supports_reasoning_effort(model: ChatModels | str) -> bool:
         "gpt-6-astra",
         "gpt-6-luna",
         "gpt-6-sol",
+        "gpt-5.6",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
@@ -307,6 +309,7 @@ _REASONING_EFFORT_NONE_MODELS: frozenset[str] = frozenset(
     {
         "gpt-6-luna",
         "gpt-6-sol",
+        "gpt-5.6",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",

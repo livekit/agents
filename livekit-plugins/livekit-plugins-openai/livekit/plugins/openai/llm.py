@@ -67,7 +67,15 @@ lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 # models that reject any reasoning_effort value but "none" once function tools are attached
 _REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS: frozenset[str] = frozenset(
-    {"gpt-6-luna", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"}
+    {
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-5.6",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.5",
+    }
 )
 
 # models that reject function tools on /v1/chat/completions at every reasoning_effort ("none" is
