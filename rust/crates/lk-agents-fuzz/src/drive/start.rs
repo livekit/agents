@@ -241,6 +241,7 @@ impl Run {
             joins: 0,
             console,
             next_request: 0,
+            background: None,
             next_filler: 1,
             refs,
             setup: setup.clone(),
@@ -248,6 +249,16 @@ impl Run {
         };
         if let Some((nth, cli)) = console_mic {
             run.mics.insert(nth, (Mic::Console(cli), 0));
+        }
+        // `BackgroundAudioPlayer().start(room=, agent_session=)` with an ambient sound.
+        if setup.background_audio {
+            let player = Arc::new(BackgroundAudioPlayer::for_host(SAMPLE_RATE, 1, 2_400, 200));
+            let room = Arc::new(FixedRoom { rtc: run.room.clone(), time: run.time.clone() });
+            if player.start_for_host(room, None).await.is_ok() {
+                let ambient = fakes::FakeSoundStream::sound(20);
+                let _ = player.play(vec![ambient], true, false, true, &mut || 0.5);
+            }
+            run.background = Some(player);
         }
         // The person joins the call the agent just answered.
         if legs.is_some() {

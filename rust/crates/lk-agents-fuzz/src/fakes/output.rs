@@ -520,3 +520,42 @@ impl remote_session::SessionPort for FakeConsolePort {
         Ok((None, None))
     }
 }
+
+/// A background sound from a host stream (`AudioConfig(source=async_iterator)`): so many 20 ms
+/// frames of tone, then its end.
+pub struct FakeSoundStream {
+    left: Mutex<u32>,
+}
+
+impl FakeSoundStream {
+    pub fn sound(frames: u32) -> lk_agents_voice::background_audio::Sound {
+        let stream = Arc::new(FakeSoundStream { left: Mutex::new(frames) });
+        lk_agents_voice::background_audio::Sound::for_host(None, Some(stream), 0.8, 1.0, 0.1, 0.1)
+    }
+}
+
+#[async_trait::async_trait]
+impl lk_agents_voice::background_audio::FrameStream for FakeSoundStream {
+    async fn next(&self) -> Result<Option<AudioFrame>, lk_agents_abi::errors::ProviderError> {
+        let mut left = self.left.lock().unwrap();
+        if *left == 0 {
+            return Ok(None);
+        }
+        *left -= 1;
+        let samples = super::SAMPLE_RATE / 50;
+        Ok(Some(AudioFrame::new(1000i16.to_le_bytes().repeat(samples as usize), super::SAMPLE_RATE, 1, samples)))
+    }
+    fn cancel_pending(&self) {}
+    async fn close(&self) {
+        *self.left.lock().unwrap() = 0;
+    }
+}
+
+/// `random.random` for the background player: always the middle, so a seed picks one sound.
+pub struct Half;
+
+impl lk_agents_voice::background_audio::RandomDraw for Half {
+    fn draw(&self) -> f64 {
+        0.5
+    }
+}

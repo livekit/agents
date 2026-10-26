@@ -30,6 +30,14 @@ impl Run {
             if let Host::Session(SessionEvent::SpeechCreated { speech, .. }) = &seen {
                 self.handles.entry(speech.id().0).or_insert_with(|| speech.clone());
             }
+            // `_agent_state_changed`: the thinking sound plays while the agent thinks.
+            if let (Some(player), Host::Session(SessionEvent::AgentStateChanged { new, .. })) =
+                (&self.background, &seen)
+            {
+                let thinking = *new == lk_agents_abi::voice::events::AgentState::Thinking;
+                let sound = fakes::FakeSoundStream::sound(5);
+                let _ = player.on_agent_state_for_host(vec![sound], Arc::new(fakes::Half), thinking, true);
+            }
             self.record.record_host(at, seen);
         }
         self.sync_fakes();

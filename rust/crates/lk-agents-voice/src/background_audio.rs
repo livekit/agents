@@ -364,6 +364,8 @@ pub struct BackgroundAudioPlayer {
     thinking: Mutex<Option<Arc<PlaybackHandle>>>,
     closed: AtomicBool,
     started: AtomicBool,
+    /// Woken by `play` and `close`: an idle mixer waits on it rather than polling.
+    wake: tokio::sync::Notify,
     pub sample_rate: u32,
     pub num_channels: u16,
     pub blocksize: usize,
@@ -405,6 +407,7 @@ impl BackgroundAudioPlayer {
             thinking: Mutex::new(None),
             closed: AtomicBool::new(false),
             started: AtomicBool::new(false),
+            wake: tokio::sync::Notify::new(),
             sample_rate,
             num_channels,
             blocksize,
@@ -543,15 +546,27 @@ impl BackgroundAudioPlayer {
             playback: Playback::new(&sound.config),
             handle: handle.clone(),
         });
+        self.wake.notify_one();
         Ok(handle)
     }
 
     pub async fn next_block(&self) -> Option<Vec<i16>> {
         while !self.closed.load(Ordering::Acquire) {
-            if let Some(pcm) = self.state.lock().await.round(self.timeout).await {
-                return Some(pcm);
+            let woken = self.wake.notified();
+            let idle = {
+                let mut state = self.state.lock().await;
+                if let Some(pcm) = state.round(self.timeout).await {
+                    return Some(pcm);
+                }
+                state.sources.is_empty() && self.queued.lock().unwrap().is_empty()
+            };
+            // Nothing to mix: wait for the next sound instead of polling. A play or close since
+            // `woken` was taken has left its permit.
+            if idle {
+                woken.await;
+            } else {
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
         }
         None
     }
@@ -586,6 +601,7 @@ impl BackgroundAudioPlayer {
         let this = self.clone();
         let _ = tokio::spawn(async move { this.stop_sounds().await }).await;
         self.closed.store(true, Ordering::Release);
+        self.wake.notify_one();
         let this = self.clone();
         let _ = tokio::spawn(async move {
             let mut output = this.output.lock().await;

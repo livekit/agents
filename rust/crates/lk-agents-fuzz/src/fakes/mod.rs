@@ -45,7 +45,8 @@ pub use eot::FakeEot;
 pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{FakeLlm, request_of};
 pub use output::{
-    FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeTextOutput,
+    FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeSoundStream,
+    FakeTextOutput, Half,
     FakeVideoInput,
 };
 pub use realtime::FakeRealtime;

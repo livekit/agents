@@ -43,6 +43,7 @@ use lk_agents_abi::{
 };
 use lk_agents_rtc::{FakeRoom, ParticipantKind};
 use lk_agents_abi::TokioSpawner;
+use lk_agents_voice::background_audio::BackgroundAudioPlayer;
 use lk_agents_voice::remote_session::driver::HostRuntime as RemoteSessionHost;
 use lk_agents_voice::remote_session::{
     WireEvent, proto,
@@ -193,6 +194,9 @@ pub struct Setup {
     /// `VoiceActivityVideoSampler()`, which `agent_session.py` hands over by default: camera
     /// frames reach the model at one rate while the person speaks and another while silent.
     pub video_sampler: bool,
+    /// `BackgroundAudioPlayer` on the room: an ambient sound from the start and a thinking sound
+    /// while the agent thinks, mixed on its own published track. Only with the room's legs.
+    pub background_audio: bool,
 }
 
 /// The room's legs, and whether the person's app sends the audio it buffered before the agent
@@ -282,6 +286,7 @@ impl Default for Setup {
             console: false,
             deprecated_turn: false,
             video_sampler: false,
+            background_audio: false,
         }
     }
 }
@@ -466,6 +471,8 @@ pub struct Run {
     console: Option<(Arc<RemoteSessionHost>, fakes::FakeCli)>,
     /// The next console request's id.
     next_request: u64,
+    /// The background audio player, as `background_audio.py` runs it beside the session.
+    background: Option<Arc<BackgroundAudioPlayer>>,
     /// The next filler id to mint. The host tells the driver the id rather than letting it
     /// choose, so a case can name a filler in the same burst that started it.
     next_filler: u64,

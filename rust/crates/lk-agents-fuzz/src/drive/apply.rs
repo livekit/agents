@@ -934,6 +934,10 @@ impl Run {
         let until = self.time.now().saturating_add(Duration::from_millis(wait));
         self.drive(Some(until), std::future::pending::<()>()).await;
         let exited = self.runtime.is_none();
+        // The player goes with the session (`BackgroundAudioPlayer.aclose()`).
+        if exited && let Some(player) = self.background.take() {
+            player.close().await;
+        }
         if exited {
             if let Some(closing) = self.closing.take() {
                 let until = self.time.now().saturating_add(Duration::from_millis(NEVER_MS));
