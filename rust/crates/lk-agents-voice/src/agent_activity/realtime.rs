@@ -436,7 +436,7 @@ impl Driver {
                     &mut self.session.closing
                 {
                     *closed = true;
-                    out.signal(crate::agent_session::signals::Signal::CloseProgress);
+                    out.signal(crate::agent_session::effects::Signal::CloseProgress);
                 }
             }
             RealtimeWake::ToolsDone { speech, step, outputs, ask } => {

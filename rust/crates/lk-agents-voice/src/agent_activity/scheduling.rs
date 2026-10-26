@@ -3,7 +3,7 @@
 
 use crate::agent_session::Driver;
 use crate::agent_session::effects::{Out, Timer};
-use crate::agent_session::signals::{PauseResult, Signal};
+use crate::agent_session::effects::{PauseResult, Signal};
 use crate::events::SessionEvent;
 use crate::speech_handle::SpeechHandle;
 use crate::trace::{CloseAct, CloseStep, InterruptCause, InterruptStep, SpeechStep, TurnStep};

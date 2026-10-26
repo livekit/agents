@@ -3,7 +3,7 @@
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::{Out, Timer};
-use crate::agent_session::signals::Signal;
+use crate::agent_session::effects::Signal;
 use crate::agent_session::{Answer, Driver, DtmfCommand, RequestId};
 use crate::events::SessionEvent;
 use crate::trace::{InterruptCause, InterruptStep};

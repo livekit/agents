@@ -6,7 +6,7 @@ use crate::agent_activity::drain::DrainEvent;
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::PauseCause;
 use crate::agent_session::effects::{Out, Timer};
-use crate::agent_session::signals::{Cx, PauseResult, Signal};
+use crate::agent_session::effects::{Cx, PauseResult, Signal};
 use crate::agent_session::{
     AgentUpdate, Answer, Driver, HandoffRefused, HookId, HookKind, SpeechCommand,
 };

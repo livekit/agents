@@ -300,7 +300,7 @@ impl DriverBuilder {
         let tts = self.tts.clone().map(|t| resources.register_tts(t));
         let stt = self.stt.clone().map(|s| resources.register_stt(s));
         let vad = self.vad.clone().map(|v| resources.register_vad(v));
-        let outputs = crate::agent_session::outputs::Outputs::new(
+        let outputs = crate::agent_session::Outputs::new(
             self.audio_out.clone().map(|o| resources.register_audio_output(o)),
             self.text_out.clone().map(|o| resources.register_text_output(o)),
         );

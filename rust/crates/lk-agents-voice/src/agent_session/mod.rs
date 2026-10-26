@@ -1,23 +1,24 @@
 //! `voice/agent_session.py`: the session's state, one struct per concern (`AgentSession`), and the
 //! [`SessionShared`] state its tasks read, with the host's [`SessionApi`], the commands, the host
-//! events, the driver, its cycle and the clock beside it.
+//! events, the driver and the clock beside it.
 
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::effects::{Effects, Timer};
+use crate::agent_session::effects::{Effect, Effects, Out, ProviderCall, Timer};
 use crate::audio::LaunchGate;
 use crate::generation::GenEvent;
 use crate::io::RealtimeAudioNode;
+use lk_agents_abi::resources::{AudioOutputRef, ResourceId, TextOutputRef};
 use lk_agents_abi::voice::events::AgentState;
-use lk_agents_abi::voice::io::{AudioOutput, TextOutput};
+use lk_agents_abi::voice::io::{AudioOutput, AudioOutputCapabilities, TextOutput};
 use lk_agents_abi::{Maybe, Spawner, Ts};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) mod agent_user_state;
 pub mod api;
 pub mod builder;
-pub mod calls;
 pub(crate) mod closing;
 pub mod commands;
 pub mod driver;
@@ -25,17 +26,12 @@ pub mod effects;
 pub mod host_events;
 pub(crate) mod idle;
 pub mod nodes;
-pub(crate) mod outputs;
-pub(crate) mod providers;
-pub(crate) mod signals;
 pub mod time;
 
 // The paths the activity files, the fuzz harness and the napi binding name the session's items by.
-
 pub(crate) use agent_user_state::AgentUserState;
 pub use api::*;
 pub use builder::*;
-
 pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use driver::*;
@@ -67,7 +63,7 @@ pub(crate) struct LiveSession {
     pub(crate) stt: Option<lk_agents_abi::resources::SttRef>,
     pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
     /// `session.output` as the core decides with it.
-    pub(crate) outputs: outputs::Outputs,
+    pub(crate) outputs: Outputs,
     /// `AgentSession._tools`, and the hosts that run them.
     pub(crate) tools: crate::tool_executor::SessionTools,
     pub(crate) tool_hosts: Vec<lk_agents_abi::HostRef>,
@@ -97,7 +93,7 @@ pub(crate) struct SessionParts {
     pub(crate) tts: Option<lk_agents_abi::resources::TtsRef>,
     pub(crate) stt: Option<lk_agents_abi::resources::SttRef>,
     pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
-    pub(crate) outputs: outputs::Outputs,
+    pub(crate) outputs: Outputs,
     pub(crate) max_unrecoverable_errors: u32,
     pub(crate) start_options: StartOptions,
     pub(crate) room_link: Option<crate::room_io::link::RoomLinkConfig>,
@@ -513,6 +509,84 @@ pub struct ActivitySnapshot {
     /// What a step's follow-up waits for, and whether the activity that made the speech drains
     /// (`self.scheduling_paused` when the step's tools were done).
     pub tools_committed: std::collections::BTreeMap<(SpeechId, u32), bool>,
+}
+
+/// `session.output` as the core decides with it: the outputs by id and their switches. The data
+/// plane's copy ([`AgentOutput`]) changes only by the effects these changes raise.
+#[derive(Debug)]
+pub(crate) struct Outputs {
+    pub(crate) audio: Option<AudioOutputRef>,
+    /// `output.audio_enabled`: the switch, which a speech freezes at its voice leg.
+    pub(crate) audio_enabled: bool,
+    pub(crate) transcription: Option<TextOutputRef>,
+    /// `output.transcription_enabled`.
+    pub(crate) transcription_enabled: bool,
+}
+
+/// No output, both switches on.
+impl Default for Outputs {
+    fn default() -> Self {
+        Outputs::new(None, None)
+    }
+}
+
+impl Outputs {
+    pub(crate) fn new(audio: Option<AudioOutputRef>, transcription: Option<TextOutputRef>) -> Self {
+        Outputs { audio, audio_enabled: true, transcription, transcription_enabled: true }
+    }
+
+    /// Audio plays: a sink, switched on.
+    pub(crate) fn plays_audio(&self) -> bool {
+        self.audio.is_some() && self.audio_enabled
+    }
+
+    /// Transcription shows: a sink, switched on.
+    pub(crate) fn shows_transcription(&self) -> bool {
+        self.transcription.is_some() && self.transcription_enabled
+    }
+
+    /// The pause facts: what the sink can do, and whether audio plays.
+    pub(crate) fn pause_facts(&self) -> (AudioOutputCapabilities, bool) {
+        let capabilities = self.audio.as_ref().map(|a| a.capabilities).unwrap_or_default();
+        (capabilities, self.plays_audio())
+    }
+}
+
+/// The providers the core holds by id: received in commands, kept by the session or a switch. One
+/// no longer held anywhere at the end of a step is released.
+impl Driver {
+    /// What the core holds now.
+    pub(crate) fn providers_held(&self) -> BTreeSet<ResourceId> {
+        let s = &self.session;
+        let slots = [
+            s.llm.as_ref().map(|r| r.id),
+            s.tts.as_ref().map(|r| r.id),
+            s.stt.as_ref().map(|r| r.id),
+            s.vad.as_ref().map(|r| r.id),
+            self.activity.rt_session.as_ref().map(|r| r.id),
+            s.outputs.audio.as_ref().map(|r| r.id),
+            s.outputs.transcription.as_ref().map(|r| r.id),
+        ];
+        let updates = self.activity.handoff.updates();
+        slots.into_iter().flatten().chain(updates.flat_map(|u| u.resources())).collect()
+    }
+
+    /// Every provider the core held or was handed since the last step and holds no more.
+    pub(crate) fn release_providers(&mut self, out: &mut Out) {
+        let held = self.providers_held();
+        for &id in self.session.providers.difference(&held) {
+            out.machine().push(Effect::Provider(ProviderCall::Release(id)));
+        }
+        self.session.providers = held;
+    }
+
+    /// The loop ended: nothing is held.
+    pub(crate) fn release_all_providers(&mut self) {
+        self.session.providers.extend(self.providers_held());
+        for id in std::mem::take(&mut self.session.providers) {
+            self.shared.resources.release(id);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
 use crate::agent_session::effects::{Effect, Out, ProviderCall, Timer};
-use crate::agent_session::signals::Signal;
+use crate::agent_session::effects::Signal;
 use crate::agent_session::{
     ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
     IdleRefused, SpeechCommand,

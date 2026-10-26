@@ -6,7 +6,6 @@ use crate::agent_activity::options::{
     RECORDING_ALL_OFF, RecordingRequest, records_anything, resolve_recording_options,
 };
 use crate::agent_session::builder::DriverBuilder;
-use crate::agent_session::calls::Calls;
 use crate::agent_session::commands::{
     AgentUpdate, Answer, Close, Command, HostRecorder, Origin, RecorderCommand, RequestId, SayText,
     SpeechCommand,
@@ -26,8 +25,10 @@ use lk_agents_abi::{
     Clock, Llm, LlmStream, Maybe, Spawner, SpawnerExt, Stt, SttSink, SttSource, Tts, TtsSink,
     TtsSource, Vad,
 };
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::oneshot;
 
 /// `voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
 /// `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
@@ -1079,5 +1080,73 @@ impl FramePusher {
 
 // After `UpdateAgentArgs`, whose kwargs macro the host methods expand against.
 mod host;
+
+/// The caller's side of awaited commands: a call gets an id for its command and a typed receiver,
+/// settled from the session's answer stream.
+type Settle = Box<dyn FnOnce(Answer) + Send>;
+
+/// One session's open calls, shared by everyone who sends it commands.
+#[derive(Clone, Default)]
+pub struct Calls(Arc<Mutex<Table>>);
+
+#[derive(Default)]
+struct Table {
+    next: u64,
+    open: BTreeMap<RequestId, Settle>,
+    closed: bool,
+}
+
+impl Calls {
+    /// `pick` takes the answer's payload; an answer of another kind, or none before the session
+    /// ends, closes the receiver.
+    pub fn open<T: Send + 'static>(
+        &self,
+        pick: fn(Answer) -> Option<T>,
+    ) -> (RequestId, oneshot::Receiver<T>) {
+        let (tx, rx) = oneshot::channel();
+        let mut table = self.lock();
+        let call = RequestId(table.next);
+        table.next += 1;
+        if !table.closed {
+            let settle = move |answer| {
+                if let Some(value) = pick(answer) {
+                    let _ = tx.send(value);
+                }
+            };
+            table.open.insert(call, Box::new(settle));
+        }
+        (call, rx)
+    }
+
+    /// A late or unknown call's answer is dropped.
+    pub fn settle(&self, call: RequestId, answer: Answer) {
+        let settle = self.lock().open.remove(&call);
+        if let Some(settle) = settle {
+            settle(answer);
+        }
+    }
+
+    pub fn close(&self) {
+        let open = {
+            let mut table = self.lock();
+            table.closed = true;
+            std::mem::take(&mut table.open)
+        };
+        drop(open);
+    }
+
+    /// Settles every answer until the session's stream ends, then closes what is left.
+    pub async fn pump(self, mut answers: Rx<(RequestId, Answer)>) {
+        while let Some((call, answer)) = answers.recv().await {
+            self.settle(call, answer);
+        }
+        self.close();
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Table> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
 #[cfg(test)]
 mod tests;
