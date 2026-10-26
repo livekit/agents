@@ -2,7 +2,8 @@
 a scripted STT and a silent TTS written as plugins (so all three cross the core's provider views).
 It starts, says something, replies, runs a tool, handles speech from the room,
 explicitly switches to a second agent whose ``on_enter`` speaks, and closes.
-Then a second session on a scripted realtime model replies through the core's realtime leg, and
+Then a second session on a scripted realtime model replies through the core's realtime leg, a
+third on the OpenAI realtime model (the core's own client) against a local socket, and
 one session per overridden node shows the core calling it: an ``llm_node`` that rewrites the
 text, a ``tts_node`` that doubles the audio and an ``stt_node`` that redacts the transcript.
 
@@ -12,10 +13,13 @@ text, a ``tts_node`` that doubles the audio and an ``stt_node`` that redacts the
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sys
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from typing import Any
+
+from aiohttp import web
 
 from livekit import rtc
 from livekit.agents import (
@@ -31,6 +35,7 @@ from livekit.agents import (
     stt,
     tts,
 )
+from livekit.agents.llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import shortuuid
 
@@ -284,6 +289,89 @@ async def realtime() -> None:
     print(f"played_bytes={room.played_bytes()}")
 
 
+async def _openai_server(ws: web.WebSocketResponse, sessions: list[dict[str, Any]]) -> None:
+    """The OpenAI Realtime protocol's happy path: items are acked, a reply is one spoken message."""
+    tail: str | None = None
+    async for msg in ws:
+        ev = json.loads(msg.data)
+        kind = ev["type"]
+        if kind == "session.update":
+            sessions.append(ev["session"])
+        elif kind == "conversation.item.create":
+            item = {**ev["item"], "id": ev["item"].get("id") or shortuuid("item_")}
+            await ws.send_json(
+                {"type": "conversation.item.added", "previous_item_id": tail, "item": item}
+            )
+            tail = item["id"]
+        elif kind == "conversation.item.delete":
+            await ws.send_json({"type": "conversation.item.deleted", "item_id": ev["item_id"]})
+        elif kind == "response.create":
+            resp, item = shortuuid("resp_"), shortuuid("item_")
+            meta = ev["response"]["metadata"]
+            pcm = base64.b64encode(b"\x00\x00" * 4800).decode()
+            for out in (
+                {"type": "response.created", "response": {"id": resp, "metadata": meta}},
+                {"type": "response.output_item.added", "item": {"id": item, "type": "message"}},
+                {
+                    "type": "conversation.item.added",
+                    "previous_item_id": tail,
+                    "item": {"id": item, "type": "message", "role": "assistant", "content": []},
+                },
+                {"type": "response.content_part.added", "item_id": item, "part": {"type": "audio"}},
+                {
+                    "type": "response.output_audio_transcript.delta",
+                    "item_id": item,
+                    "delta": "Hello from the core's realtime client.",
+                },
+                {"type": "response.output_audio.delta", "item_id": item, "delta": pcm},
+                {"type": "response.output_item.done", "item": {"id": item, "type": "message"}},
+                {"type": "response.done", "response": {"id": resp, "status": "completed"}},
+            ):
+                await ws.send_json(out)
+            tail = item
+
+
+async def native_realtime() -> None:
+    sessions: list[dict[str, Any]] = []
+
+    async def socket(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await _openai_server(ws, sessions)
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/v1/realtime", socket)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    model = OpenAIRealtimeModel(
+        api_key="sk-local", base_url=f"http://127.0.0.1:{port}/v1", voice="cedar"
+    )
+    session = LiveSession(llm=model, vad=None)
+    session.on(
+        "conversation_item_added",
+        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
+    )
+    await session.start(Agent(instructions="You are realtime.", name="native"), room=room)
+    handle = session.generate_reply(instructions="greet the user")
+    for _ in range(300):
+        if handle.done():
+            break
+        room.advance(0.02)
+        await asyncio.sleep(0.01)
+    assert handle.done(), "the native realtime reply did not finish"
+    assert sessions[0]["audio"]["output"]["voice"] == "cedar", sessions[0]
+    await session.aclose()
+    await runner.cleanup()
+    print(f"played_bytes={room.played_bytes()}")
+
+
 class Shouting(Agent):
     """Rewrites the model's text, and ends the spoken segment after it."""
 
@@ -510,6 +598,9 @@ async def main() -> int:
 
     print("== realtime")
     await realtime()
+
+    print("== native realtime")
+    await native_realtime()
 
     await nodes()
     await expressive()

@@ -42,7 +42,10 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from livekit.plugins import openai
-from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
+
+# the protocol engine's private names, read when used: an agents build whose OpenAI realtime
+# client runs in its core has no Python session to subclass
+from livekit.plugins.openai.realtime import realtime_model as _oai_realtime
 
 from ..log import logger
 from ..tools import XAITool, _raise_if_xai_tool_reserved_name_conflict
@@ -267,12 +270,12 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         if (
             generation is None
             or self._response_spoke
-            or isinstance(generation, _DiscardedGeneration)
+            or isinstance(generation, _oai_realtime._DiscardedGeneration)
         ):
             return
         logger.debug("discarding the response xAI left in flight")
         self._close_current_generation()
-        self._current_generation = _DiscardedGeneration()
+        self._current_generation = _oai_realtime._DiscardedGeneration()
 
     def interrupt(self) -> None:
         super().interrupt()

@@ -8,11 +8,6 @@ from typing import Any
 
 from livekit.agents.llm._realtime import openai as _impl
 from livekit.agents.llm._realtime.openai import *  # noqa: F403
-from livekit.agents.llm._realtime.openai import (
-    _DiscardedGeneration as _DiscardedGeneration,
-    _is_fatal_error as _is_fatal_error,
-    _MessageGeneration as _MessageGeneration,
-)
 
 
 def __getattr__(name: str) -> Any:

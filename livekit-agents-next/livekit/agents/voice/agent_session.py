@@ -34,6 +34,7 @@ from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechS
 from .._generated.session_dispatch import IGNORED_EVENTS, PUBLIC_EVENTS
 from ..job import get_job_context
 from ..llm import ChatContext, RealtimeModel, StopResponse
+from ..llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage
@@ -399,9 +400,11 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         frame = await self._frame(agent)
         model = frame.get("llm", self._llm)
+        # an OpenAI-protocol model runs in the core; any other one is a host realtime model
+        native = model._core_native() if isinstance(model, OpenAIRealtimeModel) else None
         realtime = (
             Realtime(model, lambda: self._pool(self.current_agent))
-            if isinstance(model, llm.RealtimeModel)
+            if isinstance(model, llm.RealtimeModel) and native is None
             else None
         )
         sampler = self._video_sampler
@@ -413,7 +416,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             chat_ctx=to_core_items(self._chat_ctx.items),
             stt=_core_leg(frame.get("stt", self._stt)),
             vad=frame.get("vad", self._vad),
-            llm=None if realtime else _core_leg(model),
+            llm=None if isinstance(model, llm.RealtimeModel) else _core_leg(model),
+            realtime=native,
             realtime_host=realtime,
             tts=_core_leg(frame.get("tts", self._tts)),
             host_audio_input=self._console.io if self._console else self._input.audio,
