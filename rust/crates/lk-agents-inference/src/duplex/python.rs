@@ -3,11 +3,15 @@
 //! object with `update(frame) -> bool` and `deactivate()`.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use lk_agents_abi::llm::realtime::{Event, GenerateReply, PushAudio};
-use lk_agents_abi::python::{CancellingHandle, HostBridge, check_pid, extract_generated};
-use lk_agents_abi::{AudioFrame, Realtime};
+use lk_agents_abi::llm::realtime::{
+    Event, GenerateReply, GenerateReplyFailed, HostRealtimeError, PushAudio, RealtimeError,
+    RealtimeModelError,
+};
+use lk_agents_abi::python::{CancellingHandle, FromHostErr, HostBridge, check_pid, extract_generated};
+use lk_agents_abi::{AbortHandle, AudioFrame, Realtime, Spawner, SpawnerExt};
+use tokio::sync::mpsc;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods};
@@ -129,6 +133,7 @@ struct PyDuplexHost {
     view: CancellingHandle,
     label: String,
     caps: DuplexCapabilities,
+    spawner: Arc<dyn Spawner>,
 }
 
 fn host_error(e: PyErr) -> ProviderError {
@@ -147,17 +152,27 @@ impl DuplexHost for PyDuplexHost {
 
     async fn open(&self) -> Result<(Arc<dyn DuplexHostSession>, Option<Box<dyn AudioGate>>), ProviderError> {
         let pair = self.view.await_call(|v| v.call_method0("_core_session")).await.map_err(host_error)?;
-        Python::attach(|py| -> PyResult<_> {
+        let (session, audio, gate) = Python::attach(|py| -> PyResult<_> {
             let (session, gate): (Bound<'_, PyAny>, Bound<'_, PyAny>) = pair.bind(py).extract()?;
-            let session = Arc::new(PyDuplexSession(self.view.child(session.unbind()))) as Arc<dyn DuplexHostSession>;
-            Ok((session, gate_from_py(&gate)))
+            let audio = session.call_method0("_core_audio_stream")?;
+            Ok((self.view.child(session.unbind()), self.view.child(audio.unbind()), gate_from_py(&gate)))
         })
-        .map_err(host_error)
+        .map_err(host_error)?;
+        Ok((PyDuplexSession::open(session, audio, self.label.clone(), &self.spawner), gate))
     }
 }
 
-/// `_core_view._DuplexSession`: the plugin's session, flattened into kind-tagged events.
-struct PyDuplexSession(CancellingHandle);
+/// `_core_view._DuplexSession`: the plugin's session. Updates apply one after the other, the
+/// output audio is pulled here, and the session's callbacks report the rest one event at a time.
+struct PyDuplexSession {
+    view: Arc<CancellingHandle>,
+    lane: mpsc::UnboundedSender<DuplexCommand>,
+    /// Every event, the audio and the refused replies among them; `None` once the session closed.
+    events: tokio::sync::Mutex<mpsc::UnboundedReceiver<Option<DuplexEvent>>>,
+    tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
+    spawner: Arc<dyn Spawner>,
+    tasks: Mutex<Vec<AbortHandle>>,
+}
 
 fn command_to_py<'py>(py: Python<'py>, cmd: DuplexCommand) -> PyResult<Bound<'py, PyAny>> {
     let d = PyDict::new(py);
@@ -191,51 +206,169 @@ fn command_to_py<'py>(py: Python<'py>, cmd: DuplexCommand) -> PyResult<Bound<'py
 fn event_from_py(d: &Bound<'_, PyAny>) -> PyResult<DuplexEvent> {
     let kind: String = d.get_item("kind")?.extract()?;
     Ok(match kind.as_str() {
-        "output_audio" => DuplexEvent::Audio {
-            frame: extract_generated(&d.get_item("frame")?)?,
-            start_ms: d.get_item("start_ms")?.extract()?,
-        },
         "transcript_delta" => DuplexEvent::Transcript(Fragment {
             text: d.get_item("text")?.extract()?,
             start_ms: d.get_item("start_ms")?.extract()?,
             end_ms: d.get_item("end_ms")?.extract()?,
         }),
-        "output_ended" => DuplexEvent::OutputEnded { error: d.get_item("error")?.extract()? },
         _ => DuplexEvent::Session(d.extract::<Event>()?),
     })
 }
 
-#[async_trait::async_trait]
-impl DuplexHostSession for PyDuplexSession {
-    fn send(&self, cmd: DuplexCommand) {
-        let sent = Python::attach(|py| -> PyResult<()> {
-            let cmd = command_to_py(py, cmd)?;
-            let send = self.0.object().bind(py).getattr("_core_send")?;
-            self.0.task_locals().event_loop(py).call_method1("call_soon_threadsafe", (send, cmd))?;
-            Ok(())
+/// `{type(e).__name__}: {e}`, as the output stream's failure is reported.
+fn describe(py: Python<'_>, e: &PyErr) -> String {
+    let name = e.get_type(py).name().map(|n| n.to_string()).unwrap_or_default();
+    format!("{name}: {}", e.value(py))
+}
+
+fn wall_now() -> f64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()
+}
+
+impl PyDuplexSession {
+    fn open(view: CancellingHandle, audio: CancellingHandle, label: String, spawner: &Arc<dyn Spawner>) -> Arc<Self> {
+        let (lane, lane_rx) = mpsc::unbounded_channel();
+        let (tx, events) = mpsc::unbounded_channel();
+        let session = Arc::new(PyDuplexSession {
+            view: Arc::new(view),
+            lane,
+            events: tokio::sync::Mutex::new(events),
+            tx: tx.clone(),
+            spawner: Arc::clone(spawner),
+            tasks: Mutex::new(Vec::new()),
         });
-        if let Err(e) = sent {
-            Python::attach(|py| e.print(py));
-        }
+        session.spawn(Self::forward(Arc::clone(&session.view), tx.clone()));
+        session.spawn(Self::pump_audio(audio, tx.clone()));
+        session.spawn(Self::run_lane(Arc::clone(&session.view), lane_rx, label, tx));
+        session
     }
 
-    async fn next_event(&self) -> Option<DuplexEvent> {
+    fn spawn(&self, f: impl std::future::Future<Output = ()> + Send + 'static) {
+        let mut tasks = self.tasks.lock().unwrap_or_else(|p| p.into_inner());
+        tasks.retain(|t| !t.is_finished());
+        tasks.push(self.spawner.spawn_unboxed(f));
+    }
+
+    /// The session callbacks' events, until the view reports the end.
+    async fn forward(view: Arc<CancellingHandle>, tx: mpsc::UnboundedSender<Option<DuplexEvent>>) {
         loop {
-            let ev = self.0.await_call(|s| s.call_method0("_core_next_event")).await.ok()?;
+            let Ok(ev) = view.await_call(|s| s.call_method0("_core_next_event")).await else { return };
             let parsed = Python::attach(|py| -> PyResult<Option<DuplexEvent>> {
                 let ev = ev.bind(py);
                 if ev.is_none() { Ok(None) } else { event_from_py(ev).map(Some) }
             });
             match parsed {
-                Ok(ev) => return ev,
+                Ok(None) => {
+                    let _ = tx.send(None);
+                    return;
+                }
+                Ok(Some(ev)) => {
+                    if tx.send(Some(ev)).is_err() {
+                        return;
+                    }
+                }
                 // a malformed event is the view's bug; the session goes on
                 Err(e) => log::warn!(target: "livekit.agents", error = e.to_string().as_str(); "duplex event refused"),
             }
         }
     }
 
+    /// The model's output audio, then how it ended.
+    async fn pump_audio(audio: CancellingHandle, tx: mpsc::UnboundedSender<Option<DuplexEvent>>) {
+        let error = loop {
+            match audio.anext().await {
+                Ok(Some(item)) => {
+                    let ev = Python::attach(|py| -> PyResult<DuplexEvent> {
+                        let item = item.bind(py);
+                        Ok(DuplexEvent::Audio {
+                            frame: extract_generated(&item.getattr("frame")?)?,
+                            start_ms: item.getattr("start_ms")?.extract()?,
+                        })
+                    });
+                    match ev {
+                        Ok(ev) => {
+                            let _ = tx.send(Some(ev));
+                        }
+                        Err(e) => break Some(Python::attach(|py| describe(py, &e))),
+                    }
+                }
+                Ok(None) => break None,
+                Err(e) => break Some(Python::attach(|py| describe(py, &e))),
+            }
+        };
+        let _ = tx.send(Some(DuplexEvent::OutputEnded { error }));
+    }
+
+    /// The configuration and its updates, each applied once the previous one has. A session that
+    /// cannot carry its startup configuration is unusable: it reports the error and closes.
+    async fn run_lane(
+        view: Arc<CancellingHandle>,
+        mut lane: mpsc::UnboundedReceiver<DuplexCommand>,
+        label: String,
+        tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
+    ) {
+        while let Some(cmd) = lane.recv().await {
+            let configure = matches!(cmd, DuplexCommand::Configure { .. });
+            let applied = view.await_call(|s| s.call_method1("_core_update", (command_to_py(s.py(), cmd)?,))).await;
+            let Err(e) = applied else { continue };
+            let message = Python::attach(|py| e.value(py).to_string());
+            if !configure {
+                log::error!(target: "livekit.agents", error = message.as_str(); "failed to update the duplex session");
+                continue;
+            }
+            let error = RealtimeModelError { label: label.clone(), message, recoverable: false, ..Default::default() };
+            let _ = tx.send(Some(DuplexEvent::Session(Event::HostError(HostRealtimeError { error, timestamp: wall_now() }))));
+            let _ = view.await_call(|s| s.call_method0("_core_close_plugin")).await;
+        }
+    }
+
+    /// A reply the plugin refused is reported, so the turn waiting for it fails.
+    async fn generate(view: Arc<CancellingHandle>, cmd: DuplexCommand, req_id: String, tx: mpsc::UnboundedSender<Option<DuplexEvent>>) {
+        let asked = view.await_call(|s| s.call_method1("_core_generate", (command_to_py(s.py(), cmd)?,))).await;
+        if let Err(e) = asked {
+            let error = Python::attach(|py| <RealtimeError as FromHostErr>::from_host(py, &e));
+            let _ = tx.send(Some(DuplexEvent::Session(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }))));
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl DuplexHostSession for PyDuplexSession {
+    fn send(&self, cmd: DuplexCommand) {
+        match cmd {
+            DuplexCommand::PushAudio(frame) => {
+                let sent = Python::attach(|py| -> PyResult<()> {
+                    let cmd = (&PushAudio { frame }).into_pyobject(py)?;
+                    let push = self.view.object().bind(py).getattr("_core_push_audio")?;
+                    self.view.task_locals().event_loop(py).call_method1("call_soon_threadsafe", (push, cmd))?;
+                    Ok(())
+                });
+                if let Err(e) = sent {
+                    Python::attach(|py| e.print(py));
+                }
+            }
+            DuplexCommand::GenerateReply { ref req_id, .. } => {
+                let req_id = req_id.clone();
+                self.spawn(Self::generate(Arc::clone(&self.view), cmd, req_id, self.tx.clone()));
+            }
+            DuplexCommand::UpdateInstructions(_)
+            | DuplexCommand::AppendItems(_)
+            | DuplexCommand::UpdateTools(_)
+            | DuplexCommand::Configure { .. } => {
+                let _ = self.lane.send(cmd);
+            }
+        }
+    }
+
+    async fn next_event(&self) -> Option<DuplexEvent> {
+        self.events.lock().await.recv().await.flatten()
+    }
+
     async fn aclose(&self) {
-        let _ = self.0.await_call(|s| s.call_method0("_core_aclose")).await;
+        for task in std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner())) {
+            task.abort();
+        }
+        let _ = self.view.await_call(|s| s.call_method0("_core_aclose")).await;
     }
 }
 
@@ -279,7 +412,8 @@ impl PyDuplexRealtimeModel {
             mutable_tools: get("mutable_tools")?,
         };
         let view = CancellingHandle::new(py, host.unbind())?;
-        let host = Arc::new(PyDuplexHost { view, label, caps });
+        let spawner = <Arc<dyn Spawner> as lk_agents_abi::python::Ambient>::ambient();
+        let host = Arc::new(PyDuplexHost { view, label, caps, spawner });
         let clock = <Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient();
         let inner = DuplexModel::new(host, Duration::from_secs_f64(audio_timeout.max(0.0)), clock);
         Ok(PyDuplexRealtimeModel { inner: Arc::new(inner) })

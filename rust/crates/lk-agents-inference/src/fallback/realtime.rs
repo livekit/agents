@@ -96,21 +96,22 @@ use crate::fallback::{ChainObserver, RealtimePolicy};
 #[derive(Clone)]
 pub enum RealtimeChild {
     Native(Arc<dyn Realtime>),
-    Host(Arc<dyn HostRealtime>),
+    /// With the spawner its leg's tasks run on.
+    Host(Arc<dyn HostRealtime>, Arc<dyn lk_agents_abi::Spawner>),
 }
 
 impl RealtimeChild {
     fn capabilities(&self) -> RealtimeCapabilities {
         match self {
             RealtimeChild::Native(m) => m.capabilities(),
-            RealtimeChild::Host(h) => h.capabilities(),
+            RealtimeChild::Host(h, _) => h.capabilities(),
         }
     }
 
     fn label(&self) -> String {
         match self {
             RealtimeChild::Native(m) => m.label(),
-            RealtimeChild::Host(h) => h.label(),
+            RealtimeChild::Host(h, _) => h.label(),
         }
     }
 
@@ -121,8 +122,10 @@ impl RealtimeChild {
     ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
         match self {
             RealtimeChild::Native(m) => m.session(turn_detection_disabled).await,
-            RealtimeChild::Host(h) => {
-                HostRealtimeModel::new(Arc::clone(h), anchor).session(turn_detection_disabled).await
+            RealtimeChild::Host(h, spawner) => {
+                HostRealtimeModel::new(Arc::clone(h), anchor, Arc::clone(spawner))
+                    .session(turn_detection_disabled)
+                    .await
             }
         }
     }
@@ -559,7 +562,10 @@ mod python {
                 .iter()
                 .map(|m| match native::<dyn Realtime>(m) {
                     Some(n) => Ok(RealtimeChild::Native(n)),
-                    None => <dyn HostRealtime as HostProxy>::from_host(m, None).map(RealtimeChild::Host),
+                    None => <dyn HostRealtime as HostProxy>::from_host(m, None).map(|h| {
+                        let spawner = <Arc<dyn lk_agents_abi::Spawner> as lk_agents_abi::python::Ambient>::ambient();
+                        RealtimeChild::Host(h, spawner)
+                    }),
                 })
                 .collect::<PyResult<Vec<_>>>()?;
             let observer: Arc<dyn ChainObserver> = match on_availability {

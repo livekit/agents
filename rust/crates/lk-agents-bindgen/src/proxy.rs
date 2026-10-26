@@ -355,7 +355,9 @@ pub fn proxy(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<TokenStream>
                 }
                 fn view(handle: #rt::HostHandle, clock: ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
                     let _ = &clock;
-                    ::std::result::Result::Ok(::std::boxed::Box::new(#name::<#rt::HostHandle>::from_bridge(handle #clock_arg)?))
+                    // A `cancel_on_drop` trait's view cancels too.
+                    let bridge = <#bridge_ty as ::std::convert::From<#rt::HostHandle>>::from(handle);
+                    ::std::result::Result::Ok(::std::boxed::Box::new(#name::<#bridge_ty>::from_bridge(bridge #clock_arg)?))
                 }
             }
         };

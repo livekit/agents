@@ -12,8 +12,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
-import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -310,8 +309,9 @@ class Duplex:
 
 
 class _DuplexSession:
-    """A plugin's ``DuplexSession`` flattened: commands in, one ``kind``-tagged event out at a
-    time, its output audio among them."""
+    """A plugin's ``DuplexSession`` flattened: the core applies the updates in order and pulls
+    the output audio (``_core_audio_stream``); the session's callbacks report one ``kind``-tagged
+    event at a time."""
 
     def __init__(
         self, session: llm.DuplexSession, tools: Callable[[], Sequence[Tool | Toolset]]
@@ -335,92 +335,53 @@ class _DuplexSession:
         session.on(
             "function_call", lambda call: put({"kind": "function_call", "call": to_core_item(call)})
         )
-        # updates apply in order: what each one reads is current when it runs
-        self._updating: asyncio.Future[Any] | None = None
-        self._audio = asyncio.ensure_future(self._pump_audio())
 
-    async def _pump_audio(self) -> None:
-        error = None
-        try:
-            async for f in self._session.audio_stream:
-                self._events.put_nowait(
-                    {"kind": "output_audio", "frame": f.frame, "start_ms": f.start_ms}
-                )
-        except Exception as e:
-            error = f"{type(e).__name__}: {e}"
-        self._events.put_nowait({"kind": "output_ended", "error": error})
+    def _core_audio_stream(self) -> AsyncIterator[Any]:
+        return self._session.audio_stream
 
-    def _then(self, apply: Callable[[], Awaitable[Any]]) -> None:
-        previous = self._updating
+    def _core_push_audio(self, cmd: dict[str, Any]) -> None:
+        self._session.push_audio(cmd["frame"])
 
-        async def _run() -> None:
-            if previous is not None:
-                await asyncio.wait([previous])
-            await apply()
+    async def _core_update(self, cmd: dict[str, Any]) -> None:
+        await _DUPLEX_UPDATES[cmd["kind"]](self, cmd)
 
-        self._updating = asyncio.ensure_future(_run())
-
-    async def _configure(self, cmd: dict[str, Any]) -> None:
-        items = cmd["items"]
-        try:
-            await self._session._update_session(
-                instructions=cmd["instructions"] or NOT_GIVEN,
-                chat_ctx=NOT_GIVEN
-                if items is None
-                else llm.ChatContext([from_core_item(i) for i in items]),
-                tools=offered_tools(self._tools(), cmd["names"]),
-            )
-        except Exception as e:
-            # a session that cannot carry its configuration is unusable
-            self._events.put_nowait(
-                {
-                    "kind": "error",
-                    "label": self._session.duplex_model.label,
-                    "message": str(e),
-                    "recoverable": False,
-                    "timestamp": time.time(),
-                }
-            )
-            await self._session.aclose()
-
-    def _core_send(self, cmd: dict[str, Any]) -> None:
-        session, kind = self._session, cmd["kind"]
-        if kind == "push_audio":
-            session.push_audio(cmd["frame"])
-        elif kind == "configure":
-            self._then(lambda: self._configure(cmd))
-        elif kind == "update_instructions":
-            self._then(lambda: session._update_instructions(cmd["instructions"]))
-        elif kind == "append_items":
-            items = [from_core_item(i) for i in cmd["items"]]
-            self._then(lambda: session._append_items(items))
-        elif kind == "update_tools":
-            tools = offered_tools(self._tools(), cmd["names"])
-            self._then(lambda: session._update_tools(tools))
-        elif kind == "generate_reply":
-            choice = cmd["tool_choice"]
-            try:
-                session._generate_reply(
-                    instructions=cmd["instructions"] or NOT_GIVEN,
-                    tool_choice=NOT_GIVEN if choice is None else choice,
-                )
-            except llm.RealtimeError as e:
-                self._events.put_nowait(
-                    {
-                        "kind": "generate_reply_failed",
-                        "req_id": cmd["req_id"],
-                        "message": str(e),
-                        "code": getattr(e, "code", None),
-                    }
-                )
+    async def _core_generate(self, cmd: dict[str, Any]) -> None:
+        choice = cmd["tool_choice"]
+        self._session._generate_reply(
+            instructions=cmd["instructions"] or NOT_GIVEN,
+            tool_choice=NOT_GIVEN if choice is None else choice,
+        )
 
     async def _core_next_event(self) -> dict[str, Any] | None:
         return await self._events.get()
 
+    async def _core_close_plugin(self) -> None:
+        await self._session.aclose()
+
     async def _core_aclose(self) -> None:
-        self._audio.cancel()
         await self._session.aclose()
         self._events.put_nowait(None)
+
+
+def _chat_ctx(items: list[_core.ChatItem] | None) -> Any:
+    return NOT_GIVEN if items is None else llm.ChatContext([from_core_item(i) for i in items])
+
+
+# the updates the core applies one after the other
+_DUPLEX_UPDATES: dict[str, Callable[[_DuplexSession, dict[str, Any]], Awaitable[None]]] = {
+    "configure": lambda v, cmd: v._session._update_session(
+        instructions=cmd["instructions"] or NOT_GIVEN,
+        chat_ctx=_chat_ctx(cmd["items"]),
+        tools=offered_tools(v._tools(), cmd["names"]),
+    ),
+    "update_instructions": lambda v, cmd: v._session._update_instructions(cmd["instructions"]),
+    "append_items": lambda v, cmd: v._session._append_items(
+        [from_core_item(i) for i in cmd["items"]]
+    ),
+    "update_tools": lambda v, cmd: v._session._update_tools(
+        offered_tools(v._tools(), cmd["names"])
+    ),
+}
 
 
 class Realtime:
@@ -443,8 +404,9 @@ class Realtime:
 
 
 class _RealtimeSession:
-    """A plugin's ``RealtimeSession`` flattened: commands in, one ``kind``-tagged event out at a
-    time, each generation's message and function streams drained in order."""
+    """A plugin's ``RealtimeSession`` flattened: the core orders the commands (updates one after
+    the other, a reply after the updates before it) and drains each generation through
+    ``_core_drain``; the session's callbacks report one ``kind``-tagged event at a time."""
 
     def __init__(
         self, session: llm.RealtimeSession, tools: Callable[[], Sequence[Tool | Toolset]]
@@ -452,17 +414,13 @@ class _RealtimeSession:
         self._session = session
         self._tools = tools
         self._events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-        self._replies: dict[str, asyncio.Future[Any]] = {}
-        # replies cancelled before they were asked for, behind a session update
-        self._cancelled: set[str] = set()
-        # the last session update: updates apply in order, and a reply waits for them
-        self._updating: asyncio.Task[Any] | None = None
-        self._tasks: set[asyncio.Task[Any]] = set()
         put = self._events.put_nowait
         _forward_session_events(session, put)
         session.on(
             "generation_created",
-            lambda ev: None if ev.user_initiated else self._spawn(self._generation(ev, None)),
+            lambda ev: (
+                None if ev.user_initiated else put({"kind": "server_generation", "generation": ev})
+            ),
         )
         session.on(
             "remote_item_added",
@@ -475,45 +433,30 @@ class _RealtimeSession:
             ),
         )
 
-    def _spawn(self, coro: Any) -> asyncio.Task[Any]:
-        task = asyncio.ensure_future(coro)
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-        return task
+    def _core_send(self, cmd: dict[str, Any]) -> None:
+        _REALTIME_SENDS[cmd["kind"]](self._session, cmd)
 
-    def _update(self, apply: Callable[[], Awaitable[Any]]) -> None:
-        """Run a session update after the previous one: what it reads is current when it runs."""
-        previous = self._updating
+    async def _core_update(self, cmd: dict[str, Any]) -> None:
+        await _REALTIME_UPDATES[cmd["kind"]](self, cmd)
 
-        async def _run() -> None:
-            if previous is not None:
-                await asyncio.wait([previous])
-            await apply()
+    async def _core_request(self, cmd: dict[str, Any]) -> asyncio.Future[Any]:
+        if cmd["kind"] == "say":
+            return self._session.say(cmd["text"])
+        choice = cmd["tool_choice"]
+        return self._session.generate_reply(
+            instructions=cmd["instructions"] or NOT_GIVEN,
+            tool_choice=NOT_GIVEN if choice is None else choice,
+        )
 
-        self._updating = self._spawn(_run())
+    async def _core_generation(
+        self, request: asyncio.Future[llm.GenerationCreatedEvent]
+    ) -> llm.GenerationCreatedEvent:
+        return await request
 
-    def _after_updates(self, req_id: str, ask: Callable[[], asyncio.Future[Any]]) -> None:
-        """Ask for a reply once the updates sent before it applied, as the reference awaits
-        them: a tool's output reaches the server before the reply that reads it."""
-        pending = self._updating
+    async def _core_cancel(self, request: asyncio.Future[Any]) -> None:
+        request.cancel()
 
-        def _ask() -> None:
-            if req_id in self._cancelled:
-                self._cancelled.discard(req_id)
-                return
-            self._reply(req_id, ask())
-
-        if pending is None or pending.done():
-            _ask()
-            return
-
-        async def _run() -> None:
-            await asyncio.wait([pending])
-            _ask()
-
-        self._spawn(_run())
-
-    async def _generation(self, ev: llm.GenerationCreatedEvent, req_id: str | None) -> None:
+    async def _core_drain(self, ev: llm.GenerationCreatedEvent, req_id: str | None) -> None:
         put = self._events.put_nowait
         response_id = ev.response_id or ""
         put({"kind": "generation_created", "response_id": response_id, "req_id": req_id})
@@ -553,87 +496,42 @@ class _RealtimeSession:
         await asyncio.gather(_messages(), _calls())
         put({"kind": "generation_done", "response_id": response_id})
 
-    def _reply(self, req_id: str, fut: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
-        self._replies[req_id] = fut
-
-        def _done(fut: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
-            self._replies.pop(req_id, None)
-            if fut.cancelled():
-                return
-            if (exc := fut.exception()) is not None:
-                self._events.put_nowait(
-                    {
-                        "kind": "generate_reply_failed",
-                        "req_id": req_id,
-                        "message": str(exc),
-                        "code": getattr(exc, "code", None),
-                    }
-                )
-                return
-            self._spawn(self._generation(fut.result(), req_id))
-
-        fut.add_done_callback(_done)
-
-    def _core_send(self, cmd: dict[str, Any]) -> None:
-        session, kind = self._session, cmd["kind"]
-        if kind == "push_audio":
-            session.push_audio(cmd["frame"])
-        elif kind == "generate_reply":
-            choice = cmd["tool_choice"]
-            self._after_updates(
-                cmd["req_id"],
-                lambda: session.generate_reply(
-                    instructions=cmd["instructions"] or NOT_GIVEN,
-                    tool_choice=NOT_GIVEN if choice is None else choice,
-                ),
-            )
-        elif kind == "say":
-            self._after_updates(cmd["req_id"], lambda: session.say(cmd["text"]))
-        elif kind == "cancel_reply":
-            if (fut := self._replies.pop(cmd["req_id"], None)) is not None:
-                fut.cancel()
-            else:
-                self._cancelled.add(cmd["req_id"])
-        elif kind == "interrupt":
-            session.interrupt()
-        elif kind == "commit_audio":
-            session.commit_audio()
-        elif kind == "clear_audio":
-            session.clear_audio()
-        elif kind == "truncate":
-            transcript = cmd["audio_transcript"]
-            session.truncate(
-                message_id=cmd["message_id"],
-                modalities=["audio", "text"] if cmd["has_audio"] else ["text"],
-                audio_end_ms=cmd["audio_end_ms"],
-                audio_transcript=NOT_GIVEN if transcript is None else transcript,
-            )
-        elif kind == "update_instructions":
-            self._update(lambda: session.update_instructions(cmd["instructions"]))
-        elif kind == "update_chat_ctx":
-            ctx = llm.ChatContext([from_core_item(i) for i in cmd["items"]])
-            self._update(lambda: session.update_chat_ctx(ctx))
-        elif kind == "push_item":
-            item = from_core_item(cmd["item"])
-
-            def _pushed() -> Awaitable[None]:
-                ctx = session.chat_ctx.copy()
-                ctx.insert(item)
-                return session.update_chat_ctx(ctx)
-
-            self._update(_pushed)
-        elif kind == "update_tools":
-            tools = offered_tools(self._tools(), cmd["names"])
-            self._update(lambda: session.update_tools(tools))
-
     async def _core_next_event(self) -> dict[str, Any] | None:
         return await self._events.get()
 
     async def _core_aclose(self) -> None:
-        for task in list(self._tasks):
-            task.cancel()
         await self._session.aclose()
         self._events.put_nowait(None)
+
+
+async def _push_item(view: _RealtimeSession, cmd: dict[str, Any]) -> None:
+    ctx = view._session.chat_ctx.copy()
+    ctx.insert(from_core_item(cmd["item"]))
+    await view._session.update_chat_ctx(ctx)
+
+
+# the commands that apply at once, and the session updates the core awaits one after the other
+_REALTIME_SENDS: dict[str, Callable[[llm.RealtimeSession, dict[str, Any]], Any]] = {
+    "push_audio": lambda s, cmd: s.push_audio(cmd["frame"]),
+    "interrupt": lambda s, cmd: s.interrupt(),
+    "commit_audio": lambda s, cmd: s.commit_audio(),
+    "clear_audio": lambda s, cmd: s.clear_audio(),
+    "truncate": lambda s, cmd: s.truncate(
+        message_id=cmd["message_id"],
+        modalities=["audio", "text"] if cmd["has_audio"] else ["text"],
+        audio_end_ms=cmd["audio_end_ms"],
+        audio_transcript=NOT_GIVEN if cmd["audio_transcript"] is None else cmd["audio_transcript"],
+    ),
+}
+
+_REALTIME_UPDATES: dict[str, Callable[[_RealtimeSession, dict[str, Any]], Awaitable[None]]] = {
+    "update_instructions": lambda v, cmd: v._session.update_instructions(cmd["instructions"]),
+    "update_chat_ctx": lambda v, cmd: v._session.update_chat_ctx(
+        llm.ChatContext([from_core_item(i) for i in cmd["items"]])
+    ),
+    "push_item": _push_item,
+    "update_tools": lambda v, cmd: v._session.update_tools(offered_tools(v._tools(), cmd["names"])),
+}
 
 
 class TurnDetector:

@@ -504,7 +504,8 @@ impl Driver {
             // error's stamp is placed by the host leg before it gets here.
             Event::ChatCtxUpdated { .. }
             | Event::ConnectionAcquired { .. }
-            | Event::HostError(_) => {}
+            | Event::HostError(_)
+            | Event::ServerGeneration(_) => {}
             Event::Disconnected { .. } => {
                 if self.activity.realtime_state.begin_closing() {
                     self.close_on_realtime_failure(now, out);

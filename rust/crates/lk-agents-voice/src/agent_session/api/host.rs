@@ -143,7 +143,11 @@ impl SessionApi {
         }
         let realtime = realtime.or_else(|| {
             realtime_host.map(|host| {
-                Arc::new(lk_agents_abi::llm::realtime::HostRealtimeModel::new(host, anchor))
+                Arc::new(lk_agents_abi::llm::realtime::HostRealtimeModel::new(
+                    host,
+                    anchor,
+                    spawner.clone(),
+                ))
                     as Arc<dyn lk_agents_abi::Realtime>
             })
         });

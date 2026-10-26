@@ -381,6 +381,13 @@ impl CancellingHandle {
     }
 }
 
+/// The same object and loop, its awaits cancelled on drop.
+impl From<HostHandle> for CancellingHandle {
+    fn from(handle: HostHandle) -> Self {
+        CancellingHandle { obj: handle.obj, locals: handle.locals }
+    }
+}
+
 impl HostBridge for CancellingHandle {
     fn object(&self) -> &Py<PyAny> {
         &self.obj
