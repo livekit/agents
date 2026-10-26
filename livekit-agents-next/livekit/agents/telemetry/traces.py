@@ -65,12 +65,12 @@ from opentelemetry.util.types import AttributeValue
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
 
+from .. import _core
 from .._proto import encode_chat_item
 from ..log import TRACE_LEVEL, logger
 from ..types import (
     ATTRIBUTE_REDACTION_ENABLED,
     ATTRIBUTE_SIMULATION_ENABLED,
-    recording_enabled,
 )
 from ..utils import is_given
 from . import gen_ai, pii, trace_types, utils as telemetry_utils
@@ -255,43 +255,27 @@ tracer: _DynamicTracer = _DynamicTracer("livekit-agents")
 
 class _UploadGate:
     """Process-wide gate that stops observability uploads once LiveKit Cloud reports data
-    recording is disabled for the project. Reset per session from JobContext.init_recording().
-    """
-
-    # substrings identifying the 401 "data recording is disabled by owner" rejection. Other
-    # 401s ("missing project id", "operation requires observability write grant") share the
-    # same status/grpc code, so we match the message text rather than the code.
-    _DISABLED_MARKERS = ("data recording is disabled", "disabled by owner")
+    recording is disabled for the project (``_core.UploadGate``). Reset per session from
+    JobContext.init_recording()."""
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._disabled = False
+        self._core = _core.UploadGate()
 
     def reset(self) -> None:
-        with self._lock:
-            self._disabled = False
+        self._core.reset()
 
     @property
     def disabled(self) -> bool:
-        return self._disabled
+        return self._core.disabled  # type: ignore[no-any-return]
 
     def disable(self) -> None:
-        with self._lock:
-            if self._disabled:
-                return
-            self._disabled = True
-        logger.warning(
-            "LiveKit Cloud data recording is disabled for this project; "
-            "skipping telemetry and recording uploads for this session"
-        )
+        if self._core.disable():
+            logger.warning(
+                "LiveKit Cloud data recording is disabled for this project; "
+                "skipping telemetry and recording uploads for this session"
+            )
 
-    @staticmethod
-    def is_disabled_response(status_code: int, body: bytes) -> bool:
-        """Return True if an upload response means recording is disabled by the project owner."""
-        if status_code != 401:
-            return False
-        text = body.decode("utf-8", "ignore").lower()
-        return any(marker in text for marker in _UploadGate._DISABLED_MARKERS)
+    is_disabled_response = staticmethod(_core.UploadGate.is_disabled_response)
 
 
 _upload_gate = _UploadGate()
@@ -1283,105 +1267,34 @@ async def _upload_session_report(
             },
         )
 
-    def _log(
-        otel_logger: Any,
-        body: str,
-        timestamp: int,
-        attributes: dict,
-        severity: SeverityNumber = SeverityNumber.UNSPECIFIED,
-        severity_text: str = "unspecified",
-    ) -> None:
-        otel_logger.emit(
-            body=body,
-            timestamp=timestamp,
-            attributes=attributes,
-            severity_number=severity,
-            severity_text=severity_text,
-        )
+    from .._core_view import from_core_item, to_core_items
 
-    chat_logger = _get_logger("chat_history")
     recording_options = report.options["recording_options"]
-
-    if recording_enabled(recording_options):
-        _log(
-            chat_logger,
-            body="session report",
-            timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
-            attributes={
-                "session.options": _serialize_session_options(report.options),
-                "session.report_timestamp": report.timestamp,
-                "session.tags": sorted(tagger.tags) if tagger.tags else None,
-                "agent_name": agent_name,
-                "sdk_version": report.sdk_version,
-                "usage": [
-                    {k: v for k, v in u.model_dump().items() if v != 0 and v != 0.0}
-                    for u in report.model_usage
-                ]
-                if report.model_usage
-                else None,
-            },
-        )
-
-    if recording_options["transcript"]:
-        for item in report.chat_history.items:
-            item_log = _chat_item_span_attribute(item)
-            severity: SeverityNumber = SeverityNumber.UNSPECIFIED
-            severity_text: str = "unspecified"
-
-            if item.type == "function_call_output" and item.is_error:
-                severity = SeverityNumber.ERROR
-                severity_text = "error"
-
-            _log(
-                chat_logger,
-                body="chat item",
-                timestamp=int(item.created_at * 1e9),
-                attributes={"chat.item": item_log},
-                severity=severity,
-                severity_text=severity_text,
-            )
-
-    eval_logger = _get_logger("evaluations")
-    if tagger.evaluations:
-        for evaluation in tagger.evaluations:
-            severity = SeverityNumber.UNSPECIFIED
-            severity_text = "unspecified"
-
-            if evaluation.get("verdict") == "fail":
-                severity = SeverityNumber.ERROR
-                severity_text = "error"
-
-            _log(
-                eval_logger,
-                body="evaluation",
-                timestamp=int(report.timestamp * 1e9),
-                attributes={"evaluation": evaluation},
-                severity=severity,
-                severity_text=severity_text,
-            )
-
-    for tag, tag_metadata, tagged_at in tagger._core.entries():
-        if tag_metadata:
-            _log(
-                eval_logger,
-                body="tag",
-                timestamp=int(tagged_at * 1e9),
-                attributes={"tag": {"name": tag, "metadata": tag_metadata}},
-            )
-
-    if tagger.outcome:
-        is_fail = tagger.outcome == "fail"
-        outcome_data: dict[str, Any] = {"outcome": tagger.outcome}
-        if tagger.outcome_reason:
-            outcome_data["reason"] = tagger.outcome_reason
-
-        _log(
-            eval_logger,
-            body="outcome",
-            timestamp=int(report.timestamp * 1e9),
-            attributes={"outcome": outcome_data},
-            severity=SeverityNumber.ERROR if is_fail else SeverityNumber.UNSPECIFIED,
-            severity_text="error" if is_fail else "unspecified",
+    records = _core.session_records(
+        _upload_gate._core,
+        {
+            "agent_name": agent_name,
+            "sdk_version": report.sdk_version,
+            "started_at": report.started_at,
+            "timestamp": report.timestamp,
+            "options": _serialize_session_options(report.options),
+            "recording_options": _core.RecordingOptions(**recording_options),
+            "model_usage": report.model_usage,
+            "chat_history": to_core_items(report.chat_history.items),
+        },
+        tagger._core,
+        lambda item: _chat_item_span_attribute(from_core_item(item)),
+    )
+    loggers: dict[str, Any] = {}
+    for r in records:
+        if (otel_logger := loggers.get(r["logger"])) is None:
+            otel_logger = loggers[r["logger"]] = _get_logger(r["logger"])
+        otel_logger.emit(
+            body=r["body"],
+            timestamp=r["timestamp_nanos"],
+            attributes=r["attributes"],
+            severity_number=SeverityNumber(r["severity_number"]),
+            severity_text=r["severity_text"],
         )
 
     has_audio = (
