@@ -18,7 +18,7 @@ use lk_agents_voice::{
     agent_session::IoKind,
     events::{SessionEvent, SpeechOutcome, ToolLifecycle},
     trace::{
-        CloseStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SinkCall,
+        CloseStep, CoreStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SinkCall,
         SpeechStep, Step, ToolStep,
     },
 };
@@ -191,10 +191,15 @@ impl<'a> InputsView<'a> {
     /// A leg's path is on while both of its independent switches are: the enable, which holds
     /// whatever is attached, and the attachment. Either one alone turning on again does not
     /// reopen a path the other still holds shut.
+    ///
+    /// A switch takes effect when the driver receives its command, not when the case sent it: a
+    /// command sent behind another (a `say`) is handled after it.
     fn path(&self, leg: IoKind, attach: impl Fn(&Input) -> Option<bool>) -> Switch {
         let (mut enabled, mut attached, mut on) = (true, true, true);
         let mut changes = Vec::new();
+        let mut received = self.received_commands();
         for a in self.accepted() {
+            let at = received(&a.input).unwrap_or(a.at);
             match &a.input {
                 Input::SetIoEnabled { leg: l, enabled: e } if *l == leg => enabled = *e,
                 input => match attach(input) {
@@ -204,10 +209,36 @@ impl<'a> InputsView<'a> {
             }
             if (enabled && attached) != on {
                 on = !on;
-                changes.push((a.at, on));
+                changes.push((at, on));
             }
         }
         Switch { changes }
+    }
+
+    /// When the driver received each accepted io command, in the order the case sent them: the
+    /// n-th accepted command of a kind is the n-th `CommandReceived` of that kind.
+    fn received_commands(&self) -> impl FnMut(&Input) -> Option<Observed> + 'a {
+        let journal = &self.0.journal;
+        let mut seen: std::collections::BTreeMap<&'static str, usize> = Default::default();
+        move |input| {
+            let kind = match input {
+                Input::SetIoEnabled { .. } => "ActivityCommand::SetIoEnabled",
+                Input::SetAudioInput { .. } => "ActivityCommand::SetAudioInput",
+                Input::SetAudioOutput { .. } => "ActivityCommand::SetAudioOutput",
+                Input::SetTranscriptionOutput { .. } => "ActivityCommand::SetTranscriptionOutput",
+                _ => return None,
+            };
+            let n = seen.entry(kind).or_default();
+            let at = journal
+                .iter()
+                .filter(|(_, s)| {
+                    matches!(s, Step::Core(CoreStep::CommandReceived { kind: k, .. }) if *k == kind)
+                })
+                .nth(*n)
+                .map(|(at, _)| *at);
+            *n += 1;
+            at
+        }
     }
 }
 

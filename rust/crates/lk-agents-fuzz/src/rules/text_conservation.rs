@@ -59,10 +59,16 @@ impl Rule for TextConservation {
             let deltas: Vec<String> =
                 internal.speech(speech.id).transcript_forwarded().into_iter().map(squash).collect();
             let forwarded: String = deltas.concat();
-            let until = speech.done_at().unwrap_or(r.now());
-            let live_path = speech
-                .created_at()
-                .is_none_or(|created| transcription.on_throughout(created, until));
+            // The driver's own stretch for the speech, on the clock its io switches are read on:
+            // the host is told of the speech later, after a switch the driver took behind it.
+            // A recording with no journal for it (an authored one) has only the host's stamps.
+            let trace = internal.speech(speech.id);
+            let lived = match trace.steps().next().zip(trace.steps().last()) {
+                Some(((created, _), (until, _))) => Some((created, until)),
+                None => speech.created_at().map(|c| (c, speech.done_at().unwrap_or(r.now()))),
+            };
+            let live_path =
+                lived.is_none_or(|(created, until)| transcription.on_throughout(created, until));
 
             // Nothing reaches the host that the case did not give it, and nothing is reordered:
             // what was forwarded so far is a prefix of what was given. A path closed part of the
