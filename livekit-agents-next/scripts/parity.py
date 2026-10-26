@@ -689,6 +689,10 @@ class Call:
         # emitted as each provider's stream settles, so their order against the state changes is
         # the scheduler's: counted per kind, not ordered
         session.on("metrics_collected", lambda ev: self.metrics.append(type(ev.metrics).__name__))
+        session.on(
+            "session_usage_updated",
+            lambda ev: self.metrics.append(f"usage_updated:{len(ev.usage.model_usage)}"),
+        )
         on("agent_false_interruption", lambda ev: ["resumed" if ev.resumed else "not resumed"])
         on("user_transcription_timeout", lambda ev: [])
         on(
@@ -822,6 +826,7 @@ class Call:
         out["tts_requests"] = self.tts_requests
         if self.session is not None:
             out["history"] = [item_view(i) for i in self.session.history.items]
+            out["usage"] = [u.model_dump() for u in self.session.usage.model_usage]
         out["speech_handles"] = [
             [label, "done" if h.done() else "pending", "interrupted" if h.interrupted else "-"]
             for label, h in self.handles

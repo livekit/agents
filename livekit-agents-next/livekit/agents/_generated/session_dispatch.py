@@ -81,6 +81,8 @@ EVENT_KINDS: frozenset[str] = frozenset(
         "floor_changed",
         "close",
         "metrics_collected",
+        "session_usage_updated",
+        "overlapping_speech",
         "error",
         "tool_execution_updated",
         "participant_linked",

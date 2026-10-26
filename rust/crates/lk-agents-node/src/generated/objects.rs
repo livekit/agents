@@ -556,6 +556,11 @@ impl LiveSession {
         })
     }
 
+    #[napi(getter, js_name = "usage", ts_return_type = "Array<LlmModelUsage | TtsModelUsage | SttModelUsage | InterruptionModelUsage | EotModelUsage>")]
+    pub fn usage(&self) -> Vec<crate::generated::records::ModelUsage> {
+        self.inner.usage().into_iter().map(|v| crate::generated::records::ModelUsage::from(&v)).collect::<Vec<_>>()
+    }
+
     #[napi(js_name = "waitUntilReady", ts_return_type = "Promise<void>")]
     pub fn wait_until_ready<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
         let reply = crate::host_error::run(env, || {

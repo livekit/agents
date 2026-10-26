@@ -8,7 +8,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::turn::detector::ReqId;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum In {
     /// Over agent speech, with the detector live (`_on_start_of_overlap_speech`).
     Started {

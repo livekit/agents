@@ -539,6 +539,7 @@ impl Driver {
             | SessionEvent::SpanStarted(_)
             | SessionEvent::SpanEnded(_)
             | SessionEvent::Error(_)
+            | SessionEvent::OverlappingSpeech(_)
             | SessionEvent::Diagnostic(_)
             | SessionEvent::EotPrediction(_)
             | SessionEvent::AgentBackchannelOpportunity(_)

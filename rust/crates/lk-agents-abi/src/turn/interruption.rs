@@ -17,13 +17,15 @@ pub enum InterruptionSignal {
 }
 
 /// `inference.OverlappingSpeechEvent`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OverlapVerdict {
     pub is_interruption: bool,
     /// Force-ended because the agent finished speaking: inconclusive, not a confirmed backchannel.
     pub agent_ended: bool,
     /// `ev.overlap_started_at or ev.detected_at`: a zero `overlap_started_at` falls through.
     pub ignore_user_transcript_until: Ts,
+    /// The detector's event, emitted as `overlapping_speech`; `None` from a detector without one.
+    pub reported: Option<Arc<crate::voice::events::OverlappingSpeechEvent>>,
 }
 
 #[async_trait::async_trait]

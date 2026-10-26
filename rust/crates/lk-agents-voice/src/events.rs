@@ -446,6 +446,8 @@ pub enum SessionEvent {
     },
     /// A provider failed (`AgentActivity._on_error`), one per failed attempt, before the close policy.
     Error(Box<ErrorEvent>),
+    /// `overlapping_speech`: the interruption detector's verdict, as it reported it.
+    OverlappingSpeech(Arc<lk_agents_abi::voice::events::OverlappingSpeechEvent>),
     /// The session closed: the last event. `error` is set for a `CloseReason::Error` close.
     Close {
         reason: lk_agents_abi::voice::events::CloseReason,

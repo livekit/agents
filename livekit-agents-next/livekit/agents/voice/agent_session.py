@@ -17,6 +17,7 @@ from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic
 
+import numpy as np
 from typing_extensions import TypedDict, TypeVar
 
 from livekit import rtc
@@ -34,11 +35,13 @@ from .._core_view import (
 from .._generated.amd import AMDPredictionEvent
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
 from .._generated.session_dispatch import IGNORED_EVENTS, MIRRORED_STATES, PUBLIC_EVENTS
+from ..inference.interruption import OverlappingSpeechEvent
 from ..job import get_job_context
 from ..llm import ChatContext, RealtimeModel, StopResponse
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage
+from ..metrics.usage import _MODEL_USAGE
 from ..telemetry import otel_metrics
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -60,6 +63,7 @@ from .events import (
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     RunContext,
+    SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     ToolExecutionUpdatedEvent,
     UserState,
@@ -250,7 +254,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_state: UserState = "listening"
         self._input = io.AgentInput(self)
         self._output = io.AgentOutput(self)
-        self._usage = AgentSessionUsage(model_usage=[])
         # what a job's session report reads
         self._started_at: float | None = None
         self._recorded_events: list[AgentEvent] = []
@@ -364,7 +367,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @property
     def usage(self) -> AgentSessionUsage:
-        return self._usage
+        model_usage = self._core.usage if self._core is not None else []
+        return AgentSessionUsage(model_usage=[_MODEL_USAGE.validate_python(u) for u in model_usage])
 
     @property
     def _running(self) -> _core.LiveSession:
@@ -803,9 +807,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         otel_metrics.collect_usage(ev.metrics)
         self.emit("metrics_collected", ev)
 
-    def _on_error(self, wire: dict[str, Any]) -> None:
-        logger.error("session error", extra={"source": wire["source"], "error": str(wire["error"])})
-        # the reference's payload: the provider's error record, and the provider that failed
+    def _error_record(self, wire: dict[str, Any]) -> tuple[Any, Any]:
+        """The reference's payload: the provider's error record, and the provider that failed."""
         record, leg = _ERROR_RECORDS[wire["source"]]
         source = getattr(_VoiceBinding(self, self.current_agent), leg)
         error = record(
@@ -814,7 +817,26 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             error=wire["error"],
             recoverable=wire["recoverable"],
         )
+        return error, source
+
+    def _core_error_message(self, wire: dict[str, Any]) -> str:
+        return str(self._error_record(wire)[0])
+
+    def _on_error(self, wire: dict[str, Any]) -> None:
+        logger.error("session error", extra={"source": wire["source"], "error": str(wire["error"])})
+        error, source = self._error_record(wire)
         self.emit("error", ErrorEvent(error=error, source=source))
+
+    def _on_usage(self, wire: dict[str, Any]) -> None:
+        usage = [_MODEL_USAGE.validate_python(u) for u in wire["model_usage"]]
+        self.emit("session_usage_updated", SessionUsageUpdatedEvent(usage=AgentSessionUsage(usage)))
+
+    def _on_overlapping_speech(self, wire: dict[str, Any]) -> None:
+        ev = dict(wire["event"])
+        for key, dtype in (("speech_input", np.int16), ("probabilities", np.float32)):
+            if ev[key] is not None:
+                ev[key] = np.asarray(ev[key], dtype=dtype)
+        self.emit("overlapping_speech", OverlappingSpeechEvent(**ev))
 
     def _on_amd_result(self, wire: dict[str, Any]) -> None:
         if self._amd is not None:
@@ -1003,6 +1025,8 @@ _HANDLERS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], None]] = {
     "run_settled": LiveSession._on_run_settled,
     "tool_execution_updated": LiveSession._on_tool_update,
     "metrics_collected": LiveSession._on_metrics,
+    "session_usage_updated": LiveSession._on_usage,
+    "overlapping_speech": LiveSession._on_overlapping_speech,
     "error": LiveSession._on_error,
     "close": LiveSession._on_close,
     "amd_result": LiveSession._on_amd_result,

@@ -226,7 +226,8 @@ pub fn session_event(
 ) -> Option<(WireEvent, Option<f64>)> {
     use lk_agents_abi::voice::events::{HostWire as W, ToolUpdate};
     use lk_agents_abi::worker::remote_session::{
-        AmdPredictionWire, ErrorWire, ToolCallStartedWire,
+        AmdPredictionWire, ErrorWire, OverlappingSpeechWire, SessionUsageUpdatedWire,
+        ToolCallStartedWire,
     };
     let event = match wire {
         W::AgentStateChanged(ev) => WireEvent::AgentStateChanged(ev.clone()),
@@ -264,6 +265,15 @@ pub fn session_event(
             },
         }),
         W::FunctionToolsExecuted(ev) => tools_executed(ev),
+        W::SessionUsageUpdated(ev) => WireEvent::SessionUsageUpdated(SessionUsageUpdatedWire {
+            usage: AgentSessionUsage { model_usage: ev.model_usage.clone() },
+        }),
+        W::OverlappingSpeech(ev) => WireEvent::OverlappingSpeech(OverlappingSpeechWire {
+            is_interruption: ev.event.is_interruption,
+            overlap_started_at: ev.event.overlap_started_at,
+            detection_delay: ev.event.detection_delay,
+            detected_at: ev.event.detected_at,
+        }),
         _ => return None,
     };
     Some((event, None))

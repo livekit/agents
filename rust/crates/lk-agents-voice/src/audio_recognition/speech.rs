@@ -557,7 +557,7 @@ impl AudioRecognition {
     ) -> (Result<(), OverlapRefusal>, Effects) {
         let mut eff = Effects::new();
         let user_speaking = self.user_speaking();
-        let verdict = In::Verdict { req, verdict: *v, user_speaking };
+        let verdict = In::Verdict { req, verdict: v.clone(), user_speaking };
         let (refusal, stepped) = self.overlap.step(verdict);
         eff.append(stepped);
         let result = match refusal {

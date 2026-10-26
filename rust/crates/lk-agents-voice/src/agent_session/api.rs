@@ -686,6 +686,8 @@ struct HostParts {
     remote: Option<Arc<crate::remote_session::driver::Hosting>>,
     /// The job whose room the session runs in.
     job: Option<Arc<dyn SessionJob>>,
+    /// `session.usage`: every metrics record the host is handed, folded per model.
+    usage: Arc<Mutex<lk_agents_abi::metrics::usage::ModelUsageCollector>>,
 }
 
 /// One stream, in emission order, so ordering between items, handoffs and completions needs no
@@ -803,6 +805,11 @@ fn origin_of(origin: Option<&str>) -> Result<Origin, CommandRefused> {
 #[lk_agents_abi::host(proxy)]
 pub trait SessionEvents: Send + Sync {
     fn event(&self, wire: &HostWire);
+
+    /// `str()` of the error record `error` is emitted with: the message the remote session sends.
+    fn error_message(&self, error: &lk_agents_abi::voice::events::SessionErrorWire) -> String {
+        error.error.to_string()
+    }
 }
 
 /// The job a session runs in, as `start()` sequences it: the room connected beside the opening,

@@ -402,6 +402,7 @@ impl SessionApi {
             call_room: (!offline).then(|| Arc::clone(&room)),
             remote,
             job,
+            usage: Arc::default(),
         };
         Ok(api)
     }
@@ -418,6 +419,7 @@ impl SessionApi {
         let events = self.host.events.clone();
         let remote = self.host.remote.clone();
         let forwarding = remote.clone();
+        let usage = Arc::clone(&self.host.usage);
         let hooks = self.host.hooks.clone();
         let anchor = self.anchor;
         let agents = self.agents.clone();
@@ -455,16 +457,22 @@ impl SessionApi {
                             }
                         }
                         ev => {
-                            if events.is_none() && forwarding.is_none() {
-                                continue;
-                            }
-                            let Some(mut wire) = ev.wire(anchor) else { continue };
-                            if let Some(remote) = &forwarding {
-                                remote.forward(&wire);
-                            }
-                            if let Some(events) = &events {
-                                agents.resolve(&mut wire);
-                                events.event(&wire);
+                            let Some(wire) = ev.wire(anchor) else { continue };
+                            // `_on_metrics_collected`: a record is folded into the session's
+                            // usage, then `session_usage_updated` follows it.
+                            let updated = session_usage_updated(&usage, &wire);
+                            for mut wire in std::iter::once(wire).chain(updated) {
+                                match (&forwarding, &events, &wire) {
+                                    (Some(remote), Some(events), HostWire::Error(error)) => {
+                                        remote.forward_error(events.error_message(error));
+                                    }
+                                    (Some(remote), ..) => remote.forward(&wire),
+                                    (None, ..) => {}
+                                }
+                                if let Some(events) = &events {
+                                    agents.resolve(&mut wire);
+                                    events.event(&wire);
+                                }
                             }
                         }
                     }
@@ -495,6 +503,12 @@ impl SessionApi {
             }
             Ok(())
         }))
+    }
+
+    /// `session.usage.model_usage`: the usage of every model the session was billed for.
+    #[host(getter)]
+    pub fn usage(&self) -> Vec<lk_agents_abi::metrics::usage::ModelUsage> {
+        self.host.usage.lock().unwrap_or_else(|p| p.into_inner()).flatten()
     }
 
     /// The session's clock, as the handle a provider's `_bind_session_clock` takes.
@@ -1318,4 +1332,21 @@ impl SessionApi {
         })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(CommitSuperseded)) }))
     }
+}
+
+/// The `session_usage_updated` a `metrics_collected` record brings, once folded into `usage`. The
+/// end-of-utterance and avatar records are reported beside the providers' (no usage follows them).
+fn session_usage_updated(
+    usage: &Mutex<lk_agents_abi::metrics::usage::ModelUsageCollector>,
+    wire: &HostWire,
+) -> Option<HostWire> {
+    use lk_agents_abi::metrics::base::AgentMetrics;
+    let HostWire::MetricsCollected(m) = wire else { return None };
+    if matches!(m.metrics, AgentMetrics::Eou(_) | AgentMetrics::Avatar(_)) {
+        return None;
+    }
+    let mut usage = usage.lock().unwrap_or_else(|p| p.into_inner());
+    usage.collect(&m.metrics);
+    let model_usage = usage.flatten();
+    Some(HostWire::SessionUsageUpdated(lk_agents_abi::voice::events::SessionUsageWire { model_usage }))
 }

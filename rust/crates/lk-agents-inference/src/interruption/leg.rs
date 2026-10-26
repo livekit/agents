@@ -101,6 +101,7 @@ fn verdict(ev: &OverlappingSpeechEvent, anchor: WallAnchor) -> OverlapVerdict {
         // `ev.overlap_started_at or ev.detected_at`: Python's `or`, so `0.0` falls through.
         ignore_user_transcript_until: anchor
             .ts(ev.overlap_started_at.filter(|v| *v != 0.0).unwrap_or(ev.detected_at)),
+        reported: Some(Arc::new(ev.clone())),
     }
 }
 

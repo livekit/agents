@@ -2034,6 +2034,80 @@ impl TryFrom<LlmChunk> for lk_agents_abi::LlmChunk {
     }
 }
 
+/// Union type for all model usage types.
+pub enum ModelUsage {
+    Llm(LlmModelUsage),
+    Tts(TtsModelUsage),
+    Stt(SttModelUsage),
+    Interruption(InterruptionModelUsage),
+    Eot(EotModelUsage),
+}
+
+impl napi::bindgen_prelude::TypeName for ModelUsage {
+    fn type_name() -> &'static str {
+        "ModelUsage"
+    }
+
+    fn value_type() -> napi::ValueType {
+        napi::ValueType::Object
+    }
+}
+
+impl napi::bindgen_prelude::ToNapiValue for ModelUsage {
+    unsafe fn to_napi_value(env: napi::sys::napi_env, val: Self) -> napi::Result<napi::sys::napi_value> {
+        match val {
+            ModelUsage::Llm(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            ModelUsage::Tts(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            ModelUsage::Stt(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            ModelUsage::Interruption(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            ModelUsage::Eot(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+        }
+    }
+}
+
+impl From<&lk_agents_abi::metrics::usage::records::ModelUsage> for ModelUsage {
+    fn from(v: &lk_agents_abi::metrics::usage::records::ModelUsage) -> Self {
+        match v {
+            lk_agents_abi::metrics::usage::records::ModelUsage::Llm(x) => ModelUsage::Llm(LlmModelUsage::from(x)),
+            lk_agents_abi::metrics::usage::records::ModelUsage::Tts(x) => ModelUsage::Tts(TtsModelUsage::from(x)),
+            lk_agents_abi::metrics::usage::records::ModelUsage::Stt(x) => ModelUsage::Stt(SttModelUsage::from(x)),
+            lk_agents_abi::metrics::usage::records::ModelUsage::Interruption(x) => ModelUsage::Interruption(InterruptionModelUsage::from(x)),
+            lk_agents_abi::metrics::usage::records::ModelUsage::Eot(x) => ModelUsage::Eot(EotModelUsage::from(x)),
+        }
+    }
+}
+
+impl napi::bindgen_prelude::FromNapiValue for ModelUsage {
+    unsafe fn from_napi_value(env: napi::sys::napi_env, value: napi::sys::napi_value) -> napi::Result<Self> {
+        let obj = unsafe { <napi::bindgen_prelude::Object as napi::bindgen_prelude::FromNapiValue>::from_napi_value(env, value)? };
+        let tag: String = obj.get_named_property("type")?;
+        match tag.as_str() {
+            "llm_usage" => Ok(ModelUsage::Llm(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "tts_usage" => Ok(ModelUsage::Tts(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "stt_usage" => Ok(ModelUsage::Stt(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "interruption_usage" => Ok(ModelUsage::Interruption(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "eot_usage" => Ok(ModelUsage::Eot(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            other => Err(napi::Error::new(napi::Status::InvalidArg, format!("ModelUsage: unknown type `{other}`"))),
+        }
+    }
+}
+
+impl napi::bindgen_prelude::ValidateNapiValue for ModelUsage {}
+
+impl TryFrom<ModelUsage> for lk_agents_abi::metrics::usage::records::ModelUsage {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: ModelUsage) -> Result<Self, Self::Error> {
+        Ok(match v {
+            ModelUsage::Llm(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Llm(x.try_into()?),
+            ModelUsage::Tts(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Tts(x.try_into()?),
+            ModelUsage::Stt(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Stt(x.try_into()?),
+            ModelUsage::Interruption(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Interruption(x.try_into()?),
+            ModelUsage::Eot(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Eot(x.try_into()?),
+        })
+    }
+}
+
 /// The resolved `AgentSessionOptions` as the host reads it: every public option of
 /// `session.options`, seconds as `f64`. Built only by `resolved_session_options`, whose exhaustive
 /// destructure keeps it complete.
@@ -2163,80 +2237,6 @@ impl TryFrom<DtmfOutcomeWire> for lk_agents_abi::voice::workflows::DtmfOutcomeWi
             DtmfOutcomeWire::Complete(x) => lk_agents_abi::voice::workflows::DtmfOutcomeWire::Complete(x.try_into()?),
             DtmfOutcomeWire::Incomplete(x) => lk_agents_abi::voice::workflows::DtmfOutcomeWire::Incomplete(x.try_into()?),
             DtmfOutcomeWire::Stopped(x) => lk_agents_abi::voice::workflows::DtmfOutcomeWire::Stopped(x.try_into()?),
-        })
-    }
-}
-
-/// Union type for all model usage types.
-pub enum ModelUsage {
-    Llm(LlmModelUsage),
-    Tts(TtsModelUsage),
-    Stt(SttModelUsage),
-    Interruption(InterruptionModelUsage),
-    Eot(EotModelUsage),
-}
-
-impl napi::bindgen_prelude::TypeName for ModelUsage {
-    fn type_name() -> &'static str {
-        "ModelUsage"
-    }
-
-    fn value_type() -> napi::ValueType {
-        napi::ValueType::Object
-    }
-}
-
-impl napi::bindgen_prelude::ToNapiValue for ModelUsage {
-    unsafe fn to_napi_value(env: napi::sys::napi_env, val: Self) -> napi::Result<napi::sys::napi_value> {
-        match val {
-            ModelUsage::Llm(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
-            ModelUsage::Tts(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
-            ModelUsage::Stt(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
-            ModelUsage::Interruption(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
-            ModelUsage::Eot(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
-        }
-    }
-}
-
-impl From<&lk_agents_abi::metrics::usage::records::ModelUsage> for ModelUsage {
-    fn from(v: &lk_agents_abi::metrics::usage::records::ModelUsage) -> Self {
-        match v {
-            lk_agents_abi::metrics::usage::records::ModelUsage::Llm(x) => ModelUsage::Llm(LlmModelUsage::from(x)),
-            lk_agents_abi::metrics::usage::records::ModelUsage::Tts(x) => ModelUsage::Tts(TtsModelUsage::from(x)),
-            lk_agents_abi::metrics::usage::records::ModelUsage::Stt(x) => ModelUsage::Stt(SttModelUsage::from(x)),
-            lk_agents_abi::metrics::usage::records::ModelUsage::Interruption(x) => ModelUsage::Interruption(InterruptionModelUsage::from(x)),
-            lk_agents_abi::metrics::usage::records::ModelUsage::Eot(x) => ModelUsage::Eot(EotModelUsage::from(x)),
-        }
-    }
-}
-
-impl napi::bindgen_prelude::FromNapiValue for ModelUsage {
-    unsafe fn from_napi_value(env: napi::sys::napi_env, value: napi::sys::napi_value) -> napi::Result<Self> {
-        let obj = unsafe { <napi::bindgen_prelude::Object as napi::bindgen_prelude::FromNapiValue>::from_napi_value(env, value)? };
-        let tag: String = obj.get_named_property("type")?;
-        match tag.as_str() {
-            "llm_usage" => Ok(ModelUsage::Llm(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
-            "tts_usage" => Ok(ModelUsage::Tts(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
-            "stt_usage" => Ok(ModelUsage::Stt(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
-            "interruption_usage" => Ok(ModelUsage::Interruption(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
-            "eot_usage" => Ok(ModelUsage::Eot(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
-            other => Err(napi::Error::new(napi::Status::InvalidArg, format!("ModelUsage: unknown type `{other}`"))),
-        }
-    }
-}
-
-impl napi::bindgen_prelude::ValidateNapiValue for ModelUsage {}
-
-impl TryFrom<ModelUsage> for lk_agents_abi::metrics::usage::records::ModelUsage {
-    type Error = crate::host_error::JsError;
-
-    fn try_from(v: ModelUsage) -> Result<Self, Self::Error> {
-        Ok(match v {
-            ModelUsage::Llm(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Llm(x.try_into()?),
-            ModelUsage::Tts(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Tts(x.try_into()?),
-            ModelUsage::Stt(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Stt(x.try_into()?),
-            ModelUsage::Interruption(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Interruption(x.try_into()?),
-            ModelUsage::Eot(x) => lk_agents_abi::metrics::usage::records::ModelUsage::Eot(x.try_into()?),
         })
     }
 }
@@ -2901,239 +2901,6 @@ impl From<CompletionUsage> for lk_agents_abi::CompletionUsage {
     }
 }
 
-/// The resolved `endpointing` group, seconds as `f64`.
-#[napi(object, js_name = "ResolvedEndpointing")]
-pub struct ResolvedEndpointing {
-    pub mode: String,
-    pub min_delay: f64,
-    pub max_delay: f64,
-    pub alpha: f64,
-}
-
-impl From<&lk_agents_abi::voice::session_options::ResolvedEndpointing> for ResolvedEndpointing {
-    fn from(v: &lk_agents_abi::voice::session_options::ResolvedEndpointing) -> Self {
-        ResolvedEndpointing {
-            mode: v.mode.to_string(),
-            min_delay: v.min_delay,
-            max_delay: v.max_delay,
-            alpha: v.alpha,
-        }
-    }
-}
-
-impl From<ResolvedEndpointing> for lk_agents_abi::voice::session_options::ResolvedEndpointing {
-    fn from(v: ResolvedEndpointing) -> Self {
-        lk_agents_abi::voice::session_options::ResolvedEndpointing {
-            mode: v.mode,
-            min_delay: v.min_delay,
-            max_delay: v.max_delay,
-            alpha: v.alpha,
-        }
-    }
-}
-
-/// The resolved `interruption` group. `mode` is absent when the session picks.
-#[napi(object, js_name = "ResolvedInterruption")]
-pub struct ResolvedInterruption {
-    pub enabled: bool,
-    pub mode: Option<String>,
-    pub discard_audio_if_uninterruptible: bool,
-    pub min_duration: f64,
-    pub min_words: u32,
-    pub resume_false_interruption: bool,
-    pub false_interruption_timeout: Option<f64>,
-    pub backchannel_boundary: Option<(f64, f64)>,
-}
-
-impl From<&lk_agents_abi::voice::session_options::ResolvedInterruption> for ResolvedInterruption {
-    fn from(v: &lk_agents_abi::voice::session_options::ResolvedInterruption) -> Self {
-        ResolvedInterruption {
-            enabled: v.enabled,
-            mode: v.mode.as_ref().map(|v| v.to_string()),
-            discard_audio_if_uninterruptible: v.discard_audio_if_uninterruptible,
-            min_duration: v.min_duration,
-            min_words: v.min_words,
-            resume_false_interruption: v.resume_false_interruption,
-            false_interruption_timeout: v.false_interruption_timeout,
-            backchannel_boundary: v.backchannel_boundary.as_ref().map(|v| { let (t0, t1,) = v; (*t0, *t1) }),
-        }
-    }
-}
-
-impl From<ResolvedInterruption> for lk_agents_abi::voice::session_options::ResolvedInterruption {
-    fn from(v: ResolvedInterruption) -> Self {
-        lk_agents_abi::voice::session_options::ResolvedInterruption {
-            enabled: v.enabled,
-            mode: v.mode,
-            discard_audio_if_uninterruptible: v.discard_audio_if_uninterruptible,
-            min_duration: v.min_duration,
-            min_words: v.min_words,
-            resume_false_interruption: v.resume_false_interruption,
-            false_interruption_timeout: v.false_interruption_timeout,
-            backchannel_boundary: v.backchannel_boundary,
-        }
-    }
-}
-
-/// The resolved `preemptive_generation` group.
-#[napi(object, js_name = "ResolvedPreemptiveGeneration")]
-pub struct ResolvedPreemptiveGeneration {
-    pub enabled: bool,
-    pub preemptive_tts: bool,
-    pub max_speech_duration: f64,
-    pub max_retries: u32,
-}
-
-impl From<&lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration> for ResolvedPreemptiveGeneration {
-    fn from(v: &lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration) -> Self {
-        ResolvedPreemptiveGeneration {
-            enabled: v.enabled,
-            preemptive_tts: v.preemptive_tts,
-            max_speech_duration: v.max_speech_duration,
-            max_retries: v.max_retries,
-        }
-    }
-}
-
-impl From<ResolvedPreemptiveGeneration> for lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration {
-    fn from(v: ResolvedPreemptiveGeneration) -> Self {
-        lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration {
-            enabled: v.enabled,
-            preemptive_tts: v.preemptive_tts,
-            max_speech_duration: v.max_speech_duration,
-            max_retries: v.max_retries,
-        }
-    }
-}
-
-/// The resolved `user_turn_limit` group.
-#[napi(object, js_name = "ResolvedUserTurnLimit")]
-pub struct ResolvedUserTurnLimit {
-    pub max_words: Option<u32>,
-    pub max_duration: Option<f64>,
-}
-
-impl From<&lk_agents_abi::voice::session_options::ResolvedUserTurnLimit> for ResolvedUserTurnLimit {
-    fn from(v: &lk_agents_abi::voice::session_options::ResolvedUserTurnLimit) -> Self {
-        ResolvedUserTurnLimit {
-            max_words: v.max_words,
-            max_duration: v.max_duration,
-        }
-    }
-}
-
-impl From<ResolvedUserTurnLimit> for lk_agents_abi::voice::session_options::ResolvedUserTurnLimit {
-    fn from(v: ResolvedUserTurnLimit) -> Self {
-        lk_agents_abi::voice::session_options::ResolvedUserTurnLimit {
-            max_words: v.max_words,
-            max_duration: v.max_duration,
-        }
-    }
-}
-
-/// The session layer's sparse endpointing (`AgentSessionOptions.endpointing_overrides`).
-#[napi(object, js_name = "EndpointingOverrides")]
-pub struct EndpointingOverrides {
-    pub mode: Option<String>,
-    pub min_delay: Option<f64>,
-    pub max_delay: Option<f64>,
-    pub alpha: Option<f64>,
-}
-
-impl From<&lk_agents_abi::voice::session_options::EndpointingOverrides> for EndpointingOverrides {
-    fn from(v: &lk_agents_abi::voice::session_options::EndpointingOverrides) -> Self {
-        EndpointingOverrides {
-            mode: v.mode.as_ref().map(|v| v.to_string()),
-            min_delay: v.min_delay,
-            max_delay: v.max_delay,
-            alpha: v.alpha,
-        }
-    }
-}
-
-impl From<EndpointingOverrides> for lk_agents_abi::voice::session_options::EndpointingOverrides {
-    fn from(v: EndpointingOverrides) -> Self {
-        lk_agents_abi::voice::session_options::EndpointingOverrides {
-            mode: v.mode,
-            min_delay: v.min_delay,
-            max_delay: v.max_delay,
-            alpha: v.alpha,
-        }
-    }
-}
-
-/// `self.complete(GetDtmfResult(user_input))`.
-#[napi(object, js_name = "DtmfComplete")]
-pub struct DtmfComplete {
-    #[napi(js_name = "kind", ts_type = "'complete'")]
-    pub kind: String,
-    pub user_input: String,
-}
-
-impl From<&lk_agents_abi::voice::workflows::DtmfComplete> for DtmfComplete {
-    fn from(v: &lk_agents_abi::voice::workflows::DtmfComplete) -> Self {
-        DtmfComplete {
-            kind: "complete".to_owned(),
-            user_input: v.user_input.to_string(),
-        }
-    }
-}
-
-impl From<DtmfComplete> for lk_agents_abi::voice::workflows::DtmfComplete {
-    fn from(v: DtmfComplete) -> Self {
-        lk_agents_abi::voice::workflows::DtmfComplete {
-            user_input: v.user_input,
-        }
-    }
-}
-
-/// `self.complete(ToolError(message))`: the debounce fired before `num_digits` arrived.
-#[napi(object, js_name = "DtmfIncomplete")]
-pub struct DtmfIncomplete {
-    #[napi(js_name = "kind", ts_type = "'incomplete'")]
-    pub kind: String,
-    pub message: String,
-}
-
-impl From<&lk_agents_abi::voice::workflows::DtmfIncomplete> for DtmfIncomplete {
-    fn from(v: &lk_agents_abi::voice::workflows::DtmfIncomplete) -> Self {
-        DtmfIncomplete {
-            kind: "incomplete".to_owned(),
-            message: v.message.to_string(),
-        }
-    }
-}
-
-impl From<DtmfIncomplete> for lk_agents_abi::voice::workflows::DtmfIncomplete {
-    fn from(v: DtmfIncomplete) -> Self {
-        lk_agents_abi::voice::workflows::DtmfIncomplete {
-            message: v.message,
-        }
-    }
-}
-
-/// The collection was stopped, replaced or closed first.
-#[napi(object, js_name = "DtmfStopped")]
-pub struct DtmfStopped {
-    #[napi(js_name = "kind", ts_type = "'stopped'")]
-    pub kind: String,
-}
-
-impl From<&lk_agents_abi::voice::workflows::DtmfStopped> for DtmfStopped {
-    fn from(v: &lk_agents_abi::voice::workflows::DtmfStopped) -> Self {
-        DtmfStopped {
-            kind: "stopped".to_owned(),
-        }
-    }
-}
-
-impl From<DtmfStopped> for lk_agents_abi::voice::workflows::DtmfStopped {
-    fn from(v: DtmfStopped) -> Self {
-        lk_agents_abi::voice::workflows::DtmfStopped {
-        }
-    }
-}
-
 /// Usage summary for LLM models.
 #[napi(object, js_name = "LlmModelUsage")]
 pub struct LlmModelUsage {
@@ -3387,6 +3154,239 @@ impl TryFrom<EotModelUsage> for lk_agents_abi::metrics::usage::records::EotModel
             model: v.model,
             total_requests: <u64>::try_from(v.total_requests).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("EotModelUsage.total_requests: {e}")))?,
         })
+    }
+}
+
+/// The resolved `endpointing` group, seconds as `f64`.
+#[napi(object, js_name = "ResolvedEndpointing")]
+pub struct ResolvedEndpointing {
+    pub mode: String,
+    pub min_delay: f64,
+    pub max_delay: f64,
+    pub alpha: f64,
+}
+
+impl From<&lk_agents_abi::voice::session_options::ResolvedEndpointing> for ResolvedEndpointing {
+    fn from(v: &lk_agents_abi::voice::session_options::ResolvedEndpointing) -> Self {
+        ResolvedEndpointing {
+            mode: v.mode.to_string(),
+            min_delay: v.min_delay,
+            max_delay: v.max_delay,
+            alpha: v.alpha,
+        }
+    }
+}
+
+impl From<ResolvedEndpointing> for lk_agents_abi::voice::session_options::ResolvedEndpointing {
+    fn from(v: ResolvedEndpointing) -> Self {
+        lk_agents_abi::voice::session_options::ResolvedEndpointing {
+            mode: v.mode,
+            min_delay: v.min_delay,
+            max_delay: v.max_delay,
+            alpha: v.alpha,
+        }
+    }
+}
+
+/// The resolved `interruption` group. `mode` is absent when the session picks.
+#[napi(object, js_name = "ResolvedInterruption")]
+pub struct ResolvedInterruption {
+    pub enabled: bool,
+    pub mode: Option<String>,
+    pub discard_audio_if_uninterruptible: bool,
+    pub min_duration: f64,
+    pub min_words: u32,
+    pub resume_false_interruption: bool,
+    pub false_interruption_timeout: Option<f64>,
+    pub backchannel_boundary: Option<(f64, f64)>,
+}
+
+impl From<&lk_agents_abi::voice::session_options::ResolvedInterruption> for ResolvedInterruption {
+    fn from(v: &lk_agents_abi::voice::session_options::ResolvedInterruption) -> Self {
+        ResolvedInterruption {
+            enabled: v.enabled,
+            mode: v.mode.as_ref().map(|v| v.to_string()),
+            discard_audio_if_uninterruptible: v.discard_audio_if_uninterruptible,
+            min_duration: v.min_duration,
+            min_words: v.min_words,
+            resume_false_interruption: v.resume_false_interruption,
+            false_interruption_timeout: v.false_interruption_timeout,
+            backchannel_boundary: v.backchannel_boundary.as_ref().map(|v| { let (t0, t1,) = v; (*t0, *t1) }),
+        }
+    }
+}
+
+impl From<ResolvedInterruption> for lk_agents_abi::voice::session_options::ResolvedInterruption {
+    fn from(v: ResolvedInterruption) -> Self {
+        lk_agents_abi::voice::session_options::ResolvedInterruption {
+            enabled: v.enabled,
+            mode: v.mode,
+            discard_audio_if_uninterruptible: v.discard_audio_if_uninterruptible,
+            min_duration: v.min_duration,
+            min_words: v.min_words,
+            resume_false_interruption: v.resume_false_interruption,
+            false_interruption_timeout: v.false_interruption_timeout,
+            backchannel_boundary: v.backchannel_boundary,
+        }
+    }
+}
+
+/// The resolved `preemptive_generation` group.
+#[napi(object, js_name = "ResolvedPreemptiveGeneration")]
+pub struct ResolvedPreemptiveGeneration {
+    pub enabled: bool,
+    pub preemptive_tts: bool,
+    pub max_speech_duration: f64,
+    pub max_retries: u32,
+}
+
+impl From<&lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration> for ResolvedPreemptiveGeneration {
+    fn from(v: &lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration) -> Self {
+        ResolvedPreemptiveGeneration {
+            enabled: v.enabled,
+            preemptive_tts: v.preemptive_tts,
+            max_speech_duration: v.max_speech_duration,
+            max_retries: v.max_retries,
+        }
+    }
+}
+
+impl From<ResolvedPreemptiveGeneration> for lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration {
+    fn from(v: ResolvedPreemptiveGeneration) -> Self {
+        lk_agents_abi::voice::session_options::ResolvedPreemptiveGeneration {
+            enabled: v.enabled,
+            preemptive_tts: v.preemptive_tts,
+            max_speech_duration: v.max_speech_duration,
+            max_retries: v.max_retries,
+        }
+    }
+}
+
+/// The resolved `user_turn_limit` group.
+#[napi(object, js_name = "ResolvedUserTurnLimit")]
+pub struct ResolvedUserTurnLimit {
+    pub max_words: Option<u32>,
+    pub max_duration: Option<f64>,
+}
+
+impl From<&lk_agents_abi::voice::session_options::ResolvedUserTurnLimit> for ResolvedUserTurnLimit {
+    fn from(v: &lk_agents_abi::voice::session_options::ResolvedUserTurnLimit) -> Self {
+        ResolvedUserTurnLimit {
+            max_words: v.max_words,
+            max_duration: v.max_duration,
+        }
+    }
+}
+
+impl From<ResolvedUserTurnLimit> for lk_agents_abi::voice::session_options::ResolvedUserTurnLimit {
+    fn from(v: ResolvedUserTurnLimit) -> Self {
+        lk_agents_abi::voice::session_options::ResolvedUserTurnLimit {
+            max_words: v.max_words,
+            max_duration: v.max_duration,
+        }
+    }
+}
+
+/// The session layer's sparse endpointing (`AgentSessionOptions.endpointing_overrides`).
+#[napi(object, js_name = "EndpointingOverrides")]
+pub struct EndpointingOverrides {
+    pub mode: Option<String>,
+    pub min_delay: Option<f64>,
+    pub max_delay: Option<f64>,
+    pub alpha: Option<f64>,
+}
+
+impl From<&lk_agents_abi::voice::session_options::EndpointingOverrides> for EndpointingOverrides {
+    fn from(v: &lk_agents_abi::voice::session_options::EndpointingOverrides) -> Self {
+        EndpointingOverrides {
+            mode: v.mode.as_ref().map(|v| v.to_string()),
+            min_delay: v.min_delay,
+            max_delay: v.max_delay,
+            alpha: v.alpha,
+        }
+    }
+}
+
+impl From<EndpointingOverrides> for lk_agents_abi::voice::session_options::EndpointingOverrides {
+    fn from(v: EndpointingOverrides) -> Self {
+        lk_agents_abi::voice::session_options::EndpointingOverrides {
+            mode: v.mode,
+            min_delay: v.min_delay,
+            max_delay: v.max_delay,
+            alpha: v.alpha,
+        }
+    }
+}
+
+/// `self.complete(GetDtmfResult(user_input))`.
+#[napi(object, js_name = "DtmfComplete")]
+pub struct DtmfComplete {
+    #[napi(js_name = "kind", ts_type = "'complete'")]
+    pub kind: String,
+    pub user_input: String,
+}
+
+impl From<&lk_agents_abi::voice::workflows::DtmfComplete> for DtmfComplete {
+    fn from(v: &lk_agents_abi::voice::workflows::DtmfComplete) -> Self {
+        DtmfComplete {
+            kind: "complete".to_owned(),
+            user_input: v.user_input.to_string(),
+        }
+    }
+}
+
+impl From<DtmfComplete> for lk_agents_abi::voice::workflows::DtmfComplete {
+    fn from(v: DtmfComplete) -> Self {
+        lk_agents_abi::voice::workflows::DtmfComplete {
+            user_input: v.user_input,
+        }
+    }
+}
+
+/// `self.complete(ToolError(message))`: the debounce fired before `num_digits` arrived.
+#[napi(object, js_name = "DtmfIncomplete")]
+pub struct DtmfIncomplete {
+    #[napi(js_name = "kind", ts_type = "'incomplete'")]
+    pub kind: String,
+    pub message: String,
+}
+
+impl From<&lk_agents_abi::voice::workflows::DtmfIncomplete> for DtmfIncomplete {
+    fn from(v: &lk_agents_abi::voice::workflows::DtmfIncomplete) -> Self {
+        DtmfIncomplete {
+            kind: "incomplete".to_owned(),
+            message: v.message.to_string(),
+        }
+    }
+}
+
+impl From<DtmfIncomplete> for lk_agents_abi::voice::workflows::DtmfIncomplete {
+    fn from(v: DtmfIncomplete) -> Self {
+        lk_agents_abi::voice::workflows::DtmfIncomplete {
+            message: v.message,
+        }
+    }
+}
+
+/// The collection was stopped, replaced or closed first.
+#[napi(object, js_name = "DtmfStopped")]
+pub struct DtmfStopped {
+    #[napi(js_name = "kind", ts_type = "'stopped'")]
+    pub kind: String,
+}
+
+impl From<&lk_agents_abi::voice::workflows::DtmfStopped> for DtmfStopped {
+    fn from(v: &lk_agents_abi::voice::workflows::DtmfStopped) -> Self {
+        DtmfStopped {
+            kind: "stopped".to_owned(),
+        }
+    }
+}
+
+impl From<DtmfStopped> for lk_agents_abi::voice::workflows::DtmfStopped {
+    fn from(v: DtmfStopped) -> Self {
+        lk_agents_abi::voice::workflows::DtmfStopped {
+        }
     }
 }
 

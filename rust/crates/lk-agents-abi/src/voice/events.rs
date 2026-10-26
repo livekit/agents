@@ -858,6 +858,21 @@ pub struct MetricsCollectedWire {
     pub speech_id: Option<String>,
 }
 
+/// `session_usage_updated`'s wire payload: the session's usage once a record was folded in.
+#[derive(Debug, Clone, Host)]
+#[binding(emit, tag = "type", tag_value = "session_usage_updated")]
+pub struct SessionUsageWire {
+    /// `AgentSessionUsage.model_usage`.
+    pub model_usage: Vec<crate::metrics::usage::ModelUsage>,
+}
+
+/// `overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it.
+#[derive(Debug, Clone, Host)]
+#[binding(emit, tag = "type", tag_value = "overlapping_speech")]
+pub struct OverlappingSpeechWire {
+    pub event: OverlappingSpeechEvent,
+}
+
 /// `error`'s wire payload: the ingredients of `ErrorEvent`; the host wraps `error` in the leg's
 /// class chosen by `source`.
 #[derive(Debug, Clone, Host)]
@@ -983,6 +998,8 @@ pub enum HostWire {
     FloorChanged(FloorChangedWire),
     Close(CloseWire),
     MetricsCollected(MetricsCollectedWire),
+    SessionUsageUpdated(SessionUsageWire),
+    OverlappingSpeech(OverlappingSpeechWire),
     Error(SessionErrorWire),
     ToolExecutionUpdated(ToolExecutionUpdated),
     ParticipantLinked(ParticipantLinked),

@@ -348,6 +348,12 @@ impl Hosting {
         }
     }
 
+    /// `error`, as the host words it.
+    pub fn forward_error(&self, message: String) {
+        use lk_agents_abi::worker::remote_session::ErrorWire;
+        self.send(WireEvent::Error(ErrorWire { message }), None);
+    }
+
     /// `function_tools_executed`, emitted by the host's hook rather than as an event.
     pub fn forward_tools_executed(&self, ev: &lk_agents_abi::voice::events::ToolsExecutedEvent) {
         self.send(super::tools_executed(ev), None);

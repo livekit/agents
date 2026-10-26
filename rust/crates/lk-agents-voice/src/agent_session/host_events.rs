@@ -287,6 +287,9 @@ impl SessionEvent {
                 has_error: error.is_some(),
                 error: error.clone(),
             }),
+            SessionEvent::OverlappingSpeech(event) => {
+                HostWire::OverlappingSpeech(w::OverlappingSpeechWire { event: (**event).clone() })
+            }
             SessionEvent::MetricsCollected { metrics, speech } => {
                 HostWire::MetricsCollected(w::MetricsCollectedWire {
                     metrics: (**metrics).clone(),
