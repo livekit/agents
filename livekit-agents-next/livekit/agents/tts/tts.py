@@ -1,40 +1,32 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import datetime
-import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
-from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
-from livekit.agents.metrics.base import Metadata
 
+from .. import _core
 from .._exceptions import APIError, APIStatusError
 from ..log import logger
-from ..metrics import TTSMetrics
-from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
     APIConnectOptions,
+    TimedString,
 )
 from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
     from ..llm.chat_context import MetricsMetadata
     from ..voice.agent_session import SpeechSteeringOptions
-    from ..voice.io import TimedString
-
-lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
 
 
 @dataclass
@@ -49,6 +41,15 @@ class SynthesizedAudio:
     """Segment ID, each segment is separated by a flush (streaming only)"""
     delta_text: str = ""
     """Current segment of the synthesized audio (streaming only)"""
+
+    @property
+    def _core_started_time(self) -> float | None:
+        return self.frame.userdata.get(USERDATA_TTS_STARTED_TIME)  # type: ignore[no-any-return]
+
+    @property
+    def _core_timed_transcript(self) -> list[TimedString]:
+        words = self.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT) or []
+        return [w for w in words if isinstance(w, TimedString)]
 
 
 @dataclass
@@ -85,65 +86,41 @@ class TTS(
     Generic[TEvent],
 ):
     class Markup:
-        """Declares TTS markup capabilities for the expressive pipeline.
+        """The markup dialect this TTS speaks, for the expressive pipeline: what the LLM is
+        taught to write and how it is normalized and lowered before synthesis.
 
-        Plugins override this inner class to declare which markup dialect the TTS speaks:
-        what the LLM is taught to write, and how those markers are normalized and lowered
-        to the provider's native syntax before synthesis. Stripping markup back out is not
-        here — the transcript sinks do it provider-agnostically (see
-        ``_provider_format.split_all_markup``).
+        Plugins opt in by overriding ``_provider_key``; the tables are the core's
+        (``_core.Markup``).
         """
 
         def __init__(self, tts: TTS) -> None:
             self._tts = tts
 
         def _provider_key(self) -> str:
-            """Key into the shared ``_provider_format`` markup tables, or "" for none.
-
-            Plugins override this to opt into markup support; the default ("") means
-            no markup instructions, normalization, or conversion are applied. The other
-            markup methods delegate through this key, so a plugin only needs to override
-            ``_provider_key``.
-            """
+            """The provider's key into the markup tables, or "" for no markup."""
             return ""
+
+        def _core(self) -> _core.Markup:
+            return _core.Markup(self._provider_key())
 
         @property
         def info(self) -> MarkupInfo:
             """The queryable markup matrix for this voice."""
-            from ._provider_format import supported_nonverbals
-
-            return MarkupInfo(nonverbals=supported_nonverbals(self._provider_key()))
+            return MarkupInfo(nonverbals=_core.supported_nonverbals(self._provider_key()))
 
         def llm_instructions(
             self, *, speech_steering: SpeechSteeringOptions | None = None
         ) -> str | None:
-            """Return instructions for the LLM describing available markup tags.
-
-            The framework injects this into the LLM system prompt when expressive mode
-            is active. Returns ``None`` if this TTS has no markup support. When
-            *speech_steering* is given, sounds it disables are omitted from the
-            advertised vocabulary.
-            """
-            from ._provider_format import llm_instructions
-
-            return llm_instructions(self._provider_key(), speech_steering)
+            """The instructions teaching the LLM this voice's markup, ``None`` without markup."""
+            return self._core().llm_instructions(speech_steering=speech_steering)  # type: ignore[no-any-return]
 
         def normalize(self, text: str) -> str:
             """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
-            from ._provider_format import normalize_markup
-
-            return normalize_markup(self._provider_key(), text)
+            return self._core().normalize(text)  # type: ignore[no-any-return]
 
         def convert(self, text: str) -> str:
-            """Convert framework-standard markup to the provider's native format.
-
-            Called before text is sent to the TTS; a no-op when the provider declares
-            no markup. Plugins that use non-XML formats (e.g. square brackets) opt in
-            via ``_provider_key`` so ``<expression value="..."/>`` becomes native syntax.
-            """
-            from ._provider_format import convert_markup
-
-            return convert_markup(self._provider_key(), text)
+            """Lower the framework's markup to the provider's native syntax."""
+            return self._core().convert(text)  # type: ignore[no-any-return]
 
     def __init__(
         self,
@@ -158,10 +135,8 @@ class TTS(
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._markup = self.Markup(self)
-        # Whether expressive is active for the current turn, set by the framework
-        # before each synthesis. TTS implementations that tokenize their own input
-        # read this to batch into larger chunks (continuous prosody); False (the
-        # default) means per-sentence chunking. See `_set_expressive`.
+        # whether expressive is active for the current turn, set by the framework before each
+        # synthesis; a TTS tokenizing its own input batches larger chunks when it is
         self._expressive: bool = False
 
     @property
@@ -170,12 +145,7 @@ class TTS(
         return self._markup
 
     def _set_expressive(self, enabled: bool) -> None:
-        """Framework-internal: mark whether expressive is active for this turn.
-
-        Called by the voice pipeline before each synthesis. TTS implementations widen
-        their input chunking when enabled; a no-op for TTS that don't tokenize their
-        own input.
-        """
+        """Mark whether expressive is active for this turn (set by the framework)."""
         self._expressive = enabled
 
     @property
@@ -184,26 +154,12 @@ class TTS(
 
     @property
     def model(self) -> str:
-        """Get the model name/identifier for this TTS instance.
-
-        Returns:
-            The model name if available, "unknown" otherwise.
-
-        Note:
-            Plugins should override this property to provide their model information.
-        """
+        """The model name; plugins override it."""
         return "unknown"
 
     @property
     def provider(self) -> str:
-        """Get the provider name/identifier for this TTS instance.
-
-        Returns:
-            The provider name if available, "unknown" otherwise.
-
-        Note:
-            Plugins should override this property to provide their provider information.
-        """
+        """The provider name; plugins override it."""
         return "unknown"
 
     @property
@@ -238,17 +194,8 @@ class TTS(
     def _synthesize_with_stream(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        """Helper method to implement synthesize() using stream() for TTS providers
-        that only support streaming inference.
-
-        This creates a stream, pushes the text as a single chunk, ends the input,
-        and returns a ChunkedStream wrapper around it.
-        """
-        return _ChunkedStreamFromStream(
-            tts=self,
-            input_text=text,
-            conn_options=conn_options,
-        )
+        """``synthesize()`` for a TTS that only streams: one push, then the end of input."""
+        return _ChunkedStreamFromStream(tts=self, input_text=text, conn_options=conn_options)
 
     def prewarm(self) -> None:
         """Pre-warm connection to the TTS service"""
@@ -268,199 +215,30 @@ class TTS(
         await self.aclose()
 
 
-@contextlib.contextmanager
-def _attempt_span(name: str | None, tts: TTS) -> Iterator[trace.Span]:
-    """One retry attempt's span, or the request span itself when ``name`` is None."""
-    if name is None:
-        yield trace.get_current_span()
-        return
-
-    with tracer.start_as_current_span(name) as span:
-        # a failed attempt names the model it asked without opening its parent
-        gen_ai_telemetry.set_request_attributes(
-            span, operation=None, provider=tts.provider, model=tts.model
-        )
-        yield span
+async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bool) -> None:
+    """Forward a core synthesis (``_core.*TtsStream``) into ``output_emitter``."""
+    started = not stream
+    while (audio := await native.recv()) is not None:
+        if not started:
+            started = True
+            output_emitter.start_segment(segment_id=audio["segment_id"] or shortuuid())
+        if words := audio["timed_transcript"]:
+            output_emitter.push_timed_transcript(words)
+        output_emitter.push_frame(audio["frame"])
 
 
-class ChunkedStream(ABC):
-    """Used by the non-streamed synthesize API, some providers support chunked http responses"""
+class _Synthesis:
+    """What both stream kinds share: one attempt run against an ``AudioEmitter``; retries are
+    the core's."""
 
-    _tts_request_span_name: ClassVar[str] = "tts_request"
-    # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
-    _tts_attempt_span_name: ClassVar[str | None] = "tts_request_run"
-
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        self._input_text = input_text
-        self._tts = tts
-        self._conn_options = conn_options
-        # the full text is submitted to the provider at creation time
-        self._started_time: float = time.perf_counter()
-        self._event_ch = aio.Chan[SynthesizedAudio]()
-        self._input_tokens = 0
-        self._output_tokens = 0
-        self._acquire_time: float = 0.0
-        self._connection_reused: bool = False
-
-        self._tee = aio.itertools.tee(self._event_ch, 2)
-        self._event_aiter, monitor_aiter = self._tee
-        self._current_attempt_has_error = False
-        self._metrics_task = asyncio.create_task(
-            self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
-        )
-
-        async def _traceable_main_task() -> None:
-            with tracer.start_as_current_span(self._tts_request_span_name, end_on_exit=False):
-                await self._main_task()
-
-        self._synthesize_task = asyncio.create_task(
-            _traceable_main_task(), name="TTS._synthesize_task"
-        )
-        self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
-
-        self._tts_request_span: trace.Span | None = None
-
-    @property
-    def input_text(self) -> str:
-        return self._input_text
-
-    @property
-    def done(self) -> bool:
-        return self._synthesize_task.done()
-
-    @property
-    def exception(self) -> BaseException | None:
-        return self._synthesize_task.exception()
+    _tts: TTS
+    _event_ch: aio.Chan[SynthesizedAudio]
 
     def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
 
-    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
-        """Task used to collect metrics"""
-
-        start_time = time.perf_counter()
-        audio_duration = 0.0
-        ttfb = -1.0
-        request_id = ""
-
-        async for ev in event_aiter:
-            request_id = ev.request_id
-            if ttfb == -1.0:
-                ttfb = time.perf_counter() - start_time
-
-            audio_duration += ev.frame.duration
-
-        duration = time.perf_counter() - start_time
-
-        if self._current_attempt_has_error:
-            return
-
-        metrics = TTSMetrics(
-            timestamp=time.time(),
-            request_id=request_id,
-            ttfb=ttfb,
-            duration=duration,
-            characters_count=len(self._input_text),
-            input_tokens=self._input_tokens,
-            output_tokens=self._output_tokens,
-            audio_duration=audio_duration,
-            cancelled=self._synthesize_task.cancelled(),
-            label=self._tts._label,
-            streamed=False,
-            acquire_time=self._acquire_time,
-            connection_reused=self._connection_reused,
-            metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
-        )
-        if self._tts_request_span:
-            self._tts_request_span.set_attribute(
-                trace_types.ATTR_TTS_METRICS, metrics.model_dump_json()
-            )
-        self._tts.emit("metrics_collected", metrics)
-
-    async def collect(self) -> rtc.AudioFrame:
-        """Utility method to collect every frame in a single call"""
-        frames = []
-        async for ev in self:
-            frames.append(ev.frame)
-
-        return rtc.combine_audio_frames(frames)
-
-    @abstractmethod
-    async def _run(self, output_emitter: AudioEmitter) -> None: ...
-
-    async def _main_task(self) -> None:
-        self._tts_request_span = current_span = trace.get_current_span()
-        current_span.set_attributes(
-            {
-                trace_types.ATTR_TTS_STREAMING: False,
-                trace_types.ATTR_TTS_LABEL: self._tts.label,
-            }
-        )
-        # an adapter names the instance expected to serve; the one that did is its response
-        gen_ai_telemetry.set_request_attributes(
-            current_span, operation=None, provider=self._tts.provider, model=self._tts.model
-        )
-
-        for i in range(self._conn_options.max_retry + 1):
-            output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
-            try:
-                with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
-                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                    await self._run(output_emitter)
-
-                output_emitter.end_input()
-                # wait for all audio frames to be pushed & propagate errors
-                await output_emitter.join()
-
-                if self._input_text.strip() and output_emitter.pushed_duration() <= 0.0:
-                    raise APIError(f"no audio frames were pushed for text: {self._input_text}")
-
-                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
-                return
-            except APIError as e:
-                # 499 (Client Closed Request) - close gracefully without raising
-                if isinstance(e, APIStatusError) and e.status_code == 499:
-                    return
-
-                # settle the emitter so no frames from this attempt are delivered after
-                # the retry starts; the retry restarts the synthesis under a fresh
-                # request_id, signaling downstream that any partial audio is stale
-                await output_emitter.aclose()
-
-                should_retry = (
-                    e.retryable
-                    and self._conn_options.max_retry > 0
-                    and i < self._conn_options.max_retry
-                )
-
-                if not should_retry:
-                    self._emit_error(e, recoverable=False)
-                    raise
-
-                retry_interval = self._conn_options._interval_for_retry(i)
-                self._emit_error(e, recoverable=True)
-                logger.warning(
-                    "failed to synthesize speech: %s, retrying in %ss",
-                    e,
-                    retry_interval,
-                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
-                )
-
-                await asyncio.sleep(retry_interval)
-                # Reset the flag when retrying
-                self._current_attempt_has_error = False
-            finally:
-                await output_emitter.aclose()
-
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
-        self._current_attempt_has_error = True
         self._tts.emit(
             "error",
             TTSError(
@@ -471,25 +249,78 @@ class ChunkedStream(ABC):
             ),
         )
 
+    @abstractmethod
+    async def _run(self, output_emitter: AudioEmitter) -> None: ...
+
+    def _invalid(self, output_emitter: AudioEmitter) -> str | None: ...
+
+    async def _attempt(self) -> None:
+        output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
+        try:
+            await self._run(output_emitter)
+            output_emitter.end_input()
+            # wait for all audio frames to be pushed & propagate errors
+            await output_emitter.join()
+            if problem := self._invalid(output_emitter):
+                raise APIError(problem)
+        except APIError as e:
+            # 499 (Client Closed Request) - close gracefully without raising
+            if isinstance(e, APIStatusError) and e.status_code == 499:
+                return
+            self._emit_error(e, recoverable=False)
+            raise
+        finally:
+            await output_emitter.aclose()
+
+
+class ChunkedStream(_Synthesis, ABC):
+    """Used by the non-streamed synthesize API, some providers support chunked http responses"""
+
+    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        self._input_text = input_text
+        self._tts = tts
+        self._conn_options = conn_options
+        # the full text is submitted to the provider at creation time
+        self._started_time: float = time.perf_counter()
+        self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._acquire_time: float = 0.0
+        self._connection_reused: bool = False
+        self._synthesize_task = asyncio.create_task(self._attempt(), name="TTS._synthesize_task")
+        self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
+
+    @property
+    def input_text(self) -> str:
+        return self._input_text
+
+    def _invalid(self, output_emitter: AudioEmitter) -> str | None:
+        return _core.validate_synthesis(self._input_text, output_emitter.pushed_duration(), None)  # type: ignore[no-any-return]
+
+    @property
+    def done(self) -> bool:
+        return self._synthesize_task.done()
+
+    @property
+    def exception(self) -> BaseException | None:
+        return self._synthesize_task.exception()
+
+    async def collect(self) -> rtc.AudioFrame:
+        """Utility method to collect every frame in a single call"""
+        return rtc.combine_audio_frames([ev.frame async for ev in self])
+
     async def aclose(self) -> None:
         """Close is automatically called if the stream is completely collected"""
         await aio.cancel_and_wait(self._synthesize_task)
         self._event_ch.close()
-        await self._metrics_task
-        await self._tee.aclose()
-        if self._tts_request_span:
-            self._tts_request_span.end()
-            self._tts_request_span = None
 
     async def __anext__(self) -> SynthesizedAudio:
         try:
-            val = await self._event_aiter.__anext__()
+            val = await self._event_ch.__anext__()
         except StopAsyncIteration:
             if not self._synthesize_task.cancelled() and (exc := self._synthesize_task.exception()):
                 raise exc  # noqa: B904
-
             raise StopAsyncIteration from None
-
         val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
         return val
 
@@ -509,24 +340,7 @@ class ChunkedStream(ABC):
 
 
 class _ChunkedStreamFromStream(ChunkedStream):
-    """Implementation of ChunkedStream that wraps a SynthesizeStream.
-
-    Used by TTS providers that only support streaming inference to implement
-    the synthesize() method.
-    """
-
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(
-            tts=tts,
-            input_text=input_text,
-            conn_options=conn_options,
-        )
+    """``synthesize()`` over a TTS that only streams."""
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         output_emitter.initialize(
@@ -536,24 +350,17 @@ class _ChunkedStreamFromStream(ChunkedStream):
             mime_type="audio/pcm",
             stream=False,
         )
-        async with self._tts.stream(
-            conn_options=APIConnectOptions(max_retry=0, timeout=self._conn_options.timeout)
-        ) as stream:
+        async with self._tts.stream(conn_options=self._conn_options) as stream:
             stream.push_text(self._input_text)
             stream.end_input()
             async for ev in stream:
                 output_emitter.push(ev.frame.data.tobytes())
                 if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
                     output_emitter.push_timed_transcript(timed_transcripts)
-
         output_emitter.flush()
 
 
-class SynthesizeStream(ABC):
-    _tts_request_span_name: ClassVar[str] = "tts_request"
-    # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
-    _tts_attempt_span_name: ClassVar[str | None] = "tts_request_run"
-
+class SynthesizeStream(_Synthesis, ABC):
     class _FlushSentinel: ...
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
@@ -562,250 +369,55 @@ class SynthesizeStream(ABC):
         self._conn_options = conn_options
         self._input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SynthesizedAudio]()
-        self._tee = aio.itertools.tee(self._event_ch, 2)
-        self._event_aiter, self._monitor_aiter = self._tee
-
-        async def _traceable_main_task() -> None:
-            with tracer.start_as_current_span(self._tts_request_span_name, end_on_exit=False):
-                await self._main_task()
-
-        self._task = asyncio.create_task(_traceable_main_task(), name="TTS._main_task")
+        self._task = asyncio.create_task(self._attempt(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
-        self._metrics_task: asyncio.Task[None] | None = None  # started on first push
-        self._current_attempt_has_error = False
         self._started_time: float = 0
         self._pushed_text: str = ""
-
-        # buffered input events for retry replay
-        self._input_buffer: list[str | SynthesizeStream._FlushSentinel] = []
-        self._input_ended = False
-
-        # used to track metrics
-        self._mtc_pending_texts: list[str] = []
-        self._mtc_text = ""
+        self._segment_open = False
         self._num_segments = 0
         self._input_tokens = 0
         self._output_tokens = 0
         self._acquire_time: float = 0.0
         self._connection_reused: bool = False
 
-        self._tts_request_span: trace.Span | None = None
-
-    def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
-        self._input_tokens = input_tokens
-        self._output_tokens = output_tokens
-
-    @abstractmethod
-    async def _run(self, output_emitter: AudioEmitter) -> None: ...
-
-    async def _main_task(self) -> None:
-        self._tts_request_span = current_span = trace.get_current_span()
-        current_span.set_attributes(
-            {
-                trace_types.ATTR_TTS_STREAMING: True,
-                trace_types.ATTR_TTS_LABEL: self._tts.label,
-            }
-        )
-        # an adapter names the instance expected to serve; the one that did is its response
-        gen_ai_telemetry.set_request_attributes(
-            current_span, operation=None, provider=self._tts.provider, model=self._tts.model
-        )
-
-        for i in range(self._conn_options.max_retry + 1):
-            output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
-            try:
-                with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
-                    attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                    await self._run(output_emitter)
-
-                output_emitter.end_input()
-                # wait for all audio frames to be pushed & propagate errors
-                await output_emitter.join()
-
-                if self._pushed_text.strip():
-                    if output_emitter.pushed_duration(idx=-1) <= 0.0:
-                        raise APIError(f"no audio frames were pushed for text: {self._pushed_text}")
-
-                    if self._num_segments != output_emitter.num_segments:
-                        raise APIError(
-                            f"number of segments mismatch: expected {self._num_segments}, "
-                            f"but got {output_emitter.num_segments}"
-                        )
-
-                current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
-                return
-            except APIError as e:
-                # 499 (Client Closed Request) - close gracefully without raising
-                if isinstance(e, APIStatusError) and e.status_code == 499:
-                    return
-
-                pushed_duration = output_emitter.pushed_duration()
-                should_retry = (
-                    e.retryable
-                    and pushed_duration == 0.0
-                    and self._conn_options.max_retry > 0
-                    and i < self._conn_options.max_retry
-                )
-
-                if not should_retry:
-                    if pushed_duration > 0.0:
-                        logger.error(
-                            "TTS failed after partial audio was already sent to the user, skip retrying.",
-                            extra={
-                                "tts": self._tts._label,
-                                "streamed": True,
-                                "pushed_duration": pushed_duration,
-                            },
-                        )
-                    self._emit_error(e, recoverable=False)
-                    raise
-
-                retry_interval = self._conn_options._interval_for_retry(i)
-                self._emit_error(e, recoverable=True)
-                logger.warning(
-                    "failed to synthesize speech: %s, retrying in %ss",
-                    e,
-                    retry_interval,
-                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
-                )
-
-                await asyncio.sleep(retry_interval)
-
-                # replay buffered input into a fresh channel for retry
-                self._input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
-                for event in self._input_buffer:
-                    self._input_ch.send_nowait(event)
-                if self._input_ended:
-                    self._input_ch.close()
-
-                # Reset the flag when retrying
-                self._current_attempt_has_error = False
-            finally:
-                await output_emitter.aclose()
-
-    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
-        self._current_attempt_has_error = True
-        self._tts.emit(
-            "error",
-            TTSError(
-                timestamp=time.time(),
-                label=self._tts._label,
-                error=api_error,
-                recoverable=recoverable,
-            ),
+    def _invalid(self, output_emitter: AudioEmitter) -> str | None:
+        return _core.validate_synthesis(  # type: ignore[no-any-return]
+            self._pushed_text,
+            output_emitter.pushed_duration(),
+            (self._num_segments, output_emitter.num_segments),
         )
 
     def _mark_started(self) -> None:
-        # only set the started time once, it'll get reset after we emit metrics
         if self._started_time == 0:
             self._started_time = time.perf_counter()
-
-    async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
-        """Task used to collect metrics"""
-        audio_duration = 0.0
-        ttfb = -1.0
-        request_id = ""
-        segment_id = ""
-
-        def _emit_metrics() -> None:
-            nonlocal audio_duration, ttfb, request_id, segment_id
-
-            if not self._started_time or self._current_attempt_has_error:
-                return
-
-            duration = time.perf_counter() - self._started_time
-
-            if not self._mtc_pending_texts:
-                return
-
-            text = self._mtc_pending_texts.pop(0)
-            if not text:
-                return
-
-            metrics = TTSMetrics(
-                timestamp=time.time(),
-                request_id=request_id,
-                segment_id=segment_id,
-                ttfb=ttfb,
-                duration=duration,
-                characters_count=len(text),
-                input_tokens=self._input_tokens,
-                output_tokens=self._output_tokens,
-                audio_duration=audio_duration,
-                cancelled=self._task.cancelled(),
-                label=self._tts._label,
-                streamed=True,
-                acquire_time=self._acquire_time,
-                connection_reused=self._connection_reused,
-                metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
-            )
-            if self._tts_request_span:
-                self._tts_request_span.set_attribute(
-                    trace_types.ATTR_TTS_METRICS, metrics.model_dump_json()
-                )
-            self._tts.emit("metrics_collected", metrics)
-
-            audio_duration = 0.0
-            ttfb = -1.0
-            request_id = ""
-            self._started_time = 0
-
-        async for ev in event_aiter:
-            if ttfb == -1.0:
-                ttfb = time.perf_counter() - self._started_time
-
-            audio_duration += ev.frame.duration
-            request_id = ev.request_id
-            segment_id = ev.segment_id
-
-            if ev.is_final:
-                _emit_metrics()
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
         if not token or self._input_ch.closed:
             return
-
-        self._pushed_text += token
-
-        if self._metrics_task is None:
-            self._metrics_task = asyncio.create_task(
-                self._metrics_monitor_task(self._monitor_aiter), name="TTS._metrics_task"
-            )
-
-        if not self._mtc_text:
+        if not self._segment_open:
             if self._num_segments >= 1:
                 logger.warning(
                     "SynthesizeStream: handling multiple segments in a single instance is "
-                    "deprecated. Please create a new SynthesizeStream instance for each segment. "
-                    "Most TTS plugins now use pooled WebSocket connections via ConnectionPool."
+                    "deprecated. Please create a new SynthesizeStream instance for each segment."
                 )
                 return
-
+            self._segment_open = True
             self._num_segments += 1
-
-        self._mtc_text += token
+        self._pushed_text += token
         self._input_ch.send_nowait(token)
-        self._input_buffer.append(token)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
         if self._input_ch.closed:
             return
-
-        if self._mtc_text:
-            self._mtc_pending_texts.append(self._mtc_text)
-            self._mtc_text = ""
-
-        sentinel = self._FlushSentinel()
-        self._input_ch.send_nowait(sentinel)
-        self._input_buffer.append(sentinel)
+        self._segment_open = False
+        self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
         self.flush()
         self._input_ch.close()
-        self._input_ended = True
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
@@ -813,26 +425,13 @@ class SynthesizeStream(ABC):
         self._event_ch.close()
         self._input_ch.close()
 
-        if self._metrics_task is not None:
-            await self._metrics_task
-
-        await self._tee.aclose()
-
-        if self._tts_request_span:
-            self._tts_request_span.end()
-            self._tts_request_span = None
-
     async def __anext__(self) -> SynthesizedAudio:
         try:
-            val = await self._event_aiter.__anext__()
+            val = await self._event_ch.__anext__()
         except StopAsyncIteration:
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc  # noqa: B904
-
             raise StopAsyncIteration from None
-
-        # _started_time is 0 until _mark_started() (first text sent to the provider);
-        # it is also reset to 0 between segments after metrics are emitted
         if self._started_time:
             val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
         return val
@@ -924,8 +523,6 @@ class AudioEmitter:
         self._num_channels = num_channels
         self._streaming = stream
 
-        from ..voice.io import TimedString
-
         self._write_ch = aio.Chan[
             bytes
             | rtc.AudioFrame
@@ -950,22 +547,9 @@ class AudioEmitter:
         return self.__start_segment(segment_id=segment_id)
 
     def _note_provider_request_id(self, context_id: str) -> None:
-        """Record a provider-known id for this stream on the current span.
-
-        Exposed on the `tts_request_run` span as `lk.provider_request_ids` so users
-        can correlate traces with the provider's server-side logs for debugging.
-        `start_segment()` calls this automatically; plugins can also call it when
-        the provider-known id becomes available later (e.g. from a response
-        message's `request_id`/`session_id` field after start_segment).
-        """
-        if not context_id or context_id in self._provider_request_ids:
-            return
-        self._provider_request_ids.append(context_id)
-        current_span = trace.get_current_span()
-        if current_span.is_recording():
-            current_span.set_attribute(
-                trace_types.ATTR_PROVIDER_REQUEST_IDS, self._provider_request_ids
-            )
+        """Record a provider-known id for this stream (plugins call it once they learn one)."""
+        if context_id and context_id not in self._provider_request_ids:
+            self._provider_request_ids.append(context_id)
 
     def __start_segment(self, *, segment_id: str) -> None:
         if not self._started:
@@ -1061,13 +645,10 @@ class AudioEmitter:
 
     @log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        from ..voice.io import TimedString
-
         audio_decoder: codecs.AudioStreamDecoder | None = None
         decode_atask: asyncio.Task | None = None
         segment_ctx: AudioEmitter._SegmentContext | None = None
         last_frame: rtc.AudioFrame | None = None
-        debug_frames: list[rtc.AudioFrame] = []
         timed_transcripts: list[TimedString] = []
 
         flush_timer: asyncio.TimerHandle | None = None
@@ -1145,8 +726,6 @@ class AudioEmitter:
             )
             segment_ctx.audio_duration += frame.duration
             self._audio_durations[-1] += frame.duration
-            if lk_dump_tts:
-                debug_frames.append(frame)
 
         def _emit_frame(frame: rtc.AudioFrame | None = None, *, is_final: bool = False) -> None:
             nonlocal last_frame, segment_ctx, timed_transcripts
@@ -1224,9 +803,6 @@ class AudioEmitter:
             segment_ctx.audio_duration += last_frame.duration
             self._audio_durations[-1] += last_frame.duration
 
-            if lk_dump_tts:
-                debug_frames.append(last_frame)
-
             last_frame = None
             # reset sent duration after flush
             sent_start = None
@@ -1234,24 +810,6 @@ class AudioEmitter:
             if flush_timer is not None:
                 flush_timer.cancel()
                 flush_timer = None
-
-        def dump_segment() -> None:
-            nonlocal segment_ctx
-            assert segment_ctx is not None
-
-            if not lk_dump_tts or not debug_frames:
-                return
-
-            ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            fname = (
-                f"lk_dump/{self._label}_{self._request_id}_{segment_ctx.segment_id}_{ts}.wav"
-                if self._streaming
-                else f"lk_dump/{self._label}_{self._request_id}_{ts}.wav"
-            )
-            with open(fname, "wb") as f:
-                f.write(rtc.combine_audio_frames(debug_frames).to_wav_bytes())
-
-            debug_frames.clear()
 
         @log_exceptions(logger=logger)
         async def _decode_task() -> None:
@@ -1339,7 +897,6 @@ class AudioEmitter:
                                 )
 
                         _emit_frame(is_final=True)
-                        dump_segment()
                         segment_ctx = audio_byte_stream = last_frame = None
                     else:
                         logger.warning("unknown data type: %s", type(data))
@@ -1372,7 +929,6 @@ class AudioEmitter:
                                 audio_decoder.end_input()
                                 await decode_atask
                             _emit_frame(is_final=True)
-                            dump_segment()
                             audio_decoder = segment_ctx = audio_byte_stream = last_frame = None
                         else:
                             logger.warning("unknown data type: %s", type(data))
