@@ -107,7 +107,6 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "speech_settles",
     "synthesized_speech_is_played",
     "text_conservation",
-    "tool_call_reaches_runner",
     "tool_lifecycle",
 ];
 

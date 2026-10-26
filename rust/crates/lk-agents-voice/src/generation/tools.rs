@@ -87,16 +87,18 @@ impl ToolStep {
                 let previous = self.last_deferred_start.replace(started_rx);
                 let task_owner = Arc::clone(&handle);
                 let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
-                    // Adoption first: a discarded preemptive generation drops the call unrun.
-                    let scheduled = tokio::select! {
-                        biased;
-                        () = handle.wait_for_interrupted() => false,
-                        () = handle.wait_for_scheduled() => true,
-                    };
-                    if !scheduled {
-                        return;
-                    }
+                    // A start already reported runs, as the reference's executor starts the body
+                    // right after `tool_execution_started_cb`, interrupted or not.
                     if let Some(started) = deferred {
+                        // Adoption first: a discarded preemptive generation drops the call unrun.
+                        let scheduled = tokio::select! {
+                            biased;
+                            () = handle.wait_for_interrupted() => false,
+                            () = handle.wait_for_scheduled() => true,
+                        };
+                        if !scheduled {
+                            return;
+                        }
                         if let Some(previous) = previous {
                             let _ = previous.await;
                         }
