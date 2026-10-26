@@ -14,6 +14,7 @@ mod failed_synthesis_plays_out;
 mod filler_source;
 mod filler_source_no_host;
 mod filler_source_raises;
+mod final_ends_pause;
 mod filler_while_draining;
 mod held_turn_idle;
 mod hold_at_close;

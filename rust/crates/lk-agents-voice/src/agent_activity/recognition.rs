@@ -104,6 +104,8 @@ impl Driver {
                     out,
                     AudioInterruptTrigger::SttFinal { words },
                 );
+                // A final ends the pause: the paused speech is interrupted, not resumed.
+                self.cancel_speech_pause(now, out);
             }
             SpeechEventType::InterimTranscript if !has_vad => {
                 self.interrupt_by_audio_activity(
