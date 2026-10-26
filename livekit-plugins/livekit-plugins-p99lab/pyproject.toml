@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-p99lab"
+dynamic = ["version"]
+description = "LiveKit Agents plugin for p99lab's Audrey speech-to-text"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = [
+    "webrtc",
+    "realtime",
+    "audio",
+    "livekit",
+    "livekit-agents",
+    "p99lab",
+    "audrey",
+    "stt",
+    "speech-to-text",
+    "streaming",
+    "websocket",
+]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = ["livekit-agents>=1.8.9", "aiohttp>=3.8.0", "numpy>=1.26"]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://p99lab.com"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/p99lab/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
