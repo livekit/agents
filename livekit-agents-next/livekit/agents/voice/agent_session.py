@@ -67,6 +67,7 @@ from .events import (
     ToolExecutionUpdatedEvent,
     UserState,
 )
+from .keyterm_detection import _detection_llm, _record_keyterms
 from .remote_session import SessionHost
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import SpeechHandle
@@ -419,6 +420,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         realtime = rt if isinstance(rt, Realtime) else None
         native = None if isinstance(rt, Realtime) else rt
         sampler = self._video_sampler
+        keyterm_llm = _detection_llm(self._stt_context)
         self._room = room
         self._core = _core.LiveSession(
             room,
@@ -453,6 +455,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_unrecoverable_errors=self._conn_options.max_unrecoverable_errors,
             interruption_detector=self._interruption_detector(agent, frame, model),
             stt_context=self._stt_context,
+            keyterm_llm=_core_leg(keyterm_llm) if keyterm_llm is not None else None,
+            keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
             **{node: frame[node] for node in _NODES if node in frame},
         )
         self._agent = agent

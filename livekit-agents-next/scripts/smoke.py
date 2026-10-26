@@ -819,6 +819,79 @@ async def amd() -> None:
     await session.aclose()
 
 
+class KeytermSTT(ScriptedSTT):
+    """``ScriptedSTT`` taking keyterms, recording each list it is handed."""
+
+    def __init__(self) -> None:
+        stt.STT.__init__(
+            self,
+            capabilities=stt.STTCapabilities(streaming=True, interim_results=False, keyterms=True),
+        )
+        self.pushed: list[list[str]] = []
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        self.pushed.append(list(keyterms))
+
+
+class KeytermLLM(ScriptedLLM):
+    """Answers each detection pass: "Theo" pending, then confirmed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.passes = 0
+
+    def chat(
+        self, *, chat_ctx: llm.ChatContext, tools: list[llm.Tool] | None = None, **_: object
+    ) -> llm.LLMStream:
+        names = {t.info.name for t in tools or [] if isinstance(t, llm.FunctionTool)}
+        assert names == {"record_keyterms"}, names
+        self.passes += 1
+        return _Keyterms(
+            self, chat_ctx=chat_ctx, tools=tools or [], conn_options=DEFAULT_API_CONNECT_OPTIONS
+        )
+
+
+class _Keyterms(llm.LLMStream):
+    async def _run(self) -> None:
+        assert isinstance(self._llm, KeytermLLM)
+        update = {"pending": ["Theo"], "confirm": [], "remove": []}
+        if self._llm.passes > 1:
+            update = {"pending": [], "confirm": ["Theo"], "remove": []}
+        call = llm.FunctionToolCall(
+            name="record_keyterms", arguments=json.dumps(update), call_id=shortuuid("call_")
+        )
+        delta = llm.ChoiceDelta(role="assistant", tool_calls=[call])
+        self._event_ch.send_nowait(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
+
+
+async def keyterms() -> None:
+    """Keyterm detection: an LLM pass per user turn, a confirmed term pushed to the STT."""
+    print("== keyterm detection")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    recogniser, detector = KeytermSTT(), KeytermLLM()
+    session = LiveSession(
+        stt=recogniser,
+        llm=ScriptedLLM(),
+        tts=SilentTTS(),
+        vad=None,
+        stt_context_options={
+            "keyterms": ["LiveKit"],
+            "keyterm_detection": {"enabled": True, "llm": detector},
+        },
+    )
+    await session.start(Agent(instructions="You listen for names."), room=room)
+    room.speak(frames=40)
+    await settle(room, 6)
+    session.generate_reply(user_input="yes, Theo, T H E O")
+    await settle(room, 6)
+    print(f"keyterm passes={detector.passes} keyterms={session.keyterms}")
+    assert detector.passes >= 2, detector.passes
+    assert session.keyterms == ["LiveKit", "Theo"], session.keyterms
+    assert recogniser.pushed[-1] == ["LiveKit", "Theo"], recogniser.pushed
+    await session.aclose()
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -916,6 +989,7 @@ async def main() -> int:
     await expressive()
     await background_audio()
     await amd()
+    await keyterms()
     return 0
 
 

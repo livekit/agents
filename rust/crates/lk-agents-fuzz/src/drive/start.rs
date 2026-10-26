@@ -90,7 +90,7 @@ impl Run {
                 None,
                 "agent".into(),
                 None,
-                setup.stt.then(|| fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>),
+                setup.stt.then(|| session_stt(setup, &registry, connect)),
                 setup.vad.then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
                 pipeline.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
                 setup.realtime.map(|server| {
@@ -163,11 +163,24 @@ impl Run {
                 false,
                 setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
                 setup.max_unrecoverable_errors,
-                (!setup.keyterms.is_empty()).then(|| SttContextConfig {
-                    keyterms: Some(setup.keyterms.clone()),
-                    ..SttContextConfig::default()
+                (!setup.keyterms.is_empty() || setup.keyterm_detection.is_some()).then(|| {
+                    SttContextConfig {
+                        keyterms: Some(setup.keyterms.clone()),
+                        keyterm_detection: setup.keyterm_detection.map(|k| {
+                            KeytermDetectionConfig {
+                                enabled: Some(true),
+                                llm: Some(DetectionLlm::Instance),
+                                turn_interval: Some(k.turn_interval),
+                                max_keyterms: k.max_keyterms,
+                                instructions: None,
+                                timeout: k.timeout_ms.map(|ms| ms as f64 / 1000.0),
+                            }
+                        }),
+                        ..SttContextConfig::default()
+                    }
                 }),
-                None,
+                // `KeytermDetectionOptions(llm=...)`: the detection LLM the host resolved.
+                setup.keyterm_detection.map(|_| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
                 None,
                 lk_agents_abi::Maybe::NotGiven,
                 Some("AS_fuzz".into()),
@@ -572,6 +585,19 @@ pub(super) fn frame(
         llm_node: None,
         tts_node: None,
         stt_node: None,
+    }
+}
+
+/// The session's recogniser: one that takes keyterms when the setup's detection says so.
+pub(super) fn session_stt(
+    setup: &Setup,
+    registry: &Arc<Registry>,
+    connect: Duration,
+) -> Arc<Stt> {
+    if setup.keyterm_detection.is_some_and(|k| k.stt_takes_keyterms) {
+        fakes::FakeStt::taking_keyterms(registry.clone(), connect)
+    } else {
+        fakes::FakeStt::new(registry.clone(), connect)
     }
 }
 

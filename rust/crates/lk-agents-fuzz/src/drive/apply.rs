@@ -14,7 +14,8 @@ use lk_agents_voice::speech_handle::SpeechWireId;
 use lk_agents_voice::workflows::builtins::dtmf::{DtmfOutcome, GetDtmfResult};
 
 use super::start::{
-    Llm, Stt, Tts, frame, history, instructions, patch, tool_specs, turn_detection, vad_metrics,
+    Llm, Tts, frame, history, instructions, patch, session_stt, tool_specs, turn_detection,
+    vad_metrics,
 };
 use super::*;
 use crate::record::{Task, TaskEnd};
@@ -497,7 +498,7 @@ impl Run {
                 api.update_models(
                     given(llm, || fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
                     given(tts, || fakes::FakeTts::new(registry.clone()) as Arc<Tts>),
-                    given(stt, || fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>),
+                    given(stt, || session_stt(&self.setup, &registry, connect)),
                     Maybe::NotGiven,
                     None,
                     None,

@@ -25,16 +25,23 @@ pub struct FakeStt {
     connect: std::time::Duration,
     /// What its streams are recorded as: the session's, or AMD's own.
     detail: Detail,
+    /// `STTCapabilities.keyterms`: whether keyterm detection runs over it.
+    keyterms: bool,
 }
 
 impl FakeStt {
     pub fn new(registry: Arc<Registry>, connect: std::time::Duration) -> Arc<Self> {
-        Arc::new(FakeStt { registry, connect, detail: Detail::None })
+        Arc::new(FakeStt { registry, connect, detail: Detail::None, keyterms: false })
+    }
+
+    /// A recogniser that takes keyterms, as most streaming providers do.
+    pub fn taking_keyterms(registry: Arc<Registry>, connect: std::time::Duration) -> Arc<Self> {
+        Arc::new(FakeStt { registry, connect, detail: Detail::None, keyterms: true })
     }
 
     /// `AMD(stt=..)`: a recogniser the detector feeds through its own listening gate.
     pub fn for_amd(registry: Arc<Registry>, connect: std::time::Duration) -> Arc<Self> {
-        Arc::new(FakeStt { registry, connect, detail: Detail::AmdStt })
+        Arc::new(FakeStt { registry, connect, detail: Detail::AmdStt, keyterms: false })
     }
 }
 
@@ -52,7 +59,12 @@ impl Stt for FakeStt {
     }
 
     fn capabilities(&self) -> SttCapabilities {
-        SttCapabilities { streaming: true, interim_results: true, ..Default::default() }
+        SttCapabilities {
+            streaming: true,
+            interim_results: true,
+            keyterms: self.keyterms,
+            ..Default::default()
+        }
     }
 
     async fn recognize(

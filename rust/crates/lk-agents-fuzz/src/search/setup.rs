@@ -3,7 +3,10 @@ use fastrand::Rng;
 use lk_agents_abi::voice::session_options::TextTransformSet;
 
 use crate::{
-    drive::{AmdAnswer, AmdSetup, PreConnect, RealtimeSetup, RoomLegs, RoomSetup, Setup},
+    drive::{
+        AmdAnswer, AmdSetup, KeytermDetectionSetup, PreConnect, RealtimeSetup, RoomLegs, RoomSetup,
+        Setup,
+    },
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
 
@@ -42,6 +45,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         },
         amd: rng.bool().then_some(AmdSetup::default()),
         keyterms: if rng.bool() { names(rng) } else { vec![] },
+        keyterm_detection: None,
         room: rng.bool().then(|| RoomSetup {
             close_on_disconnect: rng.bool(),
             delete_room_on_close: rng.bool(),
@@ -99,5 +103,12 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
             },
         };
     }
+    // Drawn last, so a seed draws the same setup as before the switch existed.
+    setup.keyterm_detection = (rng.u8(0..100) < 35).then(|| KeytermDetectionSetup {
+        stt_takes_keyterms: rng.u8(0..100) < 80,
+        turn_interval: rng.u32(0..3),
+        max_keyterms: rng.bool().then(|| rng.usize(0..4)),
+        timeout_ms: rng.bool().then(|| DELAYS_MS[rng.usize(0..DELAYS_MS.len())]),
+    });
     setup
 }

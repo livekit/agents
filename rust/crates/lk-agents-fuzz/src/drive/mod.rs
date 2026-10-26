@@ -34,7 +34,7 @@ use lk_agents_abi::{
     errors::RefRegistry,
     metrics::base::AgentMetrics,
     turn::interruption::InterruptionSource,
-    turn::keyterms::SttContextConfig,
+    turn::keyterms::{DetectionLlm, KeytermDetectionConfig, SttContextConfig},
     voice::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig},
     voice::session_options::{
         DeprecatedTurnKwargs, EndpointingKwargs, HostValue, InterruptionKwargs, PreemptiveKwargs, SessionKwargs,
@@ -148,6 +148,8 @@ pub struct Setup {
     pub amd: Option<AmdSetup>,
     /// Static keyterms, which is also what makes the session have a keyterm pass at all.
     pub keyterms: Vec<String>,
+    /// `stt_context_options["keyterm_detection"]` on, with the detection LLM the host resolves.
+    pub keyterm_detection: Option<KeytermDetectionSetup>,
     /// What happens in the room: `None` is a room nothing happens in (a `Room` input is refused),
     /// `Some` a room people join and leave, with `RoomOptions`' two switches.
     pub room: Option<RoomSetup>,
@@ -219,6 +221,16 @@ pub enum PreConnect {
     Sent,
     Never,
     Malformed,
+}
+
+/// Keyterm detection as `KeytermDetectionOptions` sets it up, and whether the session's
+/// recogniser takes keyterms at all (`STTCapabilities.keyterms`): without it no pass runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeytermDetectionSetup {
+    pub stt_takes_keyterms: bool,
+    pub turn_interval: u32,
+    pub max_keyterms: Option<usize>,
+    pub timeout_ms: Option<u64>,
 }
 
 /// `AMD(session, ...)`: its switches, its recogniser, and what the room says once it is attached.
@@ -308,6 +320,7 @@ impl Default for Setup {
             ivr: None,
             amd: None,
             keyterms: Vec::new(),
+            keyterm_detection: None,
             room: None,
             text_transforms: None,
             room_legs: None,

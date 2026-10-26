@@ -33,6 +33,7 @@ use lk_agents_voice::{
         classifier::MAX_EXTENSION_SECS,
         detector::{POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL},
     },
+    keyterm_detection::RECORD_KEYTERMS_TOOL,
     events::SessionEvent,
     trace::{GenerationStep, Step},
 };
@@ -42,8 +43,8 @@ use crate::{
     drive::{AmdAnswer, Case, Outcome, Policy, Run, Setup},
     input::{
         AGENT_TURNS, AgentText, AmdInput, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make,
-        Millis, Ref, RoomIn, RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode, USER_TURNS,
-        UserText,
+        Millis, NAMES, Ref, RoomIn, RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode,
+        USER_TURNS, UserText,
     },
     record::{Detail, Kind, Tag},
 };
@@ -1249,14 +1250,39 @@ impl Talk {
                 // A request that offered the answering-machine classifier's tool is the
                 // classifier's, and is answered as a model would answer it: with that tool. The
                 // person on the line is a person, and saying so is the classifier's whole job.
-                let classifying =
-                    match self.run.record.resource(Kind::Chat, chat).map(|r| r.detail()) {
-                        Some(Detail::Chat { tools, .. }) => {
-                            tools.iter().any(|t| t == SAVE_PREDICTION_TOOL)
-                        }
-                        _ => false,
+                let offered = |tool: &str| {
+                    matches!(
+                        self.run.record.resource(Kind::Chat, chat).map(|r| r.detail()),
+                        Some(Detail::Chat { tools, .. }) if tools.iter().any(|t| t == tool)
+                    )
+                };
+                let classifying = offered(SAVE_PREDICTION_TOOL);
+                let detecting = offered(RECORD_KEYTERMS_TOOL);
+                if detecting {
+                    // The keyterm detector's pass, answered with its tool: terms to track, to
+                    // apply and to drop, drawn from the call's names, or an answer that changes
+                    // nothing.
+                    let mut terms = || -> Vec<&str> {
+                        let n = self.rng.usize(0..3);
+                        (0..n).map(|_| NAMES[self.rng.usize(0..NAMES.len())]).collect()
                     };
-                if classifying {
+                    let (pending, confirm, remove) = (terms(), terms(), terms());
+                    let args = if self.rng.u8(0..100) < 15 {
+                        "{}".to_owned()
+                    } else {
+                        let update = serde_json::json!({
+                            "pending": pending,
+                            "confirm": confirm,
+                            "remove": remove,
+                        });
+                        update.to_string()
+                    };
+                    rows.push(Input::LlmToolCall {
+                        chat: Ref::new(chat),
+                        name: RECORD_KEYTERMS_TOOL.to_owned(),
+                        args: ToolArgs(args),
+                    });
+                } else if classifying {
                     // Any answer the model could give, drawn uniformly: each label the tool
                     // accepts, a postponement (including one past the clamp), and an answer
                     // without the label, which the classifier must ignore.
