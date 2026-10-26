@@ -168,6 +168,7 @@
   "conciseness",
   "confirm_duplicate_description",
   "convert_expression_tags",
+  "convert_mid_conversation_instructions",
   "cpu_count",
   "decide_duplicate",
   "default_aec_warmup",

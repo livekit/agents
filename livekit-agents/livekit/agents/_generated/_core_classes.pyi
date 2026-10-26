@@ -320,6 +320,12 @@ def to_provider_format(
     inject_trailing_user_message: bool = False,
     thought_signatures: dict[str, list[int]] | None = None,
 ) -> tuple[list[Any], Any]: ...
+def convert_mid_conversation_instructions(
+    items: list[ChatItem],
+    *,
+    role: str,
+    template: str,
+) -> list[tuple[int, ChatItem | None]]: ...
 def to_fnc_ctx(
     format: str,
     tools: list[Any],

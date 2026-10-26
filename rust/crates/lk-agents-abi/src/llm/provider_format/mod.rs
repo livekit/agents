@@ -70,14 +70,25 @@ pub(crate) fn field<'v>(schema: &'v Value, key: &str) -> Result<&'v Value, Forma
     schema.get(key).ok_or_else(|| FormatError::MalformedToolSchema { detail: format!("missing {key:?}") })
 }
 
-/// `json.loads(msg.arguments or "{}")`: only `""` becomes `{}`.
-pub(crate) fn parse_arguments(arguments: &str) -> Result<Value, FormatError> {
-    if arguments.is_empty() {
-        return Ok(Value::Object(serde_json::Map::new()));
+/// `parse_tool_call_arguments`: a stored call's arguments as the JSON object Anthropic, Bedrock and
+/// Gemini take, repaired when malformed. History the model never parsed (restored, or written by a
+/// custom `llm_node`) must not fail every later turn, so an unrecoverable one becomes `{}`.
+pub(crate) fn parse_arguments(call: &lk_agents_abi::FunctionCall) -> Value {
+    if call.arguments.is_empty() {
+        return Value::Object(serde_json::Map::new());
     }
-    serde_json::from_str(arguments).map_err(|e| FormatError::MalformedToolSchema {
-        detail: format!("tool call arguments are not JSON: {e}"),
-    })
+    match crate::llm::tool_arguments::parse_logged(&call.arguments) {
+        Ok(arguments) => Value::Object(arguments),
+        Err(_) => {
+            log::warn!(
+                target: "livekit.agents",
+                call_id = call.call_id.as_str(),
+                tool_name = call.name.as_str();
+                "could not parse stored tool call arguments as a JSON object, using empty arguments"
+            );
+            Value::Object(serde_json::Map::new())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -113,14 +124,22 @@ mod tests {
         }
     }
 
-    // Catches: treating any falsy-looking `arguments` as `{}` instead of only `""`.
+    // Catches: a malformed stored call raising on every later turn instead of being repaired, or
+    // emptied when it is not an object.
     #[test]
-    fn only_empty_arguments_default_to_an_empty_object() {
-        assert_eq!(parse_arguments("").unwrap(), serde_json::json!({}));
-        assert_eq!(parse_arguments("{\"a\":1}").unwrap(), serde_json::json!({ "a": 1 }));
-        // Not an object, and the reference passes it straight through as `input`/`args`.
-        assert_eq!(parse_arguments("5").unwrap(), serde_json::json!(5));
-        assert!(parse_arguments("   ").is_err());
-        assert!(parse_arguments("{").is_err());
+    fn stored_arguments_are_repaired_or_emptied_never_raised() {
+        let args = |raw: &str| {
+            let lk_agents_abi::ChatItem::FunctionCall(call) = testkit::call("c", "c0", "f", raw) else {
+                unreachable!()
+            };
+            parse_arguments(&call)
+        };
+        assert_eq!(args(""), serde_json::json!({}));
+        assert_eq!(args("{\"a\":1}"), serde_json::json!({ "a": 1 }));
+        assert_eq!(args("{'a': 1,}"), serde_json::json!({ "a": 1 }));
+        assert_eq!(args(&serde_json::to_string("{\"a\":1}").unwrap()), serde_json::json!({ "a": 1 }));
+        for unrecoverable in ["5", "[1]", "   ", "not json"] {
+            assert_eq!(args(unrecoverable), serde_json::json!({}), "{unrecoverable:?}");
+        }
     }
 }
