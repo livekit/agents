@@ -67,8 +67,10 @@ class TranslationRoomOptions:
     text_output: TextOutputOptions | bool = True
     """Transcripts published to the room: what was heard, and what was spoken back.
 
-    Both are attributed to the speaker's track and tagged with ``lk.transcription_language``
-    where it is known, so a listener tells them apart by language."""
+    What was heard is the speaker's, on their track; the translation is the agent's, on the
+    translated track it transcribes, as a client expects of an agent's speech. Both carry
+    ``lk.transcription_language`` where it is known, and the translated track's name links
+    the translation back to the speaker's track."""
     track: NotGivenOr[str] = NOT_GIVEN
     """The sid of the audio track to translate. If not given, the first eligible one
     published. A track is the unit here rather than a participant: a participant can publish
@@ -384,10 +386,8 @@ class TranslationRoomIO:
             # the transcript follows the track, or later speech keeps the old stamp
             self._input_tr_output.set_track(track_sid)
         if self._output_tr_output:
-            # the translation is the speaker's words, so it is theirs on the wire too, and
-            # tells itself apart from what they said by its language
-            self._output_tr_output.set_participant(self._participant_identity)
-            self._output_tr_output.set_track(track_sid)
+            # the translation stays the agent's, on its own track: clients file a transcript
+            # under its sender, so sent as the speaker it would read as their own words
             self._output_tr_output.set_attributes(self._output_attributes())
 
         if self._init_atask is not None and self._init_atask.done():
@@ -418,9 +418,6 @@ class TranslationRoomIO:
         if self._input_tr_output:
             self._input_tr_output.set_participant(None)
             self._input_tr_output.set_track(None)
-        if self._output_tr_output:
-            self._output_tr_output.set_participant(None)
-            self._output_tr_output.set_track(None)
 
     def _on_output_language_changed(self, language: str) -> None:
         """Retag the translation with the language it is now spoken in, and rename its track.
@@ -520,6 +517,11 @@ class TranslationRoomIO:
             )
 
         self._apply_link(linked)
+
+        if self._output_tr_output:
+            # stamped with the agent's own microphone track, which is the translated one, once
+            # it is published, and again whenever it is republished under a new name
+            self._output_tr_output.set_participant(self._room.local_participant.identity)
 
         if self._audio_output:
             if (name := self._output_track_name()) is not None:

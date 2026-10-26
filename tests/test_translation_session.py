@@ -874,7 +874,7 @@ class _NamingAudioOutput:
         self.started = True
 
 
-async def test_the_translation_is_attributed_to_the_speakers_track() -> None:
+async def test_the_translation_stays_the_agents_and_carries_its_language() -> None:
     room_io = _room_io()
     _linked(room_io)
     translation = _RecordingTaggedOutput()
@@ -883,9 +883,10 @@ async def test_the_translation_is_attributed_to_the_speakers_track() -> None:
 
     room_io._apply_link(_LinkedTrack(_FakePublication("TR_a"), alice))  # type: ignore[arg-type]
 
-    # the speaker's words in another language: theirs, on their track, told apart by language
-    assert translation.participants == ["alice"]
-    assert translation.tracks == ["TR_a"]
+    # clients file a transcript under its sender: sent as Alice, the translation would read
+    # as her own words, so it stays the agent's, on the agent's track
+    assert translation.participants == []
+    assert translation.tracks == []
     assert translation.attributes == [{"lk.transcription_language": "es"}]
 
 
