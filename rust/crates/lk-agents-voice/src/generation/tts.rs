@@ -25,11 +25,13 @@ const MAX_BUFFERED_TTS_FRAMES: usize = 256;
 
 /// `opening` is the text so far, still the item's. `lost`: the TTS failed for good; otherwise the
 /// speech was interrupted or closing before the synthesiser was asked, and no leg is opened.
-/// `synchronized`: the synchroniser's words up to where the failed synthesis played.
+/// `synchronized`: the synchroniser's words up to where the failed synthesis played. `played`:
+/// the failed synthesis produced audio; with none, none of its words were heard.
 pub(super) struct Lost {
     pub(super) lost: bool,
     pub(super) opening: Visible,
     pub(super) synchronized: Option<String>,
+    pub(super) played: bool,
 }
 
 /// One failed duplex stream: the error, whether audio came first, the words fed, and the
@@ -64,7 +66,7 @@ pub(super) async fn perform_tts_inference(
     loop {
         // Never open for a speech that is over or a closing session.
         if handle.interrupted() || *shared.closing.borrow() {
-            return Err(Lost { lost: false, opening: text, synchronized: None });
+            return Err(Lost { lost: false, opening: text, synchronized: None, played: false });
         }
         // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex open's
         // `Err` is a failed attempt, never a downgrade. What the words leg already closed is fed at
@@ -109,9 +111,11 @@ pub(super) async fn perform_tts_inference(
         match retry(shared, handle, &mut attempt, ProviderKind::Tts, &error).await {
             Retried::Again => {}
             Retried::Interrupted => {
-                return Err(Lost { lost: false, opening: text, synchronized: None });
+                return Err(Lost { lost: false, opening: text, synchronized: None, played: false });
             }
-            Retried::GiveUp => return Err(Lost { lost: true, opening: text, synchronized }),
+            Retried::GiveUp => {
+                return Err(Lost { lost: true, opening: text, synchronized, played: produced });
+            }
         }
     }
 }

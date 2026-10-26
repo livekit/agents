@@ -251,7 +251,7 @@ impl Pump<'_> {
                     }
                     // The voice is gone for the rest of the step; the words are forwarded as text,
                     // and the item reads as cut short (`interrupted=... or out.tts_failed`).
-                    Err(Lost { lost: true, opening, synchronized }) => {
+                    Err(Lost { lost: true, opening, synchronized, played }) => {
                         self.voice = Voice::Silent;
                         self.acc.tts_failed();
                         match aligned.as_ref().filter(|a| a.stamped) {
@@ -263,10 +263,17 @@ impl Pump<'_> {
                                 silent(words, true)
                             }
                             // `opening` holds what the failed synthesiser was fed. The item is what
-                            // the synchroniser says was heard of it, else every word forwarded.
+                            // the synchroniser says was heard of it, else every word forwarded;
+                            // nothing when none of its audio played (`forward_generation` leaves
+                            // such a segment "skipped").
                             None => {
                                 let words = drain_segment_text(rx, opening, text_out).await.text;
-                                silent(synchronized.unwrap_or(words), true)
+                                let heard = if played {
+                                    synchronized.unwrap_or(words)
+                                } else {
+                                    String::new()
+                                };
+                                silent(heard, true)
                             }
                         }
                     }
