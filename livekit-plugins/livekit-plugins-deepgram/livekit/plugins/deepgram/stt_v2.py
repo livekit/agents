@@ -521,8 +521,11 @@ class SpeechStreamv2(stt.SpeechStream):
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -544,9 +547,7 @@ class SpeechStreamv2(stt.SpeechStream):
                     if closing_ws or self._session.closed:
                         return
 
-                    # the heartbeat closes the socket when a ping goes unanswered,
-                    # and that surfaces here rather than as a close frame.
-                    # ws.exception() is the only place the reason survives.
+                    # Preserve the underlying transport error.
                     raise APIConnectionError("deepgram connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -554,7 +555,16 @@ class SpeechStreamv2(stt.SpeechStream):
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                    if data.get("type") == "TurnInfo" and data.get("event") in (
+                        "StartOfTurn",
+                        "Update",
+                        "EagerEndOfTurn",
+                        "TurnResumed",
+                        "EndOfTurn",
+                    ):
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception("failed to process deepgram message")
 
@@ -643,7 +653,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._session.ws_connect(
                     _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
                     headers={"Authorization": f"Token {self._api_key}"},
-                    heartbeat=30.0,
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )

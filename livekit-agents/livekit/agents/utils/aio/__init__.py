@@ -6,6 +6,7 @@ from .sleep import Sleep, SleepFinished, sleep
 from .task_set import TaskSet
 from .utils import cancel_and_wait, gracefully_cancel
 from .wait_group import WaitGroup
+from .websocket import WebSocketMonitor
 
 __all__ = [
     "AsyncAtomicCounter",
@@ -20,6 +21,7 @@ __all__ = [
     "sleep",
     "TaskSet",
     "WaitGroup",
+    "WebSocketMonitor",
     "debug",
     "cancel_and_wait",
     "duplex_unix",
