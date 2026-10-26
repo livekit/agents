@@ -18,8 +18,10 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 import google.auth.credentials
+import google.auth.exceptions
 from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
+from google.genai.errors import APIError, ClientError
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, utils
@@ -56,6 +58,18 @@ INPUT_AUDIO_SAMPLE_RATE = 16000
 INPUT_AUDIO_CHANNELS = 1
 OUTPUT_AUDIO_SAMPLE_RATE = 24000
 OUTPUT_AUDIO_CHANNELS = 1
+
+# websocket close codes for a setup the server refuses: invalid argument, policy violation
+_SETUP_REJECTED_CLOSE_CODES = (1007, 1008)
+
+
+def _is_setup_error(e: Exception) -> bool:
+    """Whether a connection that never opened failed on its setup, which a retry repeats."""
+    if isinstance(e, ClientError):
+        return e.code != 429
+    if isinstance(e, APIError):
+        return e.code in _SETUP_REJECTED_CLOSE_CODES
+    return isinstance(e, (google.auth.exceptions.GoogleAuthError, ValueError, TypeError))
 
 
 @dataclass
@@ -430,6 +444,7 @@ class GeminiTranslationSession(TranslationModelSession[None]):
         if self._input_resampler:
             if frame.sample_rate != self._input_resampler._input_rate:
                 # input audio changed to a different sample rate
+                yield from self._input_resampler.flush()
                 self._input_resampler = None
 
         if self._input_resampler is None and (
@@ -465,8 +480,11 @@ class GeminiTranslationSession(TranslationModelSession[None]):
                     if self._msg_ch.closed:
                         break
 
-                    if not connected or max_retries == 0 or self._num_retries == max_retries:
-                        # never connecting usually means a bad setup, which a retry repeats
+                    if (
+                        (not connected and _is_setup_error(e))
+                        or max_retries == 0
+                        or self._num_retries == max_retries
+                    ):
                         self._emit_error(e, recoverable=False)
                         raise APIConnectionError(
                             message="Gemini Live translation connection failed"
@@ -513,8 +531,9 @@ class GeminiTranslationSession(TranslationModelSession[None]):
     async def _send_or_keep(self, session: AsyncSession, blob: types.Blob) -> None:
         try:
             await session.send_realtime_input(audio=blob)
-        except Exception:
-            # a failed send means the connection is going; keep the audio for the next one
+        except (Exception, asyncio.CancelledError):
+            # a failed or interrupted send means the connection is going; keep the audio for
+            # the next one
             self._unsent_audio = blob
             raise
 

@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import pytest
-from google.genai import types
+from google.genai import errors, types
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions
@@ -27,6 +27,7 @@ class _FakeLiveSession:
         self.config = config
         self.sent: list[types.Blob] = []
         self.fail_sends = False
+        self.stall_sends = False
         self._incoming: asyncio.Queue[types.LiveServerMessage | Exception] = asyncio.Queue()
 
     def emit(self, **server_content: Any) -> None:
@@ -43,6 +44,8 @@ class _FakeLiveSession:
     async def send_realtime_input(self, *, audio: types.Blob) -> None:
         if self.fail_sends:
             raise ConnectionResetError("connection reset")
+        if self.stall_sends:
+            await asyncio.Future()
         self.sent.append(audio)
 
     async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
@@ -52,13 +55,18 @@ class _FakeLiveSession:
         yield msg
 
 
-def _connect_hook(monkeypatch: pytest.MonkeyPatch) -> list[_FakeLiveSession]:
+def _connect_hook(
+    monkeypatch: pytest.MonkeyPatch, *, handshake_errors: list[Exception] | None = None
+) -> list[_FakeLiveSession]:
     conns: list[_FakeLiveSession] = []
+    pending_errors = list(handshake_errors or [])
 
     @contextlib.asynccontextmanager
     async def _connect(
         self: GeminiTranslationSession, config: types.LiveConnectConfig
     ) -> AsyncIterator[_FakeLiveSession]:
+        if pending_errors:
+            raise pending_errors.pop(0)
         conn = _FakeLiveSession(config)
         conns.append(conn)
         yield conn
@@ -311,3 +319,71 @@ async def test_audio_from_before_a_retarget_keeps_its_language(
         assert isinstance(second, TranslatedAudioFrame) and second.language == "fr"
     finally:
         await session.aclose()
+
+
+async def test_a_handshake_that_fails_in_transit_is_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch, handshake_errors=[ConnectionError("network down")])
+    session = _model(conn_options=APIConnectOptions(max_retry=3, retry_interval=0)).session()
+    errors_seen: list[TranslationModelError] = []
+    session.on("error", errors_seen.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        assert [e.recoverable for e in errors_seen] == [True]
+    finally:
+        await session.aclose()
+
+
+async def test_a_handshake_the_server_rejects_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(
+        monkeypatch, handshake_errors=[errors.APIError(1007, {"message": "invalid argument"})]
+    )
+    session = _model(conn_options=APIConnectOptions(max_retry=3, retry_interval=0)).session()
+    errors_seen: list[TranslationModelError] = []
+    session.on("error", errors_seen.append)
+    try:
+        async for _ in session.audio_stream:
+            pass
+        assert [e.recoverable for e in errors_seen] == [False]
+        assert not conns
+    finally:
+        await session.aclose()
+
+
+async def test_audio_in_flight_at_a_retarget_goes_out_on_the_next_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model().session()
+    try:
+        await _wait_for(lambda: bool(conns))
+        conns[0].stall_sends = True
+        session.push_audio(_frame(0.1, fill=5))
+        await asyncio.sleep(0.05)
+
+        session.update_options(target_language="fr")
+        await _wait_for(lambda: len(conns) == 2 and bool(conns[1].sent))
+        assert [b.data for b in conns[1].sent] == [_pcm(0.1, fill=5)]
+    finally:
+        await session.aclose()
+
+
+async def test_a_sample_rate_change_keeps_the_tail_of_the_old_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model().session()
+    await _wait_for(lambda: bool(conns))
+    # 10ms at 48kHz, all of it still held in the resampler
+    session.push_audio(
+        rtc.AudioFrame(
+            data=b"\x01\x00" * 480, sample_rate=48000, num_channels=1, samples_per_channel=480
+        )
+    )
+    session.push_audio(_frame(0.09, fill=6))
+    await session.aclose()
+
+    assert sum(len(b.data or b"") for b in conns[0].sent) == 1600 * 2
