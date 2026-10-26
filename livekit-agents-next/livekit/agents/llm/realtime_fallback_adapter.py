@@ -5,11 +5,12 @@ import contextlib
 import time
 import weakref
 from collections.abc import AsyncIterable, Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
+from .. import _core
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
@@ -35,27 +36,6 @@ class RealtimeAvailabilityChangedEvent:
     available: bool
 
 
-# pipeline-shaping caps that must match across models (set at activity start, can't change mid-call)
-_HARD_CAPABILITIES = (
-    "audio_output",
-    "turn_detection",
-    "supports_overlapping_speech",
-)
-
-# caps exposed as the conservative AND; the active model's exact value is read per-turn from the session
-_SOFT_CAPABILITIES = (
-    "message_truncation",
-    "user_transcription",
-    "manual_function_calls",
-    "auto_tool_reply_generation",
-    "mutable_chat_context",
-    "mutable_instructions",
-    "mutable_tools",
-    "per_response_tool_choice",
-    "supports_say",
-    "can_disable_turn_detection",
-)
-
 # child events re-emitted on the wrapper
 _FORWARDED_EVENTS: tuple[EventTypes, ...] = (
     "input_speech_started",
@@ -69,21 +49,8 @@ _FORWARDED_EVENTS: tuple[EventTypes, ...] = (
 
 
 def _merge_capabilities(models: list[RealtimeModel]) -> RealtimeCapabilities:
-    first = models[0].capabilities
-    for model in models[1:]:
-        caps = model.capabilities
-        for name in _HARD_CAPABILITIES:
-            if getattr(caps, name) != getattr(first, name):
-                raise ValueError(
-                    f"all realtime models must agree on `{name}` to be used in a "
-                    f"RealtimeModelFallbackAdapter, got "
-                    f"{getattr(first, name)} and {getattr(caps, name)}"
-                )
-
-    merged = {name: getattr(first, name) for name in _HARD_CAPABILITIES}
-    for name in _SOFT_CAPABILITIES:
-        merged[name] = all(getattr(model.capabilities, name) for model in models)
-
+    """The pipeline-shaping capabilities must agree; the others are the conservative AND."""
+    merged = _core.merge_realtime_capabilities([asdict(m.capabilities) for m in models])
     return RealtimeCapabilities(**merged)
 
 
@@ -188,8 +155,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._extra_forwarders: dict[str, Callable[..., None]] = {}
 
         # per-model availability, with a cooldown after a failure
-        self._available = [True] * len(adapter._models)
-        self._cooldown_deadline = [0.0] * len(adapter._models)
+        self._policy = _core.RealtimeFallback(len(adapter._models), adapter._cooldown)
 
         self._swap_task: asyncio.Task[None] | None = None
         self._swap_lock = asyncio.Lock()
@@ -243,33 +209,34 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         return super().on(event, callback)
 
+    @property
+    def _active_index(self) -> int:
+        return self._policy.active_index  # type: ignore[no-any-return]
+
+    @_active_index.setter
+    def _active_index(self, index: int) -> None:
+        self._policy.active_index = index
+
+    def _announce(self, changes: list[dict[str, Any]]) -> None:
+        for change in changes:
+            self._adapter.emit(
+                "realtime_availability_changed",
+                RealtimeAvailabilityChangedEvent(
+                    realtime_model=self._adapter._models[change["index"]],
+                    available=change["available"],
+                ),
+            )
+
     def _set_available(self, index: int, available: bool) -> None:
-        if self._available[index] == available:
-            return
-        self._available[index] = available
-        if not available:
-            # keep the model out of rotation until the cooldown expires
-            self._cooldown_deadline[index] = time.time() + self._adapter._cooldown
-        self._adapter.emit(
-            "realtime_availability_changed",
-            RealtimeAvailabilityChangedEvent(
-                realtime_model=self._adapter._models[index], available=available
-            ),
-        )
+        if change := self._policy.set_available(index, available, time.time()):
+            self._announce([change])
 
     def _next_available_index(self, *, exclude_current: bool = False) -> int | None:
-        # re-enable models whose cooldown expired, then pick the first available (primary preferred)
-        now = time.time()
-        for i, deadline in enumerate(self._cooldown_deadline):
-            if not self._available[i] and deadline <= now:
-                self._set_available(i, True)
-
-        for i in range(len(self._adapter._models)):
-            if exclude_current and i == self._active_index:
-                continue
-            if self._available[i]:
-                return i
-        return None
+        index, changes = self._policy.next_available_index(
+            time.time(), exclude_current=exclude_current
+        )
+        self._announce(changes)
+        return index  # type: ignore[no-any-return]
 
     def _is_agent_speaking(self) -> bool:
         # "thinking" (generating) or "speaking" (playing out) both mean a reply is in progress
@@ -279,33 +246,26 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         )
 
     def _on_child_error(self, error: RealtimeModelError) -> None:
-        if error.recoverable:
-            # surface it and let the plugin's own reconnect handle it
-            self.emit("error", error)
-            return
-
-        # mark the dead model unavailable for a cooldown, then find a fallback
-        self._set_available(self._active_index, False)
-        target = self._next_available_index()
-        if target is None:
-            # exhausted: escalate so LiveSession can close
-            self.emit("error", error)
-            return
-
-        # recoverable while a fallback remains, so the session isn't torn down
-        self.emit("error", error.model_copy(update={"recoverable": True}))
-        if self._swap_task is None or self._swap_task.done():
-            # capture the speaking state now; the dead generation may flip it before the swap runs
+        busy = self._swap_task is not None and not self._swap_task.done()
+        plan = self._policy.on_child_error(
+            recoverable=error.recoverable, swap_busy=busy, now=time.time()
+        )
+        self._announce(plan["changes"])
+        # while a fallback remains the error is recoverable, so the session isn't torn down
+        self.emit(
+            "error",
+            error.model_copy(update={"recoverable": True})
+            if plan["rewrite_recoverable"]
+            else error,
+        )
+        if (target := plan["swap_to"]) is not None:
+            # the speaking state now: the dead generation may flip it before the swap runs
             self._swap_task = asyncio.create_task(self._swap(target, self._is_agent_speaking()))
 
     async def restart(self, *, switch_model: bool) -> None:
         """Restart the underlying session, optionally on the next available model."""
-        if switch_model:
-            # fall back to the current model if no other is available
-            target = self._next_available_index(exclude_current=True)
-            target = self._active_index if target is None else target
-        else:
-            target = self._active_index
+        target, changes = self._policy.restart_target(switch_model=switch_model, now=time.time())
+        self._announce(changes)
         await self._swap(target, self._is_agent_speaking())
 
     async def _swap(self, target_index: int, was_speaking: bool) -> None:

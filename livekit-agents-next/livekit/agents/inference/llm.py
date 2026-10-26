@@ -5,6 +5,7 @@ from typing import Any, Literal, cast, get_args
 import httpx2 as httpx
 import openai
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+from openai.types.shared.reasoning_effort import ReasoningEffort
 
 from .. import _core, llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
@@ -84,25 +85,113 @@ def is_realtime_model(model: str) -> bool:
     return model in _REALTIME_MODEL_IDS
 
 
+# Reasoning models don't support sampling parameters.
+# See: https://platform.openai.com/docs/guides/reasoning
+_REASONING_UNSUPPORTED_PARAMS: set[str] = {
+    "temperature",
+    "top_p",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "logprobs",
+    "top_logprobs",
+    "n",
+}
+
+# xAI reasoning models only restrict presence_penalty, frequency_penalty, stop.
+# They still support temperature and top_p.
+_XAI_REASONING_UNSUPPORTED_PARAMS: set[str] = {
+    "presence_penalty",
+    "frequency_penalty",
+    "stop",
+}
+
+# Model prefix -> set of param names that should be dropped
+_UNSUPPORTED_PARAMS: dict[str, set[str]] = {
+    "o1": _REASONING_UNSUPPORTED_PARAMS,
+    "o3": _REASONING_UNSUPPORTED_PARAMS,
+    "o4": _REASONING_UNSUPPORTED_PARAMS,
+    "gpt-5": _REASONING_UNSUPPORTED_PARAMS,
+    "grok-4-1-fast-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
+    "grok-4.20-0309-reasoning": _XAI_REASONING_UNSUPPORTED_PARAMS,
+    "grok-4.20-multi-agent": _XAI_REASONING_UNSUPPORTED_PARAMS,
+}
+
+# temperature/top_p are accepted by gpt-5.1+ only at reasoning_effort
+# "none"; see the note in drop_unsupported_params.
+_SAMPLING_PARAMS: set[str] = {"temperature", "top_p"}
+
+# models that don't support reasoning_effort when function tools are present
+_REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
+
+
 def drop_unsupported_params(
     model: str, params: dict[str, Any], tools: list[Any] | None = None
 ) -> dict[str, Any]:
-    """``params`` without the parameters ``model`` refuses."""
-    # the core decides on the keys and the reasoning effort; the values stay host objects
-    reasoning = params.get("reasoning")
-    effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
-    probe = dict.fromkeys(params) | {
-        "reasoning_effort": params.get("reasoning_effort"),
-        "reasoning": {"effort": getattr(reasoning, "effort", effort)},
-    }
-    probe = {k: v for k, v in probe.items() if k in params}
-    keep = _core.llm_drop_unsupported_params(model, probe, has_tools=bool(tools))
-    return {k: v for k, v in params.items() if k in keep}
+    """Remove parameters that are not supported by the given model.
+
+    Strips any provider prefix (e.g. ``openai/o3-pro`` -> ``o3-pro``) before
+    matching against known model prefixes.
+    """
+    model_name = model.split("/")[-1] if "/" in model else model
+    if tools and any(
+        model_name.startswith(p) for p in _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES
+    ):
+        params = {k: v for k, v in params.items() if k != "reasoning_effort"}
+    for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
+        if model_name.startswith(prefix):
+            if (
+                unsupported is _REASONING_UNSUPPORTED_PARAMS
+                and min_reasoning_effort(model_name) == "none"
+                and _reasoning_effort_is_none(params)
+            ):
+                # OpenAI accepts temperature/top_p on gpt-5.1+ models only at
+                # effort "none" (the model's lowest supported effort). Verified
+                # against the API on gpt-5.6-luna (2026-10): "none" +
+                # temperature -> 200, "low" + temperature -> 400, on both the
+                # chat completions and responses APIs. The reasoning guide no
+                # longer documents this restriction. Applies only to models in
+                # _MIN_REASONING_EFFORT — new gpt-5.1+ models must be added
+                # there or temperature stays stripped.
+                unsupported = unsupported - _SAMPLING_PARAMS
+            params = {k: v for k, v in params.items() if k not in unsupported}
+            break
+    return params
 
 
-def min_reasoning_effort(model: str) -> str | None:
-    """The lowest reasoning effort ``model`` supports, ``None`` when it has no such control."""
-    return _core.min_reasoning_effort(model)  # type: ignore[no-any-return]
+def _reasoning_effort_is_none(params: dict[str, Any]) -> bool:
+    # chat completions sends effort as params["reasoning_effort"]; the
+    # responses plugin sends it as params["reasoning"], an openai Reasoning
+    # object with an .effort attribute
+    if params.get("reasoning_effort") == "none":
+        return True
+    return getattr(params.get("reasoning"), "effort", None) == "none"
+
+
+# lowest supported reasoning effort per model; "none" requires gpt-5.1+
+_MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
+    "gpt-5.1": "none",
+    "gpt-5.2": "none",
+    "gpt-5.4": "none",
+    "gpt-5.4-mini": "none",
+    "gpt-5.4-nano": "none",
+    "gpt-5.5": "none",
+    "gpt-5.6-luna": "none",
+    "gpt-5.6-sol": "none",
+    "gpt-5.6-terra": "none",
+    "gpt-5": "minimal",
+    "gpt-5-mini": "minimal",
+    "gpt-5-nano": "minimal",
+}
+
+
+def min_reasoning_effort(model: str) -> ReasoningEffort | None:
+    """Lowest reasoning effort the model supports, or None if the model has no
+    reasoning-effort control.
+
+    Strips any provider prefix (e.g. ``openai/gpt-5`` -> ``gpt-5``) before matching.
+    """
+    return _MIN_REASONING_EFFORT.get(model.split("/")[-1])
 
 
 class LLM(llm.LLM):

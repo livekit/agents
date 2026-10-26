@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import textwrap
 import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
@@ -27,7 +26,7 @@ from typing_extensions import TypedDict
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
-from .. import utils
+from .. import _core, utils
 from .._proto import encode_chat_item
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -772,22 +771,22 @@ class ChatContext:
         *,
         inject_dummy_user_message: bool = True,
         thought_signatures: dict[str, bytes] | None = None,
-    ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
+    ) -> tuple[list[dict], _provider_format.GoogleFormatData]: ...
 
     @overload
     def to_provider_format(
         self, format: Literal["aws"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], _provider_format.aws.BedrockFormatData]: ...
+    ) -> tuple[list[dict], _provider_format.BedrockFormatData]: ...
 
     @overload
     def to_provider_format(
         self, format: Literal["anthropic"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], _provider_format.anthropic.AnthropicFormatData]: ...
+    ) -> tuple[list[dict], _provider_format.AnthropicFormatData]: ...
 
     @overload
     def to_provider_format(
         self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], _provider_format.mistralai.MistralFormatData]: ...
+    ) -> tuple[list[dict], _provider_format.MistralFormatData]: ...
 
     @overload
     def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
@@ -808,24 +807,9 @@ class ChatContext:
         This is necessary because some providers expect a user message to be present for
         generating a response.
         """
-        kwargs["inject_dummy_user_message"] = inject_dummy_user_message
-
-        if format == "openai":
-            return _provider_format.openai.to_chat_ctx(self, **kwargs)
-        elif format == "openai.responses":
-            return _provider_format.openai.to_responses_chat_ctx(self, **kwargs)
-        elif format == "google":
-            return _provider_format.google.to_chat_ctx(self, **kwargs)
-        elif format == "aws":
-            return _provider_format.aws.to_chat_ctx(self, **kwargs)
-        elif format == "anthropic":
-            return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
-        elif format == "mistralai":
-            return _provider_format.mistralai.to_conversations_ctx(
-                self, inject_dummy_user_message=inject_dummy_user_message
-            )
-        else:
-            raise ValueError(f"Unsupported provider format: {format}")
+        return _provider_format.to_chat_ctx(
+            self, format, inject_dummy_user_message=inject_dummy_user_message, **kwargs
+        )
 
     def find_insertion_index(self, *, created_at: float) -> int:
         """
@@ -850,130 +834,32 @@ class ChatContext:
         else:
             self.insert(item)
 
-    async def _summarize(
-        self,
-        llm_v: LLM,
-        *,
-        keep_last_turns: int = 2,
-    ) -> ChatContext:
-        # Split self.items into head/tail. Walk backward, counting only
-        # user/assistant ChatMessages toward the keep_last_turns budget (each
-        # turn = one user + one assistant message, so budget = keep_last_turns * 2).
-        # Everything from the split point onward — including any interleaved
-        # FunctionCall/FunctionCallOutput items — is preserved as-is in the tail.
-        msg_budget = keep_last_turns * 2
-        split_idx = len(self.items)
+    async def _summarize(self, llm_v: LLM, *, keep_last_turns: int = 2) -> ChatContext:
+        """Replace all but the last ``keep_last_turns`` turns with an LLM-written summary."""
+        from .._core_view import to_core_items
 
-        if msg_budget > 0:
-            msg_count = 0
-            for i in range(len(self.items) - 1, -1, -1):
-                item = self.items[i]
-                if isinstance(item, ChatMessage) and item.role in ("user", "assistant"):
-                    msg_count += 1
-                    if msg_count >= msg_budget:
-                        split_idx = i
-                        break
-            else:
-                # Not enough messages to fill the budget — nothing to summarize
-                return self
-
-        if split_idx == 0:
+        plan = _core.chat_ctx_summarize_plan(to_core_items(self.items), keep_last_turns)
+        if plan is None:
             return self
-
-        head_items, tail_items = self.items[:split_idx], self.items[split_idx:]
-
-        # Build summarization input from head_items only.
-        to_summarize: list[ChatMessage | FunctionCall | FunctionCallOutput] = []
-        for item in head_items:
-            if isinstance(item, ChatMessage):
-                if item.role not in ("user", "assistant"):
-                    continue
-                if item.extra.get("is_summary") is True:  # avoid making summary of summaries
-                    continue
-
-                if (item.text_content or "").strip():
-                    to_summarize.append(item)
-            elif isinstance(item, (FunctionCall, FunctionCallOutput)):
-                to_summarize.append(item)
-
-        if not to_summarize:
-            return self
-
-        # Render items to XML format and collect the contents.
-        contents: list[str] = []
-        for m in to_summarize:
-            if isinstance(m, (FunctionCall, FunctionCallOutput)):
-                contents.append(_function_call_item_to_message(m).raw_text_content or "")
-            else:
-                contents.append(to_xml(m.role, (m.text_content or "").strip()))
-
-        source_text = "\n".join(contents).strip()
-
-        if not source_text:
-            return self
-
-        chat_ctx = ChatContext()
-        chat_ctx.add_message(
-            role="system",
-            content=textwrap.dedent("""\
-                Compress older conversation history into a short, faithful summary.
-
-                The conversation is formatted as XML. Here is how to read it:
-                - <user>…</user>  — something the user said.
-                - <assistant>…</assistant>  — something the assistant said.
-                - <function_call name="…" call_id="…">…</function_call>  — the assistant invoked an action.
-                - <function_call_output name="…" call_id="…">…</function_call_output>  — the result of that \
-                action. May contain <error>…</error> if it failed.
-
-                Guidelines:
-                - Distill the *information learned* from function call outputs into the summary. \
-                Do not mention that a tool/function was called — just preserve the knowledge gained.
-                - Focus on: user goals, constraints, decisions, key facts, preferences, entities, \
-                and any pending or unresolved tasks.
-                - Omit greetings, filler, and chit-chat.
-                - Be concise."""),
-        )
-        chat_ctx.add_message(
-            role="user",
-            content=f"Conversation to summarize:\n\n{source_text}",
-        )
-
-        chunks: list[str] = []
-        async with llm_v.chat(chat_ctx=chat_ctx) as stream:
-            async for chunk in stream:
-                if chunk.delta and chunk.delta.content:
-                    chunks.append(chunk.delta.content)
-
-        summary = "".join(chunks).strip()
+        split_idx, preserved, system_prompt, user_content, created_at = plan
+        request = ChatContext()
+        request.add_message(role="system", content=system_prompt)
+        request.add_message(role="user", content=user_content)
+        async with llm_v.chat(chat_ctx=request) as stream:
+            summary = "".join(
+                [c.delta.content async for c in stream if c.delta and c.delta.content]
+            ).strip()
         if not summary:
             return self
-
-        # Rebuild self._items. From head_items, keep only structural
-        # items (system messages, agent handoffs, config updates, prior
-        # summaries) — everything summarizable is replaced by the summary.
-        # Tail items are appended as-is.
-        preserved: list[ChatItem] = []
-        for it in head_items:
-            if isinstance(it, ChatMessage) and it.role in ("user", "assistant"):
-                continue
-            if isinstance(it, (FunctionCall, FunctionCallOutput)):
-                continue
-            preserved.append(it)
-
-        self._items = preserved
-
-        created_at_hint = (
-            (tail_items[0].created_at - 1e-6) if tail_items else (head_items[-1].created_at + 1e-6)
-        )
+        tail = self._items[split_idx:]
+        self._items = [self._items[i] for i in preserved]
         self.add_message(
             role="assistant",
-            content=to_xml("chat_history_summary", summary),
-            created_at=created_at_hint,
+            content=_core.chat_history_summary_xml(summary),
+            created_at=created_at.timestamp(),
             extra={"is_summary": True},
         )
-
-        self._items.extend(tail_items)
-
+        self._items.extend(tail)
         return self
 
     @classmethod
@@ -1052,61 +938,7 @@ class _ReadOnlyChatContext(ChatContext):
         return True
 
 
-def _to_attrs_str(attrs: dict[str, Any] | None = None) -> str | None:
-    if attrs:
-        return " ".join([f'{k}="{v}"' for k, v in attrs.items()])
-    return None
-
-
-def to_xml(
-    tag_name: str,
-    content: str | None = None,
-    attrs: dict[str, Any] | None = None,
-) -> str:
-    attrs_str = _to_attrs_str(attrs)
-
-    if content:
-        return "\n".join(
-            [
-                f"<{tag_name} {attrs_str}>" if attrs_str else f"<{tag_name}>",
-                content,
-                f"</{tag_name}>",
-            ]
-        )
-    else:
-        return f"<{tag_name} {attrs_str} />" if attrs_str else f"<{tag_name} />"
-
-
-def _function_call_item_to_message(item: FunctionCall | FunctionCallOutput) -> ChatMessage:
-    if isinstance(item, FunctionCall):
-        return ChatMessage(
-            role="user",
-            content=[
-                to_xml(
-                    "function_call",
-                    item.arguments,
-                    attrs={
-                        "name": item.name,
-                        "call_id": item.call_id,
-                    },
-                )
-            ],
-            created_at=item.created_at,
-            extra={"is_function_call": True},
-        )
-    elif isinstance(item, FunctionCallOutput):
-        return ChatMessage(
-            role="assistant",
-            content=[
-                to_xml(
-                    "function_call_output",
-                    item.output if not item.is_error else to_xml("error", item.output),
-                    attrs={
-                        "call_id": item.call_id,
-                        "name": item.name,
-                    },
-                )
-            ],
-            created_at=item.created_at,
-            extra={"is_function_call_output": True},
-        )
+def to_xml(tag_name: str, content: str | None = None, attrs: dict[str, Any] | None = None) -> str:
+    return _core.to_xml(  # type: ignore[no-any-return]
+        tag_name, content, [(k, str(v)) for k, v in (attrs or {}).items()]
+    )

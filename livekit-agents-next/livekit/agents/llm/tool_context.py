@@ -992,7 +992,7 @@ class ToolContext:
         self,
         format: Literal["google"],
         *,
-        tool_behavior: _provider_format.google.TOOL_BEHAVIOR | None = None,
+        tool_behavior: _provider_format.TOOL_BEHAVIOR | None = None,
         use_parameters_json_schema: bool = True,
     ) -> list[dict[str, Any]]: ...
 
@@ -1010,15 +1010,4 @@ class ToolContext:
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
         """Parse the function tools to a provider-specific schema."""
-        if format == "openai":
-            return _provider_format.openai.to_fnc_ctx(self, **kwargs)
-        elif format == "openai.responses":
-            return _provider_format.openai.to_responses_fnc_ctx(self, **kwargs)
-        elif format == "google":
-            return _provider_format.google.to_fnc_ctx(self, **kwargs)
-        elif format == "anthropic":
-            return _provider_format.anthropic.to_fnc_ctx(self, **kwargs)
-        elif format == "aws":
-            return _provider_format.aws.to_fnc_ctx(self, **kwargs)
-
-        raise ValueError(f"Unsupported provider format: {format}")
+        return _provider_format.to_fnc_ctx(self, format, **kwargs)

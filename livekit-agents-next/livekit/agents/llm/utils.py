@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import bisect
 import contextlib
-import copy
 import inspect
 import json
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import (
@@ -20,18 +16,16 @@ from typing import (
     get_type_hints,
 )
 
-import json_repair
 import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticSerializationError, PydanticUndefined, from_json, to_json
+from pydantic_core import PydanticSerializationError, PydanticUndefined, to_json
 from typing_extensions import TypeVar
 
 from livekit import rtc
 
+from .. import _core
 from ..log import logger
-from ..utils import images
-from . import _strict
 from .chat_context import ChatContext, ImageContent
 from .tool_context import FunctionTool, RawFunctionTool, ToolError, is_raw_function_tool
 
@@ -43,79 +37,6 @@ if TYPE_CHECKING:
 
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
-
-
-def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
-    """
-    Get the longest common subsequence of IDs (in order) that appear in both
-    old_ids and new_ids.
-    """
-    lcs_ids = _compute_unique_ids_lcs(old_ids, new_ids)
-    if lcs_ids is not None:
-        return lcs_ids
-
-    # Standard dynamic-programming LCS, O(n*m), for IDs that repeat.
-    n, m = len(old_ids), len(new_ids)
-    dp = [[0] * (m + 1) for _ in range(n + 1)]
-
-    # Fill DP table
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            if old_ids[i - 1] == new_ids[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1] + 1
-            else:
-                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
-
-    # Backtrack to find the actual LCS sequence
-    lcs_ids = []
-    i, j = n, m
-    while i > 0 and j > 0:
-        if old_ids[i - 1] == new_ids[j - 1]:
-            lcs_ids.append(old_ids[i - 1])
-            i -= 1
-            j -= 1
-        elif dp[i - 1][j] > dp[i][j - 1]:
-            i -= 1
-        else:
-            j -= 1
-
-    return list(reversed(lcs_ids))
-
-
-def _compute_unique_ids_lcs(old_ids: list[str], new_ids: list[str]) -> list[str] | None:
-    """
-    LCS in O(n log n) when neither list repeats an ID, else None.
-
-    Without repeats, the LCS is the longest increasing subsequence of the
-    positions in new_ids, taken in the order of old_ids.
-    """
-    new_index = {item_id: i for i, item_id in enumerate(new_ids)}
-    if len(new_index) != len(new_ids) or len(set(old_ids)) != len(old_ids):
-        return None
-
-    positions = [new_index[item_id] for item_id in old_ids if item_id in new_index]
-    # tails[k] is the smallest last position of an increasing run of length
-    # k + 1, and tail_at[k] is the index in `positions` that ends that run
-    tails: list[int] = []
-    tail_at: list[int] = []
-    previous = [-1] * len(positions)
-    for at, position in enumerate(positions):
-        k = bisect.bisect_left(tails, position)
-        if k:
-            previous[at] = tail_at[k - 1]
-        if k == len(tails):
-            tails.append(position)
-            tail_at.append(at)
-        else:
-            tails[k] = position
-            tail_at[k] = at
-
-    lcs_ids: list[str] = []
-    at = tail_at[-1] if tail_at else -1
-    while at != -1:
-        lcs_ids.append(new_ids[positions[at]])
-        at = previous[at]
-    return list(reversed(lcs_ids))
 
 
 @dataclass
@@ -130,33 +51,12 @@ class DiffOps:
 
 
 def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps:
-    """Computes the minimal list of create/remove operations to transform old_ctx into new_ctx."""
-    # TODO(theomonnom): Make ChatMessage hashable and also add update ops
+    """The minimal create/remove/update operations turning ``old_ctx`` into ``new_ctx``."""
+    from .._core_view import to_core_items
 
-    old_ids = [m.id for m in old_ctx.items]
-    new_ids = [m.id for m in new_ctx.items]
-
-    lcs_ids = set(_compute_lcs(old_ids, new_ids))
-    old_ctx_by_id = {item.id: item for item in old_ctx.items}
-
-    to_remove = [msg.id for msg in old_ctx.items if msg.id not in lcs_ids]
-    to_create: list[tuple[str | None, str]] = []
-    to_update: list[tuple[str | None, str]] = []
-
-    prev_id: str | None = None  # None means root
-    for new_msg in new_ctx.items:
-        if new_msg.id not in lcs_ids:
-            to_create.append((prev_id, new_msg.id))
-        else:
-            # check if the content is different
-            old_msg = old_ctx_by_id[new_msg.id]
-            if new_msg.type == "message" and old_msg.type == "message":
-                if new_msg.raw_text_content != old_msg.raw_text_content:
-                    to_update.append((prev_id, new_msg.id))
-                # TODO: check other content types
-
-        prev_id = new_msg.id
-
+    to_remove, to_create, to_update = _core.compute_chat_ctx_diff(
+        to_core_items(old_ctx.items), to_core_items(new_ctx.items)
+    )
     return DiffOps(to_remove=to_remove, to_create=to_create, to_update=to_update)
 
 
@@ -189,63 +89,34 @@ class SerializedImage:
 
 
 def serialize_image(image: ImageContent, *, use_cache: bool = True) -> SerializedImage:
-    cache_key = "serialized_image"  # TODO(long): use hash of encoding options if available
-    if use_cache and cache_key in image._cache:
-        return cast(SerializedImage, image._cache[cache_key])
-
-    serialized_image: SerializedImage
+    """The image's bytes (a frame encoded, resized to its inference size) or its URL."""
+    if use_cache and (cached := image._cache.get("serialized_image")) is not None:
+        return cast(SerializedImage, cached)
     if isinstance(image.image, str):
-        if image.image.startswith("data:"):
-            header, b64_data = image.image.split(",", 1)
-            encoded_data = base64.b64decode(b64_data)
-            header_mime = header.split(";")[0].split(":")[1]
-            if image.mime_type and image.mime_type != header_mime:
-                logger.warning(
-                    f"""Provided mime_type '{image.mime_type}' does not match data URL mime type
-                    '{header_mime}'. Using provided mime_type."""
-                )
-                mime_type = image.mime_type
-            else:
-                mime_type = header_mime
-            supported_types = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-            if mime_type not in supported_types:
-                raise ValueError(
-                    f"Unsupported mime_type {mime_type}. Must be jpeg, png, webp, or gif"
-                )
-
-            serialized_image = SerializedImage(
-                data_bytes=encoded_data,
-                mime_type=mime_type,
-                inference_detail=image.inference_detail,
-            )
-        else:
-            serialized_image = SerializedImage(
-                mime_type=image.mime_type,
-                inference_detail=image.inference_detail,
-                external_url=image.image,
-            )
-
+        data, mime_type, url, _ = _core.serialize_image_url(image.image, image.mime_type)
     elif isinstance(image.image, rtc.VideoFrame):
-        opts = images.EncodeOptions()
-        if image.inference_width and image.inference_height:
-            opts.resize_options = images.ResizeOptions(
-                width=image.inference_width,
-                height=image.inference_height,
-                strategy="scale_aspect_fit",
-            )
-        encoded_data = images.encode(image.image, opts)
-
-        serialized_image = SerializedImage(
-            data_bytes=encoded_data,
-            mime_type="image/jpeg",
-            inference_detail=image.inference_detail,
+        frame = image.image
+        if frame.type != rtc.VideoBufferType.RGBA:
+            frame = frame.convert(rtc.VideoBufferType.RGBA)
+        data, mime_type = _core.serialize_image_frame(
+            bytes(frame.data),
+            frame.width,
+            frame.height,
+            image.inference_width,
+            image.inference_height,
         )
+        url = None
     else:
         raise ValueError("Unsupported image type")
-
+    serialized = SerializedImage(
+        inference_detail=image.inference_detail,
+        mime_type=mime_type,
+        data_bytes=data,
+        external_url=url,
+    )
     if use_cache:
-        image._cache[cache_key] = serialized_image
-    return serialized_image
+        image._cache["serialized_image"] = serialized
+    return serialized
 
 
 def build_legacy_openai_schema(
@@ -281,7 +152,7 @@ def build_strict_openai_schema(
     """strict mode tool description"""
     model = function_arguments_to_pydantic_model(function_tool)
     info = function_tool.info
-    schema = _strict.to_strict_json_schema(model, null_sentinel_for_defaults=True)
+    schema = _core.to_strict_json_schema(model.model_json_schema(), null_sentinel_for_defaults=True)
 
     return {
         "type": "function",
@@ -344,7 +215,12 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
     # No null sentinel here: nothing resolves it on the decode side (users validate
     # the raw payload themselves), so the schema must be exactly what validation
     # accepts. Defaulted fields stay required; the model produces their values.
-    schema = _strict.to_strict_json_schema(json_schema_type)
+    raw = (
+        json_schema_type.json_schema()
+        if isinstance(json_schema_type, TypeAdapter)
+        else json_schema_type.model_json_schema()
+    )
+    schema = _core.to_strict_json_schema(raw)
     return {
         "type": "json_schema",
         "json_schema": {
@@ -353,182 +229,6 @@ def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[st
             "strict": True,
         },
     }
-
-
-def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[str, Any]) -> Any:
-    ref = schema.get("$ref")
-    if isinstance(ref, str):
-        resolved = _strict.resolve_ref(root=root, ref=ref)
-        if isinstance(resolved, dict):
-            schema = {**resolved, **schema}
-
-    if value is None:
-        if "default" in schema and not _json_schema_allows_null(schema, root=root):
-            return copy.deepcopy(schema["default"])
-        return None
-
-    all_of = schema.get("allOf")
-    if isinstance(all_of, list):
-        for variant in all_of:
-            if isinstance(variant, dict):
-                value = _inject_schema_defaults(value, schema=variant, root=root)
-
-    for union_key in ("anyOf", "oneOf"):
-        variants = schema.get(union_key)
-        if isinstance(variants, list):
-            for variant in variants:
-                if isinstance(variant, dict) and _json_schema_matches(value, variant, root=root):
-                    return _inject_schema_defaults(value, schema=variant, root=root)
-
-    if isinstance(value, dict):
-        properties = schema.get("properties")
-        additional = schema.get("additionalProperties")
-        if isinstance(properties, dict) or isinstance(additional, dict):
-            # additionalProperties only governs keys not declared in properties
-            def _inject_entry(key: str, item: Any) -> Any:
-                prop = properties.get(key) if isinstance(properties, dict) else None
-                if isinstance(prop, dict):
-                    return _inject_schema_defaults(item, schema=prop, root=root)
-                if isinstance(additional, dict):
-                    return _inject_schema_defaults(item, schema=additional, root=root)
-                return item
-
-            return {key: _inject_entry(key, item) for key, item in value.items()}
-
-    if isinstance(value, list):
-        prefix_items = schema.get("prefixItems")
-        items = schema.get("items")
-        if isinstance(prefix_items, list) or isinstance(items, dict):
-            # prefixItems covers positional slots (fixed tuples); items the rest
-            def _inject_item(i: int, item: Any) -> Any:
-                if (
-                    isinstance(prefix_items, list)
-                    and i < len(prefix_items)
-                    and isinstance(prefix_items[i], dict)
-                ):
-                    return _inject_schema_defaults(item, schema=prefix_items[i], root=root)
-                if isinstance(items, dict):
-                    return _inject_schema_defaults(item, schema=items, root=root)
-                return item
-
-            return [_inject_item(i, item) for i, item in enumerate(value)]
-
-    return value
-
-
-def _json_schema_allows_null(
-    schema: dict[str, Any], *, root: dict[str, Any], seen_refs: set[str] | None = None
-) -> bool:
-    """Whether ``null`` is a valid instance of ``schema``.
-
-    JSON schema keywords are conjunctive: null must satisfy every constraint
-    present (type, enum, const, allOf, unions, $ref), so any keyword that
-    rejects null makes the whole schema reject it.
-    """
-    ref = schema.get("$ref")
-    if isinstance(ref, str):
-        if ref in (seen_refs or set()):
-            return False
-        resolved = _strict.resolve_ref(root=root, ref=ref)
-        if isinstance(resolved, dict) and not _json_schema_allows_null(
-            resolved, root=root, seen_refs={*(seen_refs or set()), ref}
-        ):
-            return False
-
-    typ = schema.get("type")
-    if isinstance(typ, str) and typ != "null":
-        return False
-    if isinstance(typ, list) and "null" not in typ:
-        return False
-
-    if "const" in schema and schema["const"] is not None:
-        return False
-    enum = schema.get("enum")
-    if isinstance(enum, list) and None not in enum:
-        return False
-
-    all_of = schema.get("allOf")
-    if isinstance(all_of, list) and not all(
-        _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
-        for variant in all_of
-        if isinstance(variant, dict)
-    ):
-        return False
-
-    for union_key in ("anyOf", "oneOf"):
-        variants = schema.get(union_key)
-        if isinstance(variants, list) and not any(
-            isinstance(variant, dict)
-            and _json_schema_allows_null(variant, root=root, seen_refs=seen_refs)
-            for variant in variants
-        ):
-            return False
-
-    return True
-
-
-def _json_schema_matches(value: Any, schema: dict[str, Any], *, root: dict[str, Any]) -> bool:
-    ref = schema.get("$ref")
-    if isinstance(ref, str):
-        resolved = _strict.resolve_ref(root=root, ref=ref)
-        if isinstance(resolved, dict):
-            schema = {**resolved, **schema}
-
-    if value is None and "default" in schema and not _json_schema_allows_null(schema, root=root):
-        return True
-
-    if "const" in schema and value != schema["const"]:
-        return False
-    enum = schema.get("enum")
-    if isinstance(enum, list) and value not in enum:
-        return False
-
-    typ = schema.get("type")
-    if isinstance(typ, list):
-        return any(_json_type_matches(value, item) for item in typ if isinstance(item, str))
-    if isinstance(typ, str) and not _json_type_matches(value, typ):
-        return False
-
-    if isinstance(value, dict):
-        required = schema.get("required")
-        if isinstance(required, list) and not all(key in value for key in required):
-            return False
-        properties = schema.get("properties")
-        if isinstance(properties, dict):
-            # the strict wire schema closes objects (additionalProperties: false),
-            # so a key outside the declared properties rules this variant out;
-            # otherwise a payload meant for a sibling union variant matches any
-            # variant that merely ignores the extra keys
-            if schema.get("additionalProperties") in (None, False) and any(
-                key not in properties for key in value
-            ):
-                return False
-            for key, item in value.items():
-                property_schema = properties.get(key)
-                if isinstance(property_schema, dict) and not _json_schema_matches(
-                    item, property_schema, root=root
-                ):
-                    return False
-
-    return True
-
-
-def _json_type_matches(value: Any, typ: str) -> bool:
-    if typ == "null":
-        return value is None
-    if typ == "object":
-        return isinstance(value, dict)
-    if typ == "array":
-        return isinstance(value, list)
-    if typ == "boolean":
-        return isinstance(value, bool)
-    if typ == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if typ == "number":
-        return isinstance(value, int | float) and not isinstance(value, bool)
-    if typ == "string":
-        return isinstance(value, str)
-    return True
 
 
 def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
@@ -569,92 +269,10 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
     return create_model(model_name, **fields)
 
 
-# Patterns for chat-template tokens that sometimes leak into tool-call arguments
-# when the model fumbles its own special-token formatting. Ordered: well-formed
-# delimiters first (so we don't leave dangling halves), then stragglers.
-# Covers Qwen/ChatML-style (`<|im_start|>`, `<|tool_call|>`, the leaked `<|"|"`
-# we've seen from Gemma 4) and Gemma turn markers (`<start_of_turn>` /
-# `<end_of_turn>`).
-_TEMPLATE_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"<\|[^<>|]{0,40}\|>"),  # well-formed <|...|>
-    re.compile(r"<\|[^<>a-zA-Z0-9_]{0,10}"),  # dangling start <|"|" etc.
-    re.compile(r"[^<>a-zA-Z0-9_]{0,10}\|>"),  # dangling end
-    re.compile(r"<(?:start|end)_of_turn>"),  # Gemma turn markers
-)
-
-
-def _strip_template_tokens(value: Any) -> Any:
-    """Recursively remove leaked chat-template tokens from string values.
-
-    Only applied after a JSON repair pass — we don't want to silently rewrite
-    legitimate arguments that happen to contain `<|...|>` substrings.
-    """
-    if isinstance(value, str):
-        out = value
-        for pat in _TEMPLATE_TOKEN_PATTERNS:
-            out = pat.sub("", out)
-        return out.strip()
-    if isinstance(value, list):
-        cleaned = [_strip_template_tokens(v) for v in value]
-        # Drop empties that were left behind purely as separators between leaked
-        # tokens (e.g. `["<|", "X<|", ""]` -> `["X"]`).
-        return [v for v in cleaned if v not in ("", None)]
-    if isinstance(value, dict):
-        return {k: _strip_template_tokens(v) for k, v in value.items()}
-    return value
-
-
 def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
-    """Parse a raw JSON tool-call arguments string into a dict.
-
-    First tries strict parsing; if the JSON is malformed (common with smaller /
-    open-weight models that fumble special tokens or escaping), falls back to
-    ``json_repair`` and then strips known chat-template token leaks.
-
-    Raises ``ValueError`` if the arguments can't be recovered or don't decode
-    to a dict-shaped value.
-    """
-    try:
-        args_dict: Any = from_json(json_arguments)
-    except ValueError as strict_err:
-        repaired = json_repair.loads(json_arguments)
-        if repaired == "":
-            # json_repair returns "" when it can't recover anything meaningful.
-            raise ValueError(
-                f"could not parse function arguments as JSON: {strict_err}: {json_arguments[:200]}"
-            ) from strict_err
-        # After a repair, also strip leaked chat-template tokens — many of
-        # the failures we see are caused by `<|...|>` markers bleeding into
-        # the model's structured output.
-        cleaned = _strip_template_tokens(repaired)
-        logger.warning(
-            "repaired malformed function-call JSON arguments",
-            extra={
-                "lk.pii.raw_arguments": json_arguments[:500],
-                "lk.pii.repaired": cleaned,
-                "lk.pii.error": str(strict_err),
-            },
-        )
-        args_dict = cleaned
-
-    # Some providers (e.g. Nova Sonic) double-encode tool arguments as nested
-    # JSON strings. Unwrap until we reach a non-string value.
-    while isinstance(args_dict, str):
-        try:
-            args_dict = from_json(args_dict)
-        except Exception:
-            raise ValueError(
-                f"function arguments decoded to a non-JSON string: {args_dict[:200]}"
-            ) from None
-
-    if args_dict is None:
-        return {}
-    if not isinstance(args_dict, dict):
-        raise ValueError(
-            f"expected dict from function arguments, "
-            f"got {type(args_dict).__name__}: {json_arguments[:200]}"
-        )
-    return args_dict
+    """A tool call's raw JSON arguments as a dict, repaired when malformed (leaked chat-template
+    tokens stripped, double encoding unwrapped). Raises ``ValueError`` when unrecoverable."""
+    return _core.parse_function_arguments(json_arguments)  # type: ignore[no-any-return]
 
 
 def answer_arguments(fnc: FunctionTool | RawFunctionTool, answer: str) -> dict[str, Any] | None:
@@ -755,7 +373,7 @@ def validated_arguments(
     # _ensure_strict_json_schema): null means "use the default". Resolve
     # the sentinel, including in nested models, before validation.
     schema = model_type.model_json_schema()
-    args_dict = _inject_schema_defaults(args_dict, schema=schema, root=schema)
+    args_dict = _core.inject_schema_defaults(args_dict, schema)
 
     model = model_type.model_validate(args_dict)  # can raise ValidationError
     return _shallow_model_dump(model)
@@ -820,87 +438,28 @@ class ThinkingTokenFilter:
     _end_marker: str | None = None
 
 
-def _partial_marker_length(content: str, markers: tuple[str, ...]) -> int:
-    return max(
-        (
-            length
-            for marker in markers
-            for length in range(1, min(len(content), len(marker) - 1) + 1)
-            if content.endswith(marker[:length])
-        ),
-        default=0,
-    )
-
-
-def _flatten_delta_content(content: Any) -> str | None:
-    """Flatten list-shaped streaming delta content to its concatenated text.
-
-    The OpenAI-compatible ecosystem allows ``delta.content`` to be a list of
-    typed content parts (``[{"type": "text", "text": ...}]``) instead of a
-    plain string — Mistral emits this shape on some streamed chunks — and the
-    openai SDK constructs stream models without validation, so the list
-    reaches us as-is when the plugin points at such a provider (#6323).
-    """
-    if content is None or isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-                continue
-            text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
-            if isinstance(text, str):
-                parts.append(text)
-        # no text part at all carries no content, unlike a part that carries an
-        # empty string - that one is kept, like a plain "" delta
-        return "".join(parts) if parts else None
-    logger.warning(
-        "unexpected streaming delta content type %s; dropping the chunk", type(content).__name__
-    )
-    return None
-
-
 def strip_thinking_tokens(
     content: str | list[Any] | None, state: ThinkingTokenFilter, *, final: bool = False
 ) -> str | None:
-    content = _flatten_delta_content(content)
-    if content is not None:
-        state._buffer += content
-
-    visible: list[str] = []
-    while state._buffer:
-        if state._end_marker is not None:
-            idx = state._buffer.find(state._end_marker)
-            if idx < 0:
-                keep = _partial_marker_length(state._buffer, (state._end_marker,))
-                state._buffer = state._buffer[-keep:] if keep else ""
-                break
-
-            state._buffer = state._buffer[idx + len(state._end_marker) :]
-            state._end_marker = None
-            continue
-
-        idx = state._buffer.find(state.start_tag)
-        if idx >= 0:
-            visible.append(state._buffer[:idx])
-            state._buffer = state._buffer[idx + len(state.start_tag) :]
-            state._end_marker = state.end_tag
-            continue
-
-        keep = _partial_marker_length(state._buffer, (state.start_tag,))
-        visible.append(state._buffer[:-keep] if keep else state._buffer)
-        state._buffer = state._buffer[-keep:] if keep else ""
-        break
-
-    if final:
-        if state._end_marker is None:
-            visible.append(state._buffer)
-        state._buffer = ""
-        state._end_marker = None
-
-    result = "".join(visible)
-    return result or ("" if content == "" else None)
+    """The visible part of a streamed delta, the thinking spans removed; ``state`` carries a
+    span or a partial tag across deltas."""
+    if isinstance(content, list):
+        parts = [
+            p
+            if isinstance(p, str)
+            else (p.get("text") if isinstance(p, dict) else getattr(p, "text", None))
+            for p in content
+        ]
+        content = _core.flatten_delta_text([p for p in parts if isinstance(p, str)])
+    elif content is not None and not isinstance(content, str):
+        logger.warning(
+            "unexpected streaming delta content type %s; dropping the chunk", type(content).__name__
+        )
+        content = None
+    visible, state._buffer, state._end_marker = _core.strip_thinking(
+        content, state.start_tag, state.end_tag, state._buffer, state._end_marker, final
+    )
+    return visible  # type: ignore[no-any-return]
 
 
 def _is_valid_function_output(value: Any) -> bool:
