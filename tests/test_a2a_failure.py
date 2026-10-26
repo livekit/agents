@@ -327,7 +327,6 @@ class Down(httpx.AsyncBaseTransport):
 
 
 @pytest.mark.rule("R26", "B33")
-@pytest.mark.xfail(strict=True, reason="B33: a card that cannot be read fails the whole turn")
 async def test_an_expert_down_at_setup_is_a_tool_error_and_the_other_tools_run(
     door: Callable[..., Door],
 ) -> None:

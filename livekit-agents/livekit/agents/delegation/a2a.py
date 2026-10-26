@@ -129,16 +129,28 @@ class A2ADelegate(Delegate, Toolset):
         return [self._tool] if self._tool is not None else []
 
     async def setup(self) -> A2ADelegate:
-        """Reads the card and builds the tool from it; once per delegate."""
-        if self._tool is None:
+        """Reads the card and builds the tool from it, once per delegate. While the card cannot
+        be read the tool is offered without it, and a call says why the expert did not answer."""
+        if self._tool is not None and self._client is not None and self._client.card is not None:
+            return self
+
+        name = self._tool_name or "ask"
+        try:
             client = await self._connect()
-            card = client.card
-            title = card.name if card is not None else self.id
-            self._id = title
-            name = self._tool_name or "ask"
-            about = card.description.strip() if card is not None and card.description else ""
-            description = f"{about}\n\n{ASK}" if about else ASK
-            self._tool = function_tool(self._ask, name=name, description=description)
+        except A2AError as e:
+            # the turn goes on: the model can still call the tool, and the card is read again
+            logger.warning(
+                "an expert's card could not be read", extra={"url": self._url, "error": str(e)}
+            )
+            if self._tool is None:
+                self._tool = function_tool(self._ask, name=name, description=ASK)
+            return self
+
+        card = client.card
+        self._id = card.name if card is not None else self.id
+        about = card.description.strip() if card is not None and card.description else ""
+        description = f"{about}\n\n{ASK}" if about else ASK
+        self._tool = function_tool(self._ask, name=name, description=description)
         return self
 
     async def _ask(self, ctx: RunContext, request: str) -> str | InputRequired | ToolResult:
