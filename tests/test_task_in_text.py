@@ -15,8 +15,16 @@ from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.storage import AgentDBStorage
 
+from .a2a_driver import (
+    http_client,
+    make_server,
+    no_project_env,  # noqa: F401  (autouse: the demo environment must not shape the cards)
+    payloads,
+    send,
+    stock_client,
+    user_message,
+)
 from .fake_llm import FakeLLM, FakeLLMResponse
-from .test_a2a_server import http_client, make_server, payloads, send, stock_client, user_message
 
 pytestmark = [pytest.mark.unit]
 

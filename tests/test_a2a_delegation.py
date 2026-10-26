@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
@@ -32,11 +32,9 @@ from livekit.agents.llm.tool_context import ASK_IN_OWN_WORDS
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.storage.resolve import Thread
 
-from .fake_llm import FakeLLM, FakeLLMResponse
-from .test_a2a_server import (
+from .a2a_driver import (
     AGENT,
     ENDPOINT,
-    history_items,
     http_client,
     make_server,
     no_project_env,  # noqa: F401  (autouse: the demo environment must not shape the cards)
@@ -44,6 +42,8 @@ from .test_a2a_server import (
     sse_results,
     wire,
 )
+from .fake_llm import FakeLLM, FakeLLMResponse
+from .test_a2a_server import history_items
 
 
 async def lanes_of(storage: AgentDBStorage, thread_id: str) -> set[str]:
@@ -63,7 +63,7 @@ pytestmark = [pytest.mark.unit]
 # ---------------------------------------------------------------------------------------------
 
 
-async def expert(ctx: A2ASessionContext[Any]) -> str:
+async def fare_expert(ctx: A2ASessionContext[Any]) -> str:
     await ctx.update("checking the fare rules")
     if ctx.message.text_content == "say goodbye":
         return "Thanks for calling, goodbye."
@@ -73,7 +73,7 @@ async def expert(ctx: A2ASessionContext[Any]) -> str:
 
 
 async def test_a2a_delegate_against_a_livekit_expert(agentdb_storage: AgentDBStorage) -> None:
-    server, _ = make_server(agentdb_storage, expert)
+    server, _ = make_server(agentdb_storage, fare_expert)
     storage = server.storage
     assert storage is not None
     caller_session = (await storage.threads.create_thread()).thread_id
@@ -110,17 +110,14 @@ async def test_a2a_delegate_against_a_livekit_expert(agentdb_storage: AgentDBSto
 
 
 async def test_a2a_delegate_outside_the_session_sends_the_conversation(
-    agentdb_storage: AgentDBStorage,
+    expert: Callable[..., A2ADelegate],
 ) -> None:
-    server, _ = make_server(agentdb_storage, expert)
     history = ChatContext(
         [ChatMessage(role="user", content=["hi"]), ChatMessage(role="assistant", content=["hello"])]
     )
-    async with http_client(server) as http:
-        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
-        first = await delegate.run("what is the fare", message_history=history)
-        second = await delegate.run("what is the fare", message_history=history)
-        await delegate.aclose()
+    delegate = expert(fare_expert)
+    first = await delegate.run("what is the fare", message_history=history)
+    second = await delegate.run("what is the fare", message_history=history)
     assert first.output == "the fare is 240 USD (caller history: 2)"
     # outside a turn there is no session to name: a session of its own, kept across calls
     assert first.context_id.startswith("AT_") and second.context_id == first.context_id
@@ -319,7 +316,9 @@ async def test_a_delegate_is_a_toolset_named_from_the_card(
     agentdb_storage: AgentDBStorage,
 ) -> None:
     expert_server = AgentServer(storage=agentdb_storage, agent_name="eligibility")
-    expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(expert)
+    expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(
+        fare_expert
+    )
     async with http_client(expert_server) as http:
         back_office = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
         assert back_office.tools == [], "nothing before the card is read"
@@ -374,7 +373,7 @@ async def test_a_tools_update_inside_agent_run_reaches_the_door_and_the_delegate
     # expert is its own agent, so its lane is its own
     clinic_storage, expert_storage = agentdb_workers
     expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
-    expert_server.a2a_session(endpoint=ENDPOINT, description="x")(expert)
+    expert_server.a2a_session(endpoint=ENDPOINT, description="x")(fare_expert)
     async with http_client(expert_server) as http:
         delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
         front = _front_desk(delegate)
@@ -540,6 +539,7 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
     ]
 
 
+@pytest.mark.rule("R23", "B12")
 async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
     agentdb_workers: tuple[AgentDBStorage, AgentDBStorage],
 ) -> None:

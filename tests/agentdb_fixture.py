@@ -1,10 +1,11 @@
-"""The agentstore the storage tests run against, through LiveKit's public API.
+"""The agentstore the storage tests run against.
 
-A staging project from the environment: ``LIVEKIT_URL``, with ``LIVEKIT_API_KEY`` and
-``LIVEKIT_API_SECRET``. ``agentdb_storage`` is one ``AgentDBStorage``; ``agentdb_workers`` two
-of them with holders of their own, which is two workers of one project;
-``agentdb_worker`` the factory behind both. Every test skips when the project is not set. Threads
-are minted by the threads service, never reused across tests.
+By default the fake of ``fake_agentstore.py``, started once per session on loopback. With
+``AGENTSTORE_PROJECT=1``, the project of ``LIVEKIT_URL``, ``LIVEKIT_API_KEY`` and
+``LIVEKIT_API_SECRET`` (staging), and every test skips when the project is not set.
+``agentdb_storage`` is one ``AgentDBStorage``; ``agentdb_workers`` two of them with holders of their
+own, which is two workers of one project; ``agentdb_worker`` the factory behind both. Threads are
+minted by the threads service, never reused across tests.
 """
 
 from __future__ import annotations
@@ -12,31 +13,47 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
+from datetime import timedelta
 
 import pytest
 
 from livekit.agents.a2a import pump
 from livekit.agents.storage import AgentDBStorage
 
-LEASE_TTL = float(os.environ.get("LIVEKIT_AGENTDB_LEASE_TTL", "10"))
-"""The lane lease's lifetime in seconds, as ``AgentDBStorage`` reads it from the environment."""
+from . import fake_agentstore
+
+ON_PROJECT = os.environ.get("AGENTSTORE_PROJECT") == "1"
+"""Whether the tests run against the project's agentstore rather than the fake."""
+LEASE_TTL = float(os.environ.get("LIVEKIT_AGENTDB_LEASE_TTL", "10" if ON_PROJECT else "2"))
+"""The lane lease's lifetime in seconds: what ``AgentDBStorage`` reads from the environment on
+the project, short on the fake so that a test waits seconds for a lease to lapse."""
 LEASE_MARGIN = 1.0
 """What a test sleeps past ``LEASE_TTL`` before it counts a lease as lapsed."""
-PROJECT_URL = os.environ.get("LIVEKIT_URL", "")
+PROJECT_URL = os.environ.get("LIVEKIT_URL", "") if ON_PROJECT else ""
 """The project's URL, read at import: a test module may remove ``LIVEKIT_URL`` so that its
 servers address themselves locally, and the storage still needs it."""
 
 
 def project_storage(holder: str = "") -> AgentDBStorage:
-    """An ``AgentDBStorage`` on ``PROJECT_URL``, which it reads only while it is built."""
+    """An ``AgentDBStorage`` on the fake or on ``PROJECT_URL``, which it reads only while it is
+    built."""
     with pytest.MonkeyPatch.context() as mp:
+        if not ON_PROJECT:
+            mp.setenv("LIVEKIT_URL", fake_agentstore.serve())
+            return AgentDBStorage(
+                api_key="devkey",
+                api_secret="secret",
+                lease_ttl=timedelta(seconds=LEASE_TTL),
+                renew_interval=timedelta(seconds=LEASE_TTL / 4),
+                holder=holder,
+            )
         if PROJECT_URL:
             mp.setenv("LIVEKIT_URL", PROJECT_URL)
         return AgentDBStorage(holder=holder)
 
 
 def agentstore_configured() -> str | None:
-    """``None`` when the environment names a project, else why the tests skip."""
+    """``None`` when the storage can be built (always on the fake), else why the tests skip."""
     try:
         project_storage()
     except ValueError as e:
@@ -51,6 +68,12 @@ async def new_session(storage: AgentDBStorage, agent_name: str) -> str:
 
 async def let_the_lease_lapse() -> None:
     await asyncio.sleep(LEASE_TTL + LEASE_MARGIN)
+
+
+async def past_the_fresh_acquire() -> None:
+    """Waits out ``FRESH`` (``turn/host.rs``): for 100 ms after an acquire a boundary check is
+    answered from the acquire, so an interrupt or a cancel inside it waits for the next boundary."""
+    await asyncio.sleep(0.15)
 
 
 @pytest.fixture

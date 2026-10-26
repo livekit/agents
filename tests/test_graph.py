@@ -25,8 +25,7 @@ from livekit.agents.graph import (
 from livekit.agents.llm import ChatMessage, FunctionToolCall
 from livekit.agents.storage import AgentDBStorage
 
-from .fake_llm import FakeLLM, FakeLLMResponse
-from .test_a2a_server import (
+from .a2a_driver import (
     http_client,
     make_server,
     no_project_env,  # noqa: F401  (autouse: the demo environment must not shape the cards)
@@ -35,6 +34,7 @@ from .test_a2a_server import (
     stock_client,
     user_message,
 )
+from .fake_llm import FakeLLM, FakeLLMResponse
 
 pytestmark = pytest.mark.unit
 

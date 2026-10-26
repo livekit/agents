@@ -33,7 +33,7 @@ from livekit.agents.storage.context import A2ASessionContext, Handler, TurnHost
 from livekit.agents.storage.protocol import dump_state
 from livekit.agents.storage.resolve import AgentRegistry, Thread, resolve_thread
 
-from .agentdb_fixture import let_the_lease_lapse, new_session
+from .agentdb_fixture import let_the_lease_lapse, new_session, past_the_fresh_acquire
 from .fake_llm import FakeLLM, FakeLLMResponse
 
 pytestmark = [pytest.mark.unit]
@@ -311,6 +311,7 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
         await asyncio.sleep(0.01)
     else:
         pytest.fail("the waiter was never set")
+    await past_the_fresh_acquire()
     waiter_set.set()
 
     r1 = await first
@@ -436,6 +437,7 @@ async def test_a_lapsed_lease_fails_the_orphan_worker_lost(agentdb_workers: Work
     db.close()
 
 
+@pytest.mark.rule("R16", "B22")
 async def test_a_resend_after_the_holder_died_fails_worker_lost(
     agentdb_worker: Callable[[str], AgentDBStorage],
 ) -> None:
@@ -809,8 +811,10 @@ async def test_the_rtc_door_resolves_the_call_thread(agentdb_storage: AgentDBSto
     assert named is not None and named.id == sid and named.agent_name == "desk"
     assert fresh is not None and fresh.id != sid
     assert (await fresh.info()).thread_id == fresh.id
-    # a job process rebuilds the storage from its configuration
-    assert pickle.loads(pickle.dumps(agentdb_storage))._args == agentdb_storage._args
+    # a job process rebuilds the storage from its configuration, its project's URL in its env
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("LIVEKIT_URL", agentdb_storage.url)
+        assert pickle.loads(pickle.dumps(agentdb_storage))._args == agentdb_storage._args
 
 
 async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: Workers) -> None:
