@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import contextvars
 import inspect
 import sys
@@ -27,7 +26,7 @@ from typing_extensions import ParamSpec, TypeVar
 
 from livekit import rtc
 
-from .. import _core, inference, llm, stt, tokenize, tts, vad
+from .. import _core, inference, llm, stt, tts, vad
 from .._generated.tool_executor import ToolHandlingOptions
 from ..llm import (
     LLM,
@@ -49,7 +48,7 @@ from ..llm.tool_context import (
 )
 from ..log import logger
 from ..types import NOT_GIVEN, APIConnectOptions, FlushSentinel, NotGivenOr
-from ..utils import aio, is_given, misc
+from ..utils import is_given, misc
 from .events import Context_T, UserTurnExceededEvent
 from .turn import TurnHandlingOptions
 
@@ -632,74 +631,35 @@ class Agent(Generic[Context_T, Output_T]):
 
     class default:
         @staticmethod
-        async def stt_node(
+        def stt_node(
             agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
-        ) -> AsyncGenerator[stt.SpeechEvent, None]:
+        ) -> AsyncIterable[stt.SpeechEvent]:
             """Default implementation for `Agent.stt_node`"""
             binding = agent._get_voice_binding_or_raise()
             recognizer = binding.stt
             if recognizer is None:
                 raise RuntimeError("stt_node called but no STT is available")
-            adapter: stt.StreamAdapter | None = None
             if not recognizer.capabilities.streaming:
                 if binding.vad is None:
                     raise RuntimeError(
                         f"the STT ({recognizer.label}) does not stream: add a VAD, or wrap it in "
                         "an stt.StreamAdapter"
                     )
-                recognizer = adapter = stt.StreamAdapter(stt=recognizer, vad=binding.vad)
-            try:
-                conn_options = binding.session.conn_options.stt_conn_options
-                async with recognizer.stream(conn_options=conn_options) as stream:
-
-                    async def _forward() -> None:
-                        async for frame in audio:
-                            stream.push_frame(frame)
-                        stream.end_input()
-
-                    forward = asyncio.create_task(_forward())
-                    try:
-                        async for ev in stream:
-                            yield ev
-                    finally:
-                        await aio.cancel_and_wait(forward)
-            finally:
-                if adapter is not None:
-                    await adapter.aclose()
+                recognizer = stt.StreamAdapter(stt=recognizer, vad=binding.vad)
+            conn_options = binding.session.conn_options.stt_conn_options
+            return _core.stt_node(recognizer, audio, conn_options=conn_options)
 
         @staticmethod
-        async def tts_node(
+        def tts_node(
             agent: Agent, text: AsyncIterable[str], model_settings: ModelSettings
-        ) -> AsyncGenerator[rtc.AudioFrame, None]:
-            """Default implementation for `Agent.tts_node`"""
+        ) -> AsyncIterable[rtc.AudioFrame]:
+            """Default implementation for `Agent.tts_node`: a TTS that does not stream is fed
+            sentence by sentence."""
             binding = agent._get_voice_binding_or_raise()
-            synthesizer = binding.tts
-            if synthesizer is None:
+            if binding.tts is None:
                 raise RuntimeError("tts_node called but no TTS is available")
-            adapter: tts.StreamAdapter | None = None
-            if not synthesizer.capabilities.streaming:
-                synthesizer = adapter = tts.StreamAdapter(
-                    tts=synthesizer,
-                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
-                )
-            try:
-                conn_options = binding.session.conn_options.tts_conn_options
-                async with synthesizer.stream(conn_options=conn_options) as stream:
-
-                    async def _forward() -> None:
-                        async for chunk in text:
-                            stream.push_text(chunk)
-                        stream.end_input()
-
-                    forward = asyncio.create_task(_forward())
-                    try:
-                        async for ev in stream:
-                            yield ev.frame
-                    finally:
-                        await aio.cancel_and_wait(forward)
-            finally:
-                if adapter is not None:
-                    await adapter.aclose()
+            conn_options = binding.session.conn_options.tts_conn_options
+            return _core.tts_node(binding.tts, text, conn_options=conn_options)
 
         @staticmethod
         async def llm_node(
@@ -735,7 +695,7 @@ class Agent(Generic[Context_T, Output_T]):
         binding = _BindingContextVar.get(None)
         if binding is None or binding.agent is not self:
             return None
-        return binding  # type: ignore[no-any-return]
+        return binding
 
     def _get_binding_or_raise(self) -> _VoiceBinding | AgentRun[Any]:
         binding = self._bound_binding()

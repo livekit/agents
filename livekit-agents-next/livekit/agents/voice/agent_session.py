@@ -11,9 +11,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
-import inspect
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Callable
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic
 
@@ -44,10 +43,8 @@ from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
-    FlushSentinel,
     NotGivenOr,
 )
-from ..utils import aio, shortuuid
 from ..utils.misc import is_dev_mode, is_given, is_hosted
 from . import io
 from .agent import Agent, ModelSettings, _BindingContextVar, _VoiceBinding
@@ -745,9 +742,14 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return {**frame, **self._nodes(agent)}
 
     def _nodes(self, agent: Agent) -> dict[str, Any]:
-        """The nodes ``agent`` overrides, as the core opens them over each provider."""
-        nodes = _AgentNodes(_VoiceBinding(self, agent))
-        return {n: nodes for n in _NODES if getattr(type(agent), n) is not getattr(Agent, n)}
+        """The nodes ``agent`` overrides, as the core opens them over each provider, each call in
+        the agent's binding."""
+        overridden = [n for n in _NODES if getattr(type(agent), n) is not getattr(Agent, n)]
+        if not overridden:
+            return {}
+        context = contextvars.copy_context()
+        context.run(_BindingContextVar.set, _VoiceBinding(self, agent))
+        return dict.fromkeys(overridden, _core.AgentNodes(context, _AgentNodes(agent)))
 
     def _legs(self) -> dict[str, Any]:
         return {
@@ -1019,128 +1021,24 @@ _NODES = ("llm_node", "tts_node", "stt_node")
 
 
 class _AgentNodes:
-    """An agent's overridden ``llm_node``, ``tts_node`` and ``stt_node`` as the core opens them
-    in place of the provider (``_core.NodeFactory``): one completion, one spoken segment, one
-    recognition stream."""
+    """An agent's overridden ``llm_node``, ``tts_node`` and ``stt_node`` as the core calls them
+    (``_core.AgentNodes``), in the agent's binding: one completion, one spoken segment, one
+    recognition stream. The core feeds what they read and drains what they return."""
 
-    def __init__(self, binding: _VoiceBinding) -> None:
-        self._binding = binding
+    def __init__(self, agent: Agent) -> None:
+        self._agent = agent
 
-    async def _core_llm_node(self, req: _core.ChatRequest) -> _NodeStream:
+    def llm(self, req: _core.ChatRequest) -> Any:
         chat_ctx, tools = chat_request(req)
         choice = req.tool_choice
         settings = ModelSettings(tool_choice=NOT_GIVEN if choice is None else choice)
-        agent = self._binding.agent
-        return _NodeStream(
-            self._binding, lambda _: agent.llm_node(chat_ctx, tools, settings), _chat_chunk
-        )
+        return self._agent.llm_node(chat_ctx, tools, settings)
 
-    async def _core_tts_node(self) -> _NodeStream:
-        agent, request_id = self._binding.agent, shortuuid("tts_node_")
-        return _NodeStream(
-            self._binding,
-            lambda text: agent.tts_node(text, ModelSettings()),
-            lambda frame: tts.SynthesizedAudio(frame=frame, request_id=request_id),
-        )
+    def tts(self, text: AsyncIterable[str]) -> Any:
+        return self._agent.tts_node(text, ModelSettings())
 
-    async def _core_stt_node(self) -> _NodeStream:
-        agent = self._binding.agent
-        return _NodeStream(
-            self._binding, lambda audio: agent.stt_node(audio, ModelSettings()), lambda ev: ev
-        )
-
-
-class _NodeStream:
-    """One node invocation as the core drives it: input pushed in (``_core_push``,
-    ``end_input``), the node's output out (``__anext__``). The node runs in its own task, in the
-    agent's binding, so its code sees its session as hooks and tools do."""
-
-    def __init__(
-        self,
-        binding: _VoiceBinding,
-        node: Callable[[AsyncIterable[Any]], Any],
-        convert: Callable[[Any], Any],
-    ) -> None:
-        self._input: asyncio.Queue[Any] = asyncio.Queue()
-        self._output: asyncio.Queue[Any] = asyncio.Queue()
-        self._convert = convert
-        token = _BindingContextVar.set(binding)
-        try:
-            self._task = asyncio.create_task(self._run(node))
-        finally:
-            _BindingContextVar.reset(token)
-
-    async def _inputs(self) -> AsyncIterator[Any]:
-        while (item := await self._input.get()) is not _END:
-            yield item
-
-    async def _run(self, node: Callable[[AsyncIterable[Any]], Any]) -> None:
-        try:
-            out = node(self._inputs())
-            if inspect.isawaitable(out):
-                out = await out
-            if isinstance(out, AsyncIterable):
-                async for item in out:
-                    self._output.put_nowait(self._convert(item))
-            elif out is not None:
-                self._output.put_nowait(self._convert(out))
-            self._output.put_nowait(_END)
-        except Exception as e:
-            self._output.put_nowait(e)
-
-    def _core_push(self, item: Any) -> None:
-        self._input.put_nowait(item)
-
-    def flush(self) -> None:
-        pass
-
-    def end_input(self) -> None:
-        self._input.put_nowait(_END)
-
-    async def __anext__(self) -> Any:
-        item = await self._output.get()
-        if item is _END:
-            self._output.put_nowait(_END)
-            raise StopAsyncIteration
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-    async def aclose(self) -> None:
-        await aio.cancel_and_wait(self._task)
-
-
-_END = object()
-
-
-@dataclass(frozen=True)
-class _Flush:
-    """``FlushSentinel`` as the core reads a chunk: the spoken segment ends here."""
-
-    id: str = ""
-    delta: None = None
-    usage: None = None
-    flush: bool = True
-
-
-@dataclass(frozen=True)
-class _NodeText:
-    """Text the node answered itself, as the core reads a chunk: spoken, not a model call."""
-
-    id: str
-    delta: llm.ChoiceDelta
-    usage: None = None
-    node_text: bool = True
-
-
-def _chat_chunk(item: llm.ChatChunk | str | FlushSentinel) -> llm.ChatChunk | _Flush | _NodeText:
-    if isinstance(item, str):
-        return _NodeText(
-            id=shortuuid("chunk_"), delta=llm.ChoiceDelta(role="assistant", content=item)
-        )
-    if isinstance(item, FlushSentinel):
-        return _Flush()
-    return item
+    def stt(self, audio: AsyncIterable[rtc.AudioFrame]) -> Any:
+        return self._agent.stt_node(audio, ModelSettings())
 
 
 _HOOKS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], Any]] = {

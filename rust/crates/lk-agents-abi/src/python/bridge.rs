@@ -390,6 +390,11 @@ impl CancellingHandle {
     pub fn child(&self, obj: Py<PyAny>) -> Self {
         CancellingHandle { obj, locals: self.locals.clone() }
     }
+
+    /// `obj` on a loop and context the caller captured.
+    pub fn from_parts(obj: Py<PyAny>, locals: pyo3_async_runtimes::TaskLocals) -> Self {
+        CancellingHandle { obj, locals }
+    }
 }
 
 /// The same object and loop, its awaits cancelled on drop.

@@ -220,6 +220,66 @@ out = (loop, Stream(asyncio.CancelledError()), Stream(ValueError("boom")))
         });
     }
 
+    // Catches: a node's output drained outside the context its binding was set in (the node's
+    // code would not see its session), or one of the reference's return shapes -- an async
+    // iterable, an awaitable of one value, `None` -- read as another.
+    #[test]
+    fn a_node_is_drained_in_its_context_whatever_it_returns() {
+        use crate::StreamSource as _;
+        attach(|py| {
+            let out = eval_with_stubs(
+                py,
+                r#"
+import asyncio, contextvars, threading
+loop = asyncio.new_event_loop()
+ready = threading.Event()
+def run():
+    asyncio.set_event_loop(loop); loop.call_soon(ready.set); loop.run_forever()
+threading.Thread(target=run, daemon=True).start(); ready.wait()
+binding = contextvars.ContextVar("binding")
+async def stream():
+    yield binding.get("unbound")
+    await asyncio.sleep(0)
+    yield binding.get("unbound") + "!"
+async def one():
+    return binding.get("unbound")
+async def nothing():
+    return None
+context = contextvars.copy_context()
+context.run(binding.set, "agent")
+out = (loop, context, [context.run(f) for f in (stream, one, nothing)])
+"#,
+            );
+            let (event_loop, context, nodes): (Py<PyAny>, Py<PyAny>, Vec<Py<PyAny>>) =
+                out.extract(py).unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+            let read: Vec<Vec<String>> = nodes
+                .into_iter()
+                .map(|node| {
+                    let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.bind(py).clone())
+                        .with_context(context.bind(py).clone());
+                    let convert: crate::python::Convert<String> =
+                        Box::new(|o| o.extract::<String>().map_err(Into::into));
+                    let mut source = crate::python::NodeSource::new(
+                        node,
+                        locals,
+                        convert,
+                        std::sync::Arc::new(crate::RealClock::new()),
+                    );
+                    let mut items = Vec::new();
+                    while let Some(item) = py.detach(|| rt.block_on(source.next())).unwrap() {
+                        items.push(item);
+                    }
+                    items
+                })
+                .collect();
+            let want = vec![vec!["agent".to_owned(), "agent!".to_owned()], vec!["agent".to_owned()], vec![]];
+            assert_eq!(read, want);
+            let stop = event_loop.bind(py).getattr("stop").unwrap();
+            event_loop.bind(py).call_method1("call_soon_threadsafe", (stop,)).unwrap();
+        });
+    }
+
     // Catches: a duck-typed plugin (the reference API's shape, no base class) refused by a bare
     // proxy instead of seen through the host class's own `_core_*` functions.
     #[test]
