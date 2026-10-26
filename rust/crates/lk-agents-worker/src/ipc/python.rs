@@ -9,7 +9,9 @@ use std::borrow::Cow;
 use std::sync::Mutex;
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use tokio::sync::watch;
 
 use lk_agents_abi::python::{CancellingHandle, HostBridge, HostHandle, check_pid, pyo3_async_runtimes};
 use pyo3::exceptions::{PyAssertionError, PyException, PyRuntimeError, PyValueError};
@@ -20,7 +22,7 @@ use super::pool::{LaunchError, PoolEvent, PoolHost, PoolOptions, ProcPool};
 
 use super::{
     Closed, ExtraValue, FieldKind, InitError, IpcClient, IpcMessage, Level, MESSAGES, MemoryError,
-    ProcHost, ProcSupervisor, SupervisorOptions, Value, lock,
+    ProcHost, ProcSupervisor, SupervisorOptions, Value, lock, secs,
 };
 
 /// `duplex_unix.DuplexClosed`, what the duplex the supervisor and client replace raised.
@@ -514,3 +516,258 @@ impl PyProcPool {
 }
 
 lk_agents_abi::register_host!(class PyProcPool);
+
+// ------------------------------------------------------------------------------------ job run
+
+/// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
+const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The entrypoint has this long to connect the room before a warning.
+const CONNECT_WARNING_DELAY: Duration = Duration::from_secs(10);
+
+#[derive(Default)]
+struct JobRunState {
+    /// The first reason the job ends with, and whether the user asked for it.
+    shutdown: Option<(String, bool)>,
+    connected: bool,
+    user_shutdown: bool,
+}
+
+/// `job_proc_lazy_main.py`'s `_JobProc`, for the job it runs: what ends the job (the room, the
+/// user, the parent, a crash; the first wins), the entrypoint's supervision, and the order and
+/// bounds of the shutdown. The host (`_JobProc`) runs each step and opens its spans.
+#[pyclass(name = "JobRun", module = "livekit.agents._core", frozen)]
+pub struct PyJobRun(Arc<JobRunInner>);
+
+struct JobRunInner {
+    host: CancellingHandle,
+    fake: bool,
+    session_end_timeout: f64,
+    state: Mutex<JobRunState>,
+    ended: watch::Sender<bool>,
+}
+
+impl JobRunInner {
+    fn end(&self, reason: String, user_initiated: bool) {
+        let mut st = lock(&self.state);
+        st.user_shutdown |= user_initiated;
+        if st.shutdown.is_none() {
+            st.shutdown = Some((reason, user_initiated));
+            self.ended.send_replace(true);
+        }
+    }
+
+    async fn call(&self, f: impl for<'py> FnOnce(&Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>>) -> PyResult<Py<PyAny>> {
+        self.host.await_call(f).await
+    }
+
+    fn log(&self, level: Level, msg: &str, exc: Option<PyErr>) {
+        let r = Python::attach(|py| -> PyResult<()> {
+            let exc = exc.map(|e| e.into_value(py).into_any());
+            self.host.object().bind(py).call_method1("_core_log", (level as i32, msg, exc))?;
+            Ok(())
+        });
+        if let Err(e) = r {
+            Python::attach(|py| e.print(py));
+        }
+    }
+
+    fn span(&self, name: &str, callback: Option<&Py<PyAny>>) -> PyResult<Py<PyAny>> {
+        Python::attach(|py| {
+            let callback = callback.map(|c| c.clone_ref(py));
+            Ok(self.host.object().bind(py).call_method1("_core_span", (name, callback))?.unbind())
+        })
+    }
+
+    fn span_end(&self, span: Py<PyAny>, error: Option<PyErr>, timed_out: bool) {
+        let r = Python::attach(|py| -> PyResult<()> {
+            let error = error.map(|e| e.into_value(py).into_any());
+            self.host.object().bind(py).call_method1("_core_span_end", (span, error, timed_out))?;
+            Ok(())
+        });
+        if let Err(e) = r {
+            Python::attach(|py| e.print(py));
+        }
+    }
+
+    /// One step run inside a span of its own: `error_msg` is logged with a failure.
+    async fn spanned(&self, name: &str, method: &'static str, timeout: Option<f64>, error_msg: &str) {
+        let span = match self.span(name, None) {
+            Ok(span) => span,
+            Err(e) => return Python::attach(|py| e.print(py)),
+        };
+        let run = self.call(|h| h.call_method1(method, (span.clone_ref(h.py()),)));
+        let outcome = match timeout {
+            Some(t) => tokio::time::timeout(secs(t), run).await.map_err(|_| ()),
+            None => Ok(run.await),
+        };
+        match outcome {
+            Ok(Ok(_)) => self.span_end(span, None, false),
+            Ok(Err(e)) => {
+                let shown = Python::attach(|py| e.clone_ref(py));
+                self.span_end(span, Some(e), false);
+                self.log(Level::Error, error_msg, Some(shown));
+            }
+            Err(()) => {
+                self.span_end(span, None, true);
+                let msg = format!("on_session_end timed out after {}s", timeout.unwrap_or_default() as i64);
+                self.log(Level::Error, &msg, None);
+            }
+        }
+    }
+
+    async fn run(self: Arc<Self>) -> PyResult<()> {
+        let entry = self.call(|h| h.call_method0("_core_start_entrypoint")).await?;
+        let wait_entry = {
+            let entry = Python::attach(|py| entry.clone_ref(py));
+            self.call(move |h| h.call_method1("_core_wait", (entry,)))
+        };
+        tokio::pin!(wait_entry);
+        let warn_at = tokio::time::sleep(CONNECT_WARNING_DELAY);
+        tokio::pin!(warn_at);
+        let mut ended = self.ended.subscribe();
+        let (mut entry_done, mut warned) = (false, self.fake);
+        loop {
+            tokio::select! {
+                r = &mut wait_entry, if !entry_done => {
+                    entry_done = true;
+                    match r {
+                        Err(e) => {
+                            self.log(Level::Error, "unhandled exception while running the job task", Some(e));
+                            // a crash before ctx.connect() resolves nothing else: the shutdown
+                            // still runs, so the cleanup can flush the crash logs
+                            self.end("job crashed".into(), false);
+                        }
+                        Ok(_) => {
+                            let st = lock(&self.state);
+                            if !st.connected && !st.user_shutdown && !self.fake {
+                                drop(st);
+                                self.log(Level::Warning, "The job task completed without establishing a connection or performing a proper shutdown. Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized.", None);
+                            }
+                        }
+                    }
+                }
+                () = &mut warn_at, if !entry_done && !warned => {
+                    warned = true;
+                    let st = lock(&self.state);
+                    if !st.connected && !st.user_shutdown {
+                        drop(st);
+                        self.log(Level::Warning, "The room connection was not established within 10 seconds after calling job_entry. This might mean that job_ctx.connect() was never invoked, or that no LiveSession with an active RoomIO has been started.", None);
+                    }
+                }
+                _ = ended.wait_for(|e| *e) => break,
+            }
+        }
+        let (reason, user_initiated) = lock(&self.state).shutdown.clone().unwrap_or_default();
+        self.call(|h| h.call_method1("_core_shutdown_began", (reason.as_str(), user_initiated))).await?;
+
+        // the entrypoint returns, or is cancelled
+        if !entry_done && tokio::time::timeout(ENTRYPOINT_EXIT_TIMEOUT, &mut wait_entry).await.is_err() {
+            self.log(Level::Warning, "entrypoint did not exit in time, cancelling", None);
+            let entry = Python::attach(|py| entry.clone_ref(py));
+            let _ = self.call(move |h| h.call_method1("_core_cancel", (entry,))).await;
+        }
+
+        // the bound on `LiveSession.aclose()`: past it, the rest of the shutdown still runs
+        let aclose_timeout = Python::attach(|py| -> PyResult<f64> {
+            self.host.object().bind(py).getattr("_session_aclose_timeout")?.extract()
+        })?;
+        let close = self.call(|h| h.call_method0("_core_close_session"));
+        match tokio::time::timeout(secs(aclose_timeout), close).await {
+            Ok(Err(e)) => Python::attach(|py| e.print(py)),
+            Ok(Ok(_)) => {}
+            Err(_) => self.log(
+                Level::Error,
+                &format!(
+                    "LiveSession.aclose() timed out after {aclose_timeout:.1}s; proceeding with shutdown so registered callbacks still run."
+                ),
+                None,
+            ),
+        }
+
+        let has_session_end = Python::attach(|py| -> PyResult<bool> {
+            self.host.object().bind(py).call_method0("_core_has_session_end")?.extract()
+        })?;
+        if has_session_end {
+            self.spanned(
+                "on_session_end",
+                "_core_session_end",
+                Some(self.session_end_timeout),
+                "error while executing the on_session_end callback",
+            )
+            .await;
+        }
+        self.spanned("session_end_upload", "_core_upload", None, "error in job_ctx._on_session_end").await;
+        self.call(|h| h.call_method1("_core_finish", (reason.as_str(), user_initiated))).await?;
+        let disconnect = self.span("room_disconnect", None)?;
+        let r = self
+            .call(|h| h.call_method1("_core_disconnect", (disconnect.clone_ref(h.py()),)))
+            .await;
+        self.span_end(disconnect, None, false);
+        r?;
+
+        // the shutdown callbacks run together; a framework one gets no span of its own
+        let callbacks: Vec<(Py<PyAny>, bool)> = Python::attach(|py| {
+            self.host.object().bind(py).call_method0("_core_shutdown_callbacks")?.extract()
+        })?;
+        let mut runs = Vec::new();
+        for (callback, framework) in callbacks {
+            let inner = self.clone();
+            let reason = reason.clone();
+            runs.push(tokio::spawn(async move {
+                let span = if framework { None } else { Some(inner.span("shutdown_callback", Some(&callback))?) };
+                let r = inner
+                    .call(|h| {
+                        let span = span.as_ref().map(|s| s.clone_ref(h.py()));
+                        h.call_method1("_core_shutdown_callback", (callback, reason.as_str(), span))
+                    })
+                    .await;
+                if let Some(span) = span {
+                    let error = r.as_ref().err().map(|e| Python::attach(|py| e.clone_ref(py)));
+                    inner.span_end(span, error, false);
+                }
+                r.map(drop)
+            }));
+        }
+        for run in runs {
+            if let Ok(Err(e)) = run.await {
+                self.log(Level::Error, "error while shutting down the job", Some(e));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[pymethods]
+impl PyJobRun {
+    /// `host` is the `_JobProc`; must be called inside the job's loop.
+    #[new]
+    #[pyo3(signature = (host, *, fake_job, session_end_timeout))]
+    fn new(py: Python<'_>, host: Py<PyAny>, fake_job: bool, session_end_timeout: f64) -> PyResult<Self> {
+        Ok(Self(Arc::new(JobRunInner {
+            host: CancellingHandle::new(py, host)?,
+            fake: fake_job,
+            session_end_timeout,
+            state: Mutex::new(JobRunState::default()),
+            ended: watch::channel(false).0,
+        })))
+    }
+
+    /// The job ends with `reason`; the first reason given is the one kept.
+    fn shutdown(&self, reason: String, user_initiated: bool) {
+        self.0.end(reason, user_initiated);
+    }
+
+    /// `ctx.connect()` was called.
+    fn connected(&self) {
+        lock(&self.0.state).connected = true;
+    }
+
+    /// The entrypoint, then the shutdown sequence once the job ends.
+    fn run<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move { inner.run().await })
+    }
+}
+
+lk_agents_abi::register_host!(class PyJobRun);

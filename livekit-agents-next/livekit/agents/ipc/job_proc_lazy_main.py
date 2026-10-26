@@ -23,10 +23,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from opentelemetry import context as otel_context, trace
+from opentelemetry import trace
 
 from livekit import rtc
 
+from .. import _core
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
@@ -46,11 +47,9 @@ from .proto import (
     StartJobRequest,
 )
 
-# Defensive timeout for LiveSession.aclose() during job shutdown. Hardcoded for now
-# as a guardrail against close paths that hang indefinitely. If aclose() does not
-# return in this window, the rest of the shutdown sequence (on_session_end,
-# ShuttingDown ack, room.disconnect, shutdown callbacks) runs anyway so user-
-# registered shutdown callbacks are not silently dropped.
+# The core's bound on LiveSession.aclose() during the job shutdown, a guardrail against close
+# paths that hang: past it the rest of the shutdown (on_session_end, ShuttingDown,
+# room.disconnect, the shutdown callbacks) runs anyway.
 _SESSION_ACLOSE_TIMEOUT = 60.0
 
 
@@ -181,13 +180,11 @@ class _InfClient(InferenceExecutor):
             fut.set_result(resp)
 
 
-@dataclass
-class _ShutdownInfo:
-    user_initiated: bool
-    reason: str
-
-
 class _JobProc:
+    """A job process's (or job thread's) job. The core decides what ends the job and runs the
+    shutdown in order and within its bounds (``_core.JobRun``); the ``_core_*`` methods are the
+    steps it runs, each in the span it opened."""
+
     def __init__(
         self,
         initialize_process_fnc: Callable[[JobProcess], Any],
@@ -207,10 +204,6 @@ class _JobProc:
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
-
-        # used to warn users if both connect and shutdown are not called inside the job_entry
-        self._ctx_connect_called = False
-        self._ctx_shutdown_called = False
 
     @property
     def has_running_job(self) -> bool:
@@ -232,44 +225,7 @@ class _JobProc:
     @log_exceptions(logger=logger)
     async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
         self._exit_proc_flag = asyncio.Event()
-        self._shutdown_fut: asyncio.Future[_ShutdownInfo] = asyncio.Future()
-        self._entrypoint_span_context: otel_context.Context | None = None
-
-        @log_exceptions(logger=logger)
-        async def _read_ipc_task() -> None:
-            async for msg in cch:
-                if isinstance(msg, StartJobRequest):
-                    if self.has_running_job:
-                        logger.warning("trying to start a new job while one is already running")
-                        continue
-
-                    self._start_job(msg)
-                if isinstance(msg, ShutdownRequest):
-                    await self._client.send(ShutdownRequestAck())
-
-                    if not self.has_running_job:
-                        await self._client.send(ShuttingDown())
-                        self._exit_proc_flag.set()
-                        break  # exit immediately
-
-                    with contextlib.suppress(asyncio.InvalidStateError):
-                        self._shutdown_fut.set_result(
-                            _ShutdownInfo(
-                                reason=msg.reason or "parent process shutdown",
-                                user_initiated=False,
-                            )
-                        )
-
-                if isinstance(msg, InferenceResponse):
-                    self._inf_client._on_inference_response(msg)
-
-                if isinstance(msg, DumpStackTraceRequest):
-                    _dump_stack_traces_impl()
-
-            # unblock any pending do_inference() calls
-            self._inf_client.close()
-
-        read_task = asyncio.create_task(_read_ipc_task(), name="job_ipc_read")
+        read_task = asyncio.create_task(self._read_ipc(cch), name="job_ipc_read")
         try:
             await self._exit_proc_flag.wait()
         finally:
@@ -278,50 +234,56 @@ class _JobProc:
                 await aio.cancel_and_wait(self._job_task)
             await aio.cancel_and_wait(read_task)
 
+    @log_exceptions(logger=logger)
+    async def _read_ipc(self, cch: aio.ChanReceiver[Message]) -> None:
+        async for msg in cch:
+            if isinstance(msg, StartJobRequest):
+                if self.has_running_job:
+                    logger.warning("trying to start a new job while one is already running")
+                else:
+                    self._start_job(msg)
+            elif isinstance(msg, ShutdownRequest):
+                await self._client.send(ShutdownRequestAck())
+                if not self.has_running_job:
+                    await self._client.send(ShuttingDown())
+                    self._exit_proc_flag.set()
+                    break  # exit immediately
+                self._run.shutdown(msg.reason or "parent process shutdown", False)
+            elif isinstance(msg, InferenceResponse):
+                self._inf_client._on_inference_response(msg)
+            elif isinstance(msg, DumpStackTraceRequest):
+                _dump_stack_traces_impl()
+
+        # unblock any pending do_inference() calls
+        self._inf_client.close()
+
     def _start_job(self, msg: StartJobRequest) -> None:
-        if msg.running_job.fake_job:
+        info = msg.running_job
+        if info.fake_job:
             from .mock_room import create_mock_room
 
             self._room = cast(rtc.Room, create_mock_room())
         else:
             self._room = rtc.Room()
+        self._room._info.name = info.job.room.name
 
-        @self._room.on("disconnected")
-        def _on_room_disconnected(*args: Any) -> None:
-            with contextlib.suppress(asyncio.InvalidStateError):
-                self._shutdown_fut.set_result(
-                    _ShutdownInfo(user_initiated=False, reason="room disconnected")
-                )
-
-        def _on_ctx_connect() -> None:
-            self._ctx_connect_called = True
-
-        def _on_ctx_shutdown(reason: str) -> None:
-            self._ctx_shutdown_called = True
-
-            with contextlib.suppress(asyncio.InvalidStateError):
-                self._shutdown_fut.set_result(
-                    _ShutdownInfo(user_initiated=True, reason=reason or "user requested")
-                )
-
-        self._room._info.name = msg.running_job.job.room.name
-
+        self._run = _core.JobRun(
+            self, fake_job=info.fake_job, session_end_timeout=self._session_end_timeout
+        )
+        self._room.on("disconnected", lambda *_: self._run.shutdown("room disconnected", False))
         self._job_ctx = JobContext(
             proc=self._job_proc,
-            info=msg.running_job,
+            info=info,
             room=self._room,
-            on_connect=_on_ctx_connect,
-            on_shutdown=_on_ctx_shutdown,
+            on_connect=self._run.connected,
+            on_shutdown=lambda reason: self._run.shutdown(reason or "user requested", True),
             inference_executor=self._inf_client,
         )
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
 
-        def _exit_proc_cb(_: asyncio.Task[None]) -> None:
-            self._exit_proc_flag.set()
-
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
-        self._job_task.add_done_callback(_exit_proc_cb)
+        self._job_task.add_done_callback(lambda _: self._exit_proc_flag.set())
 
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
@@ -335,82 +297,16 @@ class _JobProc:
 
         # the job's root span, from the availability request to the end of shutdown; the
         # entrypoint returning is an event on it
-        job_span = _start_job_span(self._job_ctx)
-        self._entrypoint_span_context = trace.set_span_in_context(job_span)
-
-        async def _traceable_entrypoint(job_ctx: JobContext) -> None:
-            with tracer.use_span(
-                job_span, end_on_exit=False, record_exception=False, set_status_on_exception=False
-            ):
-                # the loop monitor's heartbeat predates the job: give its reports this context
-                if (monitor := loop_monitor.get_monitor(asyncio.get_running_loop())) is not None:
-                    monitor.set_report_context(contextvars.copy_context())
-                try:
-                    await self._job_entrypoint_fnc(job_ctx)
-                except asyncio.CancelledError:
-                    job_span.add_event("entrypoint_cancelled")
-                    raise
-                except Exception as e:
-                    trace_utils.record_exception(job_span, e)
-                    raise
-                job_span.add_event("entrypoint_returned")
-
-        job_entry_task = asyncio.create_task(
-            _traceable_entrypoint(self._job_ctx), name="job_user_entrypoint"
-        )
-
-        async def _warn_not_connected_task() -> None:
-            if self._job_ctx.is_fake_job():
-                return
-
-            await asyncio.sleep(10)
-            if not self._ctx_connect_called and not self._ctx_shutdown_called:
-                logger.warning(
-                    "The room connection was not established within 10 seconds after calling job_entry. "  # noqa: E501
-                    "This might mean that job_ctx.connect() was never invoked, or that no LiveSession with an active RoomIO has been started."
-                )
-
-        warn_unconnected_task = asyncio.create_task(_warn_not_connected_task())
-        job_entry_task.add_done_callback(lambda _: warn_unconnected_task.cancel())
-
-        def _on_entry_done(t: asyncio.Task[Any]) -> None:
-            if not t.cancelled() and t.exception():
-                logger.error(
-                    "unhandled exception while running the job task",
-                    exc_info=t.exception(),
-                )
-                # if the process crashes before ctx.connect(), shutdown_fut will never resolve
-                # we'll force it to trigger shutdown so _on_cleanup can flush crash logs
-                with contextlib.suppress(asyncio.InvalidStateError):
-                    self._shutdown_fut.set_result(
-                        _ShutdownInfo(user_initiated=False, reason="job crashed")
-                    )
-            elif not self._ctx_connect_called and not self._ctx_shutdown_called:
-                if self._job_ctx.is_fake_job():
-                    return
-
-                logger.warning(
-                    "The job task completed without establishing a connection or performing a proper shutdown. "  # noqa: E501
-                    "Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized."  # noqa: E501
-                )
-
-        job_entry_task.add_done_callback(_on_entry_done)
-
+        self._job_span = _start_job_span(self._job_ctx)
+        self._shutdown_span: trace.Span | None = None
         try:
-            shutdown_info = await self._shutdown_fut
-            with tracer.start_as_current_span(
-                "job_shutdown",
-                context=self._entrypoint_span_context,
-                attributes={
-                    trace_types.ATTR_SHUTDOWN_REASON: shutdown_info.reason,
-                    trace_types.ATTR_SHUTDOWN_USER_INITIATED: shutdown_info.user_initiated,
-                },
-            ):
-                await self._shutdown_job(job_entry_task, shutdown_info)
+            await self._run.run()
         finally:
             # whatever happened above (a cancel while waiting, a close that raised), the job
             # ends: root span, temp dir, per-job telemetry state
-            job_span.end()
+            if self._shutdown_span is not None:
+                self._shutdown_span.end()
+            self._job_span.end()
 
             if tasks := self._job_ctx._pending_tasks:
                 await aio.cancel_and_wait(*tasks)
@@ -419,91 +315,107 @@ class _JobProc:
             await http_context._close_http_ctx()
             _JobContextVar.reset(job_ctx_token)
 
-    async def _shutdown_job(
-        self, job_entry_task: asyncio.Task[None], shutdown_info: _ShutdownInfo
-    ) -> None:
-        # wait for the entrypoint to finish, cancel if it takes too long
-        if not job_entry_task.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(job_entry_task), timeout=15)
-            except asyncio.TimeoutError:
-                logger.warning("entrypoint did not exit in time, cancelling")
-                await aio.cancel_and_wait(job_entry_task)
-            except Exception:
-                # entrypoint raised; already logged via _on_entry_done.
-                # swallow so shutdown callbacks still run.
-                pass
+    # --- the steps the core runs -------------------------------------------------------
 
-        if session := self._job_ctx._primary_agent_session:
-            try:
-                await asyncio.wait_for(session.aclose(), timeout=_SESSION_ACLOSE_TIMEOUT)
-            except asyncio.TimeoutError:
-                logger.error(
-                    "LiveSession.aclose() timed out after %.1fs; "
-                    "proceeding with shutdown so registered callbacks still run.",
-                    _SESSION_ACLOSE_TIMEOUT,
-                )
+    async def _core_start_entrypoint(self) -> asyncio.Task[None]:
+        return asyncio.create_task(self._traceable_entrypoint(), name="job_user_entrypoint")
 
-        if self._session_end_fnc:
-            with tracer.start_as_current_span(
-                "on_session_end",
-                attributes={trace_types.ATTR_CALLBACK_NAME: _callback_name(self._session_end_fnc)},
-            ) as span:
-                try:
-                    await asyncio.wait_for(
-                        self._session_end_fnc(self._job_ctx),
-                        timeout=self._session_end_timeout,
-                    )
-                except asyncio.TimeoutError as e:
-                    trace_utils.record_exception(span, e)
-                    logger.error("on_session_end timed out after %ds", self._session_end_timeout)
-                except Exception as e:
-                    trace_utils.record_exception(span, e)
-                    logger.exception("error while executing the on_session_end callback")
-
-        with tracer.start_as_current_span("session_end_upload") as span:
+    async def _traceable_entrypoint(self) -> None:
+        job_span = self._job_span
+        with tracer.use_span(
+            job_span, end_on_exit=False, record_exception=False, set_status_on_exception=False
+        ):
+            # the loop monitor's heartbeat predates the job: give its reports this context
+            if (monitor := loop_monitor.get_monitor(asyncio.get_running_loop())) is not None:
+                monitor.set_report_context(contextvars.copy_context())
             try:
-                await self._job_ctx._on_session_end()
+                await self._job_entrypoint_fnc(self._job_ctx)
+            except asyncio.CancelledError:
+                job_span.add_event("entrypoint_cancelled")
+                raise
             except Exception as e:
-                trace_utils.record_exception(span, e)
-                logger.exception("error in job_ctx._on_session_end")
+                trace_utils.record_exception(job_span, e)
+                raise
+            job_span.add_event("entrypoint_returned")
 
-        await self._client.send(ShuttingDown())
+    async def _core_wait(self, task: asyncio.Task[None]) -> None:
+        await asyncio.shield(task)
 
-        logger.debug(
-            "shutting down job task",
-            extra={"reason": shutdown_info.reason, "user_initiated": shutdown_info.user_initiated},
+    async def _core_cancel(self, task: asyncio.Task[None]) -> None:
+        await aio.cancel_and_wait(task)
+
+    def _core_log(self, level: int, msg: str, exc: BaseException | None) -> None:
+        logger.log(level, msg, exc_info=exc)
+
+    async def _core_shutdown_began(self, reason: str, user_initiated: bool) -> None:
+        self._shutdown_span = tracer.start_span(
+            "job_shutdown",
+            context=trace.set_span_in_context(self._job_span),
+            attributes={
+                trace_types.ATTR_SHUTDOWN_REASON: reason,
+                trace_types.ATTR_SHUTDOWN_USER_INITIATED: user_initiated,
+            },
         )
-        await self._client.send(Exiting(reason=shutdown_info.reason))
-        with tracer.start_as_current_span("room_disconnect"):
+
+    def _core_span(self, name: str, callback: Callable[..., Any] | None) -> trace.Span:
+        fnc = callback or (self._session_end_fnc if name == "on_session_end" else None)
+        attributes = {trace_types.ATTR_CALLBACK_NAME: _callback_name(fnc)} if fnc else None
+        return tracer.start_span(
+            name, context=trace.set_span_in_context(self._shutdown_span), attributes=attributes
+        )
+
+    def _core_span_end(
+        self, span: trace.Span, error: BaseException | None, timed_out: bool
+    ) -> None:
+        if error is not None or timed_out:
+            trace_utils.record_exception(span, error or asyncio.TimeoutError())
+        span.end()
+
+    @property
+    def _session_aclose_timeout(self) -> float:
+        return _SESSION_ACLOSE_TIMEOUT
+
+    async def _core_close_session(self) -> None:
+        if session := self._job_ctx._primary_agent_session:
+            await session.aclose()
+
+    def _core_has_session_end(self) -> bool:
+        return self._session_end_fnc is not None
+
+    async def _core_session_end(self, span: trace.Span) -> None:
+        assert self._session_end_fnc is not None
+        with trace.use_span(span, end_on_exit=False, record_exception=False):
+            await self._session_end_fnc(self._job_ctx)
+
+    async def _core_upload(self, span: trace.Span) -> None:
+        with trace.use_span(span, end_on_exit=False, record_exception=False):
+            await self._job_ctx._on_session_end()
+
+    async def _core_finish(self, reason: str, user_initiated: bool) -> None:
+        await self._client.send(ShuttingDown())
+        logger.debug(
+            "shutting down job task", extra={"reason": reason, "user_initiated": user_initiated}
+        )
+        await self._client.send(Exiting(reason=reason))
+
+    async def _core_disconnect(self, span: trace.Span) -> None:
+        with trace.use_span(span, end_on_exit=False, record_exception=False):
             await self._room.disconnect()
 
-        async def _traced_shutdown_callback(
-            callback: Callable[[str], Awaitable[None]],
-        ) -> None:
-            if _is_framework_callback(callback):
-                # framework callbacks (the session's own close) get no span of their own
-                await callback(shutdown_info.reason)
-                return
-            # a hung callback here is why jobs hit the supervisor's shutdown deadline
-            with tracer.start_as_current_span(
-                "shutdown_callback",
-                attributes={trace_types.ATTR_CALLBACK_NAME: _callback_name(callback)},
-            ):
-                await callback(shutdown_info.reason)
+    def _core_shutdown_callbacks(self) -> list[tuple[Callable[[str], Awaitable[None]], bool]]:
+        # framework callbacks (the session's own close) get no span of their own
+        return [(cb, _is_framework_callback(cb)) for cb in self._job_ctx._shutdown_callbacks]
 
-        try:
-            shutdown_tasks = []
-            for callback in self._job_ctx._shutdown_callbacks:
-                shutdown_tasks.append(
-                    asyncio.create_task(
-                        _traced_shutdown_callback(callback), name="job_shutdown_callback"
-                    )
-                )
-
-            await asyncio.gather(*shutdown_tasks)
-        except Exception:
-            logger.exception("error while shutting down the job")
+    async def _core_shutdown_callback(
+        self, callback: Callable[[str], Awaitable[None]], reason: str, span: trace.Span | None
+    ) -> None:
+        # a framework callback runs in the shutdown's own span
+        with trace.use_span(
+            span or self._shutdown_span or trace.INVALID_SPAN,
+            end_on_exit=False,
+            record_exception=False,
+        ):
+            await callback(reason)
 
 
 def _is_framework_callback(fnc: Any) -> bool:
