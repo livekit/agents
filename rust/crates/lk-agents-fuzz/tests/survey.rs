@@ -157,6 +157,40 @@ struct Window {
     single: bool,
 }
 
+/// Every seed of the window, run on all cores and returned in seed order, so the report does not
+/// depend on which thread finished first. A seed is the whole of its run, so runs share nothing.
+fn run_all(window: &Window) -> Vec<(u64, Outcome, std::time::Duration)> {
+    let seeds: Vec<u64> = (window.first..window.first + window.seeds).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(seeds.len());
+    let mut done: Vec<(u64, Outcome, std::time::Duration)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&seed) = seeds.get(i) else { break mine };
+                        // A fresh setup per seed, from the seed alone: three journal families
+                        // exist only under legs the default setup never builds. Fresh every
+                        // time: mutating the campaign's most novel cases instead was measured on
+                        // 2026-09-23 and lost a fifth of the edges and a quarter of the findings
+                        // at every scale; the generator, not a mutator, is where novelty comes
+                        // from.
+                        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+                        let began = std::time::Instant::now();
+                        let outcome = search::explore(setup, seed, window.budget);
+                        mine.push((seed, outcome, began.elapsed()));
+                    }
+                })
+            })
+            .collect();
+        workers.into_iter().flat_map(|w| w.join().expect("a survey worker panicked")).collect()
+    });
+    done.sort_by_key(|(seed, ..)| *seed);
+    done
+}
+
 fn campaign(window: &Window) {
     let (seeds, budget) = (window.seeds, window.budget);
     let mut reached: BTreeSet<String> = BTreeSet::new();
@@ -177,18 +211,8 @@ fn campaign(window: &Window) {
     let mut observed: BTreeMap<&'static str, BTreeSet<Kind>> = BTreeMap::new();
     let started = std::time::Instant::now();
 
-    for seed in window.first..window.first + seeds {
-        // A fresh setup per seed, from the seed alone: three journal families exist only under
-        // legs the default setup never builds, and no budget reaches them without one. Fresh
-        // every time: mutating the campaign's most novel cases instead was measured on 2026-09-23
-        // and lost a fifth of the edges and a quarter of the findings at every scale -- a
-        // near-copy of a run is a run's worth of novelty forgone, and the generator, not a
-        // mutator, is where this search's novelty comes from.
-        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-        let began = std::time::Instant::now();
-        let outcome = search::explore(setup, seed, budget);
+    for (seed, outcome, took) in run_all(window) {
         let band_of = ((search::randomness(seed).log10() + 4.0) as usize).min(BANDS - 1);
-        let took = began.elapsed();
         bands[band_of].absorb(&outcome, took);
         policies.entry(format!("{:?}", outcome.case.policy)).or_default().absorb(&outcome, took);
         reached.extend(outcome.reached.iter().cloned());
