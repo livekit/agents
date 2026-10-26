@@ -173,6 +173,39 @@ impl RealtimeMachine {
         })
     }
 
+    /// `_emit_transcription_metrics`: the input transcription's usage as `STTMetrics`, named by the
+    /// transcription model.
+    fn transcription_metrics(&self, now: Ts, t: &TranscriptionCompleted) -> Option<Event> {
+        use lk_agents_abi::metrics::base::SttMetrics;
+        let usage = t.usage.as_ref()?;
+        let model = self.opts.transcription.as_ref().and_then(|v| v.get("model")).and_then(Value::as_str);
+        let (audio_duration, input_tokens, output_tokens, total_tokens, input_audio_tokens) = match *usage {
+            wire::TranscriptionUsage::Tokens { input, output, total, input_audio } => (0.0, input, output, total, input_audio),
+            wire::TranscriptionUsage::Duration { seconds } => (seconds, 0, 0, 0, 0),
+        };
+        let metrics = SttMetrics {
+            label: self.label.clone(),
+            request_id: t.event_id.clone(),
+            timestamp: secs(now),
+            duration: 0.0,
+            audio_duration,
+            streamed: true,
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            input_audio_tokens,
+            acquire_time: 0.0,
+            connection_reused: false,
+            metadata: Some(lk_agents_abi::metrics::base::Metadata {
+                model_name: model.map(str::to_owned),
+                model_provider: Some(self.provider.clone()),
+            }),
+        };
+        Some(Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics {
+            metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Stt(metrics)),
+        }))
+    }
+
     /// The finished response's `RealtimeModelMetrics`, as `_handle_response_done` computes them.
     fn response_metrics(&mut self, now: Ts, response_id: &str, status: GenerationStatus, usage: &TokenUsage) -> Option<Event> {
         use lk_agents_abi::metrics::base::{CachedTokenDetails, InputTokenDetails, OutputTokenDetails, RealtimeModelMetrics};

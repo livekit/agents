@@ -847,3 +847,39 @@ fn a_finished_response_reports_its_realtime_metrics() {
     let md = r.metadata.as_ref().unwrap();
     assert_eq!(md.model_provider.as_deref(), Some("api.openai.com"));
 }
+
+// Catches: the input transcription's billed usage dropped (no `STTMetrics`), or named by the
+// realtime model instead of the transcription model.
+#[test]
+fn a_transcription_with_usage_reports_stt_metrics() {
+    use lk_agents_abi::metrics::base::AgentMetrics;
+    let mut m = machine(OPENAI).with_provider("api.openai.com".into());
+    m.open(at(0));
+    let step = recv(
+        &mut m,
+        at(2),
+        json!({
+            "type": "conversation.item.input_audio_transcription.completed",
+            "event_id": "event_7", "item_id": "item_1", "content_index": 0, "transcript": "hello",
+            "usage": {"type": "tokens", "input_tokens": 12, "output_tokens": 3, "total_tokens": 15,
+                      "input_token_details": {"audio_tokens": 12}},
+        }),
+    );
+    let stt: Vec<_> = step
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics { metrics }) => match &**metrics {
+                AgentMetrics::Stt(s) => Some(s.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stt.len(), 1, "{:?}", step.events);
+    assert_eq!(stt[0].request_id, "event_7");
+    assert_eq!((stt[0].input_tokens, stt[0].output_tokens, stt[0].total_tokens, stt[0].input_audio_tokens), (12, 3, 15, 12));
+    assert!(stt[0].streamed);
+    let md = stt[0].metadata.as_ref().unwrap();
+    assert_eq!(md.model_name.as_deref(), Some("gpt-4o-mini-transcribe"), "the transcription model");
+}

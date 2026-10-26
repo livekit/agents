@@ -323,11 +323,12 @@ impl RealtimeMachine {
             }));
             return step;
         }
-        self.finalize_transcript(t)
+        let metrics = self.transcription_metrics(now, &t);
+        let mut step = self.finalize_transcript(t);
+        step.events.extend(metrics);
+        step
     }
 
-    /// "The agent has started answering": xAI finalises the user's transcript here, the last
-    /// moment it can be revised.
     /// `_first_token_timestamp`: the response's first text or audio.
     fn first_token(&mut self, now: Ts) {
         if self.first_token_at.is_none() && matches!(self.generation, Generation::Active { .. }) {
@@ -335,6 +336,8 @@ impl RealtimeMachine {
         }
     }
 
+    /// "The agent has started answering": xAI finalises the user's transcript here, the last
+    /// moment it can be revised.
     fn on_output(&mut self, now: Ts, _item_id: &str) -> Step {
         if matches!(self.generation, Generation::Discarded | Generation::None) {
             return Step::default();

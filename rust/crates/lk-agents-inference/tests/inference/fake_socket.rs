@@ -269,7 +269,7 @@ async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
 
     loop {
         match next_event(&session).await {
-            Event::ConnectionAcquired { .. } => continue,
+            Event::ConnectionAcquired { .. } | Event::Metrics(_) => continue,
             Event::Error(err) => {
                 assert!(err.message.contains("closed unexpectedly"), "{}", err.message);
                 assert!(err.recoverable);

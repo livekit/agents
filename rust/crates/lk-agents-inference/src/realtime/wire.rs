@@ -618,6 +618,34 @@ pub struct TranscriptionCompleted {
     pub confidence: Option<f64>,
     /// xAI sends `status: "in_progress"` on a transcript it will revise. Absent on OpenAI.
     pub in_progress: bool,
+    pub event_id: String,
+    /// The transcription's billed usage, when the provider reports it.
+    pub usage: Option<TranscriptionUsage>,
+}
+
+/// `UsageTranscriptTextUsageTokens | UsageTranscriptTextUsageDuration`, told apart by `type`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TranscriptionUsage {
+    Tokens { input: u32, output: u32, total: u32, input_audio: u32 },
+    Duration { seconds: f64 },
+}
+
+impl TranscriptionUsage {
+    /// `_coerce_transcription_usage`: anything else is no usage.
+    fn decode(v: Option<&Value>) -> Option<Self> {
+        let v = v?;
+        let n = |path: &[&str]| u32::try_from(u(v, path)).unwrap_or(u32::MAX);
+        match v.get("type").and_then(Value::as_str)? {
+            "tokens" => Some(TranscriptionUsage::Tokens {
+                input: n(&["input_tokens"]),
+                output: n(&["output_tokens"]),
+                total: n(&["total_tokens"]),
+                input_audio: n(&["input_token_details", "audio_tokens"]),
+            }),
+            "duration" => Some(TranscriptionUsage::Duration { seconds: v.get("seconds")?.as_f64()? }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -717,6 +745,8 @@ pub fn decode(ev: &Value) -> Incoming {
                 transcript: s(ev, "transcript").unwrap_or_default(),
                 confidence: confidence_from_logprobs(ev.get("logprobs").and_then(Value::as_array)),
                 in_progress: ev.get("status").and_then(Value::as_str) == Some("in_progress"),
+                event_id: s(ev, "event_id").unwrap_or_default(),
+                usage: TranscriptionUsage::decode(ev.get("usage")),
             })
         }
         "conversation.item.input_audio_transcription.failed" => Incoming::TranscriptionFailed {
