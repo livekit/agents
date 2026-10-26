@@ -78,6 +78,8 @@ pub struct DriverBuilder {
     /// Instead of an LLM+TTS pair: `llm`/`tts` are ignored while it is set.
     pub realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
     pub toolset: crate::tool_executor::Toolset,
+    /// Prefixes every chat item id the session mints, so items from two calls never collide.
+    pub session_id: String,
 }
 
 impl DriverBuilder {
@@ -288,6 +290,7 @@ impl DriverBuilder {
             spawner: Arc::clone(&self.spawner),
             frames: Arc::new(FrameTable::new()),
             gen_ids: std::sync::atomic::AtomicU64::new(0),
+            session_id: self.session_id.clone(),
             resources: self.resources.clone(),
             activity:
                 tokio::sync::watch::channel(crate::agent_session::ActivitySnapshot::default()).0,
@@ -335,6 +338,7 @@ impl DriverBuilder {
                 room_link: self.room_link,
                 agent: self.agent.clone(),
                 chat_ctx: self.chat_ctx.clone(),
+                session_id: self.session_id.clone(),
             },
         );
 

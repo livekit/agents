@@ -150,6 +150,7 @@ impl Run {
                 None,
                 None,
                 lk_agents_abi::Maybe::NotGiven,
+                Some("AS_fuzz".into()),
                 tasks.clone(),
             )
             .expect("assemble the session"),

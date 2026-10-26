@@ -113,6 +113,8 @@ impl SessionApi {
         keyterm_tools: Option<lk_agents_abi::HostRef>,
         // The first agent's own `expressive`; `NOT_GIVEN` defers to the session's.
         agent_expressive: Maybe<crate::agent_activity::options::Expressive>,
+        // Prefixes the ids the session mints for chat items; `None` mints a random one.
+        session_id: Option<String>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
     ) -> Result<Self, SessionBuildError> {
         use crate::room_io::types::{
@@ -275,6 +277,7 @@ impl SessionApi {
         let resources = lk_agents_abi::resources::Resources::default();
         let builder = DriverBuilder {
             resources: resources.clone(),
+            session_id: session_id.unwrap_or_else(crate::agent_session::mint_session_id),
             agent,
             time: time.clone(),
             spawner: spawner.clone(),

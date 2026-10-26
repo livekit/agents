@@ -104,6 +104,7 @@ pub(crate) struct SessionParts {
     /// has it).
     pub(crate) agent: String,
     pub(crate) chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
+    pub(crate) session_id: String,
 }
 
 /// What `start()` asked for, taken once by the opening.
@@ -128,6 +129,7 @@ impl LiveSession {
             room_link,
             agent,
             chat_ctx: opening_items,
+            session_id,
         } = parts;
         let mut chat_ctx = crate::agent::SessionChatCtx::new();
         chat_ctx.set_agent(&agent, false);
@@ -140,7 +142,7 @@ impl LiveSession {
             aec: AecWarmup::new(cfg.timers.aec_warmup),
             by_audio_activity: cfg.turn.interruption.by_audio_activity,
             errors: ErrorCounts { max: max_unrecoverable_errors, ..Default::default() },
-            ids: IdMint { next: 1, user_item: None },
+            ids: IdMint { session: session_id, next: 1, user_item: None },
             config,
             chat_ctx,
             llm,
@@ -341,8 +343,16 @@ impl ErrorCounts {
     }
 }
 
-/// The session's own ids: speeches and items share one counter.
+/// `AS_` and twelve random hex digits, as `utils.shortuuid("AS_")`.
+pub(crate) fn mint_session_id() -> String {
+    use std::hash::BuildHasher;
+    let n = std::collections::hash_map::RandomState::new().hash_one(std::process::id());
+    format!("AS_{:012x}", n & 0xffff_ffff_ffff)
+}
+
+/// The session's own ids: speeches and items share one counter, items carry the session's id.
 pub(crate) struct IdMint {
+    session: String,
     next: u64,
     /// The user item an interim transcript opened, reused until its final.
     user_item: Option<String>,
@@ -350,7 +360,8 @@ pub(crate) struct IdMint {
 
 impl IdMint {
     pub(crate) fn mint(&mut self, prefix: &str) -> String {
-        format!("{prefix}_{:04}", self.next_speech_id().0)
+        let n = self.next_speech_id().0;
+        format!("{}_{prefix}_{n:04}", self.session)
     }
 
     pub(crate) fn next_speech_id(&mut self) -> SpeechId {
@@ -400,6 +411,7 @@ pub struct SessionShared {
     pub frames: Arc<lk_agents_abi::utils::frame::FrameTable>,
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
     pub gen_ids: std::sync::atomic::AtomicU64,
+    pub session_id: String,
     pub activity: tokio::sync::watch::Sender<ActivitySnapshot>,
     /// The providers by id, until the runtime owns them.
     pub resources: lk_agents_abi::resources::Resources,
@@ -408,7 +420,7 @@ pub struct SessionShared {
 impl SessionShared {
     pub fn mint_item_id(&self) -> String {
         let n = self.gen_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!("item_g{n:04}")
+        format!("{}_item_g{n:04}", self.session_id)
     }
 
     /// A closed channel means the session is ending; not an error.
