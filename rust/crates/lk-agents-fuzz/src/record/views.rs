@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_voice::{
     agent_activity::scheduling::SpeechKind,
+    agent_session::IoKind,
     events::{SessionEvent, SpeechOutcome, ToolLifecycle},
     trace::{
         CloseStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SinkCall,
@@ -120,56 +121,50 @@ impl<'a> InputsView<'a> {
         Some(Turn { began: applied[began].at, ended: applied.get(began + 1).map(|a| a.at) })
     }
 
-    /// The audio input switch: the leg's enable, and attaching or detaching the microphone.
+    /// The audio input path: the leg's enable, and the microphone attached.
     pub fn audio_input(&self) -> Switch {
-        self.switch(|input| match input {
-            Input::SetIoEnabled {
-                leg: lk_agents_voice::agent_session::IoKind::AudioInput,
-                enabled,
-            } => Some(*enabled),
+        self.path(IoKind::AudioInput, |input| match input {
             Input::SetAudioInput { attach } => Some(*attach),
             _ => None,
         })
     }
 
-    /// The transcription path: the leg's enable, and attaching or detaching the text output.
+    /// The transcription path: the leg's enable, and a text output attached.
     pub fn transcription_output(&self) -> Switch {
-        self.switch(|input| match input {
-            Input::SetIoEnabled {
-                leg: lk_agents_voice::agent_session::IoKind::Transcription,
-                enabled,
-            } => Some(*enabled),
+        self.path(IoKind::Transcription, |input| match input {
             Input::SetTranscriptionOutput { attach } => Some(*attach),
             _ => None,
         })
     }
 
-    /// The audio output: attached or detached.
+    /// The audio output path: the leg's enable, and an audio output attached.
     pub fn audio_output(&self) -> Switch {
-        self.switch(|input| match input {
+        self.path(IoKind::AudioOutput, |input| match input {
             Input::SetAudioOutput { attach } => Some(*attach),
             _ => None,
         })
     }
 
-    /// The audio output leg's enable, which holds whichever output is attached.
-    pub fn audio_output_enabled(&self) -> Switch {
-        self.switch(|input| match input {
-            Input::SetIoEnabled {
-                leg: lk_agents_voice::agent_session::IoKind::AudioOutput,
-                enabled,
-            } => Some(*enabled),
-            _ => None,
-        })
-    }
-
-    fn switch(&self, toggle: impl Fn(&Input) -> Option<bool>) -> Switch {
-        Switch {
-            changes: self
-                .accepted()
-                .filter_map(|a| toggle(&a.input).map(|on| (a.at, on)))
-                .collect(),
+    /// A leg's path is on while both of its independent switches are: the enable, which holds
+    /// whatever is attached, and the attachment. Either one alone turning on again does not
+    /// reopen a path the other still holds shut.
+    fn path(&self, leg: IoKind, attach: impl Fn(&Input) -> Option<bool>) -> Switch {
+        let (mut enabled, mut attached, mut on) = (true, true, true);
+        let mut changes = Vec::new();
+        for a in self.accepted() {
+            match &a.input {
+                Input::SetIoEnabled { leg: l, enabled: e } if *l == leg => enabled = *e,
+                input => match attach(input) {
+                    Some(at) => attached = at,
+                    None => continue,
+                },
+            }
+            if (enabled && attached) != on {
+                on = !on;
+                changes.push((a.at, on));
+            }
         }
+        Switch { changes }
     }
 }
 
