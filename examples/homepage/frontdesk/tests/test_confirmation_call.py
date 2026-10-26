@@ -98,7 +98,12 @@ async def test_only_the_patients_own_appointment_can_be_confirmed(
 def test_inbound_only_tools_are_not_on_the_outbound_call(agent):
     tools = {t.info.name for t in agent.tools}
     assert {"confirm_appointment", "add_note_for_doctor", "verify_patient"} <= tools
-    assert not tools & {"look_up_patient", "register_new_patient", "book_appointment"}
+    assert not tools & {
+        "look_up_birthday",
+        "open_chart",
+        "register_new_patient",
+        "book_appointment",
+    }
 
 
 def test_the_greeting_names_the_patient_but_nothing_medical(appointment, clinic):

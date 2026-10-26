@@ -12,7 +12,9 @@ SCHEDULE = json.loads((Path(__file__).parent / "schedule.json").read_text())
 
 CLINIC_NAME = SCHEDULE["clinic"]
 DOCTOR = SCHEDULE["doctor"]
-CLINIC_TZ = ZoneInfo("America/New_York")
+# most people trying the demo are on the West Coast
+CLINIC_TZ = ZoneInfo("America/Los_Angeles")
+CLINIC_TZ_NAME = "Pacific time"
 CLINIC_DAYS = len(SCHEDULE["busy"])
 SLOT_TIMES = [time.fromisoformat(t) for t in SCHEDULE["times"]]
 PATIENTS_ON_FILE = {
@@ -99,6 +101,9 @@ class Clinic:
     def upcoming(self, patient: str) -> list[Appointment]:
         return [a for a in self.appointments if a.patient == patient]
 
+    def born_on(self, date_of_birth: date) -> list[str]:
+        return [name for name, born in self.patients.items() if born == date_of_birth]
+
     async def verify(self, name: str, date_of_birth: date) -> bool:
         if self.patients.get(name) != date_of_birth:
             return False
@@ -111,7 +116,8 @@ class Clinic:
             raise ClinicError("A name is required.")
         if name in self.patients:
             raise ClinicError(
-                f"{name} already has a chart. Ask for their date of birth again."
+                f"{name} already has a chart. Read the whole date of birth back to "
+                "the caller to check it."
             )
         self.patients[name] = date_of_birth
         await self._publish_caller(name)

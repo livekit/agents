@@ -7,16 +7,19 @@ scenarios:
       PERSONA: Taylor Smith, a patient on file, born March 14, 1988, calling from work.
       OPENING LINE: "Hi, it's Taylor Smith."
       If asked for your date of birth, say "March 14th, 1988."
+      If your name is spelled back to you correctly, say "Yes, that's right."
       If asked to spell your name, spell it letter by letter: T, A, Y, L, O, R, then S, M, I, T, H.
       DO, IN ORDER:
       1. When told about your upcoming appointment, ask to move it to a morning later in the week.
       2. Accept the first time offered.
       3. Say that's all and hang up.
     agent_expectations: >
-      Asks Taylor to spell their name and for their date of birth before sharing anything from the chart, then finds it and mentions the upcoming knee pain follow-up. Checks the
+      Asks Taylor for their date of birth once, then spells Taylor's name back to confirm it
+      instead of asking Taylor to spell it. Shares nothing from the chart until Taylor
+      confirms the spelling, then mentions the upcoming knee pain follow-up. Checks the
       calendar and offers morning times later in the week, then moves the appointment to
-      the time Taylor picked without asking for a second confirmation. Replies are
-      one or two short spoken sentences.
+      the time Taylor picked without asking for a second confirmation. Never talks about
+      typing or a keyboard. Replies are one or two short spoken sentences.
     tags:
       feature: reschedule
 
@@ -25,18 +28,19 @@ scenarios:
     instructions: |
       PERSONA: Casey Morgan, a new patient with a sore throat, born June 1, 1995.
       If asked for your date of birth, say "June 1st, 1995."
+      If your name is spelled back to you correctly, say "Yep, that's right."
       If asked to spell your name, spell it letter by letter: C, A, S, E, Y, then M, O, R, G, A, N.
-      If the letters are read back to you correctly, say "Yep, that's right."
       OPENING LINE: "Hi, I'm Casey Morgan, I'm a new patient."
       DO, IN ORDER:
       1. Say the visit is for a sore throat and ask for something tomorrow afternoon.
       2. Accept the first time offered.
       3. Say that's all and hang up.
     agent_expectations: >
-      Asks Casey to spell their name and reads the letters back before registering
-      them, then checks tomorrow afternoon, offers an open time, and books it once
-      Casey picks it. Confirms the booking with the same day and time it offered.
-      Never invents times that the calendar didn't return.
+      Asks Casey for their date of birth, then spells Casey's name back for Casey to confirm
+      instead of asking Casey to spell it, and registers them only after Casey confirms.
+      Checks tomorrow afternoon, offers an open time, and books it once Casey picks it.
+      Confirms the booking with the same day and time it offered. Never invents times that
+      the calendar didn't return.
     tags:
       feature: new-patient
 
@@ -47,34 +51,70 @@ scenarios:
       OPENING LINE: "Hey, my knee's really sore. I've never been to the clinic before, but I'm hoping to make an appointment."
       Your first reply must say you've never been to the clinic before. Don't give your name until you're asked for it.
       If asked for your date of birth, say "August 17th, 1990."
-      If asked for your name or its spelling, spell it letter by letter: S, A, M, then R, I, V, E, R, A.
-      If the letters are read back to you correctly, say "Yep, that's right."
+      If asked for your name, say "Sam Rivera."
+      If your name is spelled back to you correctly, say "Yep, that's right."
+      If asked to spell your name, spell it letter by letter: S, A, M, then R, I, V, E, R, A.
       DO, IN ORDER:
       1. When asked about timing, ask for the earliest morning appointment.
       2. Accept the first time offered.
       3. Say that's all and hang up.
     agent_expectations: >
-      Asks Sam to spell their name before looking anything up. Never talks as if
-      it expects to find a chart for Sam, like saying it's pulling Sam up, since
-      Sam said they've never been in. Reads the letters back and registers Sam
-      once they confirm, then books the morning opening Sam picks and confirms it
-      with the same day and time it offered.
+      Gets Sam's date of birth and name before looking anything up. Never talks as if it
+      expects to find a chart for Sam, like saying it's pulling Sam up, since Sam said
+      they've never been in, and never talks about typing or a keyboard. Spells Sam's name
+      back and registers Sam once they confirm, then books the morning opening Sam picks and
+      confirms it with the same day and time it offered.
     tags:
       feature: new-patient
 
   - id: SCN_WhQ6yVjG6RAe
-    label: Spelling finds the chart behind a misheard name
+    label: Birthday finds the chart behind a misheard name
     instructions: |
       PERSONA: Jordan Lee, a patient on file, born July 8, 1992, just checking their appointment.
       If asked for your date of birth, say "July 8th, 1992."
+      If your name is spelled back to you as J, O, R, D, A, N, L, E, E, say "Yes, that's me."
       If asked to spell your name, spell it letter by letter: J, O, R, D, A, N, then L, E, E.
       OPENING LINE: "Hi, this is Jordan Leigh."
       DO, IN ORDER:
       1. Ask when your next appointment is.
       2. Once Riley has told you when it is, say thanks and hang up. Don't say goodbye before that.
     agent_expectations: >
-      Asks Jordan to spell their name, finds Jordan Lee's chart from the spelling,
-      and tells Jordan about the upcoming annual physical. Does not register a new
-      patient.
+      Asks Jordan for their date of birth, finds Jordan Lee's chart from it even though
+      Jordan's name was heard as "Leigh", and spells the name on the chart back for Jordan
+      to confirm. Then tells Jordan about the upcoming annual physical. Does not register a
+      new patient.
     tags:
       feature: lookup
+
+  - id: SCN_UPjB5WkXqZCg
+    label: Caller gives their full birthday once and isn't asked again
+    instructions: |
+      PERSONA: Morgan Brooks, a patient on file, born November 2, 1979, checking their appointment.
+      OPENING LINE: "Hi, this is Morgan Brooks, my birthday's November 2nd, 1979. When's my next appointment?"
+      If your name is spelled back to you correctly, say "Yes."
+      If you're asked for your date of birth or any part of it again, say "I already told you, November 2nd, 1979."
+      DO, IN ORDER:
+      1. Once Riley has told you when your appointment is, say thanks and hang up. Don't say goodbye before that.
+    agent_expectations: >
+      Never asks Morgan for the date of birth or any part of it, such as the year or its
+      last digits, since Morgan gave the whole date in the first line. Spells Morgan's name
+      back to confirm it, then tells Morgan about the upcoming blood pressure check.
+    tags:
+      feature: lookup
+
+  - id: SCN_3T8UNutjcGeY
+    label: Caller asks Riley to say their name back
+    instructions: |
+      PERSONA: Priya Raghunathan, a new patient with a rash, born April 23, 1987.
+      OPENING LINE: "Hi, I'm a new patient and I'd like to book a visit for a rash."
+      If asked for your date of birth, say "April 23rd, 1987."
+      If asked for your name, say "Priya Raghunathan."
+      When Riley spells your name back, don't confirm it yet. First ask, "Can you say my last name out loud for me, so I know you've got it?"
+      Once Riley has said it, say "Yes, that's right."
+      If asked to spell your name, spell it letter by letter: P, R, I, Y, A, then R, A, G, H, U, N, A, T, H, A, N.
+      Once Riley says you're set up or asks when you'd like to come in, say "Great, I'll call back to pick a time, thanks," and hang up.
+    agent_expectations: >
+      When Priya asks Riley to say the last name, Riley says it instead of refusing or
+      deflecting. Registers Priya only after Priya confirms the spelling.
+    tags:
+      feature: new-patient
