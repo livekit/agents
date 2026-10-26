@@ -239,9 +239,11 @@ pub const fn defaults(legs: &LegSet) -> SessionConfig {
     }
 }
 
-/// `Auto` falls `realtime_llm` → `vad` → `stt` → `manual`. A mode the legs cannot honour falls back
-/// (`vad` without VAD → `stt`, `stt` without STT → `vad`, the rest → `Auto`); `Manual` always
-/// holds. `RealtimeLlm` only when no local leg can decide; `DriverBuilder::start` refines it.
+/// `Auto` falls `realtime_llm` → `vad` → `manual`. A mode the legs cannot honour falls back as
+/// `Auto` does; `Manual` always holds. `RealtimeLlm` only when no local leg can decide;
+/// `DriverBuilder::start` refines it. Only an asked-for `stt` is `Stt`: the reference's unset mode
+/// (`_turn_detection_mode = None`, the default turn detector included) is its VAD-based path, which
+/// with an STT and no VAD ends turns on finals alone and leaves the STT's speech events unread.
 pub const fn resolve_turn_detection_mode(
     detection: TurnDetection,
     legs: &LegSet,
@@ -262,10 +264,8 @@ pub const fn resolve_turn_detection_mode(
 const fn auto_turn_detection_mode(legs: &LegSet) -> TurnDetectionMode {
     if legs.realtime && !legs.vad && !legs.stt {
         TurnDetectionMode::RealtimeLlm
-    } else if legs.vad {
+    } else if legs.vad || legs.stt {
         TurnDetectionMode::Vad
-    } else if legs.stt {
-        TurnDetectionMode::Stt
     } else {
         TurnDetectionMode::Manual
     }

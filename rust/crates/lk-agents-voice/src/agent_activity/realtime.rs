@@ -702,18 +702,20 @@ impl Driver {
         }
         let t = &mut self.activity.realtime_state;
         let mut read_back = false;
-        let (asked, allow_interruptions, add_to_chat_ctx, reuse) = match pending.flatten() {
+        // `turn`: the reply to a user turn the client committed, which the reference creates
+        // through `_generate_reply` and so announces as user-initiated.
+        let (asked, allow_interruptions, add_to_chat_ctx, reuse, turn) = match pending.flatten() {
             Some(Pending { request, call, allow_interruptions, .. }) => match request {
                 Request::Say { add_to_chat_ctx, .. } => {
-                    (Some(call), allow_interruptions, add_to_chat_ctx, None)
+                    (Some(call), allow_interruptions, add_to_chat_ctx, None, false)
                 }
                 Request::GenerateReply { read_back: asked_back, .. } => {
                     read_back = asked_back;
-                    (Some(call), allow_interruptions, true, None)
+                    (Some(call), allow_interruptions, true, None, false)
                 }
-                Request::UserTurn { .. } => (None, allow_interruptions, true, None),
+                Request::UserTurn { .. } => (None, allow_interruptions, true, None, true),
                 Request::ToolFollowUp { speech, step } => {
-                    (None, allow_interruptions, true, Some(Reuse { speech, step }))
+                    (None, allow_interruptions, true, Some(Reuse { speech, step }), false)
                 }
             },
             // Server-initiated: the follow-up of a model that answers its own tools, or a new turn.
@@ -722,7 +724,7 @@ impl Driver {
                 if let Some((_, key)) = follow_up {
                     out.machine().cancel(Timer::RealtimeRequest(key));
                 }
-                (None, None, true, follow_up.map(|(reuse, _)| reuse))
+                (None, None, true, follow_up.map(|(reuse, _)| reuse), false)
             }
         };
         t.open_generation(response_id.clone(), reuse.map(|r| r.speech));
@@ -735,9 +737,14 @@ impl Driver {
         let speech = match reuse.filter(|r| self.activity.realtime_players.contains_key(&r.speech))
         {
             Some(r) => r.speech,
-            None => {
-                self.start_realtime_speech(now, asked, allow_interruptions, add_to_chat_ctx, out)
-            }
+            None => self.start_realtime_speech(
+                now,
+                asked,
+                turn,
+                allow_interruptions,
+                add_to_chat_ctx,
+                out,
+            ),
         };
         self.activity.realtime_state.set_open_speech(&response_id, speech);
         if read_back {
@@ -746,11 +753,13 @@ impl Driver {
         }
     }
 
-    /// `asked`: the speech is a host command's (`say`, `generate_reply`), with its call.
+    /// `asked`: the speech is a host command's (`say`, `generate_reply`), with its call. `turn`: it
+    /// answers a user turn the client committed.
     fn start_realtime_speech(
         &mut self,
         now: Ts,
         asked: Option<Option<RequestId>>,
+        turn: bool,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         out: &mut Out,
@@ -779,7 +788,7 @@ impl Driver {
         let source = ReplySource::Realtime { events, wake: self.realtime_tx.clone() };
         let spec = SpeechSpec {
             add_to_chat_ctx,
-            host_asked: asked.is_some(),
+            host_asked: asked.is_some() || turn,
             ..SpeechSpec::new(SpeechKind::Realtime, source, allow)
         };
         let handle = self.start_speech(now, spec, out);
@@ -1210,14 +1219,9 @@ pub fn realtime_turn_detection_mode(
     }
     match side.turn_detection_mode {
         TurnDetectionMode::Manual => TurnDetectionMode::Manual,
+        // The reference ignores `stt` under a realtime model: its unset, VAD-based mode.
         TurnDetectionMode::Vad | TurnDetectionMode::Stt | TurnDetectionMode::RealtimeLlm => {
-            if side.vad {
-                TurnDetectionMode::Vad
-            } else if side.stt {
-                TurnDetectionMode::Stt
-            } else {
-                TurnDetectionMode::Manual
-            }
+            if side.vad || side.stt { TurnDetectionMode::Vad } else { TurnDetectionMode::Manual }
         }
     }
 }

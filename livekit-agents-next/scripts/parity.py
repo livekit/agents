@@ -528,7 +528,9 @@ class Call:
         kwargs.setdefault("aec_warmup_duration", None)
         kwargs.setdefault("user_away_timeout", None)
         th = dict(kwargs.pop("turn_handling", {}) or {})
-        th.setdefault("turn_detection", "stt")
+        # "default" leaves the session's own turn detection in place
+        if th.setdefault("turn_detection", "stt") == "default":
+            del th["turn_detection"]
         kwargs["turn_handling"] = th
         self.session = LiveSession(**kwargs)
         self._observe(self.session)
@@ -768,6 +770,26 @@ async def sc_user_turn(call: Call) -> None:
     await call.settle(4)
     call.speak("what's the weather like?")
     await call.settle(5)
+    await _close(call)
+
+
+async def sc_user_turn_default_detection(call: Call) -> None:
+    await _pipeline(call, turn_handling={"turn_detection": "default"})
+    call.speak("my name is Theo")
+    await call.settle(4)
+    await _close(call)
+
+
+async def sc_realtime_stt_default_detection(call: Call) -> None:
+    from livekit.agents import Agent
+
+    call.session_of(
+        llm=_realtime_models(call)(), stt=call.stt(), turn_handling={"turn_detection": "default"}
+    )
+    await call.start(Agent(instructions="You are realtime."))
+    await call.settle(0.5)
+    call.speak("hello there")
+    await call.settle(4)
     await _close(call)
 
 
@@ -1182,6 +1204,8 @@ SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "generate_reply": sc_generate_reply,
     "tool_call": sc_tool_call,
     "user_turn": sc_user_turn,
+    "user_turn_default_detection": sc_user_turn_default_detection,
+    "realtime_stt_default_detection": sc_realtime_stt_default_detection,
     "interruption": sc_interruption,
     "false_interruption": sc_false_interruption,
     "backchannel": sc_backchannel,

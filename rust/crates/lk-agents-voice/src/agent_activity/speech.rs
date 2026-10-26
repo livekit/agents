@@ -417,26 +417,12 @@ impl Driver {
         out: &mut Out,
     ) {
         self.activity.last_turn = Some(info.turn_id);
-        // A realtime session answers on its own socket: the words go as an item, the buffer is
-        // committed when the server did not segment, the reply is asked for.
+        // A realtime session answers on its own socket, from the audio it heard: the buffer is
+        // committed when the server did not segment and the reply is asked for. The STT's words
+        // are neither sent nor kept ("ignore stt transcription for realtime model"); the server's
+        // own transcript fills the user item.
         if self.activity.rt_session.is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
-            let user = self.user_turn_item(info, edits.user_text.as_deref());
-            let has_words = user
-                .content
-                .iter()
-                .any(|c| matches!(c, lk_agents_abi::ChatContent::Text(t) if !t.trim().is_empty()));
-            if has_words {
-                let item = Box::new(ChatItem::Message(user.clone()));
-                let push = lk_agents_abi::PushItem { item, reply_required: true };
-                self.rt_send(lk_agents_abi::RealtimeCommand::PushItem(push), out);
-            }
-            self.commit_item(
-                ChatItem::Message(user),
-                Source::UserTurn { turn: info.turn_id },
-                Visibility::Both,
-                out,
-            );
             // The commit of the server's buffer and the ask, as one request.
             self.realtime_user_turn(now, out);
             // The realtime reply's speech is created when the server answers; no speech id here.
