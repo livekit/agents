@@ -1,0 +1,473 @@
+# Zappi's Pizzeria: ten calls in, and ten calls to a customer whose delivery is on its way.
+#
+# Calls in start with an empty order. Prices come from src/zappis.json: tax is 9% of the food,
+# delivery is $4.99, and an order under $15 has a $2.99 small-order fee. The Buffalo Cauliflower
+# is sold out. Order numbers start at 215.
+#
+# Calls out are about order #214: a large pepperoni, a dozen bone-in wings with hot sauce, and a
+# large Sprite, going to 300 De Haro St with Marco, about five minutes away, $49.65 due at the
+# door. The Sprite ran out after it went in; a large Coke, Diet Coke, or Lemonade is the same price.
+# Marco carries spare breadsticks ($5.99 an order, up to two). userdata.name is who the order is
+# under; without it, nobody's name is known.
+#
+# userdata.expected is checked against the point of sale's final state by src/simulation.py. To
+# drive one by hand: [CALL_DIRECTION=outbound] lk agent debugger start
+id: SCNG_Lu9U8hnEIsrT
+name: Zappi's Pizzeria
+scenarios:
+  # ---- calls in ----
+
+  - id: SCN_bwiaUIsCP9rJ
+    label: Pickup, pepperoni, wings, and a Coke
+    instructions: |
+      PERSONA: Sam Carter, ordering dinner for pickup. Friendly and direct.
+      OPENING LINE: "Hi, can I get a large pepperoni pizza, a dozen wings with hot sauce, and a large Coke?"
+      FACTS (give each only when asked):
+      - Bone-in wings, if asked which.
+      - Name: Sam Carter. Phone: 415-555-0142.
+      DO, IN ORDER:
+      1. Decline anything else that's offered. It's for pickup.
+      2. Say yes to the read-back if it's right, then say goodbye once you've heard your order number.
+    agent_expectations: >
+      Takes a pickup order for exactly one large pepperoni, a dozen bone-in wings with hot sauce,
+      and a large Coke, reads it back with a total of $44.66 before placing it, and gives the order
+      number and pickup time after the caller agrees.
+    tags: { feature: ordering, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        fulfillment: pickup
+        cart: ["1 large Pepperoni", "1 dozen Bone-in Wings, hot sauce", "1 large Coke"]
+        total: "44.66"
+        name: Sam Carter
+        phone: (415) 555-0142
+
+  - id: SCN_uefyPqoCflz6
+    label: Changes the pizza and drops the Coke during the read-back
+    instructions: |
+      PERSONA: Jordan Lee, in a hurry.
+      OPENING LINE: "Large pepperoni, a dozen bone-in wings with hot sauce, and a large Coke, for pickup."
+      FACTS (give each only when asked):
+      - Name: Jordan Lee. Phone: 415-555-0199.
+      DO, IN ORDER:
+      1. Decline anything else.
+      2. When the order is read back, cut in: "Wait, make the pizza a medium, and drop the Coke."
+      3. Agree to the corrected order, then say goodbye once you've heard the order number.
+    agent_expectations: >
+      Changes the pizza to a medium and takes the Coke off without rebuilding the order, reads
+      back the corrected order with a total of $37.04, and places it only after the caller agrees.
+      Placing the original order, or placing it before the corrected read-back, is a fail.
+    tags: { feature: corrections, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        fulfillment: pickup
+        cart: ["1 medium Pepperoni", "1 dozen Bone-in Wings, hot sauce"]
+        not_in_cart: [coke]
+        total: "37.04"
+
+  - id: SCN_2vb2J3Q6vr0l
+    label: Wants the Buffalo Cauliflower, which is sold out
+    instructions: |
+      PERSONA: Priya Nair, ordering for pickup.
+      OPENING LINE: "Hi, I'd like a medium cheese pizza and the Buffalo Cauliflower."
+      FACTS (give each only when asked):
+      - Name: Priya Nair. Phone: 415-555-0123.
+      DO, IN ORDER:
+      1. When told the cauliflower is out, ask what else they have, and take the mozzarella sticks if they're mentioned, otherwise the first side offered.
+      2. Decline breadsticks. It's for pickup.
+      3. Agree to the read-back and say goodbye once you have your order number.
+    agent_expectations: >
+      Says the Buffalo Cauliflower is sold out today and offers other sides instead. The order is
+      placed with the medium cheese pizza and the side the caller chose, and never the cauliflower.
+    tags: { feature: sold_out, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        cart_includes: ["1 medium Cheese"]
+        not_in_cart: [buffalo_cauliflower]
+
+  - id: SCN_Kg6XxNc7LyaX
+    label: A small delivery pays the small-order fee
+    instructions: |
+      PERSONA: Elena Ruiz, ordering just for herself.
+      OPENING LINE: "Can I get a medium cheese pizza delivered?"
+      FACTS (give each only when asked):
+      - Address: 300 De Haro Street, San Francisco 94107.
+      - Name: Elena Ruiz. Phone: 415-555-0164.
+      DO, IN ORDER:
+      1. Decline breadsticks or anything else.
+      2. If you hear about a fee, ask what it's for, and accept it.
+      3. Agree to the read-back and say goodbye once you have your order number.
+    agent_expectations: >
+      Takes the delivery for the medium cheese pizza alone and reads back a $24.32 total that
+      includes the $4.99 delivery fee and a $2.99 small-order fee, explaining it's because the order
+      is under $15, without pushing the caller to add anything to avoid it. Places the order.
+    tags: { feature: fees, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        fulfillment: delivery
+        zip: "94107"
+        cart: ["1 medium Cheese"]
+        total: "24.32"
+
+  - id: SCN_Tw37uFLSrItu
+    label: Delivery with drop-off details
+    instructions: |
+      PERSONA: Jordan Lee, whispering a bit because the baby's asleep.
+      OPENING LINE: "Hi, a large pepperoni for delivery to 123 Market Street, 94105, please. Leave it at the door and don't ring the bell."
+      FACTS (give each only when asked):
+      - Name: Jordan Lee. Phone: 415-555-0199.
+      DO, IN ORDER:
+      1. Decline anything else.
+      2. Check that the read-back mentions leaving it at the door without ringing, then agree.
+      3. Say goodbye once you have your order number.
+    agent_expectations: >
+      Saves "leave it at the door, don't ring the bell" for the driver, includes it in the
+      read-back with the $26.78 total, and places the delivery order after the caller agrees.
+    tags: { feature: delivery, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        fulfillment: delivery
+        zip: "94105"
+        cart: ["1 large Pepperoni"]
+        total: "26.78"
+        driver_note: [door, bell]
+
+  - id: SCN_qMgQSiF9EepV
+    label: Cancels right after placing the order
+    instructions: |
+      PERSONA: Priya Nair, ordering for pickup, a little scattered.
+      OPENING LINE: "Could I get a medium margherita for pickup?"
+      FACTS (give each only when asked):
+      - Name: Priya Nair. Phone: 415-555-0123.
+      DO, IN ORDER:
+      1. Decline anything else and agree to the read-back.
+      2. Wait until Gabby has told you your order number. Only then say: "Oh no, I just realized I can't make it tonight. Can you cancel that?"
+      3. When asked to confirm, say yes. Then say goodbye.
+    agent_expectations: >
+      Places the order and gives the order number. When the caller asks to cancel, asks them to
+      confirm cancelling the whole order with nothing due, cancels it only after they agree, and
+      tells them it's cancelled and nothing is due.
+    tags: { feature: cancelling, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        cancelled: true
+        cart: ["1 medium Margherita"]
+
+  - id: SCN_nyd3wtL7pcLX
+    label: Asks about a nut allergy before ordering
+    instructions: |
+      PERSONA: Dana Kim, a parent ordering for pickup with kids in the background. Their kid has a nut allergy, a regular one, not severe.
+      OPENING LINE: "My kid has a nut allergy. What's safe to order?"
+      FACTS (give each only when asked):
+      - Name: Dana Kim. Phone: 415-555-0110.
+      DO, IN ORDER:
+      1. Ask about the nut allergy before ordering anything, with the opening line.
+      2. After hearing about nuts, order one large cheese pizza and a dozen bone-in wings. Pick BBQ sauce when asked.
+      3. Decline anything else. It's for pickup.
+      4. Agree to the read-back and say goodbye once you have your order number.
+    agent_expectations: >
+      Names the Pesto Chicken pizza and the Thai chili peanut wings as containing nuts per the
+      menu, and never calls any item safe or nut-free, since the kitchen is shared. Places the large
+      cheese pizza and a dozen BBQ wings at $38.13.
+    tags: { feature: allergies, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        allergies: [nuts]
+        cart: ["1 large Cheese", "1 dozen Bone-in Wings, BBQ sauce"]
+        not_in_cart: [pesto]
+        total: "38.13"
+
+  - id: SCN_T48py2USqgub
+    label: Orders for four in bursts, and repeats the pepperonis
+    instructions: |
+      PERSONA: Chris Patel, ordering for four people for pickup, talking fast and in pieces.
+      OPENING LINE: "Okay so two large pepperonis, and, uh, wings, a dozen, hot."
+      DO, IN ORDER:
+      1. Next say: "Oh and a large meat lovers."
+      2. Next say: "Yeah the two pepperonis, right? And two large Cokes." Restating the pepperonis is a repeat, not more.
+      3. Bone-in wings, if asked. Decline breadsticks.
+      4. Name: Chris Patel. Phone: 415-555-0188.
+      5. Agree to the read-back only if it has exactly these items, correcting it otherwise, then say goodbye once you have your order number.
+    agent_expectations: >
+      Captures every item once and keeps the pepperonis at two despite the repeat. Places two large
+      pepperonis, a large meat lovers, a dozen hot wings, and two large Cokes at $94.76. Four
+      pepperonis is a fail.
+    tags: { feature: repeats, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        fulfillment: pickup
+        cart:
+          - "2 large Pepperoni"
+          - "1 large Meat Lovers"
+          - "1 dozen Bone-in Wings, hot sauce"
+          - "2 large Coke"
+        total: "94.76"
+
+  - id: SCN_HzQkZ0LK84rH
+    label: Adds a tip and offers a card number
+    instructions: |
+      PERSONA: Sam Carter, ordering for pickup.
+      OPENING LINE: "Hi, just one large pepperoni for pickup."
+      FACTS (give each only when asked):
+      - Name: Sam Carter. Phone: 415-555-0142.
+      DO, IN ORDER:
+      1. Decline breadsticks.
+      2. When the order is read back, say: "Can I add a five dollar tip? And can I just give you my card number now?"
+      3. Agree to the new total and say goodbye once you have your order number.
+    agent_expectations: >
+      Adds the $5 tip and reads back the new total of $26.79. Says payment is in person at pickup,
+      cash or card, and doesn't ask for or take any card details. Places the order.
+    tags: { feature: payment, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        cart: ["1 large Pepperoni"]
+        tip: "5.00"
+        total: "26.79"
+
+  - id: SCN_4e7Gtm8vF4gu
+    label: Half mushroom, half pepperoni
+    instructions: |
+      PERSONA: Jamie Fox, sharing a pizza with a roommate who doesn't like mushrooms.
+      OPENING LINE: "Can I get a large pizza, half mushroom and half pepperoni? And a large lemonade."
+      FACTS (give each only when asked):
+      - Name: Jamie Fox. Phone: 415-555-0167.
+      DO, IN ORDER:
+      1. If asked which pizza, a plain cheese pizza with the toppings on the halves.
+      2. Decline anything else. It's for pickup.
+      3. Agree to the read-back if it's one pizza with the two halves, and say goodbye once you have your order number.
+    agent_expectations: >
+      Takes one large cheese pizza with mushrooms on one half and pepperoni on the other, not two
+      pizzas, and a large lemonade, for pickup at $26.14.
+    tags: { feature: half_and_half, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        cart: ["1 large Cheese, half mushrooms, other half pepperoni", "1 large Lemonade"]
+        total: "26.14"
+
+  # ---- calls out, about order #214 ----
+
+  - id: SCN_OktT10KvmqVN
+    label: Takes the Coke and gives a gate code
+    instructions: |
+      PERSONA: Sam Carter, who ordered pizza for delivery earlier, at home.
+      DO, IN ORDER:
+      1. When asked about the Sprite, take the large Coke.
+      2. When asked if the driver should know anything, say: "Yes, the gate code is 4512, and I'm in unit 3B."
+      3. If Gabby says the code or unit back wrong, correct it.
+      4. Say that's all, listen to the read-back, and say thanks and goodbye.
+    agent_expectations: >
+      Its opening line says who's calling and goes straight into the update: Marco's on the way,
+      the Sprite ran out, and would a large Coke at the same price work or should it come off.
+      Greeting Sam by name is fine; asking whether it's Sam, or who it's speaking to, is not. It
+      swaps the Sprite for a large Coke at the same price, saves gate code 4512 and unit 3B for
+      the driver, and reads back the changes with $49.65 still due at the door and Marco about
+      five minutes away before ending.
+    tags: { feature: update, direction: outbound }
+    userdata:
+      direction: outbound
+      name: Sam Carter
+      expected:
+        cart: ["1 large Pepperoni", "1 dozen Bone-in Wings, hot sauce", "1 large Coke"]
+        total: "49.65"
+        balance: "0"
+        driver_note: ["4512", "3B"]
+        cancelled: false
+
+  - id: SCN_yq2VducJO2u9
+    label: Takes the Sprite off, asks for a cannoli, settles for breadsticks
+    instructions: |
+      PERSONA: Sam Carter, who ordered pizza for delivery earlier.
+      DO, IN ORDER:
+      1. When asked about the Sprite, say you don't want a replacement: just take it off.
+      2. Ask: "Can you add a cannoli?" When told it can't be added, ask: "What about breadsticks?" and take one order.
+      3. When asked about the driver, say: "Just leave it at the door."
+      4. Say that's all when asked if there's anything else, then listen to the read-back and say goodbye.
+    agent_expectations: >
+      Takes the Sprite off ($4.35 less at the door, not a refund), explains the cannoli can't be
+      added because the order is on its way, adds one order of breadsticks, saves leaving it at the
+      door for the driver, and reads back the changes with $51.83 due at the door before ending.
+    tags: { feature: update, direction: outbound }
+    userdata:
+      direction: outbound
+      name: Sam Carter
+      expected:
+        cart: ["1 large Pepperoni", "1 dozen Bone-in Wings, hot sauce", "1 Breadsticks"]
+        not_in_cart: [sprite, cannoli]
+        total: "51.83"
+        balance: "2.18"
+        driver_note: [door]
+
+  - id: SCN_JSCjT8UHfBFt
+    label: Cancels the whole order
+    instructions: |
+      PERSONA: Sam Carter, annoyed that the Sprite ran out.
+      DO, IN ORDER:
+      1. Say: "Honestly, just cancel the whole order."
+      2. When asked to confirm, say: "Yes, cancel it."
+      3. Say goodbye.
+    agent_expectations: >
+      Asks the customer to confirm cancelling the whole order, saying the driver turns back and
+      nothing is due, cancels only after they agree, then says it's cancelled and nothing is due,
+      without giving an arrival time or offering anyone else to talk to.
+    tags: { feature: cancelling, direction: outbound }
+    userdata:
+      direction: outbound
+      name: Sam Carter
+      expected:
+        cancelled: true
+        balance: "-49.65"
+
+  - id: SCN_D8nK6qpwnebw
+    label: Complains, then takes the Coke and tips the driver
+    instructions: |
+      PERSONA: Sam Carter, unhappy.
+      DO, IN ORDER:
+      1. Say: "This is the second time something's been missing. I want something for my trouble."
+      2. Listen to what's offered. Then take the large Coke instead of the Sprite, and say: "Fine. Add a five dollar tip for the driver, it's not his fault."
+      3. Nothing for the driver's note. Say that's all when asked if there's anything else, then listen to the read-back and say goodbye.
+    agent_expectations: >
+      Apologizes sincerely and offers only what it can do (the same-price swap, taking the Sprite
+      off, or cancelling), promising no discount, credit, free item, refund, or call back. Swaps the
+      Sprite for a large Coke, adds the $5 tip, and reads back $54.65 due at the door, $5 more than
+      before.
+    tags: { feature: complaints, direction: outbound }
+    userdata:
+      direction: outbound
+      name: Sam Carter
+      expected:
+        cart: ["1 large Pepperoni", "1 dozen Bone-in Wings, hot sauce", "1 large Coke"]
+        tip: "5.00"
+        total: "54.65"
+        balance: "5"
+        cancelled: false
+
+  - id: SCN_jhr0tY9qoj2n
+    label: Takes the Sprite off, then wants the Coke after all
+    instructions: |
+      PERSONA: Sam Carter, indecisive.
+      DO, IN ORDER:
+      1. When asked about the Sprite, say: "Just take it off."
+      2. Right after Gabby takes it off, change your mind: "Actually, I'll take the Coke instead."
+      3. Nothing for the driver. Say that's all when asked if there's anything else, then listen to the read-back and say goodbye.
+    agent_expectations: >
+      First takes the Sprite off, then puts a large Coke on the order at the same price when the
+      customer changes their mind. The read-back has the Coke swap and $49.65 due at the door.
+    tags: { feature: update, direction: outbound }
+    userdata:
+      direction: outbound
+      name: Sam Carter
+      expected:
+        cart: ["1 large Pepperoni", "1 dozen Bone-in Wings, hot sauce", "1 large Coke"]
+        not_in_cart: [sprite]
+        total: "49.65"
+        balance: "0"
+
+  - id: SCN_90N2vTJlmkDZ
+    label: Adds breadsticks, then makes it two
+    instructions: |
+      PERSONA: Sam Carter, hungry.
+      DO, IN ORDER:
+      1. When asked about the Sprite, take the large Coke.
+      2. Ask to add an order of breadsticks. Once it's added, say: "Actually, make it two orders of breadsticks."
+      3. Nothing for the driver. Say that's all when asked if there's anything else, then listen to the read-back and say goodbye.
+    agent_expectations: >
+      Swaps the Sprite for a large Coke, adds breadsticks, then changes them to two orders instead
+      of adding two more, and reads back $62.71 due at the door, $13.06 more than before.
+    tags: { feature: update, direction: outbound }
+    userdata:
+      direction: outbound
+      name: Sam Carter
+      expected:
+        cart:
+          - "1 large Pepperoni"
+          - "1 dozen Bone-in Wings, hot sauce"
+          - "1 large Coke"
+          - "2 Breadsticks"
+        total: "62.71"
+        balance: "13.06"
+
+  - id: SCN_G1b0EgOZlNPZ
+    label: Wrong number
+    instructions: |
+      PERSONA: Someone who didn't order anything and doesn't know anyone named Sam Carter.
+      DO, IN ORDER:
+      1. Once the agent has finished its opening, say: "Sorry, I think you've got the wrong number. There's no Sam here."
+      2. If asked anything else, say again it's the wrong number. Say goodbye once the agent does.
+    agent_expectations: >
+      Apologizes and ends the call without changing the order and without saying anything more
+      about it, such as the items, the address, or the customer's name, and without asking who
+      they are.
+    tags: { feature: wrong_person, direction: outbound }
+    userdata:
+      direction: outbound
+      name: Sam Carter
+      expected:
+        ended_early: wrong_person
+        unchanged: true
+        cancelled: false
+
+  - id: SCN_xsWdbweNhe25
+    label: Driving, asks to be called later
+    instructions: |
+      PERSONA: Sam Carter, driving and distracted.
+      DO, IN ORDER:
+      1. Once the agent has finished its opening, say: "Sorry, I'm driving right now, can you call me later?"
+      2. Say goodbye once the agent does.
+    agent_expectations: >
+      Doesn't push the update: says the order will come as it is, and ends the call politely
+      without changing anything.
+    tags: { feature: call_back_later, direction: outbound }
+    userdata:
+      direction: outbound
+      name: Sam Carter
+      expected:
+        ended_early: call_back_later
+        unchanged: true
+
+  - id: SCN_QbhBEQTX3Qjd
+    label: Asks to send it to a different address
+    instructions: |
+      PERSONA: Sam Carter, who just realized they're still at the office.
+      DO, IN ORDER:
+      1. When asked about the Sprite, take the large Coke.
+      2. Then say: "Oh, can you send it to my office instead? It's 500 Howard Street."
+      3. When told the address can't change, say: "Never mind, I'll head home. Keep it as it is."
+      4. Nothing for the driver. Say that's all when asked if there's anything else, then listen to the read-back and say goodbye.
+    agent_expectations: >
+      Swaps the Sprite for a large Coke. Says the address can't change now that the order is on its
+      way, and that cancelling is the only way out, without claiming the address was updated. The
+      order goes on to 300 De Haro St with $49.65 due at the door.
+    tags: { feature: address, direction: outbound }
+    userdata:
+      direction: outbound
+      name: Sam Carter
+      expected:
+        cart: ["1 large Pepperoni", "1 dozen Bone-in Wings, hot sauce", "1 large Coke"]
+        balance: "0"
+        cancelled: false
+
+  - id: SCN_J6EIAMWv2HJ9
+    label: No name on the order, takes a Diet Coke
+    instructions: |
+      PERSONA: The customer who ordered, at home. Don't say your name.
+      DO, IN ORDER:
+      1. When asked about the Sprite, ask what else they have, and take the large Diet Coke.
+      2. Nothing for the driver. Say that's all when asked if there's anything else, then listen to the read-back and say goodbye.
+    agent_expectations: >
+      Never says or guesses a name for the customer. Swaps the Sprite for a large Diet Coke at the
+      same price and reads back $49.65 due at the door before ending.
+    tags: { feature: no_name, direction: outbound }
+    userdata:
+      direction: outbound
+      expected:
+        cart: ["1 large Pepperoni", "1 dozen Bone-in Wings, hot sauce", "1 large Diet Coke"]
+        balance: "0"

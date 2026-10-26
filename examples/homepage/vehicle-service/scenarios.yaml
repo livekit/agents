@@ -1,0 +1,485 @@
+# Bayside BMW's service desk: ten calls in, and ten callbacks about the X3 in the shop.
+#
+# Every scenario pins today to Monday, October 19, 2026 (userdata.today), so the bookable days
+# are Tuesday the 20th through Monday the 26th. Already taken: Wednesday 9:00 AM, Thursday
+# 7:30 AM and 1:00 PM, Friday 10:30 AM, and Monday the 26th at 2:30 PM, which is Alex Morgan's
+# tire rotation on the 330i (RO-48194).
+#
+# Alex Morgan's file (415-555-0142): a 2023 X3 (in warranty, open rear-view camera recall) and a
+# 2019 330i (out of warranty). Callbacks reach Alex about the X3 in the shop for grinding when
+# braking: front pads and rotors $489, needed now; rear pads $214, can wait; diagnostic $159 and
+# the recall already done.
+#
+# userdata.expected is checked against the desk's final state by src/simulation.py. To drive one
+# by hand: SERVICE_DESK_TODAY=2026-10-19 [CALL_DIRECTION=outbound] lk agent debugger start
+id: SCNG_8lSliBx5hoUi
+name: Bayside BMW service desk
+scenarios:
+  # ---- calls in ----
+
+  - id: SCN_wlB1gQ9JNM4w
+    label: Grinding when braking, booked with the recall
+    instructions: |
+      PERSONA: Alex Morgan, an existing customer, a little worried about a noise.
+      OPENING LINE: "Hi, my X3 has been making a grinding noise when I brake."
+      FACTS (give each only when asked):
+      - Name: Alex Morgan. Phone: 415-555-0142.
+      - The noise is from the front, for about a week. No warning lights. Nothing done to the car recently.
+      DO, IN ORDER:
+      1. Answer the questions about the noise one at a time.
+      2. Agree to a diagnostic. If an open recall is mentioned, add it.
+      3. Ask for Wednesday morning, and take the earliest time offered.
+      4. Take the free shuttle.
+      5. Say yes to the read-back, then say that's all and goodbye.
+    agent_expectations: >
+      Finds Alex's file, asks about the noise one question at a time, says what it may point to
+      as a possibility, books a diagnostic with the recall for Wednesday, October 21 at 7:30 AM
+      with the shuttle, only after reading it back, and confirms the booking.
+    tags: { feature: booking, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: true
+        vehicle: X3
+        services: [diagnostic, recall]
+        day: "2026-10-21"
+        ride: shuttle
+
+  - id: SCN_HiEeTPNOirtj
+    label: Oil change on the 330i, waits in the lounge
+    instructions: |
+      PERSONA: Alex Morgan, brisk and busy.
+      OPENING LINE: "I need to book an oil change."
+      FACTS (give each only when asked):
+      - Name: Alex Morgan. Phone: 415-555-0142.
+      - It's for the 330i, not the X3.
+      DO, IN ORDER:
+      1. Ask what an oil change costs.
+      2. Ask for Thursday afternoon and take the first time offered.
+      3. Wait in the lounge.
+      4. Confirm the read-back and hang up.
+    agent_expectations: >
+      Quotes the oil change at $79 from the menu, books it on the 330i for Thursday, October 22
+      at 2:30 PM with the caller waiting in the lounge, after a read-back.
+    tags: { feature: booking, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: true
+        vehicle: 3 Series
+        services: [oil_change]
+        day: "2026-10-22"
+        ride: wait
+
+  - id: SCN_BHAy14GLLM0u
+    label: Wants a loaner for an oil change
+    instructions: |
+      PERSONA: Alex Morgan, used to getting a loaner and a bit pushy about it.
+      OPENING LINE: "I'd like an oil change on my X3, and I'll need a loaner."
+      FACTS (give each only when asked):
+      - Name: Alex Morgan. Phone: 415-555-0142.
+      DO, IN ORDER:
+      1. Decline the recall if offered: "Not this time."
+      2. Ask for Tuesday morning; take any time offered.
+      3. Insist once on a loaner. When it's refused, take the shuttle.
+      4. Confirm the read-back and hang up.
+    agent_expectations: >
+      Explains that loaners are only for warranty or recall visits over three hours, offers the
+      free shuttle or the lounge instead, and books the oil change on the X3 on Tuesday,
+      October 20 with the shuttle. Booking a loaner is a fail.
+    tags: { feature: loaner_rule, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: true
+        vehicle: X3
+        services: [oil_change]
+        day: "2026-10-20"
+        ride: shuttle
+
+  - id: SCN_sJUsV1I5V7Ub
+    label: Liftgate failed, warranty repair with a loaner
+    instructions: |
+      PERSONA: Alex Morgan, annoyed that a nearly new car has a fault.
+      OPENING LINE: "The power liftgate on my X3 won't close anymore. That should be under warranty, right?"
+      FACTS (give each only when asked):
+      - Name: Alex Morgan. Phone: 415-555-0142.
+      - It started last week. No warning lights. No recent work.
+      DO, IN ORDER:
+      1. Ask for warranty work.
+      2. Decline the recall: "Not today."
+      3. Ask for Friday, and take the earliest time offered.
+      4. Ask for a loaner.
+      5. Confirm the read-back and hang up.
+    agent_expectations: >
+      Treats the failed liftgate on the in-warranty X3 as a warranty repair at no charge, offers a
+      loaner because it's a warranty visit over three hours, and books it for Friday,
+      October 23 with the loaner after a read-back.
+    tags: { feature: warranty, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: true
+        vehicle: X3
+        services: [warranty_repair]
+        day: "2026-10-23"
+        ride: loaner
+
+  - id: SCN_iBaqDS90a4xr
+    label: Wants worn brakes done under warranty
+    instructions: |
+      PERSONA: Alex Morgan, convinced the warranty should cover brakes.
+      OPENING LINE: "My X3 is squealing when I stop. It's still under warranty, so can you replace the brakes for free?"
+      FACTS (give each only when asked):
+      - Name: Alex Morgan. Phone: 415-555-0142.
+      - The squeal is from the front, for a couple of weeks. No warning lights. No recent work.
+      DO, IN ORDER:
+      1. Push back once that it should be covered.
+      2. Accept a diagnostic. Decline the recall.
+      3. Take the first Tuesday time offered, and wait in the lounge.
+      4. Confirm the read-back and hang up.
+    agent_expectations: >
+      Says plainly that brakes are a wear item the warranty never covers, offers a diagnostic
+      ($159) instead, and books the diagnostic on the X3 on Tuesday, October 20. Booking a
+      warranty repair is a fail.
+    tags: { feature: warranty, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: true
+        vehicle: X3
+        services: [diagnostic]
+        day: "2026-10-20"
+        ride: wait
+
+  - id: SCN_ux7Iy639LE0k
+    label: Thinks they're booked, moves the tire rotation
+    instructions: |
+      PERSONA: Alex Morgan, unsure what's already on the calendar.
+      OPENING LINE: "I think I already have something booked for my 330i. Can you check?"
+      FACTS (give each only when asked):
+      - Name: Alex Morgan. Phone: 415-555-0142.
+      DO, IN ORDER:
+      1. When told about the tire rotation on Monday the 26th, ask to move it to Wednesday morning.
+      2. Pick 8:00 AM.
+      3. Say yes to the move's read-back, then that's all.
+    agent_expectations: >
+      Finds the tire rotation already booked on the 330i, moves it to Wednesday, October 21 at
+      8:00 AM after reading the move back, and never books a second tire rotation.
+    tags: { feature: reschedule, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: false
+        on_file: moved
+
+  - id: SCN_ETjifFsljpQU
+    label: Cancels the appointment on file after a hesitation
+    instructions: |
+      PERSONA: Alex Morgan, indecisive.
+      OPENING LINE: "Hi, I need to cancel my tire rotation."
+      FACTS (give each only when asked):
+      - Name: Alex Morgan. Phone: 415-555-0142.
+      DO, IN ORDER:
+      1. When asked to confirm the cancellation, hesitate: "Hmm, let me think a second."
+      2. Then: "Yes, go ahead and cancel it."
+      3. Say that's all and goodbye.
+    agent_expectations: >
+      Reads the cancellation of the tire rotation on Monday, October 26 back, doesn't cancel on
+      the hesitation, cancels it once the caller clearly says yes, and confirms it's cancelled.
+    tags: { feature: cancel, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: false
+        on_file: cancelled
+
+  - id: SCN_zuaEsrMi6cyJ
+    label: First-time caller with an X5
+    instructions: |
+      PERSONA: Jamie Chen, has never been to Bayside BMW.
+      OPENING LINE: "Hi, I've never been in before, but my brakes have started squealing."
+      FACTS (give each only when asked):
+      - Name: Jamie Chen. Phone: 510-555-0177.
+      - The car: a 2021 X5 with about 30,000 miles.
+      - The squeal is from the front, when stopping, for a week. No warning lights. No recent work.
+      DO, IN ORDER:
+      1. Give the details as asked.
+      2. Agree to a diagnostic.
+      3. Ask for Tuesday afternoon and take the first time offered. Take the shuttle.
+      4. Confirm the read-back and hang up.
+    agent_expectations: >
+      Sets up a new file for Jamie Chen, adds the 2021 X5, books a diagnostic on Tuesday,
+      October 20 in the afternoon with the shuttle after a read-back.
+    tags: { feature: new_customer, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: true
+        new_file: true
+        vehicle: X5
+        services: [diagnostic]
+        day: "2026-10-20"
+        ride: shuttle
+
+  - id: SCN_HKyZePu1teCU
+    label: Smoke from under the hood
+    instructions: |
+      PERSONA: Alex Morgan, rattled.
+      OPENING LINE: "There was smoke coming from under the hood of my X3 on the way home. What should I do?"
+      FACTS (give each only when asked):
+      - Name: Alex Morgan. Phone: 415-555-0142.
+      - A burning smell too, since this afternoon. No warning lights. No recent work.
+      DO, IN ORDER:
+      1. Ask whether it's okay to drive it in.
+      2. Agree to a diagnostic. Decline the recall.
+      3. Take the earliest time offered. Wait in the lounge.
+      4. Confirm the read-back and hang up.
+    agent_expectations: >
+      Tells Alex right away, before anything else, not to drive it and to have it towed in, and
+      that the desk can't arrange the tow. Books a diagnostic at the earliest time, Tuesday,
+      October 20 at 7:30 AM, flagged as not safe to drive.
+    tags: { feature: safety, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: true
+        vehicle: X3
+        services: [diagnostic]
+        day: "2026-10-20"
+        unsafe_to_drive: true
+
+  - id: SCN_HY0oXnwlcD7u
+    label: Check engine light, spending limit, changes the day at the read-back
+    instructions: |
+      PERSONA: Alex Morgan, careful with money.
+      OPENING LINE: "My check engine light came on in the 330i."
+      FACTS (give each only when asked):
+      - Name: Alex Morgan. Phone: 415-555-0142.
+      - It's a steady amber light, since yesterday. No noises. No recent work.
+      DO, IN ORDER:
+      1. Agree to a diagnostic, and say: "Don't do anything over five hundred dollars without calling me."
+      2. Ask for Wednesday and take any time offered. Wait in the lounge.
+      3. At the read-back, change your mind: "Actually, can we do Thursday instead?" Take any Thursday time.
+      4. Confirm the new read-back and hang up.
+    agent_expectations: >
+      Notes the $500 limit without promising what anything will cost, moves the visit to
+      Thursday, October 22 when asked at the read-back, reads it back again, and books the
+      diagnostic on the 330i for Thursday with the limit on it.
+    tags: { feature: corrections, direction: inbound }
+    userdata:
+      today: "2026-10-19"
+      expected:
+        booked: true
+        vehicle: 3 Series
+        services: [diagnostic]
+        day: "2026-10-22"
+        approval_limit: 500
+
+  # ---- callbacks: Nick calls about the X3 in the shop ----
+
+  - id: SCN_YbrpcAUIS76Y
+    label: Approves the front brakes, rear at the next visit, shuttle from home
+    instructions: |
+      PERSONA: Alex Morgan, agreeable.
+      OPENING LINE: "Yes, this is Alex."
+      DO, IN ORDER:
+      1. When Nick tells you what the technician found, say: "Yes, go ahead with that."
+      2. When the rear brakes come up, keep them for the next visit.
+      3. Take the shuttle, from home.
+      4. When told the ready time and total, say that's all and goodbye.
+    agent_expectations: >
+      Records the front brakes approved and the rear pads for the next visit, sets the shuttle
+      from home, and tells Alex the car's ready today at 5:30 PM with $648 due before ending.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        decisions: { front_brakes: approved, rear_brakes: next_visit }
+        ride: shuttle
+
+  - id: SCN_7eFooQIRmx5Y
+    label: Declines the repair
+    instructions: |
+      PERSONA: Alex Morgan, who'd rather have a friend's shop do the brakes.
+      OPENING LINE: "Yes, this is Alex."
+      DO, IN ORDER:
+      1. When Nick tells you what the technician found, say: "No thanks, I'll have them done somewhere else."
+      2. If told it shouldn't be driven like this, acknowledge it but still decline.
+      3. Say you'll come in to pick it up yourself.
+      4. When told what's due, say goodbye.
+    agent_expectations: >
+      Says once, without pushing, that the front brakes shouldn't be driven like this, records
+      the repair declined, and tells Alex the car's ready now with $159 due for the diagnostic.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        decisions: { front_brakes: declined }
+        ride: self
+
+  - id: SCN_Xkn9mzC66V0V
+    label: Wants to think it over
+    instructions: |
+      PERSONA: Alex Morgan, cautious about the cost.
+      OPENING LINE: "Yes, this is Alex."
+      DO, IN ORDER:
+      1. When Nick tells you what the technician found, say: "Hmm, that's a lot. Let me think about it."
+      2. Say you'll come pick the car up yourself today.
+      3. When told what's due, say goodbye.
+    agent_expectations: >
+      Doesn't pressure Alex, records the front brakes as thinking it over, and tells Alex the
+      car's ready now with $159 due.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        decisions: { front_brakes: thinking_it_over }
+        ride: self
+
+  - id: SCN_lKdjXEG8sGGC
+    label: Wrong number
+    instructions: |
+      PERSONA: Pat, who has never heard of Alex Morgan.
+      OPENING LINE: "Sorry, I think you have the wrong number. There's no Alex here."
+      DO, IN ORDER:
+      1. Ask what it's about.
+      2. Say goodbye.
+    agent_expectations: >
+      Apologizes, shares nothing about the car, the repair, or the price, and ends the call
+      politely.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        ended_early: wrong_person
+
+  - id: SCN_HfXtY8eERGlE
+    label: Driving, call back later
+    instructions: |
+      PERSONA: Alex Morgan, driving.
+      OPENING LINE: "Yes, this is Alex. I'm driving right now, can you call me back later?"
+      DO, IN ORDER:
+      1. Say goodbye.
+    agent_expectations: >
+      Doesn't push, says Alex can call the service desk back whenever suits, and ends the call
+      without going over the findings.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        ended_early: call_back_later
+
+  - id: SCN_nqI15j3fFGPY
+    label: Asks why the rotors too and for a cheaper option, then approves
+    instructions: |
+      PERSONA: Alex Morgan, skeptical of upsells.
+      OPENING LINE: "Yes, this is Alex."
+      DO, IN ORDER:
+      1. When Nick tells you what the technician found, say: "Why do the rotors need replacing too? Is there a cheaper option?"
+      2. Once you've heard the answer, approve the front brakes.
+      3. Keep the rear pads for the next visit.
+      4. Take the shuttle, from work.
+      5. When told the ready time and total, say goodbye.
+    agent_expectations: >
+      Explains from the findings that scored rotors can't be resurfaced and there's no cheaper
+      option, records the front brakes approved, and sets the shuttle from work.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        decisions: { front_brakes: approved, rear_brakes: next_visit }
+        ride: shuttle
+
+  - id: SCN_Chn3ga21zfMk
+    label: Does the rear pads too
+    instructions: |
+      PERSONA: Alex Morgan, wants it all done at once.
+      OPENING LINE: "Yes, this is Alex."
+      DO, IN ORDER:
+      1. When Nick tells you what the technician found, say: "Yes, do the front."
+      2. When the rear pads come up, say: "Just do those too while it's in."
+      3. Say you'll come pick it up yourself.
+      4. When told the ready time and total, say goodbye.
+    agent_expectations: >
+      Records both repairs approved, and says the car's ready tomorrow at 10:00 AM with $862
+      due.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        decisions: { front_brakes: approved, rear_brakes: approved }
+        ride: self
+
+  - id: SCN_GxxNcEb2BE3I
+    label: A friend collects the car
+    instructions: |
+      PERSONA: Alex Morgan, at work all day.
+      OPENING LINE: "Yes, this is Alex."
+      DO, IN ORDER:
+      1. When Nick tells you what the technician found, say: "Yes, please go ahead."
+      2. Keep the rear pads for the next visit.
+      3. Say your friend Sam will pick the car up for you.
+      4. When told the ready time and total, say goodbye.
+    agent_expectations: >
+      Records the front brakes approved, notes that Sam is collecting the car, and tells Alex
+      when it's ready and the total due.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        decisions: { front_brakes: approved, rear_brakes: next_visit }
+        ride: self
+
+  - id: SCN_Kipnp8OWhF6Y
+    label: Mentions a new noise
+    instructions: |
+      PERSONA: Alex Morgan, chatty.
+      OPENING LINE: "Yes, this is Alex."
+      DO, IN ORDER:
+      1. When Nick tells you what the technician found, say: "Okay, go ahead. Oh, and there's a new rattle from the back I noticed this morning."
+      2. Keep the rear pads for the next visit.
+      3. Say you'll pick it up yourself.
+      4. When told the ready time and total, say goodbye.
+    agent_expectations: >
+      Notes the rattle for the technician without guessing the cause or promising free work,
+      records the front brakes approved, and tells Alex when it's ready and the total.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        decisions: { front_brakes: approved }
+        ride: self
+        concern_noted: true
+
+  - id: SCN_tBl0bMNAdNC1
+    label: Asks about warranty and a discount, then approves
+    instructions: |
+      PERSONA: Alex Morgan, bargain hunting.
+      OPENING LINE: "Yes, this is Alex."
+      DO, IN ORDER:
+      1. When Nick tells you what the technician found, say: "Isn't that covered by my warranty? The car's only a couple of years old."
+      2. Ask if there's a discount code.
+      3. Approve the front brakes.
+      4. Keep the rear pads for the next visit.
+      5. Take the shuttle, from home.
+      6. When told the ready time and total, say goodbye.
+    agent_expectations: >
+      Says brakes are a wear item the warranty doesn't cover and that there are no discount
+      codes, then records the front brakes approved and sets the shuttle from home.
+    tags: { feature: callback, direction: outbound }
+    userdata:
+      today: "2026-10-19"
+      direction: outbound
+      expected:
+        decisions: { front_brakes: approved, rear_brakes: next_visit }
+        ride: shuttle

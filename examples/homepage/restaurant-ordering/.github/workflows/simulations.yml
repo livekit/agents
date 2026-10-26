@@ -1,0 +1,46 @@
+# Runs the scenarios in scenarios.yaml against your agent on LiveKit Cloud.
+# Simulations spend real inference, so this runs on merges to main and on demand
+# rather than on every pull request push. Run
+# `lk agent simulate text --scenarios scenarios.yaml` locally while iterating.
+name: Simulations
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+    env:
+      LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+      LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+      LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v1
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.14"
+
+    - name: Install dependencies
+      run: UV_GIT_LFS=1 uv sync
+
+    - name: Download model files
+      run: uv run python src/agent.py download-files
+
+    - name: Install LiveKit CLI
+      run: curl -sSL https://get.livekit.io/cli | bash
+
+    - name: Run simulations
+      run: lk agent simulate text --scenarios scenarios.yaml
