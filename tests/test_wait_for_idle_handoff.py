@@ -191,6 +191,88 @@ async def test_wait_for_idle_fails_fast_from_a_draining_tool(wrapper: str) -> No
         await asyncio.wait_for(session.aclose(), timeout=10.0)
 
 
+async def test_detached_child_of_draining_tool_retargets() -> None:
+    """A detached task spawned by a draining tool is not part of the drain graph.
+
+    The tool is non-cancellable and keeps running after ``ctx.update()``, so the
+    handoff's drain awaits its task. The idle wait runs in a separate task the tool
+    never awaits: the drain does not wait on it either, so it must re-target to the
+    incoming activity instead of copying the fast failure of the task actually being
+    drained.
+    """
+    tool_started = asyncio.Event()
+    child_go = asyncio.Event()
+    child_done = asyncio.Event()
+    release_tool = asyncio.Event()
+    child_activity: object | None = None
+    child_error: BaseException | None = None
+    watchers: list[asyncio.Task[None]] = []
+
+    class DetachedChildAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="agent a")
+
+        @function_tool
+        async def background(self, ctx: RunContext) -> str:
+            """Spawn a detached idle waiter, then keep working."""
+            nonlocal child_activity, child_error
+            await ctx.update("working")
+            tool_started.set()
+
+            async def _report_when_idle() -> None:
+                nonlocal child_activity, child_error
+                try:
+                    await child_go.wait()
+                    child_activity = await ctx.session.wait_for_idle()
+                except BaseException as exc:
+                    child_error = exc
+                finally:
+                    child_done.set()
+
+            # not awaited by the tool: the drain only waits for the tool's own task
+            watchers.append(asyncio.create_task(_report_when_idle(), name="detached_wait_for_idle"))
+            await release_tool.wait()
+            return "done"
+
+    call = FunctionToolCall(name="background", arguments="{}", call_id="call_background")
+    session = AgentSession(llm=_session_llm(_tool_call_response("go", call)))
+    try:
+        await session.start(DetachedChildAgent())
+        await asyncio.wait_for(session.run(user_input="go"), timeout=5.0)
+        await asyncio.wait_for(tool_started.wait(), timeout=5.0)
+
+        old_activity = session._activity
+        assert old_activity is not None
+
+        session.update_agent(_AgentB())
+        await _wait_until(lambda: old_activity._closed and session._activity is old_activity)
+        assert session._closing_task is None
+
+        # the waiter observes the closing-but-still-current activity
+        child_go.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+        # it must be parked on the incoming activity, not fail fast like the drained tool
+        assert not child_done.is_set(), child_error
+
+        # the tool must finish for the handoff's drain (and so the retarget) to proceed
+        release_tool.set()
+        await asyncio.wait_for(child_done.wait(), timeout=5.0)
+
+        assert child_error is None, child_error
+        assert isinstance(getattr(child_activity, "agent", None), _AgentB)
+        await _wait_for_handoff(session)
+        assert isinstance(session.current_agent, _AgentB)
+    finally:
+        child_go.set()
+        release_tool.set()
+        if watchers:
+            await asyncio.gather(*watchers, return_exceptions=True)
+        await _wait_for_handoff(session)
+        await asyncio.wait_for(session.aclose(), timeout=10.0)
+
+
 async def test_session_scoped_async_tool_reply_survives_handoff_window() -> None:
     """A session-scoped AsyncToolset reply must not be dropped while an agent hands off.
 
