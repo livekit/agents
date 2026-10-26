@@ -104,9 +104,10 @@ def replace(
 
     def _value(m: re.Match[str]) -> str:
         # prefer the key spelled like the match ("s" vs "ſ" are distinct keys but one pattern
-        # branch); fall back to the matched group when no key has that spelling
+        # branch); fall back to the matched group when no key has that spelling, or when
+        # lower() changed the length ("İ" -> "i̇"), which makes it a different key
         key = m.group(0) if case_sensitive else m.group(0).lower()
-        if key in lookup:
+        if key in lookup and len(key) == len(m.group(0)):
             return lookup[key]
         assert m.lastindex is not None
         return values[m.lastindex - 1]

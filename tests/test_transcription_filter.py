@@ -422,6 +422,14 @@ async def test_replace_case_insensitive_keeps_distinct_unicode_keys(
     assert result == "standardlong"
 
 
+@pytest.mark.parametrize("chunk_size", [1, 3, 100])
+async def test_replace_case_insensitive_ignores_key_of_other_length(chunk_size: int):
+    """A match of "İ" is the "i" branch and keeps its value, although "İ".lower() is a key."""
+    replacements = {"i": "short", "i̇": "long"}
+    result = await _collect(replace(replacements)(_stream_text("İ ok", chunk_size)))
+    assert result == "short ok"
+
+
 async def test_replace_edge_cases():
     """Test empty replacements, empty input, no matches, and regex special chars."""
     # empty replacements = passthrough
