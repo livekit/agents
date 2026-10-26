@@ -11,19 +11,21 @@ from hold_music import hold_beats
 from personas import Persona, compose_instructions, resolve_persona
 
 from livekit.agents import (
+    NOT_GIVEN,
     Agent,
     AgentServer,
     AgentSession,
     AudioConfig,
     BackgroundAudioPlayer,
     JobContext,
+    RunContext,
     TurnHandlingOptions,
     cli,
     inference,
     llm as agents_llm,
 )
 from livekit.agents.llm import function_tool
-from livekit.plugins import lemonslice
+from livekit.plugins import lemonslice, tavus
 from livekit.rtc import RpcError, RpcInvocationData
 
 load_dotenv(find_dotenv(usecwd=False))
@@ -34,8 +36,9 @@ server = AgentServer()
 @dataclass
 class State:
     persona: Persona
-    avatar: lemonslice.AvatarSession
-    session_id: str
+    avatar: lemonslice.AvatarSession | tavus.AvatarSession
+    # lemonslice session id, used by the motion actions; tavus returns none
+    session_id: str | None
 
 
 class MotionAgent(Agent):
@@ -63,6 +66,22 @@ class MotionAgent(Agent):
         return await self._actions.play("turn")
 
 
+class EmotionAgent(Agent):
+    def __init__(self, persona: Persona, avatar: tavus.AvatarSession) -> None:
+        super().__init__(
+            instructions=compose_instructions(persona),
+            tts=inference.TTS("cartesia/sonic-3.5", voice=persona.voice_id or NOT_GIVEN),
+            chat_ctx=agents_llm.ChatContext.empty(),
+        )
+        self._avatar = avatar
+
+    @function_tool
+    async def set_emotion(self, context: RunContext, emotion: tavus.Emotion) -> None:
+        """Set the facial emotion of your avatar. It stays until you set another one."""
+        logger.info("setting avatar emotion to %s", emotion)
+        await self._avatar.set_emotion(emotion)
+
+
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     meta = json.loads(ctx.job.metadata) if ctx.job.metadata else {}
@@ -77,7 +96,9 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    def make_avatar(p: Persona) -> lemonslice.AvatarSession:
+    def make_avatar(p: Persona) -> lemonslice.AvatarSession | tavus.AvatarSession:
+        if p.provider == "tavus":
+            return tavus.AvatarSession(face_id=p.face_id or NOT_GIVEN)
         return lemonslice.AvatarSession(
             agent_image_url=p.image_url,
             agent_prompt=p.speaking_prompt,
@@ -89,7 +110,9 @@ async def entrypoint(ctx: JobContext) -> None:
     actions = ActionController()
     ctx.add_shutdown_callback(actions.shutdown)
 
-    def make_agent(p: Persona) -> Agent:
+    def make_agent(p: Persona, avatar: lemonslice.AvatarSession | tavus.AvatarSession) -> Agent:
+        if isinstance(avatar, tavus.AvatarSession):
+            return EmotionAgent(p, avatar)
         if supports_actions(p.id):
             return MotionAgent(p, actions)
         return Agent(
@@ -103,10 +126,10 @@ async def entrypoint(ctx: JobContext) -> None:
     state = State(persona=initial, avatar=avatar, session_id=session_id)
     await state.avatar.wait_for_join()
 
-    if supports_actions(initial.id):
+    if supports_actions(initial.id) and state.session_id:
         actions.set_session(state.session_id, initial.id)
 
-    await session.start(agent=make_agent(initial), room=ctx.room)
+    await session.start(agent=make_agent(initial, state.avatar), room=ctx.room)
 
     if supports_actions(initial.id):
         await actions.opening_wave()
@@ -155,13 +178,14 @@ async def entrypoint(ctx: JobContext) -> None:
                 state.avatar = make_avatar(new_persona)
                 state.session_id = await state.avatar.start(session, room=ctx.room)
                 await state.avatar.wait_for_join()
-                session.update_agent(make_agent(new_persona))
+                session.update_agent(make_agent(new_persona, state.avatar))
                 state.persona = new_persona
-                # Lemonslice's video pipeline needs a beat after wait_for_join
-                # before it actually consumes audio + emits frames.
-                await asyncio.sleep(1.2)
+                if new_persona.provider == "lemonslice":
+                    # Lemonslice's video pipeline needs a beat after wait_for_join
+                    # before it actually consumes audio + emits frames.
+                    await asyncio.sleep(1.2)
 
-            if supports_actions(new_persona.id):
+            if supports_actions(new_persona.id) and state.session_id:
                 actions.set_session(state.session_id, new_persona.id)
                 await actions.opening_wave()
 
