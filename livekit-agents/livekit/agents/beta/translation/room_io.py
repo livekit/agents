@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -142,8 +143,10 @@ class TranslationRoomIO:
         # the track whose speech is being translated, once linked
         self._source_track_sid: str | None = None
         # the language the translation is labelled with; the session moves it once the model
-        # is actually speaking a new one
+        # is actually speaking a new one, and it lands once the old one has played out
         self._output_language: str | None = None
+        self._requested_output_language: str | None = None
+        self._relabel_atask: asyncio.Task[None] | None = None
         # a name given outright is kept; otherwise it follows the source track and language
         audio_output_options = self._options.get_audio_output_options()
         self._fixed_track_name = audio_output_options is not None and is_given(
@@ -420,10 +423,45 @@ class TranslationRoomIO:
             self._output_tr_output.set_track(None)
 
     def _on_output_language_changed(self, language: str) -> None:
-        """Retag the translation with the language it is now spoken in, and rename its track."""
-        if language == self._output_language:
+        """Retag the translation with the language it is now spoken in, and rename its track.
+
+        With transcripts paced to the audio, the synchronizer still holds words of the old
+        language while its speech plays out, and releases them after. So the change lands only
+        once that speech has played and the synchronizer has closed its segment; until then
+        the old words, and the old audio, keep the old label.
+        """
+        if language == (self._requested_output_language or self._output_language):
             return
 
+        self._requested_output_language = language
+        pending = self._relabel_atask is not None and not self._relabel_atask.done()
+        if self._tr_synchronizer is None and not pending:
+            # nothing holds text back, so what is published already is the old language's
+            self._apply_output_language(language)
+            return
+
+        self._relabel_atask = asyncio.create_task(
+            self._relabel_after_playout(language, self._relabel_atask)
+        )
+        self._tasks.add(self._relabel_atask)
+        self._relabel_atask.add_done_callback(self._tasks.discard)
+
+    @log_exceptions(logger=logger)
+    async def _relabel_after_playout(
+        self, language: str, previous: asyncio.Task[None] | None
+    ) -> None:
+        if previous is not None:
+            # changes land in the order they were made
+            with contextlib.suppress(Exception):
+                await previous
+
+        if (synchronizer := self._tr_synchronizer) is not None:
+            await synchronizer.audio_output.wait_for_playout()
+            await synchronizer.barrier()
+
+        self._apply_output_language(language)
+
+    def _apply_output_language(self, language: str) -> None:
         self._output_language = language
         if self._output_tr_output and self._source_track_sid is not None:
             self._output_tr_output.set_attributes(self._output_attributes())

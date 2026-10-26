@@ -815,12 +815,32 @@ class _ParticipantStreamTranscriptionOutput:
             if self._room.isconnected():
                 if self._is_delta_stream:  # reuse the existing writer
                     if self._writer is None:
+                        segment_id, track_id = self._current_id, self._track_id
+                        additional_attributes = dict(self._additional_attributes)
                         # the leading expression is stripped before any visible text, so it is
                         # already known here. Put it on the opening header as well as the closing
                         # one, or a frontend can't colour the turn until the agent stops talking.
-                        self._writer = await self._create_text_writer(
+                        writer = await self._create_text_writer(
                             extra=expression_attribute(self._stripper.tags)
                         )
+                        if self._current_id != segment_id or not self._capturing:
+                            # the segment was closed while its stream opened, so the flush had
+                            # no stream to close; this text is the segment's, and closes it
+                            await writer.write(payload)
+                            await writer.aclose(
+                                attributes={
+                                    ATTRIBUTE_TRANSCRIPTION_FINAL: "true",
+                                    **(
+                                        {ATTRIBUTE_TRANSCRIPTION_TRACK_ID: track_id}
+                                        if track_id
+                                        else {}
+                                    ),
+                                    **additional_attributes,
+                                }
+                            )
+                            return
+
+                        self._writer = writer
 
                     await self._writer.write(payload)
                 else:  # always create a new writer

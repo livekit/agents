@@ -1200,3 +1200,122 @@ async def test_legacy_transcriptions_carry_the_language() -> None:
         ]
     finally:
         await sink.aclose()
+
+
+class _HeldSynchronizer:
+    """Stands in for a TranscriptSynchronizer whose old segment is still playing out."""
+
+    def __init__(self) -> None:
+        self.played: asyncio.Future[None] = asyncio.Future()
+        self.rotated: asyncio.Future[None] = asyncio.Future()
+
+        class _Audio:
+            async def wait_for_playout(_self) -> None:
+                await self.played
+
+        self.audio_output = _Audio()
+
+    async def barrier(self) -> None:
+        await self.rotated
+
+
+async def test_a_language_change_waits_for_the_old_language_to_play_out() -> None:
+    room_io = _room_io()
+    _linked(room_io)
+    translation = _RecordingTaggedOutput()
+    room_io._output_tr_output = translation  # type: ignore[assignment]
+    synchronizer = _HeldSynchronizer()
+    room_io._tr_synchronizer = synchronizer  # type: ignore[assignment]
+    room_io._apply_link(
+        _LinkedTrack(_FakePublication("TR_a"), _FakeParticipant("alice"))  # type: ignore[arg-type]
+    )
+
+    room_io._on_output_language_changed("fr")
+    await asyncio.sleep(0)
+    # Spanish words the synchronizer has yet to release must still go out as Spanish
+    assert translation.attributes[-1] == {"lk.transcription_language": "es"}
+
+    synchronizer.played.set_result(None)
+    await asyncio.sleep(0)
+    # played, but the synchronizer has not closed the Spanish segment yet
+    assert translation.attributes[-1] == {"lk.transcription_language": "es"}
+
+    synchronizer.rotated.set_result(None)
+    await asyncio.gather(*room_io._tasks)
+    assert translation.attributes[-1] == {"lk.transcription_language": "fr"}
+
+
+class _GatedTextRoom:
+    """A connected room whose text streams open only when the test lets them."""
+
+    def __init__(self) -> None:
+        self.open_gate: asyncio.Future[None] = asyncio.Future()
+        self.streams: list[dict[str, object]] = []
+        room = self
+
+        class _Writer:
+            def __init__(self, attributes: dict[str, str]) -> None:
+                self.record: dict[str, object] = {
+                    "header": dict(attributes),
+                    "text": [],
+                    "closed_with": None,
+                }
+                room.streams.append(self.record)
+
+            async def write(self, text: str) -> None:
+                self.record["text"].append(text)  # type: ignore[union-attr]
+
+            async def aclose(self, attributes: dict[str, str] | None = None) -> None:
+                self.record["closed_with"] = dict(attributes or {})
+
+        class _Local:
+            identity = "agent"
+
+            async def stream_text(self, *, attributes: dict[str, str], **_: object) -> _Writer:
+                header = dict(attributes)
+                await room.open_gate
+                return _Writer(header)
+
+        self.local_participant = _Local()
+
+    def isconnected(self) -> bool:
+        return True
+
+    def on(self, *_: object) -> None: ...
+
+    def off(self, *_: object) -> None: ...
+
+
+async def test_a_language_change_while_the_stream_opens_closes_it_as_the_old_language() -> None:
+    from livekit.agents.voice.room_io._output import _ParticipantStreamTranscriptionOutput
+
+    room = _GatedTextRoom()
+    sink = _ParticipantStreamTranscriptionOutput(
+        room,  # type: ignore[arg-type]
+        is_delta_stream=True,
+        participant="alice",
+        track="TR_a",
+        attributes={"lk.transcription_language": "es"},
+    )
+    try:
+        capture = asyncio.create_task(sink.capture_text("hola"))
+        await asyncio.sleep(0)
+        # the Spanish stream is still opening when French is set
+        sink.set_attributes({"lk.transcription_language": "fr"})
+        room.open_gate.set_result(None)
+        await capture
+
+        await sink.capture_text("bonjour")
+        sink.flush()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        spanish, french = room.streams
+        assert spanish["header"]["lk.transcription_language"] == "es"  # type: ignore[index]
+        assert spanish["text"] == ["hola"]
+        assert spanish["closed_with"]["lk.transcription_language"] == "es"  # type: ignore[index]
+        # French opened its own stream rather than reusing the Spanish one
+        assert french["header"]["lk.transcription_language"] == "fr"  # type: ignore[index]
+        assert french["text"] == ["bonjour"]
+    finally:
+        await sink.aclose()
