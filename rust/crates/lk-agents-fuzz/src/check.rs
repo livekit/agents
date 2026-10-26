@@ -101,7 +101,6 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "provider_streams_closed",
     "speech_error_is_injected",
     "speech_settles",
-    "synthesized_speech_is_played",
     "tool_lifecycle",
 ];
 
