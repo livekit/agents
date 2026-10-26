@@ -1426,6 +1426,121 @@ async def sc_speech_identity(call: Call) -> None:
     ]
 
 
+async def _amd(call: Call, label: str) -> None:
+    from livekit.agents import AMD
+
+    def respond(items: list[dict[str, Any]], tools: list[str]) -> list[Any]:
+        if "save_prediction" in tools:
+            return [("tool", "save_prediction", {"label": label})]
+        return default_reply(items, tools)
+
+    session = await _pipeline(call, llm=call.llm(respond))
+    async with AMD(session, llm=None, stt=None, suppress_compatibility_warning=True) as detector:
+        call.speak("Hi, you have reached Theo, leave a message after the tone.", after=1.0)
+        verdict = asyncio.ensure_future(detector.execute())
+        await call.settle(6)
+        if verdict.done():
+            v = verdict.result()
+            call.extra["amd"] = [v.category.value, v.reason, v.transcript]
+        else:
+            call.extra["amd"] = ["pending"]
+    await call.settle(3)
+    await _close(call)
+
+
+async def sc_amd_machine(call: Call) -> None:
+    """A voicemail greeting: the machine verdict, and the turn it ended gets no reply."""
+    await _amd(call, "machine-vm")
+
+
+async def sc_amd_human(call: Call) -> None:
+    """A person answering: the human verdict, and the turn is replied to."""
+    await _amd(call, "human")
+
+
+async def sc_keyterm_detection(call: Call) -> None:
+    """A detection pass per user turn; the term it confirms reaches the STT."""
+    from livekit.agents import stt
+
+    pushed: list[list[str]] = []
+
+    class KeytermSTT(type(call.stt())):  # type: ignore[misc]
+        def __init__(self) -> None:
+            stt.STT.__init__(
+                self,
+                capabilities=stt.STTCapabilities(
+                    streaming=True, interim_results=True, keyterms=True
+                ),
+            )
+            self.call = call
+
+        def _update_session_keyterms(self, keyterms: list[str]) -> None:
+            pushed.append(list(keyterms))
+
+    passes = [0]
+
+    def detect(items: list[dict[str, Any]], tools: list[str]) -> list[Any]:
+        passes[0] += 1
+        confirm = passes[0] > 1
+        update = {
+            "pending": [] if confirm else ["Theo"],
+            "confirm": ["Theo"] if confirm else [],
+            "remove": [],
+        }
+        return [("tool", "record_keyterms", update)]
+
+    detector = call.llm(detect)
+    await _pipeline(
+        call,
+        stt=KeytermSTT(),
+        stt_context_options={
+            "keyterms": ["LiveKit"],
+            "keyterm_detection": {"enabled": True, "llm": detector},
+        },
+    )
+    call.speak("my name is Theo")
+    await call.settle(4)
+    call.speak("T H E O")
+    await call.settle(4)
+    call.extra["keyterms"] = [list(call.session.keyterms), pushed[-1:] or []]
+    await _close(call)
+
+
+async def sc_update_endpointing(call: Call) -> None:
+    """`update_options` mid-call: a longer endpointing delay joins two utterances in one turn."""
+    session = await _pipeline(call, turn_handling={"turn_detection": "vad"}, vad=call.vad())
+    call.speak("my name is Theo")
+    await call.settle(3)
+    session.update_options(endpointing_opts={"min_delay": 2.0})
+    call.speak("I live", after=0.4)
+    await call.settle(1.0)
+    call.speak("in Paris", after=0.4)
+    await call.settle(5)
+    await _close(call)
+
+
+async def sc_update_turn_detection(call: Call) -> None:
+    """`update_options(turn_detection="manual")` mid-call: speech gets no reply until committed."""
+    session = await _pipeline(call)
+    session.update_options(turn_detection="manual")
+    call.speak("hello there")
+    await call.settle(3)
+    session.commit_user_turn()
+    await call.settle(3)
+    await _close(call)
+
+
+async def sc_user_away_returns(call: Call) -> None:
+    """Away twice: the timer restarts after the user comes back, and the agent's speech holds it."""
+    session = await _pipeline(call, user_away_timeout=1.5)
+    await call.settle(2)
+    call.speak("I am back")
+    await call.settle(1)
+    call.handle("long", session.say(LONG))
+    await call.settle(5)
+    await _close(call)
+
+
 SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "say_cut": sc_say_cut,
     "live_transcript": sc_live_transcript,
@@ -1463,6 +1578,12 @@ SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "on_user_turn_completed": sc_on_user_turn_completed,
     "say_uninterruptible": sc_say_uninterruptible,
     "interrupt_api": sc_interrupt_api,
+    "amd_machine": sc_amd_machine,
+    "amd_human": sc_amd_human,
+    "keyterm_detection": sc_keyterm_detection,
+    "update_endpointing": sc_update_endpointing,
+    "update_turn_detection": sc_update_turn_detection,
+    "user_away_returns": sc_user_away_returns,
     "speech_identity": sc_speech_identity,
 }
 
