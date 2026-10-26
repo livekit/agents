@@ -67,6 +67,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .remote_session import SessionHost
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolRunner
@@ -259,6 +260,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # the job's telemetry parents its spans here; the core traces the session itself
         self._root_span_context = None
         self._session_start_context = None
+        self._host: SessionHost | None = None
 
     # --- state ---------------------------------------------------------------------------
 
@@ -377,7 +379,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         one) with ``agent`` driving."""
         if self._core is not None:
             return
-        self._console = ConsoleCall.claim(self)
+        self._console = self._host = ConsoleCall.claim(self)
         job_ctx = get_job_context(required=False)
         if self._console is not None:
             room = _core.OfflineRoom("console")
@@ -436,7 +438,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             await self._core.start(capture_run=capture_run)
             return
         # the job's room: this session records and reports for the job, connects the room,
-        # closes with it
+        # closes with it, and the primary one serves the remote session protocol there
         plan = _core.plan_session_start(
             job_default=job_ctx.job.enable_recording,
             has_job_context=True,
@@ -445,11 +447,15 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._recording_options = plan["recording"]
         if plan["is_primary"]:
             job_ctx._primary_agent_session = self
+        if plan["hosting"]:
+            self._host = SessionHost.on_room(self, room)
         job_ctx.init_recording(self._recording_options)
         job_ctx.add_shutdown_callback(
             lambda: self._close(drain=False, reason=CloseReason.JOB_SHUTDOWN)
         )
         await asyncio.gather(self._core.start(capture_run=capture_run), job_ctx.connect())
+        if self._host is not None:
+            await self._host.start()
 
     async def aclose(self) -> None:
         await self._close(drain=False)
@@ -466,10 +472,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._core is None:
             return
         await self._core.aclose(reason=reason.value, drain=drain)
+        if self._host is not None:
+            host, self._host = self._host, None
+            await host.aclose()
         await self._core.close_io()
-        if (console := self._console) is not None:
-            self._console = None
-            await console.aclose()
         for task in list(self._tasks):
             task.cancel()
         await asyncio.gather(*(t.aclose() for t in self._tools if isinstance(t, llm.Toolset)))
@@ -672,8 +678,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _core_event(self, wire: dict[str, Any]) -> None:
         kind = wire["type"]
-        if self._console is not None:
-            self._console.forward(wire)
+        if self._host is not None:
+            self._host.forward(wire)
         if kind in IGNORED_EVENTS:
             return
         if (public := PUBLIC_EVENTS.get(kind)) is not None:
