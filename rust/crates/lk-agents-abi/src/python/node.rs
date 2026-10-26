@@ -129,6 +129,10 @@ enum State {
     Done,
 }
 
+/// The provider calls a default node made for the node it runs in, `None` until one meters its
+/// calls (a `StreamAdapter`'s sentences): the node's own output is not a call.
+pub type NodeCalls = Arc<Mutex<Option<Vec<crate::metrics::base::AgentMetrics>>>>;
+
 /// A node's output as the core drains it, as the reference's node task does: an awaitable is
 /// awaited first, an async iterable is read to its end, a single value is the one item, `None` is
 /// none. Every await runs in `locals`' context and is cancelled if the core stops waiting.
@@ -137,6 +141,7 @@ pub struct NodeSource<T> {
     locals: pyo3_async_runtimes::TaskLocals,
     convert: Convert<T>,
     clock: Arc<dyn crate::Clock>,
+    calls: Option<NodeCalls>,
 }
 
 impl<T> NodeSource<T> {
@@ -146,7 +151,13 @@ impl<T> NodeSource<T> {
         convert: Convert<T>,
         clock: Arc<dyn crate::Clock>,
     ) -> Self {
-        NodeSource { state: State::Returned(returned), locals, convert, clock }
+        NodeSource { state: State::Returned(returned), locals, convert, clock, calls: None }
+    }
+
+    /// The calls the default nodes it runs make, reported in place of its own output.
+    pub fn with_calls(mut self, calls: NodeCalls) -> Self {
+        self.calls = Some(calls);
+        self
     }
 
     fn handle(&self, obj: &Py<PyAny>) -> CancellingHandle {
@@ -228,6 +239,14 @@ impl<T: Send> crate::StreamSource<T> for NodeSource<T> {
                 }
             }
         }
+    }
+
+    fn take_call_metrics(
+        &mut self,
+        _in_flight: bool,
+    ) -> Option<Vec<crate::metrics::base::AgentMetrics>> {
+        let calls = self.calls.as_ref()?;
+        calls.lock().unwrap_or_else(|p| p.into_inner()).as_mut().map(std::mem::take)
     }
 
     /// An iterator is closed (`aclose()`) in its context, bounded; a coroutine never awaited is

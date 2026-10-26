@@ -83,6 +83,13 @@ impl<T: Send> StreamSource<T> for Final<T> {
     fn started_time(&self) -> Option<f64> {
         self.0.started_time()
     }
+
+    fn take_call_metrics(
+        &mut self,
+        in_flight: bool,
+    ) -> Option<Vec<lk_agents_abi::metrics::base::AgentMetrics>> {
+        self.0.take_call_metrics(in_flight)
+    }
 }
 
 fn duplex<I, T: Send + 'static>(

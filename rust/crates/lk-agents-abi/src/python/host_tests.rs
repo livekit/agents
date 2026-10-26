@@ -280,6 +280,33 @@ out = (loop, context, [context.run(f) for f in (stream, one, nothing)])
         });
     }
 
+    // Catches: a node's output metered as one call when the default node it ran metered its
+    // provider's (a non-streaming TTS's sentences, as the reference's `ChunkedStream`s report
+    // theirs), or those records read twice. Until a default node meters, the node is its own call.
+    #[test]
+    fn a_node_reports_the_calls_its_default_node_made() {
+        use crate::StreamSource as _;
+        attach(|py| {
+            let event_loop = py.import("asyncio").unwrap().call_method0("new_event_loop").unwrap();
+            let source = || {
+                let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.clone());
+                let convert: crate::python::Convert<String> =
+                    Box::new(|o| o.extract::<String>().map_err(Into::into));
+                let clock = std::sync::Arc::new(crate::RealClock::new());
+                crate::python::NodeSource::new(py.None(), locals, convert, clock)
+            };
+            assert!(source().take_call_metrics(false).is_none());
+            let calls = crate::python::NodeCalls::default();
+            let mut node = source().with_calls(calls.clone());
+            assert!(node.take_call_metrics(false).is_none(), "no default node metered yet");
+            let record = crate::metrics::base::AgentMetrics::Tts(crate::metrics::testkit::tts());
+            *calls.lock().unwrap() = Some(vec![record.clone(), record]);
+            assert_eq!(node.take_call_metrics(false).map(|r| r.len()), Some(2));
+            assert_eq!(node.take_call_metrics(true).map(|r| r.len()), Some(0));
+            event_loop.call_method0("close").unwrap();
+        });
+    }
+
     // Catches: a duck-typed plugin (the reference API's shape, no base class) refused by a bare
     // proxy instead of seen through the host class's own `_core_*` functions.
     #[test]

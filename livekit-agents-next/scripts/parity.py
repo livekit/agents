@@ -1282,7 +1282,7 @@ async def sc_tts_node(call: Call) -> None:
                 yield frame
 
     session = await _pipeline(call, agent=Twice())
-    call.handle("say", session.say("Twenty characters..."))
+    call.handle("say", session.say("Twenty characters... And a second sentence."))
     await call.settle(3)
     await _close(call)
 

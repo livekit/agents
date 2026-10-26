@@ -12,7 +12,7 @@ mod values;
 pub use bridge::*;
 pub use host_errors::*;
 pub use loop_time::{LoopRuntime, VIRTUAL_TIME_ENV, future_into_py};
-pub use node::{Convert, ItemSink, ItemStream, NodeSource, item_stream};
+pub use node::{Convert, ItemSink, ItemStream, NodeCalls, NodeSource, item_stream};
 pub use values::*;
 
 use std::sync::RwLock;
