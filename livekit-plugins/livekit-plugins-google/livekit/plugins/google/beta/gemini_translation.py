@@ -221,13 +221,16 @@ class GeminiTranslationModel(TranslationModel):
 
 
 class _TranscriptSegmenter:
-    """Ends a transcript when the server marks it finished, or once its pieces go quiet."""
+    """Ends a transcript when the server marks it finished, or once its pieces go quiet.
+
+    Each callback gets the piece and the transcript so far, so a consumer can take either.
+    """
 
     def __init__(
         self,
         timeout: float,
-        on_text: Callable[[str, str | None], None],
-        on_final: Callable[[str | None], None],
+        on_text: Callable[[str, str, str | None], None],
+        on_final: Callable[[str, str | None], None],
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._timeout = timeout
@@ -236,6 +239,7 @@ class _TranscriptSegmenter:
         self._loop = loop
         self._timer: asyncio.TimerHandle | None = None
         self._language: str | None = None
+        self._text = ""
 
     def push(self, text: str, *, language: str | None, finished: bool) -> None:
         if self._timer is None:
@@ -246,7 +250,8 @@ class _TranscriptSegmenter:
             self._language = language
 
         if text:
-            self._on_text(text, self._language)
+            self._text += text
+            self._on_text(text, self._text, self._language)
             if self._timer is not None:
                 self._timer.cancel()
             self._timer = self._loop.call_later(self._timeout, self.flush)
@@ -261,16 +266,18 @@ class _TranscriptSegmenter:
 
         self._timer.cancel()
         self._timer = None
-        self._on_final(self._language)
-        self._language = None
+        text, self._text = self._text, ""
+        language, self._language = self._language, None
+        self._on_final(text, language)
 
 
 class GeminiTranslationSession(TranslationModelSession[None]):
     """One run of Gemini Live translation, reconnecting when its setup has to change.
 
-    Transcripts arrive in pieces: each ``input_transcript`` and ``output_transcript`` carries
-    the text added since the last, and the one that ends a transcript carries none, only
-    ``is_final``.
+    An ``input_transcript`` carries the transcript so far, as an STT interim does, and the
+    final one the whole of it. An ``output_transcript`` carries the text added since the last,
+    as the translation's transcript is a delta stream, and the one that ends it carries none,
+    only ``is_final``.
     """
 
     def __init__(self, translation_model: GeminiTranslationModel) -> None:
@@ -301,23 +308,23 @@ class GeminiTranslationSession(TranslationModelSession[None]):
 
         self._input_segmenter = _TranscriptSegmenter(
             self._opts.transcript_segment_timeout,
-            on_text=lambda text, language: self.emit(
+            on_text=lambda _, text, language: self.emit(
                 "input_transcript", InputTranscript(text=text, is_final=False, language=language)
             ),
-            on_final=lambda language: self.emit(
-                "input_transcript", InputTranscript(text="", is_final=True, language=language)
+            on_final=lambda text, language: self.emit(
+                "input_transcript", InputTranscript(text=text, is_final=True, language=language)
             ),
             loop=self._loop,
         )
         self._output_segmenter = _TranscriptSegmenter(
             self._opts.transcript_segment_timeout,
-            on_text=lambda text, language: self.emit(
+            on_text=lambda delta, _, language: self.emit(
                 "output_transcript",
                 OutputTranscript(
-                    text=text, is_final=False, language=language or self._output_language
+                    text=delta, is_final=False, language=language or self._output_language
                 ),
             ),
-            on_final=lambda language: self.emit(
+            on_final=lambda _, language: self.emit(
                 "output_transcript",
                 OutputTranscript(
                     text="", is_final=True, language=language or self._output_language

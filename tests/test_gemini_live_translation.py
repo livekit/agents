@@ -193,10 +193,11 @@ async def test_transcripts_end_when_finished_or_quiet(monkeypatch: pytest.Monkey
 
         await _wait_for(lambda: len(heard) == 3 and len(spoken) == 2)
         # the leading space gemini opens with is dropped, the language carries to the end
+        # the source transcript replaces itself in place, as an STT interim does
         assert [(t.text, t.is_final, t.language) for t in heard] == [
             ("hello", False, "en"),
-            (" there", False, "en"),
-            ("", True, "en"),
+            ("hello there", False, "en"),
+            ("hello there", True, "en"),
         ]
         # the server never marked this one finished, so the quiet ended it
         assert [(t.text, t.is_final, t.language) for t in spoken] == [
