@@ -324,3 +324,55 @@ async def test_recognize_refusals(
     if reason:
         assert err.body["reason"] == reason and err.body["console_url"] == BILLING
     assert len(fake.requests) == 1
+
+
+async def test_session_flush_and_every_final_ends_speech(fake, http) -> None:
+    async def long_final(ws: web.WebSocketResponse, conn: dict) -> None:
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data)["type"] == "end":
+                await ws.send_json({"type": "final", "text": "a long one", "start": 0, "end": 25})
+                await ws.send_json({"type": "done", "audio_seconds": 25.0})
+                return
+
+    fake.scripts = [long_final]
+    audrey = make(fake, http)
+    assert audrey.capabilities.manual_flush
+    stream = audrey.stream(conn_options=FAST_RETRY)
+    for f in frames(tone(0.2)):
+        stream.push_frame(f)
+    stream.end_input()
+    events = [ev.type for ev in await collect(stream) if ev.type != E.RECOGNITION_USAGE]
+    assert events == [E.START_OF_SPEECH, E.FINAL_TRANSCRIPT, E.END_OF_SPEECH]
+
+
+async def test_missing_done_is_an_error(fake, http, monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.p99lab import stt as audrey_stt
+
+    async def silent(ws: web.WebSocketResponse, conn: dict) -> None:
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data)["type"] == "end":
+                await asyncio.sleep(2)
+                return
+
+    monkeypatch.setattr(audrey_stt, "DONE_TIMEOUT_SECS", 0.2)
+    fake.scripts = [silent]
+    stream = make(fake, http).stream(conn_options=FAST_RETRY)
+    for f in frames(tone(0.2)):
+        stream.push_frame(f)
+    stream.end_input()
+    with pytest.raises(APIConnectionError):
+        await collect(stream)
+
+
+async def test_error_body_keeps_only_known_fields(fake, http) -> None:
+    fake.scripts = [
+        refuse({"code": 401, "message": "unknown API key", "text": "what the caller said"})
+    ]
+    stream = make(fake, http).stream(conn_options=FAST_RETRY)
+    for f in frames(tone(0.2)):
+        stream.push_frame(f)
+    with pytest.raises(APIStatusError) as info:
+        await collect(stream)
+    assert "text" not in info.value.body
+    assert "what the caller said" not in repr(info.value)

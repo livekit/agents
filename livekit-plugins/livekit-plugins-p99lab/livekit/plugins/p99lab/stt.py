@@ -103,8 +103,9 @@ USAGE_REPORT_SECS = 5.0
 # How long to wait for the server's "done" after the end of the audio.
 DONE_TIMEOUT_SECS = 60.0
 MAX_PROMPT_CHARS = 500
-# The server caps an utterance at 25 s of audio and finalises it there even mid-speech.
-UTTERANCE_CAP_SECS = 25.0
+
+# The fields of a server error payload that are kept in ``APIStatusError.body``.
+_ERROR_FIELDS = ("code", "reason", "top_up_url", "plans_url")
 
 # Error messages after which reconnecting cannot help. Account refusals also carry the HTTP
 # status as ``code`` (401, 402, 429, 503); these strings cover servers that send only a message.
@@ -186,6 +187,7 @@ class STT(stt.STT):
                 interim_results=True,
                 aligned_transcript=False,
                 offline_recognize=True,
+                manual_flush=True,
             )
         )
 
@@ -464,6 +466,8 @@ class SpeechStream(stt.RecognizeStream):
                     raise _stream_error(data)
                 try:
                     self._process_stream_event(data)
+                    if kind in ("partial", "final"):
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception("failed to process an Audrey message")
 
@@ -487,8 +491,10 @@ class SpeechStream(stt.RecognizeStream):
                             pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
                         )
                         if not done:
-                            logger.warning("Audrey sent no 'done' after the end of the audio")
-                            break
+                            raise APIConnectionError(
+                                "Audrey sent no 'done' after the end of the audio",
+                                retryable=False,
+                            )
                         for task in done:
                             if task is not wait_reconnect_task:
                                 task.result()
@@ -526,7 +532,6 @@ class SpeechStream(stt.RecognizeStream):
                 ),
                 self._conn_options.timeout,
             )
-            await ws.send_str(json.dumps(self._config()))
         except asyncio.TimeoutError:
             raise APIConnectionError("timed out connecting to Audrey") from None
         except aiohttp.WSServerHandshakeError as e:
@@ -539,6 +544,14 @@ class SpeechStream(stt.RecognizeStream):
         except Exception as e:
             # Not chained: aiohttp errors can carry the request headers, key included.
             raise APIConnectionError(f"failed to connect to Audrey ({type(e).__name__})") from None
+
+        try:
+            await ws.send_str(json.dumps(self._config()))
+        except Exception as e:
+            await ws.close()
+            raise APIConnectionError(
+                f"failed to configure the Audrey stream ({type(e).__name__})"
+            ) from None
 
         self._report_connection_acquired(time.perf_counter() - t0, False)
         return ws
@@ -601,10 +614,7 @@ class SpeechStream(stt.RecognizeStream):
                         alternatives=[sd],
                     )
                 )
-            # A final cut at the 25 s utterance cap is not a pause: the speaker
-            # is still talking, so the speech continues into the next utterance.
-            if sd.end_time - sd.start_time < UTTERANCE_CAP_SECS - 0.5:
-                self._end_speech()
+            self._end_speech()
         else:
             logger.warning("unexpected Audrey message type %r", kind)
 
@@ -635,7 +645,7 @@ def _payment_reason(message: str, explicit: object = None) -> str:
 def _refusal(status: int, message: str, detail: dict[str, Any]) -> APIStatusError:
     """The error for a refusal, with a machine-readable ``body``: ``code`` and, for a 402,
     ``reason`` and ``console_url``."""
-    body: dict[str, Any] = {k: v for k, v in detail.items() if k not in ("type", "message")}
+    body: dict[str, Any] = {k: detail[k] for k in _ERROR_FIELDS if k in detail}
     code = body.get("code")
     body["code"] = code if isinstance(code, str) else ("unknown_key" if status == 401 else None)
     body["status"] = status
