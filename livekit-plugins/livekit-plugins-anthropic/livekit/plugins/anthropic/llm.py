@@ -176,7 +176,7 @@ class LLM(llm.LLM):
             extra.update(extra_kwargs)
 
         if is_given(self._opts.user):
-            extra["user"] = self._opts.user
+            extra["metadata"] = {**(extra.get("metadata") or {}), "user_id": self._opts.user}
 
         # SDK 1.x dropped temperature/top_k from messages.create(). Older models
         # still honor them when they are merged into the request JSON.
