@@ -50,19 +50,9 @@ impl BuiltinAudioClip {
     }
 }
 
-/// `AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip`; a builtin clip arrives
-/// as its file path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SoundSource {
-    File(String),
-    /// A host-owned `AsyncIterator[rtc.AudioFrame]`; the binding pulls it and applies [`Playback`].
-    Stream,
-}
-
-/// `AudioConfig` -- one candidate sound with its playback parameters.
+/// `AudioConfig`'s playback parameters; its `source` is the [`Sound`]'s input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioConfig {
-    pub source: SoundSource,
     /// 0.0-1.0.
     pub volume: f64,
     /// The chance this one is picked when several are offered. 0.0-1.0.
@@ -237,6 +227,8 @@ pub trait FrameStream: Send + Sync {
     async fn close(&self);
 }
 
+/// `AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip`; a builtin clip arrives
+/// as its file path.
 #[derive(Clone)]
 pub enum PlaybackInput {
     File(String),
@@ -263,14 +255,11 @@ impl Sound {
         fade_in: f64,
         fade_out: f64,
     ) -> Self {
-        let (source, input) = match (path, stream) {
-            (_, Some(stream)) => (SoundSource::Stream, PlaybackInput::Stream(stream)),
-            (path, None) => {
-                let path = path.unwrap_or_default();
-                (SoundSource::File(path.clone()), PlaybackInput::File(path))
-            }
+        let input = match stream {
+            Some(stream) => PlaybackInput::Stream(stream),
+            None => PlaybackInput::File(path.unwrap_or_default()),
         };
-        Sound { config: AudioConfig { source, volume, probability, fade_in, fade_out }, input }
+        Sound { config: AudioConfig { volume, probability, fade_in, fade_out }, input }
     }
 }
 
@@ -528,7 +517,7 @@ impl BackgroundAudioPlayer {
         };
         let sound = sounds.into_iter().nth(index).unwrap();
         // `loop_ambient = isinstance(cfg.source, str)`: files and builtins loop, iterators don't.
-        let is_stream = sound.config.source == SoundSource::Stream;
+        let is_stream = matches!(sound.input, PlaybackInput::Stream(_));
         let looping = looping || (ambient && !is_stream);
         if looping && is_stream {
             return Err(LoopingStreamError.into());
