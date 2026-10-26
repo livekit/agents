@@ -84,10 +84,6 @@ async def test_a_failed_save_is_reported_under_the_acked_task_id(
 
 
 @pytest.mark.rule("R15", "B1")
-@pytest.mark.xfail(
-    strict=True,
-    reason="B1: the acked row stays working; rust ask 'fail the acked row on a storage error'",
-)
 async def test_a_failed_save_leaves_the_acked_task_failed(door: Callable[..., Door]) -> None:
     desk = door(unsaved)
     sent = await desk.send("hi", context_id=await desk.thread())
