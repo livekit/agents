@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 268 core items bound (120 functions and consts, 74 classes, 73 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 266 core items bound (118 functions and consts, 74 classes, 73 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -11,6 +11,7 @@
 //! - `lk_agents_voice::turn::migrate_turn_handling_for_host`: parameter `turn_detection`: `TurnDetectionArg` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_activity::options::resolve_recording_options_for_host`: parameter `record`: `RecordingRequest` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_activity::options::resolve_interruption_detector_for_host`: parameter `agent_mode`: `InterruptionMode` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_voice::workflows::dtmf::send_dtmf_events`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
 //! - `lk_agents_voice::workflows::dtmf::receive_dtmf`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::plan_session_start`: parameter `requested`: `RecordingRequest` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::gen_ai::chat_ctx_gen_ai_events`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container

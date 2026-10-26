@@ -487,7 +487,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection: the DTMF tool joins the session's tools and the core's navigator
         runs, counting ``transcript`` (AMD's greeting) as heard."""
-        from ..beta.tools.send_dtmf import send_dtmf_events
+        from ..beta.tools import send_dtmf_events
 
         if send_dtmf_events not in self._tools:
             self._tools.append(send_dtmf_events)

@@ -221,6 +221,12 @@ impl ScriptedRoom {
     pub fn press_dtmf(&self, digit: String) {
         self.room.press_dtmf(&digit);
     }
+
+    /// The keypad tones the agent published, as `(code, digit)`.
+    #[host(method)]
+    pub fn dtmf_published(&self) -> Vec<(u32, String)> {
+        self.room.local_participant().dtmf_published()
+    }
 }
 
 /// A session with no RTC room, on the real clock. Built on [`FakeRtc::offline`] but on the wall

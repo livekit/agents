@@ -694,6 +694,14 @@ impl LiveSession {
         self.inner.dtmf_reply_running()
     }
 
+    #[napi(js_name = "endCall")]
+    pub fn end_call(&self, env: Env, speech: &crate::generated::objects::SpeechHandle) -> napi::Result<()> {
+        crate::host_error::run(&env, || {
+            self.inner.end_call(&speech.inner).map_err(crate::generated::errors::session_refused_to_node)?;
+            Ok(())
+        })
+    }
+
     #[napi(js_name = "dtmfDigit")]
     pub fn dtmf_digit(&self, env: Env, digit: String) -> napi::Result<()> {
         crate::host_error::run(&env, || {
@@ -1742,6 +1750,11 @@ impl FakeRoom {
     #[napi(js_name = "pressDtmf")]
     pub fn press_dtmf(&self, digit: String) {
         self.inner.press_dtmf(digit);
+    }
+
+    #[napi(js_name = "dtmfPublished")]
+    pub fn dtmf_published(&self) -> Vec<(u32, String)> {
+        self.inner.dtmf_published()
     }
 }
 

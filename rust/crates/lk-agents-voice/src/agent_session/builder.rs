@@ -384,6 +384,7 @@ impl DriverBuilder {
             on_exit: Default::default(),
             drain: Default::default(),
             dtmf: Default::default(),
+            end_call: None,
             pending_turn: None,
             last_turn: None,
             live_speech_at_final: false,

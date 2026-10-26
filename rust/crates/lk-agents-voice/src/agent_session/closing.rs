@@ -434,6 +434,7 @@ impl Driver {
                 | SpeechCommand::ClaimUserTurn
                 | SpeechCommand::ReleaseUserTurn
                 | SpeechCommand::SetAllowInterruptions { .. }
+                | SpeechCommand::EndCall { .. }
                 | SpeechCommand::SetRunOutput { .. }
                 | SpeechCommand::ToolUpdate { .. }
                 | SpeechCommand::FillerStart { .. }

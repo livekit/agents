@@ -145,6 +145,11 @@ pub trait LocalParticipant: Send + Sync {
     fn register_rpc_method(&self, _method: String, _handler: RpcHandler) -> Result<()> {
         Err(RtcError::Unsupported("register_rpc_method"))
     }
+
+    /// `publish_dtmf(code=, digit=)`: a keypad tone to the room's SIP participants.
+    async fn publish_dtmf(&self, _code: u32, _digit: String) -> Result<()> {
+        Err(RtcError::Unsupported("publish_dtmf"))
+    }
 }
 
 /// An open byte stream. `rtc.ByteStreamWriter`; `close` ends it (the stream's trailer).

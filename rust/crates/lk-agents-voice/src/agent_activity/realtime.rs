@@ -176,6 +176,11 @@ pub(crate) mod realtime_state {
             self.ended
         }
 
+        /// The model answers a tool result with a reply of its own.
+        pub fn auto_tool_reply(&self) -> bool {
+            self.caps.auto_tool_reply_generation
+        }
+
         /// `true` when this starts the close (it was not closing).
         pub fn begin_closing(&mut self) -> bool {
             !std::mem::replace(&mut self.closing, true)

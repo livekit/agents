@@ -647,6 +647,7 @@ impl Driver {
                 Timer::DtmfDebounce => {
                     self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Debounced, out)
                 }
+                Timer::EndCallReply => self.end_call_reply_timed_out(now, out),
                 // A realtime request the server never answered: the machine settles it.
                 Timer::RealtimeRequest(key) => self.realtime_request_timed_out(key, out),
                 Timer::Filler(id) => self.on_filler_timer(now, id, out),

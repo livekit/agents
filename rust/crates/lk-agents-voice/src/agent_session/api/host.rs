@@ -1116,6 +1116,14 @@ impl SessionApi {
             .is_some_and(|guard| guard.load(std::sync::atomic::Ordering::SeqCst))
     }
 
+    /// `EndCallTool`: close the session once `speech`, the tool's, is done (with what is left to
+    /// say), or once a realtime model's own reply to the tool result is.
+    #[host(method)]
+    pub fn end_call(&self, speech: &SpeechHandle) -> Result<(), SessionRefused> {
+        let Some(speech) = speech.created() else { return Ok(()) };
+        self.send(SpeechCommand::EndCall { speech })
+    }
+
     /// `sip_dtmf_received`: the raw `ev.digit`, for the running collection.
     #[host(method(send = DtmfCommand::Digit { digit }))]
     pub fn dtmf_digit(&self, digit: String) -> Result<(), SessionRefused>;

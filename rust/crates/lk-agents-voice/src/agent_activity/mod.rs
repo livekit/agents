@@ -76,6 +76,8 @@ pub(crate) struct AgentActivity {
     pub(crate) drain: crate::agent_activity::drain::Drain,
     /// DTMF collection while it runs.
     pub(crate) dtmf: crate::workflows::dtmf::Dtmf,
+    /// `EndCallTool`: the speech whose goodbye the session closes after.
+    pub(crate) end_call: Option<crate::workflows::end_call::EndCall>,
     /// The user turn parked on `on_user_turn_completed` (`_user_turn_completed_atask`).
     pub(crate) pending_turn: Option<crate::audio_recognition::PendingTurn>,
     /// So a preemptive generation can be keyed to the turn after it.

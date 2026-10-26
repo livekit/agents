@@ -260,6 +260,7 @@ impl AudioRecognition {
             | Timer::RealtimeRequest(_)
             | Timer::Filler(_)
             | Timer::DtmfDebounce
+            | Timer::EndCallReply
             | Timer::InterruptionTimeout(_)
             | Timer::ConsecutiveSpeechDelay => {}
         }

@@ -1,4 +1,22 @@
-//! The prompts the workflows speak with: the DTMF read-back and the warm transfer's.
+//! The prompts the workflows and tools speak with: `end_call`'s description, the DTMF read-back
+//! and the warm transfer's.
+
+/// `EndCallTool`'s description, before its `extra_description`.
+#[lk_agents_abi::host(export(name = "END_CALL_DESCRIPTION"))]
+pub const END_CALL_DESCRIPTION: &str = "
+Ends the current call and disconnects immediately.
+
+Call when:
+- The user clearly indicates they are done (e.g., “that’s all, bye”).
+
+Do not call when:
+- The user asks to pause, hold, or transfer.
+- Intent is unclear.
+
+This is the final action the agent can take.
+Once called, no further interaction is possible with the user.
+Don't generate any other text or response when the tool is called.
+";
 
 pub mod dtmf {
     //! DTMF reception and read-back.

@@ -186,7 +186,7 @@ impl Command {
         match self {
             Command::Speech(c) => leaf!(c; SpeechCommand: Say, GenerateReply, Interrupt,
                 InterruptSpeech, CommitUserTurn, WaitForIdle, WaitForIdleAndHold, ReleaseIdleHold, ClaimUserTurn,
-                ReleaseUserTurn, SetAllowInterruptions, SetRunOutput, ToolUpdate, FillerStart,
+                ReleaseUserTurn, SetAllowInterruptions, EndCall, SetRunOutput, ToolUpdate, FillerStart,
                 FillerStop, PauseAuthorization, ResumeAuthorization),
             Command::Activity(c) => leaf!(c; ActivityCommand: Update, UpdateInstructions,
                 UpdateTools, UpdateExpressive, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
@@ -349,6 +349,9 @@ pub enum SpeechCommand {
     ReleaseUserTurn,
     /// Refused quietly on a done handle.
     SetAllowInterruptions { speech: SpeechId, allow: bool },
+    /// `EndCallTool`: close the session once `speech` (the tool's) is done; on a realtime model
+    /// answering tool results by itself, once that answer is done.
+    EndCall { speech: SpeechId },
     /// an accepted output from `speech`'s tool: the run ending on that speech reads it as
     /// output.
     SetRunOutput { speech: SpeechId, output: crate::run_result::RunOutput },

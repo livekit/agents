@@ -56,6 +56,8 @@ TOOL_CALLS = [
     ("weather", "get_weather", lambda text: {"city": "Paris"}),
     ("billing", "to_billing", lambda text: {}),
     ("order", "look_up_order", lambda text: {}),
+    ("keypad", "send_dtmf_events", lambda text: {"events": ["1", "#"]}),
+    ("bye", "end_call", lambda text: {}),
 ]
 
 
@@ -1281,6 +1283,33 @@ class _FakeTransferHost:
         self.calls.append("delete caller room")
 
 
+async def tools() -> None:
+    """The prebuilt tools in a session: keypad tones published by the core, then ``end_call``,
+    after whose goodbye the core closes the session."""
+    from livekit.agents.beta.tools import EndCallTool, send_dtmf_events
+
+    print("== tools")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    closed: list[str] = []
+    session.on("close", lambda ev: closed.append(ev.reason.value))
+    agent = Agent(instructions="You answer the phone.", tools=[EndCallTool(), send_dtmf_events])
+    await session.start(agent, room=room)
+    session.generate_reply(user_input="press the keypad for me")
+    await settle(room, 1)
+    await asyncio.sleep(0.8)  # the tones are 0.3 s apart on the wall clock, as the reference's
+    await settle(room, 2)
+    print(f"dtmf published {room.dtmf_published()}")
+    assert room.dtmf_published() == [(1, "1"), (11, "#")], room.dtmf_published()
+    session.generate_reply(user_input="that's all, bye")
+    await settle(room, 6)
+    spoken = [text for topic, text in room.text_streams() if topic == "lk.transcription"]
+    print(f"closed {closed} after {spoken[-1]!r}")
+    assert closed == ["user_initiated"], closed
+    assert spoken[-1] == "The tool said: say goodbye to the user", spoken
+
+
 async def warm_transfer() -> None:
     """The warm transfer the core runs over a host: dialled over SIP and connected (the caller
     leaving then deletes their room), declined, and dialled through Twilio, whose rejected caller
@@ -1503,6 +1532,7 @@ async def main() -> int:
     await job()
     await workflows()
     await warm_transfer()
+    await tools()
     log_transport()
     return 0
 

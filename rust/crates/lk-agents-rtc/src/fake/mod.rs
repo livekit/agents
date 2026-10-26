@@ -443,6 +443,7 @@ struct LocalState {
     /// What the next `perform_rpc` answers; `(0, "")` when unset.
     rpc_reply: Option<(u32, String)>,
     rpc_handlers: HashMap<String, crate::RpcHandler>,
+    dtmf: Vec<(u32, String)>,
     fail_with: Option<RtcError>,
 }
 
@@ -460,6 +461,11 @@ impl FakeLocalParticipant {
 
     pub fn attributes(&self) -> HashMap<String, String> {
         self.state.lock().unwrap().attributes.clone()
+    }
+
+    /// Every keypad tone published, as `(code, digit)`.
+    pub fn dtmf_published(&self) -> Vec<(u32, String)> {
+        self.state.lock().unwrap().dtmf.clone()
     }
 
     /// Each call separately: the reference cancels an in-flight update, so the count matters.
@@ -550,6 +556,11 @@ impl FakeLocalParticipant {
 impl LocalParticipant for FakeLocalParticipant {
     fn kind(&self) -> ParticipantKind {
         ParticipantKind::Agent
+    }
+
+    async fn publish_dtmf(&self, code: u32, digit: String) -> Result<()> {
+        self.state.lock().unwrap().dtmf.push((code, digit));
+        Ok(())
     }
 
     fn identity(&self) -> ParticipantIdentity {

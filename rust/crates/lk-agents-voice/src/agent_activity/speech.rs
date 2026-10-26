@@ -193,6 +193,7 @@ impl Driver {
                 }
                 self.run_release(crate::run_result::Owned::Hold(hold), out);
             }
+            SpeechCommand::EndCall { speech } => self.end_call(speech),
             SpeechCommand::ClaimUserTurn => {
                 let (depth, eff) = self.session.states.claim_user_turn(now);
                 out.machine().append(eff);

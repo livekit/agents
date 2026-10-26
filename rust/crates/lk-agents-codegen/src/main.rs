@@ -131,6 +131,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
         "rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs",
         "lk_agents_voice::workflows::warm_transfer",
     ),
+    ("rust/crates/lk-agents-voice/src/workflows/prompts.rs", "lk_agents_voice::workflows::prompts"),
     ("rust/crates/lk-agents-abi/src/voice/workflows.rs", "lk_agents_abi::voice::workflows"),
     ("rust/crates/lk-agents-abi/src/voice/host_policy.rs", "lk_agents_abi::voice::host_policy"),
     ("rust/crates/lk-agents-inference/src/llm/models.rs", "lk_agents_inference::llm::models"),

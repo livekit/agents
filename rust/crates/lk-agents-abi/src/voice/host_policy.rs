@@ -1,22 +1,5 @@
-//! Decisions for host-executed tools and gateway requests.
+//! Decisions for gateway requests.
 use serde_json::{Map, Value};
-
-#[crate::host(export)]
-pub fn end_call_wait(realtime: bool, auto_reply: bool) -> Option<f64> {
-    (realtime && auto_reply).then_some(5.0)
-}
-
-/// `voice/_dtmf.py`'s publish delay, as the module constant the host reads.
-#[crate::host(export(name = "DTMF_PUBLISH_DELAY"))]
-pub const DTMF_PUBLISH_DELAY: f64 = 0.3;
-/// `send_dtmf_events`' answer to the model: the events sent, or the one that failed and why.
-#[crate::host(export(name = "dtmf_result", pid = false))]
-pub fn dtmf_result_for_host(events: Vec<String>, #[host(required)] failure: Option<(String, String)>) -> String {
-    match failure {
-        Some((event, error)) => format!("Failed to send DTMF event: {event}. Error: {error}"),
-        None => format!("Successfully sent DTMF events: {}", events.join(", ")),
-    }
-}
 
 /// `"provider"` or `"provider/<id>"`, trimmed; anything else is refused naming the string.
 #[crate::host(export(name = "avatar_model", pid = false))]
@@ -67,20 +50,6 @@ pub fn avatar_payload(
 mod tests {
     use super::*;
     use serde_json::json;
-    #[test]
-    fn tool_policies() {
-        assert_eq!(end_call_wait(true, true), Some(5.0));
-        assert_eq!(end_call_wait(true, false), None);
-        assert_eq!(end_call_wait(false, true), None);
-        assert_eq!(
-            dtmf_result_for_host(vec!["1".into(), "#".into()], None),
-            "Successfully sent DTMF events: 1, #"
-        );
-        assert_eq!(
-            dtmf_result_for_host(vec![], Some(("1".into(), "offline".into()))),
-            "Failed to send DTMF event: 1. Error: offline"
-        );
-    }
     #[test]
     fn avatar_request_options() {
         assert_eq!(

@@ -308,21 +308,10 @@ pub fn TWILIO_RINGING_TIMEOUT() -> f64 {
     lk_agents_voice::workflows::warm_transfer::TWILIO_RINGING_TIMEOUT
 }
 
-#[napi(js_name = "endCallWait")]
-pub fn end_call_wait(realtime: bool, auto_reply: bool) -> Option<f64> {
-    lk_agents_abi::voice::host_policy::end_call_wait(realtime, auto_reply)
-}
-
-/// `voice/_dtmf.py`'s publish delay, as the module constant the host reads.
-#[napi(js_name = "DTMF_PUBLISH_DELAY")]
-pub fn DTMF_PUBLISH_DELAY() -> f64 {
-    lk_agents_abi::voice::host_policy::DTMF_PUBLISH_DELAY
-}
-
-/// `send_dtmf_events`' answer to the model: the events sent, or the one that failed and why.
-#[napi(js_name = "dtmfResult")]
-pub fn dtmf_result(events: Vec<String>, failure: Option<(String, String)>) -> String {
-    lk_agents_abi::voice::host_policy::dtmf_result_for_host(events, failure)
+/// `EndCallTool`'s description, before its `extra_description`.
+#[napi(js_name = "END_CALL_DESCRIPTION")]
+pub fn END_CALL_DESCRIPTION() -> String {
+    lk_agents_voice::workflows::prompts::END_CALL_DESCRIPTION.to_string()
 }
 
 /// `"provider"` or `"provider/<id>"`, trimmed; anything else is refused naming the string.

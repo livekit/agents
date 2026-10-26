@@ -500,6 +500,37 @@ impl Driver {
     }
 }
 
+/// The pause between two published keypad tones.
+pub const DTMF_PUBLISH_DELAY: Duration = Duration::from_millis(300);
+
+/// `send_dtmf_events(events)`: each key published as a keypad tone in `room`, 0.3 s apart; the
+/// answer to the model names the keys sent, or the first that failed and why.
+#[lk_agents_abi::host(export)]
+pub async fn send_dtmf_events(
+    room: std::sync::Arc<dyn lk_agents_rtc::RtcRoom>,
+    events: Vec<String>,
+    #[host(ambient)] clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
+) -> String {
+    for event in &events {
+        let sent = match DtmfEvent::parse(event) {
+            Some(key) => room
+                .local()
+                .publish_dtmf(u32::from(dtmf_event_to_code(key)), event.clone())
+                .await
+                .map_err(|err| match err {
+                    lk_agents_rtc::RtcError::Host(host) => host.message,
+                    other => other.to_string(),
+                }),
+            None => Err(format!("unknown DTMF symbol {event:?}")),
+        };
+        if let Err(error) = sent {
+            return format!("Failed to send DTMF event: {event}. Error: {error}");
+        }
+        clock.wait_until(clock.now().saturating_add(DTMF_PUBLISH_DELAY)).await;
+    }
+    format!("Successfully sent DTMF events: {}", events.join(", "))
+}
+
 /// Why [`receive_dtmf`] stopped short.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[lk_agents_abi::host(error(kind = "livekit.agents.llm.tool_context.ToolError"))]
@@ -524,6 +555,7 @@ pub async fn receive_dtmf(
     num_digits: usize,
     timeout: f64,
     stop_event: String,
+    #[host(ambient)] clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
 ) -> Result<DtmfResult, ReceiveDtmfError> {
     use lk_agents_abi::evals::transcript::py_repr;
     if num_digits == 0 {
@@ -538,9 +570,9 @@ pub async fn receive_dtmf(
     loop {
         let next = match deadline {
             None => events.recv().await,
-            Some(at) => match tokio::time::timeout_at(at, events.recv()).await {
-                Ok(next) => next,
-                Err(_) => break,
+            Some(at) => tokio::select! {
+                next = events.recv() => next,
+                _ = clock.wait_until(at) => break,
             },
         };
         let Some(event) = next else { break };
@@ -554,7 +586,7 @@ pub async fn receive_dtmf(
         if digits.len() == num_digits {
             break;
         }
-        deadline = Some(tokio::time::Instant::now() + gap);
+        deadline = Some(clock.now().saturating_add(gap));
     }
     if digits.len() != num_digits {
         return Err(ReceiveDtmfError::Incomplete(num_digits, digits.len()));

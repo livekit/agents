@@ -1,8 +1,9 @@
-//! `beta/workflows`: the checks a capture tool runs on what the model heard (card numbers and
-//! expiries, dates of birth, email addresses, phone numbers), DTMF reception, and the warm
-//! transfer.
+//! `beta/workflows` and `beta/tools`: the checks a capture tool runs on what the model heard
+//! (card numbers and expiries, dates of birth, email addresses, phone numbers), DTMF reception and
+//! sending, the warm transfer, and the call ended after its goodbye.
 
 pub mod dtmf;
+pub mod end_call;
 pub mod instructions;
 pub mod prompts;
 pub mod warm_transfer;

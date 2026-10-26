@@ -318,6 +318,8 @@ pub enum Timer {
     Filler(crate::filler_scheduler::FillerId),
     /// Re-armed by every digit, cancelled while either side speaks.
     DtmfDebounce,
+    /// An ended call's realtime reply to the tool result has not started yet.
+    EndCallReply,
     /// An interrupted speech that never reported its end is released (`SpeechHandle._cancel`).
     InterruptionTimeout(SpeechId),
     /// `min_consecutive_speech_delay` ran out.
@@ -510,6 +512,7 @@ impl Driver {
     pub(crate) fn on_session_edge(&mut self, now: Ts, ev: &SessionEvent, out: &mut Out) {
         // A DTMF collection reads the same edges (and its read-back's end) off the same events.
         self.dtmf_on_event(ev, out);
+        self.end_call_on_event(now, ev, out);
         match ev {
             SessionEvent::StartOfSpeech(e) => {
                 out.machine()

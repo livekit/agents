@@ -212,6 +212,9 @@ class LocalParticipant:
         except rtc.RpcError as e:
             return e.code, e.message
 
+    async def _core_publish_dtmf(self, code: int, digit: str) -> None:
+        await self._participant.publish_dtmf(code=code, digit=digit)
+
     def _core_register_rpc_method(self, method: str, handler: Any) -> None:
         self._participant.register_rpc_method(
             method, lambda data: handler.call(data.caller_identity, data.payload)
