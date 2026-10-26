@@ -206,6 +206,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._options = _core.SessionOptions(
             {**_OPTION_DEFAULTS, **options, "deprecated": deprecated, "conn_options": conn_options}
         )
+        stt_context = options.get("stt_context_options", options.get("keyterms_options"))
+        self._stt_context = stt_context if is_given(stt_context) else None
 
         self._stt = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt or None
         self._llm = inference.llm_from_model_string(llm) if isinstance(llm, str) else llm or None
@@ -418,6 +420,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             and self._turn_detector.streaming,
             hook_bound=_HOOK_BOUND,
             max_unrecoverable_errors=self._conn_options.max_unrecoverable_errors,
+            stt_context=self._stt_context,
             **{node: frame[node] for node in _NODES if node in frame},
         )
         self._agent = agent

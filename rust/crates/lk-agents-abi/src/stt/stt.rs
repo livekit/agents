@@ -120,6 +120,11 @@ pub trait Stt: Send + Sync {
     /// keyterms. The default drops it; an adapter forwards it.
     fn update_keyterms(&self, _keyterms: &[String]) {}
 
+    /// `STT._push_conversation_item`: a conversation turn's role and text, which an STT with the
+    /// `chat_context` capability uses to bias recognition. The default drops it; an adapter
+    /// forwards it.
+    fn push_conversation_item(&self, _role: &str, _text: &str) {}
+
     /// A view of this provider whose calls carry `conn` -- how a fallback chain gives each entry
     /// its per-attempt retry budget and timeout. `None`: the provider takes no per-call options,
     /// and the chain uses it as it is.

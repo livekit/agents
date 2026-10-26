@@ -53,6 +53,9 @@ pub struct DriverBuilder {
     pub stt: Option<Arc<dyn Stt>>,
     /// `None`: nothing is pushed.
     pub keyterms: Option<crate::keyterm_detection::KeytermSetup>,
+    /// `stt_context_options["forward_chat_context"]`: conversation turns reach an STT with the
+    /// `chat_context` capability.
+    pub forward_chat_context: bool,
     pub vad: Option<Arc<dyn Vad>>,
     pub audio_in: Option<Arc<dyn AudioInput>>,
     pub video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
@@ -80,6 +83,7 @@ impl DriverBuilder {
     /// `async` because the provider factories must run on the host loop.
     pub async fn start(mut self) -> Result<(crate::runtime::Runtime, SessionHandle), DriverError> {
         let keyterms = self.keyterms.take();
+        let forward_chat_context = self.forward_chat_context;
         // An advertised tool with nothing to run it is refused here, not at the first call.
         if !self.toolset.specs.is_empty() && self.toolset.runner.is_none() {
             return Err(DriverError::Missing("tool_runner"));
@@ -417,6 +421,7 @@ impl DriverBuilder {
             }
             driver.execute(out);
         }
+        driver.session.forward_chat_context = forward_chat_context;
         // `KeytermDetector.start`: the static terms reach the recogniser now.
         if let Some(setup) = keyterms {
             let mut out = driver.out();

@@ -149,6 +149,8 @@ impl SessionApi {
             Some(o) => (o.session_patch(), o.take_diagnostics()),
             None => (crate::agent_activity::options::SessionPatch::default(), Vec::new()),
         };
+        let forward_chat_context =
+            stt_context.as_ref().and_then(|cfg| cfg.forward_chat_context).unwrap_or(true);
         let keyterms = stt_context.map(|cfg| crate::keyterm_detection::KeytermSetup {
             detection: crate::keyterm_detection::resolve_detection(cfg.keyterm_detection.as_ref()),
             static_keyterms: cfg.keyterms.unwrap_or_default(),
@@ -289,6 +291,7 @@ impl SessionApi {
             tts,
             stt,
             keyterms,
+            forward_chat_context,
             vad,
             tts_text_transforms: tts_text_transforms.map(|t| t.0).unwrap_or_default(),
             audio_in: host_audio_input.or_else(|| room_io.audio_input()),

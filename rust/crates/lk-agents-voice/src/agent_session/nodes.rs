@@ -174,6 +174,10 @@ impl Stt for Node<dyn Stt> {
         self.below.update_keyterms(keyterms);
     }
 
+    fn push_conversation_item(&self, role: &str, text: &str) {
+        self.below.push_conversation_item(role, text);
+    }
+
     /// `stt_node` is a stream; a batch recognition is the provider's.
     async fn recognize(
         &self,

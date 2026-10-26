@@ -344,6 +344,10 @@ impl Stt for NativeStt {
         self.update_keyterms_for_host(keyterms.to_vec());
     }
 
+    fn push_conversation_item(&self, role: &str, text: &str) {
+        NativeStt::push_conversation_item(self, role, text);
+    }
+
     fn capabilities(&self) -> SttCapabilities {
         *self.capabilities.lock().unwrap()
     }
@@ -919,6 +923,35 @@ mod tests {
         assert_eq!(updates.len(), 2, "{updates:?}");
         assert_eq!(updates[0]["settings"]["extra"]["endpointing"], json!(300), "{updates:?}");
         assert_eq!(updates[1]["settings"]["extra"]["keyterm"], json!(["LiveKit"]), "{updates:?}");
+    }
+
+    // Catches: a user turn forwarded, a model without context carry-over sent one, or the
+    // context not cut to its tail.
+    #[tokio::test]
+    async fn an_assistant_turn_reaches_an_open_stream_as_agent_context() {
+        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+        let mut opts = opts();
+        opts.model = Some("assemblyai/universal-3-6-pro".into());
+        let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
+        let stt = NativeStt::new(opts, ws.clone(), spawner);
+        let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+        Stt::push_conversation_item(&stt, "user", "hello");
+        Stt::push_conversation_item(&stt, "assistant", &"x".repeat(2000));
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+        let updates: Vec<_> =
+            ws.sent_json().into_iter().filter(|f| f["type"] == json!("session.update")).collect();
+        assert_eq!(updates.len(), 1, "{updates:?}");
+        let context = updates[0]["settings"]["extra"]["agent_context"].as_str().unwrap();
+        assert_eq!(context.len(), MAX_AGENT_CONTEXT_CHARS);
+
+        let plain = stt_once(Arc::new(FakeWs::new(vec![]).keep_open()));
+        Stt::push_conversation_item(&plain, "assistant", "hi");
+        assert!(plain.opts.lock().unwrap().extra_kwargs.get("agent_context").is_none());
     }
 
     // Catches: transcripts of a stream opened mid-input left at zero on the caller's timeline.

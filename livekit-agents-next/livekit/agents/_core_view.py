@@ -76,6 +76,12 @@ class _Stt(_Provider):
     def _core_update_keyterms(self, keyterms: list[str]) -> None:
         self._obj._update_session_keyterms(keyterms)
 
+    def _core_push_conversation_item(self, role: str, text: str) -> None:
+        from .voice.events import ConversationItemAddedEvent
+
+        item = llm.ChatMessage(role=role, content=[text])  # type: ignore[arg-type]
+        self._obj._push_conversation_item(ConversationItemAddedEvent(item=item))
+
     async def _core_recognize(self, buffer: list[Any], language: str | None) -> stt.SpeechEvent:
         return await self._obj.recognize(
             buffer, language=language or NOT_GIVEN, conn_options=self._conn

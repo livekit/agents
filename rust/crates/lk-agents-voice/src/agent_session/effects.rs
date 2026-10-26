@@ -551,11 +551,28 @@ impl Driver {
             | SessionEvent::Close { .. } => {}
             // `_on_conversation_item_added`: the keyterm pass's turn gate.
             SessionEvent::ConversationItemAdded { item, .. } => {
+                self.forward_chat_context(item);
                 if self.session.keyterms.is_some() {
                     let item = (**item).clone();
                     self.keyterms_on_item(now, &item, out);
                 }
             }
+        }
+    }
+
+    /// `stt._push_conversation_item` on `conversation_item_added`: a message's role and text reach
+    /// an STT that consumes conversation context, unless `forward_chat_context` is off.
+    fn forward_chat_context(&self, item: &lk_agents_abi::ChatItem) {
+        if !self.session.forward_chat_context {
+            return;
+        }
+        let Some(message) = item.as_message() else { return };
+        let Some(text) = message.text_content().filter(|t| !t.is_empty()) else { return };
+        let Some(stt) = self.session.stt.as_ref().and_then(|s| self.shared.resources.stt(s.id)) else {
+            return;
+        };
+        if stt.capabilities().chat_context {
+            stt.push_conversation_item(message.role.as_str(), &text);
         }
     }
 

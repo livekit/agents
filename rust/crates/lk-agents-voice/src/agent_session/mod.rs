@@ -73,6 +73,8 @@ pub(crate) struct LiveSession {
     pub(crate) tools: crate::tool_executor::SessionTools,
     pub(crate) tool_hosts: Vec<lk_agents_abi::HostRef>,
     pub(crate) keyterms: Option<crate::keyterm_detection::KeytermSlot>,
+    /// `stt_context_options["forward_chat_context"]` (default on).
+    pub(crate) forward_chat_context: bool,
     pub(crate) start_options: StartOptions,
     pub(crate) room: crate::room_io::link::RoomLink,
     /// `_closing_task`: `_aclose_impl` in flight.
@@ -147,6 +149,7 @@ impl LiveSession {
             tools: Default::default(),
             tool_hosts: Vec::new(),
             keyterms: None,
+            forward_chat_context: true,
             start_options,
             room: crate::room_io::link::RoomLink::new(room_link),
             closing: None,

@@ -478,6 +478,13 @@ impl Stt for FallbackStt {
         }
     }
 
+    /// Every member (`fallback_adapter.py:134`), as keyterms.
+    fn push_conversation_item(&self, role: &str, text: &str) {
+        for entry in self.chain.entries() {
+            entry.inner().push_conversation_item(role, text);
+        }
+    }
+
     fn capabilities(&self) -> SttCapabilities {
         self.capabilities
     }
