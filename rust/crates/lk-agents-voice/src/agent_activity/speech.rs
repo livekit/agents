@@ -262,7 +262,7 @@ impl Driver {
             SpeechCommand::SetRunOutput { speech, output } => {
                 let ok = matches!(output, crate::run_result::RunOutput::Value(_));
                 out.trace(HandoffStep::RunOutput { speech, ok });
-                self.session.runs.record_output(speech, output);
+                self.session.runs.outputs.insert(speech, output);
             }
             // The AMD system's authorization hold: the scheduling task keeps its head.
             SpeechCommand::PauseAuthorization => {

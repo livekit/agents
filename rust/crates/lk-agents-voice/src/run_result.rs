@@ -75,7 +75,7 @@ pub(super) struct Runs {
     open: Option<OpenRun>,
     next: u64,
     /// accepted output's value by the speech whose tool called it, until that speech ends.
-    outputs: BTreeMap<SpeechId, RunOutput>,
+    pub(crate) outputs: BTreeMap<SpeechId, RunOutput>,
     /// A release happened since the last `decide`: the check is due.
     dirty: bool,
 }
@@ -133,15 +133,6 @@ impl Runs {
         }
         self.dirty = true;
         Some(r.run.id)
-    }
-
-    pub(super) fn record_output(&mut self, speech: SpeechId, output: RunOutput) {
-        self.outputs.insert(speech, output);
-    }
-
-    /// A speech left the loop outside any run: its recorded output goes with it.
-    pub(super) fn forget_speech(&mut self, speech: SpeechId) {
-        self.outputs.remove(&speech);
     }
 
     /// The verdict, once nothing is owned and something was released (`_mark_done_if_needed`).
@@ -249,7 +240,10 @@ impl Driver {
         let what = Owned::Speech(handle.id());
         match self.session.runs.release(what, Some(handle)) {
             Some(run) => out.trace(HandoffStep::RunReleased { run, what }),
-            None => self.session.runs.forget_speech(handle.id()),
+            // Outside any run: its recorded output goes with it.
+            None => {
+                self.session.runs.outputs.remove(&handle.id());
+            }
         }
     }
 
