@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import weakref
 from collections.abc import Callable, Generator
 
 from .. import _core, llm
@@ -10,11 +11,19 @@ from .. import _core, llm
 class SpeechHandle:
     """One speech of the session, over the core's handle: its state is the core's, and awaiting
     it waits for the core to finish playing it out. Awaiting never raises; read
-    ``exception()`` for a failure."""
+    ``exception()`` for a failure. The core hands this object back wherever the speech is named
+    (``speech_created``, a tool's ``RunContext``), for as long as it lives."""
 
     def __init__(self, core: _core.SpeechHandle) -> None:
         self._core = core
         self._callbacks: set[asyncio.Task[None]] = set()
+        core.host = weakref.ref(self)
+
+    @staticmethod
+    def _of(core: _core.SpeechHandle) -> SpeechHandle:
+        """The handle over ``core``: the one already made, else a new one."""
+        ref = core.host
+        return (ref() if ref is not None else None) or SpeechHandle(core)
 
     @property
     def id(self) -> str:

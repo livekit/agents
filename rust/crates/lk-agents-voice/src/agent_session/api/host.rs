@@ -12,7 +12,7 @@ use crate::agent_activity::DriverConfig;
 use crate::agent_session::DriverBuilder;
 use crate::agent_session::commands::{
     ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId, HookId, HookOutcome,
-    HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand,
+    HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCall, SpeechCommand,
     ToolUpdate, TurnCommand,
 };
 use crate::agent_session::nodes::Nodes;
@@ -372,7 +372,7 @@ impl SessionApi {
         let events = self.host.events.clone();
         let anchor = self.anchor;
         let agents = self.agents.clone();
-        // The drain: one event per call, in driver order, then one last word.
+        // The drain: one event per call, in driver order.
         let opening = self.open(capture_run, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 let api = runner.api().clone();
@@ -383,10 +383,7 @@ impl SessionApi {
                         events.event(&wire);
                     }
                 }
-                // Dropping the runner after it tells `aclose()` the host has seen everything.
-                if let Some(events) = &events {
-                    events.stream_closed(&lk_agents_abi::voice::events::StreamClosedWire {});
-                }
+                // Dropping the runner tells `aclose()` the host has seen everything.
             })
         })?;
         Ok(Reply::new(async move { opening.await.map_err(StartFailed) }))
@@ -631,9 +628,14 @@ impl SessionApi {
         // An empty toolset would tell the model about no tool at all; `None` keeps the agent's.
         let toolset =
             tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, tool_runner)));
-        let (call, rx) = self.call(Answer::speech)?;
-        let speech =
-            crate::speech_handle::HostSpeech::pending(self.api()?, rx, allow_interruptions);
+        let (id, rx) = self.call(Answer::speech)?;
+        let host = crate::speech_handle::HostSlot::default();
+        let speech = crate::speech_handle::HostSpeech::pending(
+            self.api()?,
+            rx,
+            allow_interruptions,
+            host.clone(),
+        );
         self.send_from(
             origin,
             SpeechCommand::GenerateReply {
@@ -644,7 +646,7 @@ impl SessionApi {
                 chat_ctx: chat_ctx.map(lk_agents_abi::ChatContext::new),
                 toolset,
                 on_enter,
-                call: Some(call),
+                call: Some(SpeechCall { id, host }),
             },
         )?;
         Ok(speech)

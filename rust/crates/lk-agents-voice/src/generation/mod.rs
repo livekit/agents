@@ -652,11 +652,15 @@ pub struct ReplyContext {
 }
 
 /// The agent's `@agent.instructions` functions, rendered by the host for each model request of a
-/// reply (`Agent._render_dynamic_instructions`). `speech_id` is the reply's.
+/// reply (`Agent._render_dynamic_instructions`). `speech` is the reply's, as the host's
+/// `SpeechHandle` sees it.
 #[lk_agents_abi::host(proxy(host = "livekit.agents.voice.agent_session._DynamicInstructions"))]
 #[async_trait::async_trait]
 pub trait HostInstructions: Send + Sync {
-    async fn render(&self, speech_id: u64) -> Result<String, lk_agents_abi::errors::HostError>;
+    async fn render(
+        &self,
+        speech: &lk_agents_abi::CoreObject,
+    ) -> Result<String, lk_agents_abi::errors::HostError>;
 }
 
 /// `dynamic` appended to the request's prompt, as `Agent._render_instructions` joins them.

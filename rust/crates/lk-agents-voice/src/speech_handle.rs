@@ -42,6 +42,37 @@ pub struct HostSpeech {
     api: Api,
     /// A detached handle's id, given at construction; a loop-created speech's id is its own.
     detached_id: String,
+    /// The host's object for the speech, shared with the speech the loop creates for this handle.
+    host: HostSlot,
+}
+
+/// The host's own object for one speech (its `SpeechHandle`), so every event, tool and hook that
+/// names the speech hands back the object `say()` / `generate_reply()` returned. Shared by the
+/// handle returned before the loop created the speech and the speech the loop then creates.
+#[derive(Clone, Default)]
+pub struct HostSlot(Arc<Mutex<Option<lk_agents_abi::HostRef>>>);
+
+impl HostSlot {
+    pub fn get(&self) -> Option<lk_agents_abi::HostRef> {
+        lock(&self.0).clone()
+    }
+
+    pub fn set(&self, host: lk_agents_abi::HostRef) {
+        *lock(&self.0) = Some(host);
+    }
+}
+
+impl std::fmt::Debug for HostSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HostSlot")
+    }
+}
+
+/// Two calls' slots are the same slot.
+impl PartialEq for HostSlot {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// A refusal on a host's speech handle; each `Display` is the `RuntimeError` it raises.
@@ -94,17 +125,20 @@ impl<'py> pyo3::IntoPyObject<'py> for SpeechException {
 }
 
 impl HostSpeech {
+    /// `host` goes to the loop with the command, which hands it to the speech it creates.
     pub fn pending(
         api: Api,
         rx: tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>,
         requested_allow: Option<bool>,
+        host: HostSlot,
     ) -> Self {
         let promise = SpeechPromise::pending(rx, requested_allow);
-        HostSpeech { promise: Arc::new(promise), api, detached_id: String::new() }
+        HostSpeech { promise: Arc::new(promise), api, detached_id: String::new(), host }
     }
 
     pub fn from_core(handle: Arc<SpeechHandle>, api: Api) -> Self {
         HostSpeech {
+            host: handle.host_slot(),
             promise: Arc::new(SpeechPromise::ready(handle)),
             api,
             detached_id: String::new(),
@@ -134,7 +168,21 @@ impl HostSpeech {
             promise: Arc::new(SpeechPromise::detached(allow_interruptions)),
             api: crate::agent_session::Tx::disconnected(),
             detached_id: speech_id,
+            host: HostSlot::default(),
         }
+    }
+
+    /// The host's object for this speech, as it set it; `None` until then.
+    #[host(getter)]
+    pub fn host(&self) -> Option<lk_agents_abi::HostRef> {
+        self.host.get()
+    }
+
+    /// Set by the host when it creates its handle over this one: from then on every event, tool
+    /// and hook naming the speech hands back this object.
+    #[host(setter)]
+    pub fn set_host(&self, host: lk_agents_abi::HostRef) {
+        self.host.set(host);
     }
 
     /// `speech_handle.id`. Empty until the loop has minted `speech_{n}`; a detached handle answers
@@ -404,6 +452,8 @@ struct Inner {
     watchdog_armed: bool,
     /// The metrics of the user turn a preemptive reply was adopted for.
     user_metrics: Option<lk_agents_abi::MetricsReport>,
+    /// The host's object for the speech.
+    host: HostSlot,
 }
 
 pub struct SpeechHandle {
@@ -460,12 +510,24 @@ impl SpeechHandle {
                 tasks: Vec::new(),
                 watchdog_armed: false,
                 user_metrics: None,
+                host: HostSlot::default(),
             }),
         }
     }
 
     pub fn id(&self) -> SpeechId {
         self.id
+    }
+
+    /// The host's object for the speech, shared with the handle the host was answered with.
+    pub fn host_slot(&self) -> HostSlot {
+        lock(&self.inner).host.clone()
+    }
+
+    /// The slot the host's command brought: set before the speech is first announced, so the
+    /// announcement already names the host's object.
+    pub fn adopt_host(&self, slot: HostSlot) {
+        lock(&self.inner).host = slot;
     }
 
     /// `SpeechHandle.id`: `speech_{n}`.

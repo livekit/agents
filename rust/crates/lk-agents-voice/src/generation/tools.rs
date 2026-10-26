@@ -80,6 +80,7 @@ impl ToolStep {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let one = call.clone();
                 let handle = Arc::clone(handle);
+                let host_speech = crate::speech_handle::HostSpeech::object(&handle, &shared.api);
                 let spawner = Arc::clone(&shared.spawner);
                 let shared = Arc::clone(shared);
                 // Deferred starts are reported in the model's order.
@@ -108,7 +109,7 @@ impl ToolStep {
                     // The host reports, the driver decides (`decide`).
                     let outcome = match work {
                         Ok(runner) => crate::tool_executor::decide(
-                            runner.run(one.clone(), speech, step).await,
+                            runner.run(one.clone(), host_speech, step).await,
                         ),
                         // Never run: answered in the reference executor's words so the model corrects.
                         Err(available) => ToolOutcome::Error(

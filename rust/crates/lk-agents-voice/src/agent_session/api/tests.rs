@@ -244,13 +244,13 @@ fn say_from(
     tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>,
 ) {
     let (words, rx) = tokio::sync::mpsc::channel(4);
-    let (call, answer) = api.call(Answer::speech).expect("the loop runs");
+    let (id, answer) = api.call(Answer::speech).expect("the loop runs");
     let text = SayText::Audio { text: "Hello there.".into(), rx };
     let say = SpeechCommand::Say {
         text,
         allow_interruptions: None,
         add_to_chat_ctx: true,
-        call: Some(call),
+        call: Some(crate::agent_session::SpeechCall { id, host: Default::default() }),
     };
     api.send_from(origin, say).expect("the loop runs");
     (words, answer)
@@ -361,7 +361,12 @@ async fn a_held_say_interrupted_before_the_swap_does_not_play() {
     let (api, mut exits) = session_holding_exits().await;
     let (words, swap) = handoff_draining(&api, &mut exits).await;
     let (_held, answer) = say_from(&api, Origin::Host);
-    let host = crate::speech_handle::HostSpeech::pending(api.api().expect("runs"), answer, None);
+    let host = crate::speech_handle::HostSpeech::pending(
+        api.api().expect("runs"),
+        answer,
+        None,
+        Default::default(),
+    );
     let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
     host.interrupt(false, spawner).expect("an interruptible say");
     assert!(host.interrupted(), "the interrupt is the handle's at once");

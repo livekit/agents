@@ -233,7 +233,7 @@ impl Driver {
                     },
                     out,
                 );
-                self.answer(call, Answer::Speech(h));
+                self.answer_speech(call, h);
             }
             SpeechCommand::GenerateReply {
                 user_input,
@@ -256,7 +256,7 @@ impl Driver {
                     on_enter,
                     out,
                 );
-                self.answer(call, Answer::Speech(h));
+                self.answer_speech(call, h);
             }
             // accepted output from a speech's tool: recorded for the run that ends on it.
             SpeechCommand::SetRunOutput { speech, output } => {

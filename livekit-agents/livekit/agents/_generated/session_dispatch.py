@@ -88,6 +88,5 @@ EVENT_KINDS: frozenset[str] = frozenset(
         "participant_unlinked",
         "text_input",
         "delete_room_requested",
-        "stream_closed",
     }
 )

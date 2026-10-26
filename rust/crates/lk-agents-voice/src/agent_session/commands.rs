@@ -124,6 +124,14 @@ pub struct CommitSuperseded;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(pub u64);
 
+/// A `say()` / `generate_reply()` the host awaits: its call, and the slot for the host's object,
+/// which the speech created for it takes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeechCall {
+    pub id: RequestId,
+    pub host: crate::speech_handle::HostSlot,
+}
+
 /// What an awaited command is answered with, once, on the session's answer stream.
 #[derive(Debug)]
 pub enum Answer {
@@ -294,7 +302,7 @@ pub enum SpeechCommand {
         /// `None` takes the session default.
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        call: Option<RequestId>,
+        call: Option<SpeechCall>,
     },
     GenerateReply {
         /// `None` replies to the context as it stands.
@@ -310,7 +318,7 @@ pub enum SpeechCommand {
         /// Whole, because specs, host objects and runner must agree.
         toolset: Option<Arc<Toolset>>,
         on_enter: bool,
-        call: Option<RequestId>,
+        call: Option<SpeechCall>,
     },
     /// A pending preemptive generation is dropped; the current speech is interrupted (a refusal is
     /// the whole answer); the socket is told once; the queue is walked in pop order up to the first

@@ -84,7 +84,8 @@ async fn perform_llm_inference(
     let mut chat_ctx = ctx.request.chat_ctx.clone();
     // Rendered per request, so a tool's state change reaches the step after it.
     if let Some(dynamic) = &ctx.providers.dynamic_instructions {
-        match dynamic.render(handle.id().0).await {
+        let speech = crate::speech_handle::HostSpeech::object(handle, &shared.api);
+        match dynamic.render(&speech).await {
             Ok(text) => crate::generation::append_instructions(&mut chat_ctx, &text),
             Err(e) => {
                 log::error!(target: "livekit.agents", "the agent's instructions functions failed; the static instructions are sent: {e}")

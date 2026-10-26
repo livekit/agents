@@ -413,7 +413,6 @@ impl SessionEvents for WireSink {
         let (Some(host), Some(event)) = (&self.console, console_event(wire)) else { return };
         let _ = host.send_wire(event, Some(self.time.wall_secs()));
     }
-    fn stream_closed(&self, _wire: &lk_agents_abi::voice::events::StreamClosedWire) {}
 }
 
 /// `ConsoleCall.forward` and `_tools_executed`: the events the CLI renders, in its shapes.

@@ -7,7 +7,7 @@ use crate::agent_activity::options::{
 };
 use crate::agent_session::builder::DriverBuilder;
 use crate::agent_session::commands::{
-    AgentUpdate, Answer, Close, Command, HostRecorder, Origin, RecorderCommand, RequestId, SayText,
+    AgentUpdate, Answer, Close, Command, HostRecorder, Origin, RecorderCommand, RequestId, SayText, SpeechCall,
     SpeechCommand,
 };
 use crate::agent_session::driver::{DriverError, PeerHandle, Rx, SessionHandle, Tx, start_ivr};
@@ -486,10 +486,15 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<crate::speech_handle::HostSpeech, CommandRefused> {
         let origin = origin_of(origin)?;
-        let (call, rx) = self.call(Answer::speech)?;
-        let speech =
-            crate::speech_handle::HostSpeech::pending(self.api()?, rx, allow_interruptions);
-        let call = Some(call);
+        let (id, rx) = self.call(Answer::speech)?;
+        let host = crate::speech_handle::HostSlot::default();
+        let speech = crate::speech_handle::HostSpeech::pending(
+            self.api()?,
+            rx,
+            allow_interruptions,
+            host.clone(),
+        );
+        let call = Some(SpeechCall { id, host });
         self.send_from(
             origin,
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call },
@@ -740,9 +745,6 @@ fn origin_of(origin: Option<&str>) -> Result<Origin, CommandRefused> {
 #[lk_agents_abi::host(proxy)]
 pub trait SessionEvents: Send + Sync {
     fn event(&self, wire: &HostWire);
-    /// The stream has ended: said once, so a host awaiting a `speech_done` that can no longer come
-    /// is released.
-    fn stream_closed(&self, wire: &lk_agents_abi::voice::events::StreamClosedWire);
 }
 
 /// Timers and playout must share one clock: a fake room brings its own virtual clock, a host

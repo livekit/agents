@@ -30,6 +30,8 @@
 //! - `lk_agents_voice::agent_activity::options::HostOptions::new`: field `mode`: `EndpointingMode` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::agent_activity::options::HostOptions::update`: field `mode`: `EndpointingMode` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::agent_activity::options::HostOptions::resolved`: field `detector`: `lk_agents_abi::voice::session_options::DetectorKind` has no Node shape (not a declared record, enum or JSON)
+//! - `lk_agents_voice::speech_handle::HostSpeech::host`: return: not yet: a `HostRef` (a host object in the side table)
+//! - `lk_agents_voice::speech_handle::HostSpeech::set_host`: parameter `host`: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_voice::speech_handle::HostSpeech::chat_items`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::speech_handle::HostSpeech::exception`: return: `SpeechException` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::speech_handle::HostSpeech::interrupt`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)

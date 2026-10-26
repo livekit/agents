@@ -1320,6 +1320,49 @@ async def sc_live_transcript(call: Call) -> None:
     await _close(call)
 
 
+async def sc_speech_identity(call: Call) -> None:
+    """One speech, one handle: what `say()` and `generate_reply()` return is what
+    `speech_created` carries and what the speech's tool reads as `ctx.speech_handle`; the reply to
+    a user turn's tool reads the handle `speech_created` carried."""
+    from livekit.agents import Agent, RunContext, function_tool
+
+    globals().update(Agent=Agent, RunContext=RunContext)
+    created: list[Any] = []
+    in_tool: list[Any] = []
+
+    class Desk(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are the front desk.")
+
+        @function_tool
+        async def get_weather(self, ctx: RunContext, city: str) -> str:
+            """The weather in a city."""
+            in_tool.append(ctx.speech_handle)
+            return f"sunny in {city}"
+
+    session = call.session_of(stt=call.stt(), llm=call.llm(), tts=call.tts())
+    session.on("speech_created", lambda ev: created.append(ev.speech_handle))
+    await call.start(Desk())
+    await call.settle(0.5)
+    said = call.handle("say", session.say("Hello."))
+    await call.settle(2)
+    asked = call.handle("reply", session.generate_reply(user_input="what's the weather like?"))
+    await call.settle(4)
+    call.speak("and the weather tomorrow?")
+    await call.settle(5)
+    await _close(call)
+    call.extra["identity"] = [
+        {
+            "say_is_created": len(created) > 0 and created[0] is said,
+            "reply_is_created": len(created) > 1 and created[1] is asked,
+            "reply_tool_is_reply": len(in_tool) > 0 and in_tool[0] is asked,
+            "turn_tool_is_created": len(in_tool) > 1
+            and len(created) > 2
+            and in_tool[1] is created[2],
+        }
+    ]
+
+
 SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "say_cut": sc_say_cut,
     "live_transcript": sc_live_transcript,
@@ -1357,6 +1400,7 @@ SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "on_user_turn_completed": sc_on_user_turn_completed,
     "say_uninterruptible": sc_say_uninterruptible,
     "interrupt_api": sc_interrupt_api,
+    "speech_identity": sc_speech_identity,
 }
 
 

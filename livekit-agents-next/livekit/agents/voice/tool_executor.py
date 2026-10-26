@@ -25,6 +25,7 @@ from ..llm.utils import prepare_function_arguments
 from ..log import logger
 from .agent import _BindingContextVar, _VoiceBinding
 from .events import RunContext
+from .speech_handle import SpeechHandle
 from .tool_output import make_tool_output
 
 if TYPE_CHECKING:
@@ -74,7 +75,9 @@ class ToolRunner:
         self._tools = ToolContext(tools)
         self._running: dict[str, asyncio.Task[Any]] = {}
 
-    async def _core_run(self, call: dict[str, Any], speech_id: int, step: int) -> dict[str, Any]:
+    async def _core_run(
+        self, call: dict[str, Any], speech: _core.SpeechHandle, step: int
+    ) -> dict[str, Any]:
         from .._core_view import from_core_item
 
         fnc_call = from_core_item(call)
@@ -87,11 +90,8 @@ class ToolRunner:
             names = list(self._tools.function_tools)
             return _raised(ToolError(_core.unknown_tool_message(fnc_call.name, names)))
 
-        ctx = RunContext(
-            function_call=fnc_call,
-            session=self._session,
-            speech_handle=self._session._speech(f"speech_{speech_id}"),
-        )
+        handle = SpeechHandle._of(speech)
+        ctx = RunContext(function_call=fnc_call, session=self._session, speech_handle=handle)
         try:
             args, kwargs = prepare_function_arguments(
                 fnc=tool, json_arguments=fnc_call.arguments, call_ctx=ctx, fnc_call=fnc_call
@@ -99,9 +99,7 @@ class ToolRunner:
         except Exception as e:
             return _raised(e)
 
-        binding = _VoiceBinding(
-            self._session, self._agent, origin=f"tool:{fnc_call.call_id}", speech_id=speech_id
-        )
+        binding = _VoiceBinding(self._session, self._agent, origin=f"tool:{fnc_call.call_id}")
         token = _BindingContextVar.set(binding)
         try:
             task = asyncio.create_task(tool(*args, **kwargs), name=f"tool_{fnc_call.name}")
@@ -112,12 +110,12 @@ class ToolRunner:
         first_update = ctx._first_update
         await asyncio.wait({task, first_update}, return_when=asyncio.FIRST_COMPLETED)
         if task.done():
-            return self._answer(fnc_call, task, speech_id=speech_id)
+            return self._answer(fnc_call, task, handle)
 
         # the first ctx.update() released the step; the core reads the end as a final update
         def _final(task: asyncio.Task[Any]) -> None:
             self._session._core.tool_update(
-                fnc_call.call_id, "final", answer=self._answer(fnc_call, task, speech_id=speech_id)
+                fnc_call.call_id, "final", answer=self._answer(fnc_call, task, handle)
             )
 
         task.add_done_callback(_final)
@@ -128,27 +126,25 @@ class ToolRunner:
         if task := self._running.get(call_id):
             task.cancel()
 
-    def _answer(self, fnc_call: Any, task: asyncio.Task[Any], *, speech_id: int) -> dict[str, Any]:
+    def _answer(
+        self, fnc_call: Any, task: asyncio.Task[Any], handle: SpeechHandle
+    ) -> dict[str, Any]:
         if task.cancelled():
             return {"kind": "cancelled"}
         if (exc := task.exception()) is not None:
             return _raised(exc)
         out = make_tool_output(fnc_call=fnc_call, output=task.result(), exception=None)
         if out.transition is not None:
-            self._apply(out.transition, speech_id=speech_id)
+            self._apply(out.transition, handle)
         if out.fnc_call_out.is_error:
             return {"kind": "raised", "error": "tool_error", "message": out.fnc_call_out.output}
         value = out.fnc_call_out.output if out.fnc_call_out.reply_required else None
         return {"kind": "returned", "value": value}
 
-    def _apply(self, transition: Transition, *, speech_id: int) -> None:
+    def _apply(self, transition: Transition, handle: SpeechHandle) -> None:
         """Deliver human-input questions requested by tools."""
         if isinstance(transition, InputRequired):
-            self._session._core.set_run_output(
-                self._session._speech(f"speech_{speech_id}")._core,
-                value=transition,
-                error=None,
-            )
+            self._session._core.set_run_output(handle._core, value=transition, error=None)
             if transition.verbatim:
                 self._session.say(transition.question)
             else:

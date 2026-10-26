@@ -7,7 +7,7 @@ use crate::agent_activity::options::TurnDetection;
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::effects::{Out, Timer};
-use crate::agent_session::{Answer, Close, ClosePhase, Closing, Driver, RequestId, Tx};
+use crate::agent_session::{Close, ClosePhase, Closing, Driver, SpeechCall, Tx};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::generation::ReplySource;
@@ -122,7 +122,7 @@ pub(crate) mod realtime_state {
     pub(super) struct Pending {
         pub(super) key: RequestKey,
         pub(super) request: Request,
-        pub(super) call: Option<RequestId>,
+        pub(super) call: Option<SpeechCall>,
         pub(super) allow_interruptions: Option<bool>,
     }
 
@@ -213,7 +213,7 @@ pub(crate) mod realtime_state {
             &mut self,
             req_id: String,
             request: Request,
-            call: Option<RequestId>,
+            call: Option<SpeechCall>,
             allow_interruptions: Option<bool>,
         ) -> RequestKey {
             let key = self.mint_key();
@@ -538,7 +538,7 @@ impl Driver {
         &mut self,
         now: Ts,
         request: Request,
-        call: Option<RequestId>,
+        call: Option<SpeechCall>,
         allow_interruptions: Option<bool>,
         out: &mut Out,
     ) {
@@ -551,7 +551,7 @@ impl Driver {
         now: Ts,
         req_id: String,
         request: Request,
-        call: Option<RequestId>,
+        call: Option<SpeechCall>,
         allow_interruptions: Option<bool>,
         out: &mut Out,
     ) {
@@ -608,7 +608,7 @@ impl Driver {
         Some(pending)
     }
 
-    fn settle(&mut self, request: Request, call: Option<RequestId>, how: Settled, out: &mut Out) {
+    fn settle(&mut self, request: Request, call: Option<SpeechCall>, how: Settled, out: &mut Out) {
         let kind = match request {
             Request::Say { .. } => SpeechKind::Say,
             // A follow-up that will never come: the player finishes with what it has.
@@ -758,7 +758,7 @@ impl Driver {
     fn start_realtime_speech(
         &mut self,
         now: Ts,
-        asked: Option<Option<RequestId>>,
+        asked: Option<Option<SpeechCall>>,
         turn: bool,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
@@ -796,7 +796,7 @@ impl Driver {
         if let Some(call) = asked {
             // Asked for by the host, so an open run owns it.
             self.run_own(crate::run_result::Owned::Speech(handle.id()), out);
-            self.answer(call, Answer::Speech(Arc::clone(&handle)));
+            self.answer_speech(call, Arc::clone(&handle));
         }
         handle.id()
     }
@@ -917,7 +917,7 @@ impl Driver {
 
     pub(crate) fn fail_waiter(
         &mut self,
-        call: Option<RequestId>,
+        call: Option<SpeechCall>,
         kind: SpeechKind,
         message: &str,
         out: &mut Out,
@@ -929,7 +929,7 @@ impl Driver {
     /// it, so it is announced and ended on the host stream like every other speech.
     pub(crate) fn answer_waiter(
         &mut self,
-        call: Option<RequestId>,
+        call: Option<SpeechCall>,
         kind: SpeechKind,
         how: Settled,
         out: &mut Out,
@@ -954,7 +954,7 @@ impl Driver {
         let speech = Arc::clone(&handle);
         out.machine().emit(SessionEvent::SpeechCreated { speech, kind, user_initiated: true });
         out.machine().emit(SessionEvent::SpeechDone { speech: id, outcome: handle.outcome() });
-        self.answer(call, Answer::Speech(handle));
+        self.answer_speech(call, handle);
     }
     /// The server's turn detection was fixed at the open. After a re-resolution the mode is
     /// refined through the open's table and written back; a change that takes (local to local)
@@ -1011,7 +1011,7 @@ impl Driver {
         instructions: Option<String>,
         allow_interruptions: Option<bool>,
         tool_choice: Option<lk_agents_abi::ToolChoice>,
-        call: Option<RequestId>,
+        call: Option<SpeechCall>,
         read_back: bool,
         out: &mut Out,
     ) {

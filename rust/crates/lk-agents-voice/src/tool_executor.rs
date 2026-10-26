@@ -429,7 +429,7 @@ pub trait ToolRunner: Send + Sync {
     async fn run(
         &self,
         call: lk_agents_abi::FunctionCall,
-        speech: SpeechId,
+        speech: lk_agents_abi::CoreObject,
         step: u32,
     ) -> crate::tool_executor::ToolAnswer;
 
@@ -460,10 +460,12 @@ impl std::fmt::Debug for RunnerRef {
 #[lk_agents_abi::host(proxy)]
 #[async_trait::async_trait]
 pub trait HostToolRunner: Send + Sync {
+    /// `speech` is the call's speech as the host's `SpeechHandle` sees it (`_core.SpeechHandle`),
+    /// whose `host` is the host's own object once it made one.
     async fn run(
         &self,
         call: &FunctionCall,
-        speech_id: u64,
+        speech: &lk_agents_abi::CoreObject,
         step: u32,
     ) -> Result<lk_agents_abi::llm::tool_executor::RawToolAnswer, lk_agents_abi::errors::HostError>;
 
@@ -477,8 +479,8 @@ pub struct HostTools(pub std::sync::Arc<dyn HostToolRunner>);
 
 #[async_trait::async_trait]
 impl crate::tool_executor::ToolRunner for HostTools {
-    async fn run(&self, call: FunctionCall, speech: SpeechId, step: u32) -> ToolAnswer {
-        let answer = match self.0.run(&call, speech.0, step).await {
+    async fn run(&self, call: FunctionCall, speech: lk_agents_abi::CoreObject, step: u32) -> ToolAnswer {
+        let answer = match self.0.run(&call, &speech, step).await {
             Ok(raw) => ToolAnswer::try_from(raw),
             Err(e) => Err(e.to_string()),
         };

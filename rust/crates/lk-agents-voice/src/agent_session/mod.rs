@@ -386,6 +386,8 @@ pub struct SessionShared {
     /// Unbounded: a task must never block on the loop draining it, and there are only a handful per
     /// turn.
     pub events: crate::agent_session::Tx<GenEvent>,
+    /// The host's commands: what the speech handle a host tool receives sends on.
+    pub api: crate::agent_session::Tx<crate::agent_session::Command>,
     /// Flips once, when the legs close or the runtime is dropped: every forwarder, drain, pump and
     /// reader selects on it, or one parked on an idle source would outlive the session.
     pub closing: tokio::sync::watch::Sender<bool>,

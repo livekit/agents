@@ -284,6 +284,7 @@ impl DriverBuilder {
             ),
             realtime_audio: self.realtime_audio_node.clone(),
             events: gen_tx,
+            api: api_tx.clone(),
             closing,
             draining: tokio::sync::watch::channel(false).0,
             hook_host: self.hook_bound.is_some(),

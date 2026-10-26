@@ -631,11 +631,6 @@ pub struct OverlapInterruptionEvent {
     pub ignore_user_transcript_until: crate::Ts,
 }
 
-/// `stream_closed`: the drain's last word; releases a host still awaiting a `speech_done`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[binding(emit, tag = "type", tag_value = "stream_closed")]
-pub struct StreamClosedWire {}
-
 /// `user_turn_completed`'s payload.
 #[derive(Debug, Clone, Host)]
 #[binding(emit, tag = "type", tag_value = "user_turn_completed")]
@@ -1016,11 +1011,10 @@ pub struct DetectorErrorWire {
 ///
 /// `#[python(event)]` members are emitted as public session events (`mirror` keeps the event's
 /// `new_state` on the session) and `#[python(ignored)]` ones are dropped, both via
-/// `_generated/session_dispatch.py`; the rest have host behaviour. Its
-/// `EVENT_KINDS` also holds `stream_closed`, which the stream carries outside this union.
+/// `_generated/session_dispatch.py`; the rest have host behaviour.
 #[derive(Host)]
 #[binding(emit)]
-#[python(dispatch = "session_dispatch", dispatch_also = "StreamClosedWire")]
+#[python(dispatch = "session_dispatch")]
 pub enum HostWire {
     #[python(event)]
     UserTranscript(UserInputTranscribed),

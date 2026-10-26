@@ -5,7 +5,7 @@ use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::LiveSession;
 use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{
-    Answer, Close, Command, HostRecorder, IvrCommand, Origin, RequestId, Sent,
+    Answer, Close, Command, HostRecorder, IvrCommand, Origin, RequestId, Sent, SpeechCall,
 };
 use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::host_events::HostEvent;
@@ -328,6 +328,15 @@ impl Driver {
         }
     }
 
+    /// The speech made for a host's `say()` / `generate_reply()` takes the host's slot, in the
+    /// cycle that announces it, then answers the call.
+    pub(crate) fn answer_speech(&self, call: Option<SpeechCall>, speech: Arc<SpeechHandle>) {
+        if let Some(SpeechCall { id, host }) = call {
+            speech.adopt_host(host);
+            self.answer(Some(id), Answer::Speech(speech));
+        }
+    }
+
     /// The loop stopped. What was queued and never delivered is refused (a census is still
     /// journalled), then the session's last event goes out, then every waiter and task the loop
     /// leaves is released: nothing settles after `close`.
@@ -454,12 +463,15 @@ impl Driver {
     }
 
     /// **Already done**, not dropped: an unattached handle would answer `done() == false` forever.
-    pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<RequestId>) {
+    pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<SpeechCall>) {
         let id = self.session.ids.next_speech_id();
         let handle = Arc::new(SpeechHandle::new(
             id,
             self.session.config.effective.turn.interruption.enabled,
         ));
+        if let Some(call) = &call {
+            handle.adopt_host(call.host.clone());
+        }
         handle.mark_done(Some(lk_agents_abi::errors::ProviderError::Local(
             lk_agents_abi::errors::ApiError::new(format!(
                 "the session loop ended before {what}() ran"
@@ -484,7 +496,7 @@ impl Driver {
         let done =
             SessionEvent::SpeechDone { speech: id, outcome: crate::events::SpeechOutcome::Failed };
         self.emit_now(done);
-        self.answer(call, Answer::Speech(handle));
+        self.answer_speech(call, handle);
     }
 
     pub(super) fn on_rtc(&mut self, now: Ts, ev: RoomEvent, out: &mut Out) {

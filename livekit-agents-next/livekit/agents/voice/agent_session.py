@@ -247,7 +247,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._amd: AMD | None = None
         self._console: ConsoleCall | None = None
         self._agent: Agent | None = None
-        self._speeches: dict[str, SpeechHandle] = {}
         self._chat_ctx = ChatContext.empty()
         self._agent_state: AgentState = "initializing"
         self._user_state: UserState = "listening"
@@ -784,24 +783,17 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if handler is not None:
             handler(self, wire)
 
-    def _core_stream_closed(self, wire: dict[str, Any]) -> None:
-        self._speeches.clear()
-
     def _on_hook(self, wire: dict[str, Any]) -> None:
         self._spawn(_answer_hook(self, wire))
 
     def _on_speech_created(self, wire: dict[str, Any]) -> None:
-        handle = SpeechHandle(wire["speech_handle"])
-        self._speeches[handle.id] = handle
+        handle = SpeechHandle._of(wire["speech_handle"])
         self.emit(
             "speech_created",
             SpeechCreatedEvent(
                 user_initiated=wire["user_initiated"], source=wire["source"], speech_handle=handle
             ),
         )
-
-    def _on_speech_done(self, wire: dict[str, Any]) -> None:
-        self._speeches.pop(wire["speech_id"], None)
 
     def _on_item_added(self, wire: dict[str, Any]) -> None:
         item = from_core_item(wire["item"])
@@ -874,10 +866,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._recorded_events.append(arg)
         super().emit(event, arg)
 
-    # --- speech handles, fillers, tasks ----------------------------------------------------
-
-    def _speech(self, speech_id: str) -> SpeechHandle | None:
-        return self._speeches.get(speech_id)
+    # --- tasks ---------------------------------------------------------------------------
 
     def _spawn(self, coro: Any) -> asyncio.Task[Any]:
         task = asyncio.ensure_future(coro)
@@ -926,11 +915,9 @@ class _DynamicInstructions:
         self._session = session
         self._agent = agent
 
-    async def _core_render(self, speech_id: int) -> str:
+    async def _core_render(self, speech: _core.SpeechHandle) -> str:
         ctx = RunContext(
-            function_call=None,
-            session=self._session,
-            speech_handle=self._session._speech(f"speech_{speech_id}"),
+            function_call=None, session=self._session, speech_handle=SpeechHandle._of(speech)
         )
         return await self._agent._render_dynamic_instructions(ctx)
 
@@ -1168,7 +1155,6 @@ _HOOKS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], Any]] = {
 _HANDLERS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], None]] = {
     "hook_call": LiveSession._on_hook,
     "speech_created": LiveSession._on_speech_created,
-    "speech_done": LiveSession._on_speech_done,
     "conversation_item_added": LiveSession._on_item_added,
     "run_item_added": LiveSession._on_run_item,
     "run_refused": LiveSession._on_run_refused,

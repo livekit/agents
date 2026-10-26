@@ -83,8 +83,6 @@ class _VoiceBinding(NamedTuple):
     session: LiveSession
     agent: Agent
     origin: str | None = None
-    # the core's id of the speech whose tool is running
-    speech_id: int | None = None
 
     # the providers the agent's default nodes call: its own, else the session's
     @property
