@@ -788,7 +788,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
             else:
                 run._item_added(item)
-        if item.type == "message":
+        if item.type in ("message", "agent_handoff"):
             self.emit("conversation_item_added", ConversationItemAddedEvent(item=item))
 
     def _on_run_started(self, wire: dict[str, Any]) -> None:
