@@ -44,6 +44,7 @@ mod silent_audio_say;
 mod silent_segment;
 mod sink_reset_reports_cut;
 mod speech_gap_settles;
+mod step_cut_text_conserved;
 mod stt_swapped_mid_utterance;
 mod switch_at_receipt;
 mod switch_races_frames;

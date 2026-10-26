@@ -83,8 +83,11 @@ impl Rule for TextConservation {
             );
 
             // A speech that ran to the end without interruption or error forwarded everything, as
-            // long as there was a transcript path to forward it down for the whole of its life.
-            if live_path && speech.completed_normally() && speech.is_scheduled() {
+            // long as there was a transcript path to forward it down for the whole of its life. A
+            // step cut on its own (the handle's unforced `interrupt()`) loses its words while the
+            // tool's follow-up still completes the speech.
+            let step_cut = internal.speech(speech.id).interrupted_at().is_some();
+            if live_path && speech.completed_normally() && speech.is_scheduled() && !step_cut {
                 check.expect(
                     &speech,
                     forwarded == given,
