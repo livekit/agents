@@ -1,49 +1,13 @@
 from __future__ import annotations
 
-import functools
-import re
 from dataclasses import dataclass
 
-from livekit import blingfire
-
+from .. import _core
 from . import token_stream, tokenizer
 
 __all__ = [
     "SentenceTokenizer",
 ]
-
-
-def _split_sentences(
-    text: str, min_sentence_len: int, *, retain_format: bool = False
-) -> list[tuple[str, int, int]]:
-    if not text or not text.strip():
-        return []
-
-    _, offsets = blingfire.text_to_sentences_with_offsets(text)
-
-    sentences: list[tuple[str, int, int]] = []
-    start = 0
-
-    for _, end in offsets:
-        raw_sentence = text[start:end]
-        sentence = re.sub(r"\s*\n+\s*", " ", raw_sentence).strip()
-        if not sentence or len(sentence) < min_sentence_len:
-            continue
-
-        if retain_format:
-            sentences.append((raw_sentence, start, end))
-        else:
-            sentences.append((sentence, start, end))
-        start = end
-
-    if start < len(text):
-        raw_sentence = text[start:]
-        if retain_format:
-            sentences.append((raw_sentence, start, len(text)))
-        elif sentence := raw_sentence.strip():
-            sentences.append((sentence, start, len(text)))
-
-    return sentences
 
 
 @dataclass
@@ -94,22 +58,20 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
         )
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        tokenize_fnc: token_stream.TokenizeCallable = functools.partial(
-            _split_sentences,
-            min_sentence_len=self._config.min_sentence_len,
-            retain_format=self._config.retain_format,
+        tokenize_fnc = self._split
+        tokens = (
+            _core.xml_tokenize(tokenize_fnc, text) if self._config.xml_aware else tokenize_fnc(text)
         )
-        if self._config.xml_aware:
-            tokenize_fnc = token_stream._xml_wrap_tokenizer(tokenize_fnc)
-        return [tok[0] if isinstance(tok, tuple) else tok for tok in tokenize_fnc(text)]
+        return [tok[0] for tok in tokens]
+
+    def _split(self, text: str) -> list[tuple[str, int, int]]:
+        return _core.split_sentences(  # type: ignore[no-any-return]
+            text, self._config.min_sentence_len, retain_format=self._config.retain_format
+        )
 
     def stream(self, *, language: str | None = None) -> tokenizer.SentenceStream:
         return token_stream.BufferedSentenceStream(
-            tokenizer=functools.partial(
-                _split_sentences,
-                min_sentence_len=self._config.min_sentence_len,
-                retain_format=self._config.retain_format,
-            ),
+            tokenizer=self._split,
             max_token_len=self._config.max_token_len,
             min_token_len=(
                 self._config.min_token_len
