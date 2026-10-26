@@ -180,10 +180,11 @@ async def test_transcripts_end_once_their_deltas_go_quiet(
         conns[0].emit({"type": "session.output_transcript.delta", "delta": "hola"})
 
         await _wait_for(lambda: len(heard) == 3 and len(spoken) == 2)
+        # the source transcript replaces itself in place, as an STT interim does
         assert [(t.text, t.is_final) for t in heard] == [
             ("hello ", False),
-            ("there", False),
-            ("", True),
+            ("hello there", False),
+            ("hello there", True),
         ]
         assert [(t.text, t.is_final, t.language) for t in spoken] == [
             ("hola", False, "es"),

@@ -200,13 +200,16 @@ def _translation_url(base_url: str, model: str) -> str:
 
 
 class _TranscriptSegmenter:
-    """Ends a transcript once its deltas go quiet, since the server sends no end itself."""
+    """Ends a transcript once its deltas go quiet, since the server sends no end itself.
+
+    Each callback gets the delta and the transcript so far, so a consumer can take either.
+    """
 
     def __init__(
         self,
         timeout: float,
-        on_text: Callable[[str], None],
-        on_final: Callable[[], None],
+        on_text: Callable[[str, str], None],
+        on_final: Callable[[str], None],
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._timeout = timeout
@@ -214,12 +217,14 @@ class _TranscriptSegmenter:
         self._on_final = on_final
         self._loop = loop
         self._timer: asyncio.TimerHandle | None = None
+        self._text = ""
 
     def push(self, delta: str) -> None:
         if not delta:
             return
 
-        self._on_text(delta)
+        self._text += delta
+        self._on_text(delta, self._text)
         if self._timer is not None:
             self._timer.cancel()
         self._timer = self._loop.call_later(self._timeout, self.flush)
@@ -231,15 +236,17 @@ class _TranscriptSegmenter:
 
         self._timer.cancel()
         self._timer = None
-        self._on_final()
+        text, self._text = self._text, ""
+        self._on_final(text)
 
 
 class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
     """One connection to the OpenAI Realtime translation endpoint.
 
-    Transcripts arrive as deltas: each ``input_transcript`` and ``output_transcript`` carries
-    the text added since the last, and the one that ends a transcript carries none, only
-    ``is_final``.
+    An ``input_transcript`` carries the transcript so far, as an STT interim does, and the
+    final one the whole of it. An ``output_transcript`` carries the text added since the last,
+    as the translation's transcript is a delta stream, and the one that ends it carries none,
+    only ``is_final``.
 
     It exposes two more events:
     - openai_server_event_received: the raw server events
@@ -267,19 +274,21 @@ class RealtimeTranslationSession(TranslationModelSession[TranslationEvents]):
 
         self._input_segmenter = _TranscriptSegmenter(
             self._opts.transcript_segment_timeout,
-            on_text=lambda text: self.emit(
+            on_text=lambda _, text: self.emit(
                 "input_transcript", InputTranscript(text=text, is_final=False)
             ),
-            on_final=lambda: self.emit("input_transcript", InputTranscript(text="", is_final=True)),
+            on_final=lambda text: self.emit(
+                "input_transcript", InputTranscript(text=text, is_final=True)
+            ),
             loop=self._loop,
         )
         self._output_segmenter = _TranscriptSegmenter(
             self._opts.transcript_segment_timeout,
-            on_text=lambda text: self.emit(
+            on_text=lambda delta, _: self.emit(
                 "output_transcript",
-                OutputTranscript(text=text, is_final=False, language=self._output_language),
+                OutputTranscript(text=delta, is_final=False, language=self._output_language),
             ),
-            on_final=lambda: self.emit(
+            on_final=lambda _: self.emit(
                 "output_transcript",
                 OutputTranscript(text="", is_final=True, language=self._output_language),
             ),
