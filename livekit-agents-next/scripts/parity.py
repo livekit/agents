@@ -81,19 +81,15 @@ def build(stack: str, *, rebuild: bool) -> None:
             env=env,
         )
     if rebuild or fresh:
-        subprocess.run(
-            [
-                "maturin",
-                "develop",
-                "--uv",
-                "--release",
-                "-q",
-                "-m",
-                str(REPO / "livekit-agents-next" / "pyproject.toml"),
-            ],
-            check=True,
+        proc = subprocess.run(
+            ["maturin", "develop", "--uv", "--release", "-q"],
             env=env,
+            cwd=str(REPO / "livekit-agents-next"),
+            capture_output=True,
+            text=True,
         )
+        if proc.returncode != 0:
+            sys.exit(f"maturin develop failed:\n{proc.stdout}\n{proc.stderr}")
 
 
 def run_stack(stack: str, scenario: str) -> dict[str, Any]:

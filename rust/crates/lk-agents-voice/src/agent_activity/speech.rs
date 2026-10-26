@@ -61,6 +61,9 @@ pub(crate) struct SpeechSpec {
     /// The host asked by name (`say`/`generate_reply`) although the kind says otherwise: a
     /// realtime generation for a host request is `user_initiated` to the host.
     pub(crate) host_asked: bool,
+    /// The decided turn this speech replies to: its `EOUMetrics` go out between the speech's
+    /// announcement and the user item, as the reference's `on_end_of_turn` emits them.
+    pub(crate) end_of_turn: Option<EndOfTurnInfo>,
 }
 
 impl SpeechSpec {
@@ -80,6 +83,7 @@ impl SpeechSpec {
             kind,
             on_enter: false,
             host_asked: false,
+            end_of_turn: None,
         }
     }
 }
@@ -468,13 +472,14 @@ impl Driver {
             self.emit_eou_metrics(info, Some(preemptive), out);
             return;
         }
-        let handle = self.start_speech(
+        self.start_speech(
             now,
             SpeechSpec {
                 new_message: Some(user),
                 chat_ctx,
                 turn: Some(info.turn_id),
                 instructions_override: instructions,
+                end_of_turn: Some(info.clone()),
                 ..SpeechSpec::new(
                     SpeechKind::TurnReply,
                     ReplySource::Llm,
@@ -483,7 +488,6 @@ impl Driver {
             },
             out,
         );
-        self.emit_eou_metrics(info, Some(handle.id()), out);
     }
 
     /// Emitted once the reply speech exists so it carries its id; never for a turn with no reply.
@@ -632,15 +636,6 @@ impl Driver {
         };
 
         let id = self.session.ids.next_speech_id();
-        // A preemptive generation plans against the message but does not commit it;
-        // `generate_reply` commits on adoption.
-        if let (Some(user), true) = (spec.new_message, kind.scheduled()) {
-            let source = match spec.turn {
-                Some(turn) => Source::UserTurn { turn },
-                None => Source::UserInput { speech: id },
-            };
-            self.commit_item(ChatItem::Message(user), source, Visibility::Both, out);
-        }
 
         let speech_id = crate::speech_handle::SpeechWireId(id).to_string();
         let handle = Arc::new(SpeechHandle::new(
@@ -693,6 +688,19 @@ impl Driver {
             self.schedule_speech(now, &handle, kind, spec.add_to_chat_ctx, spec.host_asked, out);
         if admitted && kind.scheduled() {
             handle.mark_scheduled();
+        }
+        if let Some(info) = &spec.end_of_turn {
+            self.emit_eou_metrics(info, Some(id), out);
+        }
+        // The reference's reply task adds the user item once its speech is scheduled: after the
+        // announcement, never for a refused speech. A preemptive generation plans against the
+        // message but does not commit it; `generate_reply` commits on adoption.
+        if let (Some(user), true) = (spec.new_message, admitted && kind.scheduled()) {
+            let source = match spec.turn {
+                Some(turn) => Source::UserTurn { turn },
+                None => Source::UserInput { speech: id },
+            };
+            self.commit_item(ChatItem::Message(user), source, Visibility::Both, out);
         }
         // `thinking` when the generation exists, only for an admitted reply (`say()` goes straight
         // to `speaking`; a refused or discarded preemptive generation never showed thinking).

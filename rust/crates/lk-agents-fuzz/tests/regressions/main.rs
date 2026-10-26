@@ -47,6 +47,7 @@ mod server_generation_ends;
 mod silent_audio_say;
 mod silent_segment;
 mod sink_reset_reports_cut;
+mod speech_announced_before_user_item;
 mod speech_gap_settles;
 mod step_cut_text_conserved;
 mod stt_swapped_mid_utterance;

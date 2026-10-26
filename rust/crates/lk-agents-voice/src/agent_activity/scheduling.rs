@@ -697,7 +697,10 @@ impl Driver {
     ) -> bool {
         let speech = handle.id();
         {
-            let user_initiated = kind.user_initiated() || host_asked;
+            // The reference announces every `say` and `_generate_reply` speech (turn replies and
+            // preemptive generations included) as user-initiated; only a generation the realtime
+            // server started on its own is not.
+            let user_initiated = kind != SpeechKind::Realtime || host_asked;
             let speech = Arc::clone(handle);
             out.machine().emit(SessionEvent::SpeechCreated { speech, kind, user_initiated });
         }
