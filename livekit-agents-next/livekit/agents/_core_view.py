@@ -316,6 +316,7 @@ class _RealtimeSession:
             ),
         )
         session.on("session_reconnected", lambda _: put({"kind": "session_reconnected"}))
+        session.on("metrics_collected", lambda ev: put({"kind": "metrics", "metrics": ev}))
         session.on(
             "error",
             lambda ev: put(

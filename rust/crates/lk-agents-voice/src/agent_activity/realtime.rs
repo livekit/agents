@@ -510,6 +510,10 @@ impl Driver {
                     self.close_on_realtime_failure(now, out);
                 }
             }
+            // `_on_metrics_collected`: into the session's metrics and usage, attributed to no speech.
+            Event::Metrics(rt::RealtimeMetrics { metrics }) => {
+                out.machine().emit(crate::events::SessionEvent::MetricsCollected { metrics, speech: None });
+            }
             Event::SessionReconnected(_) => {
                 // The socket was recycled: the frame is replayed once onto the new connection.
                 let ctx = self.session.chat_ctx.for_realtime();

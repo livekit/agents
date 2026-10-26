@@ -109,6 +109,14 @@ pub struct RemoteItemAdded {
     pub item: Box<ChatItem>,
 }
 
+/// `metrics_collected`: what the model measured (each response's `RealtimeModelMetrics`, the
+/// connection's, the input transcription's `STTMetrics`), for the session's metrics and usage.
+#[derive(Debug, Clone, PartialEq, Host)]
+#[binding(extract, from_items, tag = "kind", tag_value = "metrics")]
+pub struct RealtimeMetrics {
+    pub metrics: Box<crate::metrics::base::AgentMetrics>,
+}
+
 /// A `response.create` will never be answered. `generate_reply_failed`, with the error flattened.
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 #[binding(extract, from_items, tag = "kind", tag_value = "generate_reply_failed")]
@@ -368,6 +376,8 @@ pub enum Event {
     },
 
     SessionReconnected(SessionReconnected),
+    /// The host session's `metrics_collected`, and the native session's measurements.
+    Metrics(RealtimeMetrics),
     /// `metrics_collected` with zero usage: `_report_connection_acquired`.
     #[binding(skip)]
     ConnectionAcquired {

@@ -802,3 +802,48 @@ fn closing_releases_the_in_flight_turn_and_every_waiting_caller() {
         error: RealtimeError::new("realtime session closed"),
     })));
 }
+
+// Catches: no metrics for a finished response (the session's usage and `metrics_collected` stay
+// empty), ttft taken from creation to done instead of to the first output, or usage dropped.
+#[test]
+fn a_finished_response_reports_its_realtime_metrics() {
+    use lk_agents_abi::metrics::base::AgentMetrics;
+    let mut m = machine(OPENAI).with_provider("api.openai.com".into());
+    m.open(at(0));
+    recv(&mut m, at(1), response_created("r1", None));
+    let audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8; 480]);
+    recv(&mut m, Ts::from_nanos(1_250_000_000), json!({"type": "response.output_audio.delta", "item_id": "m1", "delta": audio}));
+    let step = recv(
+        &mut m,
+        at(3),
+        json!({"type": "response.done", "response": {"id": "r1", "status": "completed", "usage": {
+            "input_tokens": 10, "output_tokens": 20, "total_tokens": 30,
+            "input_token_details": {"audio_tokens": 4, "text_tokens": 6, "cached_tokens": 2},
+            "output_token_details": {"text_tokens": 5, "audio_tokens": 15},
+        }}}),
+    );
+    let metrics: Vec<_> = step
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics { metrics }) => match &**metrics {
+                AgentMetrics::RealtimeModel(r) => Some(r.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(metrics.len(), 1, "{:?}", step.events);
+    let r = &metrics[0];
+    assert_eq!(r.request_id, "r1");
+    assert!((r.timestamp - 1.0).abs() < 1e-9);
+    assert!((r.duration - 2.0).abs() < 1e-9);
+    assert!((r.ttft - 0.25).abs() < 1e-9, "ttft {}", r.ttft);
+    assert!(!r.cancelled);
+    assert_eq!((r.input_tokens, r.output_tokens, r.total_tokens), (10, 20, 30));
+    assert!((r.tokens_per_second - 10.0).abs() < 1e-9);
+    assert_eq!(r.input_token_details.audio_tokens, 4);
+    assert_eq!(r.output_token_details.audio_tokens, 15);
+    let md = r.metadata.as_ref().unwrap();
+    assert_eq!(md.model_provider.as_deref(), Some("api.openai.com"));
+}

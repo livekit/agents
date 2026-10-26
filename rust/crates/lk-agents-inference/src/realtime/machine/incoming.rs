@@ -46,7 +46,12 @@ impl RealtimeMachine {
             })),
 
             Incoming::ResponseCreated { response_id, client_event_id } => {
-                self.on_response_created(response_id, client_event_id)
+                let step = self.on_response_created(response_id, client_event_id);
+                if matches!(self.generation, Generation::Active { .. }) {
+                    self.response_created_at = Some(now);
+                    self.first_token_at = None;
+                }
+                step
             }
 
             Incoming::OutputItemAdded { item_id, item_type } => {
@@ -164,6 +169,7 @@ impl RealtimeMachine {
             }
 
             Incoming::TextDelta { item_id, delta } => {
+                self.first_token(now);
                 let mut step = self.on_output(now, &item_id);
                 let response_id = self.response_id();
                 if let Generation::Active { messages, .. } = &mut self.generation {
@@ -193,6 +199,7 @@ impl RealtimeMachine {
             }
 
             Incoming::AudioDelta { item_id, pcm } => {
+                self.first_token(now);
                 let mut step = self.on_output(now, &item_id);
                 step.merge(self.settle_modalities(&item_id, Modalities::AudioAndText));
                 if matches!(self.generation, Generation::Active { .. }) {
@@ -321,6 +328,13 @@ impl RealtimeMachine {
 
     /// "The agent has started answering": xAI finalises the user's transcript here, the last
     /// moment it can be revised.
+    /// `_first_token_timestamp`: the response's first text or audio.
+    fn first_token(&mut self, now: Ts) {
+        if self.first_token_at.is_none() && matches!(self.generation, Generation::Active { .. }) {
+            self.first_token_at = Some(now);
+        }
+    }
+
     fn on_output(&mut self, now: Ts, _item_id: &str) -> Step {
         if matches!(self.generation, Generation::Discarded | Generation::None) {
             return Step::default();
@@ -430,6 +444,9 @@ impl RealtimeMachine {
             status: done.status,
             usage: done.usage,
         }));
+        if let Some(metrics) = self.response_metrics(now, &done.response_id, done.status, &done.usage) {
+            step.events.push(metrics);
+        }
         debug_assert!(response_id == done.response_id || done.response_id.is_empty());
 
         if done.status == GenerationStatus::Failed {

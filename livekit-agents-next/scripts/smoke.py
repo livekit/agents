@@ -402,6 +402,8 @@ async def native_realtime() -> None:
         "conversation_item_added",
         lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
     )
+    metrics: list[Any] = []
+    session.on("metrics_collected", lambda ev: metrics.append(ev.metrics))
     await session.start(Agent(instructions="You are realtime.", name="native"), room=room)
     handle = session.generate_reply(instructions="greet the user")
     for _ in range(300):
@@ -413,7 +415,10 @@ async def native_realtime() -> None:
     assert sessions[0]["audio"]["output"]["voice"] == "cedar", sessions[0]
     await session.aclose()
     await runner.cleanup()
-    print(f"played_bytes={room.played_bytes()}")
+    realtime_metrics = [m for m in metrics if m.type == "realtime_model_metrics"]
+    # the connection's, then the reply's
+    assert [m.request_id != "" for m in realtime_metrics] == [False, True], metrics
+    print(f"played_bytes={room.played_bytes()} realtime_metrics={len(realtime_metrics)}")
 
 
 class Shouting(Agent):

@@ -260,6 +260,16 @@ impl NativeRealtime {
         self.options().model.clone()
     }
 
+    /// The `model_provider` the metrics name: the host's `provider` (LiveKit Inference reports
+    /// `"livekit"`, as its host class does).
+    fn metrics_provider(&self) -> String {
+        if self.dialect.provider_label == crate::realtime::dialect::INFERENCE.provider_label {
+            "livekit".to_owned()
+        } else {
+            self.provider()
+        }
+    }
+
     /// `RealtimeModel.label`.
     #[host(getter)]
     pub fn label(&self) -> String {
@@ -301,7 +311,8 @@ impl NativeRealtime {
             self.ids.clone(),
             self.images.clone(),
         )
-        .with_label(label.clone());
+        .with_label(label.clone())
+        .with_provider(self.metrics_provider());
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
@@ -480,9 +491,10 @@ impl Pump {
                 ))));
             }
         };
-        let _ = self.events.send(Event::ConnectionAcquired {
-            acquire_time: self.clock.now().saturating_duration_since(t0),
-        });
+        let acquire_time = self.clock.now().saturating_duration_since(t0);
+        let _ = self.events.send(Event::ConnectionAcquired { acquire_time });
+        let metrics = self.shared.machine.lock().await.connection_metrics(self.clock.now(), acquire_time);
+        let _ = self.events.send(metrics);
 
         let step = {
             let mut m = self.shared.machine.lock().await;

@@ -43,6 +43,11 @@ pub struct RealtimeMachine {
     ids: Arc<dyn IdGen>,
     images: Arc<dyn ImageResolver + Send + Sync>,
     label: String,
+    /// `Metadata(model_name=model, model_provider=provider)` on the metrics this session reports.
+    provider: String,
+    /// The response in flight: when it was created, and when its first output arrived.
+    response_created_at: Option<Ts>,
+    first_token_at: Option<Ts>,
 
     remote: RemoteChatContext,
     tools: Vec<ToolSpec>,
@@ -98,6 +103,9 @@ impl RealtimeMachine {
             ids,
             images,
             label,
+            provider: String::new(),
+            response_created_at: None,
+            first_token_at: None,
             remote: RemoteChatContext::new(),
             tools: Vec::new(),
             generation: Generation::None,
@@ -124,6 +132,89 @@ impl RealtimeMachine {
     pub fn with_label(mut self, label: String) -> Self {
         self.label = label;
         self
+    }
+
+    /// The host model's `provider`, for the metrics' metadata.
+    pub fn with_provider(mut self, provider: String) -> Self {
+        self.provider = provider;
+        self
+    }
+
+    fn metadata(&self, model: &str) -> lk_agents_abi::metrics::base::Metadata {
+        lk_agents_abi::metrics::base::Metadata {
+            model_name: Some(model.to_owned()),
+            model_provider: Some(self.provider.clone()),
+        }
+    }
+
+    /// `_report_connection_acquired`: the connection's timing as a `RealtimeModelMetrics` with zero
+    /// usage.
+    pub fn connection_metrics(&self, now: Ts, acquire_time: Duration) -> Event {
+        let metrics = lk_agents_abi::metrics::base::RealtimeModelMetrics {
+            label: String::new(),
+            request_id: String::new(),
+            timestamp: secs(now),
+            duration: 0.0,
+            session_duration: 0.0,
+            ttft: lk_agents_abi::metrics::base::RealtimeModelMetrics::NO_TTFT,
+            cancelled: false,
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            tokens_per_second: 0.0,
+            input_token_details: Default::default(),
+            output_token_details: Default::default(),
+            acquire_time: acquire_time.as_secs_f64(),
+            connection_reused: false,
+            metadata: Some(self.metadata(&self.opts.model)),
+        };
+        Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics {
+            metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::RealtimeModel(metrics)),
+        })
+    }
+
+    /// The finished response's `RealtimeModelMetrics`, as `_handle_response_done` computes them.
+    fn response_metrics(&mut self, now: Ts, response_id: &str, status: GenerationStatus, usage: &TokenUsage) -> Option<Event> {
+        use lk_agents_abi::metrics::base::{CachedTokenDetails, InputTokenDetails, OutputTokenDetails, RealtimeModelMetrics};
+        let created = self.response_created_at.take()?;
+        let first = self.first_token_at.take();
+        let duration = secs(now) - secs(created);
+        let tokens = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
+        let metrics = RealtimeModelMetrics {
+            label: self.label.clone(),
+            request_id: response_id.to_owned(),
+            timestamp: secs(created),
+            duration,
+            session_duration: 0.0,
+            ttft: first.map_or(RealtimeModelMetrics::NO_TTFT, |f| secs(f) - secs(created)),
+            cancelled: status == GenerationStatus::Cancelled,
+            input_tokens: tokens(usage.input_tokens),
+            output_tokens: tokens(usage.output_tokens),
+            total_tokens: tokens(usage.total_tokens),
+            tokens_per_second: if duration > 0.0 { usage.output_tokens as f64 / duration } else { 0.0 },
+            input_token_details: InputTokenDetails {
+                audio_tokens: tokens(usage.input_audio_tokens),
+                text_tokens: tokens(usage.input_text_tokens),
+                image_tokens: tokens(usage.input_image_tokens),
+                cached_tokens: tokens(usage.input_cached_tokens),
+                cached_tokens_details: Some(CachedTokenDetails {
+                    audio_tokens: tokens(usage.cached_audio_tokens),
+                    text_tokens: tokens(usage.cached_text_tokens),
+                    image_tokens: tokens(usage.cached_image_tokens),
+                }),
+            },
+            output_token_details: OutputTokenDetails {
+                text_tokens: tokens(usage.output_text_tokens),
+                audio_tokens: tokens(usage.output_audio_tokens),
+                image_tokens: tokens(usage.output_image_tokens),
+            },
+            acquire_time: 0.0,
+            connection_reused: false,
+            metadata: Some(self.metadata(&self.opts.model)),
+        };
+        Some(Event::Metrics(lk_agents_abi::llm::realtime::RealtimeMetrics {
+            metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::RealtimeModel(metrics)),
+        }))
     }
 
     pub fn capabilities(&self) -> RealtimeCapabilities {
@@ -993,4 +1084,9 @@ impl CtxUpdate {
     fn pending(&self) -> bool {
         !self.awaiting_create.is_empty() || !self.awaiting_delete.is_empty()
     }
+}
+
+/// A session-clock stamp in `time.time()` seconds: the native session runs on the wall clock.
+fn secs(t: Ts) -> f64 {
+    t.as_nanos() as f64 / 1e9
 }
