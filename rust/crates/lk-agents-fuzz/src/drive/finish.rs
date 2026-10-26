@@ -59,17 +59,22 @@ impl Run {
         }
         // A person the case left mid-sentence keeps the driver waiting for the end of their turn,
         // and a reply behind that turn never starts. End the speech on every detector that heard
-        // a start without an end.
+        // a start without an end. The detector is speaking or not, so its last word stands: an
+        // end with no start before it does not cancel the next start.
         for nth in self.record.live().of(Kind::Vad) {
-            let still_speaking =
-                self.record.applied().iter().filter(|a| a.accepted).fold(0i64, |n, a| {
-                    match &a.input {
-                        Input::VadStart { vad, .. } if vad.nth == nth => n + 1,
-                        Input::VadEnd { vad, .. } if vad.nth == nth => n - 1,
-                        _ => n,
-                    }
-                });
-            if still_speaking > 0 {
+            let still_speaking = self
+                .record
+                .applied()
+                .iter()
+                .filter(|a| a.accepted)
+                .filter_map(|a| match &a.input {
+                    Input::VadStart { vad, .. } if vad.nth == nth => Some(true),
+                    Input::VadEnd { vad, .. } if vad.nth == nth => Some(false),
+                    _ => None,
+                })
+                .last()
+                .unwrap_or(false);
+            if still_speaking {
                 out.push(Input::VadEnd { vad: Ref::new(nth), silence_ms: Millis(500) });
             }
         }
