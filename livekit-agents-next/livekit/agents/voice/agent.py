@@ -6,8 +6,11 @@ import dataclasses
 import inspect
 import sys
 from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
     Awaitable,
     Callable,
+    Coroutine,
     Generator,
     Sequence,
 )
@@ -50,7 +53,7 @@ from ..llm.tool_context import (
     function_tool,
 )
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .events import Deps_T, State_T, UserTurnExceededEvent
 from .turn import TurnHandlingOptions
@@ -639,6 +642,44 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
             allow_interruptions=False,
             tool_choice="none",
         )
+
+    def llm_node(
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ) -> (
+        AsyncIterable[llm.ChatChunk | str | FlushSentinel]
+        | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | FlushSentinel]]
+        | Coroutine[Any, Any, str]
+        | Coroutine[Any, Any, llm.ChatChunk]
+        | Coroutine[Any, Any, None]
+    ):
+        """One model request of ``agent.run()``: plain text, or ``llm.ChatChunk``s with text and
+        tool calls. Override it to change how the model is called. On a call the session's
+        core makes the request itself.
+        """
+        return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
+
+    class default:
+        @staticmethod
+        async def llm_node(
+            agent: Agent,
+            chat_ctx: llm.ChatContext,
+            tools: list[llm.Tool],
+            model_settings: ModelSettings,
+        ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
+            """Default implementation for `Agent.llm_node`"""
+            binding = agent._get_binding_or_raise()
+            assert isinstance(binding.llm, llm.LLM), "llm_node needs an LLM (not a realtime model)"
+            async with binding.llm.chat(
+                chat_ctx=chat_ctx,
+                tools=tools,
+                tool_choice=model_settings.tool_choice,
+                conn_options=binding.llm_conn_options,
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
 
     def _bound_binding(self) -> _VoiceBinding | AgentRun[Any] | None:
         """What runs this agent in the current context: a voice session or a run (internal).

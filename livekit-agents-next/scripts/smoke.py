@@ -373,6 +373,13 @@ async def main() -> int:
         detail = getattr(item, "text_content", None) or getattr(item, "name", "")
         print(f"  {item.type} {getattr(item, 'role', '')} {detail or ''}".rstrip())
 
+    print("== agent.run(), the text path")
+    text = await Agent(instructions="You answer by text.", name="text", llm=ScriptedLLM()).run(
+        "hello by text"
+    )
+    print(f"output {text.output!r}")
+    assert text.output == "You said: hello by text", text.output
+
     print("== realtime")
     await realtime()
     return 0
