@@ -1393,3 +1393,45 @@ async def test_an_unstamped_retarget_ends_speech_held_in_the_resampler() -> None
     finally:
         session._room_io = None
         await session.aclose()
+
+
+async def test_an_idle_unstamped_retarget_relabels_at_once() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        model.sessions[0].emit("output_transcript", OutputTranscript(text="hola", is_final=True))
+        model.sessions[0].speak()
+        # the Spanish utterance ends, and the session goes quiet
+        await _wait_for(lambda: counts.flushes == 1)
+
+        session.set_target_language("fr")
+        # nothing of the old language is waiting, so the next utterance starts as French
+        await _wait_for(lambda: labels.languages == ["fr"])
+        assert counts.flushes == 1
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+async def test_a_deferred_label_does_not_outlive_its_session() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    session, _, _, _ = _session(model)
+    await session.start()
+    model.sessions[0].emit("output_transcript", OutputTranscript(text="hola", is_final=False))
+    session.set_target_language("fr")
+    await _wait_for(lambda: session._relabel_at_segment_end == "fr")
+    await session.aclose()
+
+    # the run it was deferred for is over, so a restart starts clean
+    assert session._relabel_at_segment_end is None
+    session.set_target_language("de")
+    await session.start()
+    try:
+        assert session._relabel_at_segment_end is None
+        assert session._output_language == "de"
+    finally:
+        await session.aclose()
