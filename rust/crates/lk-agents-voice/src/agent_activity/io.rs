@@ -1,17 +1,120 @@
-//! The activity's IO: the STT and VAD legs (reopened by a handoff or `update_models`), audio and
-//! video input, and output enablement.
+//! The activity's IO: [`AgentInput`], the STT and VAD legs (reopened by a handoff or
+//! `update_models`), audio and video input, and output enablement.
 
-use crate::agent_session::effects::{AudioOp, Effect, ProviderCall};
-use crate::agent_session::effects::{Out, StreamKind};
+use crate::agent_session::effects::{AudioOp, Effect, Out, ProviderCall, StreamKind};
 use crate::agent_session::{Driver, IoKind};
 use crate::audio::{AudioChannel, ChannelEnd, on_leg_ended, spawn_drain, tagged};
 use crate::data_plane::ForwarderCommand;
 use crate::room_io::{InputProviders, Opened, StreamOpened};
 use crate::trace::{CoreStep, InputKind, InputStep, OutputKind, Step, TurnStep};
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::voice::io::AudioInput;
+use lk_agents_abi::voice::io::{AudioInput, VideoInput};
 use lk_agents_abi::{ChatMessage, Maybe, Role, Ts};
 use std::sync::Arc;
+
+/// `voice/io.py`'s `AgentInput` as the decision core holds it: the sink installed on each audio
+/// channel, the gate's last verdict and the input switch (all three told to the data plane), the
+/// camera with the task pumping it, and the STT and VAD streams being reopened for a new agent.
+pub(crate) struct AgentInput {
+    /// What this core installed on each channel; the data plane holds the same.
+    pub(crate) sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
+    /// The STT stream whose items the loop consumes: retired by a replacement or a removal, not
+    /// by the stream's own end.
+    pub(crate) live_stt: Option<ResourceId>,
+    /// The verdict last sent to the data plane; `None` before the first, so it is an edge.
+    pub(crate) gate_discard: Option<bool>,
+    /// `input.set_audio_enabled(..)`.
+    pub(crate) audio_enabled: bool,
+    /// When audio started flowing from the current source, as the data plane reported it.
+    pub(crate) first_input_at: Option<Ts>,
+    /// Where a leg's drain reports its end.
+    pub(crate) ended: crate::agent_session::Tx<crate::audio::ChannelEnd>,
+    video_forwarder_parts: crate::audio::VideoForwarderParts,
+    video_forwarder: Option<lk_agents_abi::AbortHandle>,
+    pending_video_in: Option<Option<Arc<dyn VideoInput>>>,
+    /// So the same leg handed back is a no-op.
+    video_in: Option<Arc<dyn VideoInput>>,
+    /// Shared: its rates are public attributes a caller may change mid-call.
+    video_sampler: Option<Arc<crate::room_io::_input::VideoSampler>>,
+    /// A pipeline session has nowhere to push a frame: said the first time only.
+    video_sink_warned: bool,
+    next_open: u64,
+    /// The open a leg's `StreamOpened` must carry to land; any other is discarded (0: none).
+    stt_open: u64,
+    vad_open: u64,
+    /// The STT being opened is the same recogniser as before.
+    stt_open_same: bool,
+}
+
+impl AgentInput {
+    /// The legs as the session opened them: the installed sinks, the camera with its pump (if one
+    /// was attached), nothing pending.
+    pub(crate) fn new(
+        sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
+        ended: crate::agent_session::Tx<crate::audio::ChannelEnd>,
+        (video_forwarder_parts, video_forwarder, video_in): (
+            crate::audio::VideoForwarderParts,
+            Option<lk_agents_abi::AbortHandle>,
+            Option<Arc<dyn VideoInput>>,
+        ),
+        video_sampler: Option<Arc<crate::room_io::_input::VideoSampler>>,
+    ) -> Self {
+        AgentInput {
+            live_stt: sinks.get(&crate::audio::AudioChannel::Stt).copied(),
+            sinks,
+            gate_discard: None,
+            audio_enabled: true,
+            first_input_at: None,
+            ended,
+            video_forwarder_parts,
+            video_forwarder,
+            pending_video_in: None,
+            video_in,
+            video_sampler,
+            video_sink_warned: false,
+            next_open: 0,
+            stt_open: 0,
+            vad_open: 0,
+            stt_open_same: false,
+        }
+    }
+
+    /// The parked camera replaces the pumped one, the old pump aborted first.
+    pub(crate) fn swap_video_forwarder(&mut self, spawner: &dyn lk_agents_abi::Spawner) {
+        let Some(input) = self.pending_video_in.take() else { return };
+        if let Some(old) = self.video_forwarder.take() {
+            old.abort();
+        }
+        self.video_forwarder = input.map(|input| {
+            lk_agents_abi::SpawnerExt::spawn_unboxed(
+                spawner,
+                self.video_forwarder_parts.clone().pump(input),
+            )
+        });
+    }
+
+    /// The camera handed over, parked for the performer. `false` when it is the leg already read
+    /// (nothing to swap).
+    pub(crate) fn replace_video_in(&mut self, input: Option<Arc<dyn VideoInput>>) -> bool {
+        let same = match (&self.video_in, &input) {
+            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        if same {
+            return false;
+        }
+        if let Some(old) = self.video_in.take() {
+            old.on_detached();
+        }
+        if let Some(new) = &input {
+            new.on_attached();
+        }
+        self.video_in = input.clone();
+        self.pending_video_in = Some(input);
+        true
+    }
+}
 
 impl Driver {
     /// Register `sink` and put it on `channel`; the data plane ends the sink it replaces.
@@ -61,14 +164,14 @@ impl Driver {
                         self.session.stt.as_ref().is_some_and(|old| old.instance == stt.instance);
                     let open = self.request_open(StreamKind::Stt, stt.id, out);
                     self.session.stt = Some(stt);
-                    self.input.set_stt_open_same(same_stt);
-                    self.input.expect_open(StreamKind::Stt, open);
+                    self.input.stt_open_same = same_stt;
+                    self.input.stt_open = open;
                     intent.stt = true;
                 }
                 // `Agent(stt=None)`: the leg closes and `stt_enabled` follows via `set_legs`.
                 None => {
                     self.session.stt = None;
-                    self.input.expect_open(StreamKind::Stt, 0);
+                    self.input.stt_open = 0;
                     self.remove_sink(AudioChannel::Stt, out);
                     intent.stt = false;
                 }
@@ -79,12 +182,12 @@ impl Driver {
                 Some(vad) => {
                     let open = self.request_open(StreamKind::Vad, vad.id, out);
                     self.session.vad = Some(vad);
-                    self.input.expect_open(StreamKind::Vad, open);
+                    self.input.vad_open = open;
                     intent.vad = true;
                 }
                 None => {
                     self.session.vad = None;
-                    self.input.expect_open(StreamKind::Vad, 0);
+                    self.input.vad_open = 0;
                     self.remove_sink(AudioChannel::Vad, out);
                     intent.vad = false;
                 }
@@ -104,7 +207,8 @@ impl Driver {
         resource: lk_agents_abi::resources::ResourceId,
         out: &mut Out,
     ) -> u64 {
-        let open = self.input.mint_open();
+        self.input.next_open += 1;
+        let open = self.input.next_open;
         out.machine().push(Effect::Provider(ProviderCall::OpenLeg { leg, open, resource }));
         open
     }
@@ -113,7 +217,10 @@ impl Driver {
     /// running.
     pub(crate) fn on_leg_opened(&mut self, now: Ts, opened: StreamOpened, out: &mut Out) {
         let StreamOpened { open, leg, outcome } = opened;
-        let wanted = self.input.expected_open(leg);
+        let wanted = match leg {
+            StreamKind::Stt => self.input.stt_open,
+            StreamKind::Vad => self.input.vad_open,
+        };
         let live = open == wanted && open != 0 && !self.session.closing_past_edge();
         match (outcome, live) {
             (Err(_), _) => {
@@ -131,7 +238,7 @@ impl Driver {
                     out.machine().push(Effect::Provider(ProviderCall::Prewarm(stt.id)));
                 }
                 // A different recogniser is told the full list.
-                let same_stt = self.input.stt_open_same();
+                let same_stt = self.input.stt_open_same;
                 self.keyterms_on_stt_swap(now, same_stt, out);
                 let sink = self.install_sink(AudioChannel::Stt, sink, out);
                 spawn_drain(
@@ -326,7 +433,9 @@ impl Driver {
         if self.session.closing_past_edge() {
             return;
         }
-        if !self.input.samples_video(self.activity.audio_recognition.user_speaking(), now) {
+        let speaking = self.activity.audio_recognition.user_speaking();
+        let sampler = self.input.video_sampler.as_ref();
+        if !sampler.is_none_or(|s| s.should_sample_at(speaking, now)) {
             return;
         }
         let image = lk_agents_abi::ImageContent {
@@ -350,7 +459,7 @@ impl Driver {
         }
 
         if self.activity.rt_session.is_none() {
-            if self.input.warn_video_sink_once() {
+            if !std::mem::replace(&mut self.input.video_sink_warned, true) {
                 out.trace(CoreStep::PortFailure(
                     "push_video: no realtime session, so a sampled frame reaches no model",
                 ));

@@ -249,7 +249,7 @@ pub enum Event {
 pub struct Driver {
     pub(crate) session: LiveSession,
     pub(crate) activity: crate::agent_activity::AgentActivity,
-    pub(crate) input: crate::io::AgentInput,
+    pub(crate) input: crate::agent_activity::io::AgentInput,
     /// Machines never see it; [`Out`] carries it for them.
     pub(crate) current: FrameId,
     pub(crate) timers: TimerSet<Timer>,

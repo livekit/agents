@@ -396,7 +396,7 @@ impl DriverBuilder {
             realtime_resolved_mode: resolved_mode,
             realtime_requested_detection: session.config.effective.turn.detection,
         };
-        let input = crate::io::AgentInput::new(
+        let input = crate::agent_activity::io::AgentInput::new(
             sinks,
             legs_tx.clone(),
             (video_parts, video_forwarder, self.video_in),
