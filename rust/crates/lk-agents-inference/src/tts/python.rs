@@ -24,7 +24,7 @@ pub(crate) fn build(_py: Python<'_>, cfg: TtsClientConfig) -> PyResult<Inference
         api_secret: cfg.api_secret,
         extra_kwargs: cfg.extra_kwargs.unwrap_or_default().0,
         fallback: cfg.fallback.map(|f| f.0).unwrap_or_default(),
-        conn_options: conn_options(cfg.timeout),
+        conn_options: conn_options(cfg.timeout, cfg.max_retry),
     };
     let native = NativeTts::new(
         opts,

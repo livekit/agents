@@ -18,10 +18,11 @@ pub(crate) fn transport() -> PyResult<Arc<ReqwestTransport>> {
         .map_err(|e| PyRuntimeError::new_err(format!("could not build the HTTPS client: {e}")))
 }
 
-/// The per-request connect options for every native client here. `max_retry = 0`: the host's base
-/// classes own the retry loop, and two multiply.
-pub(crate) fn conn_options(timeout: f64) -> lk_agents_abi::ApiConnectOptions {
-    lk_agents_abi::ApiConnectOptions { timeout, max_retry: 0, ..lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS }
+/// The per-request connect options of a native client. `max_retry` only reaches the gateway's
+/// session setup (`retries`, which the gateway runs server-side); the host's base classes own the
+/// client retry loop.
+pub(crate) fn conn_options(timeout: f64, max_retry: u32) -> lk_agents_abi::ApiConnectOptions {
+    lk_agents_abi::ApiConnectOptions { timeout, max_retry, ..lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS }
 }
 
 pub(crate) fn json_from_py(value: Option<&Bound<'_, PyAny>>) -> PyResult<Value> {

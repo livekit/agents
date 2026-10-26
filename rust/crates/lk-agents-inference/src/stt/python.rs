@@ -29,6 +29,7 @@ impl InferenceStt {
         extra_kwargs = None,
         fallback = None,
         timeout = 10.0,
+        max_retry = 3,
         vad = None,
         clock = None,
         headers = None,
@@ -45,6 +46,7 @@ impl InferenceStt {
         extra_kwargs: Option<&Bound<'_, PyAny>>,
         fallback: Option<Fallbacks<SttFallbackModel>>,
         timeout: f64,
+        max_retry: u32,
         vad: Option<&Bound<'_, PyAny>>,
         clock: Option<&Bound<'_, PyAny>>,
         headers: Option<Vec<(String, String)>>,
@@ -68,7 +70,7 @@ impl InferenceStt {
             api_secret,
             extra_kwargs: extra_kwargs.0,
             fallback: fallback.map(|f| f.0).unwrap_or_default(),
-            conn_options: conn_options(timeout),
+            conn_options: conn_options(timeout, max_retry),
         };
         // Not `parse_model_into`: the host already parsed `provider/model:language`; a second parse
         // would strip a legitimate `:` from the model name.

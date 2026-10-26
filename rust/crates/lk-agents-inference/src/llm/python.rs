@@ -52,7 +52,7 @@ impl InferenceLlm {
         let opts = self.opts.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let client = NativeLlm::new(opts, self.http.clone(), self.images.clone())
             .with_clock(Arc::clone(&self.clock) as Arc<dyn lk_agents_abi::Clock>)
-            .with_conn_options(conn_options(timeout));
+            .with_conn_options(conn_options(timeout, 0));
         match headers {
             Some(headers) => client.with_identification(headers.into_iter().collect()),
             None => client,
