@@ -798,8 +798,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_metrics(self, wire: dict[str, Any]) -> None:
-        otel_metrics.collect_usage(wire["metrics"])
-        self.emit("metrics_collected", MetricsCollectedEvent(metrics=wire["metrics"]))
+        ev = MetricsCollectedEvent(metrics=wire["metrics"])
+        otel_metrics.collect_usage(ev.metrics)
+        self.emit("metrics_collected", ev)
 
     def _on_error(self, wire: dict[str, Any]) -> None:
         logger.error("session error", extra={"source": wire["source"], "error": str(wire["error"])})
