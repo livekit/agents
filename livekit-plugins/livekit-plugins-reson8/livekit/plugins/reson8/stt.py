@@ -422,7 +422,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,
+                interim_results=False,
                 offline_recognize=True,
                 aligned_transcript="word" if transcript.words else False,
             ),
