@@ -41,6 +41,7 @@ from typing import (
 from pydantic import Field
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict
 
+from .. import _core
 from ..log import logger
 from . import _provider_format
 
@@ -327,11 +328,6 @@ class RawFunctionToolInfo:
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
 """Schema parameter added when ``@function_tool(on_duplicate='confirm')``."""
 
-_CONFIRM_DUPLICATE_DESCRIPTION = (
-    "Set this to True to confirm you want to run a duplicate. "
-    "Only do this when user confirms the duplication is needed."
-)
-
 
 @dataclass
 class _ApprovalScope:
@@ -597,7 +593,7 @@ def function_tool(
 
         schema = {**raw_schema}
         if on_duplicate == "confirm":
-            schema["parameters"] = _inject_confirm_duplicate(schema["parameters"])
+            schema["parameters"] = _core.inject_confirm_duplicate(schema["parameters"])
 
         info = RawFunctionToolInfo(
             name=raw_schema["name"],
@@ -643,7 +639,7 @@ def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]
         resolved = dict(getattr(func, "__annotations__", {}))
 
     annotation = Annotated[
-        bool | None, Field(default=False, description=_CONFIRM_DUPLICATE_DESCRIPTION)
+        bool | None, Field(default=False, description=_core.confirm_duplicate_description())
     ]
     new_annotations = {**resolved, CONFIRM_DUPLICATE_PARAM: annotation}
 
@@ -718,22 +714,6 @@ def _wrap_with_approval(
         return result
 
     return wrapper
-
-
-def _inject_confirm_duplicate(parameters: dict[str, Any]) -> dict[str, Any]:
-    """Add CONFIRM_DUPLICATE_PARAM to a raw JSON-schema (strict-mode conformant)."""
-    params = {**parameters}
-    properties = {**params.get("properties", {})}
-    properties[CONFIRM_DUPLICATE_PARAM] = {
-        "type": ["boolean", "null"],
-        "description": _CONFIRM_DUPLICATE_DESCRIPTION,
-    }
-    params["properties"] = properties
-    required = list(params.get("required", []))
-    if CONFIRM_DUPLICATE_PARAM not in required:
-        required.append(CONFIRM_DUPLICATE_PARAM)
-    params["required"] = required
-    return params
 
 
 def is_function_tool(f: Any) -> TypeGuard[FunctionTool]:
@@ -898,20 +878,12 @@ class ToolContext:
         return True
 
     def update_tools(self, tools: Sequence[Tool | Toolset]) -> None:
-        self._update_tools(tools)
-
-    def _update_tools(
-        self, tools: Sequence[Tool | Toolset], *, exclude: Sequence[Tool] = ()
-    ) -> None:
         self._tools = list(tools)
         self._fnc_tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
         self._provider_tools: list[ProviderTool] = []
         self._tool_sets: list[Toolset] = []
 
         def add_tool(tool: Tool | Toolset) -> None:
-            if any(tool is e for e in exclude):
-                return
-
             if isinstance(tool, ProviderTool):
                 self._provider_tools.append(tool)
 
@@ -942,33 +914,6 @@ class ToolContext:
 
         for tool in itertools.chain(tools, find_function_tools(self)):
             add_tool(tool)
-
-    def _sync_flattened(self, tools: Sequence[Tool]) -> None:
-        """Apply in-place edits of a ``flatten()`` list, preserving Toolset grouping.
-
-        Added tools become top-level entries; removed tools are dropped from the
-        flat lookup. A removed Toolset member stays in its toolset (membership and
-        lifecycle remain the toolset's) — it just stops being callable.
-        """
-        current = self.flatten()
-        current_ids = {id(t) for t in current}
-        tool_ids = {id(t) for t in tools}
-        if current_ids == tool_ids:
-            return
-
-        added = [t for t in tools if id(t) not in current_ids]
-        removed_ids = current_ids - tool_ids
-        removed = [c for c in current if id(c) in removed_ids]
-
-        structured = [t for t in self._tools if not any(t is r for r in removed)]
-        self._update_tools([*structured, *added], exclude=removed)
-
-    def _exclude(self, tools: Sequence[Tool]) -> None:
-        """Hide ``tools`` from the callable set while keeping their toolsets intact."""
-        if not tools:
-            return
-        kept = [t for t in self.flatten() if not any(t is e for e in tools)]
-        self._sync_flattened(kept)
 
     def copy(self) -> ToolContext:
         return ToolContext(self._tools.copy())
