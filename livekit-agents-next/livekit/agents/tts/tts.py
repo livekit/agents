@@ -373,6 +373,11 @@ class SynthesizeStream(_Synthesis, ABC):
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._started_time: float = 0
         self._pushed_text: str = ""
+        # driven by plugins that manage their own segments (Rime)
+        self._input_buffer: list[str | SynthesizeStream._FlushSentinel] = []
+        self._mtc_text = ""
+        self._mtc_pending_texts: list[str] = []
+        self._input_ended = False
         self._segment_open = False
         self._num_segments = 0
         self._input_tokens = 0

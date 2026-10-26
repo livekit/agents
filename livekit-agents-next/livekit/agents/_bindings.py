@@ -43,10 +43,17 @@ def verify_lists_length(ev: FunctionToolsExecutedEvent) -> FunctionToolsExecuted
 def speech_data_post_init(data: Any) -> None:
     from .language import LanguageCode
 
-    data.language = LanguageCode(data.language)
+    def code(lang: Any) -> Any:
+        return (
+            LanguageCode(lang)
+            if isinstance(lang, str) and not isinstance(lang, LanguageCode)
+            else lang
+        )
+
+    data.language = code(data.language)
     for name in ("source_languages", "target_languages"):
         if (langs := getattr(data, name)) is not None:
-            setattr(data, name, [LanguageCode(lang) for lang in langs])
+            setattr(data, name, [code(lang) for lang in langs])
 
 
 def serialize_source(source: Any) -> Any:
