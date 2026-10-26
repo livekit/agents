@@ -6,6 +6,7 @@
 
 #[cfg(feature = "python")]
 pub mod audio_emitter;
+pub mod mixer;
 #[cfg(feature = "blingfire")]
 pub mod blingfire;
 pub mod decoder;
@@ -73,3 +74,4 @@ impl AudioFormat {
         AudioFormat { sample_rate, num_channels }
     }
 }
+pub use mixer::{Mixer, MixerCounters, StreamId};

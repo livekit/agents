@@ -25,6 +25,9 @@ from livekit import rtc
 from livekit.agents import (
     Agent,
     APIConnectOptions,
+    AudioConfig,
+    BackgroundAudioPlayer,
+    BuiltinAudioClip,
     FlushSentinel,
     LiveSession,
     ModelSettings,
@@ -694,6 +697,50 @@ async def expressive() -> None:
     assert voice.expressive == [True, False], voice.expressive
 
 
+async def background_audio() -> None:
+    print("== background audio")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    await session.start(Agent(instructions="You hum while you think."), room=room)
+
+    async def tone() -> AsyncIterator[rtc.AudioFrame]:
+        for _ in range(20):
+            yield rtc.AudioFrame(b"\x10\x00" * 480, 48000, 1, 480)
+
+    player = BackgroundAudioPlayer(
+        ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.5),
+        thinking_sound=[AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, probability=1.0)],
+    )
+    await player.start(room=room, agent_session=session)
+
+    async def until(done: Callable[[], bool]) -> None:
+        # files decode and host streams are pulled in real time, the room plays in virtual time
+        for _ in range(300):
+            if done():
+                return
+            await settle(room, 0.1)
+            await asyncio.sleep(0.01)
+        raise AssertionError("background audio stalled")
+
+    before = room.played_bytes()
+    once = player.play(tone())
+    await until(once.done)
+    session.generate_reply(user_input="hello there")
+    await settle(room, 2)
+    looped = player.play(BuiltinAudioClip.HOLD_MUSIC, loop=True)
+    playing = room.played_bytes()
+    await until(lambda: room.played_bytes() > playing)
+    assert not looped.done()
+    looped.stop()
+    assert looped.done()
+    await player.aclose()
+    await session.aclose()
+    played = room.played_bytes() - before
+    print(f"background audio played={played}")
+    assert played > 0, played
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -784,6 +831,7 @@ async def main() -> int:
     await nodes()
     await avatar()
     await expressive()
+    await background_audio()
     return 0
 
 

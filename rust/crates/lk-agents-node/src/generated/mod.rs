@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 274 core items bound (121 functions and consts, 71 classes, 81 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 277 core items bound (121 functions and consts, 74 classes, 81 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -23,6 +23,10 @@
 //! - `lk_agents_abi::telemetry::provider::stt_batch_for_host`: parameter `event`: `SpeechEvent` cannot be built from JS: `kind`: a declared enum is read from JS only as a parameter (it has no `FromStr` to rely on)
 //! - `lk_agents_abi::telemetry::provider::stt_stream_for_host`: parameter `event`: `SpeechEvent` cannot be built from JS: `kind`: a declared enum is read from JS only as a parameter (it has no `FromStr` to rely on)
 //! - `lk_agents_inference::mcp::resolve_tool_options`: field `flags`: `ToolFlag` has no Node shape (not a declared record, enum or JSON)
+//! - `lk_agents_voice::background_audio::Sound::for_host`: parameter `stream`: not yet: `Arc<dyn FrameStream>` (a host object behind a proxy)
+//! - `lk_agents_voice::background_audio::BackgroundAudioPlayer::start_for_host`: parameter `room`: not yet: `Arc<dyn SessionRoom>` (a host object behind a proxy)
+//! - `lk_agents_voice::background_audio::BackgroundAudioPlayer::play_for_host`: parameter `sounds`: Vec(Declared { name: "Sound", by_ref: false }) borrows inside a container
+//! - `lk_agents_voice::background_audio::BackgroundAudioPlayer::on_agent_state_for_host`: parameter `sounds`: Vec(Declared { name: "Sound", by_ref: false }) borrows inside a container
 //! - `lk_agents_voice::agent_activity::options::HostOptions::new`: field `mode`: `EndpointingMode` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::agent_activity::options::HostOptions::update`: field `mode`: `EndpointingMode` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::agent_activity::options::HostOptions::resolved`: field `detector`: `lk_agents_abi::voice::session_options::DetectorKind` has no Node shape (not a declared record, enum or JSON)
@@ -132,6 +136,8 @@
 //! - `InferenceVadStream`: output: `VadOutput` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_inference::llm::LlmClientConfig`: not yet: a #[host(client)] constructor lands on a hand-written pyclass
 //! - `lk_agents_inference::tts::TtsClientConfig`: not yet: a #[host(client)] constructor lands on a hand-written pyclass
+//! - `lk_agents_voice::background_audio::FrameStream`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::background_audio::RandomDraw`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::tool_executor::HostToolRunner`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::SessionEvents`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::HostRoom`: not yet: a bare proxy (every method calls `_core_<method>`)

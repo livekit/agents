@@ -110,6 +110,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
         "rust/crates/lk-agents-voice/src/workflows/builtins/credit_card.rs",
         "lk_agents_voice::workflows::builtins::credit_card",
     ),
+    ("rust/crates/lk-agents-voice/src/background_audio.rs", "lk_agents_voice::background_audio"),
     ("rust/crates/lk-agents-voice/src/tool_executor.rs", "lk_agents_voice::tool_executor"),
     ("rust/crates/lk-agents-voice/src/ivr/ivr_activity.rs", "lk_agents_voice::ivr::ivr_activity"),
     ("rust/crates/lk-agents-worker/src/auth.rs", "lk_agents_worker"),
