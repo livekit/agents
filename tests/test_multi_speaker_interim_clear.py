@@ -17,9 +17,14 @@ gate - and ``commit_user_turn`` appends them to the user turn.
 The empty final carries no segment identity, so recognition only drops interim
 text that can belong to the suppressed segment: a speaker-less (Deepgram-style)
 interim is dropped, while an interim the adapter attributed to the primary
-speaker is another segment's in-progress words and survives for the commit. The
-empty final also refreshes the manual-commit freshness anchor: the wrapped STT
-did finalize, so a commit must not wait for yet another final.
+speaker is another segment's in-progress words and survives for the commit. When
+no primary interim is pending, the empty final also refreshes the manual-commit
+freshness anchor and sets the completion signal: the wrapped STT did finalize,
+so a commit must not wait for yet another final. While a primary interim is
+alive, neither happens: that final closed a different segment, so the commit
+keeps waiting for the primary speaker's own final (falling back to the interim
+after ``transcript_timeout``) instead of promoting the interim and discarding
+the final that follows.
 """
 
 from __future__ import annotations
@@ -89,6 +94,10 @@ def _make_recognition() -> AudioRecognition:
     ar._interruption_ch = None
     ar._stt_pipeline = MagicMock()
     ar._stt_pipeline.input_started_at = time.time()
+    # model an STT without manual flush: _commit_user_turn then relies on the
+    # final-transcript freshness check, as these tests exercise
+    ar._stt_pipeline.manual_flush = False
+    ar._stt_flush_requested = False
     ar._check_user_turn_limit = MagicMock()  # type: ignore[method-assign]
     ar._speech_start_time = None
     ar._run_eou_detection = MagicMock()  # type: ignore[method-assign]
@@ -393,6 +402,63 @@ async def test_primary_interim_survives_a_suppressed_background_final() -> None:
         audio_detached=False, transcript_timeout=0.01, stt_flush_duration=0.0
     )
     assert committed == "hello book a ticket"
+
+
+async def test_commit_waits_for_primary_final_after_a_suppressed_background_final() -> None:
+    """The empty final must not complete a commit that waits on the primary segment.
+
+    The empty final closes the suppressed background segment, not the primary
+    interim buffered before it. If it marked the commit complete, the commit
+    would promote the interim to final and return; the primary final that
+    arrives right after would then be dropped by the committed-turn gate. The
+    commit has to keep waiting for the primary final (and fall back to the
+    interim only after ``transcript_timeout``).
+    """
+    events = [
+        _timed_transcript(
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            "hello",
+            speaker_id="S0",
+            start_time=0.0,
+            end_time=0.2,
+        ),
+        _timed_transcript(
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            "book a ticket",
+            speaker_id="S0",
+            start_time=0.2,
+            end_time=0.3,
+        ),
+        _timed_transcript(
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            "background chatter",
+            speaker_id="S1",
+            start_time=0.3,
+            end_time=0.4,
+        ),
+    ]
+    adapter = _diarizing_adapter(events, frames=4)
+    frames = [_tone_frame(3000), _tone_frame(3000), _tone_frame(50), _tone_frame(50)]
+
+    emitted = await _adapter_events(adapter, frames, count=3)
+    assert emitted[1].alternatives[0].is_primary_speaker is True
+    assert emitted[2].alternatives[0].text == ""  # the adapter's synthesized clear
+
+    ar = _make_recognition()
+    for event in emitted:
+        await ar._on_stt_event(event)
+
+    commit = ar._commit_user_turn(
+        audio_detached=False, transcript_timeout=1.0, stt_flush_duration=0.0
+    )
+    await asyncio.sleep(0.1)
+    assert not commit.done(), "commit returned before the primary final arrived"
+
+    await ar._on_stt_event(_final_transcript("book a ticket tomorrow", speaker_id="S0"))
+    committed = await asyncio.wait_for(commit, timeout=1.0)
+
+    assert "tomorrow" in committed
+    assert committed == "hello book a ticket tomorrow"
 
 
 async def test_speakerless_interim_is_still_cleared_by_the_empty_final() -> None:

@@ -1104,6 +1104,11 @@ class AudioRecognition:
                 can_flush
                 or self._last_final_transcript_time is None
                 or (time.time() - self._last_final_transcript_time > 0.5)
+                # a primary-attributed interim is still awaiting its own final:
+                # the latest final (including the empty final a MultiSpeakerAdapter
+                # emits for a suppressed segment) closed a different segment and
+                # cannot complete this one
+                or (self._audio_interim_from_primary and self._audio_interim_transcript)
             ):
                 self._final_transcript_received.clear()
 
@@ -1279,7 +1284,6 @@ class AudioRecognition:
 
             self._update_last_language(language, transcript)
 
-            self._final_transcript_received.set()
             if not transcript:
                 # Diarization adapters replace a suppressed segment's final with
                 # an empty one: MultiSpeakerAdapter uses it to clear the interim
@@ -1293,14 +1297,21 @@ class AudioRecognition:
                 # interim the adapter attributed to the primary speaker is a
                 # different segment's in-progress words and must survive for
                 # commit_user_turn.
-                if not self._audio_interim_from_primary:
+                if not (self._audio_interim_from_primary and self._audio_interim_transcript):
                     self._audio_interim_transcript = ""
                     self._audio_preflight_transcript = ""
-                # the suppressed segment still finalized in the wrapped STT, so
-                # the manual-commit freshness check must treat this as a final
-                self._last_final_transcript_time = time.time()
+                    # the suppressed segment still finalized in the wrapped STT
+                    # and no other interim is pending, so the manual-commit
+                    # freshness check must treat this as a final. When a primary
+                    # interim is still alive this empty final closed a different
+                    # segment: neither the completion signal nor the anchor may
+                    # advance, or the commit would promote that interim and the
+                    # primary final that follows would be discarded.
+                    self._final_transcript_received.set()
+                    self._last_final_transcript_time = time.time()
                 return
 
+            self._final_transcript_received.set()
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking
