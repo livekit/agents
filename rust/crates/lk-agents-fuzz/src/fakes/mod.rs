@@ -36,7 +36,8 @@ mod interruption;
 mod llm;
 mod nodes;
 mod output;
-mod realtime;
+pub mod realtime;
+pub mod vocabulary;
 mod stt;
 mod tools;
 mod tts;
@@ -52,7 +53,7 @@ pub use output::{
     FakeTextOutput, Half, FakeAvatarWorker,
     FakeVideoInput,
 };
-pub use realtime::FakeRealtime;
+pub use realtime::{FakeRealtime, ServerSetup, Vad as RealtimeVad};
 pub use stt::FakeStt;
 pub use tools::FakeTools;
 pub use tts::FakeTts;
@@ -102,7 +103,7 @@ pub enum Control {
         Arc<dyn lk_agents_abi::errors::RefRegistry>,
     ),
     /// The realtime socket: the server-side events the case injects.
-    Realtime(Arc<realtime::Session>),
+    Realtime(Arc<realtime::Socket>),
     /// A realtime turn in progress: nothing to deliver to it, its end comes through the socket.
     Generation,
 }
@@ -146,6 +147,12 @@ pub enum Record {
         chunk: u16,
         text: String,
     },
+    /// One audio delta a realtime generation delivered: the n-th chunk of that generation.
+    Generated {
+        at: Observed,
+        generation: u32,
+        chunk: u16,
+    },
     /// Frames the driver pushed into a provider stream, as the tags they carried.
     Forwarded {
         at: Observed,
@@ -179,6 +186,7 @@ pub fn boundary_of(input: &Input) -> Option<Kind> {
         | Input::SttPreflight { .. }
         | Input::SttFinal { .. }
         | Input::SttEnd { .. }
+        | Input::SttUsage { .. }
         | Input::SttFail { .. } => Kind::Stt,
         Input::VadInference { .. } | Input::VadStart { .. } | Input::VadEnd { .. } => Kind::Vad,
         Input::EotAnswer { .. } | Input::EotFail { .. } => Kind::Prediction,
@@ -338,6 +346,11 @@ impl Registry {
     fn record_sink(&self, sink: Sink) {
         let at = self.stamps.next();
         self.write(Record::Sink { at, sink });
+    }
+
+    pub(super) fn record_generated(&self, generation: u32, chunk: u16) {
+        let at = self.stamps.next();
+        self.write(Record::Generated { at, generation, chunk });
     }
 
     fn record_produced(&self, tts: u32, chunk: u16, text: String) {

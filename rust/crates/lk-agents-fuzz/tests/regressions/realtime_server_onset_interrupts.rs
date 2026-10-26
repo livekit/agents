@@ -11,7 +11,7 @@ use lk_agents_voice::trace::{GateOp, InterruptCause, InterruptStep, Step};
 #[test]
 fn a_server_speech_onset_interrupts_the_playing_reply() {
     let setup = Setup {
-        realtime: Some(RealtimeSetup { turn_detection: true }),
+        realtime: Some(RealtimeSetup { turn_detection: true, ..RealtimeSetup::default() }),
         pausable_output: true,
         ..Setup::default()
     };

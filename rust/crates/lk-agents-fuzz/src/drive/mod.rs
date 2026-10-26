@@ -209,6 +209,12 @@ pub struct Setup {
     pub avatar: bool,
     /// The avatar reports when each segment starts playing (`wait_playback_start=True`).
     pub avatar_reports_start: bool,
+    /// Which recorded recogniser the person's transcripts behave like, by its index in
+    /// `corpus::STT_MODELS`: its timing, its cuts, its quirks.
+    pub stt_model: usize,
+    /// The voice takes as long to its first audio as the recorded one did, drawn from this seed;
+    /// `None` answers at once.
+    pub tts_latency: Option<u64>,
 }
 
 /// The room's legs, and whether the person's app sends the audio it buffered before the agent
@@ -276,6 +282,19 @@ pub struct RealtimeSetup {
     /// The server detects the user's turns itself. The driver then has a choice the fake
     /// otherwise never offers it: to leave detection to the server or to switch it off.
     pub turn_detection: bool,
+    /// Which server-side detector: `semantic_vad` (the default a session gets) or `server_vad`.
+    pub semantic: bool,
+    /// What the server's delays and choices are drawn from.
+    pub seed: u64,
+    /// How often the model calls a tool when it has some, in percent: the developer's prompt
+    /// decides it. `None` is the corpus's rate.
+    pub tool_calls: Option<u8>,
+}
+
+impl Default for RealtimeSetup {
+    fn default() -> Self {
+        RealtimeSetup { turn_detection: true, semantic: true, seed: 0, tool_calls: None }
+    }
 }
 
 /// `RoomOptions`' two session-level switches.
@@ -335,6 +354,8 @@ impl Default for Setup {
             lagging_output: false,
             ivr: None,
             amd: None,
+            stt_model: 0,
+            tts_latency: None,
             keyterms: Vec::new(),
             keyterm_detection: None,
             nodes: None,

@@ -20,6 +20,10 @@ lk-agents-abi = { path = "../lk-agents-abi" }
 # fake's signature names. Both already come in through lk-agents-voice.
 lk-agents-media = { path = "../lk-agents-media" }
 lk-agents-rtc = { path = "../lk-agents-rtc" }
+# The realtime fake runs the production native session (its wire machine, reconnects and all)
+# over a socket whose far end is the simulated OpenAI Realtime server.
+lk-agents-inference = { path = "../lk-agents-inference", default-features = false }
+base64.workspace = true
 tokio = { workspace = true, features = ["test-util", "io-util"] }
 prost.workspace = true
 async-trait.workspace = true

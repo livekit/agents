@@ -12,12 +12,14 @@ use lk_agents_voice::trace::{RealtimeStep, SpeechStep, Step};
 #[test]
 fn a_queued_realtime_reply_asks_the_server_once_authorized() {
     let setup =
-        Setup { realtime: Some(RealtimeSetup { turn_detection: false }), ..Setup::default() };
+        Setup { realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }), ..Setup::default() };
     let reply = || Input::GenerateReply { user_input: None, instructions: None, allow: None };
     let inputs =
         [reply(), Input::Advance { ms: Millis(20) }, reply(), Input::Advance { ms: Millis(20) }];
     let done = [
         Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::GenerationDone },
+        Input::Advance { ms: Millis(100) },
+        Input::PlayoutFinished { segment: Ref::new(0) },
         Input::Advance { ms: Millis(2_000) },
     ];
     let count = |run: &Run, what: fn(&Step) -> bool| {

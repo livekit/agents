@@ -228,6 +228,8 @@ pub(crate) struct FillerRun {
     /// The source hook asked and not yet answered.
     pub(crate) asking: Option<HookId>,
     pub(crate) armed: Option<Ts>,
+    /// When it last fired.
+    pub(crate) fired_at: Option<Ts>,
 }
 
 /// A timer change a filler's wait asks for.

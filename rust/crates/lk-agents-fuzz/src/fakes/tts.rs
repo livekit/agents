@@ -18,13 +18,24 @@ use crate::{
     record::{Detail, Kind, Tag},
 };
 
+/// The recorded voice the latency is drawn from.
+const TTS_MODEL: &str = "cartesia/sonic-3";
+
 pub struct FakeTts {
     registry: Arc<Registry>,
+    /// The voice's time to first audio, drawn per stream from the corpus (`tts/first_audio`),
+    /// when the setup gives the voice latency; `None` answers at once.
+    latency: Option<Mutex<fastrand::Rng>>,
 }
 
 impl FakeTts {
     pub fn new(registry: Arc<Registry>) -> Arc<Self> {
-        Arc::new(FakeTts { registry })
+        Arc::new(FakeTts { registry, latency: None })
+    }
+
+    /// A voice that takes as long to start as the recorded one did.
+    pub fn with_latency(registry: Arc<Registry>, seed: u64) -> Arc<Self> {
+        Arc::new(FakeTts { registry, latency: Some(Mutex::new(fastrand::Rng::with_seed(seed))) })
     }
 }
 
@@ -106,6 +117,8 @@ struct Output {
     slot: Slot,
     registry: Arc<Registry>,
     receiver: mpsc::UnboundedReceiver<Result<SynthesizedAudio, ProviderError>>,
+    /// When the first audio may leave: the stream's open plus the voice's time to first audio.
+    first_audio: Option<tokio::time::Instant>,
 }
 
 #[async_trait::async_trait]
@@ -151,9 +164,13 @@ impl Tts for FakeTts {
         });
         let slot = self.registry.register(Kind::Tts, Detail::None, Control::Tts(synthesis.clone()));
         let _ = synthesis.slot.set(slot);
+        let first_audio = self.latency.as_ref().map(|rng| {
+            let ms = crate::corpus::draw_ms(&mut rng.lock().unwrap(), &["tts", TTS_MODEL, "first_audio"]);
+            tokio::time::Instant::now() + std::time::Duration::from_millis(ms)
+        });
         Ok((
             Box::new(InputSide(synthesis)),
-            Box::new(Output { slot, registry: self.registry.clone(), receiver }),
+            Box::new(Output { slot, registry: self.registry.clone(), receiver, first_audio }),
         ))
     }
 }
@@ -189,7 +206,13 @@ impl StreamSink<String> for InputSide {
 #[async_trait::async_trait]
 impl StreamSource<SynthesizedAudio> for Output {
     async fn next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
-        self.receiver.recv().await.transpose()
+        let next = self.receiver.recv().await.transpose();
+        // The first audio leaves no earlier than the voice can produce it; a failure or the end
+        // is reported as soon as it is known.
+        if let (Ok(Some(_)), Some(at)) = (&next, self.first_audio.take()) {
+            tokio::time::sleep_until(at).await;
+        }
+        next
     }
 
     fn cancel_safe(&self) -> bool {

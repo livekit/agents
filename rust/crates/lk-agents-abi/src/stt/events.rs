@@ -9,7 +9,7 @@ use lk_agents_host_derive::Host;
 
 // `stt/stt.py`, a `(str, Enum)`: users write `ev.type == "final_transcript"`, so the wire strings
 // are public API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, lk_agents_host_derive::Vocabulary)]
 #[python(enum, module = "stt", path = "livekit.agents.stt.stt", name = "SpeechEventType")]
 #[node(enum)]
 #[host(wire(

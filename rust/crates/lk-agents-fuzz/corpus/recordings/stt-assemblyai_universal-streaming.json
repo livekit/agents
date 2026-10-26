@@ -1,0 +1,575 @@
+{
+ "provider": "stt",
+ "model": "assemblyai/universal-streaming",
+ "speech": [
+  {
+   "t0": 1.0015,
+   "t1": 3.3815
+  },
+  {
+   "t0": 5.8823,
+   "t1": 6.7223
+  },
+  {
+   "t0": 9.2226,
+   "t1": 12.8026
+  },
+  {
+   "t0": 15.3031,
+   "t1": 21.3431
+  },
+  {
+   "t0": 23.8436,
+   "t1": 26.4036
+  },
+  {
+   "t0": 28.9041,
+   "t1": 30.1641
+  },
+  {
+   "t0": 32.6648,
+   "t1": 33.0848
+  }
+ ],
+ "events": [
+  {
+   "t": 2.1436,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 2.1437,
+   "type": "interim_transcript",
+   "words": 1,
+   "start": 1.6,
+   "end": 1.92,
+   "confidence": 0.9
+  },
+  {
+   "t": 2.2319,
+   "type": "interim_transcript",
+   "words": 2,
+   "start": 1.6,
+   "end": 2.0,
+   "confidence": 0.908
+  },
+  {
+   "t": 2.3621,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 1.6,
+   "end": 2.16,
+   "confidence": 0.914
+  },
+  {
+   "t": 2.5424,
+   "type": "interim_transcript",
+   "words": 4,
+   "start": 1.6,
+   "end": 2.32,
+   "confidence": 0.93
+  },
+  {
+   "t": 2.7506,
+   "type": "interim_transcript",
+   "words": 5,
+   "start": 1.6,
+   "end": 2.56,
+   "confidence": 0.859
+  },
+  {
+   "t": 2.9778,
+   "type": "interim_transcript",
+   "words": 6,
+   "start": 1.6,
+   "end": 2.72,
+   "confidence": 0.874
+  },
+  {
+   "t": 3.2536,
+   "type": "interim_transcript",
+   "words": 7,
+   "start": 1.6,
+   "end": 3.04,
+   "confidence": 0.889
+  },
+  {
+   "t": 3.3471,
+   "type": "interim_transcript",
+   "words": 8,
+   "start": 1.6,
+   "end": 3.12,
+   "confidence": 0.901
+  },
+  {
+   "t": 3.75,
+   "type": "recognition_usage",
+   "audio_s": 3.7
+  },
+  {
+   "t": 3.7501,
+   "type": "final_transcript",
+   "words": 9,
+   "start": 1.6,
+   "end": 3.12,
+   "confidence": 0.901
+  },
+  {
+   "t": 3.7501,
+   "type": "end_of_speech"
+  },
+  {
+   "t": 3.8896,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 3.8897,
+   "type": "recognition_usage",
+   "audio_s": 0.15
+  },
+  {
+   "t": 3.8898,
+   "type": "final_transcript",
+   "words": 9,
+   "start": 1.6,
+   "end": 3.12,
+   "confidence": 0.877
+  },
+  {
+   "t": 3.8899,
+   "type": "end_of_speech"
+  },
+  {
+   "t": 6.647,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 6.6472,
+   "type": "interim_transcript",
+   "words": 1,
+   "start": 6.32,
+   "end": 6.4,
+   "confidence": 0.721
+  },
+  {
+   "t": 6.7416,
+   "type": "interim_transcript",
+   "words": 2,
+   "start": 6.32,
+   "end": 6.56,
+   "confidence": 0.814
+  },
+  {
+   "t": 6.8311,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 6.32,
+   "end": 6.64,
+   "confidence": 0.86
+  },
+  {
+   "t": 7.1042,
+   "type": "recognition_usage",
+   "audio_s": 3.2
+  },
+  {
+   "t": 7.1043,
+   "type": "final_transcript",
+   "words": 4,
+   "start": 6.32,
+   "end": 6.64,
+   "confidence": 0.86
+  },
+  {
+   "t": 7.1043,
+   "type": "end_of_speech"
+  },
+  {
+   "t": 7.2417,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 7.2418,
+   "type": "recognition_usage",
+   "audio_s": 0.15
+  },
+  {
+   "t": 7.242,
+   "type": "final_transcript",
+   "words": 4,
+   "start": 6.32,
+   "end": 6.64,
+   "confidence": 0.774
+  },
+  {
+   "t": 7.2421,
+   "type": "end_of_speech"
+  },
+  {
+   "t": 11.0456,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 11.0457,
+   "type": "interim_transcript",
+   "words": 1,
+   "start": 10.24,
+   "end": 10.8,
+   "confidence": 0.727
+  },
+  {
+   "t": 11.0926,
+   "type": "interim_transcript",
+   "words": 2,
+   "start": 10.24,
+   "end": 10.88,
+   "confidence": 0.811
+  },
+  {
+   "t": 11.2342,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 10.24,
+   "end": 11.04,
+   "confidence": 0.858
+  },
+  {
+   "t": 11.7798,
+   "type": "interim_transcript",
+   "words": 5,
+   "start": 10.24,
+   "end": 11.52,
+   "confidence": 0.869
+  },
+  {
+   "t": 11.8788,
+   "type": "interim_transcript",
+   "words": 6,
+   "start": 10.24,
+   "end": 11.6,
+   "confidence": 0.859
+  },
+  {
+   "t": 12.1575,
+   "type": "recognition_usage",
+   "audio_s": 4.9
+  },
+  {
+   "t": 12.1575,
+   "type": "final_transcript",
+   "words": 7,
+   "start": 10.24,
+   "end": 11.6,
+   "confidence": 0.818
+  },
+  {
+   "t": 12.1576,
+   "type": "end_of_speech"
+  },
+  {
+   "t": 12.9189,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 12.919,
+   "type": "interim_transcript",
+   "words": 1,
+   "start": 12.32,
+   "end": 12.72,
+   "confidence": 0.889
+  },
+  {
+   "t": 13.0598,
+   "type": "interim_transcript",
+   "words": 2,
+   "start": 12.32,
+   "end": 12.8,
+   "confidence": 0.892
+  },
+  {
+   "t": 13.1517,
+   "type": "interim_transcript",
+   "words": 2,
+   "start": 12.32,
+   "end": 12.96,
+   "confidence": 0.909
+  },
+  {
+   "t": 13.8758,
+   "type": "recognition_usage",
+   "audio_s": 1.75
+  },
+  {
+   "t": 13.8761,
+   "type": "final_transcript",
+   "words": 3,
+   "start": 12.32,
+   "end": 12.96,
+   "confidence": 0.909
+  },
+  {
+   "t": 13.8762,
+   "type": "end_of_speech"
+  },
+  {
+   "t": 17.0531,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 17.0532,
+   "type": "interim_transcript",
+   "words": 1,
+   "start": 16.64,
+   "end": 16.8,
+   "confidence": 0.894
+  },
+  {
+   "t": 17.0992,
+   "type": "interim_transcript",
+   "words": 2,
+   "start": 16.64,
+   "end": 16.88,
+   "confidence": 0.876
+  },
+  {
+   "t": 17.9047,
+   "type": "recognition_usage",
+   "audio_s": 4.0
+  },
+  {
+   "t": 17.9048,
+   "type": "final_transcript",
+   "words": 3,
+   "start": 16.64,
+   "end": 16.88,
+   "confidence": 0.876
+  },
+  {
+   "t": 17.9049,
+   "type": "end_of_speech"
+  },
+  {
+   "t": 18.5464,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 18.5464,
+   "type": "interim_transcript",
+   "words": 1,
+   "start": 18.0,
+   "end": 18.32,
+   "confidence": 0.706
+  },
+  {
+   "t": 19.1363,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 18.0,
+   "end": 18.96,
+   "confidence": 0.846
+  },
+  {
+   "t": 19.4259,
+   "type": "interim_transcript",
+   "words": 4,
+   "start": 18.0,
+   "end": 19.2,
+   "confidence": 0.86
+  },
+  {
+   "t": 19.5173,
+   "type": "interim_transcript",
+   "words": 5,
+   "start": 18.0,
+   "end": 19.36,
+   "confidence": 0.847
+  },
+  {
+   "t": 20.2788,
+   "type": "interim_transcript",
+   "words": 7,
+   "start": 18.0,
+   "end": 20.08,
+   "confidence": 0.866
+  },
+  {
+   "t": 21.2459,
+   "type": "interim_transcript",
+   "words": 8,
+   "start": 18.0,
+   "end": 21.04,
+   "confidence": 0.878
+  },
+  {
+   "t": 21.466,
+   "type": "interim_transcript",
+   "words": 9,
+   "start": 18.0,
+   "end": 21.28,
+   "confidence": 0.89
+  },
+  {
+   "t": 21.5538,
+   "type": "interim_transcript",
+   "words": 9,
+   "start": 18.0,
+   "end": 21.36,
+   "confidence": 0.89
+  },
+  {
+   "t": 22.2806,
+   "type": "recognition_usage",
+   "audio_s": 4.4
+  },
+  {
+   "t": 22.2807,
+   "type": "final_transcript",
+   "words": 10,
+   "start": 18.0,
+   "end": 21.36,
+   "confidence": 0.89
+  },
+  {
+   "t": 22.2807,
+   "type": "end_of_speech"
+  },
+  {
+   "t": 24.7317,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 24.7318,
+   "type": "interim_transcript",
+   "words": 1,
+   "start": 24.32,
+   "end": 24.56,
+   "confidence": 0.95
+  },
+  {
+   "t": 25.0787,
+   "type": "interim_transcript",
+   "words": 2,
+   "start": 24.32,
+   "end": 24.8,
+   "confidence": 0.929
+  },
+  {
+   "t": 25.3455,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 24.32,
+   "end": 25.12,
+   "confidence": 0.924
+  },
+  {
+   "t": 25.4837,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 24.32,
+   "end": 25.28,
+   "confidence": 0.921
+  },
+  {
+   "t": 25.8106,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 24.32,
+   "end": 25.6,
+   "confidence": 0.934
+  },
+  {
+   "t": 26.2164,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 24.32,
+   "end": 26.0,
+   "confidence": 0.899
+  },
+  {
+   "t": 26.2575,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 24.32,
+   "end": 26.08,
+   "confidence": 0.908
+  },
+  {
+   "t": 26.4395,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 24.32,
+   "end": 26.24,
+   "confidence": 0.921
+  },
+  {
+   "t": 26.6575,
+   "type": "interim_transcript",
+   "words": 3,
+   "start": 24.32,
+   "end": 26.4,
+   "confidence": 0.918
+  },
+  {
+   "t": 27.4692,
+   "type": "recognition_usage",
+   "audio_s": 5.15
+  },
+  {
+   "t": 27.4693,
+   "type": "final_transcript",
+   "words": 4,
+   "start": 24.32,
+   "end": 26.4,
+   "confidence": 0.918
+  },
+  {
+   "t": 27.4694,
+   "type": "end_of_speech"
+  },
+  {
+   "t": 29.9318,
+   "type": "start_of_speech"
+  },
+  {
+   "t": 29.9319,
+   "type": "interim_transcript",
+   "words": 1,
+   "start": 29.28,
+   "end": 29.76,
+   "confidence": 0.694
+  },
+  {
+   "t": 30.4491,
+   "type": "interim_transcript",
+   "words": 2,
+   "start": 29.28,
+   "end": 30.24,
+   "confidence": 0.789
+  },
+  {
+   "t": 30.5428,
+   "type": "interim_transcript",
+   "words": 2,
+   "start": 29.28,
+   "end": 30.32,
+   "confidence": 0.784
+  },
+  {
+   "t": 31.0968,
+   "type": "recognition_usage",
+   "audio_s": 3.65
+  },
+  {
+   "t": 31.0969,
+   "type": "final_transcript",
+   "words": 3,
+   "start": 29.28,
+   "end": 30.32,
+   "confidence": 0.784
+  },
+  {
+   "t": 31.0971,
+   "type": "end_of_speech"
+  }
+ ],
+ "recorded": "2026-10-26"
+}

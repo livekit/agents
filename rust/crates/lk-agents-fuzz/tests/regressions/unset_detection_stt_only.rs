@@ -55,7 +55,7 @@ fn an_stt_only_turn_ends_on_its_final() {
 // `scripts/parity.py realtime_stt_default_detection`.
 #[test]
 fn a_realtime_turn_keeps_no_stt_words() {
-    let realtime = Some(RealtimeSetup { turn_detection: false });
+    let realtime = Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() });
     let setup = Setup { stt: true, realtime, ..Setup::default() };
     assert_eq!(observed(&setup), (0, 0), "no user state change, no user item");
 }

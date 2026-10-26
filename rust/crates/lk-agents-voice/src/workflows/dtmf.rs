@@ -480,7 +480,8 @@ impl Driver {
         // `session.generate_reply()` answers on a realtime model's own socket; the read-back's
         // speech is named when the server creates it.
         if self.activity.rt_session.is_some() {
-            return self.realtime_reply(now, Some(user_input), None, None, None, None, true, out);
+            self.realtime_reply(now, Some(user_input), None, None, None, None, true, out);
+            return;
         }
         let h = self.generate_reply_speech(
             now,

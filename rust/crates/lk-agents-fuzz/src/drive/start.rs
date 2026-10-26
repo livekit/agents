@@ -82,8 +82,12 @@ impl Run {
         // The providers, and the nodes an agent overriding them opens over each.
         let stt = setup.stt.then(|| session_stt(setup, &registry, connect));
         let llm = pipeline.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>);
-        let tts =
-            (setup.tts && pipeline).then(|| fakes::FakeTts::new(registry.clone()) as Arc<Tts>);
+        let tts = (setup.tts && pipeline).then(|| {
+            (match setup.tts_latency {
+                Some(seed) => fakes::FakeTts::with_latency(registry.clone(), seed),
+                None => fakes::FakeTts::new(registry.clone()),
+            }) as Arc<Tts>
+        });
         let (llm_node, tts_node, stt_node) = nodes(setup, &llm, &tts, &stt);
         let providers = Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone() };
         let api = Arc::new(
@@ -98,7 +102,18 @@ impl Run {
                 setup.vad.then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
                 llm,
                 setup.realtime.map(|server| {
-                    fakes::FakeRealtime::new(registry.clone(), server.turn_detection)
+                    let vad = server.turn_detection.then_some(if server.semantic {
+                        fakes::RealtimeVad::Semantic
+                    } else {
+                        fakes::RealtimeVad::Server
+                    });
+                    let setup = fakes::ServerSetup {
+                        vad,
+                        seed: server.seed,
+                        connect,
+                        tool_calls: server.tool_calls,
+                    };
+                    fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
                         as Arc<dyn Realtime>
                 }),
                 None,

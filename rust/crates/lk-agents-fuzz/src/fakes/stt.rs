@@ -159,9 +159,17 @@ pub(super) fn deliver(
             (T::FinalTranscript, Some(t), *speaker)
         }
         Input::SttEnd { .. } => (T::EndOfSpeech, None, None),
+        Input::SttUsage { .. } => (T::RecognitionUsage, None, None),
         _ => return false,
     };
     let mut ev = SpeechEvent::new(kind);
+    if kind == T::RecognitionUsage {
+        // The audio the stream has heard so far, as the providers bill it.
+        ev.recognition_usage = Some(lk_agents_abi::RecognitionUsage {
+            audio_duration: clock.seconds(clock.now),
+            ..Default::default()
+        });
+    }
     if let Some(text) = text {
         let mut data = lk_agents_abi::SpeechData::new("en", text.clone());
         data.speaker_id = speaker.map(|Speaker(n)| format!("speaker-{n}"));

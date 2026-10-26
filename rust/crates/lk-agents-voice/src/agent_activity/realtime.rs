@@ -97,6 +97,8 @@ pub(crate) mod realtime_state {
         ToolFollowUp {
             speech: SpeechId,
             step: u32,
+            /// The step's verdict: `none` when the step budget is spent or the agent drains.
+            tool_choice: Option<lk_agents_abi::ToolChoice>,
         },
     }
 
@@ -414,6 +416,8 @@ pub enum RealtimeWake {
         step: u32,
         outputs: Vec<ChatItem>,
         ask: bool,
+        /// The follow-up's `tool_choice`, as the step decided it.
+        tool_choice: Option<lk_agents_abi::ToolChoice>,
     },
 }
 
@@ -460,10 +464,10 @@ impl Driver {
                     out.signal(crate::agent_session::effects::Signal::CloseProgress);
                 }
             }
-            RealtimeWake::ToolsDone { speech, step, outputs, ask } => {
+            RealtimeWake::ToolsDone { speech, step, outputs, ask, tool_choice } => {
                 // Minted here whether asked or not: the id sequence does not depend on the answer.
                 let req_id = self.shared.mint_item_id();
-                self.realtime_tools_done(now, speech, step, outputs, ask, req_id, out);
+                self.realtime_tools_done(now, speech, step, outputs, ask, tool_choice, req_id, out);
             }
         }
     }
@@ -557,6 +561,7 @@ impl Driver {
         self.realtime_request(now, request, None, None, out);
     }
 
+    /// The speech announced for it, if the request has one and it was not refused.
     pub(crate) fn realtime_request(
         &mut self,
         now: Ts,
@@ -564,9 +569,9 @@ impl Driver {
         call: Option<SpeechCall>,
         allow_interruptions: Option<bool>,
         out: &mut Out,
-    ) {
+    ) -> Option<SpeechId> {
         let req_id = self.shared.mint_item_id();
-        self.send_request(now, req_id, request, call, allow_interruptions, out);
+        self.send_request(now, req_id, request, call, allow_interruptions, out)
     }
 
     fn send_request(
@@ -577,10 +582,11 @@ impl Driver {
         call: Option<SpeechCall>,
         allow_interruptions: Option<bool>,
         out: &mut Out,
-    ) {
+    ) -> Option<SpeechId> {
         let t = &self.activity.realtime_state;
         if t.ended() {
-            return self.settle_request(request, call, Settled::Ended, out);
+            self.settle_request(request, call, Settled::Ended, out);
+            return None;
         }
         if t.closing {
             // Closing: a turn's own actuation still goes out whole and settles at once; a caller's
@@ -592,12 +598,14 @@ impl Driver {
                 self.rt_send(bare_reply(&req_id), out);
             }
             let closing = Settled::Interrupted(InterruptCause::Closing);
-            return self.settle_request(request, call, closing, out);
+            self.settle_request(request, call, closing, out);
+            return None;
         }
         let cmd = match &request {
             Request::Say { .. } if !t.caps.supports_say => {
                 let error = RealtimeError::new("say() on a realtime model that has no say");
-                return self.settle_request(request, call, Settled::Failed(error), out);
+                self.settle_request(request, call, Settled::Failed(error), out);
+                return None;
             }
             Request::Say { text, add_to_chat_ctx } => RealtimeCommand::Say(rt::Say {
                 req_id: req_id.clone(),
@@ -618,7 +626,15 @@ impl Driver {
                 }
                 bare_reply(&req_id)
             }
-            Request::ToolFollowUp { .. } => bare_reply(&req_id),
+            // `tool_choice="none"` when the step budget is spent or the agent drains
+            // (`_realtime_generation_task`), where the model takes one per response.
+            Request::ToolFollowUp { tool_choice, .. } => {
+                RealtimeCommand::GenerateReply(rt::GenerateReply {
+                    req_id: req_id.clone(),
+                    instructions: None,
+                    tool_choice: tool_choice.clone().filter(|_| t.caps.per_response_tool_choice),
+                })
+            }
         };
         // A caller's reply, or a user turn's, is announced now and asks the server once its speech
         // is authorized (`_realtime_reply_task`); a tool follow-up continues a speech that plays.
@@ -647,15 +663,18 @@ impl Driver {
             // Refused by the scheduler: it never plays, so nothing is asked.
             Some(speech) if !self.activity.speech_scheduler.contains(speech) => {
                 self.activity.realtime_players.remove(&speech);
+                None
             }
             // The caller was answered with the speech.
             Some(speech) => {
                 t.register(req_id, request, None, allow, Some(speech), Some(cmd));
+                Some(speech)
             }
             None => {
                 let key = t.register(req_id, request, call, allow, None, None);
                 self.rt_send(cmd, out);
                 out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
+                None
             }
         }
     }
@@ -818,7 +837,7 @@ impl Driver {
                     (Some(call), allow_interruptions, true, None, false)
                 }
                 Request::UserTurn { .. } => (None, allow_interruptions, true, None, true),
-                Request::ToolFollowUp { speech, step } => {
+                Request::ToolFollowUp { speech, step, .. } => {
                     (None, allow_interruptions, true, Some(Reuse { speech, step }), false)
                 }
             },
@@ -993,6 +1012,7 @@ impl Driver {
         step: u32,
         outputs: Vec<ChatItem>,
         ask: bool,
+        tool_choice: Option<lk_agents_abi::ToolChoice>,
         req_id: String,
         out: &mut Out,
     ) {
@@ -1015,7 +1035,12 @@ impl Driver {
             out.machine()
                 .arm(Timer::RealtimeRequest(key), now.saturating_add(AUTO_TOOL_REPLY_TIMEOUT));
         } else {
-            let request = Request::ToolFollowUp { speech, step };
+            // A draining activity's follow-up starts no new round (`draining`).
+            let draining = self.activity.speech_scheduler.is_paused()
+                || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent);
+            let tool_choice =
+                if draining { Some(lk_agents_abi::ToolChoice::Forbidden) } else { tool_choice };
+            let request = Request::ToolFollowUp { speech, step, tool_choice };
             self.send_request(now, req_id, request, None, None, out);
         }
     }
@@ -1120,10 +1145,8 @@ impl Driver {
         call: Option<SpeechCall>,
         read_back: bool,
         out: &mut Out,
-    ) {
-        if self.activity.rt_session.is_none() {
-            return;
-        }
+    ) -> Option<SpeechId> {
+        self.activity.rt_session.as_ref()?;
         if let Some(text) = user_input {
             let wall = self.step.wall();
             let item = ChatMessage::text(self.session.ids.mint("item"), Role::User, &text, wall);
@@ -1132,7 +1155,7 @@ impl Driver {
             self.commit_item(item.into(), Source::UserTyped, Visibility::Both, out);
         }
         let request = Request::GenerateReply { instructions, tool_choice, read_back };
-        self.realtime_request(now, request, call, allow_interruptions, out);
+        self.realtime_request(now, request, call, allow_interruptions, out)
     }
 
     fn on_input_transcription(

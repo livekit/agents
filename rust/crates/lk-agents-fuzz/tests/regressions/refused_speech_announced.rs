@@ -30,7 +30,7 @@ fn say(input: SayInput) -> Input {
 }
 
 fn realtime() -> Setup {
-    Setup { realtime: Some(RealtimeSetup { turn_detection: false }), ..Setup::default() }
+    Setup { realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }), ..Setup::default() }
 }
 
 // Catches: `say(words)` with no TTS answered with a failed handle the host stream never heard of

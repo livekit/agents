@@ -1,0 +1,1154 @@
+{
+ "provider": "tts",
+ "model": "cartesia/sonic-3",
+ "events": [
+  {
+   "words": 9,
+   "chars": 46,
+   "chunks": [
+    {
+     "t": 0.5745,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.5747,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.6288,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.6954,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.6964,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.749,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7816,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7817,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7819,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8694,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8696,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8698,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.9239,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.9278,
+     "ms": 129.1,
+     "final": false
+    },
+    {
+     "t": 0.9279,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 4,
+   "chars": 16,
+   "chunks": [
+    {
+     "t": 0.2023,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.2025,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.2625,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.2627,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.3459,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.346,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3483,
+     "ms": 135.9,
+     "final": false
+    },
+    {
+     "t": 0.3485,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 10,
+   "chars": 49,
+   "chunks": [
+    {
+     "t": 0.2214,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.2215,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.3087,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.3499,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.3499,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4483,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4484,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4485,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5299,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.53,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6619,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.662,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6621,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7453,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7455,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7455,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7897,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7921,
+     "ms": 72.2,
+     "final": false
+    },
+    {
+     "t": 0.7923,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 14,
+   "chars": 73,
+   "chunks": [
+    {
+     "t": 0.226,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.2261,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.2641,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.2642,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.3541,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3542,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4437,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4439,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.444,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5318,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5319,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5319,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6213,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6215,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6216,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6712,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7727,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8615,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8616,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8616,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.948,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.9513,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.9515,
+     "ms": 93.8,
+     "final": false
+    },
+    {
+     "t": 0.9517,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 10,
+   "chars": 47,
+   "chunks": [
+    {
+     "t": 0.189,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.1891,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.2332,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.2333,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.361,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.361,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3611,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3612,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4449,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.445,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4451,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5321,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5322,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5323,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5721,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5752,
+     "ms": 100.6,
+     "final": false
+    },
+    {
+     "t": 0.5753,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 3,
+   "chars": 18,
+   "chunks": [
+    {
+     "t": 0.2174,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.2175,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.2857,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.286,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.286,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3498,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3499,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3511,
+     "ms": 28.8,
+     "final": false
+    },
+    {
+     "t": 0.3512,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 1,
+   "chars": 6,
+   "chunks": [
+    {
+     "t": 0.1934,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.1936,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.2442,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.2443,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.2808,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.2825,
+     "ms": 57.3,
+     "final": false
+    },
+    {
+     "t": 0.2828,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 8,
+   "chars": 42,
+   "chunks": [
+    {
+     "t": 0.2375,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.2375,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.2818,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.3846,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.3848,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.385,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4847,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4849,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.485,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5872,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5872,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5873,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.666,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6661,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7105,
+     "ms": 68.4,
+     "final": false
+    },
+    {
+     "t": 0.7107,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 6,
+   "chars": 27,
+   "chunks": [
+    {
+     "t": 0.2024,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.2026,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.2469,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.2471,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.3755,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3756,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3757,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3759,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4077,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4109,
+     "ms": 139.6,
+     "final": false
+    },
+    {
+     "t": 0.4113,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 8,
+   "chars": 40,
+   "chunks": [
+    {
+     "t": 0.1956,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.1957,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.2351,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.2353,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.3231,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3232,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3657,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3659,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4536,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4537,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4848,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4871,
+     "ms": 111.2,
+     "final": false
+    },
+    {
+     "t": 0.4873,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 18,
+   "chars": 100,
+   "chunks": [
+    {
+     "t": 0.24,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.2401,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.3037,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.304,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.3872,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3875,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4855,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4856,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4857,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6487,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7345,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7347,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8133,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8594,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.9625,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.9626,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.9627,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.034,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.1454,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.1455,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.1455,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.2453,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.2455,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.2457,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.343,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.3431,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.4464,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.4465,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.4466,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.6268,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.6828,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.7713,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.7714,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.86,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.8601,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.8618,
+     "ms": 140.9,
+     "final": false
+    },
+    {
+     "t": 1.862,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  },
+  {
+   "words": 17,
+   "chars": 86,
+   "chunks": [
+    {
+     "t": 0.2517,
+     "ms": 10.0,
+     "final": false
+    },
+    {
+     "t": 0.2518,
+     "ms": 40.0,
+     "final": false
+    },
+    {
+     "t": 0.29,
+     "ms": 80.0,
+     "final": false
+    },
+    {
+     "t": 0.2901,
+     "ms": 160.0,
+     "final": false
+    },
+    {
+     "t": 0.3766,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.3768,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4633,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4633,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.4634,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5505,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5506,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.5507,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6374,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6376,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.6376,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7245,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7246,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.7248,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8585,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8587,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8972,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.8973,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.9947,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 0.9948,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.0903,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.0904,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.0905,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.1933,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.1933,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.1934,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.2528,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.3336,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.392,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.3921,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.4765,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.4766,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.5311,
+     "ms": 200.0,
+     "final": false
+    },
+    {
+     "t": 1.5321,
+     "ms": 158.9,
+     "final": false
+    },
+    {
+     "t": 1.5323,
+     "ms": 10.0,
+     "final": true
+    }
+   ]
+  }
+ ],
+ "recorded": "2026-10-26"
+}

@@ -96,8 +96,11 @@ impl StreamSource<LlmChunk> for Response {
 /// The completion tokens every reply reports.
 pub const COMPLETION_TOKENS: u32 = 10;
 
-/// One model delivery onto a registered chat request's stream. True when the stream still had
-/// a reader. `End` and `Fail` close the stream; the registry drops the control afterwards.
+/// One model delivery onto a registered chat request's stream, in the chunk shapes the corpus
+/// recorded from the inference gateway: words stream as token-sized chunks each naming the
+/// assistant role, a tool call comes whole in one chunk, and the end is an empty chunk (the
+/// finish) followed by one carrying only the usage. True when the stream still had a reader.
+/// `End` and `Fail` close the stream; the registry drops the control afterwards.
 pub(super) fn deliver(
     sender: &mpsc::UnboundedSender<Result<LlmChunk, ProviderError>>,
     nth: u32,
@@ -105,17 +108,28 @@ pub(super) fn deliver(
     serial: u32,
 ) -> bool {
     let response_id = response_id(nth);
+    let assistant = || lk_agents_abi::ChoiceDelta {
+        role: Some(lk_agents_abi::Role::Assistant),
+        ..Default::default()
+    };
     match what {
-        Input::LlmText { text: AgentText(text), .. } => sender
-            .send(Ok(LlmChunk {
-                id: response_id,
-                delta: Some(lk_agents_abi::ChoiceDelta {
-                    content: Some(text.clone()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }))
-            .is_ok(),
+        // A word and its trailing space is about a token: what the gateway streams.
+        Input::LlmText { text: AgentText(text), .. } => {
+            let mut sent = true;
+            for piece in text.split_inclusive(' ') {
+                sent &= sender
+                    .send(Ok(LlmChunk {
+                        id: response_id.clone(),
+                        delta: Some(lk_agents_abi::ChoiceDelta {
+                            content: Some(piece.to_owned()),
+                            ..assistant()
+                        }),
+                        ..Default::default()
+                    }))
+                    .is_ok();
+            }
+            sent
+        }
         Input::LlmToolCall { name, args, .. } => sender
             .send(Ok(LlmChunk {
                 id: response_id,
@@ -126,22 +140,28 @@ pub(super) fn deliver(
                         call_id: format!("call-{nth}-{serial}"),
                         extra: None,
                     }],
-                    ..Default::default()
+                    ..assistant()
                 }),
                 ..Default::default()
             }))
             .is_ok(),
-        // The usage a provider reports with its last chunk.
-        Input::LlmEnd { .. } => sender
-            .send(Ok(LlmChunk {
+        // The finish (an empty delta), then the usage alone, as the gateway ends a stream.
+        Input::LlmEnd { .. } => {
+            let finish = LlmChunk {
+                id: response_id.clone(),
+                delta: Some(lk_agents_abi::ChoiceDelta { content: Some(String::new()), ..assistant() }),
+                ..Default::default()
+            };
+            let usage = LlmChunk {
                 id: response_id,
                 usage: Some(lk_agents_abi::CompletionUsage {
                     completion_tokens: COMPLETION_TOKENS,
                     ..Default::default()
                 }),
                 ..Default::default()
-            }))
-            .is_ok(),
+            };
+            sender.send(Ok(finish)).is_ok() && sender.send(Ok(usage)).is_ok()
+        }
         Input::LlmFail { .. } => sender
             .send(Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
                 "injected provider failure",

@@ -539,7 +539,7 @@ pub fn from_wire_item(item: &Value, created_at: SystemTime) -> Result<ChatItem, 
 }
 
 /// One decoded server message. Covers xAI's extra types for every dialect.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum Incoming {
     SpeechStarted {
         item_id: Option<String>,

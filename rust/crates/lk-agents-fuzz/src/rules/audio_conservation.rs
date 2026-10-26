@@ -1,7 +1,8 @@
 //! Audio reaching the sink is exactly what was produced for it: every sample carries a known
 //! source, and each source's chunks arrive in order without gaps or repeats.
 //!
-//! The two sources are synthesis streams and the audio a case feeds into a `say`. A truncated
+//! The sources are synthesis streams, realtime generations and the audio a case feeds into a
+//! `say`. A truncated
 //! tail is legitimate, because that is what an interruption looks like. A gap, a repeat, a
 //! reorder, or a chunk nobody produced is not.
 use std::collections::BTreeMap;
@@ -35,6 +36,7 @@ impl Rule for AudioConservation {
                 let (source, chunk) = match *tag {
                     Tag::Synthesized { tts, chunk } => ((Kind::Tts, tts), chunk),
                     Tag::Fed { stream, chunk } => ((Kind::Stream, stream), chunk),
+                    Tag::Generated { generation, chunk } => ((Kind::Generation, generation), chunk),
                     // The person's own voice coming back out of the speaker is an echo, never a chunk
                     // any source produced for playback.
                     Tag::Mic { mic, .. } => {
@@ -66,8 +68,13 @@ impl Rule for AudioConservation {
 
                 // And a synthesized chunk was really produced by that stream, not invented downstream.
                 if let Tag::Synthesized { tts, .. } = *tag {
-                    check.expect_with(subject, inference.synthesized(tts, chunk), || {
+                    check.expect_with(subject.clone(), inference.synthesized(tts, chunk), || {
                         format!("{tag:?} was never produced by the synthesis fake")
+                    });
+                }
+                if let Tag::Generated { generation, .. } = *tag {
+                    check.expect_with(subject, inference.generated(generation, chunk), || {
+                        format!("{tag:?} was never delivered by the realtime server")
                     });
                 }
                 *next = chunk + 1;

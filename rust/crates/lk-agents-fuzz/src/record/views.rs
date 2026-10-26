@@ -278,6 +278,11 @@ impl Switch {
         self.changes.iter().rev().find(|(when, _)| *when <= at).copied()
     }
 
+    /// Whether it was switched, either way, after `from` and at or before `to`.
+    pub fn changed_within(&self, from: Observed, to: Observed) -> bool {
+        self.changes.iter().any(|(when, _)| from < *when && *when <= to)
+    }
+
     /// Whether it was switched off strictly between two stamps.
     pub fn off_within(&self, from: Observed, to: Observed) -> bool {
         self.changes.iter().any(|(when, on)| !on && from < *when && *when < to)
@@ -964,6 +969,11 @@ impl<'a> InferenceView<'a> {
     /// The speech a request was made for, once the driver has said.
     pub fn request_for(&self, request: u32) -> Option<u64> {
         self.requests().into_iter().find(|q| q.nth() == request).and_then(|q| q.speech())
+    }
+
+    /// Whether this realtime generation delivered this audio delta.
+    pub fn generated(&self, generation: u32, chunk: u16) -> bool {
+        self.r.index.generated_chunks.contains(&(generation % 255, chunk))
     }
 
     /// Whether the voice produced this chunk of this synthesis stream.

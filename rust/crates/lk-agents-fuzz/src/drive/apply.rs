@@ -518,7 +518,12 @@ impl Run {
                 let connect = Duration::from_millis(self.setup.connect_ms.unwrap_or(0));
                 let (llm, tts, stt) = (
                     given(llm, || fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
-                    given(tts, || fakes::FakeTts::new(registry.clone()) as Arc<Tts>),
+                    given(tts, || {
+                        (match self.setup.tts_latency {
+                            Some(seed) => fakes::FakeTts::with_latency(registry.clone(), !seed),
+                            None => fakes::FakeTts::new(registry.clone()),
+                        }) as Arc<Tts>
+                    }),
                     given(stt, || session_stt(&self.setup, &registry, connect)),
                 );
                 // What a later handoff gives again.
@@ -906,6 +911,7 @@ impl Run {
             Input::SttInterim { utterance, .. }
             | Input::SttPreflight { utterance, .. }
             | Input::SttFinal { utterance, .. }
+            | Input::SttUsage { utterance }
             | Input::SttEnd { utterance } => {
                 let Some(stt) = self.utterances.get(&utterance.nth).copied() else { return false };
                 (Slot { kind: Kind::Stt, nth: stt }, Some(utterance.nth))

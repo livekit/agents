@@ -119,7 +119,10 @@ impl Rule for ForwardedWhileEnabled {
                         .iter()
                         .filter(|pushed| **pushed < heard.at)
                         .next_back()
-                        .is_some_and(|pushed| switching(&inputs, &audio_input, *pushed))
+                        .is_some_and(|pushed| {
+                            switching(&inputs, &audio_input, *pushed)
+                                || switched_in_its_turn(&inputs, &audio_input, *pushed)
+                        })
                 });
                 check.expect_with(Subject::Resource(Kind::Mic, mic), late || raced, || {
                     format!(
@@ -139,6 +142,15 @@ fn switching(inputs: &InputsView, audio_input: &Switch, pushed: Observed) -> boo
     audio_input
         .last_change(pushed)
         .is_some_and(|(at, _)| inputs.driver_turn_after(at).is_none_or(|turn| turn.began > pushed))
+}
+
+/// Whether the path was switched in the driver turn that moved a frame pushed at `pushed`: a
+/// command sent before the frame lands in that turn, so the frame races it whichever way the path
+/// went (an attach and a disable sent together, say).
+fn switched_in_its_turn(inputs: &InputsView, audio_input: &Switch, pushed: Observed) -> bool {
+    inputs
+        .driver_turn_after(pushed)
+        .is_some_and(|turn| audio_input.changed_within(pushed, turn.ended.unwrap_or(Observed::END)))
 }
 
 /// The streams that listen to the microphone.

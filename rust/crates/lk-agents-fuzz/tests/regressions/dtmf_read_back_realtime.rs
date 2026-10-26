@@ -9,7 +9,7 @@ use lk_agents_fuzz::input::{Count, DtmfInput, DtmfKey, Input, Millis};
 #[test]
 fn a_read_back_on_a_realtime_model_is_spoken() {
     let setup =
-        Setup { realtime: Some(RealtimeSetup { turn_detection: false }), ..Setup::default() };
+        Setup { realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }), ..Setup::default() };
     // One digit, read back for confirmation.
     let dtmf = |input, key| Input::Dtmf {
         input,

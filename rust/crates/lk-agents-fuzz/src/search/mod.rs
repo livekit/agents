@@ -23,7 +23,7 @@ mod conversation;
 mod setup;
 mod uniform;
 
-pub use conversation::{Dials, explore, explore_at, randomness};
+pub use conversation::{Dials, explore, explore_at, randomness, stt_kinds};
 pub use setup::sample_setup;
 
 #[cfg(test)]
@@ -51,9 +51,13 @@ mod tests {
     fn a_conversation_reaches_a_decided_turn() {
         let mut closed = 0;
         for seed in 0..12u64 {
-            let outcome = explore_at(listening(), seed, 150, Dials::conversation());
+            let outcome = explore_at(listening(), seed, 200, Dials::conversation());
             let names = |name: &str| outcome.case.inputs.iter().filter(|i| i.name() == name).count();
-            if names("VadEnd") == 0 || names("SttFinal") == 0 {
+            // A final with words: Deepgram's empty finals over noise close no turn.
+            let worded = outcome.case.inputs.iter().any(|i| {
+                matches!(i, Input::SttFinal { text, .. } if !text.0.trim().is_empty())
+            });
+            if names("VadEnd") == 0 || !worded {
                 continue;
             }
             closed += 1;
@@ -68,8 +72,13 @@ mod tests {
 
     /// The generator's own invariant, which no driver rule can hold it to: every final the
     /// recogniser reports has microphone audio behind it, forwarded to that recogniser's stream
-    /// after the utterance opened and before the final. A generator that broke this would be
-    /// blaming the driver for transcripts of nothing.
+    /// in the seconds before the final. A real recogniser opens its utterance with its first
+    /// words (the corpus), so the audio comes before the start of speech, not after it. A
+    /// generator that broke this would be blaming the driver for transcripts of nothing.
+    /// How long before its final a recogniser's words may have been spoken: the slowest final
+    /// the person's providers send (a late one, 3 s) and a second final after it.
+    const HEARD_WITHIN_MS: u64 = 5_000;
+
     #[test]
     fn conversation_cases_are_coherent() {
         use crate::record::{Applied, Tag};
@@ -94,14 +103,14 @@ mod tests {
                 let heard = record.forwarded().iter().any(|(at, kind, nth, tags)| {
                     *kind == Kind::Stt
                         && *nth == stt.nth
-                        && start.seq < at.seq
                         && at.seq < final_.at.seq
+                        && at.at_ms + HEARD_WITHIN_MS >= final_.at.at_ms
                         && tags.iter().any(|t| matches!(t, Tag::Mic { .. }))
                 });
                 assert!(
                     heard,
-                    "seed {seed}: SttFinal at seq {} for utterance {} on stt#{} has no microphone \
-                     audio forwarded since its SttStart at seq {}",
+                    "seed {seed}: SttFinal at seq {} for utterance {} on stt#{} (opened at seq {}) \
+                     has no microphone audio forwarded in the {HEARD_WITHIN_MS} ms before it",
                     final_.at.seq, utterance.nth, stt.nth, start.seq
                 );
             }

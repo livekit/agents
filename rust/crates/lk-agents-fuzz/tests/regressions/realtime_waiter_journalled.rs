@@ -6,7 +6,7 @@ use lk_agents_voice::trace::{InterruptCause, InterruptStep, Step};
 
 fn realtime(inputs: &[Input]) -> Recording {
     let setup =
-        Setup { realtime: Some(RealtimeSetup { turn_detection: false }), ..Setup::default() };
+        Setup { realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }), ..Setup::default() };
     let run = simulate(async {
         let mut run = Run::start(&setup, 0, Default::default()).await;
         for input in inputs {
@@ -47,17 +47,19 @@ fn an_interrupted_request_is_journalled_with_its_cause() {
 
 // Catches: a request made after the socket ended answered with an interrupted handle no
 // interruption journalled. The reference's pending `generate_reply()` fails with a
-// `RealtimeError` there, which `_realtime_reply_task` logs, as it does a timeout.
+// `RealtimeError` there, which `_realtime_reply_task` logs, as it does a timeout. A real session
+// reconnects; a server that never takes the connection again ends it with the session's error
+// close, and the request with it, journalled.
 #[test]
 fn a_request_after_the_socket_ended_fails() {
     let r = realtime(&[
         Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::Disconnected },
         Input::Advance { ms: Millis(20) },
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
-        Input::Advance { ms: Millis(20) },
+        Input::Advance { ms: Millis(30_000) },
     ]);
     let speeches = r.host_view().speeches();
     let [speech] = &speeches[..] else { panic!("one handle, got {}", speeches.len()) };
-    assert!(!speech.is_interrupted());
-    assert!(speech.error().is_some_and(|e| e.contains("the realtime session ended")));
+    assert!(speech.is_interrupted());
+    assert_eq!(interrupted(&r), [(speech.id, InterruptCause::Closing)]);
 }

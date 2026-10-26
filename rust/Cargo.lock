@@ -1379,8 +1379,10 @@ name = "lk-agents-fuzz"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "fastrand",
  "lk-agents-abi",
+ "lk-agents-inference",
  "lk-agents-media",
  "lk-agents-rtc",
  "lk-agents-voice",

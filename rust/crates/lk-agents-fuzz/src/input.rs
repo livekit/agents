@@ -391,11 +391,14 @@ plain_enum! {
     ToolAnswer { Return, Value, Error, StopResponse, Cancelled, Detached, AfterIdle }
 }
 plain_enum! {
-    /// Something the realtime server did on its own: dropped the socket, came back, sent a delta
-    /// for no generation the driver knows, opened a generation over the one in progress, or heard
-    /// the user start speaking (its own VAD's `input_speech_started`).
+    /// Something the realtime server did of its own accord: its VAD heard the person start or
+    /// stop speaking (`speech_started`, `speech_stopped`: the commit, and with `create_response`
+    /// a reply, follow), it dropped the socket or took connections again, sent a delta for no
+    /// response, opened a response unasked, finished the one it is generating at once, sent an
+    /// `error`, failed the response (`status: failed`) or the last transcription.
     RtEvent {
-        Disconnected, Reconnected, StrayDelta, SecondGeneration, GenerationDone, SpeechStarted
+        Disconnected, Reconnected, StrayDelta, SecondGeneration, GenerationDone, SpeechStarted,
+        SpeechStopped, ServerError, ResponseFailed, TranscriptionFailed
     }
 }
 plain_enum! {
@@ -699,6 +702,9 @@ inputs! {
     SttPreflight { utterance: Ref<Utterance>, text: UserText, speaker: Option<Speaker> };
     SttFinal { utterance: Ref<Utterance>, text: UserText, speaker: Option<Speaker> };
     SttEnd { utterance: Ref<Utterance> };
+    /// The recogniser's usage report (`recognition_usage`): every corpus model sends one just
+    /// before each final.
+    SttUsage { utterance: Ref<Utterance> };
     ToolAnswered { tool: Ref<Tool>, answer: ToolAnswer, text: AgentText };
     /// The speaker began emitting this segment: the first of its audio is leaving for the
     /// listener. Legal from the segment's first frame; the driver marks the agent as speaking here.

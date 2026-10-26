@@ -353,6 +353,8 @@ pub enum Tag {
     Fed { stream: u32, chunk: u16 },
     /// The n-th microphone, and which frame the case spoke into it.
     Mic { mic: u32, chunk: u16 },
+    /// The n-th realtime generation, and which of its audio deltas.
+    Generated { generation: u32, chunk: u16 },
     /// A sample nobody in this run produced.
     Unknown(i16),
 }
@@ -364,6 +366,12 @@ impl Tag {
 
     pub fn synthesized(tts: u32, chunk: u16) -> i16 {
         (((tts as i32 + 1) << 6) | chunk.min(Self::MAX_CHUNK) as i32) as i16
+    }
+
+    /// A realtime generation's audio: the agent's side, marked like the microphone is on the
+    /// person's. Ids wrap at 255, so a generation is told from one 255 earlier by its chunks.
+    pub fn generated(generation: u32, chunk: u16) -> i16 {
+        Self::synthesized(generation % 255, chunk) | Self::MIC
     }
 
     pub fn fed(stream: u32, chunk: u16) -> i16 {
@@ -380,11 +388,12 @@ impl Tag {
         }
         let user_side = sample < 0;
         let magnitude = sample.unsigned_abs() as i16;
-        let from_mic = user_side && magnitude & Self::MIC != 0;
+        let from_mic = magnitude & Self::MIC != 0;
         let value = (magnitude & !Self::MIC) as u16;
         let (id, chunk) = ((value >> 6) as u32 - 1, value & 0x3f);
         match (user_side, from_mic) {
-            (false, _) => Tag::Synthesized { tts: id, chunk },
+            (false, true) => Tag::Generated { generation: id, chunk },
+            (false, false) => Tag::Synthesized { tts: id, chunk },
             (true, false) => Tag::Fed { stream: id, chunk },
             (true, true) => Tag::Mic { mic: id, chunk },
         }
@@ -528,6 +537,8 @@ struct Index {
     host_by_speech: BTreeMap<u64, Vec<usize>>,
     host_by_tool: BTreeMap<String, Vec<usize>>,
     produced_chunks: BTreeSet<(u32, u16)>,
+    /// The audio deltas each realtime generation delivered, by `(generation, chunk)`.
+    generated_chunks: BTreeSet<(u32, u16)>,
     /// When each listening stream last heard each microphone chunk number, by `(stream kind,
     /// stream, microphone)` and then chunk. A run forwards tens of thousands of frames, and the
     /// rules ask about each one whether it was heard after it was pushed.
@@ -721,6 +732,11 @@ impl Recording {
             }
         }
         self.forwarded.push((at, kind, nth, tags));
+    }
+
+    /// One audio delta a realtime generation delivered.
+    pub fn record_generated(&mut self, _at: Observed, generation: u32, chunk: u16) {
+        self.index.generated_chunks.insert((generation, chunk));
     }
 
     pub fn record_produced(&mut self, at: Observed, tts: u32, chunk: u16, text: String) {

@@ -36,7 +36,10 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         instructions: AGENT_TURNS[rng.usize(0..AGENT_TURNS.len())].to_owned(),
         max_unrecoverable_errors: rng.u32(0..4),
         hook_bound_ms: rng.bool().then(|| ms(rng)),
-        realtime: rng.bool().then(|| RealtimeSetup { turn_detection: rng.bool() }),
+        realtime: rng.bool().then(|| RealtimeSetup {
+            turn_detection: rng.bool(),
+            ..RealtimeSetup::default()
+        }),
         // Three ways: no navigator, one the host started, one navigating from the start.
         ivr: match rng.usize(0..3) {
             0 => None,
@@ -84,6 +87,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         background_audio: false,
         avatar: false,
         avatar_reports_start: false,
+        stt_model: 0,
+        tts_latency: None,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
@@ -122,5 +127,17 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         stt: rng.bool(),
         llm_text: None,
     });
+    // The recorded recogniser the transcripts follow, drawn last too.
+    setup.stt_model = rng.usize(0..crate::corpus::STT_MODELS.len());
+    // Most voices take their recorded time to start; some answer at once.
+    setup.tts_latency = (rng.u8(0..100) < 80).then(|| rng.u64(..));
+    // The realtime server's detector and its own dice, drawn last too.
+    if let Some(realtime) = setup.realtime.as_mut() {
+        realtime.semantic = rng.bool();
+        realtime.seed = rng.u64(..);
+        // Half the models call tools at the recorded rate, the rest as often as their prompt
+        // has them.
+        realtime.tool_calls = rng.bool().then(|| rng.u8(0..=100));
+    }
     setup
 }

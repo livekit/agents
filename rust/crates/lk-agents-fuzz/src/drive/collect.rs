@@ -116,6 +116,9 @@ impl Run {
                 Record::Produced { at, tts, chunk, text } => {
                     self.record.record_produced(at, tts, chunk, text);
                 }
+                Record::Generated { at, generation, chunk } => {
+                    self.record.record_generated(at, generation % 255, chunk);
+                }
                 Record::Forwarded { at, slot, tags } => {
                     self.record.record_forwarded(at, slot.kind, slot.nth, tags);
                 }

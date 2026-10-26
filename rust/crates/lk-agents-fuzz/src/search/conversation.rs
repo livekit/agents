@@ -35,11 +35,12 @@ use lk_agents_voice::{
     },
     keyterm_detection::RECORD_KEYTERMS_TOOL,
     events::SessionEvent,
-    trace::{GenerationStep, Step},
+    trace::{GenerationStep, RealtimeStep, Step},
 };
 
 use super::uniform;
 use crate::{
+    corpus,
     drive::{AmdAnswer, Case, Outcome, Policy, Run, Setup},
     input::{
         AGENT_TURNS, AgentText, AmdInput, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make,
@@ -179,6 +180,11 @@ enum Word {
     SttPreflight(String),
     SttFinal(String),
     SttEnd,
+    /// A usage report, which the corpus models send before every final.
+    SttUsage,
+    /// The realtime server's own VAD: `input_audio_buffer.speech_started` / `speech_stopped`.
+    RtStart,
+    RtStop,
     // The end-of-turn predictor has no word here: the driver asks it, so its answer is placed
     // when a `Kind::Prediction` is live, not on a schedule. See `Talk::predict`.
 }
@@ -189,17 +195,7 @@ const VAD_START_MS: Range<u64> = 30..150;
 /// When the detector notices speech ended, after the last frame of it.
 const VAD_END_MS: Range<u64> = 100..400;
 
-/// When the recogniser opens the utterance: slower than the detector, as it waits for words.
-const STT_START_MS: Range<u64> = 50..300;
-
-/// When the recogniser's final arrives, after speech ends: a provider's tail latency.
-const STT_FINAL_MS: Range<u64> = 100..800;
-
 const STT_LATE_FINAL_MS: Range<u64> = 1_500..3_000;
-
-/// How often the recogniser streams an interim: roughly one every so many milliseconds of speech,
-/// as a streaming provider does, so a long turn has many and a short one has one.
-const STT_INTERIM_EVERY_MS: u64 = 400;
 
 /// Detector confidence while speaking: straddles 50, so hysteresis and flicker are reached.
 const SPEAKING_P: Range<u8> = 45..95;
@@ -290,8 +286,6 @@ struct Providers {
     late_finals: u8,
     /// How often an interim is mis-heard, then corrected.
     revisions: u8,
-    /// How often a long turn comes back as two finals.
-    split_finals: u8,
     /// How often the end-of-turn predictor loses a request or fails it.
     eot_lost: u8,
     /// How often the interruption detector agrees with the overlap's length.
@@ -305,6 +299,9 @@ struct Providers {
     overlap_fails: u8,
     /// The realtime server drops the socket during a reply, then comes back.
     socket_drops: u8,
+    /// The realtime server errs during a reply: an `error` event, a failed response or
+    /// transcription, a response of its own, a stray delta.
+    realtime_errors: u8,
     /// The speaker throws its playback count away mid-playout, as a republished track does.
     sink_resets: u8,
     /// The voice is down for the whole run: every synthesis fails at the open.
@@ -332,13 +329,13 @@ impl Providers {
             latency: rng("latency").u64(25..=400),
             late_finals: rng("late_finals").u8(0..=40),
             revisions: rng("revisions").u8(0..=60),
-            split_finals: rng("split_finals").u8(0..=50),
             eot_lost: rng("eot_lost").u8(0..=30),
             detector_right: rng("detector_right").u8(0..=100),
             llm_fails: fails("llm_fails", 30, 5..=50),
             stt_fails: fails("stt_fails", 30, 1..=10),
             overlap_fails: fails("overlap_fails", 30, 10..=80),
             socket_drops: fails("socket_drops", 30, 5..=30),
+            realtime_errors: fails("realtime_errors", 30, 5..=30),
             sink_resets: fails("sink_resets", 20, 1..=10),
             voice_down: rng("voice_down").u8(0..100) < 12,
             aims: fails("aims", 50, 20..=80),
@@ -560,6 +557,10 @@ impl Talk {
     }
 
     /// One of the agent's lines.
+    fn pick_rt<'a>(&mut self, of: &'a [RtEvent]) -> &'a RtEvent {
+        &of[self.rng.usize(0..of.len())]
+    }
+
     fn line(&mut self) -> AgentText {
         AgentText(AGENT_TURNS[self.rng.usize(0..AGENT_TURNS.len())].to_owned())
     }
@@ -572,6 +573,25 @@ impl Talk {
     /// The first live resource of this kind: the microphone, detector or recogniser spoken into.
     fn first(&self, kind: Kind) -> Option<u32> {
         self.run.record.live().of(kind).first().copied()
+    }
+
+    /// Whether the realtime server is detecting turns now, and whether semantically: its socket
+    /// is open, the setup has it detect, and the driver did not switch that off at the open.
+    fn server_vad(&self) -> Option<bool> {
+        let realtime = self.run.setup.realtime?;
+        self.first(Kind::Realtime)?;
+        let disabled = self
+            .run
+            .record
+            .journal_where(|step| match step {
+                Step::Realtime(RealtimeStep::Opened { turn_detection_disabled }) => {
+                    Some(*turn_detection_disabled)
+                }
+                _ => None,
+            })
+            .last()
+            .is_none_or(|(_, disabled)| disabled);
+        (realtime.turn_detection && !disabled).then_some(realtime.semantic)
     }
 }
 
@@ -652,6 +672,16 @@ impl Talk {
         if verdict && !sent(&self.run, AmdInput::Execute) {
             self.send(Input::Amd { input: AmdInput::Execute }).await?;
         }
+        // `participant_missing` is the call that ended before anyone spoke: the developer hangs
+        // up rather than leave the agent talking to an empty room, where its voice waits for a
+        // listener that is not coming (the room's output plays once subscribed).
+        let missing = self.run.record.host_view().events().iter().any(|(_, ev)| {
+            matches!(ev, SessionEvent::AmdResult { verdict, .. }
+                if verdict.reason == lk_agents_abi::voice::amd::AmdReason::ParticipantMissing)
+        });
+        if missing && !self.ending && !self.closing() {
+            return Box::pin(self.hang_up()).await;
+        }
         if sent(&self.run, AmdInput::Execute)
             && !sent(&self.run, AmdInput::Close)
             && self.rng.u8(0..100) < AMD_LEFT
@@ -688,6 +718,11 @@ impl Talk {
             }
             3 => self.send(Input::Room { event: RoomIn::Unlinked }).await?,
             _ => self.send(Input::Room { event: RoomIn::Closed }).await?,
+        }
+        // A room with nobody linked has nobody to leave it: the developer closes the session.
+        let refused = self.run.record.applied().last().is_some_and(|a| !a.accepted);
+        if refused {
+            self.send(Input::Close { drain: false }).await?;
         }
         for _ in 0..CLOSING_BEATS {
             self.send(Input::Advance { ms: Millis(BEAT_MS) }).await?;
@@ -822,7 +857,7 @@ impl Talk {
         let live = self.run.record.live();
         let vad = !live.of(Kind::Vad).is_empty();
         let noise = self.persona.noise;
-        let Providers { latency, late_finals, revisions, split_finals, .. } = self.providers;
+        let Providers { latency, late_finals, revisions, .. } = self.providers;
         let rng = &mut self.rng;
         let slow = |ms: u64| ms * latency / 100;
         // Noise: the detector hears speech, the recogniser has nothing to transcribe.
@@ -832,90 +867,42 @@ impl Talk {
         if vad {
             out.push(Verdict { at_ms: slow(rng.u64(VAD_START_MS)), word: Word::VadStart });
         }
-        let mut vad_end_at = dur + slow(rng.u64(VAD_END_MS));
+        let vad_end_at = dur + slow(rng.u64(VAD_END_MS));
+        // The recogniser behaves as the corpus model the setup names does: when its first words
+        // come, how often it restates them, how it cuts a long turn into finals, what it sends
+        // around each final (a usage report before it, the end of speech with it), and its
+        // quirks: Deepgram's empty finals over noise, AssemblyAI's second final for the same
+        // words, Flux's preflights.
+        let model = corpus::STT_MODELS[self.run.setup.stt_model % corpus::STT_MODELS.len()];
+        let q = |name: &'static str| ["stt", model, name];
+        let listening = !live.of(Kind::Stt).is_empty();
         if let (true, Some(text)) = (stt, speech.text) {
-            let words: Vec<&str> = text.split(' ').collect();
-            let start = slow(rng.u64(STT_START_MS));
-            out.push(Verdict { at_ms: start, word: Word::SttStart });
-            // A provider under load answers late now and then; usually its tail latency is short.
-            let final_at = dur
-                + if rng.u8(0..100) < late_finals {
-                    rng.u64(STT_LATE_FINAL_MS)
-                } else {
-                    slow(rng.u64(STT_FINAL_MS))
-                };
-            // A long enough turn may come back as two finals, cut at a breath: the first covers
-            // the words up to the cut and arrives while the person is still talking.
-            let cut = (words.len() >= 4 && rng.u8(0..100) < split_finals)
-                .then(|| rng.usize(2..words.len() - 1));
-            // Interims stream as a provider's do: one every so often, each a longer prefix of
-            // the words so far, and one of them now and then mis-heard, then corrected.
-            let interims =
-                (dur / STT_INTERIM_EVERY_MS).clamp(1, words.len().saturating_sub(1).max(1) as u64);
-            let revised = (rng.u8(0..100) < revisions).then(|| rng.u64(1..=interims));
-            for i in 1..=interims {
-                let at_ms = start + dur.saturating_sub(start) * i / (interims + 1);
-                let upto = words.len() * i as usize / (interims as usize + 1);
-                let mut prefix: Vec<&str> = words[..upto.max(1)].to_vec();
-                if revised == Some(i) {
-                    // The last word so far, mis-heard as a word from some other turn.
-                    let other = USER_TURNS[rng.usize(0..USER_TURNS.len())];
-                    let stray = other
-                        .split(' ')
-                        .nth(rng.usize(0..other.split(' ').count()))
-                        .unwrap_or("uh");
-                    *prefix.last_mut().unwrap() = stray;
-                }
-                match cut {
-                    // Past the cut, an interim is the second final's own prefix.
-                    Some(cut) if upto > cut => {
-                        out.push(Verdict {
-                            at_ms,
-                            word: Word::SttInterim(prefix[cut..].join(" ")),
-                        });
-                    }
-                    _ => out.push(Verdict { at_ms, word: Word::SttInterim(prefix.join(" ")) }),
-                }
+            let knobs = SttKnobs { latency, late_finals, revisions };
+            out.extend(recogniser(model, text, dur, rng, knobs));
+            if vad {
+                out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
             }
-            match cut {
-                Some(cut) => {
-                    let first_at =
-                        start + dur.saturating_sub(start) * cut as u64 / words.len() as u64;
-                    out.push(Verdict {
-                        at_ms: first_at,
-                        word: Word::SttFinal(words[..cut].join(" ")),
-                    });
-                    out.push(Verdict {
-                        at_ms: final_at,
-                        word: Word::SttFinal(words[cut..].join(" ")),
-                    });
-                }
-                None => {
-                    if rng.bool() {
-                        let at_ms = dur + (final_at - dur) / 2;
-                        out.push(Verdict { at_ms, word: Word::SttPreflight(text.to_owned()) });
-                    }
-                    out.push(Verdict { at_ms: final_at, word: Word::SttFinal(text.to_owned()) });
-                }
-            }
-            // The utterance closes at the first of final and end, so the end never precedes the
-            // final; the coin decides which side of the detector's end it lands on.
-            let stt_end_first = rng.bool();
-            let end_at = if stt_end_first { final_at } else { final_at.max(vad_end_at) };
-            if stt_end_first {
-                vad_end_at = vad_end_at.max(end_at);
-                out.push(Verdict { at_ms: end_at, word: Word::SttEnd });
-                if vad {
-                    out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
-                }
-            } else {
-                if vad {
-                    out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
-                }
-                out.push(Verdict { at_ms: end_at, word: Word::SttEnd });
+        } else if listening
+            && speech.text.is_some()
+            && corpus::samples(&q("empty_finals_per_minute")).iter().any(|r| *r > 0.0)
+        {
+            out.extend(recogniser_noise(model, dur, rng, latency));
+            if vad {
+                out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
             }
         } else if vad {
             out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
+        }
+        // The realtime server hears the person with its own VAD, when it detects turns: its onset
+        // and its end of speech come as late as the corpus has them, its end later still under
+        // semantic detection, which waits for the words to sound finished.
+        if let Some(semantic) = self.server_vad() {
+            let kind = if semantic { "semantic" } else { "server" };
+            let rng = &mut self.rng;
+            let started = corpus::draw_ms(rng, &["realtime", &format!("speech_started_lag_{kind}")]);
+            let stopped = corpus::draw_ms(rng, &["realtime", &format!("speech_stopped_lag_{kind}")]);
+            out.push(Verdict { at_ms: started, word: Word::RtStart });
+            out.push(Verdict { at_ms: dur + stopped.max(1), word: Word::RtStop });
         }
         // Stable, so two verdicts due at the same instant keep the order chosen above.
         out.sort_by_key(|v| v.at_ms);
@@ -1093,6 +1080,13 @@ impl Talk {
                 speaker: self.current_speaker,
             }),
             Word::SttEnd => utterance.map(|utterance| Input::SttEnd { utterance }),
+            Word::SttUsage => utterance.map(|utterance| Input::SttUsage { utterance }),
+            Word::RtStart => self
+                .first(Kind::Realtime)
+                .map(|n| Input::RealtimeEvent { socket: Ref::new(n), event: RtEvent::SpeechStarted }),
+            Word::RtStop => self
+                .first(Kind::Realtime)
+                .map(|n| Input::RealtimeEvent { socket: Ref::new(n), event: RtEvent::SpeechStopped }),
         };
         match input {
             Some(input) => self.send(input).await,
@@ -1111,11 +1105,20 @@ impl Talk {
             Word::SttStart => {
                 self.first(Kind::Stt).is_some_and(|stt| self.reached(Kind::Stt, stt, segment_start))
             }
-            Word::SttInterim(_) | Word::SttPreflight(_) | Word::SttFinal(_) | Word::SttEnd => {
-                match (self.first(Kind::Stt), stt_start) {
-                    (Some(stt), Some(since)) => self.reached(Kind::Stt, stt, since),
-                    _ => false,
-                }
+            Word::RtStart | Word::RtStop => self
+                .first(Kind::Realtime)
+                .is_some_and(|rt| self.reached(Kind::Realtime, rt, segment_start)),
+            // A recogniser reports the words it heard: audio since the segment began, and an
+            // utterance open to report them on (its start comes with its first words).
+            Word::SttInterim(_)
+            | Word::SttPreflight(_)
+            | Word::SttFinal(_)
+            | Word::SttEnd
+            | Word::SttUsage => {
+                stt_start.is_some()
+                    && self
+                        .first(Kind::Stt)
+                        .is_some_and(|stt| self.reached(Kind::Stt, stt, segment_start))
             }
         }
     }
@@ -1226,13 +1229,20 @@ impl Talk {
                 )
             };
             let mut rows = Vec::new();
-            // The realtime server finishes the turns it is speaking, oldest first.
+            // The realtime server finishes its responses on its own clock. What it does wrong it
+            // does at its own rate: drops the socket mid-reply and takes connections again, errs,
+            // fails the response or the transcription, or opens a response of its own.
             if let Some(socket) = self.first(Kind::Realtime) {
-                for _ in generations {
-                    rows.push(Input::RealtimeEvent {
-                        socket: Ref::new(socket),
-                        event: RtEvent::GenerationDone,
-                    });
+                let socket_ref = Ref::new(socket);
+                if !generations.is_empty() && self.rng.u8(0..100) < self.providers.realtime_errors {
+                    let event = *self.pick_rt(&[
+                        RtEvent::ServerError,
+                        RtEvent::ResponseFailed,
+                        RtEvent::TranscriptionFailed,
+                        RtEvent::SecondGeneration,
+                        RtEvent::StrayDelta,
+                    ]);
+                    rows.push(Input::RealtimeEvent { socket: socket_ref, event });
                 }
                 // The server drops the socket mid-reply and comes back.
                 if self.rng.u8(0..100) < self.providers.socket_drops {
@@ -1461,7 +1471,7 @@ impl Talk {
     /// to catch, not for the person to avoid.
     async fn await_playout(&mut self) -> Result<(), Halt> {
         let owed_by_case = |t: &Self| {
-            [Kind::Chat, Kind::Tool, Kind::Hook, Kind::Generation]
+            [Kind::Chat, Kind::Tool, Kind::Hook]
                 .iter()
                 .any(|k| t.first(*k).is_some())
         };
@@ -1478,6 +1488,165 @@ impl Talk {
         }
         Ok(())
     }
+}
+
+/// The person's provider knobs a recogniser's verdicts depend on.
+#[derive(Clone, Copy)]
+struct SttKnobs {
+    /// In percent of the recorded delays.
+    latency: u64,
+    /// How often the last final comes 1.5-3 s late (a provider under load, past the corpus).
+    late_finals: u8,
+    /// How often an interim is mis-heard, then corrected.
+    revisions: u8,
+}
+
+/// What a recorded recogniser says about `text` spoken over `dur` ms, as the corpus model does:
+/// when its first words come, how often it restates them, how it cuts a long turn into finals,
+/// what it sends around each final (a usage report before it, the end of speech with it), and
+/// its quirks: AssemblyAI's second final for the same words, Flux's preflights. Measured from the
+/// speech's start.
+fn recogniser(model: &str, text: &str, dur: u64, rng: &mut Rng, knobs: SttKnobs) -> Vec<Verdict> {
+    let SttKnobs { latency, late_finals, revisions } = knobs;
+    let slow = |ms: u64| ms * latency / 100;
+    let q = |name: &'static str| ["stt", model, name];
+    let mut out = Vec::new();
+    let words: Vec<&str> = text.split(' ').collect();
+    let n = words.len().max(1);
+    let pieces = (corpus::draw(rng, &q("finals_per_utterance")) as usize).clamp(1, n);
+    let preflights = corpus::draw(rng, &q("preflights_per_utterance")) as usize;
+    let (dup, of) = corpus::share(&q("duplicate_share"));
+    let revised_piece = (rng.u8(0..100) < revisions).then(|| rng.usize(0..pieces));
+    let mut last_end = 0;
+    for p in 0..pieces {
+        let (a, b) = (n * p / pieces, n * (p + 1) / pieces);
+        let piece = words[a.min(words.len())..b.min(words.len())].join(" ");
+        let spoken_from = dur * a as u64 / n as u64;
+        let spoken_to = if p + 1 == pieces { dur } else { dur * b as u64 / n as u64 };
+        // A provider under load answers late now and then (`late_finals`, past what the
+        // corpus saw); usually its tail is the corpus's.
+        let tail = if p + 1 == pieces && rng.u8(0..100) < late_finals {
+            rng.u64(STT_LATE_FINAL_MS)
+        } else {
+            slow(corpus::draw_ms(rng, &q("final_after_end")))
+        };
+        let first_at = (spoken_from + slow(corpus::draw_ms(rng, &q("first_after_onset"))))
+            .max(last_end + 1);
+        // No words before the recogniser has any: a short piece's final waits for its first.
+        let final_at = (spoken_to + tail).max(last_end + 1).max(first_at);
+        // Its start of speech comes with its first words, never before.
+        if first_at < final_at {
+            out.push(Verdict { at_ms: first_at, word: Word::SttStart });
+            // The words heard by `t`, as a provider restates them.
+            let heard_by = |t: u64| {
+                let heard = (t.saturating_sub(spoken_from) * (b - a) as u64
+                    / spoken_to.saturating_sub(spoken_from).max(1))
+                .clamp(1, (b - a).max(1) as u64) as usize;
+                words[a..(a + heard).min(words.len())].to_vec()
+            };
+            // Flux's preflights: the words so far, judged finished, the last just before the
+            // final and nothing restated after it.
+            let last_preflight = (preflights > 0).then(|| {
+                final_at
+                    .saturating_sub(corpus::draw_ms(rng, &q("final_after_preflight")))
+                    .max(first_at)
+            });
+            let mut t = first_at;
+            let mut nth = 0;
+            while t < last_preflight.unwrap_or(final_at) || nth == 0 {
+                let mut prefix = heard_by(t);
+                if revised_piece == Some(p) && nth == 1 && !prefix.is_empty() {
+                    // The last word so far, mis-heard as a word from some other turn.
+                    let other = USER_TURNS[rng.usize(0..USER_TURNS.len())];
+                    let stray = other
+                        .split(' ')
+                        .nth(rng.usize(0..other.split(' ').count()))
+                        .unwrap_or("uh");
+                    *prefix.last_mut().unwrap() = stray;
+                }
+                out.push(Verdict { at_ms: t, word: Word::SttInterim(prefix.join(" ")) });
+                nth += 1;
+                t += corpus::draw_ms(rng, &q("interim_gap")).max(1);
+            }
+            if let Some(last) = last_preflight {
+                // Every final has its preflight; the last piece the turn's whole run of them.
+                let count = if p + 1 == pieces { preflights } else { 1 };
+                for k in 0..count {
+                    let at_ms = first_at + (last - first_at) * (k as u64 + 1) / count as u64;
+                    let said = if k + 1 == count { piece.clone() } else { heard_by(at_ms).join(" ") };
+                    out.push(Verdict { at_ms, word: Word::SttPreflight(said) });
+                }
+            }
+        } else {
+            out.push(Verdict { at_ms: final_at, word: Word::SttStart });
+            // A model that judges every turn's end restates the words and its verdict first,
+            // however short the turn.
+            if preflights > 0 {
+                out.push(Verdict { at_ms: final_at, word: Word::SttInterim(piece.clone()) });
+                out.push(Verdict { at_ms: final_at, word: Word::SttPreflight(piece.clone()) });
+            }
+        }
+        out.push(Verdict { at_ms: final_at, word: Word::SttUsage });
+        out.push(Verdict { at_ms: final_at, word: Word::SttFinal(piece.clone()) });
+        out.push(Verdict { at_ms: final_at, word: Word::SttEnd });
+        last_end = final_at;
+        // AssemblyAI's formatted turn: the same words again, a moment later, as an
+        // utterance of their own.
+        if rng.u64(0..of) < dup {
+            let again = final_at + corpus::draw_ms(rng, &q("duplicate_final_after")).max(1);
+            out.push(Verdict { at_ms: again, word: Word::SttStart });
+            out.push(Verdict { at_ms: again, word: Word::SttUsage });
+            out.push(Verdict { at_ms: again, word: Word::SttFinal(piece) });
+            out.push(Verdict { at_ms: again, word: Word::SttEnd });
+            last_end = again;
+        }
+    }
+    out
+}
+
+/// Noise to a recogniser that reports it: Deepgram opens an utterance over it and closes it with
+/// an empty final. Nothing from a model the corpus never saw do so.
+fn recogniser_noise(model: &str, dur: u64, rng: &mut Rng, latency: u64) -> Vec<Verdict> {
+    let q = |name: &'static str| ["stt", model, name];
+    if !corpus::samples(&q("empty_finals_per_minute")).iter().any(|r| *r > 0.0) {
+        return Vec::new();
+    }
+    let at_ms = dur + corpus::draw_ms(rng, &q("final_after_end")) * latency / 100;
+    [Word::SttStart, Word::SttUsage, Word::SttFinal(String::new()), Word::SttEnd]
+        .into_iter()
+        .map(|word| Verdict { at_ms, word })
+        .collect()
+}
+
+/// A recorded recogniser's verdicts on `text` spoken over `dur_ms`, at the corpus's own delays,
+/// as `(ms from the speech's start, event kind)`: what `tests/conformance.rs` checks against the
+/// recordings. An empty `text` is noise.
+pub fn stt_kinds(model: &str, text: &str, dur_ms: u64, seed: u64) -> Vec<(u64, &'static str)> {
+    let mut rng = Rng::with_seed(seed);
+    let knobs = SttKnobs { latency: 100, late_finals: 0, revisions: 0 };
+    let verdicts = if text.is_empty() {
+        recogniser_noise(model, dur_ms, &mut rng, 100)
+    } else {
+        recogniser(model, text, dur_ms, &mut rng, knobs)
+    };
+    let mut kinds: Vec<(u64, &'static str)> = verdicts
+        .into_iter()
+        .map(|v| {
+            let kind = match v.word {
+                Word::SttStart => "start_of_speech",
+                Word::SttInterim(_) => "interim_transcript",
+                Word::SttPreflight(_) => "preflight_transcript",
+                Word::SttUsage => "recognition_usage",
+                Word::SttFinal(_) => "final_transcript",
+                Word::SttEnd => "end_of_speech",
+                _ => "other",
+            };
+            (v.at_ms, kind)
+        })
+        .collect();
+    // In due order, as `verdicts` sends them.
+    kinds.sort_by_key(|(at, _)| *at);
+    kinds
 }
 
 /// A row the host program sends: a command, text or audio fed into a stream it opened, or a hook

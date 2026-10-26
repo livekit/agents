@@ -20,6 +20,7 @@
 
 pub mod authored;
 pub mod check;
+pub mod corpus;
 pub mod drive;
 pub mod fakes;
 pub mod input;

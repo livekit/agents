@@ -2,7 +2,7 @@
 //! them reach it, once, under the server's ids.
 use lk_agents_abi::{ChatItem, Role};
 use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, simulate};
-use lk_agents_fuzz::input::{Input, Millis, Ref, RtEvent};
+use lk_agents_fuzz::input::{Count, Input, Millis, Ref, RtEvent};
 use lk_agents_voice::events::SessionEvent;
 
 // Catches: `remote_item_added` committed into history as it came, empty, and the transcript and
@@ -14,15 +14,22 @@ use lk_agents_voice::events::SessionEvent;
 #[test]
 fn server_items_reach_history_filled() {
     let setup =
-        Setup { realtime: Some(RealtimeSetup { turn_detection: false }), ..Setup::default() };
+        Setup { realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }), ..Setup::default() };
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         Input::Advance { ms: Millis(20) },
         Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::GenerationDone },
         Input::Advance { ms: Millis(500) },
-        Input::CommitTurn { skip_reply: false },
+        Input::PlayoutFinished { segment: Ref::new(0) },
         Input::Advance { ms: Millis(20) },
+        // The person speaks: a commit of an empty buffer is an error on a real server.
+        Input::MicFrames { mic: Ref::new(0), chunks: Count(30) },
+        Input::Advance { ms: Millis(300) },
+        Input::CommitTurn { skip_reply: false },
+        Input::Advance { ms: Millis(1_000) },
         Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::GenerationDone },
+        Input::Advance { ms: Millis(500) },
+        Input::PlayoutFinished { segment: Ref::new(1) },
         Input::Advance { ms: Millis(500) },
     ];
     let run = simulate(async {
@@ -50,8 +57,8 @@ fn server_items_reach_history_filled() {
     assert!(messages.iter().all(|(_, _, text)| !text.is_empty()), "{messages:#?}");
     let user: Vec<_> = messages.iter().filter(|(role, ..)| *role == Role::User).collect();
     assert_eq!(user.len(), 1, "{messages:#?}");
-    assert!(user[0].1.starts_with("rt-user-"), "{messages:#?}");
+    assert!(user[0].1.starts_with("item_user_"), "{messages:#?}");
     let replies: Vec<_> = messages.iter().filter(|(role, ..)| *role == Role::Assistant).collect();
     assert_eq!(replies.len(), 2, "{messages:#?}");
-    assert!(replies.iter().all(|(_, id, _)| id.starts_with("rt-msg-")), "{messages:#?}");
+    assert!(replies.iter().all(|(_, id, _)| id.starts_with("item_msg_")), "{messages:#?}");
 }

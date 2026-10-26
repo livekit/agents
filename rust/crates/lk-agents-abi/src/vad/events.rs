@@ -6,7 +6,7 @@ use crate::MediaRef;
 use lk_agents_host_derive::Host;
 
 // `vad.py:19`, a `(str, Enum)`: the wire strings are public API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, lk_agents_host_derive::Vocabulary)]
 #[python(enum, module = "vad", path = "livekit.agents.vad", name = "VADEventType")]
 #[node(enum)]
 #[host(wire(

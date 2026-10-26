@@ -329,6 +329,16 @@ impl Driver {
             }
             ctx
         });
+        // A realtime model answers on its own socket, as `generate_reply()` does there.
+        if self.activity.rt_session.is_some() {
+            let tool_choice = Some(lk_agents_abi::ToolChoice::Forbidden);
+            let Some(speech) =
+                self.realtime_reply(now, None, Some(text), None, tool_choice, None, false, out)
+            else {
+                return;
+            };
+            return self.tool_reply_scheduled(speech, update_ids, at_tail, out);
+        }
         let message_id = self.session.ids.mint("item");
         let handle = self.start_speech(
             now,
@@ -348,7 +358,16 @@ impl Driver {
             },
             out,
         );
-        let speech = handle.id();
+        self.tool_reply_scheduled(handle.id(), update_ids, at_tail, out);
+    }
+
+    fn tool_reply_scheduled(
+        &mut self,
+        speech: SpeechId,
+        update_ids: Vec<String>,
+        at_tail: bool,
+        out: &mut Out,
+    ) {
         out.trace(TraceToolStep::ReplyScheduled {
             speech,
             update_ids: update_ids.clone(),
@@ -404,7 +423,7 @@ impl Driver {
             return;
         };
         out.trace(GenerationStep::FillerStarted { filler: id, speech });
-        let run = FillerRun { sched, call_id, speech, source, asking: None, armed: None };
+        let run = FillerRun { sched, call_id, speech, source, asking: None, armed: None, fired_at: None };
         self.activity.tools.fillers.insert(id, run);
         self.pump_fillers(now, out);
     }
@@ -535,6 +554,15 @@ impl Driver {
                 }
             }
             FillerAction::Fire { step } => {
+                // A second fire in the instant of the last: its say finished at birth (no voice
+                // to speak it), left the session idle at once, and `interval=0` with no dwell
+                // came round again with no time passing, forever. The reference's loop spins
+                // there; this ends the filler, as it ends one whose say is refused.
+                let Some(run) = self.activity.tools.fillers.get_mut(&id) else { return };
+                if run.fired_at.replace(now) == Some(now) {
+                    self.end_filler(id, FillerEnd::Refused, out);
+                    return;
+                }
                 match self.activity.tools.fillers.get(&id).map(|r| r.source.clone()) {
                     Some(FillerSource::Text(text)) => {
                         self.fire_filler(now, id, step, Some(text), false, out)

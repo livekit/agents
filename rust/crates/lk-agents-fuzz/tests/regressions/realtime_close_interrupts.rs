@@ -10,7 +10,7 @@ use lk_agents_voice::trace::{RealtimeStep, Step};
 #[test]
 fn a_close_interrupts_the_socket_with_no_generation_open() {
     let setup =
-        Setup { realtime: Some(RealtimeSetup { turn_detection: false }), ..Setup::default() };
+        Setup { realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }), ..Setup::default() };
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         Input::Advance { ms: Millis(20) },

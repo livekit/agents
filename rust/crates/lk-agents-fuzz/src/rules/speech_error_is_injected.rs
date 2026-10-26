@@ -1,8 +1,12 @@
 //! A speech fails only from a failure the case injected into one of its own requests, or from
 //! closing before it was scheduled, from a synthesis the case failed while it was live, from the
-//! realtime socket the case dropped while it was live, or from a refusal the driver journals
-//! itself.
-use lk_agents_voice::trace::{SpeechStep, Step};
+//! realtime socket the case dropped while it was live, from an error the realtime server sent
+//! while it was live (a refusal, a timeout, a failed connection: the server's, reported by the
+//! session), or from a refusal the driver journals itself.
+use lk_agents_voice::{
+    events::{ErrorSource, SessionEvent},
+    trace::{SpeechStep, Step},
+};
 
 use crate::{
     authored::Authored,
@@ -16,7 +20,7 @@ pub struct SpeechErrorIsInjected;
 impl Rule for SpeechErrorIsInjected {
     const CONTRACT: Contract = Contract {
         id: "speech_error_is_injected",
-        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on, was refused by Close before scheduling, or was a say the driver refused on the journal.",
+        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, was refused by Close before scheduling, or was a say the driver refused on the journal.",
         examples: &[failed_by_injection],
         counterexamples: &[failed_without_injection],
         probe: None,
@@ -61,6 +65,13 @@ impl Rule for SpeechErrorIsInjected {
             let socket_dropped = inputs.accepted().filter(before_done).any(|sent| {
                 matches!(sent.input, Input::RealtimeEvent { event: RtEvent::Disconnected, .. })
             });
+            // The realtime server is a simulation of the real one, and refuses and times out as
+            // that does: a `response.create` over its own response, a connection slower than the
+            // client's bound. What it said reached the host as the session's realtime error.
+            let server_erred = host.events().iter().any(|(at, ev)| {
+                matches!(ev, SessionEvent::Error(e) if e.source == ErrorSource::Realtime)
+                    && speech.done_at().is_none_or(|done| *at < done)
+            }) || crate::fakes::realtime::server::REFUSALS.iter().any(|code| error.contains(code));
             let refused_by_close = inputs.close_asked_at().is_some() && !speech.is_scheduled();
             // A `say` the driver refused on its own terms -- words with no voice to speak them --
             // fails without ever making a request; the refusal is on the journal.
@@ -73,6 +84,7 @@ impl Rule for SpeechErrorIsInjected {
                 || voice_failed
                 || voice_down
                 || socket_dropped
+                || server_erred
                 || refused_by_close
                 || refused_by_driver;
             check.expect(

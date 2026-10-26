@@ -114,7 +114,9 @@ pub(crate) async fn realtime_generation_task(
         llm_started_at: Some(started_at),
         ..TurnStats::default()
     };
-    let tools_running = has_calls && !interrupted;
+    // The speech's interruption decides it, as the pipeline's step does: a reply whose audio the
+    // output cut still has its tools running.
+    let tools_running = has_calls && !handle.interrupted_speech();
     // `assistant_metrics["provider_request_ids"] = [generation_ev.response_id]` (`:4168-4169`).
     let request_ids = response_id.map(|id| vec![id]);
     // The server's id, as `_realtime_generation_task` commits it: it fills the placeholder.
@@ -151,17 +153,18 @@ fn deliver_realtime(
         .into_iter()
         .filter(|item| matches!(item, ChatItem::FunctionCallOutput(_)))
         .collect();
-    let ask = match decision.next {
-        NextStep::Reply(_) => true,
+    let (ask, tool_choice) = match decision.next {
+        NextStep::Reply(req) => (true, Some(req.tool_choice)),
         // The user barged in over the tool call: the answer is committed and not spoken.
-        NextStep::Done | NextStep::Interrupted => false,
+        NextStep::Done | NextStep::Interrupted => (false, None),
     };
     if ask {
         handle.step();
         shared.report(GenEvent::ToolStep { speech, step: handle.num_steps() });
     }
     let step = handle.num_steps();
-    let sent = wake.send(RealtimeWake::ToolsDone { speech, step, outputs, ask }).is_ok();
+    let sent =
+        wake.send(RealtimeWake::ToolsDone { speech, step, outputs, ask, tool_choice }).is_ok();
     if ask && sent { StepOutcome::Next(finished) } else { StepOutcome::Done(finished) }
 }
 

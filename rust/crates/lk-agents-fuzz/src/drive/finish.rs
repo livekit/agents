@@ -78,6 +78,31 @@ impl Run {
                 out.push(Input::VadEnd { vad: Ref::new(nth), silence_ms: Millis(500) });
             }
         }
+        // The realtime server's VAD the same: a person it heard start is heard to stop, or the
+        // driver holds the agent's voice for the end of their turn forever.
+        if let Some(socket) = self.record.live().of(Kind::Realtime).first().copied() {
+            let still_speaking = self
+                .record
+                .applied()
+                .iter()
+                .filter(|a| a.accepted)
+                .filter_map(|a| match &a.input {
+                    Input::RealtimeEvent { event: RtEvent::SpeechStarted, .. } => Some(true),
+                    Input::RealtimeEvent {
+                        event: RtEvent::SpeechStopped | RtEvent::Disconnected,
+                        ..
+                    } => Some(false),
+                    _ => None,
+                })
+                .last()
+                .unwrap_or(false);
+            if still_speaking {
+                out.push(Input::RealtimeEvent {
+                    socket: Ref::new(socket),
+                    event: RtEvent::SpeechStopped,
+                });
+            }
+        }
         // A recogniser swapped out mid-utterance took that utterance with it, and the driver still
         // hears the person speaking: the new recogniser hears them out, an utterance the next
         // round ends.
