@@ -47,10 +47,9 @@ pub(crate) struct Closing {
     pub(crate) error: Option<ProviderError>,
     pub(crate) phase: ClosePhase,
     /// Host `drain()`s answered by the close's own drain (the reference's drain waits on the
-    /// activity lock `_aclose_impl` holds). Answered `Ok` once the edge has settled.
-    drains: Vec<RequestId>,
-    /// `drains` was answered: a later caller is answered at once.
-    drains_answered: bool,
+    /// activity lock `_aclose_impl` holds), `Ok` once the edge has settled. `None` once answered:
+    /// a later caller is answered at once.
+    drains: Option<Vec<RequestId>>,
 }
 
 /// Draining, the edge and the legs are bounded by [`Timer::Close`], armed as each begins.
@@ -80,39 +79,6 @@ impl ClosePhase {
     }
 }
 
-impl Closing {
-    /// The close as requested, answering `drains` with its drain.
-    pub(crate) fn new(
-        reason: CloseReason,
-        error: Option<ProviderError>,
-        drains: Vec<RequestId>,
-    ) -> Self {
-        Closing { reason, error, phase: ClosePhase::Requested, drains, drains_answered: false }
-    }
-
-    /// Whether a caller of `drain()` can still wait on the close's own drain.
-    pub(crate) fn drains_open(&self) -> bool {
-        !self.drains_answered
-    }
-
-    pub(crate) fn join_drains(&mut self, waiters: Vec<RequestId>) {
-        self.drains.extend(waiters);
-    }
-
-    /// The close's `drain()` callers, once: empty when answered already or nobody waits.
-    pub(crate) fn take_drains(&mut self) -> Vec<RequestId> {
-        if std::mem::replace(&mut self.drains_answered, true) {
-            return Vec::new();
-        }
-        std::mem::take(&mut self.drains)
-    }
-
-    /// Whoever still waits on the close's drain when the loop ends, answered or not.
-    pub(crate) fn remaining_drains(&mut self) -> Vec<RequestId> {
-        std::mem::take(&mut self.drains)
-    }
-}
-
 impl Driver {
     /// `AgentSession._aclose_impl`: the agent's `on_exit`, the drain, the hard edge, the trailing
     /// transcript, the legs, `close`. A second request joins the close in progress (a drain asked
@@ -137,7 +103,8 @@ impl Driver {
         // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's,
         // and the caller is answered with the close's drain.
         let drains = self.activity.drain.take_waiters();
-        self.session.closing = Some(Closing::new(reason, error, drains));
+        let phase = ClosePhase::Requested;
+        self.session.closing = Some(Closing { reason, error, phase, drains: Some(drains) });
         // A non-drain close: every open speech force-interrupted regardless of
         // `allow_interruptions`, a false-interruption pause released so a later turn never
         // resolves it as false, and every pending socket request settled `Closing`.
@@ -224,9 +191,9 @@ impl Driver {
             return;
         }
         let exit_hook = self.activity.on_exit.exiting();
-        if let Some(closing) = self.session.closing.as_mut().filter(|c| c.drains_open()) {
+        if let Some(drains) = self.session.closing.as_mut().and_then(|c| c.drains.as_mut()) {
             out.trace(HandoffStep::DrainStarted { exit_hook });
-            closing.join_drains(waiters);
+            drains.extend(waiters);
         } else {
             // Answered already, or no close is running (the loop is ending).
             let refused = self.session.closing.is_none().then_some(DrainRefused::Closing);
@@ -238,7 +205,8 @@ impl Driver {
     }
 
     fn answer_close_drains(&mut self, out: &mut Out) {
-        let waiters = self.session.closing.as_mut().map(Closing::take_drains).unwrap_or_default();
+        let waiters =
+            self.session.closing.as_mut().and_then(|c| c.drains.take()).unwrap_or_default();
         if waiters.is_empty() {
             return;
         }
@@ -590,7 +558,7 @@ impl Driver {
             self.answer(pending.call, Answer::Commit(Ok(String::new())));
         }
         // The close ran to its end: whoever still waits on its drain is answered as drained.
-        for call in self.session.closing.as_mut().map(Closing::remaining_drains).unwrap_or_default()
+        for call in self.session.closing.as_mut().and_then(|c| c.drains.take()).unwrap_or_default()
         {
             self.answer(Some(call), Answer::Drain(Ok(())));
         }
