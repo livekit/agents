@@ -377,6 +377,8 @@ impl Driver {
         self.session.expressive.agent = expressive;
         // A reply in flight keeps the instructions and tools it snapshotted.
         let count = toolset.specs.len();
+        let tool_names: std::collections::BTreeSet<String> =
+            toolset.specs.iter().map(|t| t.name.clone()).collect();
         let previous_agent =
             self.activity.set_agent(agent, instructions, dynamic_instructions, toolset);
         self.session.apply_providers(llm, tts, out);
@@ -392,7 +394,7 @@ impl Driver {
                 // The resume's carry: the task's calls leave the view first, then the host is told
                 // which of the task's items are now the parent's.
                 let from = self.session.chat_ctx.agent().to_owned();
-                let items = self.session.chat_ctx.set_agent(&agent, true);
+                let items = self.session.chat_ctx.hand_to(&agent, &tool_names);
                 if from != agent {
                     out.machine().emit(crate::events::SessionEvent::ContextCarried {
                         from,

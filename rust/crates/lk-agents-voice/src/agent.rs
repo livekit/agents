@@ -164,6 +164,35 @@ impl SessionChatCtx {
     /// Set the driving frame. `carry`: the frame brought no context, so the previous frame's
     /// conversation becomes its own (a resume after an inline task). Returns the ids carried.
     pub fn set_agent(&mut self, agent: &str, carry: bool) -> Vec<String> {
+        self.carry(agent, carry, |_| true)
+    }
+
+    /// A handoff's carry to an agent with `tools`: `AgentActivity(chat_ctx=...)` copies with
+    /// `tools=self.tools`, so a call to a tool the new agent lacks, and its output, stay the
+    /// previous agent's (in the history, out of the new agent's view), as `ChatContext.copy` drops
+    /// them.
+    pub fn hand_to(&mut self, agent: &str, tools: &BTreeSet<String>) -> Vec<String> {
+        let valid: BTreeSet<String> = self
+            .items
+            .iter()
+            .filter_map(|c| match &c.item {
+                ChatItem::FunctionCall(call) if tools.contains(&call.name) => {
+                    Some(call.call_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        self.carry(agent, true, |item| match item {
+            ChatItem::FunctionCall(call) => tools.contains(&call.name),
+            ChatItem::FunctionCallOutput(out) if !out.name.is_empty() => {
+                tools.contains(&out.name)
+            }
+            ChatItem::FunctionCallOutput(out) => valid.contains(&out.call_id),
+            _ => true,
+        })
+    }
+
+    fn carry(&mut self, agent: &str, carry: bool, keep: impl Fn(&ChatItem) -> bool) -> Vec<String> {
         let mut carried = Vec::new();
         if carry {
             let from = std::mem::replace(&mut self.agent, agent.to_owned());
@@ -171,7 +200,7 @@ impl SessionChatCtx {
                 return carried;
             }
             for c in &mut self.items {
-                if c.agent == from && c.visibility.model() {
+                if c.agent == from && c.visibility.model() && keep(&c.item) {
                     c.agent = agent.to_owned();
                     carried.push(c.item.id().to_owned());
                 }
@@ -340,5 +369,44 @@ impl SessionChatCtx {
             }
         }
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lk_agents_abi::{ChatMessage, FunctionCall, FunctionCallOutput, Role};
+    use std::time::{Duration, SystemTime};
+
+    // A handoff carries the conversation, but a call to a tool the new agent lacks, and its
+    // output, stay behind: `AgentActivity(chat_ctx=...)` copies with `tools=self.tools`, which
+    // drops them. Found by `scripts/parity.py handoff_update_agent`.
+    #[test]
+    fn a_handoff_leaves_calls_to_tools_the_new_agent_lacks() {
+        let at = |s: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(s);
+        let call = FunctionCall {
+            id: "fc".into(),
+            call_id: "call_1".into(),
+            arguments: "{}".into(),
+            name: "to_billing".into(),
+            created_at: at(2),
+            extra: Default::default(),
+            group_id: None,
+        };
+        let output = FunctionCallOutput::new("fo", "call_1", "", false, at(3));
+        let items = [
+            ChatItem::Message(ChatMessage::text("u", Role::User, "billing please", at(1))),
+            ChatItem::FunctionCall(call),
+            ChatItem::FunctionCallOutput(output),
+        ];
+        let mut ctx = SessionChatCtx::new();
+        ctx.set_agent("front_desk", false);
+        for item in items {
+            let _ = ctx.commit(item, Source::HostCtx, Visibility::Both, "front_desk");
+        }
+        let carried = ctx.hand_to("billing", &BTreeSet::new());
+        assert_eq!(carried, ["u"]);
+        let ids: Vec<_> = ctx.agent_chat_ctx().items.iter().map(|i| i.id().to_owned()).collect();
+        assert_eq!(ids, ["u"]);
     }
 }

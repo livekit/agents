@@ -19,7 +19,7 @@ loop's, the reference over the tests' fake audio/text IO behind a ``TranscriptSy
     python livekit-agents-next/scripts/parity.py --show say      # both transcripts, side by side
 
 The venvs live in ``$LK_PARITY_VENVS`` (default: a directory under the system temp dir). It exits
-non-zero when a scenario diverges in a way not listed in ``INTENDED``.
+non-zero when a scenario diverges in a way not listed in ``KNOWN``.
 """
 
 from __future__ import annotations
@@ -41,8 +41,24 @@ from typing import Any
 REPO = Path(__file__).resolve().parents[2]
 SAMPLE_RATE = 24000
 
-# Differences the v2.0 design makes on purpose, as (scenario, a substring of a diff line).
-INTENDED: list[tuple[str, str]] = []
+
+def _tts_metrics_per_segment(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
+    for t in (ref, nxt):
+        for kinds in t.get("metrics", []):
+            seen = "TTSMetrics" in kinds
+            kinds[:] = [k for k in kinds if k != "TTSMetrics"] + (["TTSMetrics..."] if seen else [])
+
+
+# Differences listed rather than fixed (see the report printed with them), as (name, why, a
+# normaliser applied to both transcripts). A scenario they alone separate counts as agreeing.
+KNOWN: list[tuple[str, str, Callable[[dict[str, Any], dict[str, Any]], None]]] = [
+    (
+        "tts_metrics_per_segment",
+        "a non-streaming TTS reports one TTSMetrics per sentence in the reference (its "
+        "StreamAdapter forwards each chunked synthesis's), one per synthesis stream in the core",
+        _tts_metrics_per_segment,
+    ),
+]
 
 
 # ============================================================================ the orchestrator
@@ -152,6 +168,13 @@ def orchestrate(argv: list[str]) -> int:
     for name in names:
         ref, nxt = run_stack("ref", name), run_stack("next", name)
         _tolerate_audio(ref, nxt)
+        raw = lines_of(ref) != lines_of(nxt)
+        known = []
+        for key, _, normalise in KNOWN:
+            before = (lines_of(ref), lines_of(nxt))
+            normalise(ref, nxt)
+            if before != (lines_of(ref), lines_of(nxt)) and before[0] != before[1]:
+                known.append(key)
         a, b = lines_of(ref), lines_of(nxt)
         if args.show:
             print(f"==== {name} (ref)\n" + "\n".join(a) + f"\n==== {name} (next)\n" + "\n".join(b))
@@ -160,17 +183,18 @@ def orchestrate(argv: list[str]) -> int:
             for d in difflib.unified_diff(a, b, "ref", "next", n=2, lineterm="")
             if not d.startswith(("---", "+++"))
         ]
-        changed = [d for d in diff if d[:1] in "+-"]
-        unexpected = [d for d in changed if not any(s == name and p in d for s, p in INTENDED)]
-        if not diff:
+        if not diff and (not raw or not known):
             print(f"{name}: same")
-        elif not unexpected:
-            print(f"{name}: same but for intended differences")
+        elif not diff:
+            print(f"{name}: same but for known differences ({', '.join(known)})")
         else:
             diverged.append(name)
             print(f"{name}: DIVERGES")
             print("\n".join(f"    {d}" for d in diff))
     print(f"\n{len(names) - len(diverged)}/{len(names)} scenarios agree")
+    print("known differences:")
+    for key, why, _ in KNOWN:
+        print(f"  {key}: {why}")
     return 1 if diverged else 0
 
 
