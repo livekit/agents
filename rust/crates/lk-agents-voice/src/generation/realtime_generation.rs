@@ -108,7 +108,12 @@ pub(crate) async fn realtime_generation_task(
     }
     let has_calls = !tools.is_empty();
     // No token rate: it would measure the server's audio pacing, not generation speed.
-    let stats = TurnStats { llm_ttft: ttft, llm_tps: None, llm_started_at: Some(started_at) };
+    let stats = TurnStats {
+        llm_ttft: ttft,
+        llm_tps: None,
+        llm_started_at: Some(started_at),
+        ..TurnStats::default()
+    };
     let tools_running = has_calls && !interrupted;
     // `assistant_metrics["provider_request_ids"] = [generation_ev.response_id]` (`:4168-4169`).
     let request_ids = response_id.map(|id| vec![id]);

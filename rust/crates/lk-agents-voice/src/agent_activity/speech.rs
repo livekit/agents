@@ -530,6 +530,7 @@ impl Driver {
             transcription_delay: secs(m.transcription_delay),
             end_of_turn_delay: secs(m.end_of_turn_delay),
             on_user_turn_completed_delay: secs(m.on_user_turn_completed_delay),
+            stt_metadata: self.session.stt.as_ref().map(|stt| stt.provider.metrics_metadata()),
             ..Default::default()
         };
         user

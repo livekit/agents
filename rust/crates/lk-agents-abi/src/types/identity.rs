@@ -25,4 +25,9 @@ impl ProviderId {
     pub fn metadata(&self) -> crate::metrics::base::Metadata {
         crate::metrics::base::Metadata { model_name: Some(self.model.clone()), model_provider: Some(self.provider.clone()) }
     }
+
+    /// `metrics_metadata`: the turn metrics' `{stt,llm,tts}_metadata` on a chat item.
+    pub fn metrics_metadata(&self) -> crate::MetricsMetadata {
+        crate::MetricsMetadata { model_name: Some(self.model.clone()), model_provider: Some(self.provider.clone()) }
+    }
 }

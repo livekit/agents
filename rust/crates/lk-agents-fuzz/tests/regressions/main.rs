@@ -67,6 +67,7 @@ mod tool_started_then_interrupted;
 mod transcript_path_reopened;
 mod tts_first_byte_anchor;
 mod tts_text_transforms;
+mod turn_metrics_name_models;
 mod twin_requests_attributed;
 mod unheard_reply_not_committed;
 mod user_turn_metrics;

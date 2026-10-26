@@ -867,6 +867,15 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_close(self, wire: dict[str, Any]) -> None:
         self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=None))
 
+    def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
+        if event == "metrics_collected" and callback is not None:
+            logger.warning(
+                "metrics_collected is deprecated. "
+                "Use session_usage_updated for usage tracking "
+                "and ChatMessage.metrics for per-turn latency."
+            )
+        return super().on(event, callback)
+
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
         self._recorded_events.append(arg)
         super().emit(event, arg)

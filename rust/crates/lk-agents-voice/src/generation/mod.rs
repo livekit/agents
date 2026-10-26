@@ -69,6 +69,9 @@ pub struct TurnStats {
     pub llm_tps: Option<f64>,
     /// `llm_gen_data.started_at`, the anchor for `_time_to_first_sentence`.
     pub llm_started_at: Option<f64>,
+    /// `self.llm.metrics_metadata` / `self.tts.metrics_metadata`: a pipeline reply's providers.
+    pub llm_metadata: Option<lk_agents_abi::MetricsMetadata>,
+    pub tts_metadata: Option<lk_agents_abi::MetricsMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -175,6 +178,8 @@ impl TurnAccumulator {
                 (Some(_), None) | (None, Some(_)) | (None, None) => None,
             },
             tts_node_ttfb: self.first_tts.ttfb,
+            llm_metadata: stats.llm_metadata,
+            tts_metadata: stats.tts_metadata,
             ..Default::default()
         };
 
