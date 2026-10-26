@@ -147,7 +147,9 @@ class STT(stt.STT):
         server_turn_detection: TurnDetection | None = None
         if is_realtime and _is_voxtral_3(resolved_model):
             if is_given(turn_detection):
-                server_turn_detection = turn_detection
+                server_turn_detection = (
+                    turn_detection.copy() if turn_detection is not None else None
+                )
             elif not diarize_enabled:
                 server_turn_detection = {}
         elif is_given(turn_detection) and turn_detection is not None:
@@ -169,7 +171,7 @@ class STT(stt.STT):
         self._opts = _STTOptions(
             model=resolved_model,
             language=LanguageCode(language) if is_given(language) else None,
-            context_bias=context_bias if is_given(context_bias) else None,
+            context_bias=list(context_bias) if is_given(context_bias) and context_bias else None,
             target_streaming_delay_ms=target_streaming_delay_ms
             if is_given(target_streaming_delay_ms)
             else None,
@@ -292,7 +294,7 @@ class STT(stt.STT):
 
         new_turn_detection: TurnDetection | None = None
         if is_given(turn_detection):
-            new_turn_detection = turn_detection
+            new_turn_detection = turn_detection.copy() if turn_detection is not None else None
         elif is_voxtral_3_realtime:
             if was_voxtral_3_realtime and resolved_diarize == self._opts.diarize:
                 new_turn_detection = self._opts.turn_detection
@@ -312,6 +314,12 @@ class STT(stt.STT):
         if resolved_diarize and new_turn_detection is not None:
             raise ValueError("diarization and turn detection can't be used together")
 
+        new_context_bias = (
+            (list(context_bias) if context_bias else None)
+            if is_given(context_bias)
+            else self._opts.context_bias
+        )
+
         session_changed = (
             resolved_model != self._opts.model
             or new_turn_detection != self._opts.turn_detection
@@ -327,9 +335,7 @@ class STT(stt.STT):
                         is_given(language)
                         and (LanguageCode(language) if language else None) != self._opts.language
                     )
-                    or (
-                        is_given(context_bias) and (context_bias or None) != self._opts.context_bias
-                    )
+                    or new_context_bias != self._opts.context_bias
                 )
             )
         )
@@ -339,8 +345,7 @@ class STT(stt.STT):
         self._opts.turn_detection = new_turn_detection
         if is_given(language):
             self._opts.language = LanguageCode(language) if language else None
-        if is_given(context_bias):
-            self._opts.context_bias = context_bias if context_bias else None
+        self._opts.context_bias = new_context_bias
         if is_given(target_streaming_delay_ms):
             self._opts.target_streaming_delay_ms = target_streaming_delay_ms
         self._capabilities.diarization = resolved_diarize
@@ -455,7 +460,21 @@ class SpeechStream(stt.RecognizeStream):
         self._audio_ended = False
         self._current_text = ""
         self._preflight_text = ""
+        self._language = LanguageCode(language) if is_given(language) else None
         self._detected_language = LanguageCode(language) if is_given(language) else LanguageCode("")
+
+    async def _apply_stream_language(self, connection: RealtimeConnection) -> None:
+        # the language of the stream overrides the one of the session, which can still be
+        # changed as no audio was sent on the connection yet
+        if (
+            self._language
+            and self._language != self._opts.language
+            and _is_realtime(self._opts.model)
+            and _is_voxtral_3(self._opts.model)
+        ):
+            await connection._websocket.send(
+                json.dumps({"type": "session.update", "session": {"language": str(self._language)}})
+            )
 
     async def _send_audio(self, connection: RealtimeConnection, data: bytes) -> None:
         await connection.send_audio(data)
@@ -500,6 +519,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _recv_events(self, connection: RealtimeConnection) -> None:
         self._request_id = connection.request_id
         self._current_text = ""
+        self._preflight_text = ""
 
         async for message in connection._websocket:
             try:
@@ -661,6 +681,7 @@ class SpeechStream(stt.RecognizeStream):
             while True:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
                     self._audio_pending = False
+                    await self._apply_stream_language(connection)
 
                     tasks = [
                         asyncio.create_task(self._send_task(connection)),
