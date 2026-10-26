@@ -70,6 +70,7 @@ class Room:
             "disconnected",
             lambda reason: bus.disconnected(_name(_DISCONNECT, reason, "unknown_reason")),
         )
+        room.on("sip_dtmf_received", lambda ev: bus.sip_dtmf_received(ev.digit))
 
     def _attributes_changed(self, changed: list[str], participant: rtc.Participant) -> None:
         # the agent's own attributes are not a remote participant's

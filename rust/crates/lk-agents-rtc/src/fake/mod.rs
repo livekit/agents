@@ -254,6 +254,11 @@ impl FakeRoom {
         self.state.lock().unwrap().participants.iter().find(|p| &p.identity == id).cloned()
     }
 
+    /// A SIP participant presses `digit` on the keypad.
+    pub fn press_dtmf(&self, digit: &str) {
+        self.bus.emit(RoomEvent::SipDtmf { digit: digit.to_owned() });
+    }
+
     pub fn close(&self, reason: DisconnectReason) {
         let participants = {
             let mut state = self.state.lock().unwrap();

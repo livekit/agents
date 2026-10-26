@@ -731,6 +731,7 @@ pub enum RoomEventKind {
     ParticipantDisconnected,
     ConnectionStateChanged,
     Close,
+    SipDtmf,
 }
 
 impl RoomEventKind {
@@ -747,6 +748,7 @@ impl RoomEventKind {
             E::ParticipantDisconnected { .. } => RoomEventKind::ParticipantDisconnected,
             E::ConnectionStateChanged { .. } => RoomEventKind::ConnectionStateChanged,
             E::Close { .. } => RoomEventKind::Close,
+            E::SipDtmf { .. } => RoomEventKind::SipDtmf,
         }
     }
 }

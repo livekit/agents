@@ -1,44 +1,167 @@
+"""Building blocks for voice flows that collect or act on what a caller says: the result
+records, the checks a capture tool runs on what the model heard, keypad (DTMF) reception, and the
+warm transfer to a human agent. The checks and the transfer's plan are the core's."""
+
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import os
 from base64 import b64encode
-from dataclasses import dataclass
+from datetime import date
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 from xml.sax.saxutils import quoteattr
 
 from livekit import api, rtc
 
-from ... import llm, stt, tts, utils, vad
-from ...job import DEFAULT_PARTICIPANT_KINDS, get_job_context
-from ...llm.chat_context import Instructions
-from ...llm.tool_context import ToolError, ToolFlag, function_tool
-from ...log import logger
-from ...types import NOT_GIVEN, NotGivenOr
-from ...utils import is_given
-from ...voice import room_io
-from ...voice.agent import Agent
-from ...voice.agent_session import LiveSession
-from ...voice.background_audio import (
+from .. import _core, llm, stt, tts, utils, vad
+from .._generated.workflows import (
+    GetAddressResult,
+    GetCardNumberResult,
+    GetCreditCardResult,
+    GetDOBResult,
+    GetEmailResult,
+    GetExpirationDateResult,
+    GetNameResult,
+    GetPhoneNumberResult,
+    GetSecurityCodeResult,
+    WarmTransferResult,
+)
+from ..job import DEFAULT_PARTICIPANT_KINDS, get_job_context
+from ..llm.chat_context import Instructions
+from ..llm.tool_context import ToolError, ToolFlag, function_tool
+from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import is_given
+from ..voice import room_io
+from ..voice.agent import Agent
+from ..voice.agent_session import LiveSession
+from ..voice.background_audio import (
     AudioConfig,
     AudioSource,
     BackgroundAudioPlayer,
     BuiltinAudioClip,
     PlayHandle,
 )
-from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
     import aiohttp
 
-    from ...voice.turn import TurnDetectionMode
+    from ..voice.turn import TurnDetectionMode
+
+__all__ = [
+    "DtmfEvent",
+    "GetAddressResult",
+    "GetCardNumberResult",
+    "GetCreditCardResult",
+    "GetDOBResult",
+    "GetDtmfResult",
+    "GetEmailResult",
+    "GetExpirationDateResult",
+    "GetNameResult",
+    "GetPhoneNumberResult",
+    "GetSecurityCodeResult",
+    "TwilioConnectorWarmTransfer",
+    "WarmTransfer",
+    "WarmTransferResult",
+    "WorkflowInstructions",
+    "dtmf_event_to_code",
+    "format_dtmf",
+    "is_expired",
+    "normalize_date_of_birth",
+    "normalize_email_address",
+    "normalize_phone_number",
+    "receive_dtmf",
+    "validate_card_number",
+]
+
+GetDtmfResult = _core.GetDtmfResult
+validate_card_number = _core.validate_card_number
+normalize_email_address = _core.normalize_email_address
+normalize_phone_number = _core.normalize_phone_number
+dtmf_event_to_code = _core.dtmf_code
+format_dtmf = _core.format_dtmf
 
 
-@dataclass
-class WarmTransferResult:
-    human_agent_identity: str
+def is_expired(month: int, year: int) -> bool:
+    """Whether a two-digit card expiration year/month precedes this month."""
+    return _core.card_expired(month, year, date.today())
+
+
+def normalize_date_of_birth(year: int, month: int, day: int) -> date:
+    """Normalize two-digit birth years and reject invalid or future dates."""
+    return _core.normalize_date_of_birth(year, month, day, date.today())  # type: ignore[no-any-return]
+
+
+class DtmfEvent(str, Enum):
+    ONE = "1"
+    TWO = "2"
+    THREE = "3"
+    FOUR = "4"
+    FIVE = "5"
+    SIX = "6"
+    SEVEN = "7"
+    EIGHT = "8"
+    NINE = "9"
+    ZERO = "0"
+    STAR = "*"
+    POUND = "#"
+    A = "A"
+    B = "B"
+    C = "C"
+    D = "D"
+
+
+async def receive_dtmf(
+    room: rtc.Room,
+    *,
+    num_digits: int,
+    timeout: float = 4.0,
+    stop_event: DtmfEvent = DtmfEvent.POUND,
+) -> _core.GetDtmfResult:
+    """Receive keypad digits; stop at the delimiter or after an inter-digit timeout."""
+    return await _core.receive_dtmf(room, num_digits, timeout, stop_event.value)
+
+
+class WorkflowInstructions(Instructions):
+    """Customizable instruction sections for built-in workflow tasks.
+
+    Extends :class:`Instructions` with ``persona`` and ``extra`` fields
+    that workflow tasks resolve against their own templates and defaults.
+
+    Each field overrides that section when set; leave as ``NOT_GIVEN`` to
+    preserve the workflow's built-in default. Set to ``""`` to remove a
+    section entirely.
+    """
+
+    def __init__(
+        self,
+        audio: str = "",
+        *,
+        text: str | None = None,
+        persona: NotGivenOr[Instructions | str] = NOT_GIVEN,
+        extra: Instructions | str = "",
+    ) -> None:
+        super().__init__(audio=audio, text=text)
+        self.persona: NotGivenOr[Instructions | str] = persona
+        self.extra: Instructions | str = extra
+
+    def resolve(
+        self,
+        *,
+        template: str,
+        default_persona: str,
+        **format_kwargs: Any,
+    ) -> Instructions:
+        """Resolve into a final :class:`Instructions` by formatting the template."""
+        return Instructions.resolve_template(
+            template,
+            persona=self.persona if is_given(self.persona) else default_persona,
+            extra=self.extra,
+            **format_kwargs,
+        )
 
 
 class WarmTransfer:

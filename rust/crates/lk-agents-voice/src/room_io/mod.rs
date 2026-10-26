@@ -429,7 +429,8 @@ impl RoomIo {
             | RoomEvent::LocalTrackPublished { .. }
             | RoomEvent::ParticipantActive { .. }
             | RoomEvent::ParticipantAttributesChanged { .. }
-            | RoomEvent::Close { .. } => {}
+            | RoomEvent::Close { .. }
+            | RoomEvent::SipDtmf { .. } => {}
         }
     }
 

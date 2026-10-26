@@ -5,7 +5,7 @@ use crate::ToolSpec;
 use crate::utils::dates::{Date, Time};
 use lk_agents_host_derive::Host;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 // Each task's `complete(..)` value (a frozen dataclass in the reference). `GetDtmfResult` and
 // `GetDOBResult` carry methods, so each is a `#[host(object)]` instead.
@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap};
 #[python(
     dataclass,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.address",
+    path = "livekit.agents.beta.workflows",
     name = "GetAddressResult"
 )]
 #[node(interface)]
@@ -31,7 +31,7 @@ pub struct GetAddressResult {
 #[python(
     dataclass,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.email_address",
+    path = "livekit.agents.beta.workflows",
     name = "GetEmailResult"
 )]
 #[node(interface)]
@@ -45,7 +45,7 @@ pub struct GetEmailResult {
 #[python(
     dataclass,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.phone_number",
+    path = "livekit.agents.beta.workflows",
     name = "GetPhoneNumberResult"
 )]
 #[node(interface)]
@@ -99,7 +99,7 @@ pub struct DtmfStopped {}
     dataclass,
     zero_defaults,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.name",
+    path = "livekit.agents.beta.workflows",
     name = "GetNameResult"
 )]
 #[node(interface)]
@@ -120,7 +120,7 @@ pub struct GetNameResult {
 #[python(
     dataclass,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.dob",
+    path = "livekit.agents.beta.workflows",
     name = "GetDOBResult"
 )]
 #[node(interface)]
@@ -184,7 +184,7 @@ impl GetDOBResult {
 #[python(
     dataclass,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.credit_card",
+    path = "livekit.agents.beta.workflows",
     name = "GetCardNumberResult"
 )]
 #[node(interface)]
@@ -200,7 +200,7 @@ pub struct GetCardNumberResult {
 #[python(
     dataclass,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.credit_card",
+    path = "livekit.agents.beta.workflows",
     name = "GetSecurityCodeResult"
 )]
 #[node(interface)]
@@ -216,7 +216,7 @@ pub struct GetSecurityCodeResult {
 #[python(
     dataclass,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.credit_card",
+    path = "livekit.agents.beta.workflows",
     name = "GetExpirationDateResult"
 )]
 #[node(interface)]
@@ -231,7 +231,7 @@ pub struct GetExpirationDateResult {
 #[python(
     dataclass,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.credit_card",
+    path = "livekit.agents.beta.workflows",
     name = "GetCreditCardResult"
 )]
 #[node(interface)]
@@ -250,86 +250,12 @@ pub struct GetCreditCardResult {
 #[python(
     dataclass,
     module = "workflows",
-    path = "livekit.agents.beta.workflows.warm_transfer",
+    path = "livekit.agents.beta.workflows",
     name = "WarmTransferResult"
 )]
 #[node(interface)]
 pub struct WarmTransferResult {
     pub human_agent_identity: String,
-}
-
-// Keyed exactly as published (hence capitals); the strings live in `workflows::prompts`.
-
-/// The five a capture module publishes, in the reference's own order: `address`.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
-pub struct CapturePrompts {
-    #[host(rename = "PERSONA")]
-    pub persona: String,
-    #[host(rename = "AUDIO_SPECIFIC")]
-    pub audio_specific: String,
-    #[host(rename = "TEXT_SPECIFIC")]
-    pub text_specific: String,
-    #[host(rename = "CONFIRMATION_INSTRUCTION")]
-    pub confirmation_instruction: String,
-    #[host(rename = "INSTRUCTIONS_TEMPLATE")]
-    pub instructions_template: String,
-}
-
-/// `email_address`: the capture five plus `EMAIL_REGEX`, the reference's validator string verbatim.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
-pub struct EmailPrompts {
-    #[host(rename = "PERSONA")]
-    pub persona: String,
-    #[host(rename = "AUDIO_SPECIFIC")]
-    pub audio_specific: String,
-    #[host(rename = "TEXT_SPECIFIC")]
-    pub text_specific: String,
-    #[host(rename = "CONFIRMATION_INSTRUCTION")]
-    pub confirmation_instruction: String,
-    #[host(rename = "INSTRUCTIONS_TEMPLATE")]
-    pub instructions_template: String,
-    #[host(rename = "EMAIL_REGEX")]
-    pub email_regex: String,
-}
-
-/// `phone_number`: only `PHONE_REGEX` is public there.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
-pub struct PhonePrompts {
-    #[host(rename = "PHONE_REGEX")]
-    pub phone_regex: String,
-}
-
-/// `warm_transfer`: the persona and the template alone.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
-pub struct TransferPrompts {
-    #[host(rename = "PERSONA")]
-    pub persona: String,
-    #[host(rename = "INSTRUCTIONS_TEMPLATE")]
-    pub instructions_template: String,
-}
-
-/// `credit_card`: `CARD_ISSUERS_LOOKUP`, first digit -> issuer name.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
-pub struct CardPrompts {
-    #[host(rename = "CARD_ISSUERS_LOOKUP")]
-    pub card_issuers_lookup: BTreeMap<String, String>,
-}
-
-/// `_core.workflow_prompts()`: the five modules' constants, keyed by the reference's module name.
-/// Exactly the names the reference publishes, and no others.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
-pub struct WorkflowPrompts {
-    pub email_address: EmailPrompts,
-    pub address: CapturePrompts,
-    pub phone_number: PhonePrompts,
-    pub warm_transfer: TransferPrompts,
-    pub credit_card: CardPrompts,
 }
 
 /// A [`ToolSpec`] in the shape `@function_tool(raw_schema=..)` takes: a `RawFunctionDescription`.

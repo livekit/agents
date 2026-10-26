@@ -537,7 +537,8 @@ impl Driver {
             | RoomEvent::ParticipantActive { .. }
             | RoomEvent::ParticipantAttributesChanged { .. }
             | RoomEvent::ParticipantDisconnected { .. }
-            | RoomEvent::ConnectionStateChanged { .. } => {}
+            | RoomEvent::ConnectionStateChanged { .. }
+            | RoomEvent::SipDtmf { .. } => {}
         }
     }
 

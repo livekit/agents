@@ -131,24 +131,28 @@ pub fn recording_enabled(options: &crate::generated::objects::RecordingOptions) 
     lk_agents_abi::telemetry::report::recording_enabled(&options.inner)
 }
 
-#[napi(js_name = "luhnValid")]
-pub fn luhn_valid(card_number: String) -> bool {
-    lk_agents_voice::workflows::luhn_valid(&card_number)
+/// `validate_card_number`: the Luhn checksum over an all-digit string.
+#[napi(js_name = "validateCardNumber")]
+pub fn validate_card_number(card_number: String) -> bool {
+    lk_agents_voice::workflows::validate_card_number(&card_number)
 }
 
-#[napi(js_name = "cardErrorClassNames")]
-pub fn card_error_class_names() -> (String, String) {
-    { let (t0, t1,) = lk_agents_voice::workflows::card_error_class_names(); (t0.to_string(), t1.to_string()) }
-}
-
-#[napi(js_name = "assembleCreditCard")]
-pub fn assemble_credit_card(env: Env, cardholder: crate::generated::records::GetNameResult, card_number: crate::generated::records::GetCardNumberResult, security_code: crate::generated::records::GetSecurityCodeResult, expiration_date: crate::generated::records::GetExpirationDateResult) -> napi::Result<crate::generated::records::GetCreditCardResult> {
+/// `normalize_email_address`: stripped, and refused unless it reads `local@label.….tld` (the
+/// reference's `EMAIL_REGEX`: a local part starting alphanumeric over `[A-Za-z0-9._%+-]`, labels
+/// alphanumeric at both ends with inner hyphens, and an alphabetic TLD of two or more).
+#[napi(js_name = "normalizeEmailAddress")]
+pub fn normalize_email_address(env: Env, email: String) -> napi::Result<String> {
     crate::host_error::run(&env, || {
-        let cardholder = cardholder.try_into()?;
-        let card_number = card_number.try_into()?;
-        let security_code = security_code.try_into()?;
-        let expiration_date = expiration_date.try_into()?;
-        Ok(crate::generated::records::GetCreditCardResult::from(&lk_agents_voice::workflows::assemble_credit_card(&cardholder, &card_number, &security_code, &expiration_date)))
+        lk_agents_voice::workflows::normalize_email_address(&email).map_err(|e| crate::host_error::JsError::new("livekit.agents.llm.tool_context.ToolError", e.to_string()))
+    })
+}
+
+/// `normalize_phone_number`: whitespace, hyphens, parentheses and dots dropped, and refused unless
+/// it reads `+?[1-9]` followed by six to fourteen digits (the reference's `PHONE_REGEX`).
+#[napi(js_name = "normalizePhoneNumber")]
+pub fn normalize_phone_number(env: Env, phone_number: String) -> napi::Result<String> {
+    crate::host_error::run(&env, || {
+        lk_agents_voice::workflows::normalize_phone_number(&phone_number).map_err(|e| crate::host_error::JsError::new("livekit.agents.llm.tool_context.ToolError", e.to_string()))
     })
 }
 
@@ -332,13 +336,6 @@ pub fn llm_unsupported_params(model: String, has_tools: Option<bool>, reasoning_
 #[napi(js_name = "minReasoningEffort")]
 pub fn min_reasoning_effort(model: String) -> Option<String> {
     lk_agents_inference::llm::models::min_reasoning_effort(&model).map(|v| v.to_string())
-}
-
-/// The module-level constants the reference's `beta/workflows/` publish, as the ABI record a host
-/// reads them from, so the Python modules hold no second copy.
-#[napi(js_name = "workflowPrompts")]
-pub fn workflow_prompts() -> crate::generated::records::WorkflowPrompts {
-    crate::generated::records::WorkflowPrompts::from(&lk_agents_voice::workflows::prompts::workflow_prompts())
 }
 
 /// `_DEFAULT_AEC_WARMUP_DURATION`, as a `Duration`.

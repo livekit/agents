@@ -1,14 +1,17 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 275 core items bound (119 functions and consts, 74 classes, 81 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 268 core items bound (118 functions and consts, 74 classes, 75 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
 //! - `lk_agents_abi::tts::markup::summarize_plan_of`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
+//! - `lk_agents_voice::workflows::card_expired`: parameter `today`: `Date` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_voice::workflows::normalize_date_of_birth`: parameter `today`: `Date` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::keyterm_detection::resolve_keyterm_detection`: field `llm`: `DetectionLlm` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::turn::migrate_turn_handling_for_host`: parameter `turn_detection`: `TurnDetectionArg` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_activity::options::resolve_recording_options_for_host`: parameter `record`: `RecordingRequest` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_activity::options::resolve_interruption_detector_for_host`: parameter `agent_mode`: `InterruptionMode` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_voice::workflows::dtmf::receive_dtmf`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::plan_session_start`: parameter `requested`: `RecordingRequest` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::gen_ai::chat_ctx_gen_ai_events`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::tts::markup::steering_instructions_of`: field `nonverbal_sounds`: `NonverbalSounds` has no Node shape (not a declared record, enum or JSON)

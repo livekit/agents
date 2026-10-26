@@ -215,6 +215,12 @@ impl ScriptedRoom {
         self.room.close(reason.parse()?);
         Ok(())
     }
+
+    /// A SIP caller presses `digit` on the keypad (`sip_dtmf_received`).
+    #[host(method)]
+    pub fn press_dtmf(&self, digit: String) {
+        self.room.press_dtmf(&digit);
+    }
 }
 
 /// A session with no RTC room, on the real clock. Built on [`FakeRtc::offline`] but on the wall

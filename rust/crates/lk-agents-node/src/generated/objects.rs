@@ -1749,6 +1749,11 @@ impl FakeRoom {
             Ok(())
         })
     }
+
+    #[napi(js_name = "pressDtmf")]
+    pub fn press_dtmf(&self, digit: String) {
+        self.inner.press_dtmf(digit);
+    }
 }
 
 #[napi(js_name = "OfflineRoom")]

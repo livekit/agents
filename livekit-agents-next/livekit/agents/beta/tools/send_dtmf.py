@@ -3,7 +3,7 @@ import asyncio
 from ... import function_tool
 from ...job import get_job_context
 from ...voice.events import RunContext
-from ..workflows.utils import DtmfEvent, dtmf_event_to_code
+from ..workflows import DtmfEvent, dtmf_event_to_code
 
 DEFAULT_DTMF_PUBLISH_DELAY = 0.3  # seconds to wait between sending DTMF events
 

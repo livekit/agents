@@ -528,6 +528,7 @@ async fn all_eight_room_events_can_be_produced() {
             RoomEvent::LocalTrackPublished { .. } => "local_track_published",
             RoomEvent::ParticipantDisconnected { .. } => "participant_disconnected",
             RoomEvent::Close { .. } => "close",
+            RoomEvent::SipDtmf { .. } => "sip_dtmf_received",
         });
     }
     for expected in [

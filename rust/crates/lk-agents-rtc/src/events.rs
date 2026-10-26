@@ -13,7 +13,7 @@ use crate::{ConnectionState, DisconnectReason, ParticipantIdentity, StreamInfo, 
 /// waits forever. Control events are rare; only media is lossy.
 pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
-/// One of the ten.
+/// One of the eleven.
 ///
 /// Handles rather than identifiers in the payloads: §1.5 chose an object graph over a flat session
 /// so that "which participant, which publication" and "this publication is gone" are expressible.
@@ -74,6 +74,10 @@ pub enum RoomEvent {
     Close {
         reason: DisconnectReason,
     },
+    /// A key pressed on a SIP participant's keypad (`sip_dtmf_received`): its symbol.
+    SipDtmf {
+        digit: String,
+    },
 }
 
 // Hand-written so `RemoteParticipant`/`TrackPublication` need not be `Debug`.
@@ -120,6 +124,7 @@ impl fmt::Debug for RoomEvent {
                 f.debug_struct("ConnectionStateChanged").field("state", state).finish()
             }
             RoomEvent::Close { reason } => f.debug_struct("Close").field("reason", reason).finish(),
+            RoomEvent::SipDtmf { digit } => f.debug_struct("SipDtmf").field("digit", digit).finish(),
         }
     }
 }
@@ -217,6 +222,12 @@ impl RoomEventBus {
     #[host(method)]
     pub fn disconnected(&self, reason: DisconnectReason) {
         self.emit(RoomEvent::Close { reason });
+    }
+
+    /// `rtc.Room`'s `sip_dtmf_received(ev)`: `ev.digit`.
+    #[host(method)]
+    pub fn sip_dtmf_received(&self, digit: String) {
+        self.emit(RoomEvent::SipDtmf { digit });
     }
 }
 

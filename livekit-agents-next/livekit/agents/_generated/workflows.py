@@ -95,13 +95,13 @@ class WarmTransferResult:
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-GetAddressResult.__module__ = "livekit.agents.beta.workflows.address"
-GetEmailResult.__module__ = "livekit.agents.beta.workflows.email_address"
-GetPhoneNumberResult.__module__ = "livekit.agents.beta.workflows.phone_number"
-GetNameResult.__module__ = "livekit.agents.beta.workflows.name"
-GetDOBResult.__module__ = "livekit.agents.beta.workflows.dob"
-GetCardNumberResult.__module__ = "livekit.agents.beta.workflows.credit_card"
-GetSecurityCodeResult.__module__ = "livekit.agents.beta.workflows.credit_card"
-GetExpirationDateResult.__module__ = "livekit.agents.beta.workflows.credit_card"
-GetCreditCardResult.__module__ = "livekit.agents.beta.workflows.credit_card"
-WarmTransferResult.__module__ = "livekit.agents.beta.workflows.warm_transfer"
+GetAddressResult.__module__ = "livekit.agents.beta.workflows"
+GetEmailResult.__module__ = "livekit.agents.beta.workflows"
+GetPhoneNumberResult.__module__ = "livekit.agents.beta.workflows"
+GetNameResult.__module__ = "livekit.agents.beta.workflows"
+GetDOBResult.__module__ = "livekit.agents.beta.workflows"
+GetCardNumberResult.__module__ = "livekit.agents.beta.workflows"
+GetSecurityCodeResult.__module__ = "livekit.agents.beta.workflows"
+GetExpirationDateResult.__module__ = "livekit.agents.beta.workflows"
+GetCreditCardResult.__module__ = "livekit.agents.beta.workflows"
+WarmTransferResult.__module__ = "livekit.agents.beta.workflows"

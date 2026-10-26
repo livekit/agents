@@ -347,7 +347,8 @@ impl<T> TrackReader<T> {
             | RoomEvent::ParticipantAttributesChanged { .. }
             | RoomEvent::ParticipantDisconnected { .. }
             | RoomEvent::ConnectionStateChanged { .. }
-            | RoomEvent::Close { .. } => {}
+            | RoomEvent::Close { .. }
+            | RoomEvent::SipDtmf { .. } => {}
         }
     }
 

@@ -1187,6 +1187,42 @@ async def job() -> None:
     assert Parent.sent == ["ShuttingDown", "Exiting"], Parent.sent
 
 
+async def workflows() -> None:
+    """The workflow checks (the core's) and keypad reception over a room: three keys and the
+    stop key, then a sequence the inter-digit timeout cuts short."""
+    from livekit.agents.beta import workflows as wf
+    from livekit.agents.llm import ToolError
+
+    print("== workflows")
+    assert wf.validate_card_number("4242424242424242")
+    assert not wf.validate_card_number("4242424242424241")
+    assert not wf.is_expired(12, 99)
+    assert wf.normalize_email_address(" theo@livekit.io ") == "theo@livekit.io"
+    assert wf.normalize_phone_number("+1 (510) 555-0123") == "+15105550123"
+    assert str(wf.normalize_date_of_birth(90, 5, 2)) == "1990-05-02"
+    for check, value in ((wf.normalize_email_address, "theo"), (wf.normalize_phone_number, "12")):
+        with contextlib.suppress(ToolError):
+            check(value)
+            raise AssertionError(f"{value!r} was accepted")
+    assert wf.format_dtmf([wf.DtmfEvent.ONE, wf.DtmfEvent.POUND]) == "1 #"
+    assert wf.dtmf_event_to_code(wf.DtmfEvent.D) == 15
+
+    room = _core.FakeRoom()
+    pending = asyncio.ensure_future(wf.receive_dtmf(room, num_digits=3))
+    await asyncio.sleep(0.05)
+    for key in "123#":
+        room.press_dtmf(key)
+    result = await pending
+    print(f"received {result!r}")
+    assert result.user_input == "1 2 3", result
+    pending = asyncio.ensure_future(wf.receive_dtmf(room, num_digits=4, timeout=0.1))
+    await asyncio.sleep(0.05)
+    room.press_dtmf("9")
+    with contextlib.suppress(ToolError):
+        await pending
+        raise AssertionError("a short sequence completed")
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -1338,6 +1374,7 @@ async def main() -> int:
     await room_camera()
     await console()
     await job()
+    await workflows()
     log_transport()
     return 0
 

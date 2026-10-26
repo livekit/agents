@@ -71,7 +71,7 @@ fn text_content(m: &ChatMessage) -> Option<String> {
 }
 
 /// Keeps multi-line instructions on one line. Unlike CPython, unprintable non-ASCII is not escaped.
-pub(crate) fn py_repr(s: &str) -> String {
+pub fn py_repr(s: &str) -> String {
     // CPython picks `'` unless that would need escaping and `"` would not.
     let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::with_capacity(s.len() + 2);

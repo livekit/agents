@@ -126,7 +126,7 @@ impl DtmfResult {
 
     #[host(method(name = "__repr__"))]
     pub fn host_repr(&self) -> String {
-        format!("GetDtmfResult({:?})", self.0)
+        format!("GetDtmfResult(user_input={})", lk_agents_abi::evals::transcript::py_repr(&self.0.user_input))
     }
 
     /// `GetDtmfResult.from_dtmf_inputs(events)`: the digits pressed, formatted. An unknown event
@@ -498,6 +498,68 @@ impl Driver {
         let queued = self.activity.speech_scheduler.contains(h.id());
         self.dtmf_step(DtmfTaskEvent::ReadBack(queued.then(|| h.id())), out);
     }
+}
+
+/// Why [`receive_dtmf`] stopped short.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[lk_agents_abi::host(error(kind = "livekit.agents.llm.tool_context.ToolError"))]
+pub enum ReceiveDtmfError {
+    #[error("num_digits must be greater than 0")]
+    #[host(kind = "ValueError")]
+    NoDigits,
+    /// `DtmfEvent(digit)` refused the key, quoted as Python's `repr`.
+    #[error("{0} is not a valid DtmfEvent")]
+    #[host(kind = "ValueError")]
+    UnknownKey(String),
+    #[error("Digits input not fully received. Expect {0} digits, got {1}")]
+    Incomplete(usize, usize),
+}
+
+/// `receive_dtmf(room, num_digits, timeout, stop_event)`: the keys a SIP caller presses in
+/// `room`, until `num_digits` of them, the stop key, or `timeout` seconds without a key once the
+/// first is in. Fewer than `num_digits` is [`ReceiveDtmfError::Incomplete`].
+#[lk_agents_abi::host(export)]
+pub async fn receive_dtmf(
+    room: std::sync::Arc<dyn lk_agents_rtc::RtcRoom>,
+    num_digits: usize,
+    timeout: f64,
+    stop_event: String,
+) -> Result<DtmfResult, ReceiveDtmfError> {
+    use lk_agents_abi::evals::transcript::py_repr;
+    if num_digits == 0 {
+        return Err(ReceiveDtmfError::NoDigits);
+    }
+    let stop = DtmfEvent::parse(&stop_event)
+        .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(&stop_event)))?;
+    let gap = Duration::try_from_secs_f64(timeout.max(0.0)).unwrap_or(Duration::MAX);
+    let mut events = room.events();
+    let mut digits = Vec::new();
+    let mut deadline = None;
+    loop {
+        let next = match deadline {
+            None => events.recv().await,
+            Some(at) => match tokio::time::timeout_at(at, events.recv()).await {
+                Ok(next) => next,
+                Err(_) => break,
+            },
+        };
+        let Some(event) = next else { break };
+        let lk_agents_rtc::RoomEvent::SipDtmf { digit } = event else { continue };
+        if digit == stop.as_str() {
+            break;
+        }
+        digits.push(
+            DtmfEvent::parse(&digit).ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(&digit)))?,
+        );
+        if digits.len() == num_digits {
+            break;
+        }
+        deadline = Some(tokio::time::Instant::now() + gap);
+    }
+    if digits.len() != num_digits {
+        return Err(ReceiveDtmfError::Incomplete(num_digits, digits.len()));
+    }
+    Ok(DtmfResult(dtmf_result(&digits)))
 }
 
 #[cfg(test)]
