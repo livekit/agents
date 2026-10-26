@@ -114,6 +114,14 @@ impl Driver {
                     AudioInterruptTrigger::SttInterim { words },
                 );
             }
+            // The STT's end of speech is `on_end_of_speech(None)` when it owns the turn: it arms
+            // the resume of a speech the user's words paused.
+            SpeechEventType::EndOfSpeech
+                if self.activity.audio_recognition.turn_detection_mode()
+                    == crate::audio_recognition::TurnDetectionMode::Stt =>
+            {
+                self.start_false_interruption_timer(now, out);
+            }
             SpeechEventType::InterimTranscript
             | SpeechEventType::StartOfSpeech
             | SpeechEventType::PreflightTranscript

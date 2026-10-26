@@ -446,6 +446,54 @@ def _models() -> Any:
         async def _run(self, output_emitter: tts.AudioEmitter) -> None:
             raise APIConnectionError("scripted tts failure", retryable=False)
 
+    from livekit.agents import vad
+
+    class ScriptedVAD(vad.VAD):
+        """Hears each utterance the STT hears: start of speech on its first frame, an inference
+        per frame, end of speech on its last."""
+
+        def __init__(self, call: Call) -> None:
+            super().__init__(capabilities=vad.VADCapabilities(update_interval=0.02))
+            self.call = call
+
+        @property
+        def model(self) -> str:
+            return "scripted"
+
+        def stream(self) -> vad.VADStream:
+            return _VadStream(self)
+
+    class _VadStream(vad.VADStream):
+        async def _main_task(self) -> None:
+            call: Call = self._vad.call  # type: ignore[attr-defined]
+            heard, index, samples = 0.0, 0, 0
+            async for frame in self._input_ch:
+                if not isinstance(frame, rtc.AudioFrame) or index >= len(call.vad_bursts):
+                    continue
+                samples += frame.samples_per_channel
+                if heard == 0.0:
+                    self._emit(vad.VADEventType.START_OF_SPEECH, samples, 0.0, True)
+                heard += frame.duration
+                done = heard + 1e-6 >= call.vad_bursts[index]
+                self._emit(vad.VADEventType.INFERENCE_DONE, samples, heard, not done)
+                if done:
+                    self._emit(vad.VADEventType.END_OF_SPEECH, samples, heard, False)
+                    heard, index = 0.0, index + 1
+
+        def _emit(self, kind: Any, samples: int, speech: float, speaking: bool) -> None:
+            self._event_ch.send_nowait(
+                vad.VADEvent(
+                    type=kind,
+                    samples_index=samples,
+                    timestamp=0.0,
+                    speech_duration=speech,
+                    silence_duration=0.0,
+                    probability=1.0 if speaking else 0.0,
+                    speaking=speaking,
+                )
+            )
+
+    m.ScriptedVAD = ScriptedVAD
     m.ScriptedLLM, m.FailingLLM = ScriptedLLM, FailingLLM
     m.ScriptedSTT, m.FailingSTT = ScriptedSTT, FailingSTT
     m.SilentTTS, m.FailingTTS = SilentTTS, FailingTTS
@@ -522,6 +570,7 @@ class Call:
         self.tts_requests: list[str] = []
         self.handles: list[tuple[str, Any]] = []
         self.utterances: list[Utterance] = []
+        self.vad_bursts: list[float] = []
         self.counter = 0
         self.session: Any = None
         self.room: Any = None
@@ -541,6 +590,9 @@ class Call:
 
     def stt(self) -> Any:
         return self.models.ScriptedSTT(self)
+
+    def vad(self) -> Any:
+        return self.models.ScriptedVAD(self)
 
     def tts(self) -> Any:
         return self.models.SilentTTS(self)
@@ -662,6 +714,13 @@ class Call:
                 self.room.advance(0.02)
             await asyncio.sleep(0.02)
 
+    async def aclose(self) -> None:
+        """`session.aclose()`, the room's clock moving meanwhile: a close may wait on timers."""
+        task = asyncio.ensure_future(self.session.aclose())
+        while not task.done():
+            await self.settle(0.02)
+        await task
+
     def speak(
         self, final: str | None, *, after: float = 0.5, interims: tuple[str, ...] = ()
     ) -> None:
@@ -669,6 +728,7 @@ class Call:
         from livekit import rtc
 
         self.utterances.append(Utterance(final, after=after, interims=interims))
+        self.vad_bursts.append(after)
         frames = round(after / 0.02)
         if self.room is not None:
             self.room.speak(frames=frames)
@@ -772,7 +832,7 @@ async def _pipeline(call: Call, *, agent: Any = None, **kwargs: Any) -> Any:
 
 
 async def _close(call: Call) -> None:
-    await call.session.aclose()
+    await call.aclose()
     call.extra["agent"] = type(call.session.current_agent).__name__
 
 
@@ -838,10 +898,37 @@ async def sc_interruption(call: Call) -> None:
 
 
 async def sc_false_interruption(call: Call) -> None:
+    """An interim pauses the speech; no final follows, so it resumes."""
     session = await _pipeline(call)
     call.handle("long", session.generate_reply(user_input="tell me something long"))
     await call.settle(1)
-    call.speak(None, after=0.2)
+    call.speak(None, after=0.2, interims=("uh",))
+    await call.settle(6)
+    await _close(call)
+
+
+async def sc_vad_user_turn(call: Call) -> None:
+    await _pipeline(call, vad=call.vad(), turn_handling={"turn_detection": "vad"})
+    call.speak("my name is Theo")
+    await call.settle(4)
+    await _close(call)
+
+
+async def sc_vad_interruption(call: Call) -> None:
+    session = await _pipeline(call, vad=call.vad(), turn_handling={"turn_detection": "vad"})
+    call.handle("long", session.generate_reply(user_input="tell me something long"))
+    await call.settle(1)
+    call.speak("wait, stop", after=0.6)
+    await call.settle(5)
+    await _close(call)
+
+
+async def sc_vad_false_interruption(call: Call) -> None:
+    """Speech long enough to interrupt, with no words: the speech pauses, then resumes."""
+    session = await _pipeline(call, vad=call.vad(), turn_handling={"turn_detection": "vad"})
+    call.handle("long", session.generate_reply(user_input="tell me something long"))
+    await call.settle(1)
+    call.speak(None, after=0.6)
     await call.settle(6)
     await _close(call)
 
@@ -904,7 +991,7 @@ async def sc_aclose_mid_reply(call: Call) -> None:
     session = await _pipeline(call)
     call.handle("long", session.generate_reply(user_input="tell me something long"))
     await call.settle(0.8)
-    await session.aclose()
+    await call.aclose()
 
 
 async def sc_llm_fallback(call: Call) -> None:
@@ -1258,6 +1345,9 @@ SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "realtime_stt_default_detection": sc_realtime_stt_default_detection,
     "interruption": sc_interruption,
     "false_interruption": sc_false_interruption,
+    "vad_user_turn": sc_vad_user_turn,
+    "vad_interruption": sc_vad_interruption,
+    "vad_false_interruption": sc_vad_false_interruption,
     "backchannel": sc_backchannel,
     "empty_transcript": sc_empty_transcript,
     "handoff_update_agent": sc_handoff_update_agent,

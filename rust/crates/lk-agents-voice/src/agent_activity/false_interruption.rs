@@ -638,7 +638,7 @@ impl Driver {
         // The one predicate (the reference drops `audio_enabled` here; this port does not).
         let done = self.activity.speech_scheduler.handle(paused.handle).is_none_or(|h| h.done());
         let resumed = self.activity.paused_speech.pause_timeout().is_some() && !done;
-        out.machine().emit(SessionEvent::AgentFalseInterruption { resumed });
+        // Restored and resumed before the event, as the reference emits it.
         if resumed {
             self.set_agent_state(now, paused.agent_state, out);
             // Resuming starts a new active-speech interval: the lifecycle follows audible playout.
@@ -649,6 +649,7 @@ impl Driver {
             let cause = GateCause::FalseInterruptionResolved;
             self.gate_op(out, paused.handle, GateOp::Resume, cause);
         }
+        out.machine().emit(SessionEvent::AgentFalseInterruption { resumed });
     }
 
     /// `_cancel_speech_pause(interrupt=True)`: without it a parked speech never finishes, holds

@@ -48,6 +48,7 @@ mod silent_audio_say;
 mod silent_segment;
 mod sink_reset_reports_cut;
 mod speech_announced_before_user_item;
+mod stt_end_resumes_pause;
 mod uninterruptible_drops_turn;
 mod unset_detection_stt_only;
 mod unvoiced_synthesis_no_item;
