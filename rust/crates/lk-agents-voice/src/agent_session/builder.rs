@@ -61,7 +61,6 @@ pub struct DriverBuilder {
     pub video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     pub recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
     pub audio_out: Option<Arc<dyn AudioOutput>>,
-    pub tts_text_transforms: Vec<lk_agents_voice::transcription::text_transforms::TransformSpec>,
     pub realtime_audio_node: Option<Arc<dyn crate::io::RealtimeAudioNode>>,
     pub text_out: Option<Arc<dyn TextOutput>>,
     pub room_events: Option<Rx<RoomEvent>>,
@@ -276,7 +275,9 @@ impl DriverBuilder {
             recorder: Arc::new(std::sync::RwLock::new(None)),
             recorder_observer: std::sync::Mutex::new(None),
             launch: crate::audio::LaunchGate::new(),
-            tts_transforms: self.tts_text_transforms.clone(),
+            tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
+                self.config.effective.speech.tts_text_transforms,
+            ),
             realtime_audio: self.realtime_audio_node.clone(),
             events: gen_tx,
             closing,

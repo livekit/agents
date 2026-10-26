@@ -1,5 +1,6 @@
 //! The setup: what a session is built with.
 use fastrand::Rng;
+use lk_agents_abi::voice::session_options::TextTransformSet;
 
 use crate::{
     drive::{RealtimeSetup, RoomSetup, Setup},
@@ -55,5 +56,13 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         user_turn_max_words: rng.bool().then(|| rng.u32(1..12)),
         user_turn_max_ms: rng.bool().then(|| ms(rng)),
         transcription_timeout_ms: rng.bool().then(|| ms(rng)),
+        text_transforms: match rng.usize(0..4) {
+            0 | 1 => None,
+            2 => Some(None),
+            _ => Some(Some(TextTransformSet {
+                filter_markdown: rng.bool(),
+                filter_emoji: rng.bool(),
+            })),
+        },
     }
 }

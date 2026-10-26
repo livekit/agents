@@ -385,7 +385,7 @@ pub fn has_incomplete_pattern(buffer: &str) -> bool {
 /// `filter_markdown` as a push accumulator. Returns the pieces per chunk, not joined: the
 /// synchroniser paces per chunk.
 #[lk_agents_abi::class(mutable)]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MarkdownFilter {
     buffer: String,
     at_line_start: bool,
@@ -393,7 +393,7 @@ pub struct MarkdownFilter {
 
 #[lk_agents_abi::host(object)]
 impl MarkdownFilter {
-    /// At line start (the `Default` starts mid-line, which would miss a leading `# `).
+    /// At line start, as the reference's stream begins.
     #[host(new)]
     pub fn new() -> Self {
         MarkdownFilter { buffer: String::new(), at_line_start: true }
@@ -474,8 +474,7 @@ pub fn filter_emoji(chunk: &str) -> String {
 mod tests {
     use super::*;
 
-    // Catches: `Default::default()` starting with `at_line_start: false`, so a first-chunk `# `
-    // isn't a heading.
+    // Catches: a filter starting mid-line, so a first-chunk `# ` isn't a heading.
     #[test]
     fn the_filter_starts_at_a_line_start() {
         let mut f = MarkdownFilter::new();
@@ -484,11 +483,6 @@ mod tests {
         let joined = out.concat();
         assert!(!joined.contains('#'), "a leading heading marker must be stripped: {joined:?}");
         assert!(joined.contains("Heading") && joined.contains("body"));
-
-        let mut d = MarkdownFilter::default();
-        let mut kept = d.push("# Heading\nbody");
-        kept.extend(d.flush());
-        assert!(kept.concat().contains('#'), "`Default` is mid-line, and that is the difference");
     }
 
     // Catches: `push` joining the pieces (destroying pacing), or releasing a `*` that may still open.

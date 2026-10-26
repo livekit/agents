@@ -202,10 +202,6 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
         "lk_agents_voice::room_io::_output::transcription",
     ),
     ("rust/crates/lk-agents-voice/src/room_io/rooms.rs", "lk_agents_voice::room_io::rooms"),
-    (
-        "rust/crates/lk-agents-voice/src/transcription/text_transforms.rs",
-        "lk_agents_voice::transcription::text_transforms",
-    ),
     ("rust/crates/lk-agents-abi/src/errors/provider.rs", "lk_agents_abi::errors"),
     ("rust/crates/lk-agents-abi/src/tts/tts.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/stt/stt.rs", "lk_agents_abi"),

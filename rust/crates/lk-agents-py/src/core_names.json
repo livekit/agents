@@ -81,7 +81,6 @@
   "RecordingOptions",
   "RemoteSessionClient",
   "RemoteSessionHost",
-  "ReplaceTransform",
   "Role",
   "RoomAudioOutput",
   "RoomEventBus",

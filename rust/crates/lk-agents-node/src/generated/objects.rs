@@ -1856,34 +1856,6 @@ impl OfflineRoom {
     }
 }
 
-/// `_core.ReplaceTransform`: the one pure transform that crosses as a value. `push(chunk)` /
-/// `flush()` answer a list, not a joined string, because the synchroniser paces per piece; empty
-/// means "held back". Not frozen: a transform is a buffer, and two threads pushing into one should
-/// get `Already borrowed`, not an interleaved transcript.
-#[napi(js_name = "ReplaceTransform")]
-pub struct ReplaceTransform {
-    pub(crate) inner: lk_agents_voice::transcription::text_transforms::Replace,
-}
-
-#[napi]
-impl ReplaceTransform {
-    #[napi(constructor)]
-    pub fn new(replacements: Vec<(String, String)>, case_sensitive: Option<bool>) -> Self {
-        let case_sensitive = case_sensitive.unwrap_or(false);
-        ReplaceTransform { inner: lk_agents_voice::transcription::text_transforms::Replace::for_host(replacements, case_sensitive) }
-    }
-
-    #[napi(js_name = "push")]
-    pub fn push(&mut self, chunk: String) -> Vec<String> {
-        self.inner.push_chunk(&chunk)
-    }
-
-    #[napi(js_name = "flush")]
-    pub fn flush(&mut self) -> Vec<String> {
-        self.inner.flush_held()
-    }
-}
-
 /// The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
 /// host objects cross as their side-table keys (`_core.resolve_host_ref`), and the context as its
 /// `ChatContext.to_dict()` form, read only when the request carries no host context of its own.

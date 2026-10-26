@@ -699,7 +699,6 @@ class LiveSession:
         llm_node: Any | None = None,
         tts_node: Any | None = None,
         stt_node: Any | None = None,
-        tts_text_transforms: Any | None = None,
         host_audio_input: Any | None = None,
         host_audio_output: Any | None = None,
         host_video_input: Any | None = None,
@@ -1441,22 +1440,6 @@ class OfflineRoom:
     def __init__(self, name: str = "console") -> None: ...
     @property
     def name(self) -> str: ...
-
-
-class ReplaceTransform:
-    """`_core.ReplaceTransform`: the one pure transform that crosses as a value. `push(chunk)` /
-    `flush()` answer a list, not a joined string, because the synchroniser paces per piece; empty
-    means "held back". Not frozen: a transform is a buffer, and two threads pushing into one should
-    get `Already borrowed`, not an interleaved transcript.
-    """
-
-    def __init__(
-        self,
-        replacements: list[tuple[str, str]],
-        case_sensitive: bool = False,
-    ) -> None: ...
-    def push(self, chunk: str) -> list[str]: ...
-    def flush(self) -> list[str]: ...
 
 
 class ChatRequest:

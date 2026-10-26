@@ -94,7 +94,6 @@ impl SessionApi {
         llm_node: Option<Arc<dyn NodeFactory>>,
         tts_node: Option<Arc<dyn NodeFactory>>,
         stt_node: Option<Arc<dyn NodeFactory>>,
-        tts_text_transforms: Option<crate::transcription::text_transforms::TransformSpecs>,
         // The host's own io legs, replacing the room's (which `agent_session.py` has turned off).
         host_audio_input: Option<Arc<dyn AudioInput>>,
         host_audio_output: Option<Arc<dyn AudioOutput>>,
@@ -293,7 +292,6 @@ impl SessionApi {
             keyterms,
             forward_chat_context,
             vad,
-            tts_text_transforms: tts_text_transforms.map(|t| t.0).unwrap_or_default(),
             audio_in: host_audio_input.or_else(|| room_io.audio_input()),
             // Only with the driver's sampler; a custom callable keeps frames host-side.
             video_in: if host_video_sampler {

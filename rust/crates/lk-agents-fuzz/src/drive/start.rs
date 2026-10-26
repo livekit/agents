@@ -95,7 +95,6 @@ impl Run {
                 None,
                 None,
                 None,
-                None,
                 Some(mic as Arc<AudioIn>),
                 Some(fakes::FakeAudioOutput::new(
                     registry.clone(),
@@ -251,7 +250,7 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         tool_handling: HostValue::NotGiven,
         max_tool_steps: setup.max_tool_steps.map_or(3, i64::from),
         use_tts_aligned_transcript: Maybe::NotGiven,
-        tts_text_transforms: Maybe::NotGiven,
+        tts_text_transforms: setup.text_transforms.map_or(Maybe::NotGiven, Maybe::Given),
         min_consecutive_speech_delay: secs(setup.speech_gap_ms.unwrap_or(0)),
         expressive: false,
         aec_warmup_duration: Maybe::NotGiven,

@@ -83,7 +83,7 @@ use crate::{
         hook_of,
     },
 };
-use lk_agents_abi::voice::session_options::{EndpointingMode, InterruptionMode};
+use lk_agents_abi::voice::session_options::{EndpointingMode, InterruptionMode, TextTransformSet};
 
 mod apply;
 mod collect;
@@ -168,6 +168,9 @@ pub struct Setup {
     pub sync_transcription: bool,
     /// An audio output that reports a cut a few scheduler hops late, as a host source does.
     pub lagging_output: bool,
+    /// `tts_text_transforms`: `None` is not given (markdown and emoji filtered), `Some` the set
+    /// written, `Some(None)` none.
+    pub text_transforms: Option<Option<TextTransformSet>>,
 }
 
 /// The realtime server a session is built against: what it can do, as its capabilities say.
@@ -236,6 +239,7 @@ impl Default for Setup {
             amd: false,
             keyterms: Vec::new(),
             room: None,
+            text_transforms: None,
         }
     }
 }
