@@ -180,7 +180,9 @@ fn expect_reached(
             continue;
         }
         for stream in inference.streams(kind) {
-            if !stream.open_throughout(pushed, end) {
+            // AMD's own recogniser hears the microphone only while the detector listens
+            // (`AMD.push_audio`): not this path's to owe.
+            if !stream.open_throughout(pushed, end) || *stream.detail() == Detail::AmdStt {
                 continue;
             }
             check.expect_with(

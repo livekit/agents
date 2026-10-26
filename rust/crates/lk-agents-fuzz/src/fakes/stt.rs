@@ -23,11 +23,18 @@ pub struct FakeStt {
     /// before it listens, and a driver that reopens or closes during that window has an open
     /// in flight to deal with.
     connect: std::time::Duration,
+    /// What its streams are recorded as: the session's, or AMD's own.
+    detail: Detail,
 }
 
 impl FakeStt {
     pub fn new(registry: Arc<Registry>, connect: std::time::Duration) -> Arc<Self> {
-        Arc::new(FakeStt { registry, connect })
+        Arc::new(FakeStt { registry, connect, detail: Detail::None })
+    }
+
+    /// `AMD(stt=..)`: a recogniser the detector feeds through its own listening gate.
+    pub fn for_amd(registry: Arc<Registry>, connect: std::time::Duration) -> Arc<Self> {
+        Arc::new(FakeStt { registry, connect, detail: Detail::AmdStt })
     }
 }
 
@@ -67,8 +74,11 @@ impl Stt for FakeStt {
         let (sender, events) = mpsc::unbounded_channel();
         let ended = Arc::new(Notify::new());
         let opened = self.registry.now();
-        let slot =
-            self.registry.register(Kind::Stt, Detail::None, Control::Stt(sender, opened, None));
+        let slot = self.registry.register(
+            Kind::Stt,
+            self.detail.clone(),
+            Control::Stt(sender, opened, None),
+        );
         Some(Ok((
             Box::new(Forward { slot, registry: self.registry.clone(), ended: Some(ended.clone()) }),
             Box::new(Recognition { slot, registry: self.registry.clone(), events, ended }),

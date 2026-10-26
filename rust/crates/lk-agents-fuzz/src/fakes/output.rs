@@ -408,6 +408,8 @@ impl AudioRecorder for FakeRecorder {
 #[derive(Clone)]
 pub struct FakeCli {
     to_agent: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    /// When the last flushed segment finishes playing, on the clock: its ack is owed until then.
+    playing_until: Arc<std::sync::Mutex<Option<tokio::time::Instant>>>,
 }
 
 impl FakeCli {
@@ -424,7 +426,7 @@ impl FakeCli {
                 }
             }
         });
-        let cli = FakeCli { to_agent };
+        let cli = FakeCli { to_agent, playing_until: Arc::default() };
         let speaker = cli.clone();
         tokio::spawn(async move {
             let (mut decoder, mut chunk) = (FrameDecoder::new(), vec![0u8; 16 * 1024]);
@@ -443,6 +445,10 @@ impl FakeCli {
                         Some(Message::AudioPlaybackFlush(_)) => {
                             let (speaker, played, this) = (speaker.clone(), played.clone(), segment);
                             let audio = std::mem::take(&mut pending);
+                            let until = tokio::time::Instant::now() + audio;
+                            let mut playing = speaker.playing_until.lock().unwrap();
+                            *playing = Some(playing.map_or(until, |at| at.max(until)));
+                            drop(playing);
                             tokio::spawn(async move {
                                 tokio::time::sleep(audio).await;
                                 if played.load(std::sync::atomic::Ordering::Relaxed) == this {
@@ -467,6 +473,12 @@ impl FakeCli {
             }
         });
         (Arc::new(ConsoleIo::over(agent_end, spawner)), cli)
+    }
+
+    /// The agent's voice the speaker has yet to play: an ack still owed on the clock.
+    pub fn queued(&self) -> Duration {
+        let until = *self.playing_until.lock().unwrap();
+        until.map_or(Duration::ZERO, |at| at.saturating_duration_since(tokio::time::Instant::now()))
     }
 
     /// One message to the agent; `false` once the CLI's socket is gone.

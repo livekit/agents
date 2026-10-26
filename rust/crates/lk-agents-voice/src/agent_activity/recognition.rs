@@ -196,6 +196,7 @@ impl Driver {
                     );
                 }
             }
+            TurnCommand::SkipReplies(on) => self.session.amd_skips_replies = on,
             TurnCommand::Configure(patch) => {
                 let diff = self.session.config.configure(&patch);
                 self.apply_config(
@@ -239,7 +240,13 @@ impl Driver {
         }
     }
 
-    pub(crate) fn on_end_of_turn(&mut self, now: Ts, info: EndOfTurnInfo, out: &mut Out) {
+    pub(crate) fn on_end_of_turn(&mut self, now: Ts, mut info: EndOfTurnInfo, out: &mut Out) {
+        // AMD already called the line a machine: the turn is committed, no reply is made for it
+        // and a preemptive one goes.
+        if self.session.amd_skips_replies {
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+            info.skip_reply = true;
+        }
         // Inside the transition window the leaving agent takes no new turn; it is kept for the
         // arriving one. Diverges from the reference, which drops it (`on_end_of_turn`).
         if self.in_window() {

@@ -33,16 +33,17 @@ use lk_agents_voice::{
         classifier::MAX_EXTENSION_SECS,
         detector::{POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL},
     },
+    events::SessionEvent,
     trace::{GenerationStep, Step},
 };
 
 use super::uniform;
 use crate::{
-    drive::{Case, Outcome, Policy, Run, Setup},
+    drive::{AmdAnswer, Case, Outcome, Policy, Run, Setup},
     input::{
-        AGENT_TURNS, AgentText, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make, Millis, Ref,
-        RoomIn,
-        RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode, USER_TURNS, UserText,
+        AGENT_TURNS, AgentText, AmdInput, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make,
+        Millis, Ref, RoomIn, RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode, USER_TURNS,
+        UserText,
     },
     record::{Detail, Kind, Tag},
 };
@@ -360,6 +361,13 @@ const CLOSING_BEATS: usize = 20;
 /// How often, per beat, a camera the case attached delivers frames.
 const CAMERA: u8 = 30;
 
+/// How often, per beat, a ringing SIP call AMD waits on is answered.
+const SIP_ANSWERS: u8 = 20;
+
+/// How often, per beat, the developer leaves the `async with AMD(...)` block once `execute()`
+/// returned.
+const AMD_LEFT: u8 = 30;
+
 // ==============================================================================================
 // The beat, and the agent's turn
 // ==============================================================================================
@@ -615,6 +623,39 @@ impl Talk {
             && let Some(output) = self.first(Kind::Output)
         {
             self.send(Input::SinkReset { output: Ref::new(output) }).await?;
+        }
+        self.detect_machine().await
+    }
+
+    /// The developer's `async with AMD(...) as detector: result = await detector.execute()`: the
+    /// SIP call is answered a few beats in, `execute()` returns once the verdict is out, and the
+    /// block is left (`aclose()`) right after or later.
+    async fn detect_machine(&mut self) -> Result<(), Halt> {
+        let Some(amd) = self.run.setup.amd else { return Ok(()) };
+        let sent = |run: &Run, step: AmdInput| {
+            run.record.applied().iter().any(|a| a.accepted && a.input == Input::Amd { input: step })
+        };
+        if amd.answer == AmdAnswer::Sip
+            && !sent(&self.run, AmdInput::Listen)
+            && self.rng.u8(0..100) < SIP_ANSWERS
+        {
+            self.send(Input::Amd { input: AmdInput::Listen }).await?;
+        }
+        let verdict = self
+            .run
+            .record
+            .host_view()
+            .events()
+            .iter()
+            .any(|(_, ev)| matches!(ev, SessionEvent::AmdResult { .. }));
+        if verdict && !sent(&self.run, AmdInput::Execute) {
+            self.send(Input::Amd { input: AmdInput::Execute }).await?;
+        }
+        if sent(&self.run, AmdInput::Execute)
+            && !sent(&self.run, AmdInput::Close)
+            && self.rng.u8(0..100) < AMD_LEFT
+        {
+            self.send(Input::Amd { input: AmdInput::Close }).await?;
         }
         Ok(())
     }

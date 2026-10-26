@@ -82,8 +82,8 @@ use crate::{
     check::{Failure, Subject, check_all},
     fakes::{self, Control, Record, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot},
     input::{
-        AgentText, Confidence, Count, DtmfInput, HookAnswer, Input, IvrInput, Knob, Millis, Models,
-        ConsoleAsk, Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
+        AgentText, AmdInput, Confidence, ConsoleAsk, Count, DtmfInput, HookAnswer, Input, IvrInput,
+        Knob, Millis, Models, Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
     },
     record::step_name,
     record::{
@@ -144,8 +144,8 @@ pub struct Setup {
     /// `ivr_detection`: `Some(true)` navigates from the session's start. The navigator itself
     /// runs in every session, as `start()` spawns it.
     pub ivr: Option<bool>,
-    /// Attach the answering-machine detector, as `await amd.execute()` does.
-    pub amd: bool,
+    /// The answering-machine detector, attached as `AMD(session, ...)` attaches it.
+    pub amd: Option<AmdSetup>,
     /// Static keyterms, which is also what makes the session have a keyterm pass at all.
     pub keyterms: Vec<String>,
     /// What happens in the room: `None` is a room nothing happens in (a `Room` input is refused),
@@ -221,6 +221,28 @@ pub enum PreConnect {
     Malformed,
 }
 
+/// `AMD(session, ...)`: its switches, its recogniser, and what the room says once it is attached.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AmdSetup {
+    pub interrupt_on_machine: bool,
+    pub ivr_detection: bool,
+    pub wait_until_finished: bool,
+    /// `AMD(stt=..)`: a recogniser of AMD's own; otherwise the session's finals.
+    pub own_stt: bool,
+    pub answer: AmdAnswer,
+}
+
+/// What `AMD._setup` finds in the room, as `amd_decide_setup_step` turns it into a step: the
+/// callee's track (listening opens at once), a SIP call answered later (the case sends
+/// `Amd { Listen }` when `sip.callStatus` goes active), or nobody (`participant_missing`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum AmdAnswer {
+    #[default]
+    Track,
+    Sip,
+    Missing,
+}
+
 /// The realtime server a session is built against: what it can do, as its capabilities say.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RealtimeSetup {
@@ -284,7 +306,7 @@ impl Default for Setup {
             sync_transcription: false,
             lagging_output: false,
             ivr: None,
-            amd: false,
+            amd: None,
             keyterms: Vec::new(),
             room: None,
             text_transforms: None,

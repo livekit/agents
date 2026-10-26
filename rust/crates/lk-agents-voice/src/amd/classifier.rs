@@ -308,6 +308,13 @@ impl Amd {
         matches!(self, Amd::Listening(_))
     }
 
+    /// `AMD._on_end_of_turn`'s answer: a machine verdict is out under `interrupt_on_machine`, and
+    /// the detector is open, so the turns it hears get no reply.
+    pub fn skips_replies(&self) -> bool {
+        matches!(self, Amd::Emitted(c)
+            if c.cfg.interrupt_on_machine && c.verdict.as_ref().is_some_and(|v| v.is_machine()))
+    }
+
     /// The table. Closed takes nothing; `Close` from any other phase closes.
     pub fn step(self, now: Ts, input: In) -> (Amd, Out) {
         let mut out = Out::default();

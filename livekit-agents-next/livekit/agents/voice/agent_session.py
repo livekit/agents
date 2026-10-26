@@ -31,6 +31,7 @@ from .._core_view import (
     to_core_items,
     tool_specs,
 )
+from .._generated.amd import AMDPredictionEvent
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
 from .._generated.session_dispatch import IGNORED_EVENTS, MIRRORED_STATES, PUBLIC_EVENTS
 from ..job import get_job_context
@@ -74,6 +75,7 @@ from .tool_executor import ToolRunner
 if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
+    from .amd import AMD
     from .room_io import RoomOptions
 
 __all__ = [
@@ -240,6 +242,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._thread = thread
 
         self._core: _core.LiveSession = None  # type: ignore[assignment]
+        self._room: rtc.Room | _core.FakeRoom | _core.OfflineRoom | None = None
+        self._amd: AMD | None = None
         self._console: ConsoleCall | None = None
         self._agent: Agent | None = None
         # every agent the core may name, by the id it was installed under
@@ -351,6 +355,11 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._core.keyterms() or [] if self._core is not None else []
 
     @property
+    def amd(self) -> AMD | None:
+        """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
+        return self._amd
+
+    @property
     def agent_state(self) -> AgentState:
         return self._agent_state
 
@@ -410,6 +419,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         realtime = rt if isinstance(rt, Realtime) else None
         native = None if isinstance(rt, Realtime) else rt
         sampler = self._video_sampler
+        self._room = room
         self._core = _core.LiveSession(
             room,
             instructions=frame["instructions"],
@@ -448,11 +458,11 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent = agent
         self._started_at = time.time()
         if self._console is not None:
-            await self._core.start(capture_run=capture_run)
+            await self._start_core(capture_run)
             await self._console.start()
             return
         if job_ctx is None or room is not job_ctx.room:
-            await self._core.start(capture_run=capture_run)
+            await self._start_core(capture_run)
             return
         # the job's room: this session records and reports for the job, connects the room,
         # closes with it, and the primary one serves the remote session protocol there
@@ -470,9 +480,25 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         job_ctx.add_shutdown_callback(
             lambda: self._close(drain=False, reason=CloseReason.JOB_SHUTDOWN)
         )
-        await asyncio.gather(self._core.start(capture_run=capture_run), job_ctx.connect())
+        await asyncio.gather(self._start_core(capture_run), job_ctx.connect())
         if self._host is not None:
             await self._host.start()
+
+    async def _start_core(self, capture_run: bool) -> None:
+        await self._core.start(capture_run=capture_run)
+        if self.options["ivr_detection"]:
+            await self._start_ivr_detection()
+
+    async def _start_ivr_detection(self, transcript: str | None = None) -> None:
+        """Start IVR detection: the DTMF tool joins the session's tools and the core's navigator
+        runs, counting ``transcript`` (AMD's greeting) as heard."""
+        from ..beta.tools.send_dtmf import send_dtmf_events
+
+        if send_dtmf_events not in self._tools:
+            self._tools.append(send_dtmf_events)
+        self._running.ivr_start(tools=tool_specs([send_dtmf_events]), tools_host=[send_dtmf_events])
+        if transcript is not None:
+            self._running.ivr_final(transcript)
 
     def _interruption_detector(
         self, agent: Agent, frame: dict[str, Any], model: Any
@@ -532,6 +558,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> None:
         if self._core is None:
             return
+        if self._amd is not None:
+            await self._amd.aclose()
         await self._core.aclose(reason=reason.value, drain=drain)
         if self._host is not None:
             host, self._host = self._host, None
@@ -837,6 +865,12 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             recoverable=wire["recoverable"],
         )
         self.emit("error", ErrorEvent(error=error, source=source))
+
+    def _on_amd_result(self, wire: dict[str, Any]) -> None:
+        if self._amd is not None:
+            self._amd._on_prediction(
+                AMDPredictionEvent(**{k: v for k, v in wire.items() if k != "type"})
+            )
 
     def _on_close(self, wire: dict[str, Any]) -> None:
         self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=None))
@@ -1147,4 +1181,5 @@ _HANDLERS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], None]] = {
     "metrics_collected": LiveSession._on_metrics,
     "error": LiveSession._on_error,
     "close": LiveSession._on_close,
+    "amd_result": LiveSession._on_amd_result,
 }

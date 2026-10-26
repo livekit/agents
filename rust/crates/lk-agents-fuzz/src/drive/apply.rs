@@ -51,6 +51,7 @@ impl Run {
                 true
             }
             Input::Room { event } => self.room_event(*event),
+            Input::Amd { input } => self.amd(*input),
             Input::Console { ask } => self.console_ask(*ask),
             _ if fakes::boundary_of(input).is_some() => self.deliver(at, input),
             _ => self.call(at, input),
@@ -717,6 +718,42 @@ impl Run {
             *count = count.wrapping_add(1);
         }
         true
+    }
+
+    /// `AMD`'s calls past its attach, as `detector.py` makes them. `execute()` awaits the
+    /// verdict, so it is refused before one; on `machine-ivr` under `ivr_detection` it starts the
+    /// navigator with the greeting first (`_start_ivr_detection(transcript)`).
+    fn amd(&mut self, input: AmdInput) -> bool {
+        use lk_agents_abi::voice::amd::AmdCategory;
+        let api = self.api.clone();
+        match input {
+            AmdInput::Listen => {
+                api.amd_start_detection_timer().is_ok() && api.amd_start_listening().is_ok()
+            }
+            AmdInput::Settle => api.amd_settle("uncertain", "participant_missing").is_ok(),
+            AmdInput::Execute => {
+                let verdict =
+                    self.record.host_view().events().into_iter().rev().find_map(|(_, event)| {
+                        match event {
+                            SessionEvent::AmdResult { verdict } => Some(verdict.clone()),
+                            _ => None,
+                        }
+                    });
+                let Some(verdict) = verdict else { return false };
+                if verdict.category == AmdCategory::MachineIvr
+                    && self.setup.amd.is_some_and(|amd| amd.ivr_detection)
+                {
+                    let dtmf = tool_specs(&["send_dtmf_events".to_owned()]);
+                    if api.ivr_start(5.0, Some(dtmf), None).is_err()
+                        || api.ivr_final(&verdict.transcript).is_err()
+                    {
+                        return false;
+                    }
+                }
+                api.amd_execute().is_ok()
+            }
+            AmdInput::Close => api.amd_close().is_ok(),
+        }
     }
 
     /// The CLI asks the session something, as its TUI does; refused with no console.

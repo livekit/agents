@@ -226,13 +226,44 @@ impl Run {
             _ => None,
         };
         let console_mic = console.as_ref().map(|(_, cli)| (registry.new_mic(), cli.clone()));
-        // The answering-machine detector, as `await amd.execute()` runs it: attached, its budget
-        // armed and its listening window opened as soon as the call is up.
-        if setup.amd {
+        // The answering-machine detector, as `AMD.__aenter__` attaches it once the call is up:
+        // its config as the host resolves it, then the step `AMD._setup` takes on what the room
+        // says (a SIP answer comes later, from the case).
+        if let Some(amd) = setup.amd {
+            use lk_agents_abi::voice::amd::{AmdConfigKwargs, TranscriptSource};
             let llm = fakes::FakeLlm::new(registry.clone());
-            api.host_attach_amd(Default::default(), llm, None, None).expect("attach the AMD");
-            api.amd_start_detection_timer().expect("a running session");
-            api.amd_start_listening().expect("a running session");
+            let stt =
+                amd.own_stt.then(|| fakes::FakeStt::for_amd(registry.clone(), connect) as Arc<Stt>);
+            let activity =
+                api.resolved_options().map(|o| Duration::from_secs_f64(o.endpointing.max_delay));
+            let cfg = AmdConfigKwargs {
+                max_endpointing_delay: Some(
+                    lk_agents_voice::amd::classifier::resolve_max_endpointing_delay_for_host(
+                        None, activity,
+                    )
+                    .as_secs_f64(),
+                ),
+                source: Some(if amd.own_stt {
+                    TranscriptSource::AmdStt
+                } else {
+                    TranscriptSource::SessionStt
+                }),
+                wait_until_finished: amd.wait_until_finished,
+                interrupt_on_machine: amd.interrupt_on_machine,
+                ivr_detection: amd.ivr_detection,
+                ..AmdConfigKwargs::default()
+            };
+            api.host_attach_amd(cfg, llm, None, stt).expect("attach the AMD");
+            match amd.answer {
+                AmdAnswer::Track => {
+                    api.amd_start_detection_timer().expect("a running session");
+                    api.amd_start_listening().expect("a running session");
+                }
+                AmdAnswer::Sip => {}
+                AmdAnswer::Missing => {
+                    api.amd_settle("uncertain", "participant_missing").expect("a running session")
+                }
+            }
         }
         let mut run = Run {
             api,

@@ -86,6 +86,8 @@ pub(crate) struct LiveSession {
     pub(crate) providers: std::collections::BTreeSet<lk_agents_abi::resources::ResourceId>,
     /// `expressive=`, the session's and the active agent's.
     pub(crate) expressive: crate::generation::ExpressiveLayers,
+    /// `session._amd._on_end_of_turn(info)` would answer `True`: the AMD's (`SkipReplies`).
+    pub(crate) amd_skips_replies: bool,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening frame and
@@ -161,6 +163,7 @@ impl LiveSession {
             idle: IdleHolds::default(),
             providers: Default::default(),
             expressive: Default::default(),
+            amd_skips_replies: false,
         }
     }
 

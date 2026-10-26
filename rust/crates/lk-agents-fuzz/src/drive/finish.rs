@@ -190,12 +190,13 @@ impl Run {
             || !self.room_audio_queued().is_zero()
     }
 
-    /// The agent's voice still queued in the room's speaker: the room's own output plays on the
+    /// The agent's voice still queued in the room's speaker or the console's: either plays on the
     /// clock and owes the driver its playout, so a round that leaves audio there is not quiet.
     fn room_audio_queued(&self) -> Duration {
         use lk_agents_rtc::AudioSource as _;
         let sources = self.room.local_participant().sources();
-        sources.iter().map(|source| source.queued_duration()).max().unwrap_or_default()
+        let room = sources.iter().map(|source| source.queued_duration()).max().unwrap_or_default();
+        self.console.as_ref().map_or(room, |(_, cli)| room.max(cli.queued()))
     }
 
     /// Every deadline the driver journalled, in milliseconds, and whether it is the recorder's

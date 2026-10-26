@@ -3,7 +3,7 @@ use fastrand::Rng;
 use lk_agents_abi::voice::session_options::TextTransformSet;
 
 use crate::{
-    drive::{PreConnect, RealtimeSetup, RoomLegs, RoomSetup, Setup},
+    drive::{AmdAnswer, AmdSetup, PreConnect, RealtimeSetup, RoomLegs, RoomSetup, Setup},
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
 
@@ -40,7 +40,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
             1 => Some(false),
             _ => Some(true),
         },
-        amd: rng.bool(),
+        amd: rng.bool().then_some(AmdSetup::default()),
         keyterms: if rng.bool() { names(rng) } else { vec![] },
         room: rng.bool().then(|| RoomSetup {
             close_on_disconnect: rng.bool(),
@@ -86,5 +86,18 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.background_audio = setup.room_legs.is_some() && rng.bool();
     setup.avatar = setup.room_legs.is_some() && rng.u8(0..100) < 30;
     setup.avatar_reports_start = setup.avatar && rng.bool();
+    if let Some(amd) = setup.amd.as_mut() {
+        *amd = AmdSetup {
+            interrupt_on_machine: rng.bool(),
+            ivr_detection: rng.bool(),
+            wait_until_finished: rng.bool(),
+            own_stt: rng.bool(),
+            answer: match rng.usize(0..4) {
+                0 | 1 => AmdAnswer::Track,
+                2 => AmdAnswer::Sip,
+                _ => AmdAnswer::Missing,
+            },
+        };
+    }
     setup
 }

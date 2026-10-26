@@ -120,6 +120,7 @@ from .voice import (
     room_io,
     text_transforms,
 )
+from .voice.amd import AMD, AMDCategory, AMDPredictionEvent
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.keyterm_detection import (
     KeytermDetectionOptions,
@@ -317,6 +318,9 @@ __all__ = [
     "KeytermDetectionOptions",
     "STTContextOptions",
     "UserTurnExceededEvent",
+    "AMD",
+    "AMDCategory",
+    "AMDPredictionEvent",
 ]
 
 # Cleanup docs of unexported modules

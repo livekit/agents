@@ -1003,6 +1003,10 @@ impl StreamView<'_, '_> {
         self.opened.at
     }
 
+    pub fn detail(&self) -> &Detail {
+        &self.opened.detail
+    }
+
     /// When the driver closed it. `None` while it is still open, or if it was only dropped.
     pub fn closed_at(&self) -> Option<Observed> {
         closed_at(self.view.r, self.opened)

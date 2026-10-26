@@ -10,7 +10,7 @@
 //! `_tts_task`, `_realtime_generation_task_impl` take `self._session.output` once). And a text
 //! output gets a closing flush from the synchroniser that wrapped it each time that synchroniser
 //! closes a segment's writer on it (`_capture_task`'s `finally`): once when the swap rotates it,
-//! once when the session closes it.
+//! once when the session closes it. A swap made while the session closes owes both at the close.
 use lk_agents_voice::{
     events::SessionEvent,
     agent_session::effects::GateOp,
@@ -20,6 +20,7 @@ use lk_agents_voice::{
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
+    input::Input,
     record::{Observed, Recording, Sink, Tag},
 };
 
@@ -29,7 +30,7 @@ impl Rule for OutputReplacementIsClean {
     const CONTRACT: Contract = Contract {
         id: "output_replacement_is_clean",
         guarantee: "Once an output of a kind is replaced, the replaced instance receives no further calls but those of steps already running and a synchroniser's closing flushes.",
-        examples: &[calls_stop_at_replacement],
+        examples: &[calls_stop_at_replacement, replaced_while_closing],
         counterexamples: &[captured_after_replacement, flushed_after_replacement],
         probe: None,
     };
@@ -69,7 +70,8 @@ impl Rule for OutputReplacementIsClean {
                     )
             });
             let mut release_owed = released && output.is_audio();
-            // One closing flush before the session's close and one at it, text outputs only.
+            // One closing flush for the swap's rotation and one for the session's close, text
+            // outputs only: before the close only the swap's is owed, after it either may be.
             let text = !output.is_audio();
             let (mut swap_flush, mut close_flush) = (text, text);
             for (at, sink) in output.received() {
@@ -77,11 +79,11 @@ impl Rule for OutputReplacementIsClean {
                     || running.is_some_and(|end| at <= end)
                     || (matches!(sink, Sink::Resumed { .. }) && std::mem::take(&mut release_owed))
                     || (matches!(sink, Sink::TextFlush { .. })
-                        && std::mem::take(if at < close {
-                            &mut swap_flush
+                        && if at < close {
+                            std::mem::take(&mut swap_flush)
                         } else {
-                            &mut close_flush
-                        }));
+                            std::mem::take(&mut close_flush) || std::mem::take(&mut swap_flush)
+                        });
                 // Anything else reaching this instance after its replacement was attached is
                 // output the host had already taken away.
                 check.expect(
@@ -132,6 +134,19 @@ fn calls_stop_at_replacement() -> Recording {
         .sink(Sink::Flush { output: 0, segment: 0 })
         .output(true)
         .sink(Sink::Flush { output: 1, segment: 1 })
+        .done()
+}
+
+/// The transcription output replaced after the close was asked for: the swap's rotation and the
+/// close each flush the old instance once. Catches: the rotation's flush counted as the close's
+/// (survey seed 4496).
+fn replaced_while_closing() -> Recording {
+    Authored::new()
+        .output(false)
+        .sent(Input::Close { drain: true })
+        .output(false)
+        .sink(Sink::TextFlush { output: 0 })
+        .sink(Sink::TextFlush { output: 0 })
         .done()
 }
 

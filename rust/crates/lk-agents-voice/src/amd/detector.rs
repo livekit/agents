@@ -1,4 +1,6 @@
-use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemGone, SystemTap};
+use crate::agent_session::{
+    IvrCommand, Origin, PeerHandle, SpeechCommand, SystemGone, SystemTap, TurnCommand,
+};
 use crate::amd::classifier::{
     Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out,
     TranscriptSource, Verdict,
@@ -340,10 +342,15 @@ impl AmdSystem {
 
     pub fn step(&mut self, now: Ts, input: In) {
         let Some(machine) = self.machine.take() else { return };
+        let skipped = machine.skips_replies();
         let (next, out) = machine.step(now, input);
         self.machine = Some(next);
         self.perform(now, out);
         self.sync_tap();
+        let skips = self.machine.as_ref().is_some_and(Amd::skips_replies);
+        if skips != skipped {
+            let _ = self.peer.send(Origin::Amd, TurnCommand::SkipReplies(skips));
+        }
     }
 
     fn perform(&mut self, now: Ts, out: Out) {
@@ -501,6 +508,7 @@ impl AmdSystem {
     fn open_tap(&self, stt: Arc<dyn Stt>) {
         stt.prewarm();
         let tx = self.tx.clone();
+        let time = self.peer.time.clone();
         self.peer.spawner.clone().spawn_unboxed(async move {
             let outcome = match stt.stream(None, None).await {
                 Some(Ok(pair)) => Ok(pair),
@@ -509,7 +517,14 @@ impl AmdSystem {
                     "the AMD STT does not stream",
                 ))),
             };
-            let _ = tx.send(Msg::SttOpened(outcome));
+            // The system stopped reading while the stream opened: closed here, since a dropped
+            // host stream is never cancelled.
+            if let Err(tokio::sync::mpsc::error::SendError(Msg::SttOpened(Ok((_, source))))) =
+                tx.send(Msg::SttOpened(outcome))
+            {
+                let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+                let _ = source.close(deadline).await;
+            }
         });
     }
 

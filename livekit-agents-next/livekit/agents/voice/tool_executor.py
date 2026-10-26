@@ -79,7 +79,10 @@ class ToolRunner:
 
         fnc_call = from_core_item(call)
         assert fnc_call.type == "function_call"
-        tool = self._tools.get_function_tool(fnc_call.name)
+        # a session tool added since this frame was installed (IVR's DTMF tool) is the session's
+        tool = self._tools.get_function_tool(fnc_call.name) or ToolContext(
+            self._session._tools
+        ).get_function_tool(fnc_call.name)
         if tool is None:
             names = list(self._tools.function_tools)
             return _raised(ToolError(_core.unknown_tool_message(fnc_call.name, names)))

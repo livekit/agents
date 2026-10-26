@@ -24,7 +24,9 @@ from aiohttp import web
 
 from livekit import rtc
 from livekit.agents import (
+    AMD,
     Agent,
+    AMDCategory,
     APIConnectOptions,
     AudioConfig,
     BackgroundAudioPlayer,
@@ -766,6 +768,57 @@ async def background_audio() -> None:
     assert played > 0, played
 
 
+class ClassifyingLLM(ScriptedLLM):
+    """Answers AMD's classification with ``label``; anything else as ``ScriptedLLM``."""
+
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.verdict = label
+
+    def chat(
+        self, *, chat_ctx: llm.ChatContext, tools: list[llm.Tool] | None = None, **_: object
+    ) -> llm.LLMStream:
+        names = {t.info.name for t in tools or [] if isinstance(t, llm.FunctionTool)}
+        if "save_prediction" not in names:
+            return super().chat(chat_ctx=chat_ctx, tools=tools)
+        return _Classify(
+            self, chat_ctx=chat_ctx, tools=tools or [], conn_options=DEFAULT_API_CONNECT_OPTIONS
+        )
+
+
+class _Classify(llm.LLMStream):
+    async def _run(self) -> None:
+        assert isinstance(self._llm, ClassifyingLLM)
+        call = llm.FunctionToolCall(
+            name="save_prediction",
+            arguments=json.dumps({"label": self._llm.verdict}),
+            call_id=shortuuid("call_"),
+        )
+        delta = llm.ChoiceDelta(role="assistant", tool_calls=[call])
+        self._event_ch.send_nowait(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
+
+
+async def amd() -> None:
+    """AMD on the session's transcripts: an IVR greeting, handed to the navigator."""
+    print("== amd")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    session = LiveSession(stt=ScriptedSTT(), llm=ClassifyingLLM("machine-ivr"), tts=SilentTTS())
+    await session.start(Agent(instructions="You call people."), room=room)
+    async with AMD(session, llm=None, stt=None, suppress_compatibility_warning=True) as detector:
+        assert session.amd is detector and detector.pending
+        room.speak(frames=40)
+        result = asyncio.ensure_future(detector.execute())
+        await settle(room, 30)
+        assert result.done(), "AMD gave no verdict"
+        verdict = result.result()
+        print(f"amd {verdict.category.value} reason={verdict.reason} {verdict.transcript!r}")
+        assert verdict.category == AMDCategory.MACHINE_IVR, verdict
+        assert "send_dtmf_events" in [getattr(t, "id", None) for t in session.tools], "no IVR"
+    assert session.amd is None
+    await session.aclose()
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -862,6 +915,7 @@ async def main() -> int:
     await avatar()
     await expressive()
     await background_audio()
+    await amd()
     return 0
 
 

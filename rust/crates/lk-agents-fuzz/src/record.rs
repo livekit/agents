@@ -203,6 +203,9 @@ pub enum Detail {
     Stream {
         audio: bool,
     },
+    /// A recognition stream of AMD's own (`AMD(stt=..)`): fed through the detector's listening
+    /// gate, not the session's input path.
+    AmdStt,
 }
 
 /// What the run still holds: the resources an input may point at right now.

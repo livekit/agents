@@ -413,6 +413,12 @@ plain_enum! {
     IvrInput { Start, SeedTranscript, Close }
 }
 plain_enum! {
+    /// What `AMD` does past its attach: opens listening when the SIP call is answered, settles
+    /// `participant_missing` when the callee is gone, runs `execute()` on its verdict (the IVR
+    /// hand-off included), or closes (`async with` left).
+    AmdInput { Listen, Settle, Execute, Close }
+}
+plain_enum! {
     /// What the console's CLI asks the session (`SessionRequest`), one of each kind.
     ConsoleAsk { Ping, History, AgentInfo, RunInput, State, RtcStats, Usage, Framework, Mute, Finalize }
 }
@@ -472,8 +478,8 @@ macro_rules! unreferenced {
 
 unreferenced!(
     bool, AgentText, UserText, Millis, Count, String, IoKind, SayInput, ToolAnswer, HookAnswer,
-    Knob, TurnMode, IvrInput, Models, Role, RoomIn, ConsoleAsk, Confidence, ToolArgs, Speaker, RtEvent,
-    DtmfInput, DtmfKey
+    Knob, TurnMode, IvrInput, Models, Role, RoomIn, ConsoleAsk, Confidence, ToolArgs, Speaker,
+    RtEvent, DtmfInput, DtmfKey, AmdInput
 );
 
 impl<K: Resource> Referenced for Ref<K> {
@@ -645,6 +651,9 @@ inputs! {
     Dtmf { input: DtmfInput, key: DtmfKey, digits: Count, confirm: bool, timeout: Millis }
         opens [Answer] leaf command::Dtmf;
     Recorder { attach: bool } leaf command::Recorder;
+    /// The answering-machine detector's host calls (`amd_start_*`, `amd_settle`, `execute()`,
+    /// `aclose()`), which reach its own system rather than the driver: no command leaf.
+    Amd { input: AmdInput };
     Run { user_input: Option<UserText>, expects_output: bool, retries: Count } leaf command::Run;
 
     // --- what the case feeds into a stream a call opened --------------------------------------
@@ -748,6 +757,7 @@ not_sent! {
     command::Speech => "a family, not a leaf: its leaves are in the table";
     command::Turn => "a family, not a leaf: its leaves are in the table";
     command::Activity => "a family, not a leaf: its leaves are in the table";
+    turn::SkipReplies => "the answering-machine detector's own, on its verdict and close (`Amd`)";
 }
 
 /// Compiles only while every production command leaf is either in the table or excused above.
