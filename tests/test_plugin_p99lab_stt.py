@@ -376,3 +376,31 @@ async def test_error_body_keeps_only_known_fields(fake, http) -> None:
         await collect(stream)
     assert "text" not in info.value.body
     assert "what the caller said" not in repr(info.value)
+
+
+async def test_final_cut_mid_speech_keeps_the_turn_open(fake, http) -> None:
+    async def long_speech(ws: web.WebSocketResponse, conn: dict) -> None:
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data)["type"] == "end":
+                await ws.send_json(
+                    {
+                        "type": "final",
+                        "text": "first part",
+                        "start": 0,
+                        "end": 24.2,
+                        "continues": True,
+                    }
+                )
+                await ws.send_json(
+                    {"type": "final", "text": "and the rest", "start": 24.2, "end": 30}
+                )
+                await ws.send_json({"type": "done", "audio_seconds": 30.0})
+                return
+
+    fake.scripts = [long_speech]
+    stream = make(fake, http).stream(conn_options=FAST_RETRY)
+    for f in frames(tone(30.0)):
+        stream.push_frame(f)
+    stream.end_input()
+    events = [ev.type for ev in await collect(stream) if ev.type != E.RECOGNITION_USAGE]
+    assert events == [E.START_OF_SPEECH, E.FINAL_TRANSCRIPT, E.FINAL_TRANSCRIPT, E.END_OF_SPEECH]

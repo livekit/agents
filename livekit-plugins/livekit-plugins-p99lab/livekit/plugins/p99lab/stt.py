@@ -614,7 +614,10 @@ class SpeechStream(stt.RecognizeStream):
                         alternatives=[sd],
                     )
                 )
-            self._end_speech()
+            # "continues": the server cut a long utterance (about 25 s) while the
+            # speaker was still talking, so this final is not the end of the speech.
+            if not data.get("continues"):
+                self._end_speech()
         else:
             logger.warning("unexpected Audrey message type %r", kind)
 
