@@ -189,9 +189,15 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._model_session.update_options(target_language=language)
 
         self._model.update_options(target_language=language)
-        if self._model_session is None or not self._output_language_stamped:
-            # nothing stamps the speech with its language, so the label follows the request
+        if self._model_session is None:
             self._relabel_output(language)
+        elif not self._output_language_stamped:
+            # nothing stamps the speech with its language, so the label follows the request.
+            # The open segment ends first: speech that never pauses would otherwise keep it
+            # open, and the old label with it
+            task = asyncio.create_task(self._close_segment_and_relabel(language))
+            self._segment_tasks.add(task)
+            task.add_done_callback(self._segment_tasks.discard)
 
     async def start(
         self,
@@ -537,6 +543,11 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._segment_timer is not None:
             self._segment_timer.cancel()
             self._segment_timer = None
+
+    async def _close_segment_and_relabel(self, language: str) -> None:
+        self._cancel_segment_timer()
+        await self._close_output_segment()
+        self._relabel_output(language)
 
     def _close_output_segment_soon(self) -> None:
         """Close the segment from the timer, which cannot await the drain itself.

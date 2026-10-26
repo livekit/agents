@@ -1082,7 +1082,28 @@ async def test_an_unstamped_provider_is_labelled_with_the_request() -> None:
         await _wait_for(lambda: counts.frames == 1)
 
         session.set_target_language("fr")
-        assert labels.languages == ["fr"]
+        await _wait_for(lambda: labels.languages == ["fr"])
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+async def test_an_unstamped_retarget_ends_a_segment_that_never_pauses() -> None:
+    model = _FakeTranslationModel(retargetable=True)
+    # no pause in the speech is ever long enough to end the segment on its own
+    session, _, audio_out, _ = _session(model, output_segment_timeout=60)
+    counts = _Counts(audio_out)
+    labels = _LabelRecorder()
+    await session.start()
+    session._room_io = labels  # type: ignore[assignment]
+    try:
+        model.sessions[0].speak()
+        await _wait_for(lambda: counts.frames == 1)
+
+        session.set_target_language("fr")
+        await _wait_for(lambda: labels.languages == ["fr"])
+        # the Spanish segment ended, so its playout can finish and the label can land
+        assert counts.flushes == 1
     finally:
         session._room_io = None
         await session.aclose()
