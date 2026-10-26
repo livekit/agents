@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -826,6 +826,43 @@ class TestSessionHostWithoutSession:
         assert resp.request_id == "req-fin"
         assert resp.finalize_simulation.user_verdict.reason == "vetoed"
         await asyncio.wait_for(finalized, timeout=0.1)
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_a_run_cut_short_by_the_close_fails_after_session_closed(self) -> None:
+        # an event still on the wire holds back the events queued after it
+        class _SlowEventsTransport(InMemoryTransport):
+            async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+                if msg.HasField("event"):
+                    await asyncio.sleep(0.01)
+                await super().send_message(msg)
+
+        transport = _SlowEventsTransport()
+        host = SessionHost(transport)
+        session = TestSessionHostRequests()._make_mock_session()
+        run: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        session.run = MagicMock(return_value=run)
+        session.interrupt = AsyncMock()
+        host.attach(session)
+        await host.start()
+
+        request = asyncio.ensure_future(
+            host._handle_request_safe(
+                agent_pb.SessionRequest(
+                    request_id="req-run", run_input=agent_pb.SessionRequest.RunInput(text="bye")
+                )
+            )
+        )
+        await asyncio.sleep(0)
+        host._on_error(ErrorEvent(error=RuntimeError("goodbye failed"), source="llm"))
+        host._on_close(CloseEvent(reason=CloseReason.USER_INITIATED))
+        run.set_exception(RuntimeError("session closed"))
+        await request
+        await asyncio.sleep(0.1)
+
+        assert [m.WhichOneof("message") for m in transport.sent] == ["event", "event", "response"]
+        assert transport.sent[1].event.HasField("session_closed")
+        assert transport.sent[2].response.error == "session closed"
         await host.aclose()
 
     @pytest.mark.asyncio
