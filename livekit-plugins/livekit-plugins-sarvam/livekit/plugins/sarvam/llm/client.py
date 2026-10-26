@@ -245,8 +245,8 @@ class LLM(OpenAILLM):
             timeout=timeout,
         )
 
-        # Track the API key and version for runtime model switching
-        self._sarvam_api_key = sarvam_api_key
+        # Track the endpoint for runtime model switching
+        self._explicit_base_url = is_given(base_url)
         self._sarvam_api_version = _api_version(validated_model)
 
     # ------------------------------------------------------------------
@@ -268,9 +268,9 @@ class LLM(OpenAILLM):
     ) -> None:
         """Update the model at runtime.
 
-        Validates the new model and recreates the underlying client when the
-        API version changes (``/v1`` ↔ ``/v2``).  When both old and new models
-        share the same endpoint, the client is **not** recreated.
+        Validates the new model and points the client at the new model's endpoint
+        when the API version changes (``/v1`` ↔ ``/v2``). An explicit ``base_url``
+        is kept as is.
         """
         if not is_given(model):
             return
@@ -279,12 +279,10 @@ class LLM(OpenAILLM):
         new_version = _api_version(new_model)
 
         if new_version != self._sarvam_api_version:
-            # Endpoint changed — recreate the client pointing at the new URL
-            new_base_url = _resolve_base_url(new_model)
-            self._client = _create_sarvam_client(
-                api_key=self._sarvam_api_key,
-                base_url=new_base_url,
-            )
+            if not self._explicit_base_url:
+                # with_options shares the http client, so the timeout and connection pool
+                # carry over and the client being replaced has nothing left to close
+                self._client = self._client.with_options(base_url=_resolve_base_url(new_model))
             self._sarvam_api_version = new_version
 
         self._opts.model = new_model
@@ -360,29 +358,3 @@ class LLM(OpenAILLM):
             response_format=response_format,
             extra_kwargs=merged_extra if merged_extra else NOT_GIVEN,
         )
-
-
-def _create_sarvam_client(
-    *,
-    api_key: str,
-    base_url: str,
-) -> openai.AsyncClient:
-    """Create an ``openai.AsyncClient`` with Sarvam auth headers."""
-    return openai.AsyncClient(
-        api_key=api_key,
-        base_url=base_url,
-        max_retries=0,
-        default_headers={
-            "api-subscription-key": api_key,
-            "User-Agent": USER_AGENT,
-        },
-        http_client=httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=15.0, read=60.0, write=5.0, pool=5.0),
-            follow_redirects=True,
-            limits=httpx.Limits(
-                max_connections=50,
-                max_keepalive_connections=50,
-                keepalive_expiry=120,
-            ),
-        ),
-    )
