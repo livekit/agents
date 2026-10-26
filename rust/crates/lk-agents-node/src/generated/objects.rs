@@ -273,6 +273,11 @@ impl BackgroundAudioPlayer {
         })
     }
 
+    #[napi(getter, js_name = "closed")]
+    pub fn closed(&self) -> bool {
+        self.inner.closed()
+    }
+
     #[napi(js_name = "aclose", ts_return_type = "Promise<void>")]
     pub fn aclose<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
         let inner = std::sync::Arc::clone(&self.inner);

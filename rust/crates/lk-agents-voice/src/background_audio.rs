@@ -572,9 +572,19 @@ impl BackgroundAudioPlayer {
         }
     }
 
-    /// `aclose()`: stops the output and every playing sound.
+    /// `closed`: `aclose()` got past stopping the sounds; the output is gone or going.
+    #[host(getter)]
+    pub fn closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    /// `aclose()`: stops every playing sound, then the output. Cancelled while the sounds stop,
+    /// the player stays open with its output running (`closed` stays false), as the reference
+    /// keeps its mixer; past that, the close runs to its end.
     #[host(method(name = "aclose"))]
     pub async fn close(self: &Arc<Self>) {
+        let this = self.clone();
+        let _ = tokio::spawn(async move { this.stop_sounds().await }).await;
         self.closed.store(true, Ordering::Release);
         let this = self.clone();
         let _ = tokio::spawn(async move {
@@ -593,22 +603,27 @@ impl BackgroundAudioPlayer {
                     let _ = output.participant.unpublish_track(publication.sid()).await;
                 }
             }
-            let mut state = this.state.lock().await;
-            let mut sources: Vec<_> = std::mem::take(&mut state.sources).into_values().collect();
-            sources.extend(this.queued.lock().unwrap().drain(..));
-            let retired = std::mem::take(&mut state.retired);
-            for id in state.mixer.stream_ids() {
-                state.mixer.remove_stream(id);
-            }
-            drop(state);
-            for task in retired {
-                let _ = task.await;
-            }
-            for source in sources {
-                source.close().await;
-            }
+            drop(output);
+            this.stop_sounds().await;
         })
         .await;
+    }
+
+    async fn stop_sounds(&self) {
+        let mut state = self.state.lock().await;
+        let mut sources: Vec<_> = std::mem::take(&mut state.sources).into_values().collect();
+        sources.extend(self.queued.lock().unwrap().drain(..));
+        let retired = std::mem::take(&mut state.retired);
+        for id in state.mixer.stream_ids() {
+            state.mixer.remove_stream(id);
+        }
+        drop(state);
+        for task in retired {
+            let _ = task.await;
+        }
+        for source in sources {
+            source.close().await;
+        }
     }
 }
 

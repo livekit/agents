@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import sys
 from collections.abc import AsyncIterable, AsyncIterator, Callable
@@ -734,6 +735,30 @@ async def background_audio() -> None:
     assert not looped.done()
     looped.stop()
     assert looped.done()
+
+    # a close cancelled while a sound still stops leaves the player open, thinking sounds on
+    release, pulled = asyncio.Event(), asyncio.Event()
+
+    async def stubborn() -> AsyncIterator[rtc.AudioFrame]:
+        try:
+            yield rtc.AudioFrame(b"\x10\x00" * 480, 48000, 1, 480)
+            pulled.set()
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release.wait()
+            raise
+
+    player.play(stubborn())
+    await until(pulled.is_set)
+    close = asyncio.create_task(player.aclose())
+    await asyncio.sleep(0.1)
+    close.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await close
+    assert not player._player.closed
+    assert player._agent_state_changed in session._events["agent_state_changed"]
+    assert not player.play(BuiltinAudioClip.HOLD_MUSIC).done()
+    release.set()
     await player.aclose()
     await session.aclose()
     played = room.played_bytes() - before

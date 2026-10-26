@@ -252,7 +252,13 @@ class BackgroundAudioPlayer:
                 return
             if self._agent_session:
                 self._agent_session.off("agent_state_changed", self._agent_state_changed)
-            await self._player.aclose()
+            try:
+                await self._player.aclose()
+            except asyncio.CancelledError:
+                # cancelled before the output stopped: thinking sounds keep working
+                if self._agent_session and not self._player.closed:
+                    self._agent_session.on("agent_state_changed", self._agent_state_changed)
+                raise
             self._started = False
 
     def _agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
