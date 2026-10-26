@@ -88,7 +88,7 @@ pub(crate) async fn realtime_generation_task(
         node.end();
     }
     let Generation { segments, received, first_token_at, response_id, message_id, .. } = generation;
-    let interrupted = played.is_ok_and(|heard| !heard.complete) || handle.interrupted();
+    let interrupted = played.as_ref().is_ok_and(|heard| !heard.complete) || handle.interrupted();
     // The metrics' `llm_started_at` anchor, on the driver's clock. `None` when nothing arrived.
     let ttft = first_token_at.map(|at| (at - started_at).max(0.0));
     drop(rx);
@@ -96,9 +96,15 @@ pub(crate) async fn realtime_generation_task(
     if !received && handle.num_steps() > 0 {
         return Ok(StepOutcome::Released);
     }
-    // The transcript *is* the provider's: the words committed are the ones the voice said.
-    for text in &segments {
-        acc.record(text);
+    // The transcript *is* the provider's: the words committed are the ones the voice said, or,
+    // cut, what the synchroniser says was heard of them (`_ForwardOutput.forwarded_text`).
+    match &played {
+        Ok(heard) if interrupted => acc.record(&heard.text),
+        Ok(_) | Err(_) => {
+            for text in &segments {
+                acc.record(text);
+            }
+        }
     }
     let has_calls = !tools.is_empty();
     // No token rate: it would measure the server's audio pacing, not generation speed.

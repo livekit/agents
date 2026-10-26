@@ -113,6 +113,8 @@ struct Planned {
     offset: usize,
     /// The TTS's `start_time` for the delta this word came from, or the segment start.
     base: Option<f64>,
+    /// The playhead when the word was planned: a word that arrives late starts no earlier.
+    arrived: f64,
 }
 
 impl Planned {
@@ -138,7 +140,13 @@ pub struct Pacer {
     offset: usize,
     base: Option<f64>,
     planned_hyphens: usize,
-    forwarded: String,
+    /// The words shown, each with where its audio ends. Heard are the ones whose audio ended.
+    forwarded: Vec<(String, f64)>,
+    /// Where the next unaligned word starts: the end of the last one shown (`None` before any).
+    cursor: Option<f64>,
+    /// The front word's `(start, end)`, fixed at the speed known when it started, as the
+    /// reference's pacing loop computes each word's delay as it reaches it.
+    front: Option<(f64, f64)>,
     audio_secs: f64,
     frames: u64,
     position: Duration,
@@ -158,12 +166,19 @@ impl Pacer {
             offset: 0,
             base: None,
             planned_hyphens: 0,
-            forwarded: String::new(),
+            forwarded: Vec::new(),
+            cursor: None,
+            front: None,
             audio_secs: 0.0,
             frames: 0,
             position: Duration::ZERO,
             saw_text: false,
         }
+    }
+
+    /// The last playhead the segment was told.
+    pub fn position(&self) -> Duration {
+        self.position
     }
 
     pub fn is_blank(&self) -> bool {
@@ -266,6 +281,7 @@ impl Pacer {
             hyphens,
             offset: self.offset,
             base: self.base,
+            arrived: self.position.as_secs_f64(),
         });
         self.offset += hyphens;
         self.planned_hyphens += hyphens;
@@ -323,24 +339,48 @@ impl Pacer {
         }
     }
 
+    /// The reference's pacing loop (`_SegmentSynchronizerImpl._main_task`): each word starts where
+    /// the previous one ended (or when it arrived), lasts its hyphens at the speed known then, and
+    /// is shown halfway through. An aligned word keeps the TTS's own timing.
     fn release(&mut self, position: Duration, out: &mut Vec<PaceEffect>) {
         self.position = position;
         let now = position.as_secs_f64();
         while let Some(front) = self.queue.front() {
-            if front.due(self.speed) > now + 1e-9 {
+            let (start, end) = match (self.front, front.base) {
+                (Some(timed), _) => timed,
+                (None, Some(_)) => (front.due(self.speed), front.end(self.speed)),
+                (None, None) => {
+                    let start = self.cursor.unwrap_or(0.0).max(front.arrived);
+                    if start > now + 1e-9 {
+                        break;
+                    }
+                    (start, start + front.hyphens as f64 / self.speed)
+                }
+            };
+            self.front = Some((start, end));
+            let shown_at = if front.base.is_some() { start } else { (start + end) / 2.0 };
+            if shown_at > now + 1e-9 {
                 break;
             }
             let word = self.queue.pop_front().expect("peeked");
-            let end_time = word.end(self.speed);
-            self.forward(word, end_time, out);
+            self.front = None;
+            self.cursor = Some(end);
+            self.forward(word, end, out);
         }
     }
 
     fn forward(&mut self, word: Planned, end_time: f64, out: &mut Vec<PaceEffect>) {
-        self.forwarded.push_str(&word.visible);
+        self.forwarded.push((word.visible, end_time));
         if !word.word.is_empty() {
             out.push(PaceEffect::Forward { word: word.word, end_time });
         }
+    }
+
+    /// The words shown whose audio had ended by `position` (`forwarded_text`, which the reference
+    /// extends only once a word's whole delay has passed).
+    fn heard(&self, position: Duration) -> String {
+        let at = position.as_secs_f64() + 1e-9;
+        self.forwarded.iter().take_while(|(_, end)| *end <= at).map(|(w, _)| w.as_str()).collect()
     }
 
     /// The playout ended. Complete: everything left is heard, at once. Cut: what was forwarded.
@@ -359,9 +399,10 @@ impl Pacer {
         }
         out.push(PaceEffect::Flush);
         let heard = if interrupted {
-            Heard::cut(self.forwarded.clone(), position, self.frames)
+            Heard::cut(self.heard(position), position, self.frames)
         } else {
-            Heard::complete(self.forwarded.clone(), position, self.frames)
+            let all: String = self.forwarded.iter().map(|(w, _)| w.as_str()).collect();
+            Heard::complete(all, position, self.frames)
         };
         out.push(PaceEffect::Heard(heard));
         self.state = PaceState::Finished;
@@ -371,7 +412,8 @@ impl Pacer {
     fn cut(&mut self, out: &mut Vec<PaceEffect>) {
         self.queue.clear();
         out.push(PaceEffect::Flush);
-        out.push(PaceEffect::Heard(Heard::cut(self.forwarded.clone(), self.position, self.frames)));
+        let heard = self.heard(self.position);
+        out.push(PaceEffect::Heard(Heard::cut(heard, self.position, self.frames)));
         self.state = PaceState::Closed;
     }
 }
@@ -675,7 +717,15 @@ impl SyncedAudioOutput {
     /// `wait_for_playout` races the event meant to release it.
     fn handle_playback(&self, ev: &PlaybackEvent) {
         match ev {
-            PlaybackEvent::Started(e) => self.tracker.playback_started(e.created_at),
+            PlaybackEvent::Started(e) => {
+                self.tracker.playback_started(e.created_at);
+                // The reference's pacing loop takes its first word as the playback starts.
+                let mut state = self.core.state.lock().unwrap();
+                if state.enabled && !SyncCore::pacer(&state).is_over() {
+                    let at = SyncCore::pacer(&state).position();
+                    self.core.apply(&mut state, PaceEvent::Position(at));
+                }
+            }
             PlaybackEvent::Progressed(e) => {
                 self.tracker.playback_progressed(e.started_at, e.offset, e.duration);
                 let mut state = self.core.state.lock().unwrap();
@@ -1038,5 +1088,69 @@ impl TranscriptSynchronizer {
             self.core.forwarder_done.wait_for(|set| *set),
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paced(text: &str, audio_secs: f64) -> Pacer {
+        let mut p = Pacer::new(PacerOptions::default());
+        for ev in [
+            PaceEvent::Text { raw: text.into(), start_time: None },
+            PaceEvent::TextEnd,
+            PaceEvent::Audio { secs: audio_secs },
+            PaceEvent::AudioEnd,
+        ] {
+            p = p.step(ev).0;
+        }
+        p
+    }
+
+    fn shown(effects: &[PaceEffect]) -> String {
+        effects
+            .iter()
+            .filter_map(|e| match e {
+                PaceEffect::Forward { word, .. } => Some(word.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // The reference's pacing loop shows a word halfway through its delay and counts it heard only
+    // once the whole delay passed (`_SegmentSynchronizerImpl._main_task`): a cut keeps the words
+    // whose audio ended, not the one playing. Found by `scripts/parity.py say_cut`.
+    #[test]
+    fn a_cut_keeps_the_words_whose_audio_ended() {
+        // Four one-hyphen words over 0.4 s: 0.1 s each, shown at 0.05, 0.15, ...
+        let p = paced("one two three four", 0.4);
+        let (p, effects) = p.step(PaceEvent::Position(Duration::from_millis(160)));
+        assert_eq!(shown(&effects), "one two");
+        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
+            position: Duration::from_millis(160),
+            interrupted: true,
+        });
+        let heard = effects.iter().find_map(|e| match e {
+            PaceEffect::Heard(h) => Some(h.text.clone()),
+            _ => None,
+        });
+        assert_eq!(heard.as_deref(), Some("one"), "\"two\" was shown but still playing");
+    }
+
+    // Each word lasts its hyphens at the speed known when it starts, as the reference computes
+    // each delay when it reaches the word: a re-estimate moves the words after it, not before.
+    #[test]
+    fn a_word_keeps_the_speed_it_started_at() {
+        let mut p = Pacer::new(PacerOptions::default());
+        p = p.step(PaceEvent::Text { raw: "one two three".into(), start_time: None }).0;
+        p = p.step(PaceEvent::TextEnd).0;
+        p = p.step(PaceEvent::Audio { secs: 0.3 }).0;
+        // The first word starts with the playback, at the standard rate (1 / 3.83 s).
+        p = p.step(PaceEvent::Position(Duration::ZERO)).0;
+        p = p.step(PaceEvent::AudioEnd).0;
+        let (_, effects) = p.step(PaceEvent::Position(Duration::from_millis(200)));
+        // "one" ends at 0.261 s; "two" (0.1 s at the re-estimated 10 hyphens/s) is shown at 0.311.
+        assert_eq!(shown(&effects), "one");
     }
 }

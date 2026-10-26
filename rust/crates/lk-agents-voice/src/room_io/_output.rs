@@ -147,6 +147,11 @@ impl Ledger {
     }
 }
 
+/// How often a playing segment reports what passed the speaker. A synchroniser downstream releases
+/// its words on these reports, so the room's transcript follows the audio as it plays (the
+/// reference's synchroniser paces each word on its own timer) rather than all at the segment's end.
+const PROGRESS_TICK: Duration = Duration::from_millis(20);
+
 /// Everything the source has taken that has played or been discarded.
 fn playhead(info: PlaybackInfo) -> Duration {
     info.played + info.discarded
@@ -366,6 +371,42 @@ impl Shared {
         self.lock().ledger.dry_at = Some(dry_at);
     }
 
+    /// While a segment plays, its progress every [`PROGRESS_TICK`], as the run so far. The source
+    /// is the playhead's one origin; a pause, a cut and the finish report their own runs.
+    async fn report_progress(self: Arc<Self>) {
+        let playing = |s: &Playback| s.ledger.started && !s.paused && s.phase != Phase::Idle;
+        loop {
+            self.wait_until(|s| s.closed || playing(s)).await;
+            let at = self.clock.now().saturating_add(PROGRESS_TICK);
+            self.clock.wait_until(at).await;
+            let src = {
+                let st = self.lock();
+                if st.closed {
+                    return;
+                }
+                if !playing(&st) {
+                    continue;
+                }
+                st.source.clone()
+            };
+            let Some(src) = src else { continue };
+            let played = playhead(src.playback_info());
+            let run = {
+                let mut st = self.lock();
+                if !playing(&st) {
+                    continue;
+                }
+                let at = st.ledger.window_base + played;
+                // Not a dry spell: the next capture still owes the run it may close.
+                let dry = st.ledger.dry_at;
+                let run = st.ledger.report_run(at, self.clock.now(), None);
+                st.ledger.dry_at = dry;
+                run
+            };
+            self.report(run);
+        }
+    }
+
     /// `_wait_for_playout`, per closed segment: wait for the drain, then finish the segment.
     async fn wait_for_playout(self: Arc<Self>) {
         loop {
@@ -442,7 +483,8 @@ pub struct ParticipantAudioOutput {
     spawner: Arc<dyn Spawner>,
     config: AudioOutputConfig,
     shared: Arc<Shared>,
-    /// The pump and the watcher. Two tasks for the life of the output, not one per segment.
+    /// The pump, the watcher and the progress reporter: for the life of the output, not one per
+    /// segment.
     tasks: Mutex<Vec<AbortHandle>>,
 }
 
@@ -489,7 +531,8 @@ impl ParticipantAudioOutput {
     pub async fn start(&self) -> Result<()> {
         let pump = self.spawner.spawn_unboxed(self.shared.clone().forward_audio());
         let watcher = self.spawner.spawn_unboxed(self.shared.clone().wait_for_playout());
-        *self.tasks.lock().unwrap() = vec![pump, watcher];
+        let progress = self.spawner.spawn_unboxed(self.shared.clone().report_progress());
+        *self.tasks.lock().unwrap() = vec![pump, watcher, progress];
 
         let (source, publication) =
             self.room.local().publish_audio_track(self.config.publish.clone()).await?;

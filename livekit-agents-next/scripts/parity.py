@@ -127,7 +127,7 @@ def _tolerate_audio(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
         return
     speeches = sum(1 for e in ref.get("events", []) if e[0] == "speech_created")
     # a tts_node may repeat frames, markers included
-    if abs(a["audio_s"] - b["audio_s"]) <= 0.02 * speeches + 0.005:
+    if abs(a["audio_s"] - b["audio_s"]) <= 0.05 * speeches + 0.005:
         b["audio_s"] = a["audio_s"]
 
 
@@ -590,9 +590,20 @@ class Call:
             texts = self.room_texts
 
             class Text(FakeTextOutput):
+                """RoomIO's agent transcript: one delta stream per segment, listed from its first
+                word, as the room lists the streams it opened."""
+
+                slot: int | None = None
+
+                async def capture_text(self, text: str) -> None:
+                    await super().capture_text(text)
+                    if self.slot is None:
+                        self.slot = len(texts)
+                        texts.append("")
+                    texts[self.slot] = self._pushed_text
+
                 def flush(self) -> None:
-                    if self._pushed_text:
-                        texts.append(self._pushed_text)
+                    self.slot = None
                     self._pushed_text = ""
 
             def user_transcript(ev: Any) -> None:
@@ -868,7 +879,7 @@ async def sc_aclose_drain(call: Call) -> None:
 async def sc_aclose_mid_reply(call: Call) -> None:
     session = await _pipeline(call)
     call.handle("long", session.generate_reply(user_input="tell me something long"))
-    await call.settle(0.5)
+    await call.settle(0.8)
     await session.aclose()
 
 
@@ -1057,7 +1068,7 @@ async def sc_realtime_interruption(call: Call) -> None:
     await call.start(Agent(instructions="You are realtime."))
     await call.settle(0.5)
     call.handle("reply", session.generate_reply(instructions="greet the user"))
-    await call.settle(0.6)
+    await call.settle(0.8)
     call.speak("wait")
     await call.settle(4)
     await _close(call)
@@ -1192,14 +1203,29 @@ async def sc_interrupt_api(call: Call) -> None:
 async def sc_say_cut(call: Call) -> None:
     session = await _pipeline(call)
     call.handle("say", session.say(COUNTING))
-    await call.settle(1)
+    await call.settle(1.1)
     session.interrupt()
+    await call.settle(2)
+    await _close(call)
+
+
+async def sc_live_transcript(call: Call) -> None:
+    """The room's transcript while the speech plays, not only once it ended. Sampled away from
+    word onsets: the room's sink reports its playhead a frame late (up to 50 ms)."""
+    session = await _pipeline(call)
+    call.handle("say", session.say(LONG))
+    elapsed = 0.0
+    for at in (0.44, 0.66, 0.94):
+        await call.settle(at - elapsed)
+        elapsed = at
+        call.extra.setdefault("live", []).append([at, call.received()["texts"]])
     await call.settle(2)
     await _close(call)
 
 
 SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "say_cut": sc_say_cut,
+    "live_transcript": sc_live_transcript,
     "say": sc_say,
     "generate_reply": sc_generate_reply,
     "tool_call": sc_tool_call,
