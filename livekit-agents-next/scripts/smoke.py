@@ -16,6 +16,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
 import sys
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from typing import Any
@@ -178,9 +179,23 @@ class FrontDesk(Agent):
         ctx.session.update_agent(Billing())
 
 
-async def settle(room: _core.FakeRoom, seconds: float) -> None:
-    """Run the virtual clock forward in 20 ms steps, letting the loop work between them."""
+def print_item(ev: object) -> None:
+    item = ev.item  # type: ignore[attr-defined]
+    if item.type == "message":
+        print(f"conversation_item {item.role}: {item.text_content!r}")
+    else:
+        print(f"conversation_item {item.type}: {item.old_agent_id} -> {item.new_agent_id}")
+
+
+async def settle(
+    room: _core.FakeRoom, seconds: float, *, hold: Callable[[], bool] = lambda: False
+) -> None:
+    """Run the virtual clock forward in 20 ms steps, letting the loop work between them; no step
+    is taken while ``hold()`` says real-time work the clock must wait for is out."""
     for _ in range(int(seconds / 0.02)):
+        async with asyncio.timeout(30):
+            while hold():
+                await asyncio.sleep(0.001)
         room.advance(0.02)
         for _ in range(5):
             await asyncio.sleep(0)
@@ -285,10 +300,7 @@ async def realtime() -> None:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
     session = LiveSession(llm=ScriptedRealtime(), vad=None)
-    session.on(
-        "conversation_item_added",
-        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
-    )
+    session.on("conversation_item_added", print_item)
     await session.start(Agent(instructions="You are realtime.", name="realtime"), room=room)
     handle = session.generate_reply(instructions="greet the user")
     await settle(room, 2)
@@ -327,10 +339,7 @@ async def realtime_fallback() -> None:
         lambda ev: changes.append((ev.realtime_model is primary, ev.available)),
     )
     session = LiveSession(llm=adapter, vad=None)
-    session.on(
-        "conversation_item_added",
-        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
-    )
+    session.on("conversation_item_added", print_item)
     await session.start(Agent(instructions="You are realtime.", name="fallback"), room=room)
     await settle(room, 0.5)
     handle = session.generate_reply(instructions="greet the user")
@@ -422,10 +431,7 @@ async def duplex() -> None:
     room.join("user")
     model = ScriptedDuplex()
     session = LiveSession(llm=llm.DuplexRealtimeAdapter(model), vad=None)
-    session.on(
-        "conversation_item_added",
-        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
-    )
+    session.on("conversation_item_added", print_item)
     await session.start(Agent(instructions="You are duplex.", name="duplex"), room=room)
     await settle(room, 0.2)
     handle = session.generate_reply()
@@ -503,10 +509,7 @@ async def native_realtime() -> None:
         api_key="sk-local", base_url=f"http://127.0.0.1:{port}/v1", voice="cedar"
     )
     session = LiveSession(llm=model, vad=None)
-    session.on(
-        "conversation_item_added",
-        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
-    )
+    session.on("conversation_item_added", print_item)
     metrics: list[Any] = []
     session.on("metrics_collected", lambda ev: metrics.append(ev.metrics))
     await session.start(Agent(instructions="You are realtime.", name="native"), room=room)
@@ -576,10 +579,7 @@ async def node_session(agent: Agent, act: Callable[[LiveSession, _core.FakeRoom]
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
     session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
-    session.on(
-        "conversation_item_added",
-        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
-    )
+    session.on("conversation_item_added", print_item)
     session.on("user_input_transcribed", lambda ev: print(f"user_input {ev.transcript!r}"))
     await session.start(agent, room=room)
     await settle(room, 1)
@@ -775,6 +775,8 @@ class ClassifyingLLM(ScriptedLLM):
     def __init__(self, label: str) -> None:
         super().__init__()
         self.verdict = label
+        # classifications asked for and not answered yet
+        self.classifying = 0
 
     def chat(
         self, *, chat_ctx: llm.ChatContext, tools: list[llm.Tool] | None = None, **_: object
@@ -782,6 +784,7 @@ class ClassifyingLLM(ScriptedLLM):
         names = {t.info.name for t in tools or [] if isinstance(t, llm.FunctionTool)}
         if "save_prediction" not in names:
             return super().chat(chat_ctx=chat_ctx, tools=tools)
+        self.classifying += 1
         return _Classify(
             self, chat_ctx=chat_ctx, tools=tools or [], conn_options=DEFAULT_API_CONNECT_OPTIONS
         )
@@ -790,13 +793,16 @@ class ClassifyingLLM(ScriptedLLM):
 class _Classify(llm.LLMStream):
     async def _run(self) -> None:
         assert isinstance(self._llm, ClassifyingLLM)
-        call = llm.FunctionToolCall(
-            name="save_prediction",
-            arguments=json.dumps({"label": self._llm.verdict}),
-            call_id=shortuuid("call_"),
-        )
-        delta = llm.ChoiceDelta(role="assistant", tool_calls=[call])
-        self._event_ch.send_nowait(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
+        try:
+            call = llm.FunctionToolCall(
+                name="save_prediction",
+                arguments=json.dumps({"label": self._llm.verdict}),
+                call_id=shortuuid("call_"),
+            )
+            delta = llm.ChoiceDelta(role="assistant", tool_calls=[call])
+            self._event_ch.send_nowait(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
+        finally:
+            self._llm.classifying -= 1
 
 
 async def amd() -> None:
@@ -804,13 +810,20 @@ async def amd() -> None:
     print("== amd")
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
-    session = LiveSession(stt=ScriptedSTT(), llm=ClassifyingLLM("machine-ivr"), tts=SilentTTS())
+    classifier = ClassifyingLLM("machine-ivr")
+    session = LiveSession(stt=ScriptedSTT(), llm=classifier, tts=SilentTTS())
+    heard = asyncio.Event()
+    session.on("user_input_transcribed", lambda ev: ev.is_final and heard.set())
     await session.start(Agent(instructions="You call people."), room=room)
     async with AMD(session, llm=None, stt=None, suppress_compatibility_warning=True) as detector:
         assert session.amd is detector and detector.pending
         room.speak(frames=40)
+        # AMD's timers run on the room's clock, the greeting's recognition on real time: the
+        # clock stays put until the greeting is transcribed, and while a classification is out,
+        # so a loaded machine cannot reach the no-speech or detection timeout first
+        await asyncio.wait_for(heard.wait(), 30)
         result = asyncio.ensure_future(detector.execute())
-        await settle(room, 30)
+        await settle(room, 30, hold=lambda: classifier.classifying > 0)
         assert result.done(), "AMD gave no verdict"
         verdict = result.result()
         print(f"amd {verdict.category.value} reason={verdict.reason} {verdict.transcript!r}")
@@ -930,10 +943,7 @@ async def main() -> int:
 
     session.on("agent_state_changed", on_state)
     session.on("user_input_transcribed", lambda ev: print(f"user_input {ev.transcript!r}"))
-    session.on(
-        "conversation_item_added",
-        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
-    )
+    session.on("conversation_item_added", print_item)
     session.on("function_tools_executed", on_tools)
     session.on("speech_created", lambda ev: print(f"speech_created {ev.source}"))
     session.on("close", lambda ev: print(f"close {ev.reason.value}"))
@@ -1012,5 +1022,22 @@ async def main() -> int:
     return 0
 
 
+class _Tracebacks(logging.StreamHandler):  # type: ignore[type-arg]
+    """Prints the warnings and errors, and counts those carrying an exception (a callback the
+    emitter or the loop swallowed): the smoke fails on any."""
+
+    count = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.exc_info:
+            _Tracebacks.count += 1
+        super().emit(record)
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    logging.getLogger().addHandler(_Tracebacks())
+    code = asyncio.run(main())
+    if _Tracebacks.count:
+        print(f"FAILED: {_Tracebacks.count} logged traceback(s)")
+        code = 1
+    sys.exit(code)
