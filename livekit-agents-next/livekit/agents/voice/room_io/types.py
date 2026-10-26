@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from livekit import rtc
 
@@ -158,6 +158,49 @@ class RoomOptions:
         if isinstance(self.text_output, TextOutputOptions):
             return self.text_output
         return TextOutputOptions() if self.text_output is not False else None
+
+    def _to_core(self) -> dict[str, Any]:
+        """The ``RoomIoConfig`` the core reads: every leg resolved, ``None`` when it is off."""
+        audio_in = self.get_audio_input_options()
+        audio_out = self.get_audio_output_options()
+        text_out = self.get_text_output_options()
+        return {
+            "participant_identity": (
+                self.participant_identity if is_given(self.participant_identity) else None
+            ),
+            "participant_kinds": (
+                list(self.participant_kinds) if is_given(self.participant_kinds) else []
+            ),
+            "close_on_disconnect": self.close_on_disconnect,
+            "delete_room_on_close": self.delete_room_on_close,
+            "text_input": self.get_text_input_options() is not None,
+            "video_input": self.get_video_input_options() is not None,
+            "audio_input": audio_in
+            and {
+                "sample_rate": audio_in.sample_rate,
+                "num_channels": audio_in.num_channels,
+                "frame_size_ms": audio_in.frame_size_ms,
+                "noise_cancellation": audio_in.noise_cancellation,
+                "auto_gain_control": (
+                    audio_in.auto_gain_control if is_given(audio_in.auto_gain_control) else True
+                ),
+                "pre_connect_audio": audio_in.pre_connect_audio,
+                "pre_connect_audio_timeout": audio_in.pre_connect_audio_timeout,
+            },
+            "audio_output": audio_out
+            and {
+                "sample_rate": audio_out.sample_rate,
+                "num_channels": audio_out.num_channels,
+                "track_source": audio_out.track_publish_options.source,
+                **({"track_name": audio_out.track_name} if is_given(audio_out.track_name) else {}),
+            },
+            "text_output": text_out
+            and {
+                "sync_transcription": text_out.sync_transcription,
+                "transcription_speed_factor": text_out.transcription_speed_factor,
+                "json_format": text_out.json_format,
+            },
+        }
 
     @classmethod
     def _ensure_options(
