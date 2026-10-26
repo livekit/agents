@@ -70,9 +70,14 @@ def safe_render(template: str, data: dict[str, object]) -> str:
     """
     from types import SimpleNamespace
 
+    class _Namespace(SimpleNamespace):
+        # keep the dict's item access, so a template may use {user[name]} as with str.format
+        def __getitem__(self, key: str) -> object:
+            return self.__dict__[key]
+
     def _to_ns(v: object) -> object:
         if isinstance(v, dict):
-            return SimpleNamespace(**{k: _to_ns(val) for k, val in v.items()})
+            return _Namespace(**{k: _to_ns(val) for k, val in v.items()})
         return v
 
     def _collect_paths(d: dict[str, object], prefix: str = "") -> list[str]:

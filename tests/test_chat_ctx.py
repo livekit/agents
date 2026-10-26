@@ -906,6 +906,24 @@ def test_render_missing_placeholders_become_empty(template: str, expected: str):
     assert Instructions(template).render(data={"name": "Alex"}) == expected
 
 
+@pytest.mark.parametrize(
+    "template, expected",
+    [
+        ("Hello {user[name]}", "Hello Alex"),
+        ("Hello {user.name}", "Hello Alex"),
+        ("Plan {user[account][plan]}", "Plan pro"),
+        ("Plan {user.account[plan]}", "Plan pro"),
+        ("Tier {user[support-tier]}", "Tier gold"),
+    ],
+)
+def test_render_nested_dict_item_access(template: str, expected: str):
+    """A nested dict renders through str.format's [key] lookup as well as dotted access."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    data = {"user": {"name": "Alex", "account": {"plan": "pro"}, "support-tier": "gold"}}
+    assert Instructions(template).render(data=data) == expected
+
+
 def test_upsert_places_a_backdated_item_where_it_happened():
     """A realtime user turn is stamped when it began, which can predate what is already there."""
     ctx = ChatContext.empty()
