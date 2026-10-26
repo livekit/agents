@@ -16,7 +16,6 @@ from livekit.agents import (
     LanguageCode,
     stt,
     utils,
-    vad,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -90,7 +89,6 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         context_bias: NotGivenOr[list[str]] = NOT_GIVEN,
         target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
-        vad: vad.VAD | None = None,
     ):
         """
         Create a new instance of MistralAI STT.
@@ -104,8 +102,11 @@ class STT(stt.STT):
             context_bias: Up to 100 words or phrases to guide the model toward good spelling or names or domain-specific vocabulary.
                 Only used with batch models.
             target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
-            vad: Voice Activity Detector used to trigger audio flush for realtime models (which lack server-side endpointing).
-                When not provided, Silero VAD is auto-loaded with default settings. Only used with realtime models.
+
+        Note:
+            Realtime models have no server-side endpointing. The voice pipeline (`AgentSession`) requests
+            a flush from its own VAD and turn detection to get the final transcripts. A stream used on its
+            own needs to be flushed with `stream.flush()`.
         """
         resolved_model = model if is_given(model) else DEFAULT_MODEL
         is_realtime = _is_realtime(resolved_model)
@@ -115,6 +116,8 @@ class STT(stt.STT):
                 interim_results=is_realtime,
                 aligned_transcript=False,
                 offline_recognize=not is_realtime,
+                # the pipeline requests the flush at the end of the speech
+                manual_flush=is_realtime,
             )
         )
         self._opts = _STTOptions(
@@ -125,17 +128,6 @@ class STT(stt.STT):
             if is_given(target_streaming_delay_ms)
             else None,
         )
-
-        if is_realtime and vad is None:
-            try:
-                from livekit.plugins.silero import VAD as SileroVAD
-
-                vad = SileroVAD.load()
-            except ImportError as e:
-                raise ImportError(
-                    "livekit-plugins-silero is required for Voxtral realtime models (no server-side endpointing)."
-                ) from e
-        self._vad = vad
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
         if not client and not mistral_api_key:
@@ -281,7 +273,6 @@ class STT(stt.STT):
             pool=self._pool,
             conn_options=conn_options,
             language=language,
-            vad_instance=self._vad,
         )
         self._streams.add(stream)
         return stream
@@ -297,7 +288,6 @@ class SpeechStream(stt.RecognizeStream):
         pool: utils.ConnectionPool[RealtimeConnection],
         conn_options: APIConnectOptions,
         language: NotGivenOr[str] = NOT_GIVEN,
-        vad_instance: vad.VAD | None = None,
     ) -> None:
         super().__init__(
             stt=stt,
@@ -306,18 +296,25 @@ class SpeechStream(stt.RecognizeStream):
         )
         self._pool = pool
         self._opts = stt._opts
-        self._vad = vad_instance
         self._reconnect_event = asyncio.Event()
         self._request_id = ""
         self._audio_duration = 0.0
-        self._speaking = False
+        self._audio_pending = False
         self._detected_language = LanguageCode(language) if is_given(language) else LanguageCode("")
 
-    async def _send_task(
-        self,
-        connection: RealtimeConnection,
-        vad_stream: vad.VADStream | None,
-    ) -> None:
+    async def _send_audio(self, connection: RealtimeConnection, data: bytes) -> None:
+        await connection.send_audio(data)
+        self._audio_pending = True
+
+    async def _flush_audio(self, connection: RealtimeConnection) -> None:
+        # the server rejects a flush when no audio was sent since the last one, and then fails the
+        # session. flushes can be requested back to back (e.g. end of speech and turn commit)
+        if not self._audio_pending:
+            return
+        self._audio_pending = False
+        await connection.flush_audio()
+
+    async def _send_task(self, connection: RealtimeConnection) -> None:
         samples_per_chunk = SAMPLE_RATE // 20  # 50ms chunks
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=SAMPLE_RATE,
@@ -328,42 +325,16 @@ class SpeechStream(stt.RecognizeStream):
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
                 for frame in audio_bstream.flush():
-                    await connection.send_audio(frame.data.tobytes())
-                await connection.flush_audio()
+                    await self._send_audio(connection, frame.data.tobytes())
+                await self._flush_audio(connection)
             else:
-                if vad_stream is not None:
-                    vad_stream.push_frame(data)
-
                 data_bytes = data.data.tobytes()
                 bytes_per_second = SAMPLE_RATE * NUM_CHANNELS * 2
                 self._audio_duration += len(data_bytes) / bytes_per_second
                 for frame in audio_bstream.write(data.data.tobytes()):
-                    await connection.send_audio(frame.data.tobytes())
+                    await self._send_audio(connection, frame.data.tobytes())
 
-        if vad_stream is not None:
-            vad_stream.end_input()
         await connection.end_audio()
-
-    async def _vad_task(
-        self,
-        vad_stream: vad.VADStream,
-        connection: RealtimeConnection,
-    ) -> None:
-        async for ev in vad_stream:
-            if ev.type == vad.VADEventType.START_OF_SPEECH:
-                if not self._speaking:
-                    self._speaking = True
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                    )
-            elif ev.type == vad.VADEventType.END_OF_SPEECH:
-                # force Mistral to finalize the current speech segment
-                await connection.flush_audio()
-                if self._speaking:
-                    self._speaking = False
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    )
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
         current_text = ""
@@ -453,14 +424,12 @@ class SpeechStream(stt.RecognizeStream):
         try:
             while True:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
-                    vad_stream = self._vad.stream() if self._vad else None
+                    self._audio_pending = False
 
                     tasks = [
-                        asyncio.create_task(self._send_task(connection, vad_stream)),
+                        asyncio.create_task(self._send_task(connection)),
                         asyncio.create_task(self._recv_task(connection)),
                     ]
-                    if vad_stream is not None:
-                        tasks.append(asyncio.create_task(self._vad_task(vad_stream, connection)))
 
                     tasks_group = asyncio.gather(*tasks)
                     wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
@@ -483,8 +452,6 @@ class SpeechStream(stt.RecognizeStream):
                         await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
                         tasks_group.cancel()
                         tasks_group.exception()
-                        if vad_stream is not None:
-                            await vad_stream.aclose()
 
         except (APIStatusError, APITimeoutError, APIConnectionError):
             raise

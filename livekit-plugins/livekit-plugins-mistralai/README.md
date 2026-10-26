@@ -8,12 +8,6 @@ Support for Mistral AI STT, TTS, and LLM services.
 pip install livekit-plugins-mistralai
 ```
 
-For streaming STT (Voxtral Realtime), also install `silero` plugin.
-
-```bash
-pip install livekit-plugins-silero
-```
-
 ## Pre-requisites
 
 You'll need an API key from Mistral AI. It can be set as an environment variable:
@@ -43,23 +37,22 @@ stt = mistralai.STT(
 #### Realtime streaming transcription
 
 Voxtral Realtime streams interim transcripts over a WebSocket connection. Since this
-model has no server-side endpointing, the plugin runs an internal Silero VAD to detect
-when the user stops speaking and flush the audio — producing final transcripts and
-driving the end-of-turn pipeline.
+model has no server-side endpointing, the voice pipeline (`AgentSession`) tells the plugin when
+the user stopped speaking, based on its own VAD and turn detection, and the plugin flushes the
+audio to get the final transcript.
 
 ```python
+from livekit.agents import AgentSession
 from livekit.plugins import mistralai
-from livekit.plugins.silero import VAD
 
-# Using Silero VAD with default settings (550ms silence threshold)
-stt = mistralai.STT(model="voxtral-mini-transcribe-realtime-2602")
-
-# Using custom VAD settings (e.g. shorter silence threshold for faster responses)
-stt = mistralai.STT(
-    model="voxtral-mini-transcribe-realtime-2602",
-    vad=VAD.load(min_silence_duration=0.3),
+session = AgentSession(
+    stt=mistralai.STT(model="voxtral-mini-transcribe-realtime-2602"),
+    ...
 )
 ```
+
+To use the STT on its own, outside of an `AgentSession`, flush the stream yourself with
+`stream.flush()` when the user stops speaking to get the final transcript.
 
 ### Text-to-Speech (TTS)
 
