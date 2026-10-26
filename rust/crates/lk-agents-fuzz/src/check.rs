@@ -95,7 +95,6 @@ impl Check {
 /// hide among the known ones; a contract whose findings are all fixed comes off the list.
 /// `session_settles` is the release phase's own verdict, not a rule.
 pub const KNOWN_FINDINGS: &[&str] = &[
-    "forwarded_while_enabled",
     "tool_lifecycle",
 ];
 

@@ -201,6 +201,11 @@ impl Switch {
         self.changes.iter().rev().find(|(when, _)| *when <= at).is_none_or(|(_, on)| *on)
     }
 
+    /// The last switch at or before `at`: when, and whether it switched on.
+    pub fn last_change(&self, at: Observed) -> Option<(Observed, bool)> {
+        self.changes.iter().rev().find(|(when, _)| *when <= at).copied()
+    }
+
     /// Whether it was switched off strictly between two stamps.
     pub fn off_within(&self, from: Observed, to: Observed) -> bool {
         self.changes.iter().any(|(when, on)| !on && from < *when && *when < to)
