@@ -31,6 +31,7 @@ from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobC
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..telemetry.traces import _resource
+from ..types import ATTRIBUTE_SIMULATOR
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
@@ -525,7 +526,9 @@ class _JobProc:
         simulator_left = asyncio.Event()
 
         def _check_simulator_left(*_: Any) -> None:
-            if not room.isconnected() or not room.remote_participants:
+            if not room.isconnected() or not any(
+                ATTRIBUTE_SIMULATOR in p.attributes for p in room.remote_participants.values()
+            ):
                 simulator_left.set()
 
         room.on("participant_disconnected", _check_simulator_left)
