@@ -383,6 +383,21 @@ def test_word_tokenizer_cjk_clause_mark_at_start_of_text():
     assert tokenizer.tokenize(text='ph="ni，hao" １，０００') == ['ph="ni，hao"', "１，０００"]
 
 
+async def test_streamed_word_tokenizer_matches_tokenize_after_thai_clause_mark():
+    # split_character emits Thai one character at a time too, so a mark after it reaches
+    # the stream at the start of its buffer; tokenize() must split there as well
+    tokenizer = basic.WordTokenizer(ignore_punctuation=False, split_character=True)
+    text = "ก，Hello world"
+    expected = tokenizer.tokenize(text=text)
+    assert expected == ["ก", "，", "Hello", "world"]
+
+    stream = tokenizer.stream()
+    for ch in text:
+        stream.push_text(ch)
+    stream.end_input()
+    assert [ev.token async for ev in stream] == expected
+
+
 HYPHENATOR_TEXT = [
     "Segment",
     "expected",

@@ -9,13 +9,14 @@ _CJK_CLAUSE_PUNCTUATION = frozenset("，。！？；：、")
 _CJK_SCRIPTS = r"\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
 # split_character makes each of these characters a word
 _CHAR_BASED_CODES = re.compile(rf"[{_CJK_SCRIPTS}\u0e00-\u0e7f]")  # + thai
-# such a mark only ends a word after CJK text, so it never splits markup that a TTS
+# such a mark only ends a word after CJK (or Thai) text, so it never splits markup that a TTS
 # rejoins with spaces, e.g. an SSML attribute like ph="..."
 _CJK_TEXT = re.compile(
     rf"[{_CJK_SCRIPTS}"
     r"\u3000-\u303f"  # cjk symbols and punctuation, e.g. 」
     r"\uf900-\ufaff"  # cjk compatibility ideographs
     r"\uac00-\ud7af"  # hangul syllables
+    r"\u0e00-\u0e7f"  # thai, which split_character also emits one character at a time
     r"\uff00-\uffef]"  # halfwidth and fullwidth forms
 )
 
