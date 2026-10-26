@@ -33,7 +33,7 @@ from .._core_view import (
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
 from .._generated.session_dispatch import IGNORED_EVENTS, PUBLIC_EVENTS
 from ..job import get_job_context
-from ..llm import ChatContext, StopResponse
+from ..llm import ChatContext, RealtimeModel, StopResponse
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage
@@ -219,7 +219,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         turn_handling = options.get("turn_handling") or {}
         detection = turn_handling.get("turn_detection", deprecated["turn_detection"])
         if not is_given(detection):
-            detection = inference.TurnDetector()
+            # a realtime model keeps its server's turn detection unless one is named
+            realtime = isinstance(self._llm, RealtimeModel)
+            detection = None if realtime else inference.TurnDetector()
         self._turn_detector = None if isinstance(detection, str | None) else TurnDetector(detection)
         self._video_sampler = (
             video_sampler if is_given(video_sampler) else VoiceActivityVideoSampler()
