@@ -640,3 +640,21 @@ async def test_late_event_after_final_is_ignored(mock_palabra_stt_ws):
     stream.end_input()
     await stream.aclose()
     await stt_.aclose()
+
+
+async def test_source_translation_progress_resets_retries_without_final(mock_palabra_stt_ws):
+    ws = mock_palabra_stt_ws
+    provider = STT(api_key="test-key", translate_languages=["es"])
+    stream = provider.stream()
+    progress = asyncio.Event()
+    stream._on_provider_progress = progress.set
+    stream._num_retries = 2
+    try:
+        stream.push_frame(_frame())
+        await _wait_for(lambda: bool(ws["queries"]))
+        ws["send_queue"].put_nowait(_transcription("hello", is_eos=False))
+        await asyncio.wait_for(progress.wait(), 1)
+        assert stream._num_retries == 0
+    finally:
+        await stream.aclose()
+        await provider.aclose()

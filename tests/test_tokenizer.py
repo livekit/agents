@@ -152,6 +152,33 @@ def test_sent_tokenizer_non_latin_terminators(
     assert tokenizer.tokenize(text=text) == expected
 
 
+TERMINATOR_RUN_CASES = [
+    ("Really?! Yes it is.", ["Really?!", "Yes it is."]),
+    ("Wow!!! That was great.", ["Wow!!!", "That was great."]),
+    ("What?? No way.", ["What??", "No way."]),
+    ('She asked "really?!" and left.', ['She asked "really?!"', "and left."]),
+]
+
+
+@pytest.mark.parametrize(
+    "tokenizer",
+    [basic.SentenceTokenizer(min_sentence_len=1), blingfire.SentenceTokenizer(min_sentence_len=1)],
+)
+@pytest.mark.parametrize("text, expected", TERMINATOR_RUN_CASES)
+def test_sent_tokenizer_terminator_runs(
+    tokenizer: tokenize.SentenceTokenizer, text: str, expected: list[str]
+):
+    assert tokenizer.tokenize(text=text) == expected
+
+
+def test_basic_sent_tokenizer_keeps_terminator_runs_unspaced():
+    # with the default min_sentence_len the pieces were merged back with spaces
+    text = "That is amazing!!! I cannot believe it happened today."
+    assert basic.SentenceTokenizer().tokenize(text=text) == [
+        "That is amazing!!! I cannot believe it happened today."
+    ]
+
+
 async def test_streamed_sent_tokenizer_emits_hindi_before_end_of_input():
     # the first sentence must reach TTS while the LLM is still generating
     stream = blingfire.SentenceTokenizer().stream()

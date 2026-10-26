@@ -793,16 +793,21 @@ class SpeechStream(stt.RecognizeStream):
         # Handle the messages
         elif event == ServerMessageType.ADD_PARTIAL_SEGMENT:
             self._handle_segment(message, is_final=False)
+            self._mark_provider_progress()
         elif event == ServerMessageType.ADD_SEGMENT:
             self._handle_segment(message, is_final=True)
+            self._mark_provider_progress()
         elif event == ServerMessageType.START_OF_TURN:
             self._handle_start_of_turn(message)
+            self._mark_provider_progress()
         elif event == ServerMessageType.END_OF_TURN:
             self._handle_end_of_turn(message)
+            self._mark_provider_progress()
 
         # Handle the speaker result message
         elif event == ServerMessageType.SPEAKERS_RESULT:
             self._handle_speakers_result(message)
+            self._mark_provider_progress()
 
         # Log all other messages
         else:

@@ -20,7 +20,7 @@ from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 
 pytestmark = pytest.mark.plugin("assemblyai")
 
-KEEGAN = "987db62e-a2c2-569a-9c4d-82460cdea1bd"  # the default voice
+AUDREY = "49c443a4-8a1d-5f7e-b70b-98bdbd9823c3"  # the default voice
 
 SAMPLE_RATE = 24000
 # 80 ms per Audio frame at 24 kHz pcm_s16le, as the service sends
@@ -334,9 +334,9 @@ def _strip_padding(audio: bytes, expected_len: int) -> bytes:
 def test_voice_and_language() -> None:
     from livekit.plugins.assemblyai import TTS
 
-    # nothing given: Keegan, and the server's default language (English)
+    # nothing given: Audrey, and the server's default language (English)
     tts = TTS(api_key="k")
-    assert (tts._opts.voice, tts._opts.language, tts.model) == (KEEGAN, None, "assemblyai-tts-1")
+    assert (tts._opts.voice, tts._opts.language, tts.model) == (AUDREY, None, "assemblyai-tts-1")
 
     # voices pass through; the language is never inferred from one
     tts = TTS(api_key="k", voice=" aai-vera ")
@@ -619,7 +619,7 @@ async def test_update_options_opens_a_new_session() -> None:
         await tts.aclose()
 
     assert [(s.params.get("voice_id"), s.params.get("language")) for s in srv.sessions] == [
-        (KEEGAN, None),
+        (AUDREY, None),
         ("aai-paul", "italian"),
     ]
 
