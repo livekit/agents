@@ -47,7 +47,7 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import aio, shortuuid
-from ..utils.misc import is_given
+from ..utils.misc import is_dev_mode, is_given, is_hosted
 from . import io
 from .agent import Agent, ModelSettings, _BindingContextVar, _VoiceBinding
 from .console import ConsoleCall
@@ -232,6 +232,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if isinstance(detection, inference.TurnDetector)
             else TurnDetector(detection)
         )
+        self._turn_detection_mode = detection if isinstance(detection, str) else None
+        self._interruption_mode = (turn_handling.get("interruption") or {}).get("mode")
         self._video_sampler = (
             video_sampler if is_given(video_sampler) else VoiceActivityVideoSampler()
         )
@@ -442,6 +444,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             and self._turn_detector.streaming,
             hook_bound=_HOOK_BOUND,
             max_unrecoverable_errors=self._conn_options.max_unrecoverable_errors,
+            interruption_detector=self._interruption_detector(agent, frame, model),
             stt_context=self._stt_context,
             **{node: frame[node] for node in _NODES if node in frame},
         )
@@ -473,6 +476,49 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         await asyncio.gather(self._core.start(capture_run=capture_run), job_ctx.connect())
         if self._host is not None:
             await self._host.start()
+
+    def _interruption_detector(
+        self, agent: Agent, frame: dict[str, Any], model: Any
+    ) -> inference.AdaptiveInterruptionDetector | None:
+        """The adaptive interruption detector, when the reference's gate builds one."""
+        stt_caps = getattr(frame.get("stt", self._stt), "capabilities", None)
+        has_vad = frame.get("vad", self._vad) is not None
+        agent_mode = (
+            agent.interruption_detection if is_given(agent.interruption_detection) else None
+        )
+        realtime = isinstance(model, RealtimeModel)
+        verdict = _core.resolve_interruption_detector(
+            stt_aligned_transcript=bool(stt_caps.aligned_transcript) if stt_caps else None,
+            stt_streaming=stt_caps.streaming if stt_caps else None,
+            realtime=realtime,
+            rt_server_turn_detection=realtime
+            and _core.rt_server_turn_detection(
+                caps_turn_detection=model.capabilities.turn_detection,
+                can_disable_turn_detection=model.capabilities.can_disable_turn_detection,
+                vad=has_vad,
+                turn_detection=self._turn_detection_mode,
+                streaming_detector=self._turn_detector is not None
+                and self._turn_detector.streaming,
+                interruption_given=bool(agent_mode or self._interruption_mode),
+            ),
+            has_vad=has_vad,
+            turn_detection=self._turn_detection_mode,
+            allow_interruptions=self.options["interruption"]["enabled"],
+            agent_mode=agent_mode,
+            session_mode=self._interruption_mode,
+            hosted=is_hosted(),
+            dev_mode=is_dev_mode(),
+        )
+        if verdict["message"]:
+            log = logger.warning if verdict["level"] == "warning" else logger.info
+            log(verdict["message"])
+        if not verdict["build"]:
+            return None
+        try:
+            return inference.AdaptiveInterruptionDetector()
+        except ValueError as e:
+            logger.warning("failed to create AdaptiveInterruptionDetector", extra={"error": str(e)})
+            return None
 
     async def aclose(self) -> None:
         await self._close(drain=False)

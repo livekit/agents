@@ -18,6 +18,12 @@ use super::{
     InterruptionOptions, InterruptionStream, OverlapEnd, OverlapStart, OverlappingSpeechEvent, StreamEvent,
 };
 use crate::python::{conn_options, header_provider, register_class, register_fn};
+use crate::creds::resolve_credential;
+use crate::headers::default_inference_url_from_env;
+use super::options::{
+    AUDIO_PREFIX_DURATION, DETECTION_INTERVAL, MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION,
+    REMOTE_INFERENCE_TIMEOUT,
+};
 use crate::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use lk_agents_abi::python::{CancellingHandle, HostBridge as _};
 
@@ -54,15 +60,15 @@ impl InterruptionDetector {
     #[new]
     #[pyo3(signature = (
         *,
-        base_url,
-        api_key,
-        api_secret,
         threshold = None,
-        min_interruption_duration,
-        max_audio_duration,
-        audio_prefix_duration,
-        detection_interval,
-        inference_timeout,
+        min_interruption_duration = MIN_INTERRUPTION_DURATION,
+        max_audio_duration = MAX_AUDIO_DURATION,
+        audio_prefix_duration = AUDIO_PREFIX_DURATION,
+        detection_interval = DETECTION_INTERVAL,
+        inference_timeout = REMOTE_INFERENCE_TIMEOUT,
+        base_url = None,
+        api_key = None,
+        api_secret = None,
         headers = None,
         timeout = 10.0,
         token_ttl_secs = 600,
@@ -70,21 +76,32 @@ impl InterruptionDetector {
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        base_url: String,
-        api_key: String,
-        api_secret: String,
         threshold: Option<f64>,
         min_interruption_duration: f64,
         max_audio_duration: f64,
         audio_prefix_duration: f64,
         detection_interval: f64,
         inference_timeout: f64,
+        base_url: Option<String>,
+        api_key: Option<String>,
+        api_secret: Option<String>,
         headers: Option<Py<PyAny>>,
         timeout: f64,
         token_ttl_secs: u64,
         http_session: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         check_pid()?;
+        // `base_url if base_url else ...`: an empty argument falls through to the environment.
+        let given = |v: Option<String>| v.filter(|v| !v.is_empty());
+        let env = |name: &str| std::env::var(name).ok();
+        let ladder = |explicit, inference: &str, livekit: &str| {
+            given(explicit).unwrap_or_else(|| {
+                resolve_credential(None, env(inference).as_deref(), env(livekit).as_deref())
+            })
+        };
+        let base_url = given(base_url).unwrap_or_else(default_inference_url_from_env);
+        let api_key = ladder(api_key, "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_API_KEY");
+        let api_secret = ladder(api_secret, "LIVEKIT_INFERENCE_API_SECRET", "LIVEKIT_API_SECRET");
         let opts = InterruptionOptions::new(
             threshold,
             min_interruption_duration,
