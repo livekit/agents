@@ -2,7 +2,7 @@
 
 What `lk-agents-fuzz` covers of the Rust voice driver (`lk-agents-voice`), and what it does not.
 Every number is measured, not claimed: a 1,024-seed survey and `cargo llvm-cov` over the same
-suite. Sections 6 and 10 describe the harness through the public API (2026-10-25); sections 7
+suite. Sections 6 and 10 describe the harness through the public API (2026-10-26); sections 7
 to 9 were re-measured at `049e7e332` (2026-10-25), after a seed became the whole of its run; sections 2 to 5 and the appendix are
 still the measurement at `56e265f06`. Written by hand for now; section 12 says how to re-measure
 and what makes it generated.
@@ -512,13 +512,35 @@ Inputs with no host call, sent as the command their real sender sends:
   and resuming are an inline task's, which the driver does itself.
 
 What the switch changed in what a run can reach: the backchannel threshold left the setup
-(`host_new` never overrides the end-of-turn thresholds, so no host can set one), and a tool body's
-`wait_for_idle()` is the host's (no origin), so a tool-origin idle ask (`IdleAskWithdrawn`) is
-no longer reached. A `Reply` resolves a dropped call as the host sees it (`interrupt` as done,
-`wait_for_idle` as closing, `commit_user_turn` as superseded, `drain` as closing, a DTMF
-collection as stopped); only a speech handle the loop dropped is still `Lost`. The room's own
-audio legs are off, as `agent_session.py` turns them off when the host hands its own, so
-`room_io/_input.rs` and `_output.rs` stay unreached.
+(`host_new` never overrides the end-of-turn thresholds, so no host can set one). A tool body's
+`AfterIdle` is `async with ctx.foreground()`, `wait_for_idle_and_hold` from the tool's own
+origin as `RunContext` sends it, so the tool-origin idle ask (`IdleAskWithdrawn`) is reached. A
+`Reply` resolves a dropped call as the host sees it (`interrupt` as done, `wait_for_idle` as
+closing, `commit_user_turn` as superseded, `drain` as closing, a DTMF collection as stopped);
+only a speech handle the loop dropped is still `Lost`. `AwaitSpeech` awaits the `SpeechHandle`
+the host holds (`wait_for_generation`, then `await handle`) and reads it back.
+
+The legs a seed runs on, drawn per seed (`search/setup.rs`):
+
+- **The host's legs** (the fakes): every frame and sink call is tagged, so the conservation
+  rules see exactly what went where. A third of these seeds run as **`lk agent console`**: the
+  console's socket (`ConsoleIo`, over an in-process stream) is the microphone and the speaker, a
+  `RemoteSessionHost` on it forwards what `ConsoleCall.forward` forwards and answers the CLI's
+  requests through a port that answers as the host would, and a fake CLI on the other end sends
+  the microphone and the requests and acks each flushed segment once it has played on the clock.
+- **The room's own legs** (half the seeds), as `agent_session.py` runs by default when the host
+  hands none: the person joins the fake room and speaks into a microphone track (with a
+  pre-connect buffer sent, never sent, or malformed), types in the chat, and the agent's voice
+  and transcript go out on the room's published track and transcription streams, which play on
+  the clock. Half of these also run the `BackgroundAudioPlayer` beside the session (an ambient
+  stream, the thinking sound on agent state), and a third stream the agent's voice to an avatar
+  worker instead: `DataStreamAudioOutput` as `session.output.audio`, and the real
+  `DataStreamAudioReceiver` in the worker's own room with the runner's playback bookkeeping,
+  the two rooms relayed by the run. The relay crosses at the run's next look, not in
+  milliseconds, so these seeds run without the clear-buffer give-up timer.
+
+Also drawn: `tts_text_transforms`, the deprecated turn keywords (written instead of
+`turn_handling`, so the core migrates them), and the default `VoiceActivityVideoSampler`.
 
 ## 7. How the search was chosen
 
@@ -661,38 +683,59 @@ Each is a choice the search makes for every run that a real call does not.
 ## 10. Code reached
 
 Line coverage of `lk-agents-voice` over every `lk-agents-fuzz` test, the 1,024-seed survey and
-the soak included, after the switch to the public API (section 6): **65.2% of 25,412 lines**
-(56.7% of 25,285 at `049e7e332`, before it). `cargo llvm-cov` warns that 62 functions have
-mismatched data.
+the soak included (2026-10-26): **79.8% of 23,544 lines** (64.8% of 25,678 before the room's
+legs, the console, the transforms and the players were drawn; 65.2% of 25,412 right after the
+switch to the public API).
+
+**Production-reachable: 85.1%** (18,005 of 21,164 lines): the same measurement over the lines a
+deployed Python agent can run. Left out, each for its reason below: `workflows/` (owned by the
+text-mode rework), `amd/` and the keyterm LLM pass (`livekit-agents-next` never wires them), the
+remote-session client and `room_io/rooms.rs`.
 
 | Area | Lines | Reached | Note |
 |---|--:|--:|---|
-| `audio_recognition/` | 1,509 | 94% | hearing: VAD, STT, end of turn, overlap |
-| `trace.rs` | 155 | 93% | |
-| `agent_session/` but the API and `host_events.rs` | 2,403 | 88% | the loop: driver, effects, signals, close |
-| `generation/` | 2,056 | 89% | LLM and TTS requests, replans |
-| `ivr/` | 247 | 89% | |
-| `audio.rs` | 121 | 91% | legs and gates |
-| `data_plane/` | 168 | 96% | |
-| `tool_executor.rs` | 594 | 89% | |
-| `agent_activity/` | 6,037 | 87% | scheduling, interruption, tools, hooks, handoff |
-| `transcription/synchronizer.rs` | 593 | 85% | |
-| `agent_session/api.rs`, `api/host.rs` | 1,310 | 77% | the public API (was 0%) |
-| `turn.rs`, `events.rs`, `host_events.rs` | 516 | 76% | the host's kwargs and wire records (was 10%) |
-| `amd/` | 899 | 74% | |
-| `io.rs` | 174 | 68% | the host output seam |
-| `speech_handle.rs` | 580 | 65% | the handle the developer holds (was 40%) |
-| `endpointing.rs` | 266 | 58% | |
-| `room_io/` | 1,969 | 30% | room io over the fake room (was 2%); its audio legs are the host's (section 6) |
-| `keyterm_detection.rs` | 566 | 24% | the LLM pass is never set up |
-| `transcription/filters.rs`, `text_transforms.rs` | 543 | 0% | text transforms never configured |
-| `background_audio.rs` | 547 | 0% | |
-| `remote_session*` | 946 | 0% | |
-| `workflows/` (builtin tasks) | 2,440 | 7% | host-side tasks; only the DTMF collector is used |
-| the rest (`agent.rs`, `filler_scheduler.rs`, `recorder_io/`, `run_result.rs`, `runtime.rs`, `transcription/mod.rs`) | 773 | 86% | |
+| `audio_recognition/` | 1,512 | 94% | hearing: VAD, STT, end of turn, overlap |
+| `endpointing.rs` | 156 | 99% | (was 58%: the unused host classes went) |
+| `ivr/` | 225 | 97% | |
+| `room_io/_output*` | 787 | 91% | the agent's track and transcription streams (was 28%) |
+| `tool_executor.rs` | 558 | 91% | |
+| `room_io/room_io.rs`, `link.rs` | 464 | 89% | |
+| `generation/` | 2,156 | 89% | |
+| `agent_activity/` | 5,401 | 88% | |
+| `remote_session/console.rs` | 114 | 89% | the console's socket (was 0%) |
+| `transcription/text_transforms.rs`, `filters.rs` | 450 | 84% | (was 0%) |
+| `transcription/synchronizer.rs` | 590 | 86% | |
+| `agent_session/` but the API | 2,735 | 86% | |
+| `agent_session/api*` | 1,297 | 79% | |
+| `room_io/_pre_connect_audio.rs` | 141 | 78% | (was 0%) |
+| `turn.rs` | 172 | 73% | the deprecated keywords' migration (was 45%) |
+| `background_audio.rs` | 569 | 71% | the player, beside room-legs seeds |
+| `speech_handle.rs` | 587 | 70% | |
+| `avatar.rs` | 561 | 72% | sink and worker receiver |
+| `io.rs` | 174 | 68% | the node chain seams |
+| `room_io/_input.rs` | 373 | 65% | the person's microphone track (was 0%); the camera track is not drawn |
+| `remote_session.rs`, `remote_session/driver.rs` | 935 | 49% | the host side runs; the client does not (below) |
+| the rest | 1,716 | 86% | |
 
-What is left is not reachable by any search until the search sets up what section 2.3 lists as
-fixed (text transforms, a keyterm LLM, background audio, the room's own audio legs).
+The justified gaps, outside the production-reachable figure:
+
+- `workflows/` (733 lines, 15%): what the text-mode rework left (result types, validation
+  helpers); owned by that work.
+- `amd/` (899, 74%): no `livekit-agents-next` call site attaches the detector (`attach_amd`).
+- The keyterm LLM pass (430 of `keyterm_detection.rs`'s 567): `agent_session.py` passes
+  `stt_context=` (static keyterms are reached) but never `keyterm_llm=`, so detection never runs.
+- The remote-session client (`ClientRuntime`, 180 lines, and its `event_name`, 17): the far
+  end of the protocol, bound for Node and Python clients, never run by an agent.
+- `room_io/rooms.rs` (121, 0%): `_core.FakeRoom`, a Python test fixture, and `OfflineRoom`, a
+  constructor on the wall clock.
+
+Production-reachable code still unreached, by size: the session API's rarer host calls
+(`set_participant`, `resolved_options`, the AMD and DTMF accessors), `speech_handle.rs`'s
+`hold_interruptions` and the host's `interrupt`, the room's camera track (`ParticipantVideoInput`;
+`RoomOptions(video_input=True)` is not drawn), the node factories (`agent_session/nodes.rs`,
+11%: no seed overrides `llm_node`/`tts_node`), the remote-session encoders of events the job's
+`SessionHost` forwards and the console does not (function calls, agent config updates), and the
+avatar sink's interrupted path after a give-up timer.
 
 ## 11. Outside this suite
 
