@@ -374,6 +374,7 @@ impl SessionApi {
     fn frame(&self, frame: UpdateAgentArgs) -> AgentUpdate {
         let UpdateAgentArgs {
             instructions,
+            dynamic_instructions,
             agent,
             tools,
             tools_host,
@@ -391,6 +392,7 @@ impl SessionApi {
         AgentUpdate {
             agent,
             instructions,
+            dynamic_instructions,
             toolset: host_toolset(tools, tools_host, tool_runner),
             chat_ctx,
             llm,
@@ -800,6 +802,8 @@ pub trait NodeFactory: Send + Sync {
 #[lk_agents_abi::host(kwargs)]
 pub struct UpdateAgentArgs {
     pub instructions: Instructions,
+    #[host(kwarg(default = None))]
+    pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
     /// The new frame's agent id.
     pub agent: String,
     #[host(kwarg(default = None))]

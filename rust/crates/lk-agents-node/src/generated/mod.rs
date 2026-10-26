@@ -171,6 +171,7 @@
 //! - `lk_agents_voice::remote_session::SessionTransport`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
 //! - `lk_agents_voice::remote_session::ConsoleSink`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
 //! - `lk_agents_voice::remote_session::ClientSink`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
+//! - `lk_agents_voice::generation::HostInstructions`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
 //! - `lk_agents_abi::voice::io::PlaybackListener`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
 //! - `lk_agents_abi::voice::io::AudioInput`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)
 //! - `lk_agents_abi::voice::io::VideoInput`: not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)

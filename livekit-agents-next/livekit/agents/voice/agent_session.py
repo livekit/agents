@@ -355,6 +355,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._core = _core.LiveSession(
             room,
             instructions=frame["instructions"],
+            dynamic_instructions=frame["dynamic_instructions"],
             agent=frame["agent"],
             chat_ctx=to_core_items(self._chat_ctx.items),
             stt=frame.get("stt", self._stt),
@@ -558,6 +559,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         await asyncio.gather(*(t.setup() for t in pool if isinstance(t, llm.Toolset)))
         frame: dict[str, Any] = {
             "instructions": _instructions(agent.instructions),
+            "dynamic_instructions": (
+                _DynamicInstructions(self, agent) if agent._instruction_fns else None
+            ),
             "agent": agent.id,
             "tools": tool_specs(pool),
             "tools_host": pool,
@@ -736,6 +740,23 @@ def _instructions(value: str | Instructions) -> str | tuple[str, str | None, str
     if isinstance(value, Instructions):
         return (value.common, value.audio, value.text)
     return str(value)
+
+
+class _DynamicInstructions:
+    """An agent's ``@agent.instructions`` functions, rendered by the core before each model
+    request of a reply (``_core_render``)."""
+
+    def __init__(self, session: LiveSession[Any], agent: Agent) -> None:
+        self._session = session
+        self._agent = agent
+
+    async def _core_render(self, speech_id: int) -> str:
+        ctx = RunContext(
+            function_call=None,
+            session=self._session,
+            speech_handle=self._session._speech(f"speech_{speech_id}"),
+        )
+        return await self._agent._render_dynamic_instructions(ctx)
 
 
 def _origin() -> str | None:

@@ -561,9 +561,37 @@ pub struct ReplyContext {
     pub speech: crate::agent_activity::options::SpeechPolicy,
 }
 
+/// The agent's `@agent.instructions` functions, rendered by the host for each model request of a
+/// reply (`Agent._render_dynamic_instructions`). `speech_id` is the reply's.
+#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.agent_session._DynamicInstructions"))]
+#[async_trait::async_trait]
+pub trait HostInstructions: Send + Sync {
+    async fn render(&self, speech_id: u64) -> Result<String, lk_agents_abi::errors::HostError>;
+}
+
+/// `dynamic` appended to the request's prompt, as `Agent._render_instructions` joins them.
+pub(crate) fn append_instructions(ctx: &mut ChatContext, dynamic: &str) {
+    if dynamic.is_empty() {
+        return;
+    }
+    let Some(ChatItem::Message(prompt)) =
+        ctx.items.iter_mut().find(|item| item.id() == INSTRUCTIONS_MESSAGE_ID)
+    else {
+        return;
+    };
+    let text = match prompt.raw_text_content() {
+        Some(base) if !base.is_empty() => format!("{base}\n\n{dynamic}"),
+        _ => dynamic.to_owned(),
+    };
+    prompt.content = vec![lk_agents_abi::ChatContent::Text(text)];
+}
+
 /// Snapshotted at creation: a reply in flight keeps the providers it started with.
 #[derive(Clone)]
 pub struct Providers {
+    /// The frame's instructions functions, rendered before each model request; `None` when the
+    /// agent has none.
+    pub dynamic_instructions: Option<Arc<dyn HostInstructions>>,
     pub llm: Option<Arc<dyn Llm>>,
     /// A provider with no duplex path arrives wrapped in a
     /// [`StreamAdapter`](lk_agents_abi::StreamAdapter).

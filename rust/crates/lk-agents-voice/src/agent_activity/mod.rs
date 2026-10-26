@@ -43,6 +43,7 @@ pub(crate) struct AgentActivity {
     pub(crate) agent: String,
     /// Replies in flight keep the prompt and tools they snapshotted.
     pub(crate) instructions: crate::generation::Instructions,
+    pub(crate) dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
     pub(crate) toolset: Arc<crate::tool_executor::Toolset>,
     /// `_tool_executor`.
     pub(crate) tools: crate::tool_executor::Tools,
@@ -108,6 +109,7 @@ pub(crate) struct AgentActivity {
 pub(crate) struct ActivityParts {
     pub(crate) agent: String,
     pub(crate) instructions: crate::generation::Instructions,
+    pub(crate) dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
     pub(crate) toolset: crate::tool_executor::Toolset,
     pub(crate) audio_recognition: AudioRecognition,
     pub(crate) speech_scheduler: SpeechScheduler,
@@ -125,6 +127,7 @@ impl AgentActivity {
         let ActivityParts {
             agent,
             instructions,
+            dynamic_instructions,
             toolset,
             audio_recognition,
             speech_scheduler,
@@ -139,6 +142,7 @@ impl AgentActivity {
         AgentActivity {
             agent,
             instructions,
+            dynamic_instructions,
             toolset: Arc::new(toolset),
             tools: Default::default(),
             audio_recognition,
@@ -179,9 +183,11 @@ impl AgentActivity {
         &mut self,
         agent: String,
         instructions: crate::generation::Instructions,
+        dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
         toolset: crate::tool_executor::Toolset,
     ) -> String {
         self.instructions = instructions;
+        self.dynamic_instructions = dynamic_instructions;
         self.toolset = Arc::new(toolset);
         std::mem::replace(&mut self.agent, agent)
     }

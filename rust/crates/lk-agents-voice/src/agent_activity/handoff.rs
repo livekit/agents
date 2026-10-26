@@ -449,11 +449,22 @@ impl Driver {
         let reopened = update.reopens();
         // `previous`, `next`, `call` and `task` are the caller's, read before the swap.
         let AgentUpdate {
-            agent, instructions, toolset, chat_ctx, llm, tts, stt, vad, options, ..
+            agent,
+            instructions,
+            dynamic_instructions,
+            toolset,
+            chat_ctx,
+            llm,
+            tts,
+            stt,
+            vad,
+            options,
+            ..
         } = update;
         // A reply in flight keeps the instructions and tools it snapshotted.
         let count = toolset.specs.len();
-        let previous_agent = self.activity.set_agent(agent, instructions, toolset);
+        let previous_agent =
+            self.activity.set_agent(agent, instructions, dynamic_instructions, toolset);
         self.session.apply_providers(llm, tts, out);
 
         // The new agent's view: the context it brought, or the conversation carried forward.

@@ -451,6 +451,7 @@ impl Driver {
         let restore = AgentUpdate {
             agent: self.activity.agent.clone(),
             instructions: self.activity.instructions.clone(),
+            dynamic_instructions: self.activity.dynamic_instructions.clone(),
             toolset: (*self.activity.toolset).clone(),
             // The record is carried, the task's turns folded into the parent's view (`set_frame`).
             chat_ctx: None,

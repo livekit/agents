@@ -641,6 +641,7 @@ impl Driver {
             frame: self.current,
             toolset: spec.toolset,
             providers: Providers {
+                dynamic_instructions: self.activity.dynamic_instructions.clone(),
                 llm: self.session.llm.as_ref().and_then(|l| self.shared.resources.llm(l.id)),
                 tts: self.session.tts.as_ref().and_then(|t| self.shared.resources.tts(t.id)),
                 toolset: advertised,

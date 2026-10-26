@@ -33,6 +33,7 @@ pub struct DriverBuilder {
     pub thresholds: lk_agents_abi::tokenize::language::ThresholdOptions,
     pub agent: String,
     pub instructions: Instructions,
+    pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
     /// The session starts from the agent's constructor context. Seeded before the instructions, so
     /// the system message lands in it.
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
@@ -352,6 +353,7 @@ impl DriverBuilder {
         let activity = crate::agent_activity::AgentActivity::new(ActivityParts {
             agent: self.agent,
             instructions: self.instructions,
+            dynamic_instructions: self.dynamic_instructions,
             toolset: self.toolset,
             audio_recognition,
             speech_scheduler,

@@ -81,8 +81,18 @@ async fn perform_llm_inference(
 ) -> Result<LlmGenerationData, DriverError> {
     // Held for the step: a mid-reply handoff must not move the model under a request on the wire.
     let llm = ctx.providers.llm.clone().ok_or(DriverError::Missing("llm"))?;
+    let mut chat_ctx = ctx.request.chat_ctx.clone();
+    // Rendered per request, so a tool's state change reaches the step after it.
+    if let Some(dynamic) = &ctx.providers.dynamic_instructions {
+        match dynamic.render(handle.id().0).await {
+            Ok(text) => crate::generation::append_instructions(&mut chat_ctx, &text),
+            Err(e) => {
+                log::error!(target: "livekit.agents", "the agent's instructions functions failed; the static instructions are sent: {e}")
+            }
+        }
+    }
     let req = ChatRequest {
-        chat_ctx: ctx.request.chat_ctx.clone(),
+        chat_ctx,
         tool_choice: ctx.tool_choice.clone(),
         tools_host: ctx
             .toolset

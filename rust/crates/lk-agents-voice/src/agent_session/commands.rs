@@ -558,6 +558,7 @@ pub struct AgentUpdate {
     pub agent: String,
     /// Workflow tasks put their persona in the modality variants.
     pub instructions: Instructions,
+    pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
     /// The executor is per-agent.
     pub toolset: crate::tool_executor::Toolset,
     /// **Replaces** the old one: an agent starts from what it was constructed with, so a merge
@@ -652,6 +653,7 @@ impl AgentUpdate {
         AgentUpdate {
             agent: agent.into(),
             instructions,
+            dynamic_instructions: None,
             toolset: crate::tool_executor::Toolset::default(),
             chat_ctx: None,
             llm: Maybe::NotGiven,
@@ -681,6 +683,7 @@ impl std::fmt::Debug for AgentUpdate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentUpdate")
             .field("instructions", &self.instructions)
+            .field("dynamic_instructions", &self.dynamic_instructions.is_some())
             .field("tools", &self.toolset.specs.len())
             .field("chat_ctx_replaced", &self.chat_ctx.is_some())
             .field("llm", &self.llm)

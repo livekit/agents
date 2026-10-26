@@ -56,6 +56,7 @@ impl SessionApi {
     pub fn host_new(
         room: Arc<dyn SessionRoom>,
         instructions: Option<Instructions>,
+        dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
         agent: String,
         chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
         stt: Option<Arc<dyn Stt>>,
@@ -273,6 +274,7 @@ impl SessionApi {
                 None,
             ),
             instructions: instructions.unwrap_or_default(),
+            dynamic_instructions,
             chat_ctx,
             hook_bound: hook_bound.map(Duration::from_secs_f64),
             capture_run: None,

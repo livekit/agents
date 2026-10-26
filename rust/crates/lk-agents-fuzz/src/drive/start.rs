@@ -140,6 +140,7 @@ impl Run {
             ),
             agent: "agent".into(),
             instructions: instructions(&setup.instructions),
+            dynamic_instructions: None,
             chat_ctx: None,
             hook_bound: setup.hook_bound_ms.map(Duration::from_millis),
             capture_run: None,
@@ -319,6 +320,7 @@ pub(super) fn frame(
     AgentUpdate {
         agent: agent.into(),
         instructions: self::instructions(instructions),
+        dynamic_instructions: None,
         toolset: toolset(registry, tools),
         chat_ctx: None,
         llm: Maybe::NotGiven,
