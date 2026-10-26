@@ -44,6 +44,7 @@ from openai.types import ReasoningEffort
 from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
 from .models import (
+    _REASONING_EFFORT_LOW_MODELS,
     _REASONING_EFFORT_NONE_MODELS,
     CerebrasChatModels,
     ChatModels,
@@ -66,8 +67,12 @@ lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 # models that reject any reasoning_effort value but "none" once function tools are attached
 _REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS: frozenset[str] = frozenset(
-    {"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}
+    {"gpt-6-luna", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"}
 )
+
+# models that reject function tools on /v1/chat/completions at every reasoning_effort ("none" is
+# not a supported value for them); they only take tools through the Responses API
+_TOOLS_REQUIRE_RESPONSES_API_MODELS: frozenset[str] = frozenset({"gpt-6-astra", "gpt-6.1-sol"})
 
 Verbosity = Literal["low", "medium", "high"]
 PromptCacheRetention = Literal["in_memory", "24h"]
@@ -145,6 +150,8 @@ class LLM(llm.LLM):
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
             if model in _REASONING_EFFORT_NONE_MODELS:
                 reasoning_effort = "none"
+            elif model in _REASONING_EFFORT_LOW_MODELS:
+                reasoning_effort = "low"
             else:
                 reasoning_effort = "minimal"
 
@@ -1051,6 +1058,11 @@ class LLM(llm.LLM):
         if is_given(response_format):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
+        if tools and self._opts.model in _TOOLS_REQUIRE_RESPONSES_API_MODELS:
+            raise ValueError(
+                f"{self._opts.model} does not support function tools on /v1/chat/completions; "
+                "use openai.responses.LLM instead"
+            )
         if tools and self._opts.model in _REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS:
             extra["reasoning_effort"] = "none"
 

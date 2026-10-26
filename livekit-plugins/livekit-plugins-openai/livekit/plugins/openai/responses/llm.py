@@ -48,7 +48,11 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
-from ..models import _REASONING_EFFORT_NONE_MODELS, _supports_reasoning_effort
+from ..models import (
+    _REASONING_EFFORT_LOW_MODELS,
+    _REASONING_EFFORT_NONE_MODELS,
+    _supports_reasoning_effort,
+)
 from ..tools import OpenAITool
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "ultrafast"]
@@ -263,6 +267,8 @@ class LLM(llm.LLM):
         if not is_given(reasoning) and _supports_reasoning_effort(model):
             if model in _REASONING_EFFORT_NONE_MODELS:
                 reasoning = Reasoning(effort="none")
+            elif model in _REASONING_EFFORT_LOW_MODELS:
+                reasoning = Reasoning(effort="low")
             else:
                 reasoning = Reasoning(effort="minimal")
 
