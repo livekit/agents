@@ -19,6 +19,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 
+pub mod pool;
 #[cfg(feature = "python")]
 pub mod python;
 #[cfg(test)]

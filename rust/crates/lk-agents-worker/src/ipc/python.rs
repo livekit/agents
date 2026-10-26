@@ -8,10 +8,15 @@
 use std::borrow::Cow;
 use std::sync::Mutex;
 
-use lk_agents_abi::python::{check_pid, pyo3_async_runtimes};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use lk_agents_abi::python::{CancellingHandle, HostBridge, HostHandle, check_pid, pyo3_async_runtimes};
 use pyo3::exceptions::{PyAssertionError, PyException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyDict, PyTuple};
+
+use super::pool::{LaunchError, PoolEvent, PoolHost, PoolOptions, ProcPool};
 
 use super::{
     Closed, ExtraValue, FieldKind, InitError, IpcClient, IpcMessage, Level, MESSAGES, MemoryError,
@@ -352,3 +357,158 @@ impl PyIpcClient {
 }
 
 lk_agents_abi::register_host!(class PyIpcClient);
+
+// ------------------------------------------------------------------------------------- pool
+
+/// An executor, compared by identity.
+#[derive(Clone)]
+pub struct PyProc(Arc<Py<PyAny>>);
+
+impl PartialEq for PyProc {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_ptr() == other.0.as_ptr()
+    }
+}
+
+/// The Python `ProcPool`: it makes the executors (`_core_create`), reports a failed
+/// initialization (`_core_init_failed`) and emits the events; the executors run their own steps.
+struct PyPoolHost(CancellingHandle);
+
+impl PyPoolHost {
+    async fn step(&self, proc: &PyProc, method: &'static str) -> PyResult<()> {
+        let proc = Python::attach(|py| self.0.child(proc.0.clone_ref(py)));
+        proc.await_call(|p| p.call_method0(method)).await.map(drop)
+    }
+
+    fn soon(&self, method: &'static str, args: impl for<'py> FnOnce(Python<'py>) -> PyResult<Bound<'py, PyTuple>>) {
+        if let Err(e) = self.0.call_soon(method, args) {
+            Python::attach(|py| e.print(py));
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl PoolHost for PyPoolHost {
+    type Proc = PyProc;
+    type Job = Arc<Py<PyAny>>;
+    type Error = PyErr;
+
+    async fn create(&self) -> PyResult<PyProc> {
+        let pool = Python::attach(|py| self.0.object().clone_ref(py));
+        let handle = Python::attach(|py| HostHandle::from_parts(pool.clone_ref(py), self.0.task_locals().clone()));
+        handle
+            .run_on_loop(move |py| Ok(pool.bind(py).call_method0("_core_create")?.unbind()))
+            .await
+            .map(|p| PyProc(Arc::new(p)))
+            .map_err(|e| Python::attach(|py| lk_agents_abi::python::raise_provider(py, e)))
+    }
+
+    async fn start(&self, proc: &PyProc) -> PyResult<()> {
+        self.step(proc, "start").await
+    }
+
+    async fn initialize(&self, proc: &PyProc) -> PyResult<()> {
+        self.step(proc, "initialize").await
+    }
+
+    /// The dispatch timeline: a warm process is now handling the job (`launched_at`).
+    async fn launch(&self, proc: &PyProc, job: &Self::Job) -> PyResult<()> {
+        let (proc, job) = Python::attach(|py| -> PyResult<_> {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default();
+            job.bind(py).setattr("launched_at", now)?;
+            Ok((self.0.child(proc.0.clone_ref(py)), job.clone_ref(py)))
+        })?;
+        proc.await_call(|p| p.call_method1("launch_job", (job,))).await.map(drop)
+    }
+
+    async fn close(&self, proc: &PyProc) {
+        if let Err(e) = self.step(proc, "aclose").await {
+            Python::attach(|py| e.print(py));
+        }
+    }
+
+    async fn join(&self, proc: &PyProc) {
+        if let Err(e) = self.step(proc, "join").await {
+            Python::attach(|py| e.print(py));
+        }
+    }
+
+    fn emit(&self, event: PoolEvent, proc: &PyProc) {
+        let proc = proc.0.clone();
+        self.soon("emit", move |py| PyTuple::new(py, [event.as_str().into_pyobject(py)?.into_any(), proc.bind(py).clone()]));
+    }
+
+    fn init_failed(&self, proc: &PyProc, error: PyErr) {
+        let proc = proc.0.clone();
+        self.soon("_core_init_failed", move |py| {
+            PyTuple::new(py, [proc.bind(py).clone(), error.into_value(py).into_bound(py).into_any()])
+        });
+    }
+}
+
+/// `ipc/proc_pool.py`'s `ProcPool`: the warm processes and the job launches.
+#[pyclass(name = "ProcPool", module = "livekit.agents._core", frozen)]
+pub struct PyProcPool(ProcPool<PyPoolHost>);
+
+#[pymethods]
+impl PyProcPool {
+    /// `host` is the Python `ProcPool`; must be called inside its running loop.
+    #[new]
+    #[pyo3(signature = (host, *, num_idle_processes, initialize_timeout))]
+    fn new(py: Python<'_>, host: Py<PyAny>, num_idle_processes: usize, initialize_timeout: f64) -> PyResult<Self> {
+        check_pid()?;
+        let opts = PoolOptions { num_idle_processes, initialize_timeout: super::secs(initialize_timeout) };
+        Ok(Self(ProcPool::new(PyPoolHost(CancellingHandle::new(py, host)?), opts)))
+    }
+
+    #[getter]
+    fn processes(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
+        self.0.processes().iter().map(|p| p.0.clone_ref(py)).collect()
+    }
+
+    #[getter]
+    fn jobs_waiting(&self) -> usize {
+        self.0.jobs_waiting()
+    }
+
+    #[getter]
+    fn target_idle_processes(&self) -> usize {
+        self.0.target_idle()
+    }
+
+    #[setter]
+    fn set_target_idle_processes(&self, n: usize) {
+        self.0.set_target_idle(n);
+    }
+
+    fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let pool = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            pool.start().await;
+            Ok(())
+        })
+    }
+
+    fn launch_job<'py>(&self, py: Python<'py>, info: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let job_id: String = info.bind(py).getattr("job")?.getattr("id")?.extract()?;
+        let pool = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            pool.launch_job(&job_id, Arc::new(info)).await.map_err(|e| match e {
+                LaunchError::NoProcess => PyRuntimeError::new_err(
+                    "no process became available after 3 attempts",
+                ),
+                LaunchError::Launch(e) => e,
+            })
+        })
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let pool = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            pool.aclose().await;
+            Ok(())
+        })
+    }
+}
+
+lk_agents_abi::register_host!(class PyProcPool);
