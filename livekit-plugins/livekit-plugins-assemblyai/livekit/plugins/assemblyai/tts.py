@@ -54,7 +54,7 @@ from .log import logger
 
 DEFAULT_BASE_URL = "wss://tts.us.assemblyai.com"
 DEFAULT_MODEL = "assemblyai-tts-1"
-DEFAULT_VOICE = "987db62e-a2c2-569a-9c4d-82460cdea1bd"  # Keegan
+DEFAULT_VOICE = "49c443a4-8a1d-5f7e-b70b-98bdbd9823c3"  # Audrey
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 # Generate's limit, in code points. A longer sentence becomes several requests rather
@@ -121,7 +121,7 @@ class TTS(tts.TTS):
             voice: The voice, by its catalog ``id`` (a UUID): a voice from the library
                 (see https://www.assemblyai.com/docs/tts/voices) or a custom (cloned)
                 voice. A slug such as ``"aai-linda-3"`` also works, but slugs can change
-                and ids do not. Defaults to Keegan. The voice must be paired with
+                and ids do not. Defaults to Audrey. The voice must be paired with
                 ``model``; a custom voice can only be used on a host in the data zone
                 that created it.
             language: The language to synthesize, as a code (``"es"``, ``"es-MX"``) or an
