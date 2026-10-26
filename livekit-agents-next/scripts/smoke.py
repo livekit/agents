@@ -1074,6 +1074,25 @@ async def main() -> int:
     await settle(room, 2)
     assert handle.done(), "say() did not finish"
 
+    print("== say, streamed words and pre-synthesised audio")
+
+    async def words() -> AsyncIterator[str]:
+        for word in ("Streamed ", "words."):
+            yield word
+
+    async def frames() -> AsyncIterator[rtc.AudioFrame]:
+        for _ in range(10):
+            yield rtc.AudioFrame(b"\0\0" * 480, 48000, 1, 480)
+
+    handle = session.say(words())
+    await settle(room, 2)
+    assert handle.done(), "say(AsyncIterable) did not finish"
+    before = room.played_bytes()
+    handle = session.say("Pre-recorded.", audio=frames())
+    await settle(room, 2)
+    assert handle.done(), "say(audio=) did not finish"
+    assert room.played_bytes() > before, "say(audio=) played nothing"
+
     print("== generate_reply")
     session.generate_reply(user_input="hello there")
     await settle(room, 3)

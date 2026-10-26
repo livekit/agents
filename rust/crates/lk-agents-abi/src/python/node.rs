@@ -176,6 +176,25 @@ impl<T> NodeSource<T> {
     }
 }
 
+/// A host async iterable handed to the core as an argument (`say(AsyncIterable[str])`), drained on
+/// the running loop in the caller's context.
+impl<'a, 'py, T> FromPyObject<'a, 'py> for Box<dyn crate::StreamSource<T>>
+where
+    T: Send + 'static,
+    T: for<'x, 'y> FromPyObject<'x, 'y>,
+    for<'x, 'y> <T as FromPyObject<'x, 'y>>::Error: Into<PyErr>,
+{
+    type Error = PyErr;
+
+    fn extract(obj: pyo3::Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let py = obj.py();
+        let locals = pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?;
+        let clock = <Arc<dyn crate::Clock> as super::Ambient>::ambient();
+        let convert: Convert<T> = Box::new(|i| i.extract::<T>().map_err(Into::into));
+        Ok(Box::new(NodeSource::new(obj.to_owned().unbind(), locals, convert, clock)))
+    }
+}
+
 enum Look {
     Channel(Arc<AsyncMutex<Option<mpsc::UnboundedReceiver<Item>>>>),
     Iterate(Py<PyAny>),

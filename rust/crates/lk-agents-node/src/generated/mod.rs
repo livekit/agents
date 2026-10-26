@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 277 core items bound (120 functions and consts, 75 classes, 81 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 275 core items bound (120 functions and consts, 73 classes, 81 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -49,7 +49,6 @@
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_eq`: not yet: `__eq__` is a Python protocol method
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::agent_session::Timebase::host_repr`: not yet: `__repr__` is a Python protocol method
-//! - `lk_agents_voice::agent_session::FramePusher::push`: parameter `frame`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::host_new`: parameter `room`: not yet: `Arc<dyn SessionRoom>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::session_clock`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::agent_session::SessionApi::audio_input`: return: not yet: `Arc<ParticipantAudioInput>` (a shared handle to an exposed class)
@@ -68,17 +67,15 @@
 //! - `lk_agents_voice::agent_session::SessionApi::generate_reply`: parameter `tool_choice`: `ToolChoice` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::ivr_start`: parameter `tools`: `ToolSpec` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::host_attach_amd`: field `source`: `TranscriptSource` has no Node shape (not a declared record, enum or JSON)
-//! - `lk_agents_voice::agent_session::SessionApi::hook_turn_done`: parameter `items`: Option(Vec(Declared { name: "ChatItem", by_ref: false })) borrows inside a container
 //! - `lk_agents_voice::agent_session::SessionApi::filler_start`: parameter `source`: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_voice::agent_session::SessionApi::update_instructions`: parameter `instructions`: `Instructions` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::tool_update`: parameter `answer`: `ToolAnswer` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::update_chat_ctx`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_voice::agent_session::SessionApi::run`: parameter `host`: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_voice::agent_session::SessionApi::say`: return: not yet: `Arc<SpeechHandle>` (a shared handle to an exposed class)
-//! - `lk_agents_voice::agent_session::SessionApi::say_stream`: return: not yet: `Arc<SpeechHandle>` (a shared handle to an exposed class)
-//! - `lk_agents_voice::agent_session::SessionApi::say_audio`: return: not yet: `Arc<SpeechHandle>` (a shared handle to an exposed class)
+//! - `lk_agents_voice::agent_session::SessionApi::say_stream`: parameter `text`: not yet: a stream half returned as a stream class
+//! - `lk_agents_voice::agent_session::SessionApi::say_audio`: parameter `audio`: not yet: a stream half returned as a stream class
 //! - `lk_agents_voice::agent_session::SessionApi::host_metrics`: parameter `record`: `HostMetricsRecord` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::agent_session::SessionApi::amd_push_audio`: parameter `frame`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_media::StreamBuffer::len`: not yet: `__len__` is a Python protocol method
 //! - `lk_agents_voice::remote_session::driver::HostRuntime::new`: parameter `clock`: not yet: `Arc<dyn Clock>` (a host object behind a proxy)
 //! - `lk_agents_voice::remote_session::driver::HostRuntime::set_port`: parameter `port`: not yet: `Arc<dyn SessionPort>` (a host object behind a proxy)
@@ -153,6 +150,7 @@
 //! - `lk_agents_voice::background_audio::RandomDraw`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::tool_executor::HostToolRunner`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::SessionEvents`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::agent_session::SessionHooks`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::HostRoom`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::NodeFactory`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::remote_session::SessionPort`: not yet: a bare proxy (every method calls `_core_<method>`)

@@ -58,8 +58,8 @@ use lk_agents_voice::{
     },
     agent_activity::scheduling::SpeechId,
     agent_session::{
-        Event, FixedRoom, FramePusher, HoldId, HookId, HostEvent, IoKind, Origin, Probe,
-        SessionApi, SessionEvents, SpeechCommand, TextPusher, Timebase, TurnCommand,
+        Event, FixedRoom, HoldId, HookId, HostEvent, IoKind, Origin, Probe,
+        Pusher, SessionApi, SessionEvents, SpeechCommand, Timebase, TurnCommand,
         UpdateAgentArgs, api::NodeFactory, effects::Decision,
     },
     events::SessionEvent,

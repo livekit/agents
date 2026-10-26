@@ -2,22 +2,22 @@
 //! `AgentSession` call, each assembling, opening, closing or sending one command.
 
 use super::{
-    CLOSE_TIMEOUT, CommandRefused, FramePusher, HostMetricsRecord, HostParts,
+    CLOSE_TIMEOUT, CommandRefused, HostMetricsRecord, HostParts,
     InterruptionPortFactory, ModelRefs, NodeFactory, NotAnImage, NotInterruptible, OpenRefused,
     Ready, Reply, SessionApi, SessionBuildError, SessionEvents, SessionRefused, SessionRoom,
-    SessionRunner, Stage, StartFailed, TextPusher, UnknownCloseReason, UpdateAgentArgs,
+    SessionRunner, Stage, StartFailed, UnknownCloseReason, UpdateAgentArgs,
     host_toolset, llm_leg, origin_of, session_tools, stt_leg, tts_leg,
 };
 use crate::agent_activity::DriverConfig;
 use crate::agent_session::DriverBuilder;
 use crate::agent_session::commands::{
-    ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId, HookId, HookOutcome,
+    ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId,
     HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand,
     ToolUpdate, TurnCommand,
 };
 use crate::agent_session::nodes::Nodes;
 use crate::agent_session::time::Timebase;
-use crate::agent_session::{Answer, CommitSuperseded};
+use crate::agent_session::{Answer, CommitSuperseded, HostEvent};
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
@@ -25,7 +25,7 @@ use crate::trace::Step;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::HostWire;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
-use lk_agents_abi::{Llm, Maybe, Spawner, Stt, Tts, Vad};
+use lk_agents_abi::{Llm, Maybe, Spawner, SpawnerExt, Stt, Tts, Vad};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -71,6 +71,7 @@ impl SessionApi {
         realtime_host: Option<Arc<dyn lk_agents_abi::llm::realtime::HostRealtime>>,
         tts: Option<Arc<dyn Tts>>,
         on_event: Option<Arc<dyn SessionEvents>>,
+        hooks: Option<Arc<dyn super::SessionHooks>>,
         participant_identity: Option<String>,
         auto_gain_control: bool,
         input_sample_rate: u32,
@@ -360,6 +361,7 @@ impl SessionApi {
         }
         api.host = HostParts {
             events: on_event,
+            hooks,
             eot: turn_detector,
             has_options: options.is_some(),
             call_room: (!offline).then(|| Arc::clone(&room)),
@@ -376,18 +378,45 @@ impl SessionApi {
     #[host(method(kw_only, defaults(capture_run = false)))]
     pub fn start(&self, capture_run: bool) -> Result<Reply<Result<(), StartFailed>>, OpenRefused> {
         let events = self.host.events.clone();
+        let hooks = self.host.hooks.clone();
         let anchor = self.anchor;
         let agents = self.agents.clone();
-        // The drain: one event per call, in driver order.
+        let spawner = Arc::clone(&self.spawner);
+        // The drain: one event per call, in driver order; a hook call handed to the host loop in
+        // that order, then awaited on its own task.
         let opening = self.open(capture_run, move |mut runner: SessionRunner| {
             Box::pin(async move {
+                let mut running: Vec<lk_agents_abi::AbortHandle> = Vec::new();
                 while let Some(ev) = runner.next_host_event().await {
-                    if let Some(events) = &events {
-                        let mut wire = ev.wire(anchor);
-                        agents.resolve(&mut wire);
-                        events.event(&wire);
+                    match ev {
+                        HostEvent::Hook(call) => {
+                            let Some(hooks) = &hooks else { continue };
+                            let answer = super::answer_hook(
+                                Arc::clone(hooks),
+                                call,
+                                agents.clone(),
+                                runner.api().clone(),
+                                Arc::clone(&spawner),
+                            );
+                            let mut answer = Box::pin(answer);
+                            let first = std::future::poll_fn(|cx| {
+                                std::task::Poll::Ready(answer.as_mut().poll(cx))
+                            })
+                            .await;
+                            if first.is_pending() {
+                                running.retain(|task| !task.is_finished());
+                                running.push(spawner.spawn(answer));
+                            }
+                        }
+                        ev => {
+                            if let (Some(events), Some(mut wire)) = (&events, ev.wire(anchor)) {
+                                agents.resolve(&mut wire);
+                                events.event(&wire);
+                            }
+                        }
                     }
                 }
+                running.iter().for_each(lk_agents_abi::AbortHandle::abort);
                 // Dropping the runner tells `aclose()` the host has seen everything.
             })
         })?;
@@ -769,75 +798,6 @@ impl SessionApi {
         self.steps().iter().map(|s| format!("{s:?}")).collect()
     }
 
-    /// `on_enter` / `on_exit` returned for hook call `id` (a `hook_call` event's `id`).
-    #[host(method(send = Command::HookDone { id: HookId(id), outcome: HookOutcome::Returned }))]
-    pub fn hook_returned(&self, id: u64) -> Result<(), SessionRefused>;
-
-    /// The hook `id` raised or could not be run; the sequence goes on as after `log_exceptions`.
-    #[host(method(send = Command::HookDone { id: HookId(id), outcome: HookOutcome::Failed }))]
-    pub fn hook_failed(&self, id: u64) -> Result<(), SessionRefused>;
-
-    /// `render_tool_reply` answered for hook call `id`: the deferred tool reply's instructions, as
-    /// the host's template rendered them.
-    #[host(method(send = Command::HookDone { id: HookId(id), outcome: HookOutcome::Rendered(text) }))]
-    pub fn hook_rendered(&self, id: u64, text: String) -> Result<(), SessionRefused>;
-
-    /// `function_tools_executed` handled for hook call `id`: each output's `reply_required`, in
-    /// order, and `handoff_required`, as the event's handlers left them (`cancel_tool_reply()`,
-    /// `cancel_agent_handoff()`).
-    #[host(method(send = Command::HookDone {
-        id: HookId(id),
-        outcome: HookOutcome::FunctionToolsExecuted { reply_required, handoff_required },
-    }))]
-    pub fn hook_tools_executed(
-        &self,
-        id: u64,
-        reply_required: Vec<bool>,
-        handoff_required: bool,
-    ) -> Result<(), SessionRefused>;
-
-    /// `filler_source` answered for hook call `id`: the callable's text for the driver to say,
-    /// `spoke` when it scheduled a speech itself, neither when it declined this fire.
-    #[host(method(
-        kw_only = "text",
-        defaults(spoke = false),
-        send = Command::HookDone { id: HookId(id), outcome: HookOutcome::Filler { text, spoke } }
-    ))]
-    pub fn hook_filler(
-        &self,
-        id: u64,
-        text: Option<String>,
-        spoke: bool,
-    ) -> Result<(), SessionRefused>;
-
-    /// `Agent.on_user_turn_completed` returned for hook call `id`, with its edits to the turn's
-    /// request. A late answer is journalled and dropped.
-    #[host(method(kw_only = "instructions", defaults(stop = false)))]
-    pub fn hook_turn_done(
-        &self,
-        id: u64,
-        instructions: Option<String>,
-        items: Option<Vec<lk_agents_abi::ChatItem>>,
-        user_text: Option<String>,
-        stop: bool,
-    ) -> Result<(), SessionRefused> {
-        use crate::agent::TurnEdit;
-        let mut edits = Vec::new();
-        if stop {
-            edits.push(TurnEdit::StopResponse);
-        }
-        if let Some(text) = instructions {
-            edits.push(TurnEdit::UpdateInstructions(text));
-        }
-        if let Some(text) = user_text {
-            edits.push(TurnEdit::UpdateUserMessage(text));
-        }
-        if let Some(items) = items {
-            edits.push(TurnEdit::ReplaceItems(items));
-        }
-        self.send(Command::HookDone { id: HookId(id), outcome: HookOutcome::Turn(edits) })
-    }
-
     /// `RunContext.with_filler(..)` entered for tool `call_id` of `speech_id`: after `delay` s idle
     /// say `text` (or ask `source`, the host's callable), then repeat every `interval`. Returns the
     /// scope's number, which `filler_stop` takes.
@@ -1104,37 +1064,36 @@ impl SessionApi {
         self.speak(SayText::Text(text), allow_interruptions, add_to_chat_ctx, origin)
     }
 
-    /// `AgentSession.say(AsyncIterable[str])`: answers the pending speech and the chunk sender;
-    /// dropping the sender ends the speech.
-    #[host(method(kw_only, defaults(add_to_chat_ctx = true)))]
+    /// `AgentSession.say(AsyncIterable[str])`: the speech reads `text` to its end, one segment per
+    /// chunk.
+    #[host(method(kw_only = "allow_interruptions", defaults(add_to_chat_ctx = true)))]
     pub fn say_stream(
         &self,
+        text: Box<dyn lk_agents_abi::StreamSource<String>>,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<&str>,
-    ) -> Result<(Arc<SpeechHandle>, TextPusher), CommandRefused> {
-        // Backpressure against a runaway producer, not a buffer.
-        let (tx, rx) = tokio::sync::mpsc::channel(64);
-        let speech =
-            self.speak(SayText::Stream(rx), allow_interruptions, add_to_chat_ctx, origin)?;
-        Ok((speech, TextPusher(std::sync::Mutex::new(Some(tx)))))
+    ) -> Result<Arc<SpeechHandle>, CommandRefused> {
+        let (speech, pusher) = self.say_text_channel(allow_interruptions, add_to_chat_ctx, origin)?;
+        self.spawner.spawn_unboxed(pusher.feed(text, self.time.clock()));
+        Ok(speech)
     }
 
-    /// `AgentSession.say(text, audio=..)`: pre-synthesised frames instead of TTS, pushed like
-    /// [`say_stream`](Self::say_stream)'s chunks; `text` is still committed.
+    /// `AgentSession.say(text, audio=..)`: pre-synthesised frames, read from `audio` to its end,
+    /// instead of TTS; `text` is still committed.
     #[host(method(kw_only = "allow_interruptions", defaults(add_to_chat_ctx = true)))]
     pub fn say_audio(
         &self,
         text: String,
+        audio: Box<dyn lk_agents_abi::StreamSource<lk_agents_abi::AudioFrame>>,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<&str>,
-    ) -> Result<(Arc<SpeechHandle>, FramePusher), CommandRefused> {
-        // Deeper than the text channel: at 20 ms a frame, 64 would be 1.3 s of audio.
-        let (tx, rx) = tokio::sync::mpsc::channel(512);
-        let speech =
-            self.speak(SayText::Audio { text, rx }, allow_interruptions, add_to_chat_ctx, origin)?;
-        Ok((speech, FramePusher(std::sync::Mutex::new(Some(tx)))))
+    ) -> Result<Arc<SpeechHandle>, CommandRefused> {
+        let (speech, pusher) =
+            self.say_audio_channel(text, allow_interruptions, add_to_chat_ctx, origin)?;
+        self.spawner.spawn_unboxed(pusher.feed(audio, self.time.clock()));
+        Ok(speech)
     }
 
     /// A metrics record only a plugin can measure, emitted as `metrics_collected`. Engine-computed
@@ -1173,24 +1132,6 @@ impl SessionApi {
     #[host(method)]
     pub fn amd_listening(&self) -> bool {
         self.running(|r| Ok(r.amd.as_ref().is_some_and(|amd| amd.listening()))).unwrap_or(false)
-    }
-
-    /// `AMD.push_audio(frame)`: a frame for AMD's own STT while it listens; dropped otherwise.
-    #[host(method)]
-    pub fn amd_push_audio(&self, frame: lk_agents_abi::AudioFrame) -> Result<(), SessionRefused> {
-        self.running(|r| {
-            if let Some(handle) = &r.amd {
-                handle.push_audio(frame);
-            }
-            Ok(())
-        })
-    }
-
-    /// `_AMDClassifier.end_input()`: no more transcripts, the classification in flight cancelled.
-    /// The system does this itself at release; a host may do it earlier.
-    #[host(method)]
-    pub fn amd_end_input(&self) -> Result<(), SessionRefused> {
-        self.amd_input(crate::amd::classifier::In::EndInput)
     }
 
     /// `AMD.execute()`'s interrupt and `_resume_authorization()`, after its IVR hand-off: a

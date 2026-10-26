@@ -109,6 +109,8 @@ impl Run {
                 None,
                 tts,
                 Some(Arc::new(WireSink { console: session_host.clone(), time: time.clone() })),
+                // The run answers the hook calls itself (`HookAnswer`).
+                None,
                 None,
                 true,
                 SAMPLE_RATE,

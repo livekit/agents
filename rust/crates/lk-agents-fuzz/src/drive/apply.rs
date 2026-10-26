@@ -9,7 +9,7 @@ use std::task::{Context, Poll, Waker};
 
 use lk_agents_abi::voice::session_options::UpdateKwargs;
 use lk_agents_rtc::{ConnectionState, DisconnectReason, RtcRoom};
-use lk_agents_voice::agent_session::{CommitSuperseded, DrainRefused, HostMetricsRecord};
+use lk_agents_voice::agent_session::{Command, CommitSuperseded, DrainRefused, HostMetricsRecord};
 
 use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
 
@@ -260,17 +260,18 @@ impl Run {
                 let speech = match say {
                     SayInput::Words => api.say(text.clone(), *allow, *to_ctx, None).ok(),
                     SayInput::TextStream => {
-                        api.say_stream(*allow, *to_ctx, None).ok().map(|(speech, pusher)| {
+                        api.say_text_channel(*allow, *to_ctx, None).ok().map(|(speech, pusher)| {
                             stream = Some((false, Feeding::Text(pusher)));
                             speech
                         })
                     }
-                    SayInput::Audio => api.say_audio(text.clone(), *allow, *to_ctx, None).ok().map(
-                        |(speech, pusher)| {
+                    SayInput::Audio => api
+                        .say_audio_channel(text.clone(), *allow, *to_ctx, None)
+                        .ok()
+                        .map(|(speech, pusher)| {
                             stream = Some((true, Feeding::Audio { pusher, chunks: 0 }));
                             speech
-                        },
-                    ),
+                        }),
                 };
                 speech.map(|speech| wait(Pending::speech(speech))).is_some()
             }
@@ -644,19 +645,21 @@ impl Run {
         true
     }
 
-    /// The host's answer to a hook call, through the method each kind of answer is.
+    /// The host's answer to a hook call, as the command it is.
     fn answer_hook(&self, id: HookId, answer: HookAnswer, text: String) -> bool {
-        let api = &self.api;
-        let id = id.0;
-        match answer {
-            HookAnswer::Returned => api.hook_returned(id),
-            HookAnswer::Failed => api.hook_failed(id),
-            HookAnswer::TurnInstructions => api.hook_turn_done(id, Some(text), None, None, false),
-            HookAnswer::TurnStop => api.hook_turn_done(id, None, None, None, true),
-            HookAnswer::Rendered => api.hook_rendered(id, text),
-            HookAnswer::Filler => api.hook_filler(id, Some(text), false),
-        }
-        .is_ok()
+        use lk_agents_voice::agent::TurnEdit;
+        use lk_agents_voice::agent_session::HookOutcome;
+        let outcome = match answer {
+            HookAnswer::Returned => HookOutcome::Returned,
+            HookAnswer::Failed => HookOutcome::Failed,
+            HookAnswer::TurnInstructions => {
+                HookOutcome::Turn(vec![TurnEdit::UpdateInstructions(text)])
+            }
+            HookAnswer::TurnStop => HookOutcome::Turn(vec![TurnEdit::StopResponse]),
+            HookAnswer::Rendered => HookOutcome::Rendered(text),
+            HookAnswer::Filler => HookOutcome::Filler { text: Some(text), spoke: false },
+        };
+        self.api.send(Command::HookDone { id, outcome }).is_ok()
     }
 
     /// The live tool invocation running under this call id.
@@ -702,8 +705,8 @@ fn dtmf_outcome(wire: lk_agents_abi::voice::workflows::DtmfOutcomeWire) -> DtmfO
 
 /// A stream a `say` opened, until the case ends it with `FeedEnd`: the pusher the host feeds.
 pub(super) enum Feeding {
-    Text(TextPusher),
-    Audio { pusher: FramePusher, chunks: u16 },
+    Text(Pusher<String>),
+    Audio { pusher: Pusher<AudioFrame>, chunks: u16 },
 }
 
 impl Run {

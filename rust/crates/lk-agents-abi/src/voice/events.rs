@@ -873,81 +873,6 @@ pub struct SessionErrorWire {
     pub speech_id: Option<String>,
 }
 
-// --- the hook calls ------------------------------------------------------------------------------
-//
-// One record per `HookCall` arm, all tagged `hook_call`: the host dispatches on `hook` and answers
-// with `id`.
-
-/// `on_enter`: `Agent.on_enter()` on the frame just installed.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "hook_call")]
-pub struct OnEnterHookWire {
-    pub hook: String,
-    pub id: u64,
-    /// The frame's agent id.
-    pub agent: String,
-    /// The frame's `Agent`, as the host installed it.
-    pub agent_host: Option<crate::HostRef>,
-}
-
-/// `on_exit`: `Agent.on_exit()` on the frame being left.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "hook_call")]
-pub struct OnExitHookWire {
-    pub hook: String,
-    pub id: u64,
-    pub agent: String,
-    /// The frame's `Agent`, as the host installed it.
-    pub agent_host: Option<crate::HostRef>,
-}
-
-/// `on_user_turn_completed`: `Agent.on_user_turn_completed(turn_ctx, new_message)` for the turn.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "hook_call")]
-pub struct OnUserTurnCompletedHookWire {
-    pub hook: String,
-    pub id: u64,
-    /// The turn's id (`TurnId`).
-    pub turn: u64,
-    pub new_transcript: String,
-    pub transcript_confidence: f64,
-}
-
-/// `filler_source`: a filler with a callable source fired.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "hook_call")]
-pub struct FillerSourceHookWire {
-    pub hook: String,
-    pub id: u64,
-    /// The `with_filler` source, the host's callable.
-    pub source: Option<crate::HostRef>,
-    pub step: u32,
-}
-
-/// `render_tool_reply`: the instructions of a deferred tool reply, rendered by the host.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "hook_call")]
-pub struct RenderToolReplyHookWire {
-    pub hook: String,
-    pub id: u64,
-    pub agent: String,
-    pub call_ids: Vec<String>,
-    pub at_tail: bool,
-}
-
-/// `function_tools_executed`: one step's tool results. The host emits the event, then answers
-/// `hook_tools_executed` with what its handlers left: each output's `reply_required` and the
-/// event's `handoff_required` (`cancel_tool_reply()`, `cancel_agent_handoff()`).
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "hook_call")]
-pub struct ToolsExecutedHookWire {
-    pub hook: String,
-    pub id: u64,
-    pub function_calls: Vec<crate::ChatItem>,
-    pub function_call_outputs: Vec<crate::ChatItem>,
-    pub handoff_required: bool,
-}
-
 // --- the interruption detector's verdict and its wire ----------------------------------------
 
 /// `OverlappingSpeechEvent` (`inference/interruption.py:120`), the detector's only public verdict.
@@ -1060,12 +985,6 @@ pub enum HostWire {
     MetricsCollected(MetricsCollectedWire),
     Error(SessionErrorWire),
     ToolExecutionUpdated(ToolExecutionUpdated),
-    HookOnEnter(OnEnterHookWire),
-    HookOnExit(OnExitHookWire),
-    HookOnUserTurnCompleted(OnUserTurnCompletedHookWire),
-    HookFillerSource(FillerSourceHookWire),
-    HookRenderToolReply(RenderToolReplyHookWire),
-    HookToolsExecuted(ToolsExecutedHookWire),
     ParticipantLinked(ParticipantLinked),
     ParticipantUnlinked(ParticipantUnlinked),
     TextInput(TextInput),

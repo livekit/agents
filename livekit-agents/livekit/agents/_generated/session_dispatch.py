@@ -83,7 +83,6 @@ EVENT_KINDS: frozenset[str] = frozenset(
         "metrics_collected",
         "error",
         "tool_execution_updated",
-        "hook_call",
         "participant_linked",
         "participant_unlinked",
         "text_input",

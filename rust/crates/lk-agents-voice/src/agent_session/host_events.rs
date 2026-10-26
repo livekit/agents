@@ -107,9 +107,10 @@ pub enum HostEvent {
 }
 
 impl HostEvent {
-    /// `anchor` turns monotonic stamps into epoch seconds.
-    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor) -> HostWire {
-        match self {
+    /// `anchor` turns monotonic stamps into epoch seconds. A hook call has no wire: the host's
+    /// hooks answer it (`SessionHooks`).
+    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor) -> Option<HostWire> {
+        Some(match self {
             HostEvent::Session(ev) => ev.wire(anchor),
             HostEvent::Room(ev) => match ev {
                 crate::room_io::RoomIoEvent::ParticipantLinked(e) => {
@@ -123,76 +124,8 @@ impl HostEvent {
                     HostWire::DeleteRoomRequested(e.clone())
                 }
             },
-            HostEvent::Hook(call) => call.wire(),
-        }
-    }
-}
-
-impl HookCall {
-    pub fn wire(&self) -> HostWire {
-        use lk_agents_abi::voice::events as w;
-        let hook = self.kind().as_str().to_owned();
-        let id = self.id().0;
-        match self {
-            HookCall::OnEnter { agent, .. } => HostWire::HookOnEnter(w::OnEnterHookWire {
-                hook,
-                id,
-                agent: agent.clone(),
-                agent_host: None,
-            }),
-            HookCall::OnExit { agent, .. } => HostWire::HookOnExit(w::OnExitHookWire {
-                hook,
-                id,
-                agent: agent.clone(),
-                agent_host: None,
-            }),
-            HookCall::OnUserTurnCompleted {
-                turn, new_transcript, transcript_confidence, ..
-            } => HostWire::HookOnUserTurnCompleted(w::OnUserTurnCompletedHookWire {
-                hook,
-                id,
-                turn: turn.0,
-                new_transcript: new_transcript.clone(),
-                transcript_confidence: *transcript_confidence,
-            }),
-            HookCall::FillerSource { step, source, .. } => {
-                HostWire::HookFillerSource(w::FillerSourceHookWire {
-                    hook,
-                    id,
-                    source: source.clone(),
-                    step: *step,
-                })
-            }
-            HookCall::RenderToolReply { agent, call_ids, at_tail, .. } => {
-                HostWire::HookRenderToolReply(w::RenderToolReplyHookWire {
-                    hook,
-                    id,
-                    agent: agent.clone(),
-                    call_ids: call_ids.clone(),
-                    at_tail: *at_tail,
-                })
-            }
-            HookCall::FunctionToolsExecuted { event, .. } => {
-                use lk_agents_abi::ChatItem;
-                HostWire::HookToolsExecuted(w::ToolsExecutedHookWire {
-                    hook,
-                    id,
-                    function_calls: event
-                        .function_calls
-                        .iter()
-                        .cloned()
-                        .map(ChatItem::FunctionCall)
-                        .collect(),
-                    function_call_outputs: event
-                        .function_call_outputs
-                        .iter()
-                        .cloned()
-                        .map(ChatItem::FunctionCallOutput)
-                        .collect(),
-                    handoff_required: event.handoff_required,
-                })
-            }
-        }
+            HostEvent::Hook(_) => return None,
+        })
     }
 }
 

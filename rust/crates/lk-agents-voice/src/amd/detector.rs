@@ -119,12 +119,6 @@ impl AmdHandle {
         let _ = self.tx.send(Msg::Input(input));
     }
 
-    /// `AMD.push_audio(frame)`: a frame for AMD's own STT, heard only while listening (a system
-    /// without an STT of its own reads the session's finals and drops it).
-    pub fn push_audio(&self, frame: AudioFrame) {
-        let _ = self.tx.send(Msg::Audio(frame));
-    }
-
     /// `AMD.aclose()`: timers swept, request cancelled, hold released, tap cleared. Idempotent.
     pub fn close(&self) {
         let _ = self.tx.send(Msg::Input(In::Close));
@@ -149,8 +143,6 @@ impl fmt::Debug for AmdHandle {
 
 enum Msg {
     Input(In),
-    /// A host frame for the tap (`AMD.push_audio`).
-    Audio(AudioFrame),
     /// Classification `req` ended with every tool call answered, in order, and the request's own
     /// transcript. `failed`: no stream or it errored; the timers decide.
     Answer {
@@ -180,17 +172,16 @@ enum SttLeg {
     None,
     Opening,
     /// On the forwarder's `Amd` channel as `tap`, behind `gate`: frames flow while the machine
-    /// listens. `sink` is the same stream, for the host's own frames.
+    /// listens.
     Installed {
         gate: Arc<AtomicBool>,
-        sink: Arc<dyn StreamSink<AudioFrame>>,
         tap: lk_agents_abi::resources::ResourceId,
     },
     /// Cleared; an open that lands now is discarded.
     Done,
 }
 
-/// The tap's sink behind the listening gate (`AMD.push_audio`): pre-answer audio is never
+/// The tap's sink behind the listening gate: pre-answer audio is never
 /// transcribed. `end_input` passes through.
 struct GatedSink {
     inner: Arc<dyn StreamSink<AudioFrame>>,
@@ -374,12 +365,6 @@ impl AmdSystem {
                     self.peer.emit(SessionEvent::MetricsCollected { metrics, speech: None });
                 }
                 self.on_answer(now, req, transcript, calls, failed)
-            }
-            Msg::Audio(frame) => {
-                // `detector.py:312`: only while listening, only into AMD's own STT.
-                if let SttLeg::Installed { sink, .. } = &self.stt {
-                    let _ = sink.push(frame);
-                }
             }
             Msg::SttOpened(outcome) => self.on_tap_opened(outcome),
             Msg::Transcript(ev) => self.on_tap_transcript(now, ev),
@@ -620,8 +605,8 @@ impl AmdSystem {
         let gate = Arc::new(AtomicBool::new(self.machine.as_ref().is_some_and(Amd::listening)));
         let sink: Arc<dyn StreamSink<AudioFrame>> =
             Arc::new(GatedSink { inner: Arc::from(sink), open: Arc::clone(&gate) });
-        let tap = self.peer.install_audio_tap(Arc::clone(&sink));
-        self.stt = SttLeg::Installed { gate, sink, tap };
+        let tap = self.peer.install_audio_tap(sink);
+        self.stt = SttLeg::Installed { gate, tap };
         self.peer.journal(Step::Input(InputStep::StreamOpened { leg: TAP }));
         spawn_tap_drain(self.peer.clone(), source, tap, self.tx.clone());
     }

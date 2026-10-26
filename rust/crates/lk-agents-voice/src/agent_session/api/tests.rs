@@ -40,7 +40,7 @@ fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
     #[rustfmt::skip]
     let api = SessionApi::host_new(
         Arc::new(room), None, None, "agent".into(), None, None, None, None, None, None, None, None,
-        None, None, true, 24_000, 24_000, None, None, None, false, None, true,
+        None, None, None, true, 24_000, 24_000, None, None, None, false, None, true,
         Some(crate::room_io::RoomIoConfig::default()), None, None, None, None, None, None,
         None, None,
         None, None, None, None, false, None, false, hook_bound, 3, None, None, None, Maybe::NotGiven, None,

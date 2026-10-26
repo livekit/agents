@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import inspect
 import time
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
@@ -429,6 +430,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             host_audio_output=self._console.io if self._console else self._output.audio,
             host_transcription_output=self._output.transcription,
             on_event=self,
+            hooks=_AgentHooks(self),
             options=self._options,
             agent_turn_handling=frame.get("turn_handling"),
             agent_expressive=frame["expressive"],
@@ -610,25 +612,12 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         }
         if is_given(audio):
             assert isinstance(text, str), "say(audio=) takes the words it speaks as a str"
-            core, pusher = self._running.say_audio(text, **kwargs)
-            self._pump(audio, pusher)
+            core = self._running.say_audio(text, audio, **kwargs)
         elif isinstance(text, str):
             core = self._running.say(text, **kwargs)
         else:
-            core, pusher = self._running.say_stream(**kwargs)
-            self._pump(text, pusher)
+            core = self._running.say_stream(text, **kwargs)
         return SpeechHandle(core)
-
-    def _pump(self, source: AsyncIterable[Any], pusher: Any) -> None:
-        async def _run() -> None:
-            try:
-                async for item in source:
-                    if not await pusher.push(item):
-                        break
-            finally:
-                pusher.end()
-
-        self._spawn(_run())
 
     def generate_reply(
         self,
@@ -787,9 +776,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         handler = _HANDLERS.get(kind)
         if handler is not None:
             handler(self, wire)
-
-    def _on_hook(self, wire: dict[str, Any]) -> None:
-        self._spawn(_answer_hook(self, wire))
 
     def _on_speech_created(self, wire: dict[str, Any]) -> None:
         handle = SpeechHandle._of(wire["speech_handle"])
@@ -953,80 +939,62 @@ def _in_hook(hook: str, session: LiveSession[Any], agent: Agent) -> Any:
         _BindingContextVar.reset(binding)
 
 
-async def _answer_hook(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    """Run the hook the core called and answer it, exactly once. ``render_tool_reply`` stays
-    unanswered: the core uses its default templates."""
-    try:
-        await _HOOKS.get(wire["hook"], _unanswered)(session, wire)
-    except Exception:
-        logger.exception(f"error in the {wire['hook']} hook")
-        session._core.hook_failed(wire["id"])
+class _AgentHooks:
+    """The agent's hooks as the core awaits them (``_core.SessionHooks``): each runs in the agent's
+    binding and returns the core's answer; ``render_tool_reply`` is the core's default."""
 
+    def __init__(self, session: LiveSession[Any]) -> None:
+        self._session = session
 
-async def _on_enter(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    agent = wire["agent_host"]
-    with _in_hook("on_enter", session, agent):
-        await agent._enter(RunContext(function_call=None, session=session))
-    session._core.hook_returned(wire["id"])
+    async def _core_on_enter(self, agent: Agent) -> None:
+        with _in_hook("on_enter", self._session, agent):
+            await agent._enter(RunContext(function_call=None, session=self._session))
 
+    async def _core_on_exit(self, agent: Agent) -> None:
+        with _in_hook("on_exit", self._session, agent):
+            await agent.on_exit()
 
-async def _on_exit(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    agent = wire["agent_host"]
-    with _in_hook("on_exit", session, agent):
-        await agent.on_exit()
-    session._core.hook_returned(wire["id"])
-    await asyncio.gather(*(t.aclose() for t in agent.tools if isinstance(t, llm.Toolset)))
+    async def _core_close_toolsets(self, agent: Agent) -> None:
+        await asyncio.gather(*(t.aclose() for t in agent.tools if isinstance(t, llm.Toolset)))
 
+    async def _core_on_user_turn_completed(
+        self, new_transcript: str, transcript_confidence: float
+    ) -> tuple[str | None, list[_core.ChatItem] | None, bool]:
+        session = self._session
+        turn_ctx = session.history.copy()
+        message = llm.ChatMessage(
+            role="user", content=[new_transcript], transcript_confidence=transcript_confidence
+        )
+        before = [i.id for i in turn_ctx.items]
+        stop = False
+        with _in_hook("on_user_turn_completed", session, session.current_agent):
+            try:
+                await session.current_agent.on_user_turn_completed(turn_ctx, message)
+            except StopResponse:
+                stop = True
+        changed = [i.id for i in turn_ctx.items] != before
+        return message.text_content, to_core_items(turn_ctx.items) if changed else None, stop
 
-async def _tools_executed(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    ev = FunctionToolsExecutedEvent(
-        function_calls=[from_core_item(c) for c in wire["function_calls"]],
-        function_call_outputs=[from_core_item(o) for o in wire["function_call_outputs"]],
-    )
-    ev._handoff_required = wire["handoff_required"]
-    session.emit("function_tools_executed", ev)
-    session._core.hook_tools_executed(
-        wire["id"], [o.reply_required for o in ev.function_call_outputs], ev.has_agent_handoff
-    )
+    async def _core_function_tools_executed(
+        self,
+        function_calls: list[_core.ChatItem],
+        function_call_outputs: list[_core.ChatItem],
+        handoff_required: bool,
+    ) -> tuple[list[bool], bool]:
+        ev = FunctionToolsExecutedEvent(
+            function_calls=[from_core_item(c) for c in function_calls],
+            function_call_outputs=[from_core_item(o) for o in function_call_outputs],
+        )
+        ev._handoff_required = handoff_required
+        self._session.emit("function_tools_executed", ev)
+        return [o.reply_required for o in ev.function_call_outputs], ev.has_agent_handoff
 
+    async def _core_filler_source(self, source: Callable[[int], Any], step: int) -> Any:
+        out = source(step)
+        return await out if inspect.isawaitable(out) else out
 
-async def _filler_source(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    source = wire["source"]
-    out = source(wire["step"]) if source is not None else None
-    if asyncio.iscoroutine(out):
-        out = await out
-    if isinstance(out, SpeechHandle):
-        session._core.hook_filler(wire["id"], spoke=True)
-    else:
-        session._core.hook_filler(wire["id"], text=out)
-
-
-async def _unanswered(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    session._core.hook_failed(wire["id"])
-
-
-async def _turn_completed(session: LiveSession[Any], wire: dict[str, Any]) -> None:
-    agent = session.current_agent
-    turn_ctx = session.history.copy()
-    message = llm.ChatMessage(
-        role="user",
-        content=[wire["new_transcript"]],
-        transcript_confidence=wire["transcript_confidence"],
-    )
-    before = [i.id for i in turn_ctx.items]
-    stop = False
-    with _in_hook("on_user_turn_completed", session, agent):
-        try:
-            await agent.on_user_turn_completed(turn_ctx, message)
-        except StopResponse:
-            stop = True
-    changed = [i.id for i in turn_ctx.items] != before
-    session._core.hook_turn_done(
-        wire["id"],
-        user_text=message.text_content if message.text_content != wire["new_transcript"] else None,
-        items=to_core_items(turn_ctx.items) if changed else None,
-        stop=stop,
-    )
+    def _core_hook_failed(self, hook: str, error: BaseException | None) -> None:
+        logger.error(f"error in the {hook} hook", exc_info=error)
 
 
 _NODES = ("llm_node", "tts_node", "stt_node")
@@ -1053,17 +1021,7 @@ class _AgentNodes:
         return self._agent.stt_node(audio, ModelSettings())
 
 
-_HOOKS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], Any]] = {
-    "on_enter": _on_enter,
-    "on_exit": _on_exit,
-    "on_user_turn_completed": _turn_completed,
-    "function_tools_executed": _tools_executed,
-    "filler_source": _filler_source,
-    "render_tool_reply": _unanswered,
-}
-
 _HANDLERS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], None]] = {
-    "hook_call": LiveSession._on_hook,
     "speech_created": LiveSession._on_speech_created,
     "conversation_item_added": LiveSession._on_item_added,
     "run_item_added": LiveSession._on_run_item,

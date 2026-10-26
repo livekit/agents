@@ -537,44 +537,6 @@ pub struct SessionClock {
 impl SessionClock {
 }
 
-#[napi(js_name = "TextPusher")]
-pub struct TextPusher {
-    pub(crate) inner: std::sync::Arc<lk_agents_voice::agent_session::TextPusher>,
-}
-
-#[napi]
-impl TextPusher {
-    #[napi(js_name = "push", ts_return_type = "Promise<boolean>")]
-    pub fn push<'env>(&self, env: &'env Env, text: String) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, bool>> {
-        let (text,) = crate::host_error::run(env, || {
-            Ok((text,))
-        })?;
-        let inner = std::sync::Arc::clone(&self.inner);
-        env.spawn_future_with_callback(async move { Ok(Ok::<_, crate::host_error::JsError>(inner.push(text).await)) }, |env, out| match out {
-            Ok(out) => Ok(out),
-            Err(e) => Err(e.into_napi(env)),
-        })
-    }
-
-    #[napi(js_name = "end")]
-    pub fn end(&self) {
-        self.inner.end();
-    }
-}
-
-#[napi(js_name = "FramePusher")]
-pub struct FramePusher {
-    pub(crate) inner: std::sync::Arc<lk_agents_voice::agent_session::FramePusher>,
-}
-
-#[napi]
-impl FramePusher {
-    #[napi(js_name = "end")]
-    pub fn end(&self) {
-        self.inner.end();
-    }
-}
-
 /// `voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
 /// `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
 /// borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
@@ -673,52 +635,6 @@ impl LiveSession {
     #[napi(js_name = "steps")]
     pub fn steps(&self) -> Vec<String> {
         self.inner.host_steps()
-    }
-
-    #[napi(js_name = "hookReturned")]
-    pub fn hook_returned(&self, env: Env, id: i64) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            let id = <u64>::try_from(id).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("id: {e}")))?;
-            self.inner.hook_returned(id).map_err(crate::generated::errors::session_refused_to_node)?;
-            Ok(())
-        })
-    }
-
-    #[napi(js_name = "hookFailed")]
-    pub fn hook_failed(&self, env: Env, id: i64) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            let id = <u64>::try_from(id).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("id: {e}")))?;
-            self.inner.hook_failed(id).map_err(crate::generated::errors::session_refused_to_node)?;
-            Ok(())
-        })
-    }
-
-    #[napi(js_name = "hookRendered")]
-    pub fn hook_rendered(&self, env: Env, id: i64, text: String) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            let id = <u64>::try_from(id).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("id: {e}")))?;
-            self.inner.hook_rendered(id, text).map_err(crate::generated::errors::session_refused_to_node)?;
-            Ok(())
-        })
-    }
-
-    #[napi(js_name = "hookToolsExecuted")]
-    pub fn hook_tools_executed(&self, env: Env, id: i64, reply_required: Vec<bool>, handoff_required: bool) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            let id = <u64>::try_from(id).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("id: {e}")))?;
-            self.inner.hook_tools_executed(id, reply_required, handoff_required).map_err(crate::generated::errors::session_refused_to_node)?;
-            Ok(())
-        })
-    }
-
-    #[napi(js_name = "hookFiller")]
-    pub fn hook_filler(&self, env: Env, id: i64, text: Option<String>, spoke: Option<bool>) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            let id = <u64>::try_from(id).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("id: {e}")))?;
-            let spoke = spoke.unwrap_or(false);
-            self.inner.hook_filler(id, text, spoke).map_err(crate::generated::errors::session_refused_to_node)?;
-            Ok(())
-        })
     }
 
     #[napi(js_name = "fillerStop")]
@@ -866,14 +782,6 @@ impl LiveSession {
     #[napi(js_name = "amdListening")]
     pub fn amd_listening(&self) -> bool {
         self.inner.amd_listening()
-    }
-
-    #[napi(js_name = "amdEndInput")]
-    pub fn amd_end_input(&self, env: Env) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            self.inner.amd_end_input().map_err(crate::generated::errors::session_refused_to_node)?;
-            Ok(())
-        })
     }
 
     #[napi(js_name = "amdExecute")]

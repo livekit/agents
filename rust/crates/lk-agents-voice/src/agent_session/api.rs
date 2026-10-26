@@ -20,7 +20,7 @@ use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use crate::trace::{CoreStep, Step, Trace};
-use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::voice::events::HostWire;
 use lk_agents_abi::voice::session_effects::StartPlan;
 use lk_agents_abi::{
@@ -509,6 +509,35 @@ impl SessionApi {
         )?;
         Ok(speech)
     }
+
+    /// A `say` of streamed words: the speech and its feeding end.
+    pub fn say_text_channel(
+        &self,
+        allow_interruptions: Option<bool>,
+        add_to_chat_ctx: bool,
+        origin: Option<&str>,
+    ) -> Result<(Arc<SpeechHandle>, Pusher<String>), CommandRefused> {
+        // Backpressure against a runaway producer, not a buffer.
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let speech =
+            self.speak(SayText::Stream(rx), allow_interruptions, add_to_chat_ctx, origin)?;
+        Ok((speech, Pusher(Mutex::new(Some(tx)))))
+    }
+
+    /// A `say` of pre-synthesised frames, `text` still committed: the speech and its feeding end.
+    pub fn say_audio_channel(
+        &self,
+        text: String,
+        allow_interruptions: Option<bool>,
+        add_to_chat_ctx: bool,
+        origin: Option<&str>,
+    ) -> Result<(Arc<SpeechHandle>, Pusher<lk_agents_abi::AudioFrame>), CommandRefused> {
+        // Deeper than the text channel: at 20 ms a frame, 64 would be 1.3 s of audio.
+        let (tx, rx) = tokio::sync::mpsc::channel(512);
+        let speech =
+            self.speak(SayText::Audio { text, rx }, allow_interruptions, add_to_chat_ctx, origin)?;
+        Ok((speech, Pusher(Mutex::new(Some(tx)))))
+    }
 }
 
 /// A second session asked to record, explicitly. The reference raises with how to proceed.
@@ -634,6 +663,8 @@ struct Running {
 #[derive(Default)]
 struct HostParts {
     events: Option<Arc<dyn SessionEvents>>,
+    /// Without it the hook calls are the embedder's to answer (`Command::HookDone`).
+    hooks: Option<Arc<dyn SessionHooks>>,
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     has_options: bool,
     /// Where `AMD` awaits the callee: the call's room, `None` on an offline (console) session.
@@ -755,6 +786,144 @@ fn origin_of(origin: Option<&str>) -> Result<Origin, CommandRefused> {
 #[lk_agents_abi::host(proxy)]
 pub trait SessionEvents: Send + Sync {
     fn event(&self, wire: &HostWire);
+}
+
+/// The agent's hooks, run by the host and awaited by the core: each hook call is answered with
+/// what its method returns, or `Failed` when it raises (after `hook_failed`). A hook still running
+/// when the loop has returned is cancelled.
+#[lk_agents_abi::host(proxy(cancel_on_drop))]
+#[async_trait::async_trait]
+pub trait SessionHooks: Send + Sync {
+    /// `Agent.on_enter()` for `agent`, the `Agent` the host installed.
+    async fn on_enter(&self, agent: &lk_agents_abi::HostRef) -> Result<(), HostError>;
+    /// `Agent.on_exit()`.
+    async fn on_exit(&self, agent: &lk_agents_abi::HostRef) -> Result<(), HostError>;
+    /// After `on_exit` was answered: the agent's own toolsets closed.
+    async fn close_toolsets(&self, agent: &lk_agents_abi::HostRef);
+    /// `Agent.on_user_turn_completed(turn_ctx, new_message)` on the current agent: the message's
+    /// text as the hook left it, the turn's items when it changed them, and whether it raised
+    /// `StopResponse`.
+    async fn on_user_turn_completed(
+        &self,
+        new_transcript: &str,
+        transcript_confidence: f64,
+    ) -> Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError>;
+    /// The `function_tools_executed` event emitted: each output's `reply_required` and the event's
+    /// `handoff_required`, as its handlers left them.
+    async fn function_tools_executed(
+        &self,
+        function_calls: Vec<lk_agents_abi::ChatItem>,
+        function_call_outputs: Vec<lk_agents_abi::ChatItem>,
+        handoff_required: bool,
+    ) -> Result<(Vec<bool>, bool), HostError>;
+    /// A filler's callable `source` called for `step`, awaited when it returns an awaitable.
+    async fn filler_source(
+        &self,
+        source: &lk_agents_abi::HostRef,
+        step: u32,
+    ) -> Result<FillerReply, HostError>;
+    /// Hook `hook` raised `error` (the exception itself, when there is one): logged.
+    fn hook_failed(&self, hook: &str, error: Option<lk_agents_abi::errors::CapturedError>);
+}
+
+/// What a filler's callable answered: its text to say, a speech it scheduled itself, or nothing.
+pub enum FillerReply {
+    Text(String),
+    Spoke,
+    Declined,
+}
+
+#[cfg(feature = "python")]
+impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for FillerReply {
+    type Error = pyo3::PyErr;
+
+    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
+        use pyo3::types::PyAnyMethods as _;
+        Ok(if obj.is_none() {
+            FillerReply::Declined
+        } else if let Ok(text) = obj.extract::<String>() {
+            FillerReply::Text(text)
+        } else {
+            FillerReply::Spoke
+        })
+    }
+}
+
+/// Runs the hook `call` asks for through `hooks` and answers it. Calls the host first, before any
+/// other await, so a caller polling it once has handed the call to the host loop in event order.
+async fn answer_hook(
+    hooks: Arc<dyn SessionHooks>,
+    call: crate::agent_session::host_events::HookCall,
+    agents: HostAgents,
+    api: Tx<Command>,
+    spawner: Arc<dyn Spawner>,
+) {
+    use crate::agent::TurnEdit;
+    use crate::agent_session::commands::{HookId, HookOutcome};
+    use crate::agent_session::host_events::HookCall;
+    let id = call.id();
+    let kind = call.kind();
+    let outcome: Result<HookOutcome, HostError> = match call {
+        HookCall::OnEnter { agent, .. } => match agents.get(&agent) {
+            Some(agent) => hooks.on_enter(&agent).await.map(|()| HookOutcome::Returned),
+            None => Ok(HookOutcome::Failed),
+        },
+        HookCall::OnExit { agent, .. } => match agents.get(&agent) {
+            Some(agent) => {
+                let outcome = hooks.on_exit(&agent).await.map(|()| HookOutcome::Returned);
+                // The toolsets close after the answer, and outlive the hook's cancellation.
+                let hooks = Arc::clone(&hooks);
+                spawner.spawn_unboxed(async move { hooks.close_toolsets(&agent).await });
+                outcome
+            }
+            None => Ok(HookOutcome::Failed),
+        },
+        HookCall::OnUserTurnCompleted { new_transcript, transcript_confidence, .. } => hooks
+            .on_user_turn_completed(&new_transcript, transcript_confidence)
+            .await
+            .map(|(user_text, items, stop)| {
+                let mut edits = Vec::new();
+                if stop {
+                    edits.push(TurnEdit::StopResponse);
+                }
+                if let Some(user_text) = user_text.filter(|t| *t != new_transcript) {
+                    edits.push(TurnEdit::UpdateUserMessage(user_text));
+                }
+                if let Some(items) = items {
+                    edits.push(TurnEdit::ReplaceItems(items));
+                }
+                HookOutcome::Turn(edits)
+            }),
+        HookCall::FunctionToolsExecuted { event, .. } => {
+            use lk_agents_abi::ChatItem;
+            let calls = event.function_calls.into_iter().map(ChatItem::FunctionCall).collect();
+            let outputs =
+                event.function_call_outputs.into_iter().map(ChatItem::FunctionCallOutput).collect();
+            hooks.function_tools_executed(calls, outputs, event.handoff_required).await.map(
+                |(reply_required, handoff_required)| HookOutcome::FunctionToolsExecuted {
+                    reply_required,
+                    handoff_required,
+                },
+            )
+        }
+        HookCall::FillerSource { source: None, .. } => {
+            Ok(HookOutcome::Filler { text: None, spoke: false })
+        }
+        HookCall::FillerSource { source: Some(source), step, .. } => {
+            hooks.filler_source(&source, step).await.map(|reply| match reply {
+                FillerReply::Text(text) => HookOutcome::Filler { text: Some(text), spoke: false },
+                FillerReply::Spoke => HookOutcome::Filler { text: None, spoke: true },
+                FillerReply::Declined => HookOutcome::Filler { text: None, spoke: false },
+            })
+        }
+        // Unanswered: the reference's templates.
+        HookCall::RenderToolReply { .. } => Ok(HookOutcome::Failed),
+    };
+    let outcome = outcome.unwrap_or_else(|e| {
+        hooks.hook_failed(kind.as_str(), e.host_ref.clone());
+        HookOutcome::Failed
+    });
+    let _ = api.send_from(Origin::Host, Command::HookDone { id: HookId(id.0), outcome });
 }
 
 /// Timers and playout must share one clock: a fake room brings its own virtual clock, a host
@@ -884,23 +1053,18 @@ impl HostAgents {
         }
     }
 
-    fn get(&self, agent: &str) -> Option<lk_agents_abi::HostRef> {
+    pub(crate) fn get(&self, agent: &str) -> Option<lk_agents_abi::HostRef> {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).get(agent).cloned()
     }
 
-    /// Fills in the `Agent`s of the wire records that name one.
+    /// Fills in the `Agent`s of a handoff item's wire record.
     pub fn resolve(&self, wire: &mut lk_agents_abi::voice::events::HostWire) {
         use lk_agents_abi::voice::events::HostWire;
-        match wire {
-            HostWire::HookOnEnter(w) => w.agent_host = self.get(&w.agent),
-            HostWire::HookOnExit(w) => w.agent_host = self.get(&w.agent),
-            HostWire::ItemAdded(w) => {
-                if let lk_agents_abi::ChatItem::AgentHandoff(h) = &w.item {
-                    w.old_agent_host = h.old_agent_id.as_deref().and_then(|a| self.get(a));
-                    w.new_agent_host = self.get(&h.new_agent_id);
-                }
-            }
-            _ => {}
+        if let HostWire::ItemAdded(w) = wire
+            && let lk_agents_abi::ChatItem::AgentHandoff(h) = &w.item
+        {
+            w.old_agent_host = h.old_agent_id.as_deref().and_then(|a| self.get(a));
+            w.new_agent_host = self.get(&h.new_agent_id);
         }
     }
 }
@@ -1048,49 +1212,61 @@ pub struct UnknownCloseReason(String);
 )]
 pub struct NotAnImage;
 
-pub struct TextPusher(std::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>>);
+/// The feeding end of a streamed `say`: what the speech reads, chunk by chunk. Dropping it, or
+/// [`end`](Self::end), finishes the speech.
+pub struct Pusher<T>(std::sync::Mutex<Option<tokio::sync::mpsc::Sender<T>>>);
 
-#[lk_agents_abi::host(object(cell = "arc"))]
-impl TextPusher {
-    /// Queue one chunk. Awaited: a full channel waits rather than dropping (every chunk is spoken,
-    /// in order). Resolves `False` once the speech is gone, so the host stops pulling.
-    #[host(method)]
-    pub async fn push(&self, text: String) -> bool {
+impl<T: Send + 'static> Pusher<T> {
+    /// Queue one item. A full channel waits rather than dropping (every chunk is spoken, in
+    /// order). `false` once the speech is gone.
+    pub async fn push(&self, item: T) -> bool {
         let tx = self.0.lock().unwrap_or_else(|p| p.into_inner()).clone();
         match tx {
-            Some(tx) => tx.send(text).await.is_ok(),
+            Some(tx) => tx.send(item).await.is_ok(),
             None => false,
         }
     }
 
-    /// No more words. This is what finishes the speech. Idempotent.
-    #[host(method)]
+    /// No more items. Idempotent.
     pub fn end(&self) {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).take();
     }
-}
 
-pub struct FramePusher(
-    std::sync::Mutex<Option<tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>>>,
-);
-
-#[lk_agents_abi::host(object(cell = "arc"))]
-impl FramePusher {
-    /// Queue one `rtc.AudioFrame`. Awaited: a full channel is backpressure, never a dropped frame.
-    /// Resolves `False` once the speech is gone, so the host stops pulling.
-    #[host(method)]
-    pub async fn push(&self, frame: lk_agents_abi::AudioFrame) -> bool {
+    /// Resolves once the speech stopped reading.
+    async fn closed(&self) {
         let tx = self.0.lock().unwrap_or_else(|p| p.into_inner()).clone();
-        match tx {
-            Some(tx) => tx.send(frame).await.is_ok(),
-            None => false,
+        if let Some(tx) = tx {
+            tx.closed().await;
         }
     }
 
-    /// No more frames. This is what finishes the speech. Idempotent.
-    #[host(method)]
-    pub fn end(&self) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).take();
+    /// `source` read into the speech to its end, or until the speech is gone; then closed. A
+    /// failing source ends the speech with what it gave.
+    async fn feed(
+        self,
+        mut source: Box<dyn lk_agents_abi::StreamSource<T>>,
+        clock: Arc<dyn Clock>,
+    ) {
+        loop {
+            let next = tokio::select! {
+                next = source.next() => next,
+                () = self.closed() => break,
+            };
+            match next {
+                Ok(Some(item)) => {
+                    if !self.push(item).await {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    log::error!("say(): the stream it speaks raised: {e}");
+                    break;
+                }
+            }
+        }
+        self.end();
+        source.close(clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)).await;
     }
 }
 
