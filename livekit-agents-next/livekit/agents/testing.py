@@ -48,7 +48,7 @@ def fake_job_context(
     from livekit import rtc as _rtc
     from livekit.protocol import agent as agent_proto, models
 
-    from . import utils
+    from . import _core, utils
     from .job import (
         JobAcceptArguments,
         JobContext,
@@ -78,13 +78,12 @@ def fake_job_context(
         proc=proc,
         info=info,
         room=room,
-        on_connect=lambda: None,
-        on_shutdown=lambda _reason: None,
+        run=_core.JobRun(fake_job=True, session_end_timeout=0.0, redaction=False),
         inference_executor=inference_executor or _NoopInferenceExecutor(),
     )
     # the caller owns the room connection (a fake job has no signal URL), so mark the
-    # context connected to keep JobContext.connect() — invoked by session.start() — a no-op
-    jc._connected = True
+    # context connected to keep JobContext.connect() (invoked by session.start()) a no-op
+    jc._run.connected()
 
     token = _JobContextVar.set(jc)
     try:

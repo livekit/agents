@@ -959,6 +959,84 @@ async def room_camera() -> None:
     await session.aclose()
 
 
+async def job() -> None:
+    """A console job, as a job process runs it: the entrypoint connects (twice: once is made), a
+    participant entrypoint runs for the participant in the room, an API call is skipped, the
+    shutdown it asks for runs the shutdown callback and tells the parent."""
+    from livekit.agents.ipc import proto
+    from livekit.agents.ipc.job_proc_lazy_main import _JobProc
+    from livekit.agents.job import (
+        JobAcceptArguments,
+        JobContext,
+        JobExecutorType,
+        JobProcess,
+        RunningJobInfo,
+    )
+    from livekit.protocol import agent as agent_proto, models
+
+    print("== job")
+    seen: list[str] = []
+
+    async def on_participant(ctx: JobContext, p: rtc.RemoteParticipant) -> None:
+        seen.append(f"participant {p.identity}")
+
+    async def on_shutdown(reason: str) -> None:
+        seen.append(f"shutdown callback {reason!r}")
+
+    async def entrypoint(ctx: JobContext) -> None:
+        ctx.add_participant_entrypoint(on_participant)
+        with contextlib.suppress(ValueError):
+            ctx.add_participant_entrypoint(on_participant)
+            seen.append("added twice")
+        ctx.add_shutdown_callback(on_shutdown)
+        await asyncio.gather(ctx.connect(), ctx.connect())
+        seen.append(f"delete_room {type(await ctx.delete_room()).__name__}")
+        ctx.shutdown("done")
+
+    class Parent:
+        """The IPC client the job process tells its parent through."""
+
+        sent: list[str] = []
+
+        async def send(self, msg: object) -> None:
+            self.sent.append(type(msg).__name__)
+
+        def stop(self) -> None:
+            pass
+
+    runner = _JobProc(
+        lambda _: None,
+        entrypoint,
+        None,
+        session_end_timeout=5.0,
+        executor_type=JobExecutorType.THREAD,
+    )
+    runner._client = Parent()  # type: ignore[assignment]
+    runner._job_proc = JobProcess(
+        executor_type=JobExecutorType.THREAD, user_arguments=None, http_proxy=None
+    )
+    request = proto.StartJobRequest()
+    request.running_job = RunningJobInfo(
+        accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
+        job=agent_proto.Job(id="AJ_smoke", room=models.Room(name="console", sid="RM_smoke")),
+        url="",
+        token="",
+        worker_id="smoke",
+        fake_job=True,
+    )
+    runner._start_job(request)
+    assert runner._job_task is not None
+    await asyncio.wait_for(runner._job_task, 30)
+    print(f"job {seen} sent={Parent.sent}")
+    # the participant's entrypoint runs beside the entrypoint, in no set order with it
+    assert sorted(seen) == [
+        "delete_room DeleteRoomResponse",
+        "participant mock_user",
+        "shutdown callback 'done'",
+    ], seen
+    assert Parent.sent == ["ShuttingDown", "Exiting"], Parent.sent
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -1056,6 +1134,7 @@ async def main() -> int:
     await filler()
     await keyterms()
     await room_camera()
+    await job()
     return 0
 
 

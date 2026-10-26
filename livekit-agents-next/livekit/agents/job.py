@@ -22,7 +22,7 @@ import logging
 import multiprocessing as mp
 import os
 import tempfile
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
@@ -35,6 +35,7 @@ from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
+from . import _core
 from .log import logger
 from .observability import Tagger
 from .telemetry import (
@@ -59,7 +60,6 @@ from .types import (
     ATTRIBUTE_SIMULATION_ENABLED,
     ATTRIBUTE_SIMULATION_JOB_ID,
     ATTRIBUTE_SIMULATION_RUN_ID,
-    ATTRIBUTE_SIMULATOR,
     ATTRIBUTE_SIMULATOR_DISPATCH,
     NotGivenOr,
     recording_enabled,
@@ -211,26 +211,15 @@ class JobContext:
         proc: JobProcess,
         info: RunningJobInfo,
         room: rtc.Room,
-        on_connect: Callable[[], None],
-        on_shutdown: Callable[[str], None],
+        run: _core.JobRun,
         inference_executor: InferenceExecutor,
     ) -> None:
         self._proc = proc
         self._info = info
         self._room = room
-        self._on_connect = on_connect
-        self._on_shutdown = on_shutdown
+        # the participant entrypoints, the connection, the API calls and the recording's setup
+        self._run = run
         self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
-        self._participant_entrypoints: list[
-            tuple[
-                JobContext._PARTICIPANT_ENTRYPOINT_CALLBACK,
-                list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType,
-            ]
-        ] = []
-        self._participant_tasks = dict[
-            tuple[str, JobContext._PARTICIPANT_ENTRYPOINT_CALLBACK], asyncio.Task[None]
-        ]()
-        self._pending_tasks = list[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
@@ -241,10 +230,6 @@ class JobContext:
         self._primary_agent_session: LiveSession | None = None
         self._thread: Thread | None = None
 
-        # Lazily built from the job's simulation attributes; None when not under a
-        # simulation. _simulation_resolved guards the one-time parse.
-        self._simulation_ctx: SimulationContext | None = None
-        self._simulation_resolved = False
         # on_simulation_end callback, injected by the job runner from AgentServer.
         self._simulation_end_fnc: Callable[[SimulationContext], Any] | None = None
 
@@ -252,11 +237,7 @@ class JobContext:
 
         self._session_directory = Path(self._tempdir.name)
 
-        self._connected = False
-        self._lock = asyncio.Lock()
         self._tagger = Tagger()
-        self._recording_initialized = False
-        self._redaction_enabled = info.job.enable_redaction
         self._early_log_handler: _BufferingHandler | None = None
         # this job's cloud-telemetry registration, set by init_recording():
         # span/log/metric attribution and upload gating resolve from it (the
@@ -355,7 +336,7 @@ class JobContext:
     async def _on_cleanup(self) -> None:
         # if session.start() was never reached and server wanted recording,
         # set up OTLP now and flush buffered crash logs
-        if self._early_log_handler is not None and not self._recording_initialized:
+        if self._early_log_handler is not None and not self._run.recording_initialized:
             try:
                 from .voice.agent_session import RecordingOptions
 
@@ -383,6 +364,10 @@ class JobContext:
 
     def is_fake_job(self) -> bool:
         return self._info.fake_job
+
+    @property
+    def _redaction_enabled(self) -> bool:
+        return self._run.redaction
 
     @property
     def session_directory(self) -> Path:
@@ -492,13 +477,12 @@ class JobContext:
         attribute (a protojson ``SimulationDispatch``), available as soon as the
         entrypoint runs; a production job has none and returns ``None``.
         """
-        if self._simulation_resolved:
-            return self._simulation_ctx
+        return self._simulation
 
+    @functools.cached_property
+    def _simulation(self) -> SimulationContext | None:
         # The simulation attributes ride the agent dispatch and land on the job
         # itself, so this is final before the room even connects.
-        self._simulation_resolved = True
-
         metadata = self._info.job.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH, "")
         if not metadata:
             return None
@@ -520,8 +504,7 @@ class JobContext:
         if not dispatch.simulation_run_id:
             return None
 
-        self._simulation_ctx = SimulationContext(dispatch, self)
-        return self._simulation_ctx
+        return SimulationContext(dispatch, self)
 
     @property
     def inference_headers(self) -> dict[str, str]:
@@ -648,75 +631,63 @@ class JobContext:
             rtc_config: Custom RTC configuration to use when connecting to the room.
             single_peer_connection: Use a single peer connection for both publish and subscribe. When None, uses the default (False).
         """  # noqa: E501
-        async with self._lock:
-            if self._connected:
-                return
-
-            encryption = encryption or e2ee
-            room_options = rtc.RoomOptions(
-                encryption=encryption,
-                auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
-                rtc_config=rtc_config,
-                single_peer_connection=single_peer_connection,
+        await self._run.connect(
+            functools.partial(
+                self._connect,
+                encryption or e2ee,
+                auto_subscribe,
+                rtc_config,
+                single_peer_connection,
             )
+        )
 
-            with session_context.session_span(
-                "room_connect",
-                attributes={
-                    trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
-                    trace_types.ATTR_ROOM_SID: self._info.job.room.sid,
-                    trace_types.ATTR_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
-                    trace_types.ATTR_ROOM_E2EE: encryption is not None,
-                },
-                job_ctx=self,
-            ) as connect_span:
-                await self._room.connect(self._info.url, self._info.token, options=room_options)
-                connect_span.set_attributes(
-                    {
-                        trace_types.ATTR_PARTICIPANT_ID: self._room.local_participant.sid,
-                        trace_types.ATTR_PARTICIPANT_IDENTITY: self._room.local_participant.identity,  # noqa: E501
-                        trace_types.ATTR_ROOM_REMOTE_PARTICIPANT_COUNT: len(
-                            self._room.remote_participants
-                        ),
-                    }
-                )
-            rpc_tracing.install(self._room.local_participant)
-            self._on_connect()
+    async def _connect(
+        self,
+        encryption: rtc.E2EEOptions | None,
+        auto_subscribe: AutoSubscribe,
+        rtc_config: rtc.RtcConfiguration | None,
+        single_peer_connection: bool | None,
+    ) -> None:
+        room_options = rtc.RoomOptions(
+            encryption=encryption,
+            auto_subscribe=auto_subscribe == AutoSubscribe.SUBSCRIBE_ALL,
+            rtc_config=rtc_config,
+            single_peer_connection=single_peer_connection,
+        )
 
-            # Always registered: the callback ignores participants without the
-            # simulator attribute, and gating on simulation_context() here would
-            # race the participant-list sync.
-            self._room.on("participant_disconnected", self._on_simulator_disconnected)
+        with session_context.session_span(
+            "room_connect",
+            attributes={
+                trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
+                trace_types.ATTR_ROOM_SID: self._info.job.room.sid,
+                trace_types.ATTR_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
+                trace_types.ATTR_ROOM_E2EE: encryption is not None,
+            },
+            job_ctx=self,
+        ) as connect_span:
+            await self._room.connect(self._info.url, self._info.token, options=room_options)
+            connect_span.set_attributes(
+                {
+                    trace_types.ATTR_PARTICIPANT_ID: self._room.local_participant.sid,
+                    trace_types.ATTR_PARTICIPANT_IDENTITY: self._room.local_participant.identity,
+                    trace_types.ATTR_ROOM_REMOTE_PARTICIPANT_COUNT: len(
+                        self._room.remote_participants
+                    ),
+                }
+            )
+        rpc_tracing.install(self._room.local_participant)
 
-            for p in self._room.remote_participants.values():
-                self._participant_available(p)
+        # a simulator leaving ends the job; the agent under test may add other participants
+        self._room.on(
+            "participant_disconnected", lambda p: self._run.participant_left(dict(p.attributes))
+        )
+        for p in self._room.remote_participants.values():
+            self._participant_available(p)
 
-            _apply_auto_subscribe_opts(self._room, auto_subscribe)
-            self._connected = True
-
-    def _track_pending_task(self, task: asyncio.Task[Any], *, name: str) -> None:
-        """Track a fire-and-forget task so its exceptions are surfaced instead of swallowed.
-
-        Callers may still await the returned task to handle errors themselves; this only
-        guarantees that an otherwise unhandled exception is logged rather than silently
-        dropped (e.g. when the returned future is not awaited).
-        """
-        self._pending_tasks.append(task)
-
-        def _on_done(task: asyncio.Task[Any]) -> None:
-            self._pending_tasks.remove(task)
-            if not task.cancelled() and (exc := task.exception()) is not None:
-                logger.error(f"error in {name}", exc_info=exc)
-
-        task.add_done_callback(_on_done)
+        _apply_auto_subscribe_opts(self._room, auto_subscribe)
 
     def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
-        if self.is_fake_job():
-            logger.warning("job_ctx.delete_room() is not executed while in console mode")
-            fut = asyncio.Future[api.DeleteRoomResponse]()
-            fut.set_result(api.DeleteRoomResponse())
-            return fut
 
         async def _delete_room() -> None:
             try:
@@ -731,9 +702,7 @@ class JobContext:
             except Exception:
                 logger.exception("unknown error while deleting room")
 
-        task = asyncio.create_task(_delete_room())
-        self._track_pending_task(task, name="delete_room")
-        return task
+        return self._run.api_call(_delete_room, "delete_room", api.DeleteRoomResponse())  # type: ignore[no-any-return]
 
     def add_sip_participant(
         self,
@@ -757,14 +726,9 @@ class JobContext:
         Make sure you have an outbound SIP trunk created in LiveKit.
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
         """
-        if self.is_fake_job():
-            logger.warning("job_ctx.add_sip_participant() is not executed while in console mode")
-            fut = asyncio.Future[api.SIPParticipantInfo]()
-            fut.set_result(api.SIPParticipantInfo())
-            return fut
 
-        task = asyncio.create_task(
-            self.api.sip.create_sip_participant(
+        def _add() -> Awaitable[api.SIPParticipantInfo]:
+            return self.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=self._room.name,
                     participant_identity=participant_identity,
@@ -772,10 +736,9 @@ class JobContext:
                     sip_call_to=call_to,
                     participant_name=participant_name if is_given(participant_name) else None,
                 )
-            ),
-        )
-        self._track_pending_task(task, name="add_sip_participant")
-        return task
+            )
+
+        return self._run.api_call(_add, "add_sip_participant", api.SIPParticipantInfo())  # type: ignore[no-any-return]
 
     def transfer_sip_participant(
         self,
@@ -799,37 +762,29 @@ class JobContext:
         Make sure you have enabled call transfer on your provider SIP trunk.
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
-        if self.is_fake_job():
-            logger.warning(
-                "job_ctx.transfer_sip_participant() is not executed while in console mode"
-            )
-            fut = asyncio.Future[api.SIPParticipantInfo]()
-            fut.set_result(api.SIPParticipantInfo())
-            return fut
 
-        if isinstance(participant, rtc.RemoteParticipant):
-            assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
-                "Participant must be a SIP participant"
-            )
-            participant_identity = participant.identity
-        else:
-            participant_identity = participant
-
-        task = asyncio.create_task(
-            self.api.sip.transfer_sip_participant(
+        def _transfer() -> Awaitable[api.SIPParticipantInfo]:
+            identity = participant
+            if isinstance(participant, rtc.RemoteParticipant):
+                assert participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP, (
+                    "Participant must be a SIP participant"
+                )
+                identity = participant.identity
+            return self.api.sip.transfer_sip_participant(
                 api.TransferSIPParticipantRequest(
                     room_name=self._room.name,
-                    participant_identity=participant_identity,
+                    participant_identity=identity,
                     transfer_to=transfer_to,
                     play_dialtone=play_dialtone,
                 )
-            ),
+            )
+
+        return self._run.api_call(  # type: ignore[no-any-return]
+            _transfer, "transfer_sip_participant", api.SIPParticipantInfo()
         )
-        self._track_pending_task(task, name="transfer_sip_participant")
-        return task
 
     def shutdown(self, reason: str = "user requested") -> None:
-        self._on_shutdown(reason)
+        self._run.shutdown(reason or "user requested", True)
 
     def add_participant_entrypoint(
         self,
@@ -842,32 +797,13 @@ class JobContext:
         the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
         added and they will each be run in parallel for each participant.
         """  # noqa: E501
-
-        if entrypoint_fnc in [e for (e, _) in self._participant_entrypoints]:
-            raise ValueError("entrypoints cannot be added more than once")
-
-        self._participant_entrypoints.append((entrypoint_fnc, kind))
+        kinds = kind if isinstance(kind, list) else [kind]
+        self._run.add_participant_entrypoint(entrypoint_fnc, kinds)
 
     def init_recording(self, options: RecordingOptions) -> None:
-        redaction_enabled = self.job.enable_redaction or options.get("redaction", False)
-        if redaction_enabled and options.get("audio", True) and not options.get("transcript", True):
-            raise ValueError("audio upload requires transcript upload when redaction is enabled")
-
-        if self._recording_initialized:
-            self._stop_log_buffering()
-            return
-
-        self._recording_initialized = True
-        self._redaction_enabled = redaction_enabled
-
-        needs_cloud = (
-            options.get("traces", True)
-            or options.get("logs", True)
-            or options.get("audio", True)
-            or options.get("transcript", True)
-        )
         obs_url = _observability_url(self._info.url)
-        if not (needs_cloud and obs_url):
+        redaction = self._run.init_recording(dict(options), obs_url is not None)  # type: ignore[arg-type]
+        if redaction is None or obs_url is None:
             self._stop_log_buffering()
             return
 
@@ -879,49 +815,15 @@ class JobContext:
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],
-            metadata=self._otel_metadata(options, redaction_enabled=redaction_enabled),
+            metadata=self._otel_metadata(options, redaction_enabled=redaction),
         )
         # init_recording is typically called during session.start(), at which point a bunch of
         # the logs would have already been emitted. we want to capture all of the logs as it
         # relates to the job
         self._flush_early_log_buffer(replay=options["logs"])
 
-    def _on_simulator_disconnected(self, p: rtc.RemoteParticipant) -> None:
-        # the agent under test may add other participants (SIP legs, avatar workers)
-        if ATTRIBUTE_SIMULATOR not in p.attributes:
-            return
-
-        logger.debug("simulator disconnected, shutting down the job")
-        self.shutdown(reason="simulation completed")
-
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
-        for coro, kind in self._participant_entrypoints:
-            if isinstance(kind, list):
-                if p.kind not in kind:
-                    continue
-            else:
-                if p.kind != kind:
-                    continue
-
-            if (p.identity, coro) in self._participant_tasks:
-                logger.warning(
-                    f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"  # noqa: E501
-                )
-            task_name = f"part-entry-{p.identity}-{coro.__name__}"
-            task = asyncio.create_task(coro(self, p), name=task_name)
-            self._participant_tasks[(p.identity, coro)] = task
-
-            def _on_done(task: asyncio.Task[Any], *, coro: Any = coro) -> None:
-                key = (p.identity, coro)
-                if self._participant_tasks.get(key) is task:
-                    self._participant_tasks.pop(key, None)
-                if not task.cancelled() and (exc := task.exception()) is not None:
-                    logger.error(
-                        f"error in participant entrypoint {coro.__name__} for '{p.identity}'",
-                        exc_info=exc,
-                    )
-
-            task.add_done_callback(_on_done)
+        self._run.participant_joined(self, p, p.identity, p.kind)
 
     def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
@@ -1010,7 +912,6 @@ class JobRequest:
         on_accept: Callable[[JobAcceptArguments], Coroutine[None, None, None]],
     ) -> None:
         self._job = job
-        self._lock = asyncio.Lock()
         self._on_reject = on_reject
         self._on_accept = on_accept
 

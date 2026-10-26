@@ -210,15 +210,16 @@ class _JobProc:
         self._room._info.name = info.job.room.name
 
         self._run = _core.JobRun(
-            self, fake_job=info.fake_job, session_end_timeout=self._session_end_timeout
+            fake_job=info.fake_job,
+            session_end_timeout=self._session_end_timeout,
+            redaction=info.job.enable_redaction,
         )
         self._room.on("disconnected", lambda *_: self._run.shutdown("room disconnected", False))
         self._job_ctx = JobContext(
             proc=self._job_proc,
             info=info,
             room=self._room,
-            on_connect=self._run.connected,
-            on_shutdown=lambda reason: self._run.shutdown(reason or "user requested", True),
+            run=self._run,
             inference_executor=self._client,
         )
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
@@ -245,7 +246,7 @@ class _JobProc:
         self._job_span = _start_job_span(self._job_ctx)
         self._shutdown_span: trace.Span | None = None
         try:
-            await self._run.run()
+            await self._run.run(self)
         finally:
             # whatever happened above (a cancel while waiting, a close that raised), the job
             # ends: root span, temp dir, per-job telemetry state
@@ -253,8 +254,7 @@ class _JobProc:
                 self._shutdown_span.end()
             self._job_span.end()
 
-            if tasks := self._job_ctx._pending_tasks:
-                await aio.cancel_and_wait(*tasks)
+            await self._run.close_tasks()
 
             await self._job_ctx._on_cleanup()
             await http_context._close_http_ctx()
@@ -294,9 +294,6 @@ class _JobProc:
 
     async def _core_cancel(self, task: asyncio.Task[None]) -> None:
         await aio.cancel_and_wait(task)
-
-    def _core_log(self, level: int, msg: str, exc: BaseException | None) -> None:
-        logger.log(level, msg, exc_info=exc)
 
     async def _core_shutdown_began(self, reason: str, user_initiated: bool) -> None:
         self._shutdown_span = tracer.start_span(

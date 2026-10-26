@@ -700,29 +700,79 @@ const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The entrypoint has this long to connect the room before a warning.
 const CONNECT_WARNING_DELAY: Duration = Duration::from_secs(10);
 
+/// The participant attribute a simulator joins with (`types.ATTRIBUTE_SIMULATOR`).
+const ATTRIBUTE_SIMULATOR: &str = "lk.simulator";
+
 #[derive(Default)]
 struct JobRunState {
     /// The first reason the job ends with, and whether the user asked for it.
     shutdown: Option<(String, bool)>,
     connected: bool,
     user_shutdown: bool,
+    /// `add_participant_entrypoint`'s, in order, each with the participant kinds it runs for.
+    entrypoints: Vec<(Py<PyAny>, Vec<i32>)>,
+    /// The participant entrypoints running, by participant and entrypoint, each its run's number.
+    participant_runs: HashMap<(String, usize), u64>,
+    runs: u64,
+    /// The API calls (`delete_room`, ...) still running.
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// Whether `init_recording` ran, and the redaction it resolved (the job's until then).
+    recording_initialized: bool,
+    redaction: bool,
 }
 
-/// `job_proc_lazy_main.py`'s `_JobProc`, for the job it runs: what ends the job (the room, the
-/// user, the parent, a crash; the first wins), the entrypoint's supervision, and the order and
-/// bounds of the shutdown. The host (`_JobProc`) runs each step and opens its spans.
+/// A job's run, for `JobContext` and `job_proc_lazy_main.py`'s `_JobProc`: what ends the job (the
+/// room, the user, the parent, a crash, the simulator leaving; the first wins), the entrypoint's
+/// supervision, the order and bounds of the shutdown (whose steps the host, `_JobProc`, runs and
+/// opens the spans of), the participant entrypoints, the room connected once, the API calls in
+/// flight and the recording's setup.
 #[pyclass(name = "JobRun", module = "livekit.agents._core", frozen)]
 pub struct PyJobRun(Arc<JobRunInner>);
 
 struct JobRunInner {
-    host: CancellingHandle,
+    host: std::sync::OnceLock<CancellingHandle>,
     fake: bool,
     session_end_timeout: f64,
     state: Mutex<JobRunState>,
     ended: watch::Sender<bool>,
+    /// Held while the room connects, so a second `connect()` waits for the first.
+    connecting: tokio::sync::Mutex<()>,
+    /// Set once the job ends: the API calls still running are cancelled.
+    tasks_closed: watch::Sender<bool>,
+}
+
+/// `msg` on the `livekit.agents` logger, with `exc`'s traceback.
+fn py_log(level: Level, msg: &str, exc: Option<PyErr>) {
+    Python::attach(|py| {
+        let logged = (|| -> PyResult<()> {
+            let logger = py.import("logging")?.call_method1("getLogger", ("livekit.agents",))?;
+            let kwargs = PyDict::new(py);
+            if let Some(exc) = exc {
+                kwargs.set_item("exc_info", exc.into_value(py))?;
+            }
+            logger.call_method("log", (level as i32, msg), Some(&kwargs))?;
+            Ok(())
+        })();
+        if let Err(e) = logged {
+            e.print(py);
+        }
+    })
+}
+
+/// `CancelledError`, what a cancelled call raises.
+fn cancelled() -> PyErr {
+    pyo3::exceptions::asyncio::CancelledError::new_err(())
+}
+
+fn is_cancelled(e: &PyErr) -> bool {
+    Python::attach(|py| e.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py))
 }
 
 impl JobRunInner {
+    fn host(&self) -> &CancellingHandle {
+        self.host.get().expect("JobRun.run() sets the host first")
+    }
+
     fn end(&self, reason: String, user_initiated: bool) {
         let mut st = lock(&self.state);
         st.user_shutdown |= user_initiated;
@@ -733,31 +783,80 @@ impl JobRunInner {
     }
 
     async fn call(&self, f: impl for<'py> FnOnce(&Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>>) -> PyResult<Py<PyAny>> {
-        self.host.await_call(f).await
+        self.host().await_call(f).await
     }
 
     fn log(&self, level: Level, msg: &str, exc: Option<PyErr>) {
-        let r = Python::attach(|py| -> PyResult<()> {
-            let exc = exc.map(|e| e.into_value(py).into_any());
-            self.host.object().bind(py).call_method1("_core_log", (level as i32, msg, exc))?;
-            Ok(())
-        });
-        if let Err(e) = r {
-            Python::attach(|py| e.print(py));
+        py_log(level, msg, exc);
+    }
+
+    /// The entrypoints of `kind` start for the participant, each in the caller's context; one
+    /// still running for an earlier participant of the same identity is warned about.
+    fn participant_joined(
+        self: &Arc<Self>,
+        py: Python<'_>,
+        ctx: &Py<PyAny>,
+        participant: &Py<PyAny>,
+        identity: &str,
+        kind: i32,
+    ) -> PyResult<()> {
+        let mut starts = Vec::new();
+        let mut overlapping = false;
+        {
+            let mut st = lock(&self.state);
+            let matching: Vec<(usize, Py<PyAny>)> = st
+                .entrypoints
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, kinds))| kinds.contains(&kind))
+                .map(|(i, (entry, _))| (i, entry.clone_ref(py)))
+                .collect();
+            for (index, entry) in matching {
+                let key = (identity.to_owned(), index);
+                st.runs += 1;
+                let run = st.runs;
+                overlapping |= st.participant_runs.insert(key.clone(), run).is_some();
+                starts.push((key, run, entry));
+            }
         }
+        if overlapping {
+            self.log(Level::Warning, &format!("a participant has joined before a prior participant task matching the same identity has finished: '{identity}'"), None);
+        }
+        for (key, run, entry) in starts {
+            let name: String = entry.bind(py).getattr("__name__").and_then(|n| n.extract()).unwrap_or_default();
+            let handle = CancellingHandle::new(py, entry)?;
+            let (ctx, participant) = (ctx.clone_ref(py), participant.clone_ref(py));
+            let inner = Arc::clone(self);
+            pyo3_async_runtimes::tokio::get_runtime().spawn(async move {
+                let r = handle.await_call(|entry| entry.call1((ctx, participant))).await;
+                {
+                    let mut st = lock(&inner.state);
+                    if st.participant_runs.get(&key) == Some(&run) {
+                        st.participant_runs.remove(&key);
+                    }
+                }
+                if let Err(e) = r.map(drop) {
+                    if !is_cancelled(&e) {
+                        let msg = format!("error in participant entrypoint {name} for '{}'", key.0);
+                        inner.log(Level::Error, &msg, Some(e));
+                    }
+                }
+            });
+        }
+        Ok(())
     }
 
     fn span(&self, name: &str, callback: Option<&Py<PyAny>>) -> PyResult<Py<PyAny>> {
         Python::attach(|py| {
             let callback = callback.map(|c| c.clone_ref(py));
-            Ok(self.host.object().bind(py).call_method1("_core_span", (name, callback))?.unbind())
+            Ok(self.host().object().bind(py).call_method1("_core_span", (name, callback))?.unbind())
         })
     }
 
     fn span_end(&self, span: Py<PyAny>, error: Option<PyErr>, timed_out: bool) {
         let r = Python::attach(|py| -> PyResult<()> {
             let error = error.map(|e| e.into_value(py).into_any());
-            self.host.object().bind(py).call_method1("_core_span_end", (span, error, timed_out))?;
+            self.host().object().bind(py).call_method1("_core_span_end", (span, error, timed_out))?;
             Ok(())
         });
         if let Err(e) = r {
@@ -845,7 +944,7 @@ impl JobRunInner {
 
         // the bound on `LiveSession.aclose()`: past it, the rest of the shutdown still runs
         let aclose_timeout = Python::attach(|py| -> PyResult<f64> {
-            self.host.object().bind(py).getattr("_session_aclose_timeout")?.extract()
+            self.host().object().bind(py).getattr("_session_aclose_timeout")?.extract()
         })?;
         let close = self.call(|h| h.call_method0("_core_close_session"));
         match tokio::time::timeout(secs(aclose_timeout), close).await {
@@ -861,7 +960,7 @@ impl JobRunInner {
         }
 
         let has_session_end = Python::attach(|py| -> PyResult<bool> {
-            self.host.object().bind(py).call_method0("_core_has_session_end")?.extract()
+            self.host().object().bind(py).call_method0("_core_has_session_end")?.extract()
         })?;
         if has_session_end {
             self.spanned(
@@ -883,7 +982,7 @@ impl JobRunInner {
 
         // the shutdown callbacks run together; a framework one gets no span of its own
         let callbacks: Vec<(Py<PyAny>, bool)> = Python::attach(|py| {
-            self.host.object().bind(py).call_method0("_core_shutdown_callbacks")?.extract()
+            self.host().object().bind(py).call_method0("_core_shutdown_callbacks")?.extract()
         })?;
         let mut runs = Vec::new();
         for (callback, framework) in callbacks {
@@ -915,17 +1014,19 @@ impl JobRunInner {
 
 #[pymethods]
 impl PyJobRun {
-    /// `host` is the `_JobProc`; must be called inside the job's loop.
+    /// `redaction` is the job's own (`Job.enable_redaction`).
     #[new]
-    #[pyo3(signature = (host, *, fake_job, session_end_timeout))]
-    fn new(py: Python<'_>, host: Py<PyAny>, fake_job: bool, session_end_timeout: f64) -> PyResult<Self> {
-        Ok(Self(Arc::new(JobRunInner {
-            host: CancellingHandle::new(py, host)?,
+    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction))]
+    fn new(fake_job: bool, session_end_timeout: f64, redaction: bool) -> Self {
+        Self(Arc::new(JobRunInner {
+            host: std::sync::OnceLock::new(),
             fake: fake_job,
             session_end_timeout,
-            state: Mutex::new(JobRunState::default()),
+            state: Mutex::new(JobRunState { redaction, ..JobRunState::default() }),
             ended: watch::channel(false).0,
-        })))
+            connecting: tokio::sync::Mutex::new(()),
+            tasks_closed: watch::channel(false).0,
+        }))
     }
 
     /// The job ends with `reason`; the first reason given is the one kept.
@@ -933,13 +1034,140 @@ impl PyJobRun {
         self.0.end(reason, user_initiated);
     }
 
-    /// `ctx.connect()` was called.
+    /// The room is connected (by `connect`, or by a caller that owns the connection).
     fn connected(&self) {
         lock(&self.0.state).connected = true;
     }
 
-    /// The entrypoint, then the shutdown sequence once the job ends.
-    fn run<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    /// `ctx.connect()`: awaits `connect()` once; a call while it runs waits for it, a call after
+    /// it connected returns at once, a failed one leaves the next call to try again.
+    fn connect<'py>(&self, py: Python<'py>, connect: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = CancellingHandle::new(py, connect)?;
+        let inner = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let _connecting = inner.connecting.lock().await;
+            if lock(&inner.state).connected {
+                return Ok(());
+            }
+            handle.await_call(|connect| connect.call0()).await?;
+            lock(&inner.state).connected = true;
+            Ok(())
+        })
+    }
+
+    /// `ctx.add_participant_entrypoint`: `entrypoint(ctx, participant)` runs for each participant
+    /// of one of `kinds` that joins.
+    fn add_participant_entrypoint(&self, py: Python<'_>, entrypoint: Py<PyAny>, kinds: Vec<i32>) -> PyResult<()> {
+        let mut st = lock(&self.0.state);
+        for (known, _) in &st.entrypoints {
+            if known.bind(py).eq(entrypoint.bind(py))? {
+                return Err(PyValueError::new_err("entrypoints cannot be added more than once"));
+            }
+        }
+        st.entrypoints.push((entrypoint, kinds));
+        Ok(())
+    }
+
+    /// A participant joined, or was in the room when it connected; `ctx` is the `JobContext`.
+    fn participant_joined(&self, py: Python<'_>, ctx: Py<PyAny>, participant: Py<PyAny>, identity: String, kind: i32) -> PyResult<()> {
+        self.0.participant_joined(py, &ctx, &participant, &identity, kind)
+    }
+
+    /// A participant left: a simulator leaving ends the job.
+    fn participant_left(&self, attributes: HashMap<String, String>) {
+        if attributes.contains_key(ATTRIBUTE_SIMULATOR) {
+            self.0.log(Level::Debug, "simulator disconnected, shutting down the job", None);
+            self.0.end("simulation completed".into(), true);
+        }
+    }
+
+    /// `ctx.<name>()`, an API call of the job's (`delete_room`, ...): `call()`'s awaitable, awaited
+    /// on the caller's loop, as a future. A failure is logged whether or not the caller awaits
+    /// it, and it is cancelled once the job ends (`close_tasks`). A console job makes no call: its
+    /// future is `console_result`.
+    fn api_call<'py>(
+        &self,
+        py: Python<'py>,
+        call: Py<PyAny>,
+        name: String,
+        console_result: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if self.0.fake {
+            self.0.log(Level::Warning, &format!("job_ctx.{name}() is not executed while in console mode"), None);
+            return pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(console_result) });
+        }
+        let handle = CancellingHandle::new(py, call.bind(py).call0()?.unbind())?;
+        let (tx, rx) = tokio::sync::oneshot::channel::<PyResult<Py<PyAny>>>();
+        let mut closed = self.0.tasks_closed.subscribe();
+        let task = pyo3_async_runtimes::tokio::get_runtime().spawn(async move {
+            let r = tokio::select! {
+                r = handle.await_call(|awaitable| Ok(awaitable.clone())) => r,
+                _ = closed.wait_for(|closed| *closed) => Err(cancelled()),
+            };
+            if let Err(e) = &r {
+                if !is_cancelled(e) {
+                    let e = Python::attach(|py| e.clone_ref(py));
+                    py_log(Level::Error, &format!("error in {name}"), Some(e));
+                }
+            }
+            let _ = tx.send(r);
+        });
+        let mut st = lock(&self.0.state);
+        st.tasks.retain(|t| !t.is_finished());
+        st.tasks.push(task);
+        drop(st);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move { rx.await.unwrap_or_else(|_| Err(cancelled())) })
+    }
+
+    /// Cancels the API calls still running and waits for them.
+    fn close_tasks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.0.tasks_closed.send_replace(true);
+        let tasks = std::mem::take(&mut lock(&self.0.state).tasks);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            for task in tasks {
+                let _ = task.await;
+            }
+            Ok(())
+        })
+    }
+
+    /// `ctx.init_recording(options)`: the redaction to record with when the cloud upload is to be
+    /// set up now, `None` when not (set up already, nothing to upload, or no observability
+    /// endpoint). Audio without its transcript under redaction is refused.
+    fn init_recording(&self, options: HashMap<String, bool>, observability: bool) -> PyResult<Option<bool>> {
+        let get = |key: &str, default: bool| options.get(key).copied().unwrap_or(default);
+        let mut st = lock(&self.0.state);
+        let redaction = st.redaction || get("redaction", false);
+        if redaction && get("audio", true) && !get("transcript", true) {
+            return Err(PyValueError::new_err("audio upload requires transcript upload when redaction is enabled"));
+        }
+        if st.recording_initialized {
+            return Ok(None);
+        }
+        st.recording_initialized = true;
+        st.redaction = redaction;
+        let uploads = ["traces", "logs", "audio", "transcript"].iter().any(|key| get(key, true));
+        Ok((uploads && observability).then_some(redaction))
+    }
+
+    /// Whether `init_recording` ran.
+    #[getter]
+    fn recording_initialized(&self) -> bool {
+        lock(&self.0.state).recording_initialized
+    }
+
+    /// The job's redaction, as `init_recording` resolved it.
+    #[getter]
+    fn redaction(&self) -> bool {
+        lock(&self.0.state).redaction
+    }
+
+    /// The entrypoint, then the shutdown sequence once the job ends; `host` is the `_JobProc`,
+    /// which runs each step.
+    fn run<'py>(&self, py: Python<'py>, host: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        if self.0.host.set(CancellingHandle::new(py, host)?).is_err() {
+            return Err(PyRuntimeError::new_err("the job already runs"));
+        }
         let inner = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move { inner.run().await })
     }
