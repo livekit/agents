@@ -310,11 +310,14 @@ class AgentInput:
         self._audio_enabled = True
 
     @property
-    def audio(self) -> AudioInput | None:
+    def audio(self) -> AudioInput | _core.RoomAudioInput | None:
+        # the room's microphone when the host gave none, as ``RoomIO`` sets it
+        if self._audio is None and self._session._core is not None:
+            return self._session._core.audio_input
         return self._audio
 
     @audio.setter
-    def audio(self, source: AudioInput | None) -> None:
+    def audio(self, source: AudioInput | _core.RoomAudioInput | None) -> None:
         self._audio = source
         if self._session._core is not None:
             self._session._core.set_audio_input(source)

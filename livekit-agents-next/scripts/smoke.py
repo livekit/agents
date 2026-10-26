@@ -919,6 +919,8 @@ async def room_camera() -> None:
         room_options=room_io.RoomOptions(video_input=True),
     )
     assert isinstance(session.input.video, _core.RoomVideoInput), session.input.video
+    # the room's microphone too, as `RoomIO` sets `session.input.audio`
+    assert isinstance(session.input.audio, _core.RoomAudioInput), session.input.audio
     print(f"video input {type(session.input.video).__name__}")
     await session.aclose()
 

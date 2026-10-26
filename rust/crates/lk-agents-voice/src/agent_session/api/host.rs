@@ -389,6 +389,13 @@ impl SessionApi {
         self.time.clone()
     }
 
+    /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
+    /// handle each call over the same leg; safe before or after `start()`.
+    #[host(getter)]
+    pub fn audio_input(&self) -> Option<Arc<crate::room_io::_input::ParticipantAudioInput>> {
+        self.room_io.audio_input_leg()
+    }
+
     /// The room's video leg, when `RoomIoConfig(video_input=True)` asked for one, else `None`. A
     /// fresh handle each call over the same leg; safe before or after `start()`.
     #[host(getter)]

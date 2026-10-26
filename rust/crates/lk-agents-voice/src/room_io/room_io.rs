@@ -193,6 +193,11 @@ impl RoomIo {
         self.audio_input.clone().map(|a| a as Arc<dyn IoRoom_IoAudioInput>)
     }
 
+    /// The microphone leg itself, as the session hands it to the host.
+    pub fn audio_input_leg(&self) -> Option<Arc<ParticipantAudioInput>> {
+        self.audio_input.clone()
+    }
+
     pub fn video_input(&self) -> Option<Arc<ParticipantVideoInput>> {
         self.video_input.clone()
     }

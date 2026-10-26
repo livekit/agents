@@ -445,7 +445,21 @@ pub struct ParticipantAudioInput {
     reader: TrackReader<AudioFrame>,
 }
 
+/// `session.input.audio` when the room is the source, as `_core.RoomAudioInput`: built only by
+/// the session, so there is no constructor.
+#[lk_agents_abi::host(object(name = "RoomAudioInput", cell = "arc", as_dyn(AudioInput = as_audio_input)))]
 impl ParticipantAudioInput {
+    /// The leg itself where a session takes an `Arc<dyn AudioInput>`, never proxied back.
+    pub fn as_audio_input(self: &Arc<Self>) -> Arc<dyn AudioInput> {
+        Arc::clone(self) as Arc<dyn AudioInput>
+    }
+
+    /// The track currently being read, if any.
+    #[host(getter)]
+    pub fn reading(&self) -> Option<TrackSid> {
+        self.reader.reading()
+    }
+
     pub fn new(
         room: Arc<dyn RtcRoom>,
         spawner: Arc<dyn Spawner>,
@@ -585,6 +599,7 @@ impl ParticipantAudioInput {
         out
     }
 
+    #[host(method)]
     pub async fn aclose(&self) {
         self.reader.close();
     }

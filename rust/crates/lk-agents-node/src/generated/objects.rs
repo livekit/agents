@@ -2398,6 +2398,25 @@ impl VideoSampler {
     }
 }
 
+/// `session.input.audio` when the room is the source, as `_core.RoomAudioInput`: built only by
+/// the session, so there is no constructor.
+#[napi(js_name = "RoomAudioInput")]
+pub struct RoomAudioInput {
+    pub(crate) inner: std::sync::Arc<lk_agents_voice::room_io::_input::ParticipantAudioInput>,
+}
+
+#[napi]
+impl RoomAudioInput {
+    #[napi(js_name = "aclose", ts_return_type = "Promise<void>")]
+    pub fn aclose<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+        let inner = std::sync::Arc::clone(&self.inner);
+        env.spawn_future_with_callback(async move { Ok(Ok::<_, crate::host_error::JsError>(inner.aclose().await)) }, |env, out| match out {
+            Ok(out) => Ok(()),
+            Err(e) => Err(e.into_napi(env)),
+        })
+    }
+}
+
 #[napi(js_name = "EvaluationResult")]
 pub struct EvaluationResult {
     pub(crate) inner: lk_agents_abi::evals::EvaluationResult,
