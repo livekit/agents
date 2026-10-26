@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, AsyncIterable
 from typing import overload
 
-from . import _basic_word, tokenizer
+from .. import _core
 
 
 @overload
@@ -28,65 +28,26 @@ def replace_words(
     replacements: dict[str, str],
 ) -> str | AsyncIterable[str]:
     """
-    Replace words in the given (async) text, case-insensitively; an empty replacement deletes
-    the word. (The core's ``replace_words`` skips empty replacements, so this stays here.)
+    Replace words in the given (async) text. The replacements are case-insensitive and the
+    replacement will keep the case of the original word.
     Args:
         text: text to replace words in
         words: dictionary of words to replace
     """
 
-    replacements = {k.lower(): v for k, v in replacements.items()}
-
-    def _process_words(text: str, words: list[tuple[str, int, int]]) -> tuple[str, int]:
-        offset = 0
-        processed_index = 0
-        for word, start_index, end_index in words:
-            # a key may itself end in punctuation (e.g. Hebrew "ג׳"), so strip trailing
-            # punctuation one character at a time and use the longest matching key
-            no_punctuation = word
-            replacement = replacements.get(no_punctuation.lower())
-            while (
-                replacement is None
-                and no_punctuation
-                and tokenizer.is_punctuation(no_punctuation[-1])
-            ):
-                no_punctuation = no_punctuation[:-1]
-                replacement = replacements.get(no_punctuation.lower())
-            punctuation_off = len(word) - len(no_punctuation)
-            if replacement is not None:
-                text = (
-                    text[: start_index + offset]
-                    + replacement
-                    + text[end_index + offset - punctuation_off :]
-                )
-                offset += len(replacement) - len(word) + punctuation_off
-
-            processed_index = end_index + offset
-
-        return text, processed_index
-
     if isinstance(text, str):
-        words = _basic_word.split_words(text, ignore_punctuation=False)
-        text, _ = _process_words(text, words)
-        return text
-    else:
+        return _core.replace_words(text, replacements)[0]  # type: ignore[no-any-return]
 
-        async def _replace_words() -> AsyncGenerator[str, None]:
-            buffer = ""
-            async for chunk in text:
-                buffer += chunk
-                words = _basic_word.split_words(buffer, ignore_punctuation=False)
+    async def _replace_words() -> AsyncGenerator[str, None]:
+        # the last word may still grow, so it is held until the next chunk
+        buffer = ""
+        async for chunk in text:
+            buffer += chunk
+            if (replaced := _core.replace_words(buffer, replacements, True)) is not None:
+                buffer, processed = replaced
+                yield buffer[:processed]
+                buffer = buffer[processed:]
+        if buffer:
+            yield _core.replace_words(buffer, replacements)[0]
 
-                if len(words) <= 1:
-                    continue
-
-                buffer, procesed_index = _process_words(buffer, words[:-1])
-                yield buffer[:procesed_index]
-                buffer = buffer[procesed_index:]
-
-            if buffer:
-                words = _basic_word.split_words(buffer, ignore_punctuation=False)
-                buffer, _ = _process_words(buffer, words)
-                yield buffer
-
-        return _replace_words()
+    return _replace_words()

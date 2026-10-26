@@ -257,6 +257,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-voice/src/room_io/_input.rs", "lk_agents_voice::room_io::_input"),
     ("rust/crates/lk-agents-media/src/images/encode.rs", "lk_agents_media::images"),
     ("rust/crates/lk-agents-abi/src/tokenize/word.rs", "lk_agents_abi::tokenize"),
+    ("rust/crates/lk-agents-abi/src/tokenize/sentence.rs", "lk_agents_abi::tokenize"),
     ("rust/crates/lk-agents-abi/src/evals/group.rs", "lk_agents_abi::evals"),
     ("rust/crates/lk-agents-worker/src/load.rs", "lk_agents_worker"),
     ("rust/crates/lk-agents-worker/src/hw/cpu.rs", "lk_agents_worker"),

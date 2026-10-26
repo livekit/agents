@@ -149,6 +149,7 @@
   "avatar_model",
   "avatar_payload",
   "base_language",
+  "basic_split_sentences",
   "build_legacy_openai_schema",
   "build_strict_openai_schema",
   "camel_to_snake_case",

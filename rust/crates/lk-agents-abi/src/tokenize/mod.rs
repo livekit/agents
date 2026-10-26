@@ -4,15 +4,17 @@
 pub mod language;
 mod replace;
 pub mod search;
+mod sentence;
 pub mod thinking;
 mod token_buffer;
 mod word;
 pub mod xml;
 
 pub use replace::{replace_words, split_paragraphs};
+pub use sentence::basic_split_sentences;
 pub use thinking::{FilterState, Stripped, strip_thinking_tokens};
 pub use token_buffer::{Span, TokenBuffer, TokenBufferOptions, Tokenize, Words};
 pub use word::{
-    PUNCTUATIONS, Word, WordTokenizerOptions, count_words, is_char_based, is_py_space, py_strip, split_words,
-    split_words_of,
+    PUNCTUATIONS, Word, WordTokenizerOptions, count_words, is_char_based, is_punctuation, is_py_space, py_strip,
+    split_words, split_words_of,
 };
