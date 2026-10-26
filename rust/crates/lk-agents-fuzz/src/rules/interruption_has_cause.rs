@@ -8,7 +8,7 @@
 //! playing also interrupts it as the host's own doing, because a segment already playing into
 //! the old sink cannot move; the driver takes that path without a `HostInterrupt` step, so the
 //! sink swap counts as a permitted input here.
-use lk_agents_voice::trace::{InterruptCause, InterruptStep::Interrupted, Step};
+use lk_agents_voice::trace::{CloseStep, InterruptCause, InterruptStep::Interrupted, Step};
 
 use crate::{
     authored::Authored,
@@ -23,8 +23,8 @@ impl Rule for InterruptionHasCause {
     const CONTRACT: Contract = Contract {
         id: "interruption_has_cause",
         guarantee: "A journalled interruption's cause matches an input that permits it: for Host, an interrupt the case issued or a sink swap it forced.",
-        examples: &[host_interrupt_then_journal, sink_swap_then_journal],
-        counterexamples: &[host_cause_without_host_call],
+        examples: &[host_interrupt_then_journal, sink_swap_then_journal, own_close_then_journal],
+        counterexamples: &[host_cause_without_host_call, closing_cause_without_close],
         probe: None,
     };
 
@@ -35,7 +35,8 @@ impl Rule for InterruptionHasCause {
             // The journalled cause names who asked; that party must actually have acted before it.
             let permitted = match cause {
                 InterruptCause::Host => host_interrupted_before(&inputs, at),
-                InterruptCause::Closing => inputs.close_asked_at().is_some_and(|c| c < at),
+                // The case's `Close`, or the session's own: its error policy, the room going.
+                InterruptCause::Closing => r.close_begun().is_some_and(|c| c < at),
                 InterruptCause::ByAudioActivity | InterruptCause::UserTurn => {
                     user_input_before(&inputs, at)
                 }
@@ -130,4 +131,27 @@ fn host_cause_without_host_call() -> Recording {
             force: false,
         }))
         .done()
+}
+
+fn cut_for_closing() -> Step {
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    Step::Interrupt(Interrupted {
+        speech: SpeechId(3),
+        cause: InterruptCause::Closing,
+        force: true,
+    })
+}
+
+/// The session's error policy began the close, which cut the speech.
+fn own_close_then_journal() -> Recording {
+    use lk_agents_abi::voice::events::CloseReason;
+    Authored::new()
+        .journal(Step::Close(CloseStep::Requested { reason: CloseReason::Error, drain: false }))
+        .journal(cut_for_closing())
+        .done()
+}
+
+/// The journal blames a close nobody began.
+fn closing_cause_without_close() -> Recording {
+    Authored::new().journal(cut_for_closing()).done()
 }
