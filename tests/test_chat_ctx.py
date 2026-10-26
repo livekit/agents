@@ -914,6 +914,7 @@ def test_render_missing_placeholders_become_empty(template: str, expected: str):
         ("Plan {user[account][plan]}", "Plan pro"),
         ("Plan {user.account[plan]}", "Plan pro"),
         ("Tier {user[support-tier]}", "Tier gold"),
+        ("Account {user.account}", "Account namespace(plan='pro')"),
     ],
 )
 def test_render_nested_dict_item_access(template: str, expected: str):
