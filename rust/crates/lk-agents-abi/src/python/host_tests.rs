@@ -173,6 +173,53 @@ out = (loop, thread.ident, Detector())
         });
     }
 
+    // Catches: a host stream whose task was cancelled under the core (at close) read as a provider
+    // failure -- reported as `stt_error` with a `CancelledError`, which the reference never does --
+    // instead of the end of the stream; and a real failure swallowed along with it.
+    #[test]
+    fn a_cancelled_host_stream_ends_and_a_failing_one_fails() {
+        attach(|py| {
+            let out = eval_with_stubs(
+                py,
+                r#"
+import asyncio, threading
+loop = asyncio.new_event_loop()
+ready = threading.Event()
+def run():
+    asyncio.set_event_loop(loop); loop.call_soon(ready.set); loop.run_forever()
+threading.Thread(target=run, daemon=True).start(); ready.wait()
+class Stream:
+    def __init__(self, end): self.items = ["one"]; self.end = end
+    async def __anext__(self):
+        if self.items: return self.items.pop()
+        raise self.end
+out = (loop, Stream(asyncio.CancelledError()), Stream(ValueError("boom")))
+"#,
+            );
+            let (event_loop, cancelled, failing): (Py<PyAny>, Py<PyAny>, Py<PyAny>) =
+                out.extract(py).unwrap();
+            let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.bind(py).clone());
+            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            let read = |stream: &Py<PyAny>| -> Vec<Result<Option<String>, String>> {
+                let handle = HostHandle::from_parts(stream.clone_ref(py), locals.clone());
+                (0..2)
+                    .map(|_| {
+                        let next = py.detach(|| rt.block_on(handle.anext()));
+                        next.map(|item| item.map(|o| o.extract::<String>(py).unwrap()))
+                            .map_err(|e| e.to_string())
+                    })
+                    .collect()
+            };
+            assert_eq!(read(&cancelled), vec![Ok(Some("one".to_owned())), Ok(None)]);
+            assert_eq!(
+                read(&failing),
+                vec![Ok(Some("one".to_owned())), Err("ValueError: boom".to_owned())]
+            );
+            let stop = event_loop.bind(py).getattr("stop").unwrap();
+            event_loop.bind(py).call_method1("call_soon_threadsafe", (stop,)).unwrap();
+        });
+    }
+
     // Catches: a duck-typed plugin (the reference API's shape, no base class) refused by a bare
     // proxy instead of seen through the host class's own `_core_*` functions.
     #[test]

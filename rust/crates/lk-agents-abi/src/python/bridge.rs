@@ -92,14 +92,18 @@ pub trait HostBridge: Send + Sync + 'static {
         }
     }
 
-    /// `StopAsyncIteration` is `Ok(None)`, a clean end.
+    /// `StopAsyncIteration` is `Ok(None)`, a clean end. So is `CancelledError`: a host stream
+    /// cancelled under the core (its task cancelled at close) ended, it did not fail; the
+    /// reference never reports its own cancellation as a provider error.
     fn anext(&self) -> impl std::future::Future<Output = PyResult<Option<Py<PyAny>>>> + Send {
         let next = self.await_call(|o| o.call_method0("__anext__"));
         async move {
             match next.await {
                 Ok(item) => Ok(Some(item)),
                 Err(err) => Python::attach(|py| {
-                    if err.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) { Ok(None) } else { Err(err) }
+                    let ended = err.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py)
+                        || err.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py);
+                    if ended { Ok(None) } else { Err(err) }
                 }),
             }
         }
@@ -308,8 +312,8 @@ impl<T> HostSource<T> {
 
 #[async_trait::async_trait]
 impl<T: Send> crate::StreamSource<T> for HostSource<T> {
-    /// `StopAsyncIteration` is not captured (a clean end must leave no side-table entry); every
-    /// other exception is, so the original can be re-raised.
+    /// `StopAsyncIteration` and `CancelledError` are not captured (an end must leave no side-table
+    /// entry); every other exception is, so the original can be re-raised.
     async fn next(&mut self) -> Result<Option<T>, ProviderError> {
         let item = self.handle.anext().await.map_err(captured)?;
         let convert = self.convert;
