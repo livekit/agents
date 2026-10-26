@@ -9,8 +9,10 @@ the plugin's own objects; chat items cross as ``_core.ChatItem``.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import functools
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -200,6 +202,203 @@ class _Llm:
             ),
             extra_kwargs=req.extra or NOT_GIVEN,
         )
+
+
+class Realtime:
+    """A plugin's ``RealtimeModel`` as the core's host realtime model. ``tools`` names the tool
+    objects the core refers to by name (the running frame's pool)."""
+
+    def __init__(self, model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool | Toolset]]):
+        self._model = model
+        self._tools = tools
+
+    def _core_label(self) -> str:
+        return self._model.label
+
+    def _core_capabilities(self) -> dict[str, Any]:
+        return dataclasses.asdict(self._model.capabilities)
+
+    async def _core_session(self, turn_detection_disabled: bool) -> _RealtimeSession:
+        session = self._model.session(turn_detection_disabled=turn_detection_disabled)
+        return _RealtimeSession(session, self._tools)
+
+
+class _RealtimeSession:
+    """A plugin's ``RealtimeSession`` flattened: commands in, one ``kind``-tagged event out at a
+    time, each generation's message and function streams drained in order."""
+
+    def __init__(
+        self, session: llm.RealtimeSession, tools: Callable[[], Sequence[Tool | Toolset]]
+    ) -> None:
+        self._session = session
+        self._tools = tools
+        self._events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        self._replies: dict[str, asyncio.Future[Any]] = {}
+        self._tasks: set[asyncio.Task[Any]] = set()
+        put = self._events.put_nowait
+        session.on("input_speech_started", lambda _: put({"kind": "input_speech_started"}))
+        session.on(
+            "input_speech_stopped",
+            lambda ev: put(
+                {
+                    "kind": "input_speech_stopped",
+                    "user_transcription_enabled": ev.user_transcription_enabled,
+                }
+            ),
+        )
+        session.on(
+            "input_audio_transcription_completed",
+            lambda ev: put(
+                {
+                    "kind": "input_transcription",
+                    "item_id": ev.item_id,
+                    "transcript": ev.transcript,
+                    "is_final": ev.is_final,
+                    "confidence": ev.confidence,
+                    "turn_started_at": ev.turn_started_at,
+                }
+            ),
+        )
+        session.on(
+            "generation_created",
+            lambda ev: None if ev.user_initiated else self._spawn(self._generation(ev, None)),
+        )
+        session.on(
+            "remote_item_added",
+            lambda ev: put(
+                {
+                    "kind": "remote_item_added",
+                    "previous_item_id": ev.previous_item_id,
+                    "item": to_core_item(ev.item),
+                }
+            ),
+        )
+        session.on("session_reconnected", lambda _: put({"kind": "session_reconnected"}))
+        session.on(
+            "error",
+            lambda ev: put(
+                {
+                    "kind": "error",
+                    "label": ev.label,
+                    "message": str(ev.error),
+                    "recoverable": ev.recoverable,
+                    "timestamp": ev.timestamp,
+                }
+            ),
+        )
+
+    def _spawn(self, coro: Any) -> None:
+        task = asyncio.ensure_future(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _generation(self, ev: llm.GenerationCreatedEvent, req_id: str | None) -> None:
+        put = self._events.put_nowait
+        response_id = ev.response_id or ""
+        put({"kind": "generation_created", "response_id": response_id, "req_id": req_id})
+        ids = {"response_id": ev.response_id}
+
+        async def _message(msg: llm.MessageGeneration) -> None:
+            mid = {"message_id": msg.message_id, **ids}
+            put({"kind": "message_started", **mid})
+
+            async def _text() -> None:
+                async for delta in msg.text_stream:
+                    put({"kind": "text_delta", "delta": str(delta), **mid})
+
+            async def _audio() -> None:
+                async for frame in msg.audio_stream:
+                    put({"kind": "audio_delta", "frame": frame, **mid})
+
+            async def _modalities() -> None:
+                modalities = await msg.modalities
+                kind = "audio" if "audio" in modalities else "text"
+                put({"kind": "message_modalities", "modalities": kind, **mid})
+
+            await asyncio.gather(_text(), _audio(), _modalities())
+            put({"kind": "message_done", **mid})
+
+        async def _messages() -> None:
+            await asyncio.gather(*[_message(m) async for m in ev.message_stream])
+
+        async def _calls() -> None:
+            async for call in ev.function_stream:
+                put({"kind": "function_call", "call": to_core_item(call)})
+
+        await asyncio.gather(_messages(), _calls())
+        put({"kind": "generation_done", "response_id": response_id})
+
+    def _reply(self, req_id: str, fut: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+        self._replies[req_id] = fut
+
+        def _done(fut: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            self._replies.pop(req_id, None)
+            if fut.cancelled():
+                return
+            if (exc := fut.exception()) is not None:
+                self._events.put_nowait(
+                    {
+                        "kind": "generate_reply_failed",
+                        "req_id": req_id,
+                        "message": str(exc),
+                        "code": getattr(exc, "code", None),
+                    }
+                )
+                return
+            self._spawn(self._generation(fut.result(), req_id))
+
+        fut.add_done_callback(_done)
+
+    def _core_send(self, cmd: dict[str, Any]) -> None:
+        session, kind = self._session, cmd["kind"]
+        if kind == "push_audio":
+            session.push_audio(cmd["frame"])
+        elif kind == "generate_reply":
+            choice = cmd["tool_choice"]
+            fut = session.generate_reply(
+                instructions=cmd["instructions"] or NOT_GIVEN,
+                tool_choice=NOT_GIVEN if choice is None else choice,
+            )
+            self._reply(cmd["req_id"], fut)
+        elif kind == "say":
+            self._reply(cmd["req_id"], session.say(cmd["text"]))
+        elif kind == "cancel_reply":
+            if (fut := self._replies.pop(cmd["req_id"], None)) is not None:
+                fut.cancel()
+        elif kind == "interrupt":
+            session.interrupt()
+        elif kind == "commit_audio":
+            session.commit_audio()
+        elif kind == "clear_audio":
+            session.clear_audio()
+        elif kind == "truncate":
+            transcript = cmd["audio_transcript"]
+            session.truncate(
+                message_id=cmd["message_id"],
+                modalities=["audio", "text"] if cmd["has_audio"] else ["text"],
+                audio_end_ms=cmd["audio_end_ms"],
+                audio_transcript=NOT_GIVEN if transcript is None else transcript,
+            )
+        elif kind == "update_instructions":
+            self._spawn(session.update_instructions(cmd["instructions"]))
+        elif kind == "update_chat_ctx":
+            ctx = llm.ChatContext([from_core_item(i) for i in cmd["items"]])
+            self._spawn(session.update_chat_ctx(ctx))
+        elif kind == "push_item":
+            ctx = session.chat_ctx.copy()
+            ctx.insert(from_core_item(cmd["item"]))
+            self._spawn(session.update_chat_ctx(ctx))
+        elif kind == "update_tools":
+            self._spawn(session.update_tools(offered_tools(self._tools(), cmd["names"])))
+
+    async def _core_next_event(self) -> dict[str, Any] | None:
+        return await self._events.get()
+
+    async def _core_aclose(self) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        await self._session.aclose()
+        self._events.put_nowait(None)
 
 
 class TurnDetector:

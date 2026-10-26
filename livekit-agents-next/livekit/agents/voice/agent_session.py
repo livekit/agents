@@ -21,7 +21,7 @@ from typing_extensions import TypedDict, TypeVar
 from livekit import rtc
 
 from .. import _core, inference, llm, stt, tts, vad
-from .._core_view import TurnDetector, from_core_item, to_core_items, tool_specs
+from .._core_view import Realtime, TurnDetector, from_core_item, to_core_items, tool_specs
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
 from .._generated.session_dispatch import IGNORED_EVENTS, PUBLIC_EVENTS
 from ..job import get_job_context
@@ -345,7 +345,12 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._chat_ctx = chat_ctx.copy()
 
         frame = await self._frame(agent)
-        realtime = frame.get("llm") if isinstance(frame.get("llm"), llm.RealtimeModel) else None
+        model = frame.get("llm", self._llm)
+        realtime = (
+            Realtime(model, lambda: self._pool(self.current_agent))
+            if isinstance(model, llm.RealtimeModel)
+            else None
+        )
         sampler = self._video_sampler
         self._core = _core.LiveSession(
             room,
@@ -354,7 +359,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             chat_ctx=to_core_items(self._chat_ctx.items),
             stt=frame.get("stt", self._stt),
             vad=frame.get("vad", self._vad),
-            llm=None if realtime else frame.get("llm", self._llm),
+            llm=None if realtime else model,
             realtime_host=realtime,
             tts=frame.get("tts", self._tts),
             host_audio_input=self._input.audio,

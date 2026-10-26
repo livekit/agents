@@ -91,6 +91,8 @@ class RealtimeCapabilities:
     When used through a RealtimeModel, add_to_chat_ctx=False is ignored and the
     message is still added to the chat context.
     """
+    auto_turn_reply_generation: bool = False
+    """Whether the server generates the reply by itself when its turn detection ends a user turn."""
 
 
 class RealtimeError(Exception):

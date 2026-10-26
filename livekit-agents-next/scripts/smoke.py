@@ -2,6 +2,7 @@
 a scripted STT and a silent TTS written as plugins (so all three cross the core's provider views).
 It starts, says something, replies, runs a tool, runs an ``AgentTask`` the user answers by
 speaking into the room, hands off to a second agent whose ``on_enter`` speaks, and closes.
+Then a second session on a scripted realtime model replies through the core's realtime leg.
 
     python livekit-agents-next/scripts/smoke.py
 """
@@ -189,6 +190,117 @@ async def settle(room: _core.FakeRoom, seconds: float) -> None:
             await asyncio.sleep(0)
 
 
+class ScriptedRealtime(llm.RealtimeModel):
+    """A realtime model that answers each reply request with one spoken message."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            capabilities=llm.RealtimeCapabilities(
+                message_truncation=False,
+                turn_detection=False,
+                user_transcription=False,
+                auto_tool_reply_generation=False,
+                audio_output=True,
+                manual_function_calls=True,
+            )
+        )
+
+    def session(self, *, turn_detection_disabled: bool = False) -> llm.RealtimeSession:
+        return _RealtimeSession(self)
+
+
+class _RealtimeSession(llm.RealtimeSession):
+    def __init__(self, model: ScriptedRealtime) -> None:
+        super().__init__(model)
+        self._chat_ctx = llm.ChatContext.empty()
+
+    @property
+    def chat_ctx(self) -> llm.ChatContext:
+        return self._chat_ctx
+
+    @property
+    def tools(self) -> llm.ToolContext:
+        return llm.ToolContext.empty()
+
+    async def update_instructions(self, instructions: str) -> None:
+        pass
+
+    async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        self._chat_ctx = chat_ctx
+
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
+        pass
+
+    def update_options(self, **_: object) -> None:
+        pass
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        pass
+
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        pass
+
+    def generate_reply(self, **_: object) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        async def _one(value: object) -> object:
+            yield value
+
+        modalities: asyncio.Future[list[str]] = asyncio.get_running_loop().create_future()
+        modalities.set_result(["audio", "text"])
+        silence = rtc.AudioFrame(b"\x00\x00" * 4800, SAMPLE_RATE, 1, 4800)
+        message = llm.MessageGeneration(
+            message_id=shortuuid("msg_"),
+            text_stream=_one("Hello from the realtime model."),
+            audio_stream=_one(silence),
+            modalities=modalities,
+        )
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.get_running_loop().create_future()
+        fut.set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=_one(message),
+                function_stream=_empty(),
+                user_initiated=True,
+                response_id=shortuuid("resp_"),
+            )
+        )
+        return fut
+
+    def commit_audio(self) -> None:
+        pass
+
+    def clear_audio(self) -> None:
+        pass
+
+    def interrupt(self) -> None:
+        pass
+
+    def truncate(self, **_: object) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def _empty() -> object:
+    return
+    yield
+
+
+async def realtime() -> None:
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    session = LiveSession(llm=ScriptedRealtime(), vad=None)
+    session.on(
+        "conversation_item_added",
+        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
+    )
+    await session.start(Agent(instructions="You are realtime.", name="realtime"), room=room)
+    handle = session.generate_reply(instructions="greet the user")
+    await settle(room, 2)
+    assert handle.done(), "the realtime reply did not finish"
+    await session.aclose()
+    print(f"played_bytes={room.played_bytes()}")
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -260,6 +372,9 @@ async def main() -> int:
     for item in session.history.items:
         detail = getattr(item, "text_content", None) or getattr(item, "name", "")
         print(f"  {item.type} {getattr(item, 'role', '')} {detail or ''}".rstrip())
+
+    print("== realtime")
+    await realtime()
     return 0
 
 
