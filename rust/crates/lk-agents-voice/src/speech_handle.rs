@@ -27,10 +27,10 @@ pub fn interruption_timeout() -> Duration {
     INTERRUPTION_TIMEOUT
 }
 
-/// `DEFAULT_INPUT_DETAILS.modality`: `InputDetails::default()`'s modality, as its wire string.
+/// `DEFAULT_INPUT_DETAILS.modality`, as its wire string.
 #[lk_agents_abi::host(export(pid = false))]
 pub fn default_input_modality() -> &'static str {
-    InputDetails::default().modality.as_str()
+    Modality::default().as_str()
 }
 
 type Api = crate::agent_session::Tx<crate::agent_session::Command>;
@@ -245,11 +245,9 @@ impl HostSpeech {
         Ok(())
     }
 
-    /// `_hold_interruptions`: disallow interruptions until every hold taken is released.
-    ///
-    /// Counted, not a flag: an inline agent and a filler may hold the same speech, and an
-    /// inner release must not re-arm the outer. Raises the reference's `RuntimeError` when the
-    /// speech is already interrupted, without counting the attempt.
+    /// `_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
+    /// the reference's `RuntimeError` when the speech is already interrupted, without counting the
+    /// attempt.
     #[host(method)]
     pub fn hold_interruptions(&self) -> Result<(), SpeechRefused> {
         Ok(self.attached()?.hold_interruptions()?)
@@ -350,11 +348,6 @@ mod wire_id_tests {
     }
 }
 
-/// `DEFAULT_INPUT_DETAILS` is `InputDetails(modality="audio")`, which is [`Default`] here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct InputDetails {
-    pub modality: Modality,
-}
 
 /// Every way an operation on a [`SpeechHandle`] can refuse. `Display` is the reference exception's
 /// message verbatim (public API, re-raised by the binding).
@@ -396,22 +389,6 @@ enum Interruption {
     Speech,
 }
 
-/// Proof that this speech has the floor, returned only by [`SpeechHandle::wait_for_authorization`].
-/// Audio pushes take it by reference, so only the words leg can run ahead (preemptive generation).
-#[derive(Debug)]
-pub struct Authorized(());
-
-/// Something the [`INTERRUPTION_TIMEOUT`] watchdog force-cancels (`SpeechHandle._cancel`).
-pub trait Cancellable: Send + Sync {
-    fn cancel(&self);
-}
-
-/// The real task object behind `speech_handle._tasks.append(task)`.
-impl Cancellable for lk_agents_abi::AbortHandle {
-    fn cancel(&self) {
-        self.abort();
-    }
-}
 
 /// `_allow_interruptions` and its hold count and restore value, in one cell so holds are atomic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -424,7 +401,8 @@ struct Interruptions {
 struct Inner {
     error: Option<ProviderError>,
     chat_items: Vec<ChatItem>,
-    tasks: Vec<Arc<dyn Cancellable>>,
+    /// What the [`INTERRUPTION_TIMEOUT`] watchdog cancels (`speech_handle._tasks`).
+    tasks: Vec<lk_agents_abi::AbortHandle>,
     watchdog_armed: bool,
     /// The metrics of the user turn a preemptive reply was adopted for.
     user_metrics: Option<lk_agents_abi::MetricsReport>,
@@ -461,17 +439,10 @@ impl PartialEq for SpeechHandle {
 impl Eq for SpeechHandle {}
 
 impl SpeechHandle {
-    /// `id` is minted by the driver; the public `speech_<uuid>` comes from the host. Nothing reads
-    /// `input_details` (always the default); the parameter stays for the fuzz crate's callers.
-    pub fn new(
-        id: SpeechId,
-        speech_id: impl Into<Arc<str>>,
-        allow_interruptions: bool,
-        _input_details: InputDetails,
-    ) -> Self {
+    pub fn new(id: SpeechId, allow_interruptions: bool) -> Self {
         SpeechHandle {
             id,
-            speech_id: speech_id.into(),
+            speech_id: SpeechWireId(id).to_string().into(),
             scheduled: Monotone::new(false),
             interrupted: watch::Sender::new(Interruption::None),
             done: Monotone::new(false),
@@ -499,7 +470,7 @@ impl SpeechHandle {
         self.id
     }
 
-    /// `SpeechHandle.id` -- the Python-visible `speech_<shortuuid>`.
+    /// `SpeechHandle.id`: `speech_{n}`.
     pub fn speech_id(&self) -> &str {
         &self.speech_id
     }
@@ -524,8 +495,6 @@ impl SpeechHandle {
         }
         n
     }
-
-    // ---------------------------------------------------------------- flags
 
     pub fn scheduled(&self) -> bool {
         self.scheduled.get()
@@ -564,8 +533,6 @@ impl SpeechHandle {
     pub async fn wait_for_done(&self) {
         self.done.wait_for(|d| *d).await;
     }
-
-    // ------------------------------------------------------- interruptions
 
     pub fn allow_interruptions(&self) -> bool {
         self.interruptions.borrow().allow
@@ -661,8 +628,6 @@ impl SpeechHandle {
         Ok(true)
     }
 
-    // ---------------------------------------------------------- watchdog
-
     /// The watchdog body (`SpeechHandle._cancel`): cancel every linked task, then mark done.
     /// Returns whether it fired.
     pub fn on_interruption_timeout(&self) -> bool {
@@ -678,17 +643,15 @@ impl SpeechHandle {
     pub(crate) fn cancel_tasks(&self) {
         let tasks = std::mem::take(&mut self.inner.lock().unwrap().tasks);
         for task in &tasks {
-            task.cancel();
+            task.abort();
         }
     }
 
     /// `speech_handle._tasks.append(task)`. The handle only cancels these; done-when-all-done is
     /// the driver's.
-    pub fn add_task(&self, task: Arc<dyn Cancellable>) {
+    pub fn add_task(&self, task: lk_agents_abi::AbortHandle) {
         self.inner.lock().unwrap().tasks.push(task);
     }
-
-    // -------------------------------------------------------- generations
 
     pub fn authorized(&self) -> bool {
         *self.authorized.borrow()
@@ -706,11 +669,10 @@ impl SpeechHandle {
     }
 
     /// `SpeechHandle._wait_for_authorization`.
-    pub async fn wait_for_authorization(&self) -> Authorized {
+    pub async fn wait_for_authorization(&self) {
         let mut rx = self.authorized.subscribe();
         // `wait_for` checks the current value first, so an earlier authorization isn't missed.
         let _ = rx.wait_for(|a| *a).await;
-        Authorized(())
     }
 
     /// Wait for step `step`'s generation (absolute, from zero). `RunContext.wait_for_playout()`
@@ -747,8 +709,6 @@ impl SpeechHandle {
     fn last_generation(&self) -> Option<Arc<Monotone<bool>>> {
         self.generations.lock().unwrap().last().cloned()
     }
-
-    // ------------------------------------------------------------- done
 
     /// `_mark_done`. The error is kept out of the completion signal so awaiting never raises; see
     /// [`exception`](Self::exception).
@@ -810,8 +770,6 @@ impl SpeechHandle {
         self.inner.lock().unwrap().user_metrics.clone()
     }
 }
-
-// --- the promise of a speech ---
 
 /// Why a [`SpeechPromise`] could not be resolved. Each `Display` is the message a host raises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

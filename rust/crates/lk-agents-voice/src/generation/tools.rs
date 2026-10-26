@@ -117,7 +117,7 @@ impl ToolStep {
                     };
                     let _ = tx.send(answer(&one, outcome, shared.time.wall()));
                 });
-                task_owner.add_task(Arc::new(abort));
+                task_owner.add_task(abort);
                 rx
             });
         self.calls.push(Dispatched { call, rx });

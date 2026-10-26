@@ -14,7 +14,7 @@ use lk_agents_abi::FunctionCall;
 use lk_agents_voice::{
     agent_activity::scheduling::{SpeechId, SpeechKind},
     events::{SessionEvent, SpeechOutcome, ToolEndStatus, ToolLifecycle},
-    speech_handle::{InputDetails, SpeechHandle},
+    speech_handle::SpeechHandle,
     trace::Step,
 };
 
@@ -72,12 +72,7 @@ impl Authored {
             Id::Speech(SpeechId(speech)),
             Detail::Speech { kind, user_initiated },
         );
-        let handle = SpeechHandle::new(
-            SpeechId(speech),
-            format!("speech_{speech}"),
-            true,
-            InputDetails::default(),
-        );
+        let handle = SpeechHandle::new(SpeechId(speech), true);
         self.session(SessionEvent::SpeechCreated { speech: Arc::new(handle), kind, user_initiated })
     }
 

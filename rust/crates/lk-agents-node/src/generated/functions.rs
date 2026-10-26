@@ -279,7 +279,7 @@ pub fn interruption_timeout() -> f64 {
     lk_agents_voice::speech_handle::interruption_timeout().as_secs_f64()
 }
 
-/// `DEFAULT_INPUT_DETAILS.modality`: `InputDetails::default()`'s modality, as its wire string.
+/// `DEFAULT_INPUT_DETAILS.modality`, as its wire string.
 #[napi(js_name = "defaultInputModality")]
 pub fn default_input_modality() -> String {
     lk_agents_voice::speech_handle::default_input_modality().to_string()

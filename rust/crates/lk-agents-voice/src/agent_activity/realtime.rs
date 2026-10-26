@@ -12,7 +12,7 @@ use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::generation::ReplySource;
 use crate::generation::pipeline_reply::fatal;
-use crate::speech_handle::{InputDetails, SpeechHandle};
+use crate::speech_handle::SpeechHandle;
 use crate::trace::{InterruptCause, InterruptStep, RealtimeStep};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::realtime::{
@@ -938,12 +938,8 @@ impl Driver {
             return;
         }
         let id = self.session.ids.next_speech_id();
-        let handle = Arc::new(SpeechHandle::new(
-            id,
-            crate::speech_handle::SpeechWireId(id).to_string(),
-            self.session.config.effective.turn.interruption.enabled,
-            InputDetails::default(),
-        ));
+        let handle =
+            Arc::new(SpeechHandle::new(id, self.session.config.effective.turn.interruption.enabled));
         match how {
             Settled::Failed(err) | Settled::TimedOut(err) => {
                 handle.mark_done(Some(fatal(err.message)))

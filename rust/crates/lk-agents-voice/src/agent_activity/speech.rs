@@ -19,7 +19,7 @@ use crate::generation::{
     EndOfSpeech, Instructions, TurnInstructions, TurnOutcome as GenTurnOutcome, end_of_speech,
 };
 use crate::generation::{GenEvent, Providers, ReplyContext, ReplySource};
-use crate::speech_handle::{InputDetails, SpeechHandle};
+use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Handling;
 use crate::tool_executor::Toolset;
 use crate::trace::{
@@ -623,13 +623,7 @@ impl Driver {
 
         let id = self.session.ids.next_speech_id();
 
-        let speech_id = crate::speech_handle::SpeechWireId(id).to_string();
-        let handle = Arc::new(SpeechHandle::new(
-            id,
-            speech_id,
-            spec.allow_interruptions,
-            InputDetails::default(),
-        ));
+        let handle = Arc::new(SpeechHandle::new(id, spec.allow_interruptions));
         self.activity.note_speech_agent(id);
 
         let message_id = self.session.ids.mint("item");
@@ -666,7 +660,7 @@ impl Driver {
                 .spawner
                 .spawn_unboxed(async move { pipeline_reply_task(shared, task, ctx).await });
             // The only way a spawned generation is cancellable; a dropped `JoinHandle` detaches.
-            handle.add_task(Arc::new(abort));
+            handle.add_task(abort);
         }
 
         // Announced, recorded and scheduled in `request`, the one place every speech passes.

@@ -14,7 +14,7 @@ use crate::audio::ChannelEnd;
 use crate::events::SessionEvent;
 use crate::generation::GenEvent;
 use crate::room_io::StreamOpened;
-use crate::speech_handle::{InputDetails, SpeechHandle};
+use crate::speech_handle::SpeechHandle;
 use crate::trace::{
     CloseAct, CloseStep, CoreStep, HandoffStep, PlayoutStep, RoomStep, SpeechStep, Step, Trace,
 };
@@ -456,12 +456,8 @@ impl Driver {
     /// **Already done**, not dropped: an unattached handle would answer `done() == false` forever.
     pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<RequestId>) {
         let id = self.session.ids.next_speech_id();
-        let handle = Arc::new(SpeechHandle::new(
-            id,
-            crate::speech_handle::SpeechWireId(id).to_string(),
-            self.session.config.effective.turn.interruption.enabled,
-            InputDetails::default(),
-        ));
+        let handle =
+            Arc::new(SpeechHandle::new(id, self.session.config.effective.turn.interruption.enabled));
         handle.mark_done(Some(lk_agents_abi::errors::ProviderError::Local(
             lk_agents_abi::errors::ApiError::new(format!(
                 "the session loop ended before {what}() ran"
