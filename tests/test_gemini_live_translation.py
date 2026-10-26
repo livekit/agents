@@ -442,3 +442,23 @@ async def test_a_transient_handshake_failure_is_retried(monkeypatch: pytest.Monk
         assert [e.recoverable for e in errors] == [True]
     finally:
         await session.aclose()
+
+
+async def test_a_transcript_stopped_mid_sentence_waits_for_its_punctuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(transcript_segment_timeout=0.05).session()
+    heard: list[InputTranscript] = []
+    session.on("input_transcript", heard.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        conns[0].emit(input_transcription=types.Transcription(text="where is the restroom"))
+        # the question mark trails the words by more than one quiet period
+        await asyncio.sleep(0.08)
+        conns[0].emit(input_transcription=types.Transcription(text="?"))
+        await _wait_for(lambda: any(t.is_final for t in heard))
+
+        assert [t.text for t in heard if t.is_final] == ["where is the restroom?"]
+    finally:
+        await session.aclose()
