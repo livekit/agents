@@ -159,9 +159,9 @@ class APIConnectOptions:
 
         The first retry is immediate, and then uses specified retry_interval
         """
-        if num_retries == 0:
-            return 0.1
-        return self.retry_interval
+        from . import _core
+
+        return _core.api_retry_interval(self.retry_interval, num_retries)  # type: ignore[no-any-return]
 
 
 DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()

@@ -176,18 +176,11 @@ def create_api_error_from_http(
     """
     from http import HTTPStatus
 
-    try:
-        reason = HTTPStatus(status).phrase
-    except ValueError:
-        reason = f"HTTP {status}"
+    from . import _core
 
-    if message and message != reason:
-        display = f"{message} ({status} {reason})"
-    else:
-        display = f"{reason} ({status})"
-
+    reason = HTTPStatus(status).phrase if status in HTTPStatus._value2member_map_ else None
     return APIStatusError(
-        message=display,
+        message=_core.http_error_display(message, status, reason),
         status_code=status,
         request_id=request_id,
         body=body,

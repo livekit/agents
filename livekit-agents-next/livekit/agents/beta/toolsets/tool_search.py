@@ -15,7 +15,6 @@ from ...llm.tool_context import (
     RawFunctionTool,
     Tool,
     ToolContext,
-    ToolError,
     Toolset,
     function_tool,
 )
@@ -149,16 +148,12 @@ class ToolSearchToolset(Toolset):
     async def _handle_search(self, raw_arguments: dict[str, object]) -> str:
         query = str(raw_arguments.get("query", ""))
         tools = await self._search_tools(query)
-        if not tools:
-            raise ToolError(f"No tools found matching '{query}'.")
-
+        loaded: str = _core.tool_search_loaded(query, len(tools))
         self._loaded_tools = tools
-        return "Tools loaded successfully."
+        return loaded
 
     async def _search_tools(self, query: str) -> list[Tool | Toolset]:
-        if not query:
-            raise ToolError("query cannot be empty")
-
+        _core.tool_search_validate(query)
         results = self._strategy.search(query, self._search_items, self._max_results)
         if inspect.isawaitable(results):
             results = await results
