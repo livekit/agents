@@ -3,7 +3,7 @@
 
 use crate::agent::TurnEdit;
 use crate::agent_activity::drain::DrainEvent;
-use crate::agent_activity::on_exit::Exit;
+use crate::agent_activity::hooks::Exit;
 use crate::agent_activity::scheduling::PauseCause;
 use crate::agent_session::effects::{Cx, Out, PauseResult, Signal, Timer};
 use crate::agent_session::{
@@ -264,7 +264,7 @@ impl Driver {
         // answered by the pause's refusal.
         self.drain_step(DrainEvent::Closing, out);
         // A DTMF collection started during the close ends with it: an owed answer is `Stopped`.
-        self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Stop, out);
+        self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Stop, out);
         self.handoff_step(HandoffEvent::Closing, out);
         self.activity.on_exit.abandon();
         // Nothing pending is delivered, a render in flight is dropped.

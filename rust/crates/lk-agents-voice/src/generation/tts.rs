@@ -15,7 +15,7 @@ use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::provider::{Context, TtsMetricState};
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::transcription::Visible;
-use lk_agents_voice::transcription::text_transforms::{Pipeline, TextTransform as _};
+use lk_agents_voice::transcription::{Pipeline, TextTransform as _};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 

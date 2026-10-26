@@ -2,12 +2,10 @@
 //! driver's configuration, and the frame commands (prompt, tools, context, IO) the driver applies.
 
 pub mod drain;
-pub mod dtmf;
 pub mod false_interruption;
 pub mod handoff;
 pub mod hooks;
 pub mod io;
-pub(crate) mod on_exit;
 pub mod options;
 pub mod realtime;
 pub mod recognition;
@@ -73,11 +71,11 @@ pub(crate) struct AgentActivity {
     /// `update_agent()`: the switches asked for and in progress.
     pub(crate) handoff: crate::agent_activity::handoff::Handoff,
     /// The `on_exit` each agent owes.
-    pub(crate) on_exit: crate::agent_activity::on_exit::OnExit,
+    pub(crate) on_exit: crate::agent_activity::hooks::OnExit,
     /// The host's `drain()`.
     pub(crate) drain: crate::agent_activity::drain::Drain,
     /// DTMF collection while it runs.
-    pub(crate) dtmf: crate::agent_activity::dtmf::Dtmf,
+    pub(crate) dtmf: crate::workflows::dtmf::Dtmf,
     /// The user turn parked on `on_user_turn_completed` (`_user_turn_completed_atask`).
     pub(crate) pending_turn: Option<crate::audio_recognition::PendingTurn>,
     /// So a preemptive generation can be keyed to the turn after it.

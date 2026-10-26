@@ -10,7 +10,7 @@ use super::{HookId, RequestId};
 
 use crate::agent_activity::false_interruption::InterruptOutcome;
 use crate::agent_activity::handoff::HandoffEvent;
-use crate::agent_activity::on_exit::Exit;
+use crate::agent_activity::hooks::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
 use crate::agent_session::effects::{Effect, Out, ProviderCall, Signal, Timer};
 use crate::agent_session::{
@@ -132,7 +132,7 @@ impl Driver {
         self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close, out);
         // DTMF collection stop, the first thing the close runs, stops listening: a key pressed
         // during the drain is not collected, a pending debounce never answers.
-        self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Stop, out);
+        self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Stop, out);
         let exit = self.plan_exit(out);
         // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's,
         // and the caller is answered with the close's drain.

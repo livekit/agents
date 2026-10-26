@@ -67,7 +67,7 @@ pub struct DriverBuilder {
     pub text_out: Option<Arc<dyn TextOutput>>,
     pub room_events: Option<Rx<RoomEvent>>,
     pub room_io_events: Option<Rx<crate::room_io::RoomIoEvent>>,
-    pub room_link: Option<crate::room_io::link::RoomLinkConfig>,
+    pub room_link: Option<crate::room_io::RoomLinkConfig>,
     /// `None` commits turns on silence alone.
     pub eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     /// `None` is VAD-only interruption: every burst past `min_interruption_duration`, a "mm-hm"

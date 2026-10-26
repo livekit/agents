@@ -24,7 +24,6 @@ pub mod commands;
 pub mod driver;
 pub mod effects;
 pub mod host_events;
-pub(crate) mod idle;
 pub mod nodes;
 pub mod time;
 
@@ -36,7 +35,6 @@ pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use driver::*;
 pub use host_events::*;
-pub(crate) use idle::{IdleHolds, IdleWaiter};
 pub use lk_agents_abi::voice::session_effects::{Span, SpanEnded, SpanStarted};
 pub use time::*;
 
@@ -71,7 +69,7 @@ pub(crate) struct LiveSession {
     /// `stt_context_options["forward_chat_context"]` (default on).
     pub(crate) forward_chat_context: bool,
     pub(crate) start_options: StartOptions,
-    pub(crate) room: crate::room_io::link::RoomLink,
+    pub(crate) room: crate::room_io::RoomLink,
     /// `_closing_task`: `_aclose_impl` in flight.
     pub(crate) closing: Option<Closing>,
     /// `_global_run_state`.
@@ -96,7 +94,7 @@ pub(crate) struct SessionParts {
     pub(crate) outputs: Outputs,
     pub(crate) max_unrecoverable_errors: u32,
     pub(crate) start_options: StartOptions,
-    pub(crate) room_link: Option<crate::room_io::link::RoomLinkConfig>,
+    pub(crate) room_link: Option<crate::room_io::RoomLinkConfig>,
     /// The opening agent, whose view the constructor context becomes (not announced: the host
     /// has it).
     pub(crate) agent: String,
@@ -151,7 +149,7 @@ impl LiveSession {
             keyterms: None,
             forward_chat_context: true,
             start_options,
-            room: crate::room_io::link::RoomLink::new(room_link),
+            room: crate::room_io::RoomLink::new(room_link),
             closing: None,
             runs: Default::default(),
             idle: IdleHolds::default(),
@@ -389,7 +387,7 @@ pub struct SessionShared {
     /// push.
     pub launch: LaunchGate,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
-    pub tts_transforms: Vec<lk_agents_voice::transcription::text_transforms::TransformSpec>,
+    pub tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
     /// A push/emit pair because the node may hold frames back or emit several for one.
     pub realtime_audio: Option<Arc<dyn RealtimeAudioNode>>,
     /// Unbounded: a task must never block on the loop draining it, and there are only a handful per
@@ -585,6 +583,121 @@ impl Driver {
         for id in std::mem::take(&mut self.session.providers) {
             self.shared.resources.release(id);
         }
+    }
+}
+
+/// A `wait_for_idle()` or `wait_for_idle_and_hold()` ask, waiting for an idle instant.
+pub(crate) struct IdleWaiter {
+    /// The hold the caller is inside, which it may pass through.
+    pub(crate) hold: Option<HoldId>,
+    /// The speech whose tool asked; its interruption withdraws the ask. `None` for the host.
+    pub(crate) speech: Option<SpeechId>,
+    /// `wait_for_idle_and_hold()`'s hold: minted at the ask, granted when idle answers it.
+    pub(crate) grant: Option<HoldId>,
+    pub(crate) call: Option<RequestId>,
+}
+
+impl IdleWaiter {
+    pub(crate) fn answer(&self, result: Result<(), IdleRefused>) -> Answer {
+        match self.grant {
+            None => Answer::Idle(result),
+            Some(id) => Answer::Hold(result.map(|()| id)),
+        }
+    }
+}
+
+/// The idle asks and the floor holds that only their own asks pass (`_idle_holds`).
+#[derive(Default)]
+pub(crate) struct IdleHolds {
+    waiters: Vec<IdleWaiter>,
+    /// While non-empty, only a waiter naming one of them passes.
+    holds: BTreeSet<HoldId>,
+    next_hold: u64,
+}
+
+impl IdleHolds {
+    /// A floor hold's id, minted at the ask.
+    pub(crate) fn mint_hold(&mut self) -> HoldId {
+        self.next_hold += 1;
+        HoldId(self.next_hold)
+    }
+
+    /// Answered at the first idle instant the ask passes.
+    pub(crate) fn ask(&mut self, waiter: IdleWaiter) {
+        self.waiters.push(waiter);
+    }
+
+    pub(crate) fn has_waiters(&self) -> bool {
+        !self.waiters.is_empty()
+    }
+
+    /// `_idle_holds > 0`.
+    pub(crate) fn held(&self) -> bool {
+        !self.holds.is_empty()
+    }
+
+    /// The asks the holds let through, in ask order, their holds granted as they pass: a hold
+    /// granted holds off the asks after it. While a hold is held only an ask inside it passes
+    /// (`_idle_holds > 0 and not _IdleHoldContextVar.get()`).
+    pub(crate) fn admit(&mut self) -> Vec<IdleWaiter> {
+        let mut admitted = Vec::new();
+        for waiter in std::mem::take(&mut self.waiters) {
+            if !self.holds.is_empty() && !waiter.hold.is_some_and(|h| self.holds.contains(&h)) {
+                self.waiters.push(waiter);
+                continue;
+            }
+            self.holds.extend(waiter.grant);
+            admitted.push(waiter);
+        }
+        admitted
+    }
+
+    /// The asks `speech`'s tools made, withdrawn with it.
+    pub(crate) fn withdraw(&mut self, speech: SpeechId) -> Vec<IdleWaiter> {
+        let (gone, kept) =
+            std::mem::take(&mut self.waiters).into_iter().partition(|w| w.speech == Some(speech));
+        self.waiters = kept;
+        gone
+    }
+
+    /// Every ask still waiting.
+    pub(crate) fn take_waiters(&mut self) -> Vec<IdleWaiter> {
+        std::mem::take(&mut self.waiters)
+    }
+
+    /// `release_idle_hold(hold)`: whether it was held.
+    pub(crate) fn release(&mut self, hold: HoldId) -> bool {
+        self.holds.remove(&hold)
+    }
+
+    /// Every hold still held.
+    pub(crate) fn take_holds(&mut self) -> BTreeSet<HoldId> {
+        std::mem::take(&mut self.holds)
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+
+    fn ask(gate: &mut IdleHolds, hold: Option<HoldId>, grant: Option<HoldId>) {
+        gate.ask(IdleWaiter { hold, speech: None, grant, call: None });
+    }
+
+    // Catches: holds checked against the state before the pass, so a wait asked after a
+    // `wait_for_idle_and_hold()` slips past the hold granted in the same idle instant.
+    #[test]
+    fn a_hold_granted_in_a_pass_holds_off_the_asks_after_it() {
+        let mut gate = IdleHolds::default();
+        let floor = gate.mint_hold();
+        ask(&mut gate, None, Some(floor));
+        ask(&mut gate, None, None);
+        ask(&mut gate, Some(floor), None);
+        let admitted: Vec<_> = gate.admit().iter().map(|w| (w.hold, w.grant)).collect();
+        assert_eq!(admitted, [(None, Some(floor)), (Some(floor), None)]);
+        assert!(gate.held() && gate.has_waiters());
+        assert!(gate.release(floor));
+        assert_eq!(gate.admit().len(), 1, "released, the outside ask passes");
     }
 }
 

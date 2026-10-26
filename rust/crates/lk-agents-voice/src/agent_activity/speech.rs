@@ -279,10 +279,9 @@ impl Driver {
                 // step.
                 let cause = match self.command_origin {
                     Origin::Amd => InterruptCause::Detector,
-                    Origin::Host
-                    | Origin::Tool { .. }
-                    | Origin::Hook
-                    | Origin::Ivr => InterruptCause::Host,
+                    Origin::Host | Origin::Tool { .. } | Origin::Hook | Origin::Ivr => {
+                        InterruptCause::Host
+                    }
                 };
                 if cause == InterruptCause::Host {
                     out.trace(InterruptStep::HostInterrupt { speech: None, force });

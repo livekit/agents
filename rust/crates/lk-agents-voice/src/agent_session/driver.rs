@@ -610,7 +610,7 @@ impl Driver {
                 Timer::RecorderFlush => self.flush_recorder(now, true, out),
                 Timer::KeytermTimeout => self.on_keyterm_timeout(now, out),
                 Timer::DtmfDebounce => {
-                    self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Debounced, out)
+                    self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Debounced, out)
                 }
                 // A realtime request the server never answered: the machine settles it.
                 Timer::RealtimeRequest(key) => self.realtime_request_timed_out(key, out),

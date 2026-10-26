@@ -619,7 +619,7 @@ impl Driver {
             Request::GenerateReply { read_back, .. } => {
                 // A read-back that will never be spoken releases the collection's guard now.
                 if read_back {
-                    self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::ReadBack(None), out);
+                    self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::ReadBack(None), out);
                 }
                 SpeechKind::GenerateReply
             }
@@ -748,7 +748,7 @@ impl Driver {
         };
         self.activity.realtime_state.set_open_speech(&response_id, speech);
         if read_back {
-            let ev = crate::agent_activity::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
+            let ev = crate::workflows::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
             self.dtmf_step(ev, out);
         }
     }

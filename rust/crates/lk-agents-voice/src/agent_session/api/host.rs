@@ -189,7 +189,7 @@ impl SessionApi {
         // **Nothing starts here**; the loop begins at `start()`. Synchronous so a host can bind the
         // room's legs and recorder before starting. Read before the config moves into `RoomIo`.
         let sync_speed = config.text_output.as_ref().map(|t| t.transcription_speed_factor);
-        let room_link = crate::room_io::link::RoomLinkConfig {
+        let room_link = crate::room_io::RoomLinkConfig {
             close_on_disconnect: config.close_on_disconnect,
             delete_room_on_close: config.delete_room_on_close,
             room: room.name().to_owned(),

@@ -1,7 +1,7 @@
 //! `drain()`: the host waits for the driving agent to say its goodbye (`on_exit`) and for
 //! scheduling to pause with nothing left to say; the session stays open.
 
-use crate::agent_activity::on_exit::Exit;
+use crate::agent_activity::hooks::Exit;
 use crate::agent_activity::scheduling::PauseCause;
 use crate::agent_session::effects::{Cx, Out, PauseResult, Signal};
 use crate::agent_session::{Answer, DrainRefused, HookId, RequestId};

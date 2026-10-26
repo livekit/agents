@@ -5,7 +5,7 @@
 use crate::agent_activity::drain::{Drain, DrainEvent};
 use crate::agent_activity::false_interruption::{AudioInterruptTrigger, TurnSettled};
 use crate::agent_activity::handoff::{Handoff, HandoffEvent, HandoffId};
-use crate::agent_activity::on_exit::Leave;
+use crate::agent_activity::hooks::Leave;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
 use crate::agent_session::{
     AgentUpdate, Answer, ClosePhase, Driver, HandoffRefused, HookCall, HookId, HostEvent,
