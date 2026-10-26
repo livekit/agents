@@ -437,9 +437,12 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
+        # set once end_audio is sent, and once the server acknowledges it
+        input_ended = False
+        end_audio_acked = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal input_ended
             samples_per_buffer = 512
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -465,15 +468,15 @@ class SpeechStream(stt.SpeechStream):
                 # input ended: send the partial last buffer, then ask the server to flush
                 for frame in audio_bstream.flush():
                     await ws.send_bytes(frame.data.tobytes())
-                closing_ws = True
                 await ws.send_str(SpeechStream._END_AUDIO_MSG)
+                input_ended = True
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws or self._session.closed:
                     return
                 raise APIConnectionError("Baseten connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal closing_ws, end_audio_acked
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -481,7 +484,10 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                 except asyncio.TimeoutError:
-                    if closing_ws:
+                    # a runtime without end_audio support never acknowledges it; once
+                    # acknowledged, wait for "finished"; the monitor's liveness probe
+                    # still fails a server that stops responding
+                    if closing_ws or (input_ended and not end_audio_acked):
                         break
                     continue
 
@@ -508,8 +514,11 @@ class SpeechStream(stt.SpeechStream):
                     msg_type = data.get("type")
                     if msg_type == "end_audio":
                         # every transcript for the flushed audio arrives before "finished"
-                        if (data.get("body") or {}).get("status") == "finished":
+                        status = (data.get("body") or {}).get("status")
+                        if status == "finished":
                             return
+                        if status == "acknowledged":
+                            end_audio_acked = True
                         continue
 
                     # Skip non-transcription messages (e.g. error, status)
