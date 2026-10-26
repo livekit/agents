@@ -26,6 +26,9 @@ const DEFAULT_FRAME_LEN: Duration = Duration::from_millis(20);
 /// `Closing` has no clock advancing it.
 const CUT_REPORT_HOPS: usize = 16;
 
+/// How long a cut segment then waits on the clock for a host output's report of the cut.
+const CUT_REPORT_WAIT: Duration = Duration::from_secs(1);
+
 #[derive(Debug)]
 pub(crate) enum Next {
     Frame(AudioFrame),
@@ -495,6 +498,15 @@ impl Playing<'_> {
                 return Heard { text, position: ev.playback_position, complete: false, frames };
             }
             tokio::task::yield_now().await;
+        }
+        // A host output reports from its own loop, later than the hops: wait for it on the clock,
+        // which runs unless the session is closing.
+        if !*self.shared.closing.borrow()
+            && let Ok(ev) =
+                self.shared.time.timeout(CUT_REPORT_WAIT, self.out.wait_for_playout()).await
+        {
+            let text = synchronized(ev.synchronized_transcript, text);
+            return Heard { text, position: ev.playback_position, complete: false, frames };
         }
         Heard { text, position: self.out.tracker().position(), complete: false, frames }
     }

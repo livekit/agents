@@ -116,7 +116,13 @@ pub(super) fn feed_video(
 pub struct Playout {
     tracker: Arc<PlaybackTracker>,
     state: Mutex<PlayoutState>,
+    /// A host source: a cut is reported a few scheduler hops after the clear, as the report of
+    /// one crosses back from the host's own loop.
+    lagging: bool,
 }
+
+/// Hops a lagging output takes to report a cut: more than the driver yields for it.
+const LAGGING_REPORT_HOPS: usize = 64;
 
 #[derive(Default)]
 struct PlayoutState {
@@ -230,12 +236,28 @@ impl Playout {
             state.played.clear();
             cut
         };
-        for (_, position) in &cut {
-            self.tracker.playback_finished(PlaybackFinished {
+        let finished: Vec<PlaybackFinished> = cut
+            .iter()
+            .map(|(_, position)| PlaybackFinished {
                 interrupted: true,
                 playback_position: *position,
                 ..Default::default()
+            })
+            .collect();
+        if self.lagging {
+            let tracker = self.tracker.clone();
+            tokio::spawn(async move {
+                for _ in 0..LAGGING_REPORT_HOPS {
+                    tokio::task::yield_now().await;
+                }
+                for ev in finished {
+                    tracker.playback_finished(ev);
+                }
             });
+        } else {
+            for ev in finished {
+                self.tracker.playback_finished(ev);
+            }
         }
         cut.into_iter().map(|(segment, _)| segment).collect()
     }
@@ -251,8 +273,9 @@ pub struct FakeAudioOutput {
 }
 
 impl FakeAudioOutput {
-    pub fn new(registry: Arc<Registry>, pausable: bool) -> Arc<Self> {
-        let playout = Arc::new(Playout { tracker: Arc::default(), state: Mutex::default() });
+    pub fn new(registry: Arc<Registry>, pausable: bool, lagging: bool) -> Arc<Self> {
+        let playout =
+            Arc::new(Playout { tracker: Arc::default(), state: Mutex::default(), lagging });
         let id = registry.new_audio_output(playout.clone());
         Arc::new(FakeAudioOutput { id, registry, playout, pausable })
     }

@@ -446,10 +446,10 @@ impl Run {
                 api.update_chat_ctx(history(items, text)).is_ok()
             }
             Input::SetAudioOutput { attach } => {
-                let pausable = self.setup.pausable_output;
-                api.set_audio_output(
-                    attach.then(|| fakes::FakeAudioOutput::new(registry.clone(), pausable) as _),
-                )
+                let (pausable, lagging) = (self.setup.pausable_output, self.setup.lagging_output);
+                api.set_audio_output(attach.then(|| {
+                    fakes::FakeAudioOutput::new(registry.clone(), pausable, lagging) as _
+                }))
                 .is_ok()
             }
             Input::SetTranscriptionOutput { attach } => api

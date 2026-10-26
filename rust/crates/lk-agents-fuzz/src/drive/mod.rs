@@ -166,6 +166,8 @@ pub struct Setup {
     /// The transcript synchroniser between the two outputs: the agent's words are shown paced
     /// against its audio rather than as they are generated, which is the default with a room.
     pub sync_transcription: bool,
+    /// An audio output that reports a cut a few scheduler hops late, as a host source does.
+    pub lagging_output: bool,
 }
 
 /// The realtime server a session is built against: what it can do, as its capabilities say.
@@ -229,6 +231,7 @@ impl Default for Setup {
             connect_ms: None,
             video: false,
             sync_transcription: false,
+            lagging_output: false,
             ivr: None,
             amd: false,
             keyterms: Vec::new(),

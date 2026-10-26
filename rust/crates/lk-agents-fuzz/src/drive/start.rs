@@ -97,7 +97,11 @@ impl Run {
                 None,
                 None,
                 Some(mic as Arc<AudioIn>),
-                Some(fakes::FakeAudioOutput::new(registry.clone(), setup.pausable_output) as _),
+                Some(fakes::FakeAudioOutput::new(
+                    registry.clone(),
+                    setup.pausable_output,
+                    setup.lagging_output,
+                ) as _),
                 setup
                     .video
                     .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),

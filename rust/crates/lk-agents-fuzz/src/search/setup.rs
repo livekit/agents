@@ -49,6 +49,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         connect_ms: rng.bool().then(|| ms(rng)),
         video: rng.bool(),
         sync_transcription: rng.bool(),
+        lagging_output: false,
         pausable_output: rng.bool(),
         speech_gap_ms: rng.bool().then(|| ms(rng)),
         user_turn_max_words: rng.bool().then(|| rng.u32(1..12)),
