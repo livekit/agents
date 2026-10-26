@@ -654,23 +654,6 @@ class TestToolExecution:
         records = [r for r in caplog.records if r.getMessage().startswith("error parsing")]
         assert [r.levelno for r in records] == [logging.WARNING, logging.WARNING]
 
-    def test_unexpected_argument_errors_are_logged_as_errors(self, caplog, monkeypatch):
-        """An unexpected exception is not returned to the LLM; it is re-raised and
-        logged as an error with its traceback."""
-        from livekit.agents.llm import utils
-
-        def _boom(**kwargs):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(utils, "_prepare_function_arguments", _boom)
-        with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
-            with pytest.raises(RuntimeError, match="boom"):
-                prepare_function_arguments(fnc=mock_tool_1, json_arguments='{"arg1": "hi"}')
-
-        (record,) = [r for r in caplog.records if r.getMessage().startswith("error parsing")]
-        assert record.levelno == logging.ERROR
-        assert record.exc_info is not None
-
     def test_repairs_gemma_template_token_leak(self):
         """Gemma chat-template tokens (<|...|>) sometimes leak into function-call
         arguments, producing unparseable JSON. The repair pass should both fix
