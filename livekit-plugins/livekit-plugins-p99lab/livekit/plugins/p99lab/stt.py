@@ -460,6 +460,7 @@ class SpeechStream(stt.RecognizeStream):
                 kind = data.get("type")
                 if kind == "done":
                     closing_ws = True
+                    self._end_speech()  # closes speech left open by a last "continues" final
                     return
                 if kind == "error":
                     closing_ws = True

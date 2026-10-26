@@ -404,3 +404,28 @@ async def test_final_cut_mid_speech_keeps_the_turn_open(fake, http) -> None:
     stream.end_input()
     events = [ev.type for ev in await collect(stream) if ev.type != E.RECOGNITION_USAGE]
     assert events == [E.START_OF_SPEECH, E.FINAL_TRANSCRIPT, E.FINAL_TRANSCRIPT, E.END_OF_SPEECH]
+
+
+async def test_done_after_a_continued_final_ends_speech(fake, http) -> None:
+    async def cut_then_done(ws: web.WebSocketResponse, conn: dict) -> None:
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data)["type"] == "end":
+                await ws.send_json(
+                    {
+                        "type": "final",
+                        "text": "first part",
+                        "start": 0,
+                        "end": 24,
+                        "continues": True,
+                    }
+                )
+                await ws.send_json({"type": "done", "audio_seconds": 24.0})
+                return
+
+    fake.scripts = [cut_then_done]
+    stream = make(fake, http).stream(conn_options=FAST_RETRY)
+    for f in frames(tone(0.2)):
+        stream.push_frame(f)
+    stream.end_input()
+    events = [ev.type for ev in await collect(stream) if ev.type != E.RECOGNITION_USAGE]
+    assert events == [E.START_OF_SPEECH, E.FINAL_TRANSCRIPT, E.END_OF_SPEECH]
