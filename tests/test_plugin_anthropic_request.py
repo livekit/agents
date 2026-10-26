@@ -129,3 +129,14 @@ async def test_tool_choice_unchanged_without_parallel_tool_calls() -> None:
         "name": "get_weather",
         "disable_parallel_tool_use": True,
     }
+
+
+async def test_user_sent_as_metadata_user_id() -> None:
+    for extra_kwargs in ({}, {"metadata": anthropic.omit}):
+        request = await _request(llm_kwargs={"user": "user-123"}, extra_kwargs=extra_kwargs)
+        assert request["metadata"] == {"user_id": "user-123"}
+
+    metadata = {"user_id": "caller", "trace_id": "abc"}
+    request = await _request(llm_kwargs={"user": "user-123"}, extra_kwargs={"metadata": metadata})
+    assert request["metadata"] == {"user_id": "user-123", "trace_id": "abc"}
+    assert metadata == {"user_id": "caller", "trace_id": "abc"}

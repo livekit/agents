@@ -717,9 +717,12 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             consecutive_timeouts = 0
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                     consecutive_timeouts = 0
                 except asyncio.TimeoutError:
                     if closing_ws:
@@ -777,7 +780,10 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                    if data.get("type") in ("SpeechStarted", "Turn"):
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception(
                         "failed to process AssemblyAI message session=%s",
@@ -900,7 +906,7 @@ class SpeechStream(stt.SpeechStream):
             self._opts.speech_model,
             self._base_url,
         )
-        ws = await self._session.ws_connect(url, headers=headers)
+        ws = await self._session.ws_connect(url, headers=headers, autoping=False)
         logger.debug(
             "AssemblyAI WebSocket connected status=%s",
             ws._response.status if ws._response is not None else None,

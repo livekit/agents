@@ -650,6 +650,27 @@ async def test_a_track_named_before_it_exists_is_linked_once_published() -> None
     assert transcript.tracks == ["TR_late"]
 
 
+async def test_unsetting_the_track_before_one_is_linked_does_not_stall_startup() -> None:
+    room_io = _room_io(text_output=False)
+    audio_in, _ = _linked(room_io)
+    room_io._init_atask = asyncio.create_task(room_io._init_task())
+    room_io._room_connected_fut.set_result(None)
+    try:
+        # startup is now waiting for a track to link
+        await asyncio.sleep(0)
+
+        room_io.unset_track()
+        room_io.set_track("TR_late")
+        bob = _FakeParticipant("bob")
+        room_io._on_track_published(_FakePublication("TR_late"), bob)  # type: ignore[arg-type]
+
+        await asyncio.wait_for(room_io.wait_for_ready(), timeout=1.0)
+        assert audio_in.participants[-1] == "bob"
+        assert audio_in.tracks[-1] == "TR_late"
+    finally:
+        await utils.aio.cancel_and_wait(room_io._init_atask)
+
+
 async def test_switching_to_a_video_track_is_refused() -> None:
     room_io = _room_io()
     _linked(room_io)
