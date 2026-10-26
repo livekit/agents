@@ -279,9 +279,11 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-inference/src/mcp/session.rs", "lk_agents_inference::mcp::session"),
 ];
 
-/// The generated Python package, under whichever Python project the repo has: `python/livekit-agents`
-/// (agents-rust) or `livekit-agents` (livekit/agents, where `rust/` sits beside the package).
-const PYTHON_PACKAGES: &[&str] = &["python/livekit-agents", "livekit-agents"];
+/// The generated Python package, under every Python project the repo has: `python/livekit-agents`
+/// (agents-rust), or `livekit-agents` and its successor `livekit-agents-next` (livekit/agents, where
+/// `rust/` sits beside the packages).
+const PYTHON_PACKAGES: &[&str] =
+    &["python/livekit-agents", "livekit-agents", "livekit-agents-next"];
 const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 const NODE_ROOT: &str = "node/src/generated";
 const NODE_BINDING_ROOT: &str = "rust/crates/lk-agents-node/src/generated";
@@ -310,8 +312,7 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run(check: bool) -> Result<usize, String> {
-    let (root, python_package) = repo_root()?;
-    let python_root = root.join(python_package).join(PYTHON_GENERATED);
+    let (root, python_packages) = repo_root()?;
     let mut decls = Vec::new();
     for (src, module) in SOURCES {
         let path = root.join(src);
@@ -347,8 +348,16 @@ fn run(check: bool) -> Result<usize, String> {
     }
 
     let mut stale = 0;
-    for out in python::emit(&decls)? {
-        stale += put(&python_root.join(&out.path), &out.text, check)?;
+    let python = python::emit(&decls)?;
+    let stub = stub::emit(&decls, &exposed)?;
+    for package in python_packages {
+        let python_root = root.join(package).join(PYTHON_GENERATED);
+        for out in python.iter().chain(&stub) {
+            stale += put(&python_root.join(&out.path), &out.text, check)?;
+        }
+        if !check {
+            write_init(&python_root)?;
+        }
     }
     // The TypeScript side exists in agents-rust only; a repo without `node/` gets none of it.
     if root.join("node").is_dir() {
@@ -356,27 +365,25 @@ fn run(check: bool) -> Result<usize, String> {
             stale += put(&root.join(NODE_ROOT).join(&out.path), &out.text, check)?;
         }
     }
-    if let Some(out) = stub::emit(&decls, &exposed)? {
-        stale += put(&python_root.join(&out.path), &out.text, check)?;
-    }
     for out in napi::emit(&decls, &exposed)? {
         stale += put(&root.join(NODE_BINDING_ROOT).join(&out.path), &out.text, check)?;
     }
-    if !check {
-        // Written every time so a fresh checkout imports, and the dir is never a namespace package.
-        let init = python_root.join("__init__.py");
-        std::fs::create_dir_all(init.parent().expect("has a parent")).map_err(|e| e.to_string())?;
-        std::fs::write(
-            &init,
-            "# GENERATED DIRECTORY -- every file here is written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`).\n\
-             #\n\
-             # Nothing re-exports from this package. The frozen public paths do the re-exporting\n\
-             # (`voice/events.py` does `from .._generated.events import ...`), because moving a\n\
-             # name here would move it in the public API too.\n",
-        )
-        .map_err(|e| e.to_string())?;
-    }
     Ok(stale)
+}
+
+/// Written every time so a fresh checkout imports, and the dir is never a namespace package.
+fn write_init(python_root: &Path) -> Result<(), String> {
+    let init = python_root.join("__init__.py");
+    std::fs::create_dir_all(python_root).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &init,
+        "# GENERATED DIRECTORY -- every file here is written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`).\n\
+         #\n\
+         # Nothing re-exports from this package. The frozen public paths do the re-exporting\n\
+         # (`voice/events.py` does `from .._generated.events import ...`), because moving a\n\
+         # name here would move it in the public API too.\n",
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Returns 1 when the file on disk differs from what would be written.
@@ -447,15 +454,17 @@ fn declared(t: &ir::Ty) -> Vec<String> {
 }
 
 /// From `CARGO_MANIFEST_DIR`, not the cwd, so output lands in the same place wherever it runs.
-/// Returns the repo root and the Python project under it (one of [`PYTHON_PACKAGES`]).
-fn repo_root() -> Result<(PathBuf, &'static str), String> {
+/// Returns the repo root and the Python projects under it (of [`PYTHON_PACKAGES`]).
+fn repo_root() -> Result<(PathBuf, Vec<&'static str>), String> {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     loop {
-        if p.join("rust/Cargo.toml").exists()
-            && let Some(package) =
-                PYTHON_PACKAGES.iter().find(|d| p.join(d).join("pyproject.toml").exists())
-        {
-            return Ok((p, package));
+        let packages: Vec<&'static str> = PYTHON_PACKAGES
+            .iter()
+            .copied()
+            .filter(|d| p.join(d).join("pyproject.toml").exists())
+            .collect();
+        if p.join("rust/Cargo.toml").exists() && !packages.is_empty() {
+            return Ok((p, packages));
         }
         if !p.pop() {
             return Err(format!(
