@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
-import io
 import logging
 import multiprocessing as mp
 import socket
@@ -11,7 +10,6 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
-from typing import ClassVar
 
 import psutil
 import pytest
@@ -24,36 +22,20 @@ from livekit.protocol import agent
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
-@dataclass
-class EmptyMessage:
-    MSG_ID: ClassVar[int] = 0
-
-
-@dataclass
-class SomeDataMessage:
-    MSG_ID: ClassVar[int] = 1
-    string: str = ""
-    number: int = 0
-    double: float = 0.0
-    data: bytes = b""
-
-    def write(self, b: io.BytesIO) -> None:
-        ipc.channel.write_string(b, self.string)
-        ipc.channel.write_int(b, self.number)
-        ipc.channel.write_double(b, self.double)
-        ipc.channel.write_bytes(b, self.data)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.string = ipc.channel.read_string(b)
-        self.number = ipc.channel.read_int(b)
-        self.double = ipc.channel.read_double(b)
-        self.data = ipc.channel.read_bytes(b)
-
-
-IPC_MESSAGES = {
-    EmptyMessage.MSG_ID: EmptyMessage,
-    SomeDataMessage.MSG_ID: SomeDataMessage,
-}
+# the protocol's own messages, one per field type the codec writes
+CHANNEL_MESSAGES = [
+    ipc.proto.DumpStackTraceRequest(),
+    ipc.proto.PingRequest(timestamp=1_700_000_000_123),
+    ipc.proto.InitializeRequest(
+        asyncio_debug=True,
+        ping_interval=2.5,
+        ping_timeout=90.0,
+        high_ping_threshold=0.5,
+        http_proxy="http://proxy:8080",
+    ),
+    ipc.proto.InferenceRequest(method="lk_end_of_utterance", request_id="r1", data=b"\x00world"),
+    ipc.proto.InferenceResponse(request_id="r1", data=None, error="failed"),
+]
 
 
 def _echo_main(mp_cch):
@@ -61,7 +43,7 @@ def _echo_main(mp_cch):
         cch = await utils.aio.duplex_unix._AsyncDuplex.open(mp_cch)
         while True:
             try:
-                msg = await ipc.channel.arecv_message(cch, IPC_MESSAGES)
+                msg = await ipc.channel.arecv_message(cch, ipc.proto.IPC_MESSAGES)
                 await ipc.channel.asend_message(cch, msg)
             except utils.aio.duplex_unix.DuplexClosed:
                 print("_echo_main, duplex closed..")
@@ -77,15 +59,9 @@ async def test_async_channel():
     proc.start()
     mp_cch.close()
 
-    await ipc.channel.asend_message(pch, EmptyMessage())
-    assert await ipc.channel.arecv_message(pch, IPC_MESSAGES) == EmptyMessage()
-
-    await ipc.channel.asend_message(
-        pch, SomeDataMessage(string="hello", number=42, double=3.14, data=b"world")
-    )
-    assert await ipc.channel.arecv_message(pch, IPC_MESSAGES) == SomeDataMessage(
-        string="hello", number=42, double=3.14, data=b"world"
-    )
+    for msg in CHANNEL_MESSAGES:
+        await ipc.channel.asend_message(pch, msg)
+        assert await ipc.channel.arecv_message(pch, ipc.proto.IPC_MESSAGES) == msg
 
     await pch.aclose()
     await asyncio.sleep(0.1)
@@ -101,15 +77,9 @@ def test_sync_channel():
     proc.start()
     mp_cch.close()
 
-    ipc.channel.send_message(pch, EmptyMessage())
-    assert ipc.channel.recv_message(pch, IPC_MESSAGES) == EmptyMessage()
-
-    ipc.channel.send_message(
-        pch, SomeDataMessage(string="hello", number=42, double=3.14, data=b"world")
-    )
-    assert ipc.channel.recv_message(pch, IPC_MESSAGES) == SomeDataMessage(
-        string="hello", number=42, double=3.14, data=b"world"
-    )
+    for msg in CHANNEL_MESSAGES:
+        ipc.channel.send_message(pch, msg)
+        assert ipc.channel.recv_message(pch, ipc.proto.IPC_MESSAGES) == msg
 
     pch.close()
 
