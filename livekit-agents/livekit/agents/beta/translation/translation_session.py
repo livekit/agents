@@ -48,11 +48,17 @@ EventTypes = Literal[
 DEFAULT_OUTPUT_SEGMENT_TIMEOUT = 0.5
 
 
+# marks, in the transcript stream, where the audio segment the text belongs to ended
+_END_OF_SEGMENT = object()
+
+
 class TranslationTranscribedEvent(BaseModel):
     """The translation the model spoke, in the language it translates into."""
 
     type: Literal["translation_transcribed"] = "translation_transcribed"
     transcript: str
+    """The translation so far, as a user transcript is: each interim carries all of it, and
+    the final one the whole of it."""
     is_final: bool
     language: str | None = None
     created_at: float = Field(default_factory=time.time)
@@ -119,7 +125,9 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._forward_input_atask: asyncio.Task[None] | None = None
         self._forward_output_atask: asyncio.Task[None] | None = None
-        self._output_transcript_ch: aio.Chan[OutputTranscript] | None = None
+        self._output_transcript_ch: aio.Chan[OutputTranscript | object] | None = None
+        # the translation transcribed so far, for the event; the model sends it in pieces
+        self._output_transcript_text = ""
         self._output_transcript_atask: asyncio.Task[None] | None = None
         self._segment_timer: asyncio.TimerHandle | None = None
         self._segment_tasks: set[asyncio.Task[None]] = set()
@@ -263,7 +271,8 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._model_session.on("output_transcript", self._on_output_transcript)
             self._model_session.on("error", self._on_model_error)
 
-            self._output_transcript_ch = aio.Chan[OutputTranscript]()
+            self._output_transcript_ch = aio.Chan[OutputTranscript | object]()
+            self._output_transcript_text = ""
             self._output_transcript_atask = asyncio.create_task(
                 self._forward_output_transcript_task(self._output_transcript_ch),
                 name="_forward_output_transcript_task",
@@ -392,6 +401,11 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     if (audio_output := self.output.audio) is None:
                         continue
 
+                    if not self._segment_has_audio:
+                        # a segment starts once the one before has played, as the sink
+                        # requires; the model's speech waits in its stream meanwhile
+                        await audio_output.wait_for_playout()
+
                     await self._capture_output_frame(ev.frame, audio_output)
 
                 if not marks_segments:
@@ -402,15 +416,34 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._drain_resampler()
 
     @log_exceptions(logger=logger)
-    async def _forward_output_transcript_task(self, event_ch: aio.Chan[OutputTranscript]) -> None:
+    async def _forward_output_transcript_task(
+        self, event_ch: aio.Chan[OutputTranscript | object]
+    ) -> None:
         async for ev in event_ch:
             transcription_output = self.output.transcription
             if transcription_output is None or not self.output.transcription_enabled:
                 continue
 
-            await transcription_output.capture_text(ev.text)
-            if ev.is_final:
+            if ev is _END_OF_SEGMENT:
                 transcription_output.flush()
+                continue
+
+            assert isinstance(ev, OutputTranscript)
+            if ev.text:
+                await transcription_output.capture_text(ev.text)
+            if ev.is_final and not self._text_follows_audio():
+                transcription_output.flush()
+
+    def _text_follows_audio(self) -> bool:
+        """Whether the translation's text segments end with its audio segments.
+
+        A synchronizer pairs each audio segment with one text segment, and releases the text
+        only once both have ended. Ended on its own schedule, the text would close after its
+        audio had played, and the words not yet released would be lost. So while audio is
+        going out, the text ends where the audio does, marked in the transcript stream so it
+        stays behind the text that came before it.
+        """
+        return self.output.audio is not None and self.output.audio_enabled
 
     def _relabel_output(self, language: str) -> None:
         """Label the translation in the room with the language it is now spoken in."""
@@ -441,10 +474,16 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._output_transcript_ch is not None:
             self._output_transcript_ch.send_nowait(ev)
 
+        # the model sends pieces; the event carries all of it, so a final is never empty
+        self._output_transcript_text += ev.text
+        transcript = self._output_transcript_text
+        if ev.is_final:
+            self._output_transcript_text = ""
+
         self.emit(
             "translation_transcribed",
             TranslationTranscribedEvent(
-                transcript=ev.text,
+                transcript=transcript,
                 is_final=ev.is_final,
                 language=ev.language if ev.language is not None else self._model.target_language,
             ),
@@ -547,6 +586,9 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         had_audio, self._segment_has_audio = self._segment_has_audio, False
         self._segment_has_text = False
+        if had_audio and self._output_transcript_ch is not None:
+            # the text segment ends with its audio, behind the text already sent
+            self._output_transcript_ch.send_nowait(_END_OF_SEGMENT)
         if had_audio and (language := self._relabel_at_segment_end) is not None:
             # the text that was waiting on this segment's audio has gone out with it
             self._relabel_at_segment_end = None

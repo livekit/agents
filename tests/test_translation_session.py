@@ -227,10 +227,12 @@ async def test_both_transcripts_are_reported() -> None:
             "input_transcript", InputTranscript(text="hello", is_final=True, language="en")
         )
         model_session.emit("output_transcript", OutputTranscript(text="hola", is_final=True))
+        model_session.speak()
 
         assert heard == [("hello", True, "en")]
         # the language the model translates into stands in when it stamps none
         assert spoken == [("hola", True, "es")]
+        # published once its audio segment ends, which the text segment ends with
         await _wait_for(lambda: text_out._messages == ["hola"])
     finally:
         await session.aclose()
@@ -1435,3 +1437,90 @@ async def test_a_deferred_label_does_not_outlive_its_session() -> None:
         assert session._output_language == "de"
     finally:
         await session.aclose()
+
+
+async def test_the_translation_event_carries_all_of_it() -> None:
+    model = _FakeTranslationModel()
+    session, *_ = _session(model)
+    spoken: list[tuple[str, bool]] = []
+    session.on("translation_transcribed", lambda ev: spoken.append((ev.transcript, ev.is_final)))
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        # pieces, then an empty final, as a provider that only sends deltas reports them
+        model_session.emit("output_transcript", OutputTranscript(text="hola ", is_final=False))
+        model_session.emit("output_transcript", OutputTranscript(text="mundo", is_final=False))
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+        model_session.emit("output_transcript", OutputTranscript(text="adiós", is_final=True))
+
+        assert spoken == [
+            ("hola ", False),
+            ("hola mundo", False),
+            ("hola mundo", True),
+            ("adiós", True),
+        ]
+    finally:
+        await session.aclose()
+
+
+async def test_the_text_segment_ends_with_its_audio_segment() -> None:
+    model = _FakeTranslationModel()
+    # the transcript goes final well before the speech pauses
+    session, _, audio_out, text_out = _session(model, output_segment_timeout=0.1)
+    counts = _Counts(audio_out)
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        model_session.emit("output_transcript", OutputTranscript(text="hola", is_final=True))
+        model_session.speak()
+        await asyncio.sleep(0.02)
+        # the text has not ended yet: its audio has not
+        assert text_out._messages == []
+
+        await _wait_for(lambda: counts.flushes == 1)
+        await _wait_for(lambda: text_out._messages == ["hola"])
+    finally:
+        await session.aclose()
+
+
+async def test_text_without_audio_ends_on_its_own_final() -> None:
+    model = _FakeTranslationModel()
+    session, _, _, text_out = _session(model)
+    session.output.audio = None
+    await session.start()
+    try:
+        model.sessions[0].emit("output_transcript", OutputTranscript(text="hola", is_final=True))
+        await _wait_for(lambda: text_out._messages == ["hola"])
+    finally:
+        await session.aclose()
+
+
+async def test_paced_translation_text_survives_a_late_transcript_final() -> None:
+    from livekit.agents.voice.transcription.synchronizer import TranscriptSynchronizer
+
+    model = _FakeTranslationModel()
+    audio_sink, text_sink = FakeAudioOutput(), FakeTextOutput()
+    synchronizer = TranscriptSynchronizer(
+        next_in_chain_audio=audio_sink, next_in_chain_text=text_sink
+    )
+    session = TranslationSession(model=model, output_segment_timeout=0.05)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = synchronizer.audio_output
+    session.output.transcription = synchronizer.text_output
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        # a provider that sends deltas, and marks the transcript final only after it goes quiet
+        model_session.emit("output_transcript", OutputTranscript(text="hola ", is_final=False))
+        model_session.emit("output_transcript", OutputTranscript(text="mundo", is_final=False))
+        for _ in range(5):
+            model_session.speak(_frame(duration=0.02, sample_rate=24000))
+
+        # the silence timer ends the audio segment, and it plays out before the late final
+        await asyncio.sleep(0.4)
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+
+        await _wait_for(lambda: "".join(text_sink._messages).strip() == "hola mundo", timeout=3)
+    finally:
+        await session.aclose()
+        await synchronizer.aclose()
