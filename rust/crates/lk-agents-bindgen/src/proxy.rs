@@ -239,9 +239,13 @@ fn value(cx: &Cx, t: &syn::Type, o: &TokenStream) -> syn::Result<TokenStream> {
         && wrapper == "Arc"
         && is_stream_half(&path).is_none()
     {
+        // A registered native class is taken as itself, as `from_host` does.
         let handle = cx.handle(o);
         let clock = cx.clock();
-        return Ok(quote!(<dyn #path as ::lk_agents_abi::python::HostProxy>::view(#handle, #clock).map(::std::sync::Arc::from)));
+        return Ok(quote!(match ::lk_agents_abi::python::native::<dyn #path>(#o) {
+            ::std::option::Option::Some(native) => ::std::result::Result::Ok(native),
+            ::std::option::Option::None => <dyn #path as ::lk_agents_abi::python::HostProxy>::view(#handle, #clock).map(::std::sync::Arc::from),
+        }));
     }
     if let Some((wrapper, path)) = dyn_of(t)
         && wrapper == "Box"
@@ -402,7 +406,12 @@ fn method(cx: &Cx, m: &Method) -> syn::Result<TokenStream> {
         } else {
             quote!(let o = &o.call_method1(#host, (#args)(py)?)?;)
         };
-        let call = quote!(#rt::HostBridge::read(&self.bridge, "", |o| { let py = o.py(); #invoke #conv }));
+        // A core object the host builds during the call takes this proxy's clock.
+        let scope = cx.p.clock.then(|| {
+            let clock = if cx.ctor { quote!(clock) } else { quote!(self.clock) };
+            quote!(let _scope = #rt::ClockScope::push(::std::clone::Clone::clone(&#clock));)
+        });
+        let call = quote!({ #scope #rt::HostBridge::read(&self.bridge, "", |o| { let py = o.py(); #invoke #conv }) });
         let warn = format!("{name}.{host} failed: {{}}");
         return Ok(match head(ret) {
             Some((h, _)) if h == "Result" => quote!(#call.map_err(#err)),

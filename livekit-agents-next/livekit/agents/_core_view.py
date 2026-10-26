@@ -61,6 +61,14 @@ class _Provider:
 class _Stt(_Provider):
     _obj: stt.STT
 
+    def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
+        """A plugin runs one attempt, which the core retries within ``conn``; an adapter's
+        engine retries what it runs."""
+        view = _Stt(self._obj, APIConnectOptions(**conn))
+        if isinstance(self._obj, (stt.StreamAdapter, stt.FallbackAdapter)):
+            return view
+        return _core.RetryingStt(view, self._obj, **conn)
+
     def _core_label(self) -> str:
         return self._obj.label
 

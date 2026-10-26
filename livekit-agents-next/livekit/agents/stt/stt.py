@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
-from .. import _core
 from .._generated.stt import (
     RecognitionUsage,
     SpeechData,
@@ -57,16 +56,6 @@ def _speech_event_from_core(ev: dict[str, Any], *, offset: float = 0.0) -> Speec
         **ev,
         alternatives=alternatives,
         recognition_usage=RecognitionUsage(**usage) if usage else None,
-    )
-
-
-def _attempts(kind: str, conn_options: APIConnectOptions, label: str) -> _core.Attempts:
-    return _core.Attempts(
-        kind,
-        conn_options.max_retry,
-        conn_options.retry_interval,
-        conn_options.timeout,
-        label=label,
     )
 
 
@@ -133,15 +122,9 @@ class STT(
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
-        """Recognize ``buffer``, retried as the core decides within ``conn_options``."""
-        attempts = _attempts("stt_batch", conn_options, self._label)
-        while True:
-            try:
-                return await self._recognize_impl(
-                    buffer, language=language, conn_options=conn_options
-                )
-            except Exception as e:
-                await attempts.failed(e, self)
+        """Recognize ``buffer`` in one attempt; inside a session the core retries it within
+        ``conn_options``."""
+        return await self._recognize_impl(buffer, language=language, conn_options=conn_options)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self.emit(
@@ -152,6 +135,7 @@ class STT(
         )
 
     def _core_failed(self, error: Exception, recoverable: bool) -> None:
+        """A failed attempt the core retried or gave up on."""
         self._emit_error(error, recoverable)
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
@@ -228,7 +212,8 @@ class RecognizeStream(ABC):
         """
         Args:
             stt: The STT this stream recognizes for.
-            conn_options: The retry budget of the stream.
+            conn_options: The options of the provider's connection; the stream runs one attempt,
+                which the core retries inside a session.
             sample_rate: The rate the audio is resampled to before recognition; the input's own
                 rate when not given.
         """
@@ -236,9 +221,8 @@ class RecognizeStream(ABC):
         self._conn_options = conn_options
         self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
         self._event_ch = aio.Chan[SpeechEvent]()
-
-        # the attempt loop, and the stream's clock: `start_time`, `start_time_offset`
-        self._attempts = _attempts("stt_stream", conn_options, stt._label)
+        self._start_time = time.time()
+        self._start_time_offset = 0.0
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -259,25 +243,25 @@ class RecognizeStream(ABC):
 
     @property
     def start_time_offset(self) -> float:
-        return self._attempts.start_time_offset  # type: ignore[no-any-return]
+        return self._start_time_offset
 
     @start_time_offset.setter
     def start_time_offset(self, value: float) -> None:
         if value < 0:
             raise ValueError("start_time_offset must be non-negative")
-        self._attempts.start_time_offset = value
+        self._start_time_offset = value
 
     @property
     def start_time(self) -> float:
-        """Wall-clock anchor of the stream, re-seeded on each retry; plugins may move it to when
-        the first audio reached the provider, so stream-relative times convert accurately."""
-        return self._attempts.start_time  # type: ignore[no-any-return]
+        """Wall-clock anchor of the stream; plugins may move it to when the first audio reached
+        the provider, so stream-relative times convert accurately."""
+        return self._start_time
 
     @start_time.setter
     def start_time(self, value: float) -> None:
         if value < 0:
             raise ValueError("start_time must be non-negative")
-        self._attempts.start_time = value
+        self._start_time = value
 
     def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
         """Connection timing; kept on the stream, the core measures its own."""
@@ -287,15 +271,7 @@ class RecognizeStream(ABC):
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
-        while True:
-            self._attempts.begin()
-            try:
-                return await self._run()
-            except Exception as e:
-                await self._attempts.failed(e, self)
-
-    def _core_failed(self, error: Exception, recoverable: bool) -> None:
-        self._emit_error(error, recoverable)
+        await self._run()
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt._emit_error(api_error, recoverable)
@@ -340,9 +316,6 @@ class RecognizeStream(ABC):
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc  # noqa: B904
             raise StopAsyncIteration from None
-        if val.type == SpeechEventType.FINAL_TRANSCRIPT:
-            # a recognition succeeded: the retry budget restarts
-            self._attempts.reset()
         return val
 
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:

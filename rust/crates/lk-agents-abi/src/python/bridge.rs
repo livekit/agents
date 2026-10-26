@@ -147,6 +147,15 @@ impl<T: HostClock + ?Sized> HostClock for std::sync::Arc<T> {
 /// Popped on drop.
 pub struct ClockScope(bool);
 
+impl ClockScope {
+    /// `clock` is the ambient one until the scope drops: a core object the host builds meanwhile
+    /// (inside a proxy's call) runs on the proxy's clock.
+    pub fn push(clock: std::sync::Arc<dyn crate::Clock>) -> ClockScope {
+        CLOCK_SCOPE.with(|s| s.borrow_mut().push(clock));
+        ClockScope(true)
+    }
+}
+
 impl Drop for ClockScope {
     fn drop(&mut self) {
         if self.0 {

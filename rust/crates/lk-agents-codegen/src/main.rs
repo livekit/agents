@@ -207,6 +207,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/tts/stream_adapter.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/stt/stream_adapter.rs", "lk_agents_abi::stt::stream_adapter"),
     ("rust/crates/lk-agents-abi/src/types/retry.rs", "lk_agents_abi::types::retry"),
+    ("rust/crates/lk-agents-abi/src/stt/retry.rs", "lk_agents_abi::stt::retry"),
     ("rust/crates/lk-agents-abi/src/telemetry/provider.rs", "lk_agents_abi::telemetry::provider"),
     ("rust/crates/lk-agents-inference/src/fallback/chain.rs", "lk_agents_inference::fallback"),
     ("rust/crates/lk-agents-inference/src/fallback/llm.rs", "lk_agents_inference::fallback"),

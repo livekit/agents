@@ -246,7 +246,8 @@ impl Driver {
                 out.trace(InputStep::LegOpenDiscarded { leg: leg.label() });
                 self.discard_open(stream);
             }
-            (Ok(Opened::Stt(sink, source)), true) => {
+            (Ok(Opened::Stt(sink, mut source)), true) => {
+                source.report_retries(crate::audio::report_to(self.stt_retried.clone()));
                 if let Some(stt) = &self.session.stt {
                     out.machine().push(Effect::Provider(ProviderCall::Prewarm(stt.id)));
                 }

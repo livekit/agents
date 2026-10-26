@@ -1549,27 +1549,18 @@ class SttStreamAdapter:
     ) -> FallbackSttStream: ...
 
 
-class Attempts:
+class RetryingStt:
+    """`_core.RetryingStt`: what a host STT bound to `conn_options` is to the core."""
+
     def __init__(
         self,
-        kind: str,
-        maximum: int,
-        interval: float,
-        timeout: float,
+        stt: Any,
+        report: Any,
         *,
-        label: str,
+        max_retry: int,
+        retry_interval: float,
+        timeout: float,
     ) -> None: ...
-    @property
-    def start_time(self) -> float: ...
-    @start_time.setter
-    def start_time(self, value: float) -> None: ...
-    @property
-    def start_time_offset(self) -> float: ...
-    @start_time_offset.setter
-    def start_time_offset(self, value: float) -> None: ...
-    def reset(self) -> None: ...
-    def begin(self) -> None: ...
-    async def failed(self, error: Any, report: Any) -> None: ...
 
 
 class LlmMetricState:

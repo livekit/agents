@@ -290,3 +290,12 @@ pub(super) fn spawn_drain<T: Send + 'static>(
             ended.send(ChannelEnd { leg, cause, sink: Some(sink), closed: Some(closed), error });
     });
 }
+
+/// A stream's retried failures, sent to the session loop.
+pub(crate) fn report_to(
+    tx: crate::agent_session::Tx<lk_agents_abi::errors::ProviderError>,
+) -> lk_agents_abi::RetryReport {
+    Arc::new(move |error| {
+        let _ = tx.send(error);
+    })
+}

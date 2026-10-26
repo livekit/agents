@@ -430,6 +430,22 @@ def _models() -> Any:
         async def _run(self) -> None:
             raise APIConnectionError("scripted stt failure", retryable=False)
 
+    class FlakySTT(ScriptedSTT):
+        """The scripted STT whose first stream fails, retryably, as it opens."""
+
+        failures = 1
+
+        def stream(self, **_: object) -> stt.RecognizeStream:
+            return _FlakyRecognize(stt=self, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+    class _FlakyRecognize(_Recognize):
+        async def _run(self) -> None:
+            owner: Any = self._stt
+            if owner.failures:
+                owner.failures -= 1
+                raise APIConnectionError("scripted stt hiccup")
+            await super()._run()
+
     class SilentTTS(tts.TTS):
         """20 ms of silence per character, one chunked synthesis per sentence."""
 
@@ -532,7 +548,7 @@ def _models() -> Any:
 
     m.ScriptedVAD = ScriptedVAD
     m.ScriptedLLM, m.FailingLLM = ScriptedLLM, FailingLLM
-    m.ScriptedSTT, m.FailingSTT = ScriptedSTT, FailingSTT
+    m.ScriptedSTT, m.FailingSTT, m.FlakySTT = ScriptedSTT, FailingSTT, FlakySTT
     m.SilentTTS, m.FailingTTS = SilentTTS, FailingTTS
     return m
 
@@ -1090,6 +1106,20 @@ async def sc_stt_fallback(call: Call) -> None:
     await _close(call)
 
 
+async def sc_stt_retry(call: Call) -> None:
+    """The STT's stream fails once, retryably: the session reports it recoverable, the stream is
+    retried and hears the utterance."""
+    session = await _pipeline(call, stt=call.models.FlakySTT(call))
+    session.on(
+        "error",
+        lambda ev: call.log("stt_error", ev.error.recoverable, str(ev.error.error)),
+    )
+    await call.settle(1)
+    call.speak("hello there")
+    await call.settle(4)
+    await _close(call)
+
+
 async def sc_llm_failure(call: Call) -> None:
     session = await _pipeline(call, llm=call.models.FailingLLM())
     call.handle("reply", session.generate_reply(user_input="hello there"))
@@ -1617,6 +1647,7 @@ SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "llm_fallback": sc_llm_fallback,
     "tts_fallback": sc_tts_fallback,
     "stt_fallback": sc_stt_fallback,
+    "stt_retry": sc_stt_retry,
     "llm_failure": sc_llm_failure,
     "tts_failure": sc_tts_failure,
     "realtime_reply": sc_realtime_reply,

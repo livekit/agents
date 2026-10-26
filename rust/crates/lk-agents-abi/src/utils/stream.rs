@@ -57,7 +57,14 @@ pub trait StreamSource<T>: Send {
     fn call_ledger(&self) -> Option<CallLedger> {
         None
     }
+
+    /// Hands a stream that retries its failed attempts itself (a host STT's) who else hears of
+    /// each retried failure, as it happens; any other stream ignores it.
+    fn report_retries(&mut self, _report: RetryReport) {}
 }
+
+/// Told of each failed attempt a stream retries.
+pub type RetryReport = std::sync::Arc<dyn Fn(crate::errors::ProviderError) + Send + Sync>;
 
 /// A stream's provider calls, read by another task: `take(in_flight)` is
 /// [`StreamSource::take_call_metrics`].

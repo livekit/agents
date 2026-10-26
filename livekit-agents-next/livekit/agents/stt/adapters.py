@@ -137,16 +137,6 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         event = await self._native.recognize(frames, language if language else None)
         return _speech_event_from_core(event)
 
-    async def recognize(
-        self,
-        buffer: utils.AudioBuffer,
-        *,
-        language: NotGivenOr[str] = NOT_GIVEN,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SpeechEvent:
-        # the chain retries each member itself
-        return await self._recognize_impl(buffer, language=language, conn_options=conn_options)
-
     def stream(
         self,
         *,
@@ -170,8 +160,7 @@ class StreamAdapterWrapper(RecognizeStream):
     def __init__(
         self, *, stt: STT, native: _core.FallbackStt | _core.SttStreamAdapter, language: Any
     ) -> None:
-        # the core retries what it runs
-        super().__init__(stt=stt, conn_options=APIConnectOptions(max_retry=0))
+        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS)
         self._native = native
         self._language = language if language else None
 

@@ -108,6 +108,8 @@ impl DriverBuilder {
         let gen_tx: Tx<GenEvent> = Tx::new(queue_tx.clone(), |e| Event::Input(Input::Gen(e)));
         let legs_tx: Tx<ChannelEnd> =
             Tx::new(queue_tx.clone(), |e| Event::Input(Input::ChannelEnded(e)));
+        let stt_retried: Tx<lk_agents_abi::errors::ProviderError> =
+            Tx::new(queue_tx.clone(), |e| Event::Input(Input::SttRetried(e)));
         let leg_opens: Tx<crate::room_io::StreamOpened> =
             Tx::new(queue_tx.clone(), |e| Event::Input(Input::StreamOpened(e)));
         let video_tx: Tx<lk_agents_rtc::VideoFrameRef> =
@@ -152,8 +154,9 @@ impl DriverBuilder {
             sink
         };
         if let Some(stt) = &self.stt {
-            let (sink, source) =
+            let (sink, mut source) =
                 stt.stream(None, None).await.ok_or(DriverError::Missing("a streaming STT"))??;
+            source.report_retries(crate::audio::report_to(stt_retried.clone()));
             let sink = install(AudioChannel::Stt, Arc::from(sink));
             spawn_drain(
                 &self.spawner,
@@ -415,6 +418,7 @@ impl DriverBuilder {
             realtime_tx: rt_tx,
             playback_tx,
             stt_tx,
+            stt_retried,
             vad_tx,
             leg_opens,
             forwarder_tx: forwarder_tx.clone(),

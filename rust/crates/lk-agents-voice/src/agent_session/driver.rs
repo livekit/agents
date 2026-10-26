@@ -220,6 +220,8 @@ pub enum Input {
     ),
     Overlap(lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict>),
     ChannelEnded(ChannelEnd),
+    /// The STT stream failed an attempt it retries.
+    SttRetried(lk_agents_abi::errors::ProviderError),
     StreamOpened(crate::room_io::StreamOpened),
     Video(lk_agents_rtc::VideoFrameRef),
     /// A cleared buffer's answer: where playback stopped.
@@ -266,6 +268,8 @@ pub struct Driver {
     pub(crate) realtime_tx: Tx<crate::agent_activity::realtime::RealtimeWake>,
     pub(crate) playback_tx: Tx<(SpeechId, lk_agents_abi::voice::io::PlaybackFinished)>,
     pub(crate) stt_tx: Tx<crate::audio::Tagged<SpeechEvent>>,
+    /// The STT leg's retried failures (`STTError{recoverable: True}`).
+    pub(crate) stt_retried: Tx<lk_agents_abi::errors::ProviderError>,
     pub(crate) vad_tx: Tx<VadEvent>,
     pub(crate) leg_opens: Tx<crate::room_io::StreamOpened>,
     /// The data plane's commands, through the queue.
@@ -451,6 +455,9 @@ impl Driver {
             Some(Input::Eot(req, p)) => self.on_eot(now, req, p, &mut out),
             Some(Input::Overlap(ev)) => self.on_overlap_verdict(now, ev, &mut out),
             Some(Input::ChannelEnded(end)) => self.on_leg_ended(now, end, &mut out),
+            Some(Input::SttRetried(error)) => {
+                self.report_error(now, crate::events::ErrorSource::Stt, true, error, None, &mut out);
+            }
             Some(Input::StreamOpened(opened)) => self.on_leg_opened(now, opened, &mut out),
             Some(Input::Video(frame)) => self.on_video_frame(now, frame, &mut out),
             Some(Input::PlaybackFinished(speech, finished)) => {

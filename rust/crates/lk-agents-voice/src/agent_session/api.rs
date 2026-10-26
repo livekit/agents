@@ -1192,8 +1192,8 @@ fn session_tools(
     tools.map(|specs| crate::tool_executor::SessionTools { specs, host })
 }
 
-/// STT and VAD keep the host's budgets (nothing in Rust retries them); LLM and TTS run at zero
-/// because the engine's `Attempt` loop owns their retries, and two loops would multiply.
+/// LLM and TTS run at zero because the engine's `Attempt` loop owns their retries, and two loops
+/// would multiply; a host STT keeps its budget, which its `RetryingStt` spends.
 fn engine_retries() -> lk_agents_abi::ApiConnectOptions {
     lk_agents_abi::ApiConnectOptions { max_retry: 0, ..lk_agents_abi::ApiConnectOptions::default() }
 }

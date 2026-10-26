@@ -116,9 +116,7 @@
 //! - `lk_agents_abi::stt::stream_adapter::SttStreamAdapter::for_host`: parameter `stt`: not yet: `Arc<dyn Stt>` (a host object behind a proxy)
 //! - `lk_agents_abi::stt::stream_adapter::SttStreamAdapter::recognize_for_host`: parameter `frames`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::stt::stream_adapter::SttStreamAdapter::stream_for_host`: parameter `language`: not yet: `LanguageCode` is an open string (#[host(string)])
-//! - `lk_agents_abi::types::retry::Attempts::for_host`: parameter `kind`: not yet: `RequestKind` is an open string (#[host(string)])
-//! - `lk_agents_abi::types::retry::Attempts::begin`: parameter `clock`: not yet: `Arc<dyn Clock>` (a host object behind a proxy)
-//! - `lk_agents_abi::types::retry::Attempts::failed`: parameter `error`: `ProviderError` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_abi::stt::retry::RetryingStt::for_host`: parameter `stt`: not yet: `Arc<dyn Stt>` (a host object behind a proxy)
 //! - `lk_agents_inference::fallback::FallbackLlm::for_host`: parameter `llms`: not yet: `Arc<dyn Llm>` (a host object behind a proxy)
 //! - `lk_agents_inference::fallback::FallbackLlm::chat_for_host`: parameter `chat_ctx_host`: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_inference::fallback::FallbackStt::for_host`: parameter `stts`: not yet: `Arc<dyn Stt>` (a host object behind a proxy)

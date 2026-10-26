@@ -39,8 +39,10 @@ impl SttStreamAdapter {
 /// `stt.StreamAdapter`'s engine, as the host builds it; the public class stays Python.
 #[crate::host(object(name = "SttStreamAdapter", cell = "arc", as_dyn(Stt = as_stt)))]
 impl SttStreamAdapter {
+    /// The wrapped STT's recognitions run under the default `conn_options`, as the reference's.
     #[host(new)]
     pub fn for_host(stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self {
+        let stt = stt.with_conn_options(&ApiConnectOptions::default()).unwrap_or(stt);
         SttStreamAdapter::new(stt, vad)
     }
 
