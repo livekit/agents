@@ -1,7 +1,9 @@
 //! The fuzz crate's regression tests and suites, one module per file, built as one binary:
 //! each integration test file is its own binary otherwise, and linking the voice core into
 //! each of them made a core edit cost a minute of release builds.
+mod agent_state_written_on_connect;
 mod closing_on_own_error;
+mod cut_reply_keeps_heard_words;
 mod determinism;
 mod dtmf_close;
 mod dtmf_interrupt_has_cause;
@@ -25,6 +27,7 @@ mod live_options;
 mod mic_replaced_with_frames;
 mod model_failure_reported;
 mod path_needs_both_switches;
+mod realtime_items_filled;
 mod realtime_transcript_forwarded;
 mod realtime_waiter_journalled;
 mod refused_speech_announced;
@@ -44,6 +47,8 @@ mod switch_races_frames;
 mod tool_started_then_interrupted;
 mod transcript_path_reopened;
 mod twin_requests_attributed;
+mod unheard_reply_not_committed;
+mod user_turn_metrics;
 mod vad_interruption_has_cause;
 mod vad_left_speaking;
 mod wordless_audio_say;
