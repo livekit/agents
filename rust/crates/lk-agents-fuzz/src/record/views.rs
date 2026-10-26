@@ -117,7 +117,8 @@ impl<'a> InputsView<'a> {
     /// the driver has had a turn at all.
     pub fn driver_turn_after(&self, at: Observed) -> Option<Turn> {
         let applied = &self.0.applied;
-        let began = applied.iter().position(|a| a.at > at && yields(&a.input))?;
+        let after = applied.partition_point(|a| a.at <= at);
+        let began = after + applied[after..].iter().position(|a| yields(&a.input))?;
         Some(Turn { began: applied[began].at, ended: applied.get(began + 1).map(|a| a.at) })
     }
 
@@ -218,8 +219,14 @@ impl<'a> InputsView<'a> {
     /// When the driver received each accepted io command, in the order the case sent them: the
     /// n-th accepted command of a kind is the n-th `CommandReceived` of that kind.
     fn received_commands(&self) -> impl FnMut(&Input) -> Option<Observed> + 'a {
-        let journal = &self.0.journal;
-        let mut seen: std::collections::BTreeMap<&'static str, usize> = Default::default();
+        let mut received: std::collections::BTreeMap<&str, std::collections::VecDeque<Observed>> =
+            Default::default();
+        for (at, kind) in self.0.journal_where(|step| match step {
+            Step::Core(CoreStep::CommandReceived { kind, .. }) => Some(*kind),
+            _ => None,
+        }) {
+            received.entry(kind).or_default().push_back(at);
+        }
         move |input| {
             let kind = match input {
                 Input::SetIoEnabled { .. } => "ActivityCommand::SetIoEnabled",
@@ -228,16 +235,7 @@ impl<'a> InputsView<'a> {
                 Input::SetTranscriptionOutput { .. } => "ActivityCommand::SetTranscriptionOutput",
                 _ => return None,
             };
-            let n = seen.entry(kind).or_default();
-            let at = journal
-                .iter()
-                .filter(|(_, s)| {
-                    matches!(s, Step::Core(CoreStep::CommandReceived { kind: k, .. }) if *k == kind)
-                })
-                .nth(*n)
-                .map(|(at, _)| *at);
-            *n += 1;
-            at
+            received.get_mut(kind)?.pop_front()
         }
     }
 }
@@ -1023,8 +1021,9 @@ impl StreamView<'_, '_> {
             .r
             .index
             .heard
-            .get(&(self.opened.kind, self.opened.nth, mic, chunk))
-            .is_some_and(|ats| ats.iter().any(|at| *at > pushed))
+            .get(&(self.opened.kind, self.opened.nth, mic))
+            .and_then(|chunks| chunks.get(usize::from(chunk)).copied().flatten())
+            .is_some_and(|last| last > pushed)
     }
 }
 

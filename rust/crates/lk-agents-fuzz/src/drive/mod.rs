@@ -379,7 +379,9 @@ pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T
     }
     let _watchdog = watchdog(schedule);
     tokio::runtime::Builder::new_current_thread()
-        .enable_all()
+        // Timers only: every leg is in memory, and an I/O driver would poll the OS on every turn
+        // of the scheduler, which `event_interval(1)` makes every task poll.
+        .enable_time()
         .start_paused(true)
         // The run's own future is polled after every task, so the queue owner can step the driver
         // between any two polls of the tasks it spawned.

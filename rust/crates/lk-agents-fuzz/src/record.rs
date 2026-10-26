@@ -11,7 +11,7 @@
 //! One log holds every resource the run opened, and [`Live`] is the part still open, because
 //! "what can an input point at" and "what is open" are one question asked twice.
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -528,10 +528,10 @@ struct Index {
     host_by_speech: BTreeMap<u64, Vec<usize>>,
     host_by_tool: BTreeMap<String, Vec<usize>>,
     produced_chunks: BTreeSet<(u32, u16)>,
-    /// When each listening stream heard each microphone frame, ascending: `(stream kind, stream,
-    /// microphone, chunk)`. A run forwards tens of thousands of frames, and the rules ask about
-    /// each one.
-    heard: HashMap<(Kind, u32, u32, u16), Vec<Observed>>,
+    /// When each listening stream last heard each microphone chunk number, by `(stream kind,
+    /// stream, microphone)` and then chunk. A run forwards tens of thousands of frames, and the
+    /// rules ask about each one whether it was heard after it was pushed.
+    heard: BTreeMap<(Kind, u32, u32), [Option<Observed>; Tag::MAX_CHUNK as usize + 1]>,
 }
 
 // ==============================================================================================
@@ -710,7 +710,14 @@ impl Recording {
     pub fn record_forwarded(&mut self, at: Observed, kind: Kind, nth: u32, tags: Vec<Tag>) {
         for tag in &tags {
             if let Tag::Mic { mic, chunk } = *tag {
-                self.index.heard.entry((kind, nth, mic, chunk)).or_default().push(at);
+                let chunks = self
+                    .index
+                    .heard
+                    .entry((kind, nth, mic))
+                    .or_insert_with(|| [None; Tag::MAX_CHUNK as usize + 1]);
+                if let Some(last) = chunks.get_mut(usize::from(chunk)) {
+                    *last = (*last).max(Some(at));
+                }
             }
         }
         self.forwarded.push((at, kind, nth, tags));
@@ -916,8 +923,22 @@ impl Recording {
 /// Read off `Debug`, because a `Step` is thirteen nested enums with no other way to ask which
 /// variant it is. [`Recording::journal_gaps`] checks the spelling matches [`step_names`].
 pub fn step_name(step: &Step) -> String {
-    let text = format!("{step:?}");
     let cut = |s: &str| s.find(['(', '{', ' ', ')']).unwrap_or(s.len());
+    // The two names lead the text: formatting stops once both are written, not at the payload's
+    // end.
+    struct Head<F>(String, F);
+    impl<F: Fn(&str) -> usize> std::fmt::Write for Head<F> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.push_str(s);
+            let family = (self.1)(&self.0);
+            let rest = self.0[family..].trim_start_matches('(');
+            let done = family < self.0.len() && (self.1)(rest) < rest.len();
+            if done { Err(std::fmt::Error) } else { Ok(()) }
+        }
+    }
+    let mut head = Head(String::new(), cut);
+    let _ = std::fmt::Write::write_fmt(&mut head, format_args!("{step:?}"));
+    let text = head.0;
     let family = &text[..cut(&text)];
     let rest = text[family.len()..].trim_start_matches('(');
     match &rest[..cut(rest)] {

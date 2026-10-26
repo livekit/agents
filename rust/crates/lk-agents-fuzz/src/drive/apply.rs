@@ -28,7 +28,8 @@ impl Run {
     pub async fn apply(&mut self, input: &Input) {
         // `VOICE_TRACE=1` narrates every input as it is applied, whichever phase sends it: the
         // way to find the one a run stops answering on.
-        if std::env::var_os("VOICE_TRACE").is_some() {
+        static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *TRACE.get_or_init(|| std::env::var_os("VOICE_TRACE").is_some()) {
             eprintln!("> {input:?}");
         }
         let at = self.stamps.next();

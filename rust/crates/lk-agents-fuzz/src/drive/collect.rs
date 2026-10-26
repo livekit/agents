@@ -52,6 +52,8 @@ impl Run {
         let now = self.stamps.next();
         for (id, handle) in &self.handles {
             let done = handle.done();
+            // A handle seen done keeps the error it ended with: no need to read it again.
+            let ended = self.record.handles().get(id).is_some_and(|seen| seen.done);
             self.record.record_handle(
                 *id,
                 Handle {
@@ -61,7 +63,11 @@ impl Run {
                     interrupted: handle.interrupted(),
                     scheduled: handle.scheduled(),
                     allow_interruptions: handle.allow_interruptions(),
-                    error: handle.exception().ok().flatten().map(|e| format!("{e:?}")),
+                    error: if ended {
+                        None
+                    } else {
+                        handle.exception().ok().flatten().map(|e| format!("{e:?}"))
+                    },
                 },
             );
         }

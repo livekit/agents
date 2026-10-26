@@ -17,7 +17,7 @@ use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
     input::{Count, Input, Ref},
-    record::{Detail, InferenceView, InputsView, Kind, Observed, Recording, Tag, Window},
+    record::{Detail, InferenceView, InputsView, Kind, Observed, Recording, Switch, Tag, Window},
 };
 
 pub struct ForwardedWhileEnabled;
@@ -92,6 +92,7 @@ impl Rule for ForwardedWhileEnabled {
                 let frame = (mic.nth, chunk);
                 expect_reached(
                     &inputs,
+                    &audio_input,
                     &inference,
                     &gate_closed,
                     &reopened,
@@ -118,7 +119,7 @@ impl Rule for ForwardedWhileEnabled {
                         .iter()
                         .filter(|pushed| **pushed < heard.at)
                         .next_back()
-                        .is_some_and(|pushed| switching(&inputs, *pushed))
+                        .is_some_and(|pushed| switching(&inputs, &audio_input, *pushed))
                 });
                 check.expect_with(Subject::Resource(Kind::Mic, mic), late || raced, || {
                     format!(
@@ -134,9 +135,8 @@ impl Rule for ForwardedWhileEnabled {
 /// Whether the path's last switch before a frame was pushed had not yet reached the driver: the
 /// switch waits on the command queue for the driver's next turn while the frame goes straight to
 /// the pump, so the two land in the same turn in either order.
-fn switching(inputs: &InputsView, pushed: Observed) -> bool {
-    inputs
-        .audio_input()
+fn switching(inputs: &InputsView, audio_input: &Switch, pushed: Observed) -> bool {
+    audio_input
         .last_change(pushed)
         .is_some_and(|(at, _)| inputs.driver_turn_after(at).is_none_or(|turn| turn.began > pushed))
 }
@@ -148,6 +148,7 @@ const LISTENERS: [Kind; 2] = [Kind::Stt, Kind::Vad];
 /// open for its whole journey.
 fn expect_reached(
     inputs: &InputsView,
+    audio_input: &Switch,
     inference: &InferenceView,
     gate_closed: &[Window],
     reopened: &[(Observed, Kind)],
@@ -163,8 +164,8 @@ fn expect_reached(
     // A switch landing in the same turn races the pump for the frame, and so does replacing the
     // microphone it was pushed to (the reference cancels the old stream's reader with whatever it
     // had not read); either outcome is right.
-    if inputs.audio_input().off_within(pushed, end)
-        || switching(inputs, pushed)
+    if audio_input.off_within(pushed, end)
+        || switching(inputs, audio_input, pushed)
         || replaced.is_some_and(|at| at <= end)
     {
         return;
