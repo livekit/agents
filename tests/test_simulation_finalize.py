@@ -9,6 +9,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents.ipc.job_proc_lazy_main import _JobProc
+from livekit.agents.types import ATTRIBUTE_SIMULATOR
 from livekit.agents.voice import AgentSession
 from livekit.agents.voice.remote_session import SessionHost
 
@@ -19,7 +20,9 @@ class _FakeRoom(rtc.EventEmitter[str]):
     def __init__(self) -> None:
         super().__init__()
         self.connected = True
-        self.remote_participants: dict[str, Any] = {"simulator": object()}
+        self.remote_participants: dict[str, Any] = {
+            "simulator": SimpleNamespace(attributes={ATTRIBUTE_SIMULATOR: "1"})
+        }
 
     def isconnected(self) -> bool:
         return self.connected
@@ -86,6 +89,20 @@ class TestWaitForSimulationFinalize:
         await asyncio.wait_for(wait, timeout=0.5)
 
     @pytest.mark.asyncio
+    async def test_ends_when_the_simulator_leaves_others_behind(self) -> None:
+        room = _FakeRoom()
+        room.remote_participants["sip"] = SimpleNamespace(attributes={})
+        wait = asyncio.ensure_future(
+            _JobProc._wait_for_simulation_finalize(_job_proc(room, 10.0), _host())
+        )
+        await asyncio.sleep(0.05)
+        assert not wait.done()
+
+        del room.remote_participants["simulator"]
+        room.emit("participant_disconnected", object())
+        await asyncio.wait_for(wait, timeout=0.5)
+
+    @pytest.mark.asyncio
     async def test_does_not_wait_once_the_room_is_gone(self) -> None:
         room = _FakeRoom()
         room.connected = False
@@ -99,3 +116,4 @@ class TestWaitForSimulationFinalize:
             _JobProc._wait_for_simulation_finalize(_job_proc(_FakeRoom(), 0.1), _host()),
             timeout=1.0,
         )
+
