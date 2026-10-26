@@ -148,15 +148,6 @@ impl KeytermSlot {
         }
     }
 
-    pub(super) fn llm(&self) -> Option<Arc<dyn Llm>> {
-        self.llm.clone()
-    }
-
-    /// `asyncio.wait_for`'s bound on one pass.
-    pub(super) fn timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs_f64(self.detection.timeout.max(0.0))
-    }
-
     /// One request: `llm.chat(.., tools=[record_keyterms], tool_choice="required")`.
     pub(super) fn request(
         &self,
@@ -181,10 +172,6 @@ impl KeytermSlot {
             tool_choice: Some(lk_agents_abi::ToolChoice::Required),
             ..Default::default()
         }
-    }
-
-    pub(super) fn set_inflight(&mut self, req: u64, handle: AbortHandle) {
-        self.inflight = Some((req, handle));
     }
 }
 
@@ -868,7 +855,6 @@ impl Driver {
     }
 
     fn push_keyterms(&mut self, terms: Vec<String>, out: &mut Out) {
-        // Called through the table until the keyterm pass is core state (step 3).
         if let Some(stt) = self.session.stt.as_ref().and_then(|s| self.shared.resources.stt(s.id)) {
             stt.update_keyterms(&terms);
         }
@@ -878,17 +864,19 @@ impl Driver {
     /// One request, bounded by the pass's timeout, run off the loop.
     fn request_keyterms(&mut self, now: Ts, req: u64, prompt: String, out: &mut Out) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
-        let Some(llm) = slot.llm() else {
+        let Some(llm) = slot.llm.clone() else {
             // The machine asked with no model to ask: fed back as a failure so the slot frees.
             self.keyterms_step(now, KeytermIn::Failed { req }, out);
             return;
         };
         out.trace(InputStep::LegRequested { leg: DetectorName::Keyterms, req });
-        out.machine().arm(Timer::KeytermTimeout, now.saturating_add(slot.timeout()));
+        // `asyncio.wait_for`'s bound on one pass.
+        let timeout = std::time::Duration::from_secs_f64(slot.detection.timeout.max(0.0));
+        out.machine().arm(Timer::KeytermTimeout, now.saturating_add(timeout));
         let request = slot.request(prompt, self.step.wall());
         let shared = Arc::clone(&self.shared);
         let handle =
             shared.spawner.clone().spawn_unboxed(detection_pass(shared.clone(), llm, request, req));
-        slot.set_inflight(req, handle);
+        slot.inflight = Some((req, handle));
     }
 }

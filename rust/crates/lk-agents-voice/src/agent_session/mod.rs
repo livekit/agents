@@ -403,7 +403,7 @@ pub struct SessionShared {
     pub gen_ids: std::sync::atomic::AtomicU64,
     pub session_id: String,
     pub activity: tokio::sync::watch::Sender<ActivitySnapshot>,
-    /// The providers by id, until the runtime owns them.
+    /// The providers by id.
     pub resources: lk_agents_abi::resources::Resources,
 }
 
