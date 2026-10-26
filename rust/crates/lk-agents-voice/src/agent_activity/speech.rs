@@ -130,6 +130,7 @@ impl Driver {
                     allow_interruptions,
                     tool_choice,
                     call,
+                    false,
                     out,
                 );
             }

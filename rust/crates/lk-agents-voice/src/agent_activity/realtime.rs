@@ -88,6 +88,8 @@ pub(crate) mod realtime_state {
         GenerateReply {
             instructions: Option<String>,
             tool_choice: Option<ToolChoice>,
+            /// A DTMF collection's read-back, whose guard the speech holds once it exists.
+            read_back: bool,
         },
         /// No caller waits. `commit_audio`: commit the input buffer and ask, both or neither.
         UserTurn {
@@ -573,7 +575,7 @@ impl Driver {
                 text: text.clone(),
                 add_to_chat_ctx: *add_to_chat_ctx,
             }),
-            Request::GenerateReply { instructions, tool_choice } => {
+            Request::GenerateReply { instructions, tool_choice, .. } => {
                 RealtimeCommand::GenerateReply(rt::GenerateReply {
                     req_id: req_id.clone(),
                     instructions: instructions.clone(),
@@ -609,7 +611,14 @@ impl Driver {
                 self.activity.realtime_players.remove(&speech);
                 return;
             }
-            Request::GenerateReply { .. } | Request::UserTurn { .. } => SpeechKind::GenerateReply,
+            Request::GenerateReply { read_back, .. } => {
+                // A read-back that will never be spoken releases the collection's guard now.
+                if read_back {
+                    self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::ReadBack(None), out);
+                }
+                SpeechKind::GenerateReply
+            }
+            Request::UserTurn { .. } => SpeechKind::GenerateReply,
         };
         self.answer_waiter(call, kind, how, out);
     }
@@ -687,12 +696,16 @@ impl Driver {
             );
         }
         let t = &mut self.activity.realtime_state;
+        let mut read_back = false;
         let (asked, allow_interruptions, add_to_chat_ctx, reuse) = match pending.flatten() {
             Some(Pending { request, call, allow_interruptions, .. }) => match request {
                 Request::Say { add_to_chat_ctx, .. } => {
                     (Some(call), allow_interruptions, add_to_chat_ctx, None)
                 }
-                Request::GenerateReply { .. } => (Some(call), allow_interruptions, true, None),
+                Request::GenerateReply { read_back: asked_back, .. } => {
+                    read_back = asked_back;
+                    (Some(call), allow_interruptions, true, None)
+                }
                 Request::UserTurn { .. } => (None, allow_interruptions, true, None),
                 Request::ToolFollowUp { speech, step } => {
                     (None, allow_interruptions, true, Some(Reuse { speech, step }))
@@ -722,6 +735,10 @@ impl Driver {
             }
         };
         self.activity.realtime_state.set_open_speech(&response_id, speech);
+        if read_back {
+            let ev = crate::agent_activity::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
+            self.dtmf_step(ev, out);
+        }
     }
 
     /// `asked`: the speech is a host command's (`say`, `generate_reply`), with its call.
@@ -985,6 +1002,7 @@ impl Driver {
         allow_interruptions: Option<bool>,
         tool_choice: Option<lk_agents_abi::ToolChoice>,
         call: Option<RequestId>,
+        read_back: bool,
         out: &mut Out,
     ) {
         if self.activity.rt_session.is_none() {
@@ -997,7 +1015,7 @@ impl Driver {
             self.rt_send(RealtimeCommand::PushItem(push), out);
             self.commit_item(item.into(), Source::UserTyped, Visibility::Both, out);
         }
-        let request = Request::GenerateReply { instructions, tool_choice };
+        let request = Request::GenerateReply { instructions, tool_choice, read_back };
         self.realtime_request(now, request, call, allow_interruptions, out);
     }
 

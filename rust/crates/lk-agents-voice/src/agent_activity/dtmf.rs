@@ -184,6 +184,11 @@ impl Driver {
     /// The confirm arm's read-back; one refused at creation (a draining or closing queue)
     /// releases the guard now.
     pub(crate) fn read_back_dtmf(&mut self, now: Ts, user_input: String, out: &mut Out) {
+        // `session.generate_reply()` answers on a realtime model's own socket; the read-back's
+        // speech is named when the server creates it.
+        if self.activity.rt_session.is_some() {
+            return self.realtime_reply(now, Some(user_input), None, None, None, None, true, out);
+        }
         let h = self.generate_reply_speech(
             now,
             Some(user_input),
