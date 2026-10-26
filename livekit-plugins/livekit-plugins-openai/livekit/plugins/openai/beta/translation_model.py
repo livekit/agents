@@ -199,19 +199,18 @@ def _translation_url(base_url: str, model: str) -> str:
     return urlunparse((parsed_url.scheme, parsed_url.netloc, path, "", query, ""))
 
 
-# what ends a sentence, in the scripts the model speaks and hears
-_SENTENCE_END = (".", "?", "!", "…", "。", "？", "！", "؟", "।")
-# quiet periods a transcript that has not ended a sentence waits through before it is ended:
-# its closing punctuation can trail the words by more than one
-_UNFINISHED_SENTENCE_GRACE = 2
+# what ends a sentence, in the scripts the model speaks and hears. A transcript never opens
+# with these: arriving after the quiet that ended the last one, they are its closing
+# punctuation, and would otherwise lead the next one ("? What are you talking about?")
+_SENTENCE_END = ".?!…。？！؟।"
 
 
 class _TranscriptSegmenter:
     """Ends a transcript once its deltas go quiet, since the server sends no end itself.
 
-    A transcript that stops mid-sentence is given a little longer, or a late ``?`` would open
-    the next one. Each callback gets the delta and the transcript so far, so a consumer can
-    take either.
+    The quiet that ends one is the boundary between utterances, kept as given; punctuation
+    that trails past it is dropped rather than opening the next. Each callback gets the delta
+    and the transcript so far, so a consumer can take either.
     """
 
     def __init__(
@@ -227,27 +226,19 @@ class _TranscriptSegmenter:
         self._loop = loop
         self._timer: asyncio.TimerHandle | None = None
         self._text = ""
-        self._grace_left = 0
 
     def push(self, delta: str) -> None:
+        if not self._text:
+            # the last transcript's closing punctuation, or the space that leads a new one
+            delta = delta.lstrip(_SENTENCE_END + " ")
         if not delta:
             return
 
         self._text += delta
         self._on_text(delta, self._text)
-        self._grace_left = _UNFINISHED_SENTENCE_GRACE
         if self._timer is not None:
             self._timer.cancel()
-        self._timer = self._loop.call_later(self._timeout, self._on_quiet)
-
-    def _on_quiet(self) -> None:
-        """End the transcript, unless it stopped mid-sentence and has grace left."""
-        if self._grace_left > 0 and not self._text.rstrip(" \"'”»)").endswith(_SENTENCE_END):
-            self._grace_left -= 1
-            self._timer = self._loop.call_later(self._timeout, self._on_quiet)
-            return
-
-        self.flush()
+        self._timer = self._loop.call_later(self._timeout, self.flush)
 
     def flush(self) -> None:
         """End the open transcript, if one is open."""

@@ -369,7 +369,7 @@ async def test_a_retarget_relabels_only_once_the_server_applies_it(
         await session.aclose()
 
 
-async def test_a_transcript_stopped_mid_sentence_waits_for_its_punctuation(
+async def test_punctuation_trailing_past_the_quiet_does_not_open_the_next_transcript(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     conns = _connect_hook(monkeypatch)
@@ -379,18 +379,21 @@ async def test_a_transcript_stopped_mid_sentence_waits_for_its_punctuation(
     try:
         await _wait_for(lambda: bool(conns))
         conns[0].emit({"type": "session.input_transcript.delta", "delta": "where is the restroom"})
-        # the question mark trails the words by more than one quiet period
-        await asyncio.sleep(0.08)
-        conns[0].emit({"type": "session.input_transcript.delta", "delta": "?"})
         await _wait_for(lambda: any(t.is_final for t in heard))
+        # the question mark arrives after the quiet ended the sentence, with the next one
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": "? What"})
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": " are you saying?"})
+        await _wait_for(lambda: sum(t.is_final for t in heard) == 2)
 
-        finals = [t.text for t in heard if t.is_final]
-        assert finals == ["where is the restroom?"]
+        assert [t.text for t in heard if t.is_final] == [
+            "where is the restroom",
+            "What are you saying?",
+        ]
     finally:
         await session.aclose()
 
 
-async def test_a_finished_sentence_ends_after_one_quiet_period(
+async def test_utterances_apart_by_more_than_the_quiet_stay_apart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     conns = _connect_hook(monkeypatch)
@@ -399,8 +402,12 @@ async def test_a_finished_sentence_ends_after_one_quiet_period(
     session.on("input_transcript", heard.append)
     try:
         await _wait_for(lambda: bool(conns))
-        conns[0].emit({"type": "session.input_transcript.delta", "delta": "Hello there."})
-        await asyncio.sleep(0.08)
-        assert [t.text for t in heard if t.is_final] == ["Hello there."]
+        # neither carries punctuation, and the pause between is short of three timeouts
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": "hello"})
+        await asyncio.sleep(0.1)
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": "goodbye"})
+        await _wait_for(lambda: sum(t.is_final for t in heard) == 2)
+
+        assert [t.text for t in heard if t.is_final] == ["hello", "goodbye"]
     finally:
         await session.aclose()
