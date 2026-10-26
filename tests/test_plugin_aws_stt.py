@@ -370,6 +370,7 @@ async def test_aws_stream_closes_open_segment_when_attempt_restarts(
             [_transcript_event("hel", 0.0, 0.4, partial=True)],
             [_transcript_event("bye", 0.0, 0.3, partial=True)],
         ],
+        max_retry=1,
     )
 
     try:
