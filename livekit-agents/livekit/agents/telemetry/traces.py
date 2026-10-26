@@ -339,6 +339,7 @@ class _JobTelemetry:
     attributes: dict[str, AttributeValue]
     traces_enabled: bool
     logs_enabled: bool
+    metrics_enabled: bool = True
 
 
 def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
@@ -536,15 +537,19 @@ class _GatedSpanExporter(SpanExporter):
         self._inner.shutdown()
 
 
-# logger scopes of the records _upload_session_report emits. They belong to the
-# session recording, not to Python log export, so a job's `logs` option does not
-# gate them: a record=False session with evals still uploads them.
-_SESSION_REPORT_SCOPES = frozenset({"chat_history", "evaluations"})
+# Attribute carried by the records _upload_session_report emits. They belong to the
+# session recording, not to Python log export, so a job's `logs` option does not gate
+# them: a record=False session with evals still uploads them. The origin is proved by
+# this internal marker, never by the logger's (public) scope name, which any user
+# logger can claim.
+_SESSION_REPORT_ATTRIBUTE = "lk.internal.session_report"
 
 
 def _is_session_report_record(record: ReadableLogRecord) -> bool:
-    scope = getattr(record, "instrumentation_scope", None)
-    return getattr(scope, "name", None) in _SESSION_REPORT_SCOPES
+    attributes = record.log_record.attributes
+    if not attributes:
+        return False
+    return attributes.get(_SESSION_REPORT_ATTRIBUTE) is True
 
 
 class _GatedLogExporter(LogRecordExporter):
@@ -564,6 +569,15 @@ class _GatedLogExporter(LogRecordExporter):
                 exportable.append(r)
         if not exportable:
             return LogRecordExportResult.SUCCESS
+        for r in exportable:
+            attributes = r.log_record.attributes
+            if attributes and _SESSION_REPORT_ATTRIBUTE in attributes:
+                # the marker is for the gate, not for Cloud
+                r.log_record.attributes = {
+                    key: value
+                    for key, value in attributes.items()
+                    if key != _SESSION_REPORT_ATTRIBUTE
+                }
         return self._inner.export(exportable)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
@@ -1018,6 +1032,7 @@ class _CloudTelemetry:
                 attributes=session_metadata,
                 traces_enabled=enable_traces,
                 logs_enabled=enable_logs,
+                metrics_enabled=enable_metrics,
             )
             self._export_jobs[job_id] = state
             if self._span_gate is not None:
@@ -1339,13 +1354,22 @@ async def _upload_session_report(
         otel_logger.emit(
             body=body,
             timestamp=timestamp,
-            attributes=attributes,
+            attributes={**attributes, _SESSION_REPORT_ATTRIBUTE: True},
             severity_number=severity,
             severity_text=severity_text,
         )
 
     chat_logger = _get_logger("chat_history")
     recording_options = report.options.recording_options
+    # The report's attribute names belong to the session-report schema and carry no
+    # `pii` segment, so the log redaction processor cannot drop them. When the project
+    # mandates redaction, withhold the free-form parts that can quote the conversation
+    # here instead; the verdict, tag name, and outcome stay because they carry none.
+    redaction_enabled = (
+        bool((metadata or {}).get(ATTRIBUTE_REDACTION_ENABLED))
+        or bool(recording_options.get("redaction", False))
+        or telemetry_utils.redaction_enabled()
+    )
 
     if recording_enabled(recording_options):
         _log(
@@ -1396,28 +1420,41 @@ async def _upload_session_report(
                 severity = SeverityNumber.ERROR
                 severity_text = "error"
 
+            # judge reasoning and criteria quote the conversation
+            evaluation_payload = evaluation
+            if redaction_enabled:
+                evaluation_payload = {
+                    key: value
+                    for key, value in evaluation.items()
+                    if key not in ("reasoning", "instructions")
+                }
+
             _log(
                 eval_logger,
                 body="evaluation",
                 timestamp=int(report.timestamp * 1e9),
-                attributes={"evaluation": evaluation},
+                attributes={"evaluation": evaluation_payload},
                 severity=severity,
                 severity_text=severity_text,
             )
 
     for tag, entry in tagger._tags.items():
         if entry.metadata:
+            # tag metadata is caller-supplied and may quote session content
+            tag_payload: dict[str, Any] = {"name": tag}
+            if not redaction_enabled:
+                tag_payload["metadata"] = entry.metadata
             _log(
                 eval_logger,
                 body="tag",
                 timestamp=int(entry.timestamp * 1e9),
-                attributes={"tag": {"name": tag, "metadata": entry.metadata}},
+                attributes={"tag": tag_payload},
             )
 
     if tagger.outcome:
         is_fail = tagger.outcome == "fail"
         outcome_data: dict[str, Any] = {"outcome": tagger.outcome}
-        if tagger.outcome_reason:
+        if tagger.outcome_reason and not redaction_enabled:
             outcome_data["reason"] = tagger.outcome_reason
 
         _log(
