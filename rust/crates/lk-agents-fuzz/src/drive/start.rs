@@ -249,8 +249,7 @@ impl Run {
         };
         let console_mic = console.as_ref().map(|(_, cli)| (registry.new_mic(), cli.clone()));
         // The answering-machine detector, as `AMD.__aenter__` attaches it once the call is up:
-        // its config as the host resolves it, then the step `AMD._setup` takes on what the room
-        // says (a SIP answer comes later, from the case).
+        // its config as the host resolves it; it then awaits the callee in the room.
         if let Some(amd) = setup.amd {
             use lk_agents_abi::voice::amd::{AmdConfigKwargs, TranscriptSource};
             let llm = fakes::FakeLlm::new(registry.clone());
@@ -275,17 +274,7 @@ impl Run {
                 ivr_detection: amd.ivr_detection,
                 ..AmdConfigKwargs::default()
             };
-            api.host_attach_amd(cfg, llm, None, stt).expect("attach the AMD");
-            match amd.answer {
-                AmdAnswer::Track => {
-                    api.amd_start_detection_timer().expect("a running session");
-                    api.amd_start_listening().expect("a running session");
-                }
-                AmdAnswer::Sip => {}
-                AmdAnswer::Missing => {
-                    api.amd_settle("uncertain", "participant_missing").expect("a running session")
-                }
-            }
+            api.host_attach_amd(cfg, llm, None, stt, None).expect("attach the AMD");
         }
         let mut run = Run {
             api,
@@ -339,8 +328,8 @@ impl Run {
             let name = format!("avatar-{schedule}");
             run.avatar = Some(fakes::FakeAvatarWorker::start(run.time.clock(), &name).await);
         }
-        // The person joins the call the agent just answered.
-        if legs.is_some() {
+        // The person joins the call the agent just answered; the callee AMD awaits may not have.
+        if setup.amd.map_or(legs.is_some(), |amd| amd.answer != AmdAnswer::Missing) {
             run.join_caller();
         }
         run.collect();
@@ -349,10 +338,21 @@ impl Run {
 
     /// The person joins the room. With the room's legs they publish a microphone, which is then
     /// the session's (unless the host replaced it), and their app sends what it buffered before
-    /// the agent was there, as the setup says.
+    /// the agent was there, as the setup says. AMD's callee joins as the setup's answer says: a
+    /// SIP call still ringing, and with their audio even when no leg of the session hears it.
     pub(super) fn join_caller(&mut self) {
-        let caller = self.room.add_participant(CALLER, ParticipantKind::Standard);
-        let Some(legs) = self.setup.room_legs else { return };
+        let sip = self.setup.amd.is_some_and(|amd| amd.answer == AmdAnswer::Sip);
+        let kind = if sip { ParticipantKind::Sip } else { ParticipantKind::Standard };
+        let caller = self.room.add_participant(CALLER, kind);
+        if sip {
+            caller.set_attribute(lk_agents_abi::voice::amd::SIP_CALL_STATUS_ATTR, "ringing");
+        }
+        let Some(legs) = self.setup.room_legs else {
+            if self.setup.amd.is_some() {
+                caller.publish_microphone("TR_callee");
+            }
+            return;
+        };
         if self.host_mic {
             return;
         }

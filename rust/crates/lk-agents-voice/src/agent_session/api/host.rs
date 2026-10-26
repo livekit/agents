@@ -184,6 +184,7 @@ impl SessionApi {
         let interruption = interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
         let toolset = host_toolset(tools, tools_host, tool_runner);
+        let offline = room.offline();
         let room = room.rtc();
 
         // **Nothing starts here**; the loop begins at `start()`. Synchronous so a host can bind the
@@ -356,8 +357,12 @@ impl SessionApi {
                 events.event(&HostWire::Diagnostic(d.wire()));
             }
         }
-        api.host =
-            HostParts { events: on_event, eot: turn_detector, has_options: options.is_some() };
+        api.host = HostParts {
+            events: on_event,
+            eot: turn_detector,
+            has_options: options.is_some(),
+            call_room: (!offline).then(|| Arc::clone(&room)),
+        };
         Ok(api)
     }
 
@@ -678,8 +683,9 @@ impl SessionApi {
     }
 
     /// `AMD._run`: the answering-machine detector, started as a peer of this session over its
-    /// config, classifier LLM, tools and optional STT. The verdict comes back as `amd_result`; a
-    /// second attach is refused.
+    /// config, classifier LLM, tools and optional STT. It listens once the callee answers in the
+    /// session's room (only `participant_identity`'s audio, when given); the verdict comes back as
+    /// `amd_result`. A second attach is refused.
     #[host(method(name = "attach_amd"))]
     pub fn host_attach_amd(
         &self,
@@ -687,6 +693,7 @@ impl SessionApi {
         llm: Arc<dyn Llm>,
         tools: Option<lk_agents_abi::HostRef>,
         stt: Option<Arc<dyn Stt>>,
+        participant_identity: Option<String>,
     ) -> Result<(), CommandRefused> {
         let config = crate::amd::classifier::AmdConfig::resolve(&cfg)
             .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
@@ -696,6 +703,8 @@ impl SessionApi {
             llm: llm_leg(llm),
             tools_host: tools,
             stt: stt.map(stt_leg),
+            room: self.host.call_room.clone(),
+            participant: participant_identity,
         };
         Ok(self.attach_amd(setup)?)
     }
@@ -1167,19 +1176,10 @@ impl SessionApi {
     #[host(method(send = IvrCommand::Close))]
     pub fn ivr_close(&self) -> Result<(), SessionRefused>;
 
-    /// `_AMDClassifier.start_detection_timer()`: the overall detection budget, armed (or moved)
-    /// from now: at *answer*, not at dial, so pre-answer ringback cannot burn it.
+    /// `AMD.started`: the detector listens (the callee answered, no verdict out yet).
     #[host(method)]
-    pub fn amd_start_detection_timer(&self) -> Result<(), SessionRefused> {
-        use crate::amd::classifier::{In, Start};
-        self.amd_input(In::Start(Start::DetectionTimer))
-    }
-
-    /// `_AMDClassifier.start_listening()`: the input gate opens and the no-speech timer is armed.
-    #[host(method)]
-    pub fn amd_start_listening(&self) -> Result<(), SessionRefused> {
-        use crate::amd::classifier::{In, Start};
-        self.amd_input(In::Start(Start::Listening))
+    pub fn amd_listening(&self) -> bool {
+        self.running(|r| Ok(r.amd.as_ref().is_some_and(|amd| amd.listening()))).unwrap_or(false)
     }
 
     /// `AMD.push_audio(frame)`: a frame for AMD's own STT while it listens; dropped otherwise.
@@ -1191,23 +1191,6 @@ impl SessionApi {
             }
             Ok(())
         })
-    }
-
-    /// `_AMDClassifier.settle(category, reason)`: a fallback verdict from the host (e.g.
-    /// `uncertain`, `participant_missing`). Works before listening ever opened.
-    #[host(method)]
-    pub fn amd_settle(&self, category: &str, reason: &str) -> Result<(), CommandRefused> {
-        use crate::amd::classifier::{In, Verdict};
-        use lk_agents_abi::voice::amd::{AmdCategory, AmdReason};
-        let category = AmdCategory::from_wire(category)
-            .ok_or_else(|| CommandRefused::Invalid(format!("unknown AMD category {category:?}")))?;
-        let reason = AmdReason::from_wire(reason)
-            .ok_or_else(|| CommandRefused::Invalid(format!("unknown AMD reason {reason:?}")))?;
-        Ok(self.amd_input(In::Verdict(Verdict::Settle {
-            category,
-            reason,
-            speech_duration: None,
-        }))?)
     }
 
     /// `_AMDClassifier.end_input()`: no more transcripts, the classification in flight cancelled.

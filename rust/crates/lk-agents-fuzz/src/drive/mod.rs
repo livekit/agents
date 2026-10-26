@@ -260,9 +260,10 @@ pub struct AmdSetup {
     pub answer: AmdAnswer,
 }
 
-/// What `AMD._setup` finds in the room, as `amd_decide_setup_step` turns it into a step: the
-/// callee's track (listening opens at once), a SIP call answered later (the case sends
-/// `Amd { Listen }` when `sip.callStatus` goes active), or nobody (`participant_missing`).
+/// What the callee does in the room AMD awaits them in: joins with their audio (listening opens
+/// at once), joins as a SIP call the case answers later (`Amd { Answer }` sets `sip.callStatus`
+/// to `active`), or has not joined (`participant_missing` once the track wait runs out, unless
+/// they join in time).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum AmdAnswer {
     #[default]

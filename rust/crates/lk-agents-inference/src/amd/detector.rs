@@ -1,12 +1,11 @@
-//! The provider and room half of `AMD`: model selection and the setup anchor. The classifier
-//! machine and the S-06 plan live in `lk_agents_voice::amd::classifier`.
+//! The provider half of `AMD`: model selection. The classifier machine and the room wait live in
+//! `lk_agents_voice::amd`.
 
 
 use lk_agents_abi::voice::amd::AmdCategory;
 
 pub use lk_agents_abi::voice::amd::{
-    DEFAULT_LLM_MODEL, DEFAULT_STT_MODEL, EVALUATED_LLM_MODELS, EVALUATED_STT_MODELS, SIP_CALL_STATUS_ACTIVE,
-    SIP_CALL_STATUS_ATTR, TRACK_PUBLICATION_TIMEOUT,
+    DEFAULT_LLM_MODEL, DEFAULT_STT_MODEL, EVALUATED_LLM_MODELS, EVALUATED_STT_MODELS,
 };
 
 /// `_warn_if_not_evaluated` (`detector.py:627`) as a predicate: `model == candidate ||
@@ -57,27 +56,6 @@ pub fn auto_select_models(livekit_url: &str, api_key: &str, api_secret: &str) ->
     lk_agents_abi::is_cloud_url(livekit_url) && !api_key.is_empty() && !api_secret.is_empty()
 }
 
-/// `_setup` / `_wait_for_sip_answer` (`detector.py:397`) as a stateless calculator over wire
-/// names; the 5 s timeout is the driver's. `publisher` is read on `track_published` only: `"sip"`
-/// (the track exists before the callee answers, so listening waits for `sip.callStatus ==
-/// "active"`), `"other"` (the track arriving *is* the answer) or `None` (the publisher vanished
-/// before lookup). A missing track, a vanished publisher and a SIP call that never goes active all
-/// settle `participant_missing`, rather than listening for the full `no_speech_threshold`.
-#[lk_agents_abi::host(export(pid = false, name = "amd_decide_setup_step"))]
-pub fn decide_setup_step_named(event: &str, publisher: Option<&str>) -> Result<&'static str, String> {
-    const LISTEN: &str = "start_listening";
-    const SETTLE: &str = "settle_participant_missing";
-    Ok(match (event, publisher) {
-        // `session._room_io` is `None`: the reference warns and starts immediately.
-        ("no_room_io", _) | ("sip_answered", _) => LISTEN,
-        ("track_published", Some("sip")) => "wait_for_sip_answer",
-        ("track_published", Some("other")) => LISTEN,
-        ("track_published", None) | ("track_unavailable", _) | ("sip_answer_failed", _) => SETTLE,
-        ("track_published", Some(o)) => return Err(format!("unknown publisher kind {o:?}")),
-        (other, _) => return Err(format!("unknown setup event {other:?}")),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,26 +88,6 @@ mod tests {
         assert!(!auto_select_models("wss://x.livekit.cloud", "k", ""));
         assert!(!auto_select_models("wss://selfhosted.example.com", "k", "s"));
         assert!(!auto_select_models("wss://evil.com/?x=livekit.cloud", "k", "s"));
-    }
-
-    // Catches: an early end reaching `start_listening` instead of `settle`, listening when a SIP
-    // track is published (before the callee answers), or a publisher kind read on an event that
-    // carries none. With no room to wait on the reference warns and starts anyway.
-    #[test]
-    fn each_setup_event_takes_its_step() {
-        for (event, publisher, want) in [
-            ("track_unavailable", None, Ok("settle_participant_missing")),
-            ("track_published", None, Ok("settle_participant_missing")),
-            ("sip_answer_failed", None, Ok("settle_participant_missing")),
-            ("track_published", Some("sip"), Ok("wait_for_sip_answer")),
-            ("track_published", Some("other"), Ok("start_listening")),
-            ("sip_answered", Some("robot"), Ok("start_listening")),
-            ("no_room_io", None, Ok("start_listening")),
-        ] {
-            assert_eq!(decide_setup_step_named(event, publisher), want, "{event} {publisher:?}");
-        }
-        assert!(decide_setup_step_named("track_published", Some("robot")).is_err());
-        assert!(decide_setup_step_named("dialled", None).is_err());
     }
 
     // Catches: a renamed category wire string.

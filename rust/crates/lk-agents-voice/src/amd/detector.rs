@@ -1,6 +1,6 @@
 use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand};
 use crate::amd::classifier::{
-    Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out,
+    Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out, Start,
     TranscriptSource, Verdict,
 };
 use crate::events::SessionEvent;
@@ -8,11 +8,15 @@ use crate::trace::{
     ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step, TimerName,
 };
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::voice::amd::{AMD_PROMPT, AmdCategory};
+use lk_agents_abi::voice::amd::{
+    AMD_PROMPT, AmdCategory, AmdReason, SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR,
+    TRACK_PUBLICATION_TIMEOUT,
+};
 use lk_agents_abi::{
     AudioFrame, ChatContext, ChatItem, ChatMessage, FunctionToolCall, HostRef, Llm, Role,
     SpawnerExt, SpeechEvent, SpeechEventType, StreamSink, Stt, SttSink, SttSource, TimerSet, Ts,
 };
+use lk_agents_rtc::{ParticipantIdentity, ParticipantKind, RtcRoom};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +26,8 @@ pub const SAVE_PREDICTION_TOOL: &str = "save_prediction";
 
 /// `classifier.postpone_termination`, offered while extensions remain.
 pub const POSTPONE_TERMINATION_TOOL: &str = "postpone_termination";
+
+const LOG: &str = "livekit.agents";
 
 /// The leg table's peer row and the journal's name for it (`StreamOpened{"amd"}`, `ChannelEnded{"amd"}`).
 const TAP: &str = "amd";
@@ -69,11 +75,24 @@ pub struct AmdSetup {
     pub tools_host: Option<HostRef>,
     /// `AMD(stt=..)`: AMD's own recogniser; `None` reads the session's finals.
     pub stt: Option<Arc<dyn Stt>>,
+    /// The call's room, where the callee's answer is awaited; `None` for a session with no room
+    /// io (a console's), which starts listening at once.
+    pub room: Option<Arc<dyn RtcRoom>>,
+    /// `AMD(participant_identity=..)`: the one participant whose audio is awaited.
+    pub participant: Option<String>,
 }
 
 impl AmdSetup {
     pub fn new(config: AmdConfig, llm: Arc<dyn Llm>) -> Self {
-        AmdSetup { config, prompt: AMD_PROMPT.to_owned(), llm, tools_host: None, stt: None }
+        AmdSetup {
+            config,
+            prompt: AMD_PROMPT.to_owned(),
+            llm,
+            tools_host: None,
+            stt: None,
+            room: None,
+            participant: None,
+        }
     }
 }
 
@@ -91,6 +110,7 @@ impl fmt::Debug for AmdSetup {
 #[derive(Clone)]
 pub struct AmdHandle {
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
+    listening: Arc<AtomicBool>,
 }
 
 /// A gone system drops what it is sent.
@@ -110,9 +130,14 @@ impl AmdHandle {
         let _ = self.tx.send(Msg::Input(In::Close));
     }
 
+    /// `AMD.started`: the machine listens (the callee answered, no verdict out yet).
+    pub fn listening(&self) -> bool {
+        self.listening.load(Ordering::Relaxed)
+    }
+
     fn detached() -> Self {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        AmdHandle { tx }
+        AmdHandle { tx, listening: Arc::default() }
     }
 }
 
@@ -140,6 +165,14 @@ enum Msg {
     SttOpened(Result<(SttSink, SttSource), ProviderError>),
     /// One event off the tap's drain (`_receive`, `detector._receive`).
     Transcript(SpeechEvent),
+    /// What the room said of the callee ([`await_callee`]).
+    Callee(Callee),
+}
+
+/// `AMD._setup`'s outcome: listening opens, or the call ended before detection could run.
+enum Callee {
+    Answered,
+    Missing(String),
 }
 
 enum SttLeg {
@@ -191,11 +224,14 @@ pub struct AmdSystem {
     stt: SttLeg,
     /// The session asked to close (or the machine was closed): nothing more is read.
     closed: bool,
+    /// The machine's [`Amd::listening`], for the host's `AMD.started`.
+    listening: Arc<AtomicBool>,
 }
 
 impl AmdSystem {
-    /// `AMD._run`: holding authorization from now, subscribed to the feed, the tap opening off the
-    /// loop. Past the close request nothing is attached and the handle drops what it is sent.
+    /// `AMD._run`: holding authorization from now, subscribed to the feed, the tap opening and the
+    /// callee awaited off the loop. Past the close request nothing is attached and the handle
+    /// drops what it is sent.
     pub fn spawn(peer: PeerHandle, setup: AmdSetup) -> AmdHandle {
         if *peer.closing.borrow() {
             peer.journal(Step::Core(CoreStep::PortFailure("amd: attached after the close")));
@@ -206,10 +242,22 @@ impl AmdSystem {
         // "closing it so AMD can manage the IVR lifecycle": the session navigator is closed
         // before the hold; `execute()` on a machine-ivr verdict starts AMD's own.
         let _ = peer.send(Origin::Amd, IvrCommand::Close);
+        let (room, participant) = (setup.room.clone(), setup.participant.clone());
         let system = AmdSystem::new(peer, setup, tx.clone());
+        let listening = system.listening.clone();
         let spawner = system.peer.spawner.clone();
+        let time = system.peer.time.clone();
+        let callee_tx = tx.clone();
+        spawner.spawn_unboxed(async move {
+            tokio::select! {
+                () = callee_tx.closed() => {}
+                callee = await_callee(room, participant, time) => {
+                    let _ = callee_tx.send(Msg::Callee(callee));
+                }
+            }
+        });
         spawner.spawn_unboxed(system.run(rx, msg_rx));
-        AmdHandle { tx }
+        AmdHandle { tx, listening }
     }
 
     fn new(peer: PeerHandle, setup: AmdSetup, tx: tokio::sync::mpsc::UnboundedSender<Msg>) -> Self {
@@ -228,6 +276,7 @@ impl AmdSystem {
             inflight: None,
             stt: SttLeg::None,
             closed: false,
+            listening: Arc::default(),
         };
         if let Some(stt) = stt {
             system.open_tap(stt);
@@ -334,6 +383,19 @@ impl AmdSystem {
             }
             Msg::SttOpened(outcome) => self.on_tap_opened(outcome),
             Msg::Transcript(ev) => self.on_tap_transcript(now, ev),
+            // `_start_listening`: the detection budget from the answer, then the input gate.
+            Msg::Callee(Callee::Answered) => {
+                log::debug!(target: LOG, "AMD starts listening");
+                self.step(now, In::Start(Start::DetectionTimer));
+                self.step(now, In::Start(Start::Listening));
+            }
+            Msg::Callee(Callee::Missing(error)) => {
+                log::debug!(target: LOG, error = error.as_str();
+                    "AMD: call ended before detection could run, settling");
+                let (category, reason) = (AmdCategory::Uncertain, AmdReason::ParticipantMissing);
+                let settle = Verdict::Settle { category, reason, speech_duration: None };
+                self.step(now, In::Verdict(settle));
+            }
         }
     }
 
@@ -352,6 +414,8 @@ impl AmdSystem {
         self.machine = Some(next);
         self.perform(now, out);
         self.sync_tap();
+        let listening = self.machine.as_ref().is_some_and(Amd::listening);
+        self.listening.store(listening, Ordering::Relaxed);
         let skips = self.machine.as_ref().is_some_and(Amd::skips_turn_reply);
         if skips != skipped {
             let _ = self.peer.send(Origin::Amd, TurnCommand::SkipReplies(skips));
@@ -601,6 +665,43 @@ impl AmdSystem {
         if let Some(tap) = removed {
             self.peer.remove_audio_tap(tap);
         }
+    }
+}
+
+/// `AMD._setup`: the callee's audio track (subscribed), then for a SIP callee the call answered
+/// (`sip.callStatus == "active"`). No track within [`TRACK_PUBLICATION_TIMEOUT`], a publisher gone
+/// before it is looked up, or a call that ends unanswered is `participant_missing`, rather than
+/// listening for the whole no-speech threshold. Without a room the timers start at once.
+async fn await_callee(
+    room: Option<Arc<dyn RtcRoom>>,
+    participant: Option<String>,
+    time: crate::agent_session::Timebase,
+) -> Callee {
+    let Some(room) = room else {
+        log::warn!(target: LOG,
+            "session room_io unavailable, starting amd timers immediately as fallback");
+        return Callee::Answered;
+    };
+    let audio = Some(vec![lk_agents_rtc::TRACK_KIND_AUDIO]);
+    let track =
+        lk_agents_rtc::wait_for_track_publication(room.clone(), participant, audio, false, true);
+    let publisher = match time.timeout(TRACK_PUBLICATION_TIMEOUT, track).await {
+        Err(_) => return Callee::Missing("timed out waiting for participant audio track".into()),
+        Ok(Err(e)) => return Callee::Missing(e.to_string()),
+        Ok(Ok((publisher, _))) => publisher,
+    };
+    let Some(publisher) = publisher.and_then(|id: ParticipantIdentity| room.participant(&id))
+    else {
+        return Callee::Missing("participant disappeared after track subscription".into());
+    };
+    if publisher.kind() != ParticipantKind::Sip {
+        return Callee::Answered;
+    }
+    let (attribute, active) = (SIP_CALL_STATUS_ATTR.to_owned(), SIP_CALL_STATUS_ACTIVE.to_owned());
+    let identity = publisher.identity().as_str().to_owned();
+    match lk_agents_rtc::wait_for_participant_attribute(room, identity, attribute, active).await {
+        Ok(()) => Callee::Answered,
+        Err(e) => Callee::Missing(e.to_string()),
     }
 }
 

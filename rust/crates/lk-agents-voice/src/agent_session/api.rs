@@ -629,6 +629,8 @@ struct HostParts {
     events: Option<Arc<dyn SessionEvents>>,
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     has_options: bool,
+    /// Where `AMD` awaits the callee: the call's room, `None` on an offline (console) session.
+    call_room: Option<Arc<dyn lk_agents_rtc::RtcRoom>>,
 }
 
 /// One stream, in emission order, so ordering between items, handoffs and completions needs no
@@ -753,6 +755,10 @@ pub trait SessionEvents: Send + Sync {
 pub trait SessionRoom: Send + Sync {
     fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom>;
     fn timebase(&self) -> Timebase;
+    /// No call behind the room (`OfflineRoom`): the reference's session without a room io.
+    fn offline(&self) -> bool {
+        false
+    }
 }
 
 /// A host `rtc.Room`, seen through `_core_rtc.Room`, whose `_core_rtc` wraps it.

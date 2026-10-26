@@ -840,9 +840,6 @@ pub fn amd_constants() -> lk_agents_abi::voice::amd::AmdConstants {
     lk_agents_abi::voice::amd::AmdConstants {
         default_llm_model: a::DEFAULT_LLM_MODEL.to_owned(),
         default_stt_model: a::DEFAULT_STT_MODEL.to_owned(),
-        track_publication_timeout: a::TRACK_PUBLICATION_TIMEOUT.as_secs_f64(),
-        sip_call_status_attr: a::SIP_CALL_STATUS_ATTR.to_owned(),
-        sip_call_status_active: a::SIP_CALL_STATUS_ACTIVE.to_owned(),
         prompt: a::AMD_PROMPT.to_owned(),
         evaluated_llm_models: a::EVALUATED_LLM_MODELS.iter().map(|s| (*s).to_owned()).collect(),
         evaluated_stt_models: a::EVALUATED_STT_MODELS.iter().map(|s| (*s).to_owned()).collect(),

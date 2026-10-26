@@ -159,15 +159,12 @@ pub const EVALUATED_LLM_MODELS: &[&str] = &[
 pub const EVALUATED_STT_MODELS: &[&str] =
     &["deepgram/nova-3", "assemblyai/universal-streaming-multilingual", "cartesia/ink-whisper"];
 
-/// The detector's constants, as the sixteen keys the binding's `amd_constants` answers with.
+/// The detector's constants, as the thirteen keys the binding's `amd_constants` answers with.
 #[derive(Host)]
 #[binding(emit)]
 pub struct AmdConstants {
     pub default_llm_model: String,
     pub default_stt_model: String,
-    pub track_publication_timeout: f64,
-    pub sip_call_status_attr: String,
-    pub sip_call_status_active: String,
     pub prompt: String,
     pub evaluated_llm_models: Vec<String>,
     pub evaluated_stt_models: Vec<String>,

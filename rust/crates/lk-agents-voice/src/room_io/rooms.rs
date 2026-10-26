@@ -256,13 +256,31 @@ impl OfflineRoom {
         self.time.clone()
     }
 
-    /// The room and its clock, as a session is built on them.
+    /// The room and its clock, as a session is built on them: an offline one.
     pub fn session_room(&self) -> Arc<dyn crate::agent_session::SessionRoom> {
-        Arc::new(crate::agent_session::FixedRoom { rtc: self.room(), time: self.timebase() })
+        let room = crate::agent_session::FixedRoom { rtc: self.room(), time: self.timebase() };
+        Arc::new(Offline(room))
     }
 
     #[host(getter)]
     pub fn name(&self) -> String {
         self.room.name()
+    }
+}
+
+/// [`OfflineRoom`] as a session sees it: no call behind it.
+struct Offline(crate::agent_session::FixedRoom);
+
+impl crate::agent_session::SessionRoom for Offline {
+    fn rtc(&self) -> Arc<dyn RtcRoom> {
+        self.0.rtc()
+    }
+
+    fn timebase(&self) -> Timebase {
+        self.0.timebase()
+    }
+
+    fn offline(&self) -> bool {
+        true
     }
 }

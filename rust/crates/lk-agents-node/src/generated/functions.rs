@@ -228,19 +228,6 @@ pub fn amd_auto_select_models(livekit_url: String, api_key: String, api_secret: 
     lk_agents_inference::amd::auto_select_models(&livekit_url, &api_key, &api_secret)
 }
 
-/// `_setup` / `_wait_for_sip_answer` (`detector.py:397`) as a stateless calculator over wire
-/// names; the 5 s timeout is the driver's. `publisher` is read on `track_published` only: `"sip"`
-/// (the track exists before the callee answers, so listening waits for `sip.callStatus ==
-/// "active"`), `"other"` (the track arriving *is* the answer) or `None` (the publisher vanished
-/// before lookup). A missing track, a vanished publisher and a SIP call that never goes active all
-/// settle `participant_missing`, rather than listening for the full `no_speech_threshold`.
-#[napi(js_name = "amdDecideSetupStep")]
-pub fn amd_decide_setup_step(env: Env, event: String, publisher: Option<String>) -> napi::Result<String> {
-    crate::host_error::run(&env, || {
-        Ok(lk_agents_inference::amd::decide_setup_step_named(&event, publisher.as_deref()).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))?.to_string())
-    })
-}
-
 /// `_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's, else default.
 #[napi(js_name = "amdResolveMaxEndpointingDelay")]
 pub fn amd_resolve_max_endpointing_delay(env: Env, provided: Option<f64>, activity: Option<f64>) -> napi::Result<f64> {

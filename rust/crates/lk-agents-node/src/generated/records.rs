@@ -1629,14 +1629,11 @@ impl From<ExpressiveTag> for lk_agents_abi::tts::markup::ExpressiveTag {
     }
 }
 
-/// The detector's constants, as the sixteen keys the binding's `amd_constants` answers with.
+/// The detector's constants, as the thirteen keys the binding's `amd_constants` answers with.
 #[napi(object, js_name = "AmdConstants")]
 pub struct AmdConstants {
     pub default_llm_model: String,
     pub default_stt_model: String,
-    pub track_publication_timeout: f64,
-    pub sip_call_status_attr: String,
-    pub sip_call_status_active: String,
     pub prompt: String,
     pub evaluated_llm_models: Vec<String>,
     pub evaluated_stt_models: Vec<String>,
@@ -1656,9 +1653,6 @@ impl From<&lk_agents_abi::voice::amd::AmdConstants> for AmdConstants {
         AmdConstants {
             default_llm_model: v.default_llm_model.to_string(),
             default_stt_model: v.default_stt_model.to_string(),
-            track_publication_timeout: v.track_publication_timeout,
-            sip_call_status_attr: v.sip_call_status_attr.to_string(),
-            sip_call_status_active: v.sip_call_status_active.to_string(),
             prompt: v.prompt.to_string(),
             evaluated_llm_models: v.evaluated_llm_models.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
             evaluated_stt_models: v.evaluated_stt_models.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
@@ -1679,9 +1673,6 @@ impl From<AmdConstants> for lk_agents_abi::voice::amd::AmdConstants {
         lk_agents_abi::voice::amd::AmdConstants {
             default_llm_model: v.default_llm_model,
             default_stt_model: v.default_stt_model,
-            track_publication_timeout: v.track_publication_timeout,
-            sip_call_status_attr: v.sip_call_status_attr,
-            sip_call_status_active: v.sip_call_status_active,
             prompt: v.prompt,
             evaluated_llm_models: v.evaluated_llm_models,
             evaluated_stt_models: v.evaluated_stt_models,

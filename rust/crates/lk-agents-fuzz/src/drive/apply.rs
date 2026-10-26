@@ -759,17 +759,27 @@ impl Run {
         true
     }
 
-    /// `AMD`'s calls past its attach, as `detector.py` makes them. `execute()` awaits the
+    /// `AMD`'s calls past its attach, as `detector.py` makes them, and the SIP callee's answer
+    /// it awaits. `execute()` awaits the
     /// verdict, so it is refused before one; on `machine-ivr` under `ivr_detection` it starts the
     /// navigator with the greeting first (`_start_ivr_detection(transcript)`).
     fn amd(&mut self, input: AmdInput) -> bool {
-        use lk_agents_abi::voice::amd::AmdCategory;
+        use lk_agents_abi::voice::amd::{
+            AmdCategory, SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR,
+        };
+        use lk_agents_rtc::RemoteParticipant;
         let api = self.api.clone();
         match input {
-            AmdInput::Listen => {
-                api.amd_start_detection_timer().is_ok() && api.amd_start_listening().is_ok()
+            // The SIP callee picks up; refused when the callee is not a SIP call in the room.
+            AmdInput::Answer => {
+                let callee = lk_agents_rtc::ParticipantIdentity::from(super::start::CALLER);
+                let Some(callee) = self.room.fake_participant(&callee) else { return false };
+                if callee.kind() != lk_agents_rtc::ParticipantKind::Sip {
+                    return false;
+                }
+                callee.set_attribute(SIP_CALL_STATUS_ATTR, SIP_CALL_STATUS_ACTIVE);
+                true
             }
-            AmdInput::Settle => api.amd_settle("uncertain", "participant_missing").is_ok(),
             AmdInput::Execute => {
                 let verdict =
                     self.record.host_view().events().into_iter().rev().find_map(|(_, event)| {

@@ -413,10 +413,10 @@ plain_enum! {
     IvrInput { Start, SeedTranscript, Close }
 }
 plain_enum! {
-    /// What `AMD` does past its attach: opens listening when the SIP call is answered, settles
-    /// `participant_missing` when the callee is gone, runs `execute()` on its verdict (the IVR
-    /// hand-off included), or closes (`async with` left).
-    AmdInput { Listen, Settle, Execute, Close }
+    /// What happens to `AMD` past its attach: the SIP callee answers (`sip.callStatus` goes
+    /// `active`), the developer runs `execute()` on its verdict (the IVR hand-off included), or
+    /// closes it (`async with` left).
+    AmdInput { Answer, Execute, Close }
 }
 plain_enum! {
     /// What the console's CLI asks the session (`SessionRequest`), one of each kind.

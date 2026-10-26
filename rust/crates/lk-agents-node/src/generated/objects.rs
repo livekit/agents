@@ -863,28 +863,9 @@ impl LiveSession {
         })
     }
 
-    #[napi(js_name = "amdStartDetectionTimer")]
-    pub fn amd_start_detection_timer(&self, env: Env) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            self.inner.amd_start_detection_timer().map_err(crate::generated::errors::session_refused_to_node)?;
-            Ok(())
-        })
-    }
-
-    #[napi(js_name = "amdStartListening")]
-    pub fn amd_start_listening(&self, env: Env) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            self.inner.amd_start_listening().map_err(crate::generated::errors::session_refused_to_node)?;
-            Ok(())
-        })
-    }
-
-    #[napi(js_name = "amdSettle")]
-    pub fn amd_settle(&self, env: Env, category: String, reason: String) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            self.inner.amd_settle(&category, &reason).map_err(crate::generated::errors::command_refused_to_node)?;
-            Ok(())
-        })
+    #[napi(js_name = "amdListening")]
+    pub fn amd_listening(&self) -> bool {
+        self.inner.amd_listening()
     }
 
     #[napi(js_name = "amdEndInput")]

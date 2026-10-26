@@ -637,10 +637,10 @@ impl Talk {
             run.record.applied().iter().any(|a| a.accepted && a.input == Input::Amd { input: step })
         };
         if amd.answer == AmdAnswer::Sip
-            && !sent(&self.run, AmdInput::Listen)
+            && !sent(&self.run, AmdInput::Answer)
             && self.rng.u8(0..100) < SIP_ANSWERS
         {
-            self.send(Input::Amd { input: AmdInput::Listen }).await?;
+            self.send(Input::Amd { input: AmdInput::Answer }).await?;
         }
         let verdict = self
             .run

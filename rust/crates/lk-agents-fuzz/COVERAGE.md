@@ -491,7 +491,7 @@ argument shapes: `say`/`say_stream`/`say_audio` and their pushers, `generate_rep
 `interrupt`, `SpeechHandle.interrupt` and `.allow_interruptions`, `commit_user_turn`,
 `wait_for_idle(_and_hold)`, `update_agent`, `enter_task`, `update_turn_options`, `drain`,
 `aclose` then `close_io`, the `hook_*` answers, `filler_*`, `tool_update`, `dtmf_*`, `ivr_*`,
-`attach_amd` and `amd_start_*`, `push_video`, the io setters. Tools run through a
+`attach_amd`, `amd_execute`/`amd_close`, `push_video`, the io setters. Tools run through a
 `HostToolRunner` answering the marshal's report. People join and leave the fake room, and the
 real room io decides what the session hears of it.
 
@@ -544,9 +544,10 @@ Also drawn: `tts_text_transforms`, the deprecated turn keywords (written instead
 Drawn last in the setup, so a seed keeps the setup it had before they existed (2026-10-26):
 
 - **AMD as `livekit.agents.AMD` attaches it**: `interrupt_on_machine`, `ivr_detection`,
-  `wait_until_finished`, a recogniser of its own or the session's finals, and what
-  `amd_decide_setup_step` makes of the room (the callee's track: listening at once; a SIP call
-  the case answers later, `Amd { Listen }`; nobody: `participant_missing`). The developer runs
+  `wait_until_finished`, a recogniser of its own or the session's finals, and the callee it
+  awaits in the fake room (their track: listening at once; a SIP call the case answers later,
+  `Amd { Answer }`, or that hangs up; nobody, unless they join within the track wait:
+  `participant_missing`). The developer runs
   `execute()` on the verdict (the IVR hand-off on `machine-ivr`) and leaves the block.
 - **Keyterm detection** with the LLM the host resolves, on a recogniser that takes keyterms or
   not; the model answers the passes with `record_keyterms`.
