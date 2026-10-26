@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -250,6 +250,10 @@ class _RealtimeSession:
         self._tools = tools
         self._events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self._replies: dict[str, asyncio.Future[Any]] = {}
+        # replies cancelled before they were asked for, behind a session update
+        self._cancelled: set[str] = set()
+        # the last session update: updates apply in order, and a reply waits for them
+        self._updating: asyncio.Task[Any] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         put = self._events.put_nowait
         session.on("input_speech_started", lambda _: put({"kind": "input_speech_started"}))
@@ -303,10 +307,43 @@ class _RealtimeSession:
             ),
         )
 
-    def _spawn(self, coro: Any) -> None:
+    def _spawn(self, coro: Any) -> asyncio.Task[Any]:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return task
+
+    def _update(self, apply: Callable[[], Awaitable[Any]]) -> None:
+        """Run a session update after the previous one: what it reads is current when it runs."""
+        previous = self._updating
+
+        async def _run() -> None:
+            if previous is not None:
+                await asyncio.wait([previous])
+            await apply()
+
+        self._updating = self._spawn(_run())
+
+    def _after_updates(self, req_id: str, ask: Callable[[], asyncio.Future[Any]]) -> None:
+        """Ask for a reply once the updates sent before it applied, as the reference awaits
+        them: a tool's output reaches the server before the reply that reads it."""
+        pending = self._updating
+
+        def _ask() -> None:
+            if req_id in self._cancelled:
+                self._cancelled.discard(req_id)
+                return
+            self._reply(req_id, ask())
+
+        if pending is None or pending.done():
+            _ask()
+            return
+
+        async def _run() -> None:
+            await asyncio.wait([pending])
+            _ask()
+
+        self._spawn(_run())
 
     async def _generation(self, ev: llm.GenerationCreatedEvent, req_id: str | None) -> None:
         put = self._events.put_nowait
@@ -375,16 +412,20 @@ class _RealtimeSession:
             session.push_audio(cmd["frame"])
         elif kind == "generate_reply":
             choice = cmd["tool_choice"]
-            fut = session.generate_reply(
-                instructions=cmd["instructions"] or NOT_GIVEN,
-                tool_choice=NOT_GIVEN if choice is None else choice,
+            self._after_updates(
+                cmd["req_id"],
+                lambda: session.generate_reply(
+                    instructions=cmd["instructions"] or NOT_GIVEN,
+                    tool_choice=NOT_GIVEN if choice is None else choice,
+                ),
             )
-            self._reply(cmd["req_id"], fut)
         elif kind == "say":
-            self._reply(cmd["req_id"], session.say(cmd["text"]))
+            self._after_updates(cmd["req_id"], lambda: session.say(cmd["text"]))
         elif kind == "cancel_reply":
             if (fut := self._replies.pop(cmd["req_id"], None)) is not None:
                 fut.cancel()
+            else:
+                self._cancelled.add(cmd["req_id"])
         elif kind == "interrupt":
             session.interrupt()
         elif kind == "commit_audio":
@@ -400,16 +441,22 @@ class _RealtimeSession:
                 audio_transcript=NOT_GIVEN if transcript is None else transcript,
             )
         elif kind == "update_instructions":
-            self._spawn(session.update_instructions(cmd["instructions"]))
+            self._update(lambda: session.update_instructions(cmd["instructions"]))
         elif kind == "update_chat_ctx":
             ctx = llm.ChatContext([from_core_item(i) for i in cmd["items"]])
-            self._spawn(session.update_chat_ctx(ctx))
+            self._update(lambda: session.update_chat_ctx(ctx))
         elif kind == "push_item":
-            ctx = session.chat_ctx.copy()
-            ctx.insert(from_core_item(cmd["item"]))
-            self._spawn(session.update_chat_ctx(ctx))
+            item = from_core_item(cmd["item"])
+
+            def _pushed() -> Awaitable[None]:
+                ctx = session.chat_ctx.copy()
+                ctx.insert(item)
+                return session.update_chat_ctx(ctx)
+
+            self._update(_pushed)
         elif kind == "update_tools":
-            self._spawn(session.update_tools(offered_tools(self._tools(), cmd["names"])))
+            tools = offered_tools(self._tools(), cmd["names"])
+            self._update(lambda: session.update_tools(tools))
 
     async def _core_next_event(self) -> dict[str, Any] | None:
         return await self._events.get()
