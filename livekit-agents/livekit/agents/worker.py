@@ -30,11 +30,6 @@ from enum import Enum
 from typing import Any, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
-
 import aiohttp
 import jwt
 from aiohttp import web
@@ -66,22 +61,11 @@ ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+# how long a previously registered worker may stay disconnected (e.g. while it
+# reconnects after a websocket interruption) before the health check reports 503
+HEALTH_RECONNECT_GRACE_PERIOD = 30.0
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
-
-
-def _toml_agent_name(path: str) -> str:
-    try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
-    except FileNotFoundError:
-        return ""
-    except (OSError, tomllib.TOMLDecodeError) as e:
-        logger.debug("ignoring unreadable livekit.toml", extra={"path": path, "error": str(e)})
-        return ""
-    agent = data.get("agent")
-    name = agent.get("name") if isinstance(agent, dict) else None
-    return name if isinstance(name, str) else ""
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -239,8 +223,7 @@ class ServerOptions:
     agent_name: str = ""
     """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API.
 
-    Deprecated: set the name in ``livekit.toml`` (``[agent] name``) or the ``LIVEKIT_AGENT_NAME``
-    environment variable instead; this parameter will be removed in a future release."""  # noqa: E501
+    By default it uses ``LIVEKIT_AGENT_NAME`` from environment"""  # noqa: E501
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -284,6 +267,8 @@ class ServerOptions:
 
     By default it uses "spawn" on all platforms, but "forkserver" on Linux.
     """
+    preload_modules: list[str] | None = None
+    """Modules imported once in the forkserver and shared by job processes. No-op under spawn."""
     prometheus_port: NotGivenOr[int] = NOT_GIVEN
     """When enabled, will expose prometheus metrics on :{prometheus_port}/metrics"""
     prometheus_multiproc_dir: str | None = None
@@ -346,6 +331,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         ),
         setup_fnc: Callable[[JobProcess], Any] | None = None,
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
+        preload_modules: list[str] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
         log_level: str | ServerEnvOption[str] = _default_log_level,
@@ -375,6 +361,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._prometheus_multiproc_dir = prometheus_multiproc_dir
         self._mp_ctx_str = multiprocessing_context
         self._mp_ctx = mp.get_context(multiprocessing_context)
+        self._preload_modules = preload_modules or []
 
         if not is_given(http_proxy):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
@@ -385,7 +372,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # simulation: load shedding is disabled so runs can saturate the agent.
         self._simulation = False
         self._agent_name = ""
-        self._agent_name_source: Literal["override", "code", "env", "livekit.toml", "none"] = "none"
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -405,6 +391,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             False,
             False,
         )
+        # monotonic time when a registered connection was lost, cleared on re-register
+        self._disconnected_at: float | None = None
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -458,6 +446,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             prometheus_multiproc_dir=options.prometheus_multiproc_dir,
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
+            preload_modules=options.preload_modules,
             log_level=options.log_level,
         )
         server.rtc_session(
@@ -512,13 +501,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         Decorator or direct registrar for the RTC session entrypoint.
 
         Usage:
-            @server.rtc_session()
+            @server.rtc_session(agent_name="survey_agent")
             async def my_agent(job_ctx: JobContext): ...
 
-            server.rtc_session(my_agent)
-
-        The agent name comes from ``LIVEKIT_AGENT_NAME`` or ``[agent] name`` in ``livekit.toml``.
-        ``agent_name`` is deprecated and will be removed in a future release.
+            server.rtc_session(my_agent, agent_name="survey_agent")
         """
 
         def decorator(
@@ -534,20 +520,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._simulation_end_fnc = on_simulation_end
             # precedence: the LIVEKIT_AGENT_NAME_OVERRIDE env var (a platform-injected
             # force, e.g. from the lk simulation launcher) takes priority, then the
-            # explicit agent_name arg, then the LIVEKIT_AGENT_NAME env default, then
-            # [agent] name from livekit.toml (resolved in run(), production only).
+            # explicit agent_name arg, then the LIVEKIT_AGENT_NAME env default.
             if os.environ.get("LIVEKIT_AGENT_NAME_OVERRIDE"):
                 self._agent_name = os.environ["LIVEKIT_AGENT_NAME_OVERRIDE"]
-                self._agent_name_source = "override"
             elif agent_name:
                 self._agent_name = agent_name
-                self._agent_name_source = "code"
             elif os.environ.get("LIVEKIT_AGENT_NAME"):
                 self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]
-                self._agent_name_source = "env"
             else:
                 self._agent_name = ""
-                self._agent_name_source = "none"
             self._server_type = type
             return f
 
@@ -555,24 +536,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             return decorator(func)
 
         return decorator
-
-    def _resolve_agent_name(self, *, devmode: bool) -> None:
-        """Applies the livekit.toml fallback and warns about code-defined names.
-
-        Dev workers never take the toml name so they stay out of the deployed agent's pool.
-        """
-        if self._agent_name_source == "code":
-            logger.warning(
-                "agent_name is set in code; move it to livekit.toml ([agent] name). "
-                "The agent_name parameter will be removed in a future release.",
-                extra={"agent_name": self._agent_name},
-            )
-        if self._agent_name_source != "none" or devmode:
-            return
-        name = _toml_agent_name(os.path.join(os.getcwd(), "livekit.toml"))
-        if name:
-            self._agent_name = name
-            self._agent_name_source = "livekit.toml"
 
     @property
     def worker_info(self) -> WorkerInfo:
@@ -639,8 +602,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._simulation:
                 logger.info("simulation mode enabled: worker load limit disabled")
 
-            self._resolve_agent_name(devmode=devmode)
-
             self._loop = asyncio.get_event_loop()
             self._devmode = devmode
             self._job_lifecycle_tasks = set[asyncio.Task[Any]]()
@@ -704,6 +665,21 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                     if self._connection_failed:
                         return web.Response(status=503, text="failed to connect to livekit")
+
+                    # 503 until the first RegisterWorkerResponse (docs / Node SDK).
+                    # unregistered=True workers never connect; keep / as a liveness probe.
+                    if not unregistered:
+                        if self._id == "unregistered":
+                            return web.Response(status=503, text="not connected to livekit")
+
+                        # a short reconnect after a websocket interruption is expected;
+                        # only report unhealthy once it has lasted longer than the grace period
+                        disconnected_at = self._disconnected_at
+                        if (
+                            disconnected_at is not None
+                            and time.monotonic() - disconnected_at > HEALTH_RECONNECT_GRACE_PERIOD
+                        ):
+                            return web.Response(status=503, text="not connected to livekit")
 
                     return web.Response(text="OK")
 
@@ -797,7 +773,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._mp_ctx_str == "forkserver":
                 # the framework's warm-up runs once in the forkserver and is inherited via
                 # COW; under `spawn` each job process imports it itself (see ipc._preload)
-                plugin_packages = [p.package for p in Plugin.registered_plugins] + [
+                plugin_packages = list(
+                    dict.fromkeys(
+                        [p.package for p in Plugin.registered_plugins] + self._preload_modules
+                    )
+                ) + [
                     "livekit.agents.ipc._preload",
                     # Must remain last; it freezes objects imported by earlier preloads.
                     "livekit.agents.ipc._preload_freeze",
@@ -1193,11 +1173,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                 self._handle_register(msg.register)
                 self._connecting = False
+                self._disconnected_at = None
 
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
 
-                await self._run_ws(ws)
+                try:
+                    await self._run_ws(ws)
+                finally:
+                    # registered connection lost: start the health check grace period
+                    if self._disconnected_at is None:
+                        self._disconnected_at = time.monotonic()
             except Exception as e:
                 if self._closed:
                     break

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import inspect
 import json
 import logging
 import os
@@ -72,7 +73,7 @@ from ..types import (
     recording_enabled,
 )
 from ..utils import is_given
-from . import pii, trace_types, utils as telemetry_utils
+from . import gen_ai, pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
     from ..llm import ChatItem
@@ -163,6 +164,19 @@ def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
     return serialized
 
 
+_USE_SPAN_SIGNATURE = inspect.signature(trace_api.use_span)
+_START_SPAN_SIGNATURE = inspect.signature(Tracer.start_span)
+_START_AS_CURRENT_SPAN_SIGNATURE = inspect.signature(Tracer.start_as_current_span)
+
+
+def _with_conversation_id(
+    attributes: Mapping[str, AttributeValue] | None,
+) -> Mapping[str, AttributeValue] | None:
+    if (conversation_id := gen_ai._conversation_id()) is None:
+        return attributes
+    return {trace_types.ATTR_GEN_AI_CONVERSATION_ID: conversation_id, **(attributes or {})}
+
+
 class _DynamicTracer(Tracer):
     def __init__(self, instrumenting_module_name: str) -> None:
         self._instrumenting_module_name = instrumenting_module_name
@@ -177,18 +191,24 @@ class _DynamicTracer(Tracer):
         )
 
     def start_span(self, *args: Any, **kwargs: Any) -> Span:
-        return self._tracer.start_span(*args, **kwargs)
+        bound = _START_SPAN_SIGNATURE.bind(self._tracer, *args, **kwargs)
+        bound.arguments["attributes"] = _with_conversation_id(bound.arguments.get("attributes"))
+        return self._tracer.start_span(*bound.args[1:], **bound.kwargs)
 
     @_agnosticcontextmanager
     def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils.redaction_enabled():
-            kwargs = {
-                **kwargs,
-                "record_exception": False,
-                "set_status_on_exception": False,
-            }
-        with trace_api.use_span(*args, **kwargs) as span:
-            yield span
+        bound = _USE_SPAN_SIGNATURE.bind(*args, **kwargs)
+        record_exception = bound.arguments.get("record_exception", True)
+        set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
+        bound.arguments.update(record_exception=False, set_status_on_exception=False)
+        with trace_api.use_span(*bound.args, **bound.kwargs) as span:
+            try:
+                yield span
+            except Exception as exc:
+                telemetry_utils.record_exception(
+                    span, exc, record_event=record_exception, set_status=set_status_on_exception
+                )
+                raise
 
     @_agnosticcontextmanager
     def detached_span(
@@ -205,7 +225,7 @@ class _DynamicTracer(Tracer):
         it and becomes the accidental parent of unrelated spans those tasks emit for the rest
         of the session. The parent is ``context`` when given, else the ambient context; the
         exception, if any, is recorded redaction-aware and the span is ended."""
-        span = self._tracer.start_span(name, context=context, attributes=attributes)
+        span = self.start_span(name, context=context, attributes=attributes)
         try:
             yield span
         except Exception as e:
@@ -216,14 +236,19 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils.redaction_enabled():
-            kwargs = {
-                **kwargs,
-                "record_exception": False,
-                "set_status_on_exception": False,
-            }
-        with self._tracer.start_as_current_span(*args, **kwargs) as span:
-            yield span
+        bound = _START_AS_CURRENT_SPAN_SIGNATURE.bind(self._tracer, *args, **kwargs)
+        bound.arguments["attributes"] = _with_conversation_id(bound.arguments.get("attributes"))
+        record_exception = bound.arguments.get("record_exception", True)
+        set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
+        bound.arguments.update(record_exception=False, set_status_on_exception=False)
+        with self._tracer.start_as_current_span(*bound.args[1:], **bound.kwargs) as span:
+            try:
+                yield span
+            except Exception as exc:
+                telemetry_utils.record_exception(
+                    span, exc, record_event=record_exception, set_status=set_status_on_exception
+                )
+                raise
 
 
 tracer: _DynamicTracer = _DynamicTracer("livekit-agents")
@@ -337,26 +362,31 @@ def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
 
 
 class _MetadataSpanProcessor(SpanProcessor):
-    """Stamps per-job metadata on every span, resolved from the originating
-    job's context. The process-wide slot remains as a fallback for spans created
-    outside a job context (worker-level telemetry) while a job is running."""
+    """Stamps provider metadata and the current job's attributes on every span.
+
+    The last configured job's metadata is only a fallback outside a job context.
+    """
 
     def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
-        self._metadata = dict(metadata) if metadata else {}
+        self._provider_metadata = dict(metadata) if metadata else {}
+        self._fallback_metadata: dict[str, AttributeValue] = {}
 
     def set_metadata(self, metadata: dict[str, AttributeValue]) -> None:
+        """Set the fallback for spans created outside a job context."""
         # rebind rather than mutate: on_start may read it from another thread
-        self._metadata = dict(metadata)
+        self._fallback_metadata = dict(metadata)
 
     def clear_metadata(self) -> None:
-        self._metadata = {}
+        self._fallback_metadata = {}
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
-        if (attributes := _job_stamp_attributes()) is not None:
+        attributes = _job_stamp_attributes()
+        if attributes is None:
+            attributes = self._fallback_metadata
+        if self._provider_metadata:
+            attributes = {**self._provider_metadata, **attributes}
+        if attributes:
             span.set_attributes(attributes)
-            return
-        if self._metadata:
-            span.set_attributes(self._metadata)
 
 
 class _MetadataLogProcessor(LogRecordProcessor):
@@ -754,6 +784,24 @@ def _run_bounded(action: str, targets: list[tuple[str, Callable[[], Any]]], time
         logger.warning("telemetry %s exceeded %.1fs; continuing", action, timeout)
 
 
+# (pid, detected resource): service.instance.id is per process, so a fork detects again
+_detected_resource: tuple[int, Resource] | None = None
+
+
+def _resource(attributes: Mapping[str, AttributeValue]) -> Resource:
+    """``Resource.create(attributes)``, with the resource detectors run once per process.
+
+    ``Resource.create`` starts and joins a thread per detector on every call. On the event
+    loop, under GIL contention, each thread handoff waits for the GIL: a call took 85 ms with
+    two busy Python threads (0.1 ms idle). The job process warms this up before its first job.
+    """
+    global _detected_resource
+    pid = os.getpid()
+    if _detected_resource is None or _detected_resource[0] != pid:
+        _detected_resource = (pid, Resource.create())
+    return _detected_resource[1].merge(Resource(dict(attributes)))
+
+
 class _CloudTelemetry:
     """Process-lifetime LiveKit Cloud telemetry infrastructure.
 
@@ -852,7 +900,7 @@ class _CloudTelemetry:
                 self._observability_url = observability_url
             if self._session is None:
                 self._session = _AuthRefreshingSession(_AuthHeaderProvider())
-            resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
+            resource = _resource({SERVICE_NAME: "livekit-agents", **base_metadata})
             self._ensure_trace_pipeline(resource, self._observability_url)
             if self._span_gate is not None:
                 self._span_gate.open_job(job_id)
@@ -910,7 +958,7 @@ class _CloudTelemetry:
             if self._session is None:
                 self._session = _AuthRefreshingSession(_AuthHeaderProvider())
 
-            resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
+            resource = _resource({SERVICE_NAME: "livekit-agents", **base_metadata})
 
             if enable_traces:
                 self._ensure_trace_pipeline(resource, url)
@@ -937,7 +985,7 @@ class _CloudTelemetry:
             process_metadata = {
                 k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
             }
-            meter_resource = Resource.create({SERVICE_NAME: "livekit-agents", **process_metadata})
+            meter_resource = _resource({SERVICE_NAME: "livekit-agents", **process_metadata})
             self._ensure_meter_provider(meter_resource, url)
 
             if not self._atexit_registered:
@@ -1022,7 +1070,7 @@ class _CloudTelemetry:
             # an SDK provider the integrator set up — adopt it
             self._logger_provider = current
         else:
-            owned = LoggerProvider(shutdown_on_exit=False)
+            owned = LoggerProvider(resource=_resource({}), shutdown_on_exit=False)
             self._exit_targets.append(("LoggerProvider", owned.shutdown))
             set_logger_provider(owned)
             self._logger_provider = owned
@@ -1376,6 +1424,13 @@ async def _upload_session_report(
         job_id=report.job_id,
         simulated=bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
         redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
+        duration=int((report.duration or 0) * 1000),
+        # Agent evals read this to pick sessions. Schema: evalschema/session-summary.schema.json
+        # in livekit/cloud-protocol.
+        session_summary=json.dumps(
+            report.to_dict(include_chat_history=False, include_events=False),
+            separators=(",", ":"),
+        ),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()

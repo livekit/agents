@@ -1,4 +1,5 @@
 import datetime
+from typing import Literal
 
 import pytest
 from google.genai import types
@@ -59,12 +60,14 @@ async def test_json_def_replaced():
                         "lat": {"type": types.Type.NUMBER},
                         "lng": {"type": types.Type.NUMBER},
                     },
+                    "property_ordering": ["lat", "lng"],
                     "required": ["lat"],
                     "type": types.Type.OBJECT,
                 },
                 "type": types.Type.ARRAY,
             }
         },
+        "property_ordering": ["locations"],
         "required": ["locations"],
         "type": types.Type.OBJECT,
     }
@@ -93,11 +96,13 @@ async def test_json_def_replaced_any_of():
                     "lat": {"type": types.Type.NUMBER},
                     "lng": {"type": types.Type.NUMBER},
                 },
+                "property_ordering": ["lat", "lng"],
                 "required": ["lat", "lng"],
                 "type": types.Type.OBJECT,
                 "nullable": True,
             }
         },
+        "property_ordering": ["op_location"],
         "type": types.Type.OBJECT,
     }
     assert gemini_schema == expected_gemini_schema
@@ -183,6 +188,7 @@ async def test_json_def_date():
                 "description": "my timedelta",
             },
         },
+        "property_ordering": ["d", "dt", "t", "td"],
         "required": ["d", "dt", "t", "td"],
         "type": types.Type.OBJECT,
     }
@@ -200,6 +206,16 @@ async def save_contact(fields: dict[str, str]) -> None:
 @function_tool
 async def ping() -> None:
     """A tool without parameters."""
+
+
+class DecisionDetails(BaseModel):
+    zeta: str
+    alpha: str
+
+
+@function_tool
+async def decide(reasoning: str, answer: Literal["a", "b"], details: DecisionDetails) -> None:
+    """Reason first, then answer."""
 
 
 # Test for Gemini Text API. It should emit parameters_json_schema
@@ -228,8 +244,47 @@ async def test_function_tool_uses_legacy_parameters_on_live_api():
         "type": types.Type.OBJECT,
         "properties": {"fields": {"type": types.Type.OBJECT}},
         "required": ["fields"],
+        "property_ordering": ["fields"],
     }
     types.FunctionDeclaration.model_validate(schema)
+
+
+async def test_function_tool_orders_live_api_parameters_as_declared():
+    tools, _ = utils.create_tools_config(
+        llm.ToolContext([decide]), use_parameters_json_schema=False
+    )
+
+    declarations = tools[0].function_declarations
+    assert declarations is not None
+    parameters = declarations[0].parameters
+    assert parameters is not None
+    assert parameters.property_ordering == ["reasoning", "answer", "details"]
+    assert parameters.properties is not None
+    assert parameters.properties["details"].property_ordering == ["zeta", "alpha"]
+
+
+@pytest.mark.parametrize("key", ["propertyOrdering", "property_ordering"])
+async def test_raw_tool_keeps_explicit_property_ordering_on_live_api(key: str):
+    @function_tool(
+        raw_schema={
+            "name": "order",
+            "description": "A raw tool with an explicit property order.",
+            "parameters": {
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                key: ["b", "a"],
+            },
+        }
+    )
+    async def order(raw_arguments: dict[str, object]) -> None: ...
+
+    tools, _ = utils.create_tools_config(llm.ToolContext([order]), use_parameters_json_schema=False)
+
+    declarations = tools[0].function_declarations
+    assert declarations is not None
+    parameters = declarations[0].parameters
+    assert parameters is not None
+    assert parameters.property_ordering == ["b", "a"]
 
 
 # Test for a FunctionTool with no parameters. Both APIs should omit the schema
@@ -282,3 +337,83 @@ async def test_create_tools_config_emits_parameters_json_schema():
     assert decl.parameters_json_schema["properties"]["fields"]["additionalProperties"] == {
         "type": "string"
     }
+
+
+# #7349: JSON Schema annotation keywords that a real MCP server emits are legal input
+# but reach types.FunctionDeclaration, whose Schema model is declared extra="forbid".
+
+
+async def test_unknown_schema_keywords_are_dropped():
+    schema = {
+        "type": "object",
+        "properties": {
+            "view": {
+                "type": "string",
+                "enum": ["THREAD_VIEW_UNSPECIFIED", "THREAD_VIEW_MINIMAL"],
+                "x-google-enum-descriptions": ["a", "b"],
+            },
+            "limit": {"type": "integer", "readOnly": True, "deprecated": True},
+        },
+        "required": ["view"],
+    }
+    params = utils._GeminiJsonSchema(schema).simplify()
+    assert "x-google-enum-descriptions" not in params["properties"]["view"]
+    types.FunctionDeclaration.model_validate(
+        {"name": "search_threads", "description": "", "parameters": params}
+    )
+
+
+async def test_unknown_keyword_inside_ref_definition_is_dropped():
+    schema = {
+        "type": "object",
+        "properties": {
+            "attachments": {"type": "array", "items": {"$ref": "#/$defs/Attachment"}},
+        },
+        "$defs": {
+            "Attachment": {
+                "type": "object",
+                "properties": {"id": {"type": "string", "readOnly": True}},
+            }
+        },
+    }
+    params = utils._GeminiJsonSchema(schema).simplify()
+    types.FunctionDeclaration.model_validate(
+        {"name": "create_draft", "description": "", "parameters": params}
+    )
+
+
+# `const` is not a types.Schema field either, but unlike the keywords above the
+# transformer itself consumes it: it converts a literal into the single-value `enum`
+# Gemini does support. Dropping it before that conversion would silently widen the
+# parameter to any value of its type.
+async def test_const_becomes_a_single_value_enum():
+    schema = {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "const": "only", "readOnly": True},
+        },
+        "required": ["mode"],
+    }
+    params = utils._GeminiJsonSchema(schema).simplify()
+    assert params["properties"]["mode"] == {"type": types.Type.STRING, "enum": ["only"]}
+    types.FunctionDeclaration.model_validate(
+        {"name": "run", "description": "", "parameters": params}
+    )
+
+
+def _raw_tool(name: str, parameters: dict) -> llm.RawFunctionTool:
+    return function_tool(
+        lambda raw_arguments: None,
+        raw_schema={"name": name, "description": "d", "parameters": parameters},
+    )
+
+
+# Test that a declaration Gemini rejects names the tool it came from
+async def test_rejected_tool_names_itself():
+    # minLength is a Schema field, so it reaches validation whatever the transformer drops
+    bad = _raw_tool(
+        "bad", {"type": "object", "properties": {"a": {"type": "string", "minLength": "many"}}}
+    )
+
+    with pytest.raises(ValueError, match="tool bad has a schema Gemini rejected"):
+        utils.create_tools_config(llm.ToolContext([bad]), use_parameters_json_schema=False)

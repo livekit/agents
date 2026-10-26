@@ -47,6 +47,17 @@ class LLMMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
+class DecisionMetrics(_BaseMetrics):
+    type: Literal["decision_metrics"] = "decision_metrics"
+    label: str
+    request_id: str
+    timestamp: float
+    duration: float
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    metadata: Metadata | None = None
+
+
 class STTMetrics(_BaseMetrics):
     type: Literal["stt_metrics"] = "stt_metrics"
     label: str
@@ -183,7 +194,7 @@ class RealtimeModelMetrics(_BaseMetrics):
     session_duration: float = 0.0
     """The duration of the session connection in seconds (for session-based billing like xAI)."""
     ttft: float = -1
-    """Time to first audio token in seconds. -1 if no audio token was sent."""
+    """Time to first audio token in seconds. -1 if unavailable or no audio token was sent."""
     cancelled: bool = False
     """Whether the request was cancelled."""
     input_tokens: int = 0
@@ -244,6 +255,7 @@ class AvatarMetrics(_BaseMetrics):
 AgentMetrics = (
     STTMetrics
     | LLMMetrics
+    | DecisionMetrics
     | TTSMetrics
     | VADMetrics
     | EOUMetrics

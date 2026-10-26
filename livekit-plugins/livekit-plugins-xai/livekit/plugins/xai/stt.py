@@ -361,8 +361,11 @@ class SpeechStream(stt.RecognizeStream):
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -373,12 +376,25 @@ class SpeechStream(stt.RecognizeStream):
 
                     raise APIStatusError(message="xAI connection closed unexpectedly")
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws or self._session.closed:
+                        return
+                    # Preserve the underlying transport error.
+                    raise APIConnectionError("xAI connection lost") from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected xAI message type %s", msg.type)
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                    if data.get("type") in (
+                        "transcript.created",
+                        "transcript.partial",
+                        "transcript.done",
+                    ):
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception("failed to process xAI message")
 
@@ -441,6 +457,11 @@ class SpeechStream(stt.RecognizeStream):
                     XAI_WEBSOCKET_URL,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                     params=params,
+                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                    # is never noticed: recv_task parks on ws.receive() forever, and the
+                    # retry in _main_task only runs when something raises. Matches the
+                    # Deepgram and Muse STT plugins.
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
