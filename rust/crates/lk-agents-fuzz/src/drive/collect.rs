@@ -230,24 +230,12 @@ impl Run {
     /// carrying the response id this crate's own model fake minted and the speech the driver made
     /// the request for. Nothing is parsed out of message content, nothing is inferred from timing.
     ///
-    /// Metrics arrive when a request finishes, so a request still open, or one cancelled before it
-    /// reported, has none. For those the journal's `ChatRequested` stands in, and only when it is
-    /// unambiguous: if two unattributed requests carry the same context ids the plan step could
-    /// belong to either, so neither is attributed and the rules that need the association skip the
-    /// speech rather than act on a coin flip.
+    /// Metrics arrive when a request finishes, so a request still open, or one cancelled or failed
+    /// before it reported, has none. For those the journal's `ChatRequested` stands in: the driver
+    /// journals it and opens the request in one poll, with no await between, so the requests a
+    /// context's plans opened are those plans in order, and each takes the earliest request of its
+    /// context nobody has taken.
     fn attribute_chats(&mut self, from_journal: usize, from_host: usize) {
-        for position in from_host..self.record.host().len() {
-            let Host::Session(SessionEvent::MetricsCollected { metrics, speech: Some(speech) }) =
-                &self.record.host()[position].1
-            else {
-                continue;
-            };
-            let AgentMetrics::Llm(metrics) = &**metrics else { continue };
-            let Some(chat) = fakes::request_of(&metrics.request_id) else { continue };
-            let speech = speech.0;
-            self.record.attribute_chat(chat, speech);
-        }
-
         let plans: Vec<(u64, Vec<String>)> = self.record.journal()[from_journal..]
             .iter()
             .filter_map(|(_, step)| match step {
@@ -258,18 +246,29 @@ impl Run {
             })
             .collect();
         for (speech, ctx_ids) in plans {
-            let candidates: Vec<u32> = self
+            let chat = self
                 .record
                 .resources(Kind::Chat)
                 .filter(|o| {
                     matches!(o.detail(), Detail::Chat { ctx_ids: seen, speech: None, .. } if *seen == ctx_ids)
                 })
                 .map(|o| o.nth())
-                .take(2)
-                .collect();
-            if let [chat] = candidates[..] {
+                .next();
+            if let Some(chat) = chat {
                 self.record.attribute_chat(chat, speech);
             }
+        }
+        // A request's own metrics name its speech exactly, so they have the last word.
+        for position in from_host..self.record.host().len() {
+            let Host::Session(SessionEvent::MetricsCollected { metrics, speech: Some(speech) }) =
+                &self.record.host()[position].1
+            else {
+                continue;
+            };
+            let AgentMetrics::Llm(metrics) = &**metrics else { continue };
+            let Some(chat) = fakes::request_of(&metrics.request_id) else { continue };
+            let speech = speech.0;
+            self.record.attribute_chat(chat, speech);
         }
     }
 }

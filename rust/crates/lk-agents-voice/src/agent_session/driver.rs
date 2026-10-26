@@ -165,6 +165,10 @@ impl<T> Tx<T> {
         self.inner.send((self.wrap)(value)).map_err(|_| QueueClosed)
     }
 
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+
     /// Resolves when the loop has dropped its receiver.
     pub async fn closed(&self) {
         self.inner.closed().await

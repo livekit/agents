@@ -59,19 +59,33 @@ impl Run {
         }
         // A person the case left mid-sentence keeps the driver waiting for the end of their turn,
         // and a reply behind that turn never starts. End the speech on every detector that heard
-        // a start without an end.
+        // a start without an end. The detector is speaking or not, so its last word stands: an
+        // end with no start before it does not cancel the next start.
         for nth in self.record.live().of(Kind::Vad) {
-            let still_speaking =
-                self.record.applied().iter().filter(|a| a.accepted).fold(0i64, |n, a| {
-                    match &a.input {
-                        Input::VadStart { vad, .. } if vad.nth == nth => n + 1,
-                        Input::VadEnd { vad, .. } if vad.nth == nth => n - 1,
-                        _ => n,
-                    }
-                });
-            if still_speaking > 0 {
+            let still_speaking = self
+                .record
+                .applied()
+                .iter()
+                .filter(|a| a.accepted)
+                .filter_map(|a| match &a.input {
+                    Input::VadStart { vad, .. } if vad.nth == nth => Some(true),
+                    Input::VadEnd { vad, .. } if vad.nth == nth => Some(false),
+                    _ => None,
+                })
+                .last()
+                .unwrap_or(false);
+            if still_speaking {
                 out.push(Input::VadEnd { vad: Ref::new(nth), silence_ms: Millis(500) });
             }
+        }
+        // A recogniser swapped out mid-utterance took that utterance with it, and the driver still
+        // hears the person speaking: the new recogniser hears them out, an utterance the next
+        // round ends.
+        if self.recogniser_left_speaking()
+            && self.record.live().of(Kind::Utterance).is_empty()
+            && let Some(stt) = self.record.live().of(Kind::Stt).first().copied()
+        {
+            out.push(Input::SttStart { stt: Ref::new(stt) });
         }
         // A running tool is answered; one that detached is ended by the host's final update.
         for nth in self.record.live().of(Kind::Tool) {
@@ -161,16 +175,57 @@ impl Run {
     /// the next round reads fakes that have not moved.
     pub fn release_advance(&self) -> Input {
         let now = self.record.now().at_ms;
-        let furthest = self
-            .record
+        let furthest = self.deadlines().map(|(_, at)| at).max().unwrap_or(now);
+        Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
+    }
+
+    /// Whether the driver armed a deadline the clock has not reached: a speech queued behind
+    /// `min_consecutive_speech_delay`, or a retry waiting out its backoff, waits on the driver's
+    /// own clock, not on the case, so a round that leaves one ahead is not quiet. The recorder's
+    /// flush re-arms for as long as the session lives and owes nobody anything.
+    fn deadline_ahead(&self) -> bool {
+        let now = self.record.now().at_ms;
+        self.deadlines().any(|(periodic, at)| !periodic && at > now)
+    }
+
+    /// Every deadline the driver journalled, in milliseconds, and whether it is the recorder's
+    /// periodic flush: its timers, and the retries it waits out on its own.
+    fn deadlines(&self) -> impl Iterator<Item = (bool, u64)> + '_ {
+        use lk_agents_voice::{agent_session::effects::Timer, trace::TimerName};
+        self.record
             .journal_where(|step| match step {
-                Step::Core(CoreStep::TimerArmed { at, .. }) => Some(*at),
+                Step::Core(CoreStep::TimerArmed { timer, at }) => {
+                    Some((*timer == TimerName::Session(Timer::RecorderFlush), *at))
+                }
+                Step::Generation(GenerationStep::RetryArmed { at, .. }) => Some((false, *at)),
                 _ => None,
             })
-            .map(|(_, at)| at.saturating_duration_since(Ts::ZERO).as_millis() as u64)
-            .max()
-            .unwrap_or(now);
-        Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
+            .map(|(_, (periodic, at))| {
+                (periodic, at.saturating_duration_since(Ts::ZERO).as_millis() as u64)
+            })
+    }
+
+    /// Whether the person's speech the driver last heard of began on the recogniser's word, has
+    /// not ended, and no utterance was opened since. Once only: a recogniser the driver no longer
+    /// takes the end of speech from (another turn detection) cannot end it, and asking again
+    /// would never go quiet.
+    fn recogniser_left_speaking(&self) -> bool {
+        let Some((began, true)) = self
+            .record
+            .journal_where(|step| match step {
+                Step::Emitted(SessionEvent::StartOfSpeech(ev)) => Some(!ev.from_vad),
+                Step::Emitted(SessionEvent::EndOfSpeech(_)) => Some(false),
+                _ => None,
+            })
+            .last()
+        else {
+            return false;
+        };
+        !self
+            .record
+            .applied()
+            .iter()
+            .any(|a| a.accepted && a.at > began && matches!(a.input, Input::SttStart { .. }))
     }
 
     /// Whether the driver is still holding a turn open.
@@ -319,7 +374,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
         let applied = run.record.applied();
         let taken =
             applied[applied.len() - 1 - releases..applied.len() - 1].iter().any(|a| a.accepted);
-        if releases == 0 || (run.record.driver_finished() && !taken) {
+        if (releases == 0 && !run.deadline_ahead()) || (run.record.driver_finished() && !taken) {
             quiet += 1;
         } else {
             quiet = 0;

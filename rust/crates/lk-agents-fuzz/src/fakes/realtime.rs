@@ -136,11 +136,13 @@ pub(super) fn deliver(socket: &Session, what: &Input) -> bool {
             delta: "...".into(),
             start_time: None,
         }),
-        // The server opens a generation of its own, over whatever is in progress.
-        RtEvent::SecondGeneration => Event::GenerationCreated(GenerationCreated {
-            response_id: format!("rt-extra-{nth}"),
-            req_id: None,
-        }),
+        // The server opens a generation of its own, over whatever is in progress. It is a turn
+        // like any other: open until the case ends it.
+        RtEvent::SecondGeneration => {
+            let response_id = format!("rt-extra-{nth}");
+            socket.open_turn(response_id.clone());
+            Event::GenerationCreated(GenerationCreated { response_id, req_id: None })
+        }
     };
     sender.send(event).is_ok()
 }
@@ -193,6 +195,11 @@ impl Session {
         for event in events {
             let _ = sender.send(event);
         }
+        self.open_turn(response_id);
+    }
+
+    /// A turn the server is now speaking, which only the case's `GenerationDone` ends.
+    fn open_turn(&self, response_id: String) {
         let done = GenerationDone {
             response_id,
             status: lk_agents_abi::llm::realtime::GenerationStatus::Completed,

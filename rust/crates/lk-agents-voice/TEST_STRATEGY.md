@@ -50,7 +50,8 @@ sources and the driver's task pool), drawn per seed.
 
 Every run ends the same way (`drive::finish`): release rounds answer everything left pending
 (end streams and chats, answer tools and hooks, report playouts, release holds, close
-utterances) until two rounds in a row have nothing to release, then `Settle`, `Close { drain:
+utterances) until two rounds in a row have nothing to release and leave no deadline the driver
+armed ahead of the clock (the recorder's periodic flush aside), then `Settle`, `Close { drain:
 true }`, `AwaitExit`, and every spawned task is joined. A run still producing work after 100
 rounds is reported as `session_settles`; a round that grants the next of the case's queued
 floor-hold asks is working down a finite backlog and does not count. The rules then run once,

@@ -201,6 +201,11 @@ impl Switch {
         self.changes.iter().rev().find(|(when, _)| *when <= at).is_none_or(|(_, on)| *on)
     }
 
+    /// The last switch at or before `at`: when, and whether it switched on.
+    pub fn last_change(&self, at: Observed) -> Option<(Observed, bool)> {
+        self.changes.iter().rev().find(|(when, _)| *when <= at).copied()
+    }
+
     /// Whether it was switched off strictly between two stamps.
     pub fn off_within(&self, from: Observed, to: Observed) -> bool {
         self.changes.iter().any(|(when, on)| !on && from < *when && *when < to)
@@ -791,11 +796,6 @@ impl<'a> SpeechTrace<'a> {
         self.first(|s| {
             matches!(s, Step::Playout(PlayoutStep::SinkCalled { call: SinkCall::Push { .. }, .. }))
         })
-    }
-
-    /// When the driver armed a retry for one of its requests.
-    pub fn retry_armed_at(&self) -> Option<Observed> {
-        self.first(|s| matches!(s, Step::Generation(GenerationStep::RetryArmed { .. })))
     }
 
     /// When the driver first asked the voice to synthesize real words for it.
