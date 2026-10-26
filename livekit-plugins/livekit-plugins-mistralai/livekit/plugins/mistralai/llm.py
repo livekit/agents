@@ -277,7 +277,7 @@ class LLMStream(llm.LLMStream):
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
-                retryable=retryable,
+                retryable=retryable and e.retryable,
             ) from None
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(
@@ -285,7 +285,7 @@ class LLMStream(llm.LLMStream):
                 status_code=e.status_code,
                 request_id=e.headers.get("x-request-id"),
                 body=e.body,
-                retryable=retryable,
+                retryable=retryable and (e.status_code == 408 or e.status_code >= 500),
             ) from e
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
