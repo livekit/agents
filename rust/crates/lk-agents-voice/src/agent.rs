@@ -296,7 +296,6 @@ impl SessionChatCtx {
         }
     }
 
-
     /// `Agent.chat_ctx`: the driving agent's view.
     pub fn agent_chat_ctx(&self) -> ChatContext {
         ChatContext::new(

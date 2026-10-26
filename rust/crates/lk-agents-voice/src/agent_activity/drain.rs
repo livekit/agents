@@ -3,8 +3,7 @@
 
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::PauseCause;
-use crate::agent_session::effects::Out;
-use crate::agent_session::effects::{Cx, PauseResult, Signal};
+use crate::agent_session::effects::{Cx, Out, PauseResult, Signal};
 use crate::agent_session::{Answer, DrainRefused, HookId, RequestId};
 use crate::trace::HandoffStep;
 

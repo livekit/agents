@@ -239,7 +239,6 @@ impl RoomIo {
         self.agent_tr.clone().map(|a| a as Arc<dyn TextOutput>)
     }
 
-
     /// `NOT_GIVEN` means yes if there is an audio output (`has_external_audio_output`).
     pub fn wants_transcript_sync(&self, has_external_audio_output: bool) -> bool {
         let Some(t) = &self.config.text_output else { return false };

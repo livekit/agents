@@ -32,338 +32,160 @@ pub const INTERNAL_ERROR_OUTPUT: &str = "An internal error occurred";
 /// `make_function_call_output`'s text for a return value the model cannot be told about.
 pub const INVALID_OUTPUT: &str = "the tool returned an invalid output";
 
-pub(crate) use tools::Tools;
+/// `_RunningTasks` and the deferred reply (`AgentActivity`'s background tool calls), the open
+/// filler scopes, and the steps whose `function_tools_executed` the host is handling.
+#[derive(Debug, Default)]
+pub(crate) struct Tools {
+    pub(crate) running: Vec<Running>,
+    /// Update pairs batched for the next deferred reply.
+    pub(crate) pending: Vec<Pending>,
+    pub(crate) reply: Option<Reply>,
+    /// A batch handed to the host for rendering, kept until the answer or the bound.
+    pub(crate) rendering: Option<Rendering>,
+    pub(crate) fillers: BTreeMap<FillerId, FillerRun>,
+    /// The steps whose `function_tools_executed` handlers the host runs, until they answer.
+    pub(crate) handling: BTreeMap<HookId, Handling>,
+}
 
-/// The tool state, behind its methods: the driver reaches none of its fields.
-mod tools {
-    use super::*;
-
-    /// `_RunningTasks` and the deferred reply (`AgentActivity`'s background tool calls), the open
-    /// filler scopes, and the steps whose `function_tools_executed` the host is handling.
-    #[derive(Debug, Default)]
-    pub(crate) struct Tools {
-        running: Vec<Running>,
-        pending: Vec<Pending>,
-        reply: Option<Reply>,
-        rendering: Option<Rendering>,
-        fillers: BTreeMap<FillerId, FillerRun>,
-        handling: BTreeMap<HookId, Handling>,
+impl Tools {
+    /// `_RunningTasks` as the planner reads it: every hosted call not yet ended, in start order.
+    pub(crate) fn running_tool_calls(&self) -> Vec<RunningToolCall> {
+        self.running
+            .iter()
+            .map(|r| RunningToolCall { call: r.call.clone(), output_id: r.output_id.clone() })
+            .collect()
     }
 
-    impl Tools {
-        /// `_RunningTasks` as the planner reads it: every hosted call not yet ended, in start order.
-        pub(crate) fn running_tool_calls(&self) -> Vec<RunningToolCall> {
-            self.running
-                .iter()
-                .map(|r| RunningToolCall { call: r.call.clone(), output_id: r.output_id.clone() })
-                .collect()
-        }
+    /// The speech a running call belongs to (`Origin::Tool{call_id}` -> its speech).
+    pub(crate) fn speech_of(&self, call_id: &str) -> Option<SpeechId> {
+        self.running.iter().find(|r| r.call.call_id == call_id).map(|r| r.speech)
+    }
 
-        /// The speech a running call belongs to (`Origin::Tool{call_id}` -> its speech).
-        pub(crate) fn speech_of(&self, call_id: &str) -> Option<SpeechId> {
-            self.running.iter().find(|r| r.call.call_id == call_id).map(|r| r.speech)
-        }
+    /// `speech`'s blocking calls still running, in start order.
+    pub(crate) fn live(&self, speech: SpeechId) -> impl Iterator<Item = &Running> {
+        self.running.iter().filter(move |r| r.speech == speech && !r.detached())
+    }
 
-        /// The first running call named `call_id`, out of the set.
-        pub(crate) fn take(&mut self, call_id: &str) -> Option<Running> {
-            let i = self.running.iter().position(|r| r.call.call_id == call_id)?;
-            Some(self.running.remove(i))
+    /// `speech`'s call `call_id` ended: detached, it stays with its first update counted; otherwise
+    /// it leaves the set. `false` when no such call runs. By speech as well as id: a model may reuse
+    /// call ids.
+    pub(crate) fn end(&mut self, speech: SpeechId, call_id: &str, detached: bool) -> bool {
+        let Some(i) =
+            self.running.iter().position(|r| r.speech == speech && r.call.call_id == call_id)
+        else {
+            return false;
+        };
+        if detached {
+            self.running[i].updates = 1;
+        } else {
+            self.running.remove(i);
         }
+        true
+    }
 
-        pub(crate) fn live_blocking(&self, speech: SpeechId) -> u32 {
-            u32::try_from(
-                self.running.iter().filter(|r| r.speech == speech && r.updates == 0).count(),
-            )
-            .unwrap_or(u32::MAX)
-        }
+    /// The detached call named `call_id`, which may send updates.
+    pub(crate) fn detached(&mut self, call_id: &str) -> Option<&mut Running> {
+        self.running.iter_mut().find(|r| r.call.call_id == call_id && r.detached())
+    }
 
-        /// A hosted call enters the running set.
-        pub(crate) fn start(
-            &mut self,
-            call: FunctionCall,
-            output_id: String,
-            speech: SpeechId,
-            step: u32,
-            runner: RunnerRef,
-        ) {
-            self.running.push(Running { call, output_id, speech, step, updates: 0, runner });
-        }
+    pub(crate) fn fillers_of(&self, pick: impl Fn(&FillerRun) -> bool) -> Vec<FillerId> {
+        self.fillers.iter().filter(|(_, r)| pick(r)).map(|(id, _)| *id).collect()
+    }
 
-        /// Every call still running, out of the set, in start order.
-        pub(crate) fn take_all(&mut self) -> Vec<Running> {
-            std::mem::take(&mut self.running)
-        }
-
-        /// `speech`'s call `call_id` ended: detached, it stays with its first update counted; otherwise
-        /// it leaves the set. `false` when no such call runs. By speech as well as id: a model may reuse
-        /// call ids.
-        pub(crate) fn end(&mut self, speech: SpeechId, call_id: &str, detached: bool) -> bool {
-            let Some(i) =
-                self.running.iter().position(|r| r.speech == speech && r.call.call_id == call_id)
-            else {
-                return false;
-            };
-            if detached {
-                self.running[i].updates = 1;
-            } else {
-                self.running.remove(i);
+    /// A wake's move for one scope: the dwell starts at idle and restarts when somebody speaks.
+    pub(crate) fn filler_wake(
+        &mut self,
+        id: FillerId,
+        idle: bool,
+        busy: bool,
+        now: Ts,
+    ) -> Option<FillerAction> {
+        let run = self.fillers.get_mut(&id)?;
+        match run.sched.waiting() {
+            FillerAction::WaitForIdle if idle && !busy && run.asking.is_none() => {
+                Some(run.sched.on_idle(now))
             }
-            true
+            FillerAction::Dwell(_) if busy => Some(run.sched.on_busy(now)),
+            FillerAction::WaitForIdle
+            | FillerAction::Dwell(_)
+            | FillerAction::CoolDown(_)
+            | FillerAction::Fire { .. }
+            | FillerAction::Done => None,
         }
+    }
 
-        /// `speech`'s blocking calls still running, in start order.
-        pub(crate) fn live(&self, speech: SpeechId) -> Vec<Running> {
-            self.running.iter().filter(|r| r.speech == speech && r.updates == 0).cloned().collect()
-        }
+    /// The scope's deadline passed; one in the same wake as a speaking edge counts as busy.
+    pub(crate) fn filler_timer(
+        &mut self,
+        id: FillerId,
+        busy: bool,
+        now: Ts,
+    ) -> Option<FillerAction> {
+        let run = self.fillers.get_mut(&id)?;
+        run.armed = None;
+        Some(match run.sched.waiting() {
+            FillerAction::Dwell(_) if busy => run.sched.on_busy(now),
+            FillerAction::WaitForIdle
+            | FillerAction::Dwell(_)
+            | FillerAction::CoolDown(_)
+            | FillerAction::Fire { .. }
+            | FillerAction::Done => run.sched.tick(now),
+        })
+    }
 
-        /// A detached call named `call_id` runs: it may send updates.
-        pub(crate) fn is_detached(&self, call_id: &str) -> bool {
-            self.running.iter().any(|r| r.call.call_id == call_id && r.updates > 0)
-        }
+    /// The host answered the source `hook`: its scope and the step it asked for.
+    pub(crate) fn filler_answered(&mut self, hook: HookId) -> Option<(FillerId, u32)> {
+        let (id, run) = self.fillers.iter_mut().find(|(_, r)| r.asking == Some(hook))?;
+        run.asking = None;
+        Some((*id, run.sched.steps()))
+    }
 
-        /// The detached call's next progress update: its index, and the call as it stands.
-        pub(crate) fn next_update(&mut self, call_id: &str) -> Option<(u32, Running)> {
-            let r = self.running.iter_mut().find(|r| r.call.call_id == call_id && r.updates > 0)?;
-            let n = r.updates;
-            r.updates += 1;
-            Some((n, r.clone()))
-        }
-
-        /// An update's pair, batched for the next deferred reply.
-        pub(crate) fn queue_update(
-            &mut self,
-            agent: String,
-            items: Vec<ChatItem>,
-            update_id: String,
-        ) {
-            self.pending.push(Pending { agent, items, update_id });
-        }
-
-        /// Updates wait, and no reply or render is in flight.
-        pub(crate) fn reply_due(&self) -> bool {
-            !self.pending.is_empty() && self.reply.is_none() && self.rendering.is_none()
-        }
-
-        pub(crate) fn take_batch(&mut self) -> Batch {
-            Batch(std::mem::take(&mut self.pending))
-        }
-
-        pub(crate) fn rendering(&mut self, hook: HookId, batch: Batch, at_tail: bool) {
-            self.rendering = Some(Rendering { hook, batch, at_tail });
-        }
-
-        /// The render `hook` answered: its batch and tail fact.
-        pub(crate) fn rendered(&mut self, hook: HookId) -> Option<(Batch, bool)> {
-            let Rendering { batch, at_tail, .. } = self.rendering.take_if(|r| r.hook == hook)?;
-            Some((batch, at_tail))
-        }
-
-        pub(crate) fn replying(&mut self, speech: SpeechId, update_ids: Vec<String>) {
-            self.reply = Some(Reply { speech, update_ids });
-        }
-
-        /// `speech` was the deferred reply: the updates it answered.
-        pub(crate) fn reply_done(&mut self, speech: SpeechId) -> Option<Vec<String>> {
-            self.reply.take_if(|r| r.speech == speech).map(|r| r.update_ids)
-        }
-
-        /// The close: nothing pending is delivered, a render in flight is dropped.
-        pub(crate) fn abandon_replies(&mut self) {
-            self.pending.clear();
-            self.rendering = None;
-        }
-
-        /// The host runs `function_tools_executed`'s handlers for the step under `hook`.
-        pub(crate) fn handle_executed(&mut self, hook: HookId, handling: Handling) {
-            self.handling.insert(hook, handling);
-        }
-
-        /// The handlers under `hook` are done (or will not answer).
-        pub(crate) fn executed_handled(&mut self, hook: HookId) -> Option<Handling> {
-            self.handling.remove(&hook)
-        }
-
-        // --- fillers ---
-
-        pub(crate) fn has_filler(&self, id: FillerId) -> bool {
-            self.fillers.contains_key(&id)
-        }
-
-        pub(crate) fn has_fillers(&self) -> bool {
-            !self.fillers.is_empty()
-        }
-
-        pub(crate) fn open_filler(
-            &mut self,
-            id: FillerId,
-            sched: FillerScheduler,
-            call_id: String,
-            speech: SpeechId,
-            source: FillerSource,
-        ) {
-            self.fillers.insert(
-                id,
-                FillerRun { sched, call_id, speech, source, asking: None, armed: None },
-            );
-        }
-
-        /// The scope closed: whether its timer was armed, and the source hook it was asking.
-        pub(crate) fn close_filler(&mut self, id: FillerId) -> Option<(bool, Option<HookId>)> {
-            let run = self.fillers.remove(&id)?;
-            Some((run.armed.is_some(), run.asking))
-        }
-
-        pub(crate) fn filler_ids(&self) -> Vec<FillerId> {
-            self.fillers.keys().copied().collect()
-        }
-
-        pub(crate) fn fillers_of_speech(&self, speech: SpeechId) -> Vec<FillerId> {
-            self.fillers.iter().filter(|(_, r)| r.speech == speech).map(|(id, _)| *id).collect()
-        }
-
-        pub(crate) fn fillers_of_call(&self, call_id: &str) -> Vec<FillerId> {
-            self.fillers.iter().filter(|(_, r)| r.call_id == call_id).map(|(id, _)| *id).collect()
-        }
-
-        /// `reset_dwell`: somebody is busy.
-        pub(crate) fn filler_busy(&mut self, id: FillerId, now: Ts) -> Option<FillerAction> {
-            self.fillers.get_mut(&id).map(|r| r.sched.on_busy(now))
-        }
-
-        /// A wake's move for one scope: the dwell starts at idle and restarts when somebody speaks.
-        pub(crate) fn filler_wake(
-            &mut self,
-            id: FillerId,
-            idle: bool,
-            busy: bool,
-            now: Ts,
-        ) -> Option<FillerAction> {
-            let run = self.fillers.get_mut(&id)?;
-            match run.sched.waiting() {
-                FillerAction::WaitForIdle if idle && !busy && run.asking.is_none() => {
-                    Some(run.sched.on_idle(now))
-                }
-                FillerAction::Dwell(_) if busy => Some(run.sched.on_busy(now)),
-                FillerAction::WaitForIdle
-                | FillerAction::Dwell(_)
-                | FillerAction::CoolDown(_)
-                | FillerAction::Fire { .. }
-                | FillerAction::Done => None,
+    /// The timer a wait needs: `WaitForIdle` disarms, a dwell or cooldown (re)arms at its deadline.
+    /// `None` when the scope is gone.
+    pub(crate) fn filler_wait(&mut self, id: FillerId, until: Option<Ts>) -> Option<FillerTimer> {
+        let run = self.fillers.get_mut(&id)?;
+        Some(match until {
+            None => FillerTimer { cancel: run.armed.take().is_some(), arm: None },
+            Some(at) if run.armed == Some(at) => FillerTimer { cancel: false, arm: None },
+            Some(at) => {
+                let cancel = run.armed.is_some();
+                run.armed = Some(at);
+                FillerTimer { cancel, arm: Some(at) }
             }
-        }
-
-        /// The scope's deadline passed; one in the same wake as a speaking edge counts as busy.
-        pub(crate) fn filler_timer(
-            &mut self,
-            id: FillerId,
-            busy: bool,
-            now: Ts,
-        ) -> Option<FillerAction> {
-            let run = self.fillers.get_mut(&id)?;
-            run.armed = None;
-            Some(match run.sched.waiting() {
-                FillerAction::Dwell(_) if busy => run.sched.on_busy(now),
-                FillerAction::WaitForIdle
-                | FillerAction::Dwell(_)
-                | FillerAction::CoolDown(_)
-                | FillerAction::Fire { .. }
-                | FillerAction::Done => run.sched.tick(now),
-            })
-        }
-
-        /// The host answered the source `hook`: its scope and the step it asked for.
-        pub(crate) fn filler_answered(&mut self, hook: HookId) -> Option<(FillerId, u32)> {
-            let (id, run) = self.fillers.iter_mut().find(|(_, r)| r.asking == Some(hook))?;
-            run.asking = None;
-            Some((*id, run.sched.steps()))
-        }
-
-        pub(crate) fn filler_fired(
-            &mut self,
-            id: FillerId,
-            now: Ts,
-            produced: bool,
-        ) -> Option<FillerAction> {
-            self.fillers.get_mut(&id).map(|r| r.sched.fired(now, produced))
-        }
-
-        /// The timer a wait needs: `WaitForIdle` disarms, a dwell or cooldown (re)arms at its deadline.
-        /// `None` when the scope is gone.
-        pub(crate) fn filler_wait(
-            &mut self,
-            id: FillerId,
-            until: Option<Ts>,
-        ) -> Option<FillerTimer> {
-            let run = self.fillers.get_mut(&id)?;
-            Some(match until {
-                None => FillerTimer { cancel: run.armed.take().is_some(), arm: None },
-                Some(at) if run.armed == Some(at) => FillerTimer { cancel: false, arm: None },
-                Some(at) => {
-                    let cancel = run.armed.is_some();
-                    run.armed = Some(at);
-                    FillerTimer { cancel, arm: Some(at) }
-                }
-            })
-        }
-
-        pub(crate) fn filler_source(&self, id: FillerId) -> Option<FillerSource> {
-            self.fillers.get(&id).map(|r| r.source.clone())
-        }
-
-        pub(crate) fn filler_asking(&mut self, id: FillerId, hook: HookId) {
-            if let Some(run) = self.fillers.get_mut(&id) {
-                run.asking = Some(hook);
-            }
-        }
+        })
     }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct Running {
-    call: FunctionCall,
+    pub(crate) call: FunctionCall,
     /// The placeholder output id, minted once so it keeps one identity across plans.
-    output_id: String,
-    speech: SpeechId,
-    step: u32,
+    pub(crate) output_id: String,
+    pub(crate) speech: SpeechId,
+    pub(crate) step: u32,
     /// Progress updates sent so far, the first (the step's answer) included.
-    updates: u32,
+    pub(crate) updates: u32,
     /// What runs the body: its cancel goes there.
-    runner: RunnerRef,
+    pub(crate) runner: RunnerRef,
 }
 
 impl Running {
-    pub(crate) fn call(&self) -> &FunctionCall {
-        &self.call
-    }
-
-    pub(crate) fn speech(&self) -> SpeechId {
-        self.speech
-    }
-
-    pub(crate) fn step(&self) -> u32 {
-        self.step
-    }
-
     pub(crate) fn detached(&self) -> bool {
         self.updates > 0
-    }
-
-    pub(crate) fn runner(&self) -> &RunnerRef {
-        &self.runner
     }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct Pending {
-    /// The frame whose record got the pair; a different frame at delivery re-inserts it.
-    agent: String,
-    items: Vec<ChatItem>,
-    update_id: String,
+    /// The agent whose record got the pair; a different agent at delivery re-inserts it.
+    pub(crate) agent: String,
+    pub(crate) items: Vec<ChatItem>,
+    pub(crate) update_id: String,
 }
 
 /// The pending updates one deferred reply answers, in arrival order.
 #[derive(Debug, Clone)]
-pub(crate) struct Batch(Vec<Pending>);
+pub(crate) struct Batch(pub(crate) Vec<Pending>);
 
 impl Batch {
     /// Every update's id, in order (the reply's `{call_ids}`).
@@ -382,29 +204,30 @@ impl Batch {
     }
 }
 
+/// The deferred reply in flight: its speech and the updates it answers.
 #[derive(Debug, Clone)]
-struct Reply {
-    speech: SpeechId,
-    update_ids: Vec<String>,
+pub(crate) struct Reply {
+    pub(crate) speech: SpeechId,
+    pub(crate) update_ids: Vec<String>,
 }
 
-/// A batch handed to the host for rendering, kept until the answer or the bound.
 #[derive(Debug, Clone)]
-struct Rendering {
-    hook: HookId,
-    batch: Batch,
-    at_tail: bool,
+pub(crate) struct Rendering {
+    pub(crate) hook: HookId,
+    pub(crate) batch: Batch,
+    pub(crate) at_tail: bool,
 }
 
 /// One open `with_filler` scope (`voice/filler_scheduler.py`).
 #[derive(Debug)]
-struct FillerRun {
-    sched: FillerScheduler,
-    call_id: String,
-    speech: SpeechId,
-    source: FillerSource,
-    asking: Option<HookId>,
-    armed: Option<Ts>,
+pub(crate) struct FillerRun {
+    pub(crate) sched: FillerScheduler,
+    pub(crate) call_id: String,
+    pub(crate) speech: SpeechId,
+    pub(crate) source: FillerSource,
+    /// The source hook asked and not yet answered.
+    pub(crate) asking: Option<HookId>,
+    pub(crate) armed: Option<Ts>,
 }
 
 /// A timer change a filler's wait asks for.
@@ -970,7 +793,7 @@ impl Driver {
         out: &mut Out,
     ) {
         let Some(Handling { speech, step, mut event, warnings, verdict }) =
-            self.activity.tools.executed_handled(hook)
+            self.activity.tools.handling.remove(&hook)
         else {
             return;
         };

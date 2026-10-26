@@ -3,8 +3,7 @@
 //! long each is waited on.
 
 use crate::agent::TurnEdit;
-use crate::agent_session::effects::{Out, Timer};
-use crate::agent_session::effects::Signal;
+use crate::agent_session::effects::{Out, Signal, Timer};
 use crate::agent_session::{Driver, HookCall, HookId, HookKind, HookOutcome, HostEvent};
 use crate::audio_recognition::PendingTurn;
 use crate::run_result::Owned;

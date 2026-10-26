@@ -348,7 +348,6 @@ mod wire_id_tests {
     }
 }
 
-
 /// Every way an operation on a [`SpeechHandle`] can refuse. `Display` is the reference exception's
 /// message verbatim (public API, re-raised by the binding).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -388,7 +387,6 @@ enum Interruption {
     Step(u32),
     Speech,
 }
-
 
 /// `_allow_interruptions` and its hold count and restore value, in one cell so holds are atomic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

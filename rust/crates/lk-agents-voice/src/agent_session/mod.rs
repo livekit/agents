@@ -474,7 +474,6 @@ impl AgentOutput {
         self.transcription_enabled.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-
     /// Whether it changed.
     pub fn set_audio_enabled(&self, enabled: bool) -> bool {
         self.audio_enabled.swap(enabled, std::sync::atomic::Ordering::Relaxed) != enabled

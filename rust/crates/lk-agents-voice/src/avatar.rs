@@ -380,7 +380,6 @@ impl AudioOutput for DataStreamAudioOutput {
     fn resume(&self) {}
 }
 
-
 // ----------------------------------------------------------------------------- the avatar's side
 
 /// What the avatar worker reads: audio, and where each segment ends.
@@ -793,7 +792,6 @@ impl DataStreamAudioReceiver {
 
 type RxRoutes = HashMap<String, HashMap<String, Weak<RxInner>>>;
 static RX_ROUTES: LazyLock<Mutex<RxRoutes>> = LazyLock::new(Mutex::default);
-
 
 // ----------------------------------------------------------------------------- the runner's bookkeeping
 

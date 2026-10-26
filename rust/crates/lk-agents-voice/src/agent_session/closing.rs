@@ -12,8 +12,7 @@ use crate::agent_activity::false_interruption::InterruptOutcome;
 use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
-use crate::agent_session::effects::{Effect, Out, ProviderCall, Timer};
-use crate::agent_session::effects::Signal;
+use crate::agent_session::effects::{Effect, Out, ProviderCall, Signal, Timer};
 use crate::agent_session::{
     ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
     IdleRefused, SpeechCommand,
@@ -248,7 +247,6 @@ impl Driver {
             self.answer(Some(call), Answer::Drain(Ok(())));
         }
     }
-
 
     /// The close moves on when what its phase waits for is over: every speech the edge cut has
     /// reported (or the bound released it), the trailing commit, the legs. Raised on each of those

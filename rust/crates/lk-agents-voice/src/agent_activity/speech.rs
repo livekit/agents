@@ -761,7 +761,7 @@ impl Driver {
                     {
                         let event = (**event).clone();
                         let handling = Handling { speech, step, event, warnings, verdict };
-                        self.activity.tools.handle_executed(id, handling);
+                        self.activity.tools.handling.insert(id, handling);
                         return;
                     }
                     self.finish_tools(
@@ -989,7 +989,7 @@ impl Driver {
         // (`_ToolExecutor.aclose`): answered already, nothing would ever hear their end.
         if self.session.closing.is_some()
             && self.activity.speech_scheduler.contains(speech)
-            && self.activity.tools.live_blocking(speech) > 0
+            && self.activity.tools.live(speech).next().is_some()
             && self.session.close_phase() != Some(ClosePhase::Closed)
         {
             self.end_live_tools(now, speech, out);

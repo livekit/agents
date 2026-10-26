@@ -11,8 +11,8 @@ use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus}
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::{ReplySource, TurnInstructions};
 use crate::tool_executor::{
-    Batch, RunnerRef, Running, ToolAnswer, ToolEnd, ToolOutcome, answer, decide,
-    default_reply_instructions, emit_ended, pair_for,
+    Batch, FillerRun, Pending, Rendering, Reply, RunnerRef, Running, ToolAnswer, ToolEnd,
+    ToolOutcome, answer, decide, default_reply_instructions, emit_ended, pair_for,
 };
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
@@ -51,7 +51,14 @@ impl Driver {
         out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
             call: call.clone(),
         }));
-        self.activity.tools.start(call, output_id, speech, step, runner);
+        self.activity.tools.running.push(Running {
+            call,
+            output_id,
+            speech,
+            step,
+            updates: 0,
+            runner,
+        });
     }
 
     /// A blocking call leaves the running set; a detached one stays until its `ToolUpdate::Final`.
@@ -98,30 +105,30 @@ impl Driver {
     /// each end before its pair, in start order. Their bodies are cancelled too: one may have
     /// detached at the host before the driver heard its answer, and would outlive its told end.
     pub(crate) fn end_live_tools(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
-        let live = self.activity.tools.live(speech);
+        let live: Vec<Running> = self.activity.tools.live(speech).cloned().collect();
         if live.is_empty() {
             return;
         }
         let wall = self.step.wall();
         let mut pairs = Vec::with_capacity(live.len());
-        for r in &live {
-            let (call_id, runner) = (r.call().call_id.clone(), r.runner().clone());
+        for r in live {
+            let (call_id, runner) = (r.call.call_id.clone(), r.runner.clone());
             out.machine().push(Effect::CancelTool { call_id, runner });
             let outcome = if self.session.closing.is_some() {
                 ToolOutcome::Error(SESSION_CLOSING.to_owned())
             } else {
                 ToolOutcome::Cancelled
             };
-            let execution = answer(r.call(), outcome, wall);
+            let execution = answer(&r.call, outcome, wall);
             self.on_tool_ended(
                 now,
                 speech,
-                r.call().call_id.clone(),
+                r.call.call_id.clone(),
                 execution.end,
                 (!execution.output.output.is_empty()).then(|| execution.output.output.clone()),
                 out,
             );
-            pairs.push((r.step(), execution.call, execution.output));
+            pairs.push((r.step, execution.call, execution.output));
         }
         for (step, call, output) in pairs {
             self.commit_item(
@@ -143,15 +150,14 @@ impl Driver {
     /// `_ToolExecutor.aclose()`: every body still running at the host, a detached one by now, is
     /// cancelled and its end told as its own cancellation would tell it.
     pub(crate) fn cancel_running_tools(&mut self, now: Ts, out: &mut Out) {
-        let running = self.activity.tools.take_all();
+        let running = std::mem::take(&mut self.activity.tools.running);
         if running.is_empty() {
             return;
         }
         for r in running {
-            let call_id = r.call().call_id.clone();
+            let call_id = r.call.call_id.clone();
             let id = if r.detached() { format!("{call_id}_final") } else { call_id.clone() };
-            let runner = r.runner().clone();
-            out.machine().push(Effect::CancelTool { call_id: call_id.clone(), runner });
+            out.machine().push(Effect::CancelTool { call_id: call_id.clone(), runner: r.runner });
             let closing = self.session.closing_past_edge();
             out.machine().append(self.session.states.on_tool_call_ended(now, closing));
             emit_ended(out, id, call_id, None, ToolEndStatus::Cancelled);
@@ -168,7 +174,7 @@ impl Driver {
         update: ToolUpdate,
         out: &mut Out,
     ) {
-        if !self.activity.tools.is_detached(&call_id) {
+        if self.activity.tools.detached(&call_id).is_none() {
             out.trace(TraceToolStep::UpdateRefused { call_id });
             return;
         }
@@ -177,9 +183,10 @@ impl Driver {
         self.fillers_reset_dwell(now, &call_id, out);
         match update {
             ToolUpdate::Progress { message, raw } => {
-                let (n, running) =
-                    self.activity.tools.next_update(&call_id).expect("detached, checked above");
-                let id = format!("{call_id}_update_{n}");
+                let r = self.activity.tools.detached(&call_id).expect("detached, checked above");
+                let id = format!("{call_id}_update_{}", r.updates);
+                r.updates += 1;
+                let running = r.clone();
                 let pair = pair_for(&running, &id, ToolOutcome::Reply(message), wall, || {
                     self.session.ids.mint("item")
                 });
@@ -197,7 +204,9 @@ impl Driver {
             }
             ToolUpdate::Final { answer: raw } => {
                 let id = format!("{call_id}_final");
-                let running = self.activity.tools.take(&call_id).expect("detached, checked above");
+                let tools = &mut self.activity.tools.running;
+                let i = tools.iter().position(|r| r.call.call_id == call_id);
+                let running = tools.remove(i.expect("detached, checked above"));
                 // The end is journalled before the away window moves (#6883).
                 out.trace(TraceToolStep::Updated {
                     call_id: call_id.clone(),
@@ -239,14 +248,14 @@ impl Driver {
         out: &mut Out,
     ) {
         let (call, output) = pair;
-        let source = Source::ToolUpdate { speech: running.speech(), step: running.step() };
+        let source = Source::ToolUpdate { speech: running.speech, step: running.step };
         let items = vec![ChatItem::FunctionCall(call), ChatItem::FunctionCallOutput(output)];
         for item in &items {
             self.commit_item(item.clone(), source.clone(), Visibility::Both, out);
         }
         self.publish_activity();
         let agent = self.activity.agent.clone();
-        self.activity.tools.queue_update(agent, items, id);
+        self.activity.tools.pending.push(Pending { agent, items, update_id: id });
     }
 
     // ------------------------------------------------------------------ the deferred reply
@@ -254,13 +263,14 @@ impl Driver {
     /// One reply for every pending update, at the first idle instant with no current speech. Runs
     /// before idle waiters are answered, so a `foreground()` waits behind it.
     pub(crate) fn try_deliver_tool_reply(&mut self, now: Ts, out: &mut Out) {
-        if !self.activity.tools.reply_due() {
+        let tools = &self.activity.tools;
+        if tools.pending.is_empty() || tools.reply.is_some() || tools.rendering.is_some() {
             return;
         }
         if self.session.closing_past_edge() || self.session.idle.held() || !self.is_idle() {
             return;
         }
-        let batch = self.activity.tools.take_batch();
+        let batch = Batch(std::mem::take(&mut self.activity.tools.pending));
         // "if the update is still the tail, the agent hasn't spoken since".
         let last_pending = batch.last_item_id();
         let last_record =
@@ -276,7 +286,7 @@ impl Driver {
         };
         let wait = self.hook_wait();
         if self.issue_hook(now, call, Some(wait), out) {
-            self.activity.tools.rendering(id, batch, at_tail);
+            self.activity.tools.rendering = Some(Rendering { hook: id, batch, at_tail });
         } else {
             let text = default_reply_instructions(&call_ids, at_tail);
             self.schedule_tool_reply(now, batch, at_tail, text, out);
@@ -290,7 +300,10 @@ impl Driver {
         text: Option<String>,
         out: &mut Out,
     ) {
-        let Some((batch, at_tail)) = self.activity.tools.rendered(hook) else { return };
+        let rendering = &mut self.activity.tools.rendering;
+        let Some(Rendering { batch, at_tail, .. }) = rendering.take_if(|r| r.hook == hook) else {
+            return;
+        };
         let call_ids = batch.update_ids();
         let text = text.unwrap_or_else(|| default_reply_instructions(&call_ids, at_tail));
         self.schedule_tool_reply(now, batch, at_tail, text, out);
@@ -346,12 +359,13 @@ impl Driver {
             status: ToolReplyStatus::Scheduled,
             speech,
         }));
-        self.activity.tools.replying(speech, update_ids);
+        self.activity.tools.reply = Some(Reply { speech, update_ids });
     }
 
     /// A speech ended: if it was the deferred reply, its fate is reported and the next batch may go.
     pub(crate) fn tool_reply_done(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
-        let Some(update_ids) = self.activity.tools.reply_done(speech) else { return };
+        let reply = self.activity.tools.reply.take_if(|r| r.speech == speech);
+        let Some(Reply { update_ids, .. }) = reply else { return };
         let status = match self.activity.speech_scheduler.handle(speech) {
             Some(h) if h.interrupted() => ToolReplyStatus::Interrupted,
             // The instruction permits an empty response when the agent already covered the result.
@@ -380,8 +394,8 @@ impl Driver {
         source: FillerSource,
         out: &mut Out,
     ) {
-        let fresh =
-            !self.activity.tools.has_filler(id) && self.activity.speech_scheduler.contains(speech);
+        let fresh = !self.activity.tools.fillers.contains_key(&id)
+            && self.activity.speech_scheduler.contains(speech);
         let sched = fresh.then(|| {
             FillerScheduler::new(delay.as_secs_f64(), interval.map(|d| d.as_secs_f64()), max_steps)
         });
@@ -390,16 +404,17 @@ impl Driver {
             return;
         };
         out.trace(GenerationStep::FillerStarted { filler: id, speech });
-        self.activity.tools.open_filler(id, sched, call_id, speech, source);
+        let run = FillerRun { sched, call_id, speech, source, asking: None, armed: None };
+        self.activity.tools.fillers.insert(id, run);
         self.pump_fillers(now, out);
     }
 
     pub(crate) fn end_filler(&mut self, id: FillerId, cause: FillerEnd, out: &mut Out) {
-        let Some((armed, asking)) = self.activity.tools.close_filler(id) else { return };
-        if armed {
+        let Some(run) = self.activity.tools.fillers.remove(&id) else { return };
+        if run.armed.is_some() {
             out.machine().cancel(Timer::Filler(id));
         }
-        if let Some(hook) = asking
+        if let Some(hook) = run.asking
             && let Some(kind) = self.activity.hooks.finish(hook)
         {
             self.disarm(Timer::Hook(hook), out);
@@ -410,15 +425,16 @@ impl Driver {
 
     /// A speech ended or was interrupted: its tools' fillers go with it.
     pub(crate) fn fillers_speech_ended(&mut self, speech: SpeechId, out: &mut Out) {
-        for id in self.activity.tools.fillers_of_speech(speech) {
+        for id in self.activity.tools.fillers_of(|r| r.speech == speech) {
             self.end_filler(id, FillerEnd::SpeechEnded, out);
         }
     }
 
     /// `ctx.update()` on `call_id`: a dwell in flight restarts (`reset_dwell`).
     fn fillers_reset_dwell(&mut self, now: Ts, call_id: &str, out: &mut Out) {
-        for id in self.activity.tools.fillers_of_call(call_id) {
-            if let Some(action) = self.activity.tools.filler_busy(id, now) {
+        for id in self.activity.tools.fillers_of(|r| r.call_id == call_id) {
+            if let Some(run) = self.activity.tools.fillers.get_mut(&id) {
+                let action = run.sched.on_busy(now);
                 self.perform_filler(now, id, action, out);
             }
         }
@@ -427,12 +443,12 @@ impl Driver {
     /// The dwell waits for idle and restarts when the agent or user starts speaking (the
     /// reference's `wait_for_idle()` then race). Once per wake.
     pub(crate) fn pump_fillers(&mut self, now: Ts, out: &mut Out) {
-        if !self.activity.tools.has_fillers() {
+        if self.activity.tools.fillers.is_empty() {
             return;
         }
         let idle = self.is_idle();
         let busy = self.session.states.someone_speaking();
-        for id in self.activity.tools.filler_ids() {
+        for id in self.activity.tools.fillers_of(|_| true) {
             if let Some(action) = self.activity.tools.filler_wake(id, idle, busy, now) {
                 self.perform_filler(now, id, action, out);
             }
@@ -492,15 +508,14 @@ impl Driver {
             self.end_filler(id, FillerEnd::Refused, out);
             return;
         }
-        let Some(action) = self.activity.tools.filler_fired(id, now, produced) else {
-            return;
-        };
+        let Some(run) = self.activity.tools.fillers.get_mut(&id) else { return };
+        let action = run.sched.fired(now, produced);
         self.perform_filler(now, id, action, out);
     }
 
     /// Perform one machine action: a wait is a timer, a fire a say or hook, done the end.
     fn perform_filler(&mut self, now: Ts, id: FillerId, action: FillerAction, out: &mut Out) {
-        if !self.activity.tools.has_filler(id) {
+        if !self.activity.tools.fillers.contains_key(&id) {
             return;
         }
         match action {
@@ -519,24 +534,28 @@ impl Driver {
                     out.machine().arm(Timer::Filler(id), at);
                 }
             }
-            FillerAction::Fire { step } => match self.activity.tools.filler_source(id) {
-                Some(FillerSource::Text(text)) => {
-                    self.fire_filler(now, id, step, Some(text), false, out)
-                }
-                Some(FillerSource::Host(source)) => {
-                    let hook = self.activity.hooks.mint();
-                    let wait = self.hook_wait();
-                    let call = HookCall::FillerSource { id: hook, filler: id, step, source };
-                    // A callable no host can run never produces: like one that raises, it ends
-                    // the filler. Taken as a decline, the next fire could come in this instant.
-                    if self.issue_hook(now, call, Some(wait), out) {
-                        self.activity.tools.filler_asking(id, hook);
-                    } else {
-                        self.end_filler(id, FillerEnd::Refused, out);
+            FillerAction::Fire { step } => {
+                match self.activity.tools.fillers.get(&id).map(|r| r.source.clone()) {
+                    Some(FillerSource::Text(text)) => {
+                        self.fire_filler(now, id, step, Some(text), false, out)
                     }
+                    Some(FillerSource::Host(source)) => {
+                        let hook = self.activity.hooks.mint();
+                        let wait = self.hook_wait();
+                        let call = HookCall::FillerSource { id: hook, filler: id, step, source };
+                        // A callable no host can run never produces: like one that raises, it ends
+                        // the filler. Taken as a decline, the next fire could come in this instant.
+                        if self.issue_hook(now, call, Some(wait), out) {
+                            if let Some(run) = self.activity.tools.fillers.get_mut(&id) {
+                                run.asking = Some(hook);
+                            }
+                        } else {
+                            self.end_filler(id, FillerEnd::Refused, out);
+                        }
+                    }
+                    None => {}
                 }
-                None => {}
-            },
+            }
             FillerAction::Done => self.end_filler(id, FillerEnd::Done, out),
         }
     }

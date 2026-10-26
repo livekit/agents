@@ -497,7 +497,6 @@ impl ParticipantTranscriptionOutput {
         }
     }
 
-
     /// Waits for the close, since an open writer holds a server-side stream.
     pub async fn aclose(&self) {
         {

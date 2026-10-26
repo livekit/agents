@@ -5,8 +5,7 @@ use crate::agent::TurnEdit;
 use crate::agent_activity::drain::DrainEvent;
 use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::PauseCause;
-use crate::agent_session::effects::{Out, Timer};
-use crate::agent_session::effects::{Cx, PauseResult, Signal};
+use crate::agent_session::effects::{Cx, Out, PauseResult, Signal, Timer};
 use crate::agent_session::{
     AgentUpdate, Answer, Driver, HandoffRefused, HookId, HookKind, SpeechCommand,
 };
@@ -268,7 +267,9 @@ impl Driver {
         self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Stop, out);
         self.handoff_step(HandoffEvent::Closing, out);
         self.activity.on_exit.abandon();
-        self.activity.tools.abandon_replies();
+        // Nothing pending is delivered, a render in flight is dropped.
+        self.activity.tools.pending.clear();
+        self.activity.tools.rendering = None;
         self.abandon_hooks(out);
     }
 

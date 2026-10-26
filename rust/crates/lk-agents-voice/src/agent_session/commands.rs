@@ -594,7 +594,6 @@ impl AgentUpdate {
         .flatten()
     }
 
-
     pub(crate) fn reopens(&self) -> &'static str {
         match (self.stt.is_given(), self.vad.is_given()) {
             (false, false) => "",
