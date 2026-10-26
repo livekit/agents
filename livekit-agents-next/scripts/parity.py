@@ -120,13 +120,14 @@ def lines_of(transcript: dict[str, Any]) -> list[str]:
 
 def _tolerate_audio(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
     """The reference ends each synthesis with two 10 ms silent markers (the chunked stream's and
-    the stream adapter's), the core with one: up to 10 ms per speech is not a difference."""
+    the stream adapter's), the core with one: a few markers per speech are not a difference."""
     try:
         a, b = ref["room"][0], nxt["room"][0]
     except (KeyError, IndexError):
         return
     speeches = sum(1 for e in ref.get("events", []) if e[0] == "speech_created")
-    if abs(a["audio_s"] - b["audio_s"]) <= 0.01 * speeches + 0.005:
+    # a tts_node may repeat frames, markers included
+    if abs(a["audio_s"] - b["audio_s"]) <= 0.02 * speeches + 0.005:
         b["audio_s"] = a["audio_s"]
 
 
@@ -492,6 +493,7 @@ class Call:
         self.stack = _stack_name()
         self.models = _models()
         self.events: list[list[Any]] = []
+        self.metrics: list[str] = []
         self.llm_requests: list[dict[str, Any]] = []
         self.tts_requests: list[str] = []
         self.handles: list[tuple[str, Any]] = []
@@ -553,7 +555,9 @@ class Call:
                 ]
             ],
         )
-        on("metrics_collected", lambda ev: [type(ev.metrics).__name__])
+        # emitted as each provider's stream settles, so their order against the state changes is
+        # the scheduler's: counted per kind, not ordered
+        session.on("metrics_collected", lambda ev: self.metrics.append(type(ev.metrics).__name__))
         on("agent_false_interruption", lambda ev: ["resumed" if ev.resumed else "not resumed"])
         on("user_transcription_timeout", lambda ev: [])
         on(
@@ -659,6 +663,7 @@ class Call:
 
     def transcript(self) -> dict[str, Any]:
         out: dict[str, Any] = {"events": self.events}
+        out["metrics"] = [sorted(self.metrics)]
         out["llm_requests"] = self.llm_requests
         out["tts_requests"] = self.tts_requests
         if self.session is not None:

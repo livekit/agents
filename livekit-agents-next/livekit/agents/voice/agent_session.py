@@ -478,7 +478,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self, agent: Agent, frame: dict[str, Any], model: Any
     ) -> inference.AdaptiveInterruptionDetector | None:
         """The adaptive interruption detector, when the reference's gate builds one."""
-        stt_caps = getattr(frame.get("stt", self._stt), "capabilities", None)
+        # the developer's STT: a fallback chain's core leg reports its capabilities as a dict
+        stt_caps = getattr(_VoiceBinding(self, agent).stt, "capabilities", None)
         has_vad = frame.get("vad", self._vad) is not None
         agent_mode = (
             agent.interruption_detection if is_given(agent.interruption_detection) else None
