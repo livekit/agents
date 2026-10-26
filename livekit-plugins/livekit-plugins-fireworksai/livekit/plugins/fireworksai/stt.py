@@ -350,9 +350,12 @@ class SpeechStream(stt.SpeechStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                 except asyncio.TimeoutError:
                     if closing_ws:
                         break
@@ -377,7 +380,10 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                    if "segments" in data:
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception("failed to process FireworksAI message")
 
@@ -443,7 +449,7 @@ class SpeechStream(stt.SpeechStream):
         ws_url = str(self._opts.base_url).rstrip("/") + _STREAMING_PATH
         filtered_config = {k: v for k, v in live_config.items() if v is not None}
         url = f"{ws_url}?{urlencode(filtered_config, doseq=True)}"
-        ws = await self._session.ws_connect(url, headers=headers)
+        ws = await self._session.ws_connect(url, headers=headers, autoping=False)
         logger.info("connected to Fireworks AI STT")
         return ws
 
