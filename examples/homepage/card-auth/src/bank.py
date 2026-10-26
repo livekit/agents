@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any, Literal
 
-RECORDS = json.loads((Path(__file__).parent / "cardholders.json").read_text())
+BANK_NAME = "Kestrel Bank"
 
-BANK_NAME = RECORDS["bank"]
+# Nothing in the demo is on file. The card number alone decides the identity check: a card ending in
+# VERIFIED_CARD always passes and any other card fails, like DECLINED_CARD, the one the demo offers
+# for seeing a failure.
+VERIFIED_CARD = "1111"
+DECLINED_CARD = "0000"
+MAX_ATTEMPTS = 3
+EARLIEST_BIRTH_DATE = date(1900, 1, 1)
 
 AuthState = Literal["unauthenticated", "authenticating", "authenticated"]
 CardState = Literal["active", "locked"]
@@ -25,41 +28,15 @@ class BankError(Exception):
 @dataclass(frozen=True)
 class Identity:
     name: str
-    date_of_birth: str
+    date_of_birth: date
     last_four: str
-    merchant: str
-    amount: str
-
-    def matches(self, other: Identity) -> bool:
-        return (
-            _canonical(self.name) == _canonical(other.name)
-            and self.date_of_birth.strip() == other.date_of_birth.strip()
-            and _digits(self.last_four) == _digits(other.last_four)
-            and _canonical(self.merchant) == _canonical(other.merchant)
-            and _cents(self.amount) is not None
-            and _cents(self.amount) == _cents(other.amount)
-        )
 
     def to_json(self) -> dict[str, str]:
         return {
             "name": self.name,
-            "dateOfBirth": self.date_of_birth,
+            "dateOfBirth": self.date_of_birth.isoformat(),
             "lastFour": self.last_four,
-            "merchant": self.merchant,
-            "amount": self.amount,
         }
-
-
-ON_FILE = [
-    Identity(
-        name=c["name"],
-        date_of_birth=c["dob"],
-        last_four=c["last_four"],
-        merchant=c["last_purchase"]["merchant"],
-        amount=c["last_purchase"]["amount"],
-    )
-    for c in RECORDS["cardholders"]
-]
 
 
 @dataclass(frozen=True)
@@ -92,25 +69,20 @@ class TravelNotice:
 
 
 @dataclass
-class Alert:
-    """An outbound call about a flagged purchase, to the cardholder it was made on."""
+class Card:
+    """The demo card, who it was verified as, and what the call changed on it."""
 
-    cardholder: Identity
-    purchase: FlaggedPurchase = FLAGGED
-    checks: list[bool | None] = field(default_factory=list)
-    made_by_cardholder: bool | None = None
-    card: CardState = "active"
+    last_four: str = VERIFIED_CARD
+    holder: str | None = None
+    state: CardState = "active"
     case_id: str | None = None
     travel: TravelNotice | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "cardholder": self.cardholder.name,
-            "lastFour": self.cardholder.last_four,
-            "purchase": self.purchase.to_json(),
-            "checks": self.checks,
-            "madeByCardholder": self.made_by_cardholder,
-            "card": self.card,
+            "lastFour": self.last_four,
+            "holder": self.holder,
+            "state": self.state,
             "caseId": self.case_id,
             "travel": None
             if self.travel is None
@@ -118,6 +90,23 @@ class Alert:
                 "destination": self.travel.destination,
                 "until": self.travel.until.isoformat(),
             },
+        }
+
+
+@dataclass
+class Alert:
+    """A flagged purchase on the card: the one the outbound call is about, or the charge an inbound
+    caller doesn't recognize. `checks` are the outbound call's identity checks."""
+
+    purchase: FlaggedPurchase = FLAGGED
+    checks: list[bool | None] = field(default_factory=list)
+    made_by_cardholder: bool | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "purchase": self.purchase.to_json(),
+            "checks": self.checks,
+            "madeByCardholder": self.made_by_cardholder,
         }
 
 
@@ -134,9 +123,14 @@ class Bank:
     lookup_seconds: float = 1.5
     attempts: list[dict[str, Any]] = field(default_factory=list)
     state: AuthState = "unauthenticated"
+    locked_out: bool = False
+    card: Card = field(default_factory=Card)
     alert: Alert | None = None
 
-    async def authenticate(self, claimed: Identity) -> Identity | None:
+    async def authenticate(self, claimed: Identity) -> bool:
+        """Inbound: checks the caller against the demo's test cards. Three misses lock them out."""
+        if self.locked_out:
+            raise BankError("This caller is locked out after too many failed checks.")
         attempt: dict[str, Any] = {
             "submitted": claimed.to_json(),
             "authenticated": None,
@@ -145,49 +139,74 @@ class Bank:
         await self.publish("attempts", self.attempts)
         await self._set_state("authenticating")
         await asyncio.sleep(self.lookup_seconds)
-        match = next((c for c in ON_FILE if c.matches(claimed)), None)
-        attempt["authenticated"] = match is not None
+        verified = claimed.last_four == VERIFIED_CARD
+        attempt["authenticated"] = verified
         await self.publish("attempts", self.attempts)
-        await self._set_state("unauthenticated" if match is None else "authenticated")
-        return match
+        if verified:
+            await self._verify_holder(claimed.name)
+        elif sum(a["authenticated"] is False for a in self.attempts) >= MAX_ATTEMPTS:
+            self.locked_out = True
+            await self.publish("lockedOut", True)
+        await self._set_state("authenticated" if verified else "unauthenticated")
+        return verified
 
     async def open_alert(self) -> Alert:
-        self.alert = Alert(cardholder=ON_FILE[0])
+        self.alert = Alert()
         await self._publish_alert()
+        await self._publish_card()
         return self.alert
 
-    async def confirm_birth_date(self, date_of_birth: str) -> bool:
+    async def confirm_cardholder(self, name: str, date_of_birth: date) -> None:
+        """Outbound: confirms whoever picked up as the cardholder. Nothing is on file in the demo, so
+        any name and real date of birth will do; the check is there to show the step."""
         alert = self._require_alert()
         alert.checks.append(None)
         await self._publish_alert()
         await self._set_state("authenticating")
         await asyncio.sleep(self.lookup_seconds)
-        verified = date_of_birth.strip() == alert.cardholder.date_of_birth
-        alert.checks[-1] = verified
+        alert.checks[-1] = True
         await self._publish_alert()
-        await self._set_state("authenticated" if verified else "unauthenticated")
-        return verified
+        await self._verify_holder(name)
+        await self._set_state("authenticated")
 
-    async def record_answer(self, made_by_cardholder: bool) -> Alert:
-        alert = self._require_verified()
+    async def recent_charges(self) -> Alert:
+        """Inbound: the charge a verified caller is asking about, the bank's only recent one."""
+        self._require_verified()
+        if self.alert is None:
+            self.alert = Alert()
+            await self._publish_alert()
+        return self.alert
+
+    async def record_answer(self, made_by_cardholder: bool) -> Card:
+        self._require_verified()
+        alert = self._require_alert()
         alert.made_by_cardholder = made_by_cardholder
         if made_by_cardholder:
-            alert.card = "active"
-            alert.case_id = None
+            if self.card.case_id is not None:
+                self.card.state = "active"
+                self.card.case_id = None
         else:
-            alert.card = "locked"
-            alert.case_id = LOSS_PREVENTION_CASE
-            alert.travel = None
+            self.card.state = "locked"
+            self.card.case_id = LOSS_PREVENTION_CASE
+            self.card.travel = None
         await self._publish_alert()
-        return alert
+        await self._publish_card()
+        return self.card
+
+    async def lock_card(self) -> Card:
+        self._require_verified()
+        self.card.state = "locked"
+        self.card.travel = None
+        await self._publish_card()
+        return self.card
 
     async def set_travel_notice(
         self, destination: str, until: date, today: date
-    ) -> Alert:
-        alert = self._require_verified()
-        if alert.made_by_cardholder is not True:
+    ) -> Card:
+        self._require_verified()
+        if self.card.state == "locked":
             raise BankError(
-                "A travel notice is only for a cardholder who made the purchase."
+                "The card is locked, so a travel notice wouldn't do anything."
             )
         if until < today:
             raise BankError(
@@ -197,39 +216,48 @@ class Bank:
             raise BankError(
                 f"A travel notice can cover at most {LONGEST_TRAVEL_NOTICE_DAYS} days."
             )
-        alert.travel = TravelNotice(destination.strip(), until)
-        await self._publish_alert()
-        return alert
+        self.card.travel = TravelNotice(destination.strip(), until)
+        await self._publish_card()
+        return self.card
 
     def _require_alert(self) -> Alert:
         if self.alert is None:
             raise BankError("There's no flagged purchase on this call.")
         return self.alert
 
-    def _require_verified(self) -> Alert:
-        alert = self._require_alert()
+    def _require_verified(self) -> None:
         if self.state != "authenticated":
-            raise BankError("Verify the cardholder's date of birth first.")
-        return alert
+            raise BankError("Verify the caller first.")
+
+    async def _verify_holder(self, name: str) -> None:
+        self.card.holder = name
+        await self._publish_card()
 
     async def _publish_alert(self) -> None:
         await self.publish("alert", self._require_alert().to_json())
+
+    async def _publish_card(self) -> None:
+        await self.publish("card", self.card.to_json())
 
     async def _set_state(self, state: AuthState) -> None:
         self.state = state
         await self.publish("status", state)
 
 
-def _canonical(text: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", text.lower())
+def card_digits(text: str) -> str:
+    """The card's last four digits as the backend model gave them, like "1111" or "11 11"."""
+    digits = re.sub(r"\D", "", text)
+    if len(digits) != 4:
+        raise BankError(f"Ask for the card's last four digits, got {text!r}.")
+    return digits
 
 
-def _digits(text: str) -> str:
-    return re.sub(r"\D", "", text)
-
-
-def _cents(amount: str) -> Decimal | None:
+def birth_date(text: str, today: date) -> date:
+    """A date of birth as the backend model gave it, YYYY-MM-DD, if it could be someone's."""
     try:
-        return Decimal(re.sub(r"[$,\s]", "", amount)).quantize(Decimal("0.01"))
-    except InvalidOperation:
-        return None
+        born = date.fromisoformat(text.strip())
+    except ValueError as e:
+        raise BankError(f"Use YYYY-MM-DD for the date of birth, got {text!r}.") from e
+    if not EARLIEST_BIRTH_DATE <= born < today:
+        raise BankError("That can't be a date of birth. Ask for it again.")
+    return born
