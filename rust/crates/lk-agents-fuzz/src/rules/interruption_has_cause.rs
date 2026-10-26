@@ -42,9 +42,7 @@ impl Rule for InterruptionHasCause {
                 }
                 InterruptCause::Detector
                 | InterruptCause::Superseded
-                | InterruptCause::ScheduleRejected
-                | InterruptCause::Watchdog
-                | InterruptCause::Handoff => true,
+                | InterruptCause::ScheduleRejected => true,
             };
             check.expect(
                 Subject::Speech(speech),

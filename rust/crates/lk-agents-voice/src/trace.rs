@@ -687,8 +687,6 @@ pub enum InterruptCause {
     Superseded,
     Closing,
     ScheduleRejected,
-    Watchdog,
-    Handoff,
     UserTurn,
 }
 
