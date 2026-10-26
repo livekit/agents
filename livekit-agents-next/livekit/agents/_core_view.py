@@ -229,6 +229,19 @@ def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
     return chat_ctx, tools
 
 
+def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool | Toolset]]) -> Any:
+    """``model`` as the core takes it: its own model for an OpenAI-protocol model or a fallback
+    chain, else the host view of a plugin's model."""
+    from .llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
+    from .llm.realtime_fallback_adapter import RealtimeModelFallbackAdapter
+
+    if isinstance(model, OpenAIRealtimeModel):
+        return model._core_native()
+    if isinstance(model, RealtimeModelFallbackAdapter):
+        return model._core_native([realtime_model(m, tools) for m in model._models])
+    return Realtime(model, tools)
+
+
 class Realtime:
     """A plugin's ``RealtimeModel`` as the core's host realtime model. ``tools`` names the tool
     objects the core refers to by name (the running frame's pool)."""

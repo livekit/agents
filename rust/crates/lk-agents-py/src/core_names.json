@@ -75,7 +75,7 @@
   "PlaybackInfo",
   "PlaybackTracker",
   "PlayoutLedger",
-  "RealtimeFallback",
+  "RealtimeFallbackModel",
   "RecordingOptions",
   "RemoteSessionClient",
   "RemoteSessionHost",

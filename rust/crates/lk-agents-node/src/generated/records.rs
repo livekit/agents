@@ -2592,69 +2592,6 @@ impl From<TtsCapabilities> for lk_agents_abi::TtsCapabilities {
     }
 }
 
-/// One `realtime_availability_changed` a `RealtimeModelFallbackAdapter` emits: the host maps the
-/// index back to the model object it passed in, because users compare that object with `is`.
-#[napi(object, js_name = "AvailabilityChange")]
-pub struct AvailabilityChange {
-    pub index: i64,
-    pub available: bool,
-}
-
-impl From<&lk_agents_abi::llm::fallback::AvailabilityChange> for AvailabilityChange {
-    fn from(v: &lk_agents_abi::llm::fallback::AvailabilityChange) -> Self {
-        AvailabilityChange {
-            index: i64::try_from(v.index).unwrap_or(i64::MAX),
-            available: v.available,
-        }
-    }
-}
-
-impl TryFrom<AvailabilityChange> for lk_agents_abi::llm::fallback::AvailabilityChange {
-    type Error = crate::host_error::JsError;
-
-    fn try_from(v: AvailabilityChange) -> Result<Self, Self::Error> {
-        Ok(lk_agents_abi::llm::fallback::AvailabilityChange {
-            index: <usize>::try_from(v.index).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("AvailabilityChange.index: {e}")))?,
-            available: v.available,
-        })
-    }
-}
-
-/// What `RealtimeModelFallbackAdapter._on_child_error` decided.
-#[napi(object, js_name = "ErrorPlan")]
-pub struct ErrorPlan {
-    /// Emit these `realtime_availability_changed` events first, in order.
-    pub changes: Vec<crate::generated::records::AvailabilityChange>,
-    /// The rewrite: emit with `recoverable=True` because a fallback exists and the swap will
-    /// rescue the call.
-    pub rewrite_recoverable: bool,
-    /// The model to swap to, or `None`: the error was recoverable, every model is down, or a swap
-    /// is already in flight.
-    pub swap_to: Option<i64>,
-}
-
-impl From<&lk_agents_abi::llm::fallback::ErrorPlan> for ErrorPlan {
-    fn from(v: &lk_agents_abi::llm::fallback::ErrorPlan) -> Self {
-        ErrorPlan {
-            changes: v.changes.iter().map(|v| crate::generated::records::AvailabilityChange::from(v)).collect::<Vec<_>>(),
-            rewrite_recoverable: v.rewrite_recoverable,
-            swap_to: v.swap_to.as_ref().map(|v| i64::try_from(*v).unwrap_or(i64::MAX)),
-        }
-    }
-}
-
-impl TryFrom<ErrorPlan> for lk_agents_abi::llm::fallback::ErrorPlan {
-    type Error = crate::host_error::JsError;
-
-    fn try_from(v: ErrorPlan) -> Result<Self, Self::Error> {
-        Ok(lk_agents_abi::llm::fallback::ErrorPlan {
-            changes: v.changes.into_iter().map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).collect::<Result<Vec<_>, _>>()?,
-            rewrite_recoverable: v.rewrite_recoverable,
-            swap_to: v.swap_to.map(|v| Ok::<_, crate::host_error::JsError>(<usize>::try_from(v).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("ErrorPlan.swap_to: {e}")))?)).transpose()?,
-        })
-    }
-}
-
 /// A word (or chunk) with optional start/end times for alignment.
 #[napi(object, js_name = "TimedString")]
 pub struct TimedString {

@@ -1,4 +1,4 @@
-//! `RealtimeModelFallbackAdapter`'s decisions for a host that owns the models and the swap task.
+//! `RealtimeModelFallbackAdapter`'s decisions; [`super::realtime`] carries them out.
 
 use std::time::Duration;
 
@@ -56,38 +56,24 @@ pub struct RealtimePolicy {
     cooldown: Duration,
 }
 
-#[lk_agents_abi::host(object(name = "RealtimeFallback", cell = "mutex"))]
 impl RealtimePolicy {
     pub fn new(model_count: usize, cooldown: Duration) -> Self {
         RealtimePolicy { table: AvailabilityTable::new(model_count), active_index: 0, cooldown }
     }
 
-    /// Only a count: the models stay in the host list the events index into. `cooldown` in seconds.
-    #[host(new)]
-    pub fn for_host(model_count: usize, cooldown: f64) -> Result<Self, String> {
-        if model_count == 0 {
-            return Err("at least one RealtimeModel instance must be provided.".to_owned());
-        }
-        Ok(RealtimePolicy::new(model_count, Duration::from_secs_f64(cooldown.max(0.0))))
-    }
-
-    #[host(getter)]
     pub fn active_index(&self) -> usize {
         self.active_index
     }
 
-    #[host(setter)]
     pub fn set_active_index(&mut self, index: usize) {
         self.active_index = index;
     }
 
-    #[host(method)]
     pub fn is_available(&self, index: usize) -> bool {
         self.table.is_available(index)
     }
 
     /// `_set_available`. The event to emit, or `None` when nothing changed (no re-armed cooldown).
-    #[host(method)]
     pub fn set_available(&mut self, index: usize, available: bool, now: f64) -> Option<AvailabilityChange> {
         let now = ts(now);
         self.table
@@ -97,14 +83,12 @@ impl RealtimePolicy {
 
     /// `_next_available_index`: expire cooldowns, then first available, primary preferred. Returns
     /// the target and the sweep's re-enable events.
-    #[host(method(defaults(exclude_current = false), kw_only = "exclude_current"))]
     pub fn next_available_index(&mut self, now: f64, exclude_current: bool) -> (Option<usize>, Vec<AvailabilityChange>) {
         let changes = self.sweep(ts(now));
         (self.table.find(exclude_current, self.active_index), changes)
     }
 
     /// `_on_child_error`. `swap_busy` is the host's "swap task running".
-    #[host(method(kw_only))]
     pub fn on_child_error(&mut self, recoverable: bool, swap_busy: bool, now: f64) -> ErrorPlan {
         if recoverable {
             // The plugin's own reconnect owns this one.
@@ -127,7 +111,6 @@ impl RealtimePolicy {
 
     /// `restart(switch_model=)`: the next available model, or the current one when there is no
     /// other. Never `None`.
-    #[host(method(kw_only))]
     pub fn restart_target(&mut self, switch_model: bool, now: f64) -> (usize, Vec<AvailabilityChange>) {
         if !switch_model {
             return (self.active_index, vec![]);

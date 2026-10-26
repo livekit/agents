@@ -289,6 +289,50 @@ async def realtime() -> None:
     print(f"played_bytes={room.played_bytes()}")
 
 
+class _DyingSession(_RealtimeSession):
+    """Fails for good as soon as it opens."""
+
+    def __init__(self, model: ScriptedRealtime) -> None:
+        super().__init__(model)
+        asyncio.get_running_loop().call_soon(
+            self.emit,
+            "error",
+            llm.RealtimeModelError(
+                timestamp=0.0, label="dying", error=RuntimeError("gone"), recoverable=False
+            ),
+        )
+
+
+class DyingRealtime(ScriptedRealtime):
+    def session(self, *, turn_detection_disabled: bool = False) -> llm.RealtimeSession:
+        return _DyingSession(self)
+
+
+async def realtime_fallback() -> None:
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    primary, backup = DyingRealtime(), ScriptedRealtime()
+    adapter = llm.RealtimeModelFallbackAdapter([primary, backup])
+    changes: list[tuple[bool, bool]] = []
+    adapter.on(
+        "realtime_availability_changed",
+        lambda ev: changes.append((ev.realtime_model is primary, ev.available)),
+    )
+    session = LiveSession(llm=adapter, vad=None)
+    session.on(
+        "conversation_item_added",
+        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
+    )
+    await session.start(Agent(instructions="You are realtime.", name="fallback"), room=room)
+    await settle(room, 0.5)
+    handle = session.generate_reply(instructions="greet the user")
+    await settle(room, 2)
+    assert handle.done(), "the backup model did not answer"
+    assert changes == [(True, False)], changes
+    await session.aclose()
+    print(f"availability {changes}, played_bytes={room.played_bytes()}")
+
+
 async def _openai_server(ws: web.WebSocketResponse, sessions: list[dict[str, Any]]) -> None:
     """The OpenAI Realtime protocol's happy path: items are acked, a reply is one spoken message."""
     tail: str | None = None
@@ -598,6 +642,9 @@ async def main() -> int:
 
     print("== realtime")
     await realtime()
+
+    print("== realtime fallback")
+    await realtime_fallback()
 
     print("== native realtime")
     await native_realtime()

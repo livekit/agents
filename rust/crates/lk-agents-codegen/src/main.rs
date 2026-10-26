@@ -211,10 +211,6 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-inference/src/fallback/stt.rs", "lk_agents_inference::fallback"),
     ("rust/crates/lk-agents-inference/src/fallback/tts.rs", "lk_agents_inference::fallback"),
     ("rust/crates/lk-agents-inference/src/fallback/realtime.rs", "lk_agents_inference::fallback"),
-    (
-        "rust/crates/lk-agents-inference/src/fallback/realtime_policy.rs",
-        "lk_agents_inference::fallback",
-    ),
     ("rust/crates/lk-agents-inference/src/stt/mod.rs", "lk_agents_inference::stt"),
     ("rust/crates/lk-agents-inference/src/vad/mod.rs", "lk_agents_inference::vad"),
     ("rust/crates/lk-agents-inference/src/tts/mod.rs", "lk_agents_inference::tts"),

@@ -27,6 +27,7 @@ from .._core_view import (
     TurnDetector,
     chat_request,
     from_core_item,
+    realtime_model,
     to_core_items,
     tool_specs,
 )
@@ -34,7 +35,6 @@ from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechS
 from .._generated.session_dispatch import IGNORED_EVENTS, PUBLIC_EVENTS
 from ..job import get_job_context
 from ..llm import ChatContext, RealtimeModel, StopResponse
-from ..llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage
@@ -400,13 +400,15 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         frame = await self._frame(agent)
         model = frame.get("llm", self._llm)
-        # an OpenAI-protocol model runs in the core; any other one is a host realtime model
-        native = model._core_native() if isinstance(model, OpenAIRealtimeModel) else None
-        realtime = (
-            Realtime(model, lambda: self._pool(self.current_agent))
-            if isinstance(model, llm.RealtimeModel) and native is None
+        # an OpenAI-protocol model or a fallback chain runs in the core; any other one is a host
+        # realtime model
+        rt = (
+            realtime_model(model, lambda: self._pool(self.current_agent))
+            if isinstance(model, llm.RealtimeModel)
             else None
         )
+        realtime = rt if isinstance(rt, Realtime) else None
+        native = None if isinstance(rt, Realtime) else rt
         sampler = self._video_sampler
         self._core = _core.LiveSession(
             room,

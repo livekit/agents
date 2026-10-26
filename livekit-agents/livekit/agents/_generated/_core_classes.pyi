@@ -1567,35 +1567,6 @@ class FallbackTts:
     async def stream(self) -> FallbackTtsStream: ...
 
 
-class RealtimeFallback:
-    def __init__(self, model_count: int, cooldown: float) -> None: ...
-    @property
-    def active_index(self) -> int: ...
-    @active_index.setter
-    def active_index(self, index: int) -> None: ...
-    def is_available(self, index: int) -> bool: ...
-    def set_available(self, index: int, available: bool, now: float) -> dict[str, Any] | None: ...
-    def next_available_index(
-        self,
-        now: float,
-        *,
-        exclude_current: bool = False,
-    ) -> tuple[int | None, list[dict[str, Any]]]: ...
-    def on_child_error(
-        self,
-        *,
-        recoverable: bool,
-        swap_busy: bool,
-        now: float,
-    ) -> dict[str, Any]: ...
-    def restart_target(
-        self,
-        *,
-        switch_model: bool,
-        now: float,
-    ) -> tuple[int, list[dict[str, Any]]]: ...
-
-
 class InferenceStt:
     """`inference/stt.py`'s WebSocket, over `lk-agents-inference::stt::NativeStt`."""
 

@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 274 core items bound (121 functions and consts, 69 classes, 83 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 271 core items bound (121 functions and consts, 68 classes, 81 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!

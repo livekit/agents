@@ -1,51 +1,19 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import time
-import weakref
-from collections.abc import AsyncIterable, Callable
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from livekit import rtc
 
 from .. import _core
-from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import aio, is_given
-from .chat_context import ChatContext, MetricsMetadata
-from .realtime import (
-    EventTypes,
-    GenerationCreatedEvent,
-    RealtimeCapabilities,
-    RealtimeModel,
-    RealtimeModelError,
-    RealtimeSession,
-    RealtimeSessionReconnectedEvent,
-)
-from .tool_context import Tool, ToolChoice, ToolContext
-
-if TYPE_CHECKING:
-    from ..voice.agent_session import LiveSession
+from .chat_context import MetricsMetadata
+from .realtime import RealtimeCapabilities, RealtimeModel, RealtimeSession
 
 
 @dataclass
 class RealtimeAvailabilityChangedEvent:
     realtime_model: RealtimeModel
     available: bool
-
-
-# child events re-emitted on the wrapper
-_FORWARDED_EVENTS: tuple[EventTypes, ...] = (
-    "input_speech_started",
-    "input_speech_stopped",
-    "input_audio_transcription_completed",
-    "generation_created",
-    "session_reconnected",
-    "metrics_collected",
-    "remote_item_added",
-)
 
 
 def _merge_capabilities(models: list[RealtimeModel]) -> RealtimeCapabilities:
@@ -58,7 +26,12 @@ class RealtimeModelFallbackAdapter(
     RealtimeModel,
     rtc.EventEmitter[Literal["realtime_availability_changed"]],
 ):
-    """Falls back between realtime models (or restarts one), preserving chat context and handlers."""
+    """Falls back between realtime models (or restarts one), preserving chat context and handlers.
+
+    The swap runs in the core (``_core.RealtimeFallbackModel``): a failed model is skipped until its
+    cooldown ends, the conversation is replayed onto the next one, and a reply cut by the swap is
+    asked for again.
+    """
 
     def __init__(
         self,
@@ -71,8 +44,7 @@ class RealtimeModelFallbackAdapter(
 
         Args:
             models: Ordered models; the first is primary, the rest fallbacks. All must agree on
-                the ``audio_output``, ``turn_detection`` and ``supports_overlapping_speech``
-                capabilities.
+                the ``audio_output`` and ``turn_detection`` capabilities.
             cooldown: Seconds a failed model stays unavailable before it can be preferred again.
             regenerate_on_swap: Re-issue the reply on the new session if one was in progress.
 
@@ -87,10 +59,7 @@ class RealtimeModelFallbackAdapter(
         self._models = models
         self._cooldown = cooldown
         self._regenerate_on_swap = regenerate_on_swap
-        self._sessions: weakref.WeakSet[_FallbackRealtimeSession] = weakref.WeakSet()
-
-        # the model currently serving sessions; used to label metrics & traces
-        self._active_instance: RealtimeModel = models[0]
+        self._native: _core.RealtimeFallbackModel | None = None
 
     @property
     def model(self) -> str:
@@ -103,12 +72,34 @@ class RealtimeModelFallbackAdapter(
     @property
     def metrics_metadata(self) -> MetricsMetadata:
         """Metadata of the model currently serving sessions (the primary until a swap)."""
-        return self._active_instance.metrics_metadata
+        index = self._native.active_index if self._native is not None else 0
+        return self._models[index].metrics_metadata
 
-    def session(self, *, turn_detection_disabled: bool = False) -> _FallbackRealtimeSession:
-        sess = _FallbackRealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
-        self._sessions.add(sess)
-        return sess
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        raise NotImplementedError(
+            "RealtimeModelFallbackAdapter sessions run inside a LiveSession (the core swaps them)"
+        )
+
+    def _core_native(self, children: list[Any]) -> _core.RealtimeFallbackModel:
+        """The core's engine over ``children`` (each model as the core takes it)."""
+        self._native = _core.RealtimeFallbackModel(
+            children,
+            cooldown=self._cooldown,
+            regenerate_on_swap=self._regenerate_on_swap,
+            on_availability=self,
+        )
+        return self._native
+
+    def _core_availability_changed(self, ev: dict[str, Any]) -> None:
+        self.emit(
+            "realtime_availability_changed",
+            RealtimeAvailabilityChangedEvent(
+                realtime_model=self._models[ev["index"]], available=ev["available"]
+            ),
+        )
+
+    def _core_all_unavailable(self) -> None:
+        pass
 
     async def restart_session(self, *, switch_model: bool = False) -> None:
         """Bring up a fresh underlying session, preserving chat context and bound handlers.
@@ -117,331 +108,9 @@ class RealtimeModelFallbackAdapter(
             switch_model: Bring the new session up on the next available model instead of the
                 current one.
         """
-        for sess in list(self._sessions):
-            await sess.restart(switch_model=switch_model)
+        if self._native is not None:
+            await self._native.restart(switch_model=switch_model)
 
     async def aclose(self) -> None:
         for model in self._models:
             await model.aclose()
-
-
-class _FallbackRealtimeSession(RealtimeSession[str]):
-    """Bound once by AgentActivity; swaps the inner child session internally."""
-
-    def __init__(
-        self, adapter: RealtimeModelFallbackAdapter, *, turn_detection_disabled: bool = False
-    ) -> None:
-        super().__init__(adapter)
-        self._adapter = adapter
-        # applied to every underlying session, including those brought up on a swap
-        self._turn_detection_disabled = turn_detection_disabled
-
-        # session state replayed onto a new child on swap
-        self._instructions: NotGivenOr[str] = NOT_GIVEN
-        self._tools: NotGivenOr[list[Tool]] = NOT_GIVEN
-        self._tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
-
-        # stable per-event forwarders so they can be detached on swap
-        def _make_forwarder(event: EventTypes) -> Callable[[object], None]:
-            # callbacks receive only the payload, so bind the event name per forwarder
-            def _forward(ev: object) -> None:
-                self.emit(event, ev)
-
-            return _forward
-
-        self._forwarders: dict[EventTypes, Callable[[object], None]] = {
-            event: _make_forwarder(event) for event in _FORWARDED_EVENTS
-        }
-        self._extra_forwarders: dict[str, Callable[..., None]] = {}
-
-        # per-model availability, with a cooldown after a failure
-        self._policy = _core.RealtimeFallback(len(adapter._models), adapter._cooldown)
-
-        self._swap_task: asyncio.Task[None] | None = None
-        self._swap_lock = asyncio.Lock()
-        # bound by AgentActivity; used to read agent state and drive interrupt/generate_reply on swap
-        self._agent_session: LiveSession | None = None
-
-        # audio during a swap is dropped; replaying it would lag the model behind realtime
-        self._swapping = False
-
-        self._active_index = 0
-        self._active_bound = False
-        self._active = adapter._models[0].session(
-            turn_detection_disabled=self._turn_detection_disabled
-        )
-        # a fresh session always starts on the primary, even after an earlier failover
-        adapter._active_instance = adapter._models[0]
-        self._bind(self._active)
-
-    def _bind(self, child: RealtimeSession) -> None:
-        for event, forwarder in self._forwarders.items():
-            child.on(event, forwarder)
-        for extra_event, forwarder in self._extra_forwarders.items():
-            child.on(extra_event, forwarder)
-        child.on("error", self._on_child_error)
-        self._active_bound = True
-
-    def _unbind(self, child: RealtimeSession) -> None:
-        self._active_bound = False
-        for event, forwarder in self._forwarders.items():
-            child.off(event, forwarder)
-        for extra_event, forwarder in self._extra_forwarders.items():
-            child.off(extra_event, forwarder)
-        child.off("error", self._on_child_error)
-
-    def on(
-        self,
-        event: EventTypes | str,
-        callback: Callable[..., Any] | None = None,
-    ) -> Callable[..., Any]:
-        if event not in _FORWARDED_EVENTS and event != "error":
-            forwarder = self._extra_forwarders.get(event)
-            if forwarder is None:
-
-                def _forward(*args: object) -> None:
-                    self.emit(event, *args)
-
-                forwarder = _forward
-                self._extra_forwarders[event] = forwarder
-                if self._active_bound:
-                    self._active.on(event, forwarder)
-
-        return super().on(event, callback)
-
-    @property
-    def _active_index(self) -> int:
-        return self._policy.active_index  # type: ignore[no-any-return]
-
-    @_active_index.setter
-    def _active_index(self, index: int) -> None:
-        self._policy.active_index = index
-
-    def _announce(self, changes: list[dict[str, Any]]) -> None:
-        for change in changes:
-            self._adapter.emit(
-                "realtime_availability_changed",
-                RealtimeAvailabilityChangedEvent(
-                    realtime_model=self._adapter._models[change["index"]],
-                    available=change["available"],
-                ),
-            )
-
-    def _set_available(self, index: int, available: bool) -> None:
-        if change := self._policy.set_available(index, available, time.time()):
-            self._announce([change])
-
-    def _next_available_index(self, *, exclude_current: bool = False) -> int | None:
-        index, changes = self._policy.next_available_index(
-            time.time(), exclude_current=exclude_current
-        )
-        self._announce(changes)
-        return index  # type: ignore[no-any-return]
-
-    def _is_agent_speaking(self) -> bool:
-        # "thinking" (generating) or "speaking" (playing out) both mean a reply is in progress
-        return self._agent_session is not None and self._agent_session.agent_state in (
-            "speaking",
-            "thinking",
-        )
-
-    def _on_child_error(self, error: RealtimeModelError) -> None:
-        busy = self._swap_task is not None and not self._swap_task.done()
-        plan = self._policy.on_child_error(
-            recoverable=error.recoverable, swap_busy=busy, now=time.time()
-        )
-        self._announce(plan["changes"])
-        # while a fallback remains the error is recoverable, so the session isn't torn down
-        self.emit(
-            "error",
-            error.model_copy(update={"recoverable": True})
-            if plan["rewrite_recoverable"]
-            else error,
-        )
-        if (target := plan["swap_to"]) is not None:
-            # the speaking state now: the dead generation may flip it before the swap runs
-            self._swap_task = asyncio.create_task(self._swap(target, self._is_agent_speaking()))
-
-    async def restart(self, *, switch_model: bool) -> None:
-        """Restart the underlying session, optionally on the next available model."""
-        target, changes = self._policy.restart_target(switch_model=switch_model, now=time.time())
-        self._announce(changes)
-        await self._swap(target, self._is_agent_speaking())
-
-    async def _swap(self, target_index: int, was_speaking: bool) -> None:
-        """Replace the active child with a fresh session on ``target_index``.
-
-        If the agent was speaking, its reply is interrupted first (committing the heard content to
-        the agent chat context) and re-issued on the new session afterwards.
-        """
-        async with self._swap_lock:
-            # interrupt through the LiveSession so playout/state stay coordinated and the heard
-            # content is committed (best-effort: the provider may already be dead)
-            if self._agent_session is not None:
-                try:
-                    await self._agent_session.interrupt(force=True)
-                except Exception:
-                    logger.debug("failed to interrupt the agent before swap", exc_info=True)
-
-            # replay the session's history (what the user heard); fall back to the child's
-            # when unbound
-            if self._agent_session is not None:
-                chat_ctx = self._agent_session.history
-            else:
-                chat_ctx = self._active.chat_ctx
-
-            # bring up a fresh child on ``index``; on failure clean it up, cool it down, and
-            # return the error so the caller can try the next model
-            async def _bring_up(index: int) -> Exception | None:
-                try:
-                    self._active = self._adapter._models[index].session(
-                        turn_detection_disabled=self._turn_detection_disabled
-                    )
-                    self._active_index = index
-                    self._bind(self._active)
-                    await self._active._update_session(
-                        instructions=self._instructions, chat_ctx=chat_ctx, tools=self._tools
-                    )
-                    if is_given(self._tool_choice):
-                        self._active.update_options(tool_choice=self._tool_choice)
-                    self._adapter._active_instance = self._adapter._models[index]
-                    return None
-                except Exception as e:
-                    logger.exception("failed to start realtime model on swap, trying next")
-                    self._unbind(self._active)
-                    with contextlib.suppress(Exception):
-                        await self._active.aclose()
-                    self._set_available(index, False)
-                    return e
-
-            self._swapping = True
-            try:
-                # close the old child; best-effort since the provider may already be dead
-                self._unbind(self._active)
-                with contextlib.suppress(Exception):
-                    await self._active.aclose()
-
-                # cascade to further models if one fails to start
-                error = await _bring_up(target_index)
-                while error is not None:
-                    nxt = self._next_available_index()
-                    if nxt is None:
-                        break
-                    error = await _bring_up(nxt)
-            finally:
-                self._swapping = False
-
-            if error is not None:
-                # every model failed to start; escalate so LiveSession can close instead of
-                # continuing on a broken session
-                self.emit(
-                    "error",
-                    RealtimeModelError(
-                        timestamp=time.time(),
-                        label=self._adapter.label,
-                        error=error,
-                        recoverable=False,
-                    ),
-                )
-                return
-
-            # a swap is a reconnect from the caller's perspective
-            self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
-
-            # re-issue the interrupted reply on the new session
-            if (
-                was_speaking
-                and self._adapter._regenerate_on_swap
-                and self._agent_session is not None
-            ):
-                self._agent_session.generate_reply()
-
-    @property
-    def capabilities(self) -> RealtimeCapabilities:
-        # the active model's caps, so per-turn consumers see the model actually in use
-        return self._active.realtime_model.capabilities
-
-    @property
-    def chat_ctx(self) -> ChatContext:
-        return self._active.chat_ctx
-
-    @property
-    def tools(self) -> ToolContext:
-        return self._active.tools
-
-    async def update_instructions(self, instructions: str) -> None:
-        self._instructions = instructions
-        await self._active.update_instructions(instructions)
-
-    async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        if self._swapping:
-            # dropped; the swap replays the agent chat context afterwards
-            return
-        await self._active.update_chat_ctx(chat_ctx)
-
-    async def update_tools(self, tools: list[Tool]) -> None:
-        self._tools = tools
-        await self._active.update_tools(tools)
-
-    def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
-        self._tool_choice = tool_choice
-        self._active.update_options(tool_choice=tool_choice)
-
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._swapping:
-            # drop during swap; replaying would lag the model
-            return
-        self._active.push_audio(frame)
-
-    def push_video(self, frame: rtc.VideoFrame) -> None:
-        if self._swapping:
-            return
-        self._active.push_video(frame)
-
-    def generate_reply(
-        self,
-        *,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
-    ) -> asyncio.Future[GenerationCreatedEvent]:
-        return self._active.generate_reply(
-            instructions=instructions, tool_choice=tool_choice, tools=tools
-        )
-
-    def commit_audio(self) -> None:
-        self._active.commit_audio()
-
-    def clear_audio(self) -> None:
-        self._active.clear_audio()
-
-    def interrupt(self) -> None:
-        self._active.interrupt()
-
-    def start_user_activity(self) -> None:
-        self._active.start_user_activity()
-
-    def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
-        return self._active.say(text)
-
-    def truncate(
-        self,
-        *,
-        message_id: str,
-        modalities: list[Literal["text", "audio"]],
-        audio_end_ms: int,
-        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
-    ) -> None:
-        self._active.truncate(
-            message_id=message_id,
-            modalities=modalities,
-            audio_end_ms=audio_end_ms,
-            audio_transcript=audio_transcript,
-        )
-
-    async def aclose(self) -> None:
-        # cancel an in-flight swap first, else its fresh child would leak past aclose
-        if self._swap_task is not None:
-            await aio.cancel_and_wait(self._swap_task)
-        self._unbind(self._active)
-        await self._active.aclose()

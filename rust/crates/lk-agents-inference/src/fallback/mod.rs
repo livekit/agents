@@ -23,7 +23,9 @@ pub use policy::{
     AfterOutput, ChainPolicy, bound_views, caller_default, conn_options_for_attempt,
     conn_options_for_recovery, resampling_plan,
 };
-pub use realtime::{CapabilityMismatch, merge_capabilities_of};
+pub use realtime::{
+    CapabilityMismatch, FallbackSession, RealtimeChild, RealtimeFallbackModel, merge_capabilities_of,
+};
 pub use realtime_policy::{AvailabilityChange, ErrorPlan, RealtimePolicy};
 pub use stt::{
     FallbackStt, InputTee, SttBackend, SttChainError, SttReq, SttSession, merge_capabilities as merge_stt_capabilities,
