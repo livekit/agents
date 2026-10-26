@@ -781,16 +781,19 @@ class LLMStream(llm.LLMStream):
         return chunk
 
     def _handle_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
+        """Record the phase of each assistant message item as it starts."""
         if isinstance(event.item, ResponseOutputMessage):
             self._message_phases[event.item.id] = event.item.phase
-        elif event.item.type == "function_call":
-            # a preamble the model wrote before calling a tool still precedes the call
-            self._release_held_commentary()
 
     def _release_held_commentary(self) -> None:
-        """Send the held `commentary` text if no final answer text arrived to replace it."""
+        """At response completion, send the held `commentary` text if no final answer
+        text arrived to replace it."""
         if self._answer_started or not self._held_commentary:
             return
+        # The released text keeps the phase of the last message item (`final_answer`)
+        # in the chat context. That is deliberate: it is the reply the agent gave, and
+        # resending it as `commentary` would show the model a turn with no final
+        # answer, the two-message shape this works around.
         text = "".join(self._held_commentary)
         self._held_commentary.clear()
         self._event_ch.send_nowait(
@@ -806,8 +809,10 @@ class LLMStream(llm.LLMStream):
         # Models like gpt-5.3-codex and gpt-6-luna can return a `commentary` message
         # and then a `final_answer` in one response, often with the same text, so
         # speaking every delta repeats the reply. Commentary is held back instead:
-        # dropped once final answer text arrives, and released at completion (or
-        # before a tool call) when the final answer is empty, which also happens.
+        # dropped once final answer text arrives, and released at completion when
+        # the final answer is empty, which also happens. Text and tool calls reach the
+        # voice pipeline on separate channels, so releasing a preamble after a tool
+        # call item changes nothing for playout and lets a later final answer replace it.
         if self._message_phases.get(event.item_id) == "commentary":
             if not self._answer_started:
                 self._held_commentary.append(event.delta)

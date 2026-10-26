@@ -808,16 +808,25 @@ async def test_message_without_phase_is_unchanged(transport_kind: str) -> None:
 
 
 @pytest.mark.parametrize("transport_kind", ["websocket", "http"])
-async def test_commentary_preamble_precedes_tool_call(transport_kind: str) -> None:
+async def test_commentary_preamble_before_tool_call_is_spoken(transport_kind: str) -> None:
     frames = [
         *_message_frames("msg_c", "commentary", "Let me look that up.", 0),
         *_function_call_frames(1),
     ]
     chunks = await _chunks_from_frames(frames, transport_kind)
 
-    text_at = next(i for i, c in enumerate(chunks) if c.delta and c.delta.content)
-    call_at = next(i for i, c in enumerate(chunks) if c.delta and c.delta.tool_calls)
+    tool_calls = [tc for c in chunks if c.delta for tc in c.delta.tool_calls]
     assert _text(chunks) == "Let me look that up."
-    assert text_at < call_at
-    assert chunks[call_at].delta is not None
-    assert chunks[call_at].delta.tool_calls[0].name == "lookup"
+    assert [tc.name for tc in tool_calls] == ["lookup"]
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_final_answer_after_tool_call_replaces_commentary(transport_kind: str) -> None:
+    frames = [
+        *_message_frames("msg_c", "commentary", "I will check.", 0),
+        *_function_call_frames(1),
+        *_message_frames("msg_f", "final_answer", "I will check.", 2),
+    ]
+    chunks = await _chunks_from_frames(frames, transport_kind)
+
+    assert _text(chunks) == "I will check."
