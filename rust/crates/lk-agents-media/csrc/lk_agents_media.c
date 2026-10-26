@@ -162,6 +162,7 @@ struct LkDecoder *lk_dec_open(const char *format_short_name, /* NULL = probe */
 
     d->src_rate = d->dec->sample_rate;
     d->src_channels = d->dec->ch_layout.nb_channels;
+    if (d->out_rate <= 0) d->out_rate = d->src_rate; /* `sample_rate=None`: keep the source's */
 
     d->pkt = av_packet_alloc();
     d->frame = av_frame_alloc();

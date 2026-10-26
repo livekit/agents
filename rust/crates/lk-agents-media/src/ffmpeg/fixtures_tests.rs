@@ -127,7 +127,7 @@ fn the_ffmpeg_path_and_the_wav_fast_path_decode_the_same_file_identically() {
     let mut ff = FfmpegDecoder::new(Some("wav"), 24_000, 1).unwrap();
     let via_ffmpeg = decode_chunked(&mut ff, &file, 4096);
 
-    let mut fast = Decoder::new("audio/wav", 24_000, 1).unwrap();
+    let mut fast = Decoder::new("audio/wav", Some(24_000), 1).unwrap();
     let mut via_fast = fast.push(&file).unwrap();
     via_fast.extend(fast.flush().unwrap());
 
@@ -142,7 +142,7 @@ fn the_ffmpeg_path_and_the_wav_fast_path_decode_the_same_file_identically() {
 #[test]
 fn an_mp3_decodes_to_the_tone_it_holds_rather_than_to_its_own_bytes() {
     let mp3 = unhex(TONE_MP3_HEX);
-    let mut d = Decoder::new("audio/mpeg", 24_000, 1).unwrap();
+    let mut d = Decoder::new("audio/mpeg", Some(24_000), 1).unwrap();
     let mut pcm = d.push(&mp3).unwrap();
     pcm.extend(d.flush().unwrap());
 
@@ -166,7 +166,7 @@ fn an_mp3_decodes_to_the_tone_it_holds_rather_than_to_its_own_bytes() {
 #[test]
 fn the_exact_mime_type_the_js_sdk_sends_for_pre_connect_audio_decodes() {
     let webm = unhex(TONE_WEBM_OPUS_HEX);
-    let mut d = Decoder::new("audio/webm;codecs=opus", 48_000, 1).unwrap();
+    let mut d = Decoder::new("audio/webm;codecs=opus", Some(48_000), 1).unwrap();
     let mut pcm = d.push(&webm).unwrap();
     pcm.extend(d.flush().unwrap());
 
@@ -197,11 +197,11 @@ fn a_container_delivered_in_ragged_chunks_decodes_to_the_same_audio_as_one_push(
 #[test]
 fn the_requested_output_rate_is_honoured_rather_than_the_sources() {
     let webm = unhex(TONE_WEBM_OPUS_HEX);
-    let mut at48 = Decoder::new("audio/webm", 48_000, 1).unwrap();
+    let mut at48 = Decoder::new("audio/webm", Some(48_000), 1).unwrap();
     let mut a = at48.push(&webm).unwrap();
     a.extend(at48.flush().unwrap());
 
-    let mut at24 = Decoder::new("audio/webm", 24_000, 1).unwrap();
+    let mut at24 = Decoder::new("audio/webm", Some(24_000), 1).unwrap();
     let mut b = at24.push(&webm).unwrap();
     b.extend(at24.flush().unwrap());
 
@@ -216,7 +216,7 @@ fn the_requested_output_rate_is_honoured_rather_than_the_sources() {
 #[test]
 fn the_requested_channel_count_is_honoured_on_the_ffmpeg_path() {
     let webm = unhex(TONE_WEBM_OPUS_HEX);
-    let mut d = Decoder::new("audio/webm", 48_000, 2).unwrap();
+    let mut d = Decoder::new("audio/webm", Some(48_000), 2).unwrap();
     let mut pcm = d.push(&webm).unwrap();
     pcm.extend(d.flush().unwrap());
     assert_eq!(pcm.len() % 2, 0);
@@ -232,7 +232,7 @@ fn the_requested_channel_count_is_honoured_on_the_ffmpeg_path() {
 // sent silence" and gets blamed on the provider.
 #[test]
 fn bytes_that_are_not_the_declared_container_fail_with_a_named_error() {
-    let mut d = Decoder::new("audio/mpeg", 24_000, 1).unwrap();
+    let mut d = Decoder::new("audio/mpeg", Some(24_000), 1).unwrap();
     let _ = d.push(b"this is not an mp3 file, not even slightly, no frame sync anywhere at all");
     let err = d.flush().unwrap_err();
     assert!(matches!(err, CodecError::Ffmpeg { .. }), "{err:?}");
@@ -302,7 +302,7 @@ fn pcm_survives_an_encode_and_decode_round_trip() {
     let mut ogg = e.push(&src).unwrap();
     ogg.extend(e.finish().unwrap());
 
-    let mut d = Decoder::new("audio/ogg", 48_000, 1).unwrap();
+    let mut d = Decoder::new("audio/ogg", Some(48_000), 1).unwrap();
     let mut back = d.push(&ogg).unwrap();
     back.extend(d.flush().unwrap());
 
@@ -334,4 +334,17 @@ fn the_encoder_emits_pages_as_it_goes_rather_than_only_at_finish() {
         during > 3 * at_end,
         "{during} bytes during vs {at_end} at finish -- the muxer is buffering the whole stream"
     );
+}
+
+// Catches: `sample_rate=None` decoding at 48 kHz instead of the source's rate, as the reference
+// (`AudioStreamDecoder(sample_rate=None)` builds no resampler rate) does.
+#[test]
+fn no_requested_rate_keeps_the_containers_rate() {
+    let mp3 = unhex(TONE_MP3_HEX);
+    let mut d = Decoder::new("audio/mpeg", None, 1).unwrap();
+    let mut pcm = d.push(&mp3).unwrap();
+    pcm.extend(d.flush().unwrap());
+    assert!(pcm.len() > 1_500 && pcm.len() < 4_000, "0.1 s at 24 kHz, got {}", pcm.len());
+    assert!(tone_strength(&pcm, 24_000, 440.0) > 0.7, "not a 440 Hz tone at the source rate");
+    assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 1)));
 }

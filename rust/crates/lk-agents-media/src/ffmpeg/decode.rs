@@ -55,7 +55,8 @@ pub struct FfmpegDecoder {
 }
 
 impl FfmpegDecoder {
-    /// `format_short_name` is the libav container name (`"mp3"`, `"webm"`), or `None` to probe.
+    /// `format_short_name` is the libav container name (`"mp3"`, `"webm"`), or `None` to probe;
+    /// an `out_rate` of 0 keeps the source's rate.
     pub fn new(format_short_name: Option<&str>, out_rate: u32, out_channels: u16) -> Result<Self> {
         Ok(FfmpegDecoder {
             input: Arc::new(StreamBuffer::new()),
@@ -77,7 +78,11 @@ impl FfmpegDecoder {
 
     /// ffmpeg's resampler converts to exactly this, unlike the WAV path.
     pub fn output_format(&self) -> Option<AudioFormat> {
-        self.saw_output.then(|| AudioFormat::new(self.out_rate, self.out_channels))
+        let rate = match self.out_rate {
+            0 => self.source_format().map_or(0, |f| f.sample_rate),
+            r => r,
+        };
+        self.saw_output.then(|| AudioFormat::new(rate, self.out_channels))
     }
 
     /// For logging and metrics only; the output is already resampled.

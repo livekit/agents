@@ -1021,7 +1021,13 @@ class StreamBuffer:
 class AudioDecoder:
     """`AudioStreamDecoder`'s engine: bytes in, interleaved 16-bit PCM out, one decoder per stream."""
 
-    def __init__(self, mime: str, *, sample_rate: int = 48000, num_channels: int = 1) -> None: ...
+    def __init__(
+        self,
+        mime: str,
+        *,
+        sample_rate: int | None = ...,
+        num_channels: int = 1,
+    ) -> None: ...
     @property
     def output_format(self) -> tuple[int, int] | None: ...
     def push(self, data: bytes) -> bytes: ...

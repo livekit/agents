@@ -150,7 +150,7 @@ impl PreConnectAudioHandler {
         let is_opus =
             stream.info.mime_type == "audio/opus" || stream.info.mime_type.contains("codecs=opus");
         let mut decoder = if is_opus {
-            match Decoder::new(&stream.info.mime_type, sample_rate, num_channels) {
+            match Decoder::new(&stream.info.mime_type, Some(sample_rate), num_channels) {
                 Ok(d) => Some(d),
                 // The decoder's own error names the container and the missing demuxer.
                 Err(e) => {

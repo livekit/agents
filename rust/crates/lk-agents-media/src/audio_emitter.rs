@@ -151,7 +151,7 @@ impl AudioEmitter {
         {
             crate::DecodePlan::Passthrough => None,
             crate::DecodePlan::Decode(mt) => Some(
-                crate::Decoder::new(&mt, sample_rate, num_channels)
+                crate::Decoder::new(&mt, Some(sample_rate), num_channels)
                     .map_err(|e| PyNotImplementedError::new_err(format!("AudioEmitter: {e}")))?,
             ),
         };

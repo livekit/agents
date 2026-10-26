@@ -20,9 +20,9 @@ pub type OnOutput = std::sync::Arc<dyn Fn() + Send + Sync>;
 /// One decoder decodes one stream, as in the reference.
 pub struct Decoder {
     inner: Inner,
-    /// `num_channels` is advisory on the WAV path, as the reference's `_WavInlineDecoder` only
-    /// resamples the rate; the ffmpeg path honours it.
-    target_rate: u32,
+    /// `None` keeps the source's rate. `num_channels` is advisory on the WAV path, as the
+    /// reference's `_WavInlineDecoder` only resamples the rate; the ffmpeg path honours it.
+    target_rate: Option<u32>,
     #[allow(dead_code)]
     target_channels: u16,
     /// Per `(source format -> target rate)`: a provider may concatenate WAV files of different formats.
@@ -59,15 +59,15 @@ impl std::fmt::Debug for Decoder {
 impl Decoder {
     /// `mime` is a media type, not a container name -- `"audio/mpeg"`, not `"mp3"`. An unknown
     /// or absent type asks ffmpeg to probe; without the `ffmpeg` feature it is an error, because
-    /// the alternative is framing an ID3 tag as audio.
-    #[host(new(kw_only = "sample_rate", defaults(sample_rate = 48000, num_channels = 1)))]
-    pub fn new(mime: &str, sample_rate: u32, num_channels: u16) -> Result<Self> {
+    /// the alternative is framing an ID3 tag as audio. `sample_rate=None` keeps the source's rate.
+    #[host(new(kw_only = "sample_rate", defaults(sample_rate = Some(48000), num_channels = 1)))]
+    pub fn new(mime: &str, sample_rate: Option<u32>, num_channels: u16) -> Result<Self> {
         let av_format = mime_to_av_format(Some(mime));
         let inner = match av_format {
             Some("wav") => Inner::Wav(WavDecoder::new()),
             #[cfg(feature = "ffmpeg")]
             other => {
-                Inner::Ffmpeg(crate::ffmpeg::FfmpegDecoder::new(other, sample_rate, num_channels)?)
+                Inner::Ffmpeg(crate::ffmpeg::FfmpegDecoder::new(other, sample_rate.unwrap_or(0), num_channels)?)
             }
             #[cfg(not(feature = "ffmpeg"))]
             Some(other) => {
@@ -166,7 +166,7 @@ impl Decoder {
             Inner::Wav(w) => {
                 w.flush();
                 Ok(match self.resampler.as_mut() {
-                    Some((fmt, r)) => flush_tail(*fmt, self.target_rate, r.as_mut())?,
+                    Some((fmt, r)) => flush_tail(*fmt, self.target_rate.unwrap_or(fmt.sample_rate), r.as_mut())?,
                     None => Vec::new(),
                 })
             }
@@ -183,15 +183,15 @@ impl Decoder {
     fn convert(
         resampler: &mut Option<(AudioFormat, Box<dyn Resampler>)>,
         output_format: &mut Option<AudioFormat>,
-        target_rate: u32,
+        target_rate: Option<u32>,
         src: AudioFormat,
         samples: &[i16],
     ) -> Result<Vec<i16>> {
         // `if self._sample_rate is not None and self._sample_rate != self._wave_rate`.
-        if src.sample_rate == target_rate {
+        let Some(target_rate) = target_rate.filter(|r| *r != src.sample_rate) else {
             let mut tail = Vec::new();
             if let Some((fmt, mut r)) = resampler.take() {
-                tail = flush_tail(fmt, target_rate, r.as_mut())?;
+                tail = flush_tail(fmt, src.sample_rate, r.as_mut())?;
             }
             *output_format = Some(src);
             if tail.is_empty() {
@@ -199,7 +199,7 @@ impl Decoder {
             }
             tail.extend_from_slice(samples);
             return Ok(tail);
-        }
+        };
 
         let mut prefix = Vec::new();
         if resampler.as_ref().is_some_and(|(f, _)| *f != src)
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn a_wav_mime_type_decodes_with_no_features_enabled() {
         let want: Vec<i16> = vec![3, -3, 300, -300];
-        let mut d = Decoder::new("audio/wav", 24_000, 1).unwrap();
+        let mut d = Decoder::new("audio/wav", Some(24_000), 1).unwrap();
         let got = d.push(&wav_file(24_000, 1, &want)).unwrap();
         assert_eq!(got, want);
         assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 1)));
@@ -294,7 +294,7 @@ mod tests {
     fn a_container_mime_type_is_refused_when_ffmpeg_is_not_compiled_in() {
         for mime in ["audio/mpeg", "audio/aac", "audio/flac", "audio/ogg", "audio/webm;codecs=opus"]
         {
-            let err = Decoder::new(mime, 48_000, 1).unwrap_err();
+            let err = Decoder::new(mime, Some(48_000), 1).unwrap_err();
             assert!(matches!(err, CodecError::UnsupportedMime { .. }), "{mime}: {err:?}");
             // The message has to name the feature, or the next person greps the codebase for it.
             assert!(err.to_string().contains("ffmpeg"), "{mime}: {err}");
@@ -313,7 +313,7 @@ mod tests {
             (48_000, 24_000, 1, 2400, 4700..=4900),
             (24_000, 48_000, 2, 4800, 1150..=1250),
         ] {
-            let mut d = Decoder::new("audio/wav", rate, ch).unwrap();
+            let mut d = Decoder::new("audio/wav", Some(rate), ch).unwrap();
             let total = d.push(&wav_file(src, ch, &ramp(n))).unwrap().len() + d.flush().unwrap().len();
             assert_eq!(total % usize::from(ch), 0, "whole frames");
             let got = total / usize::from(ch);
@@ -322,12 +322,20 @@ mod tests {
         }
     }
 
+    // Catches: `sample_rate=None` read as 48 kHz. The reference keeps the source's rate then.
+    #[test]
+    fn no_requested_rate_keeps_the_sources_rate() {
+        let mut d = Decoder::new("audio/wav", None, 1).unwrap();
+        assert_eq!(d.push(&wav_file(16_000, 1, &ramp(160))).unwrap(), ramp(160));
+        assert_eq!(d.output_format(), Some(AudioFormat::new(16_000, 1)));
+    }
+
     // Catches: dropping the resampler's tail at end of stream. soxr always holds a filter delay;
     // losing it clips the last milliseconds of every utterance, which gets reported as "the agent
     // cuts itself off".
     #[test]
     fn flush_releases_the_resamplers_tail() {
-        let mut d = Decoder::new("audio/wav", 24_000, 1).unwrap();
+        let mut d = Decoder::new("audio/wav", Some(24_000), 1).unwrap();
         let pushed = d.push(&wav_file(48_000, 1, &ramp(4800))).unwrap();
         let tail = d.flush().unwrap();
         assert!(!tail.is_empty(), "soxr holds a filter delay and flush must release it");
@@ -343,7 +351,7 @@ mod tests {
     // 4800 samples. A dropped tail or a stale resampler both make that number wrong.
     #[test]
     fn a_format_change_drains_the_old_resampler_before_building_a_new_one() {
-        let mut d = Decoder::new("audio/wav", 24_000, 1).unwrap();
+        let mut d = Decoder::new("audio/wav", Some(24_000), 1).unwrap();
         let mut total = d.push(&wav_file(48_000, 1, &ramp(4800))).unwrap().len();
         total += d.push(&wav_file(16_000, 1, &ramp(1600))).unwrap().len();
         total += d.flush().unwrap().len();
@@ -358,7 +366,7 @@ mod tests {
     // early return, and then the join between the two files is a click.
     #[test]
     fn a_change_to_a_matching_rate_still_drains_the_old_resampler_first() {
-        let mut d = Decoder::new("audio/wav", 24_000, 1).unwrap();
+        let mut d = Decoder::new("audio/wav", Some(24_000), 1).unwrap();
         let first = d.push(&wav_file(48_000, 1, &ramp(4800))).unwrap();
         let second = d.push(&wav_file(24_000, 1, &ramp(240))).unwrap();
         assert!(
@@ -381,7 +389,7 @@ mod tests {
     // the reference on every stereo WAV. Pinned so the divergence is a decision, not a drift.
     #[test]
     fn the_wav_path_keeps_the_files_channel_count_rather_than_the_requested_one() {
-        let mut d = Decoder::new("audio/wav", 24_000, 1).unwrap();
+        let mut d = Decoder::new("audio/wav", Some(24_000), 1).unwrap();
         let interleaved: Vec<i16> = vec![1, -1, 2, -2, 3, -3];
         assert_eq!(d.push(&wav_file(24_000, 2, &interleaved)).unwrap(), interleaved);
         assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 2)));
@@ -392,7 +400,7 @@ mod tests {
     #[test]
     fn a_push_that_only_carries_a_header_decodes_to_nothing_without_failing() {
         let file = wav_file(24_000, 1, &[9, 8, 7]);
-        let mut d = Decoder::new("audio/wav", 24_000, 1).unwrap();
+        let mut d = Decoder::new("audio/wav", Some(24_000), 1).unwrap();
         assert!(d.push(&file[..44]).unwrap().is_empty());
         assert_eq!(d.output_format(), None);
         assert_eq!(d.push(&file[44..]).unwrap(), vec![9, 8, 7]);

@@ -43,13 +43,13 @@ class AudioStreamDecoder:
     ):
         """
         Args:
-            sample_rate: The output rate; 48 kHz when ``None``.
+            sample_rate: The output rate; the source's when ``None``.
             num_channels: The output channel count.
             format: The input's media type (``"audio/mpeg"``); probed when ``None``.
         """
         self._decoder = _core.AudioDecoder(
             format.lower() if format else "",
-            sample_rate=sample_rate or 48000,
+            sample_rate=sample_rate,
             num_channels=num_channels or 1,
         )
         self._output_ch = aio.Chan[rtc.AudioFrame]()

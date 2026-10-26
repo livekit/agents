@@ -1160,9 +1160,9 @@ pub struct AudioDecoder {
 #[napi]
 impl AudioDecoder {
     #[napi(constructor)]
-    pub fn new(env: Env, mime: String, sample_rate: Option<u32>, num_channels: Option<u16>) -> napi::Result<Self> {
+    pub fn new(env: Env, mime: String, sample_rate: Option<Option<u32>>, num_channels: Option<u16>) -> napi::Result<Self> {
         crate::host_error::run(&env, || {
-            let sample_rate = sample_rate.unwrap_or(48000);
+            let sample_rate = sample_rate.unwrap_or(Some(48000));
             let num_channels = num_channels.unwrap_or(1);
             Ok(AudioDecoder { inner: std::sync::Mutex::new(lk_agents_media::Decoder::new(&mime, sample_rate, num_channels).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))?) })
         })
