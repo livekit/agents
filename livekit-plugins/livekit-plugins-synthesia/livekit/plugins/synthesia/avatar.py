@@ -138,11 +138,10 @@ class AvatarSession(BaseAvatarSession):
         # TranscriptSynchronizer/RecorderAudioOutput, and a caller may already
         # have their own DataStreamAudioOutput installed before start() runs.
         self._audio_output: DataStreamAudioOutput | None = None
-        # Background launch for start(wait_for_avatar=False): the task, its
-        # outcome for wait_until_ready(), and an event set when it finishes.
+        # Background launch for start(wait_for_avatar=False) and the error it
+        # ended with, for wait_until_ready().
         self._launch_task: asyncio.Task[None] | None = None
         self._launch_error: SynthesiaError | None = None
-        self._launch_done = asyncio.Event()
 
     @property
     def avatar_identity(self) -> str:
@@ -170,7 +169,9 @@ class AvatarSession(BaseAvatarSession):
         and launches the avatar in the background: a greeting generated right
         away is held until the avatar's video track exists, then sent. A
         failed background launch closes the session, is logged, and is raised
-        by ``wait_until_ready()``.
+        by ``wait_until_ready()``. Until the agent session ends, the agent's
+        audio stays routed to the avatar and won't be heard, so end or restart
+        the session when ``wait_until_ready()`` raises.
         """
         if self._starting or (self._launch_task is not None and not self._launch_task.done()):
             raise SynthesiaError("start() is already in progress")
@@ -226,7 +227,6 @@ class AvatarSession(BaseAvatarSession):
                     # The output holds audio until the avatar's video track
                     # exists, so the agent can start its greeting now.
                     self._install_audio_output(agent_session, room)
-                    self._launch_done = asyncio.Event()
                     self._launch_task = asyncio.create_task(
                         self._launch_in_background(
                             client, request, launch_conn, agent_session, room
@@ -258,10 +258,15 @@ class AvatarSession(BaseAvatarSession):
         surfaces: it raises the ``SynthesiaError`` a blocking ``start()`` would
         have raised. After a blocking ``start()`` it returns immediately.
         """
-        if self._launch_task is not None:
-            await self._launch_done.wait()
+        task = self._launch_task
+        if task is not None:
+            # Wait on the task itself: one cancelled before it ever ran (aclose()
+            # right after start()) never reaches its own except/finally blocks.
+            await asyncio.wait({task})
             if self._launch_error is not None:
                 raise self._launch_error
+            if task.cancelled():
+                raise SynthesiaError("avatar session was closed while starting")
             return
         if self._state is not _State.STARTED:
             raise SynthesiaError("the avatar session is not started")
@@ -337,8 +342,6 @@ class AvatarSession(BaseAvatarSession):
             logger.error("avatar failed to start", exc_info=error)
             await self.aclose()
             await self._discard_partial_start()
-        finally:
-            self._launch_done.set()
 
     async def _discard_partial_start(self) -> None:
         # An aclose() that ran concurrently with start() cannot see the audio

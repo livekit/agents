@@ -59,6 +59,9 @@ await avatar.wait_until_ready()  # optional: raises synthesia.SynthesiaError if 
 
 With `wait_for_avatar=False`, a failed launch no longer raises from `start()`.
 It closes the avatar session, is logged, and is raised by `wait_until_ready()`.
+The agent's audio stays routed to the avatar until the session ends, so its
+speech won't be heard: end or restart the session when `wait_until_ready()`
+raises.
 
 ## Parameters
 

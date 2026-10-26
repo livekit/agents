@@ -1559,6 +1559,18 @@ class TestAvatarSession:
             await session.wait_until_ready()
         assert sink.closed
 
+    async def test_aclose_before_background_start_runs(self, api_recorder, instant_join):
+        api_recorder.gate = asyncio.Event()
+        room = self._FakeRoom()
+        session = self._session()
+        await self._start_in_background(session, room)
+
+        # No yield: the launch task is cancelled before it runs a single step.
+        await session.aclose()
+
+        with pytest.raises(SynthesiaError, match="closed while starting"):
+            await asyncio.wait_for(session.wait_until_ready(), timeout=1)
+
     async def test_start_while_background_start_runs_raises(self, api_recorder, instant_join):
         api_recorder.gate = asyncio.Event()
         room = self._FakeRoom()
