@@ -365,8 +365,10 @@ async def test_sarvam_stt_handle_message_treats_unknown_error_shape_as_error() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("liveness_timeout", [3.0, 30.0])
 async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
     monkeypatch: pytest.MonkeyPatch,
+    liveness_timeout: float,
 ) -> None:
     captured = {}
 
@@ -390,6 +392,7 @@ async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
             max_retry=9,
             retry_interval=1.5,
             timeout=7.0,
+            liveness_timeout=liveness_timeout,
         ),
     )
 
@@ -397,11 +400,14 @@ async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
     assert conn_options.max_retry == 0
     assert conn_options.retry_interval == 1.5
     assert conn_options.timeout == 7.0
+    assert conn_options.liveness_timeout == liveness_timeout
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("liveness_timeout", [3.0, 30.0])
 async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
     monkeypatch: pytest.MonkeyPatch,
+    liveness_timeout: float,
 ) -> None:
     captured = {}
 
@@ -427,15 +433,18 @@ async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
             max_retry=8,
             retry_interval=0.2,
             timeout=4.0,
+            liveness_timeout=liveness_timeout,
         )
     )
 
-    conn_options = captured["conn_options"]
-    assert conn_options.max_retry == 0
-    assert conn_options.retry_interval == 0.2
-    assert conn_options.timeout == 4.0
-
-    await captured["http_session"].close()
+    try:
+        conn_options = captured["conn_options"]
+        assert conn_options.max_retry == 0
+        assert conn_options.retry_interval == 0.2
+        assert conn_options.timeout == 4.0
+        assert conn_options.liveness_timeout == liveness_timeout
+    finally:
+        await captured["http_session"].close()
 
 
 @pytest.mark.asyncio

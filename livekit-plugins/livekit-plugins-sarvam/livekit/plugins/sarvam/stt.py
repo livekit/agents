@@ -26,7 +26,7 @@ import logging
 import os
 import platform
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -550,11 +550,7 @@ class STT(stt.STT):
 
     @staticmethod
     def _single_attempt_conn_options(conn_options: APIConnectOptions) -> APIConnectOptions:
-        return APIConnectOptions(
-            max_retry=0,
-            retry_interval=conn_options.retry_interval,
-            timeout=conn_options.timeout,
-        )
+        return replace(conn_options, max_retry=0)
 
     async def recognize(
         self,

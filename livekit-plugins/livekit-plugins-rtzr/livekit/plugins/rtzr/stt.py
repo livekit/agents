@@ -173,7 +173,7 @@ class SpeechStream(stt.SpeechStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._rtzr_stt._client.connect_websocket(config),
+                self._rtzr_stt._client.connect_websocket(config, autoping=False),
                 timeout=self._conn_options.timeout,
             )
             logger.debug(
