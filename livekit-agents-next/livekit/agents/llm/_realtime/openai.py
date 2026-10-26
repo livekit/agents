@@ -503,6 +503,7 @@ class RealtimeModel(llm.RealtimeModel):
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=True,
                 turn_detection=_server_turn_taking_enabled(resolved_turn_detection),
+                auto_turn_reply_generation=_server_turn_taking_enabled(resolved_turn_detection),
                 can_disable_turn_detection=not is_given(turn_detection),
                 user_transcription=input_audio_transcription is not None,
                 auto_tool_reply_generation=False,
@@ -774,9 +775,9 @@ class RealtimeModel(llm.RealtimeModel):
         if is_given(turn_detection):
             # a derived capability has to follow the option it is derived from
             self._opts.turn_detection = to_turn_detection(turn_detection)
-            self._capabilities.turn_detection = _server_turn_taking_enabled(
-                self._opts.turn_detection
-            )
+            server = _server_turn_taking_enabled(self._opts.turn_detection)
+            self._capabilities.turn_detection = server
+            self._capabilities.auto_turn_reply_generation = server
             # only the model warns: it re-runs the update on every session it owns
             _warn_on_half_disabled_turn_taking(self._opts.turn_detection)
 
@@ -1486,7 +1487,9 @@ class RealtimeSession(
                 audio_input.turn_detection = turn_detection
                 has_audio_config = True
             self._opts.turn_detection = turn_detection
-            self._capabilities.turn_detection = _server_turn_taking_enabled(turn_detection)
+            server = _server_turn_taking_enabled(turn_detection)
+            self._capabilities.turn_detection = server
+            self._capabilities.auto_turn_reply_generation = server
 
         if is_given(input_audio_transcription):
             if self._opts.input_audio_transcription != input_audio_transcription:
