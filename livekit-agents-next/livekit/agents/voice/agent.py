@@ -208,7 +208,6 @@ class Agent(Generic[Context_T, Output_T]):
         self._on_enter_fn: _OnEnterFn | None = None
         self._output_validators: list[_OutputValidatorFn] = []
         self._frozen = False
-        self._turn_detection = turn_handling.get("turn_detection", NOT_GIVEN)
 
         self._output_type: type[Any] = output_type if output_type is not None else str
 
@@ -230,24 +229,10 @@ class Agent(Generic[Context_T, Output_T]):
         self._vad = vad
         self._expressive: NotGivenOr[bool | ExpressiveOptions] = expressive
 
-        self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
-        self._interruption_detection: NotGivenOr[Literal["adaptive", "vad"]] = NOT_GIVEN
-        if is_given(raw_interruption := turn_handling.get("interruption", NOT_GIVEN)):
-            if "enabled" in raw_interruption:
-                self._allow_interruptions = raw_interruption["enabled"]
-            if "mode" in raw_interruption:
-                self._interruption_detection = raw_interruption["mode"]
-        endpointing = turn_handling.get("endpointing", {})
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
-        self._min_endpointing_delay = endpointing.get("min_delay", NOT_GIVEN)
-        self._max_endpointing_delay = endpointing.get("max_delay", NOT_GIVEN)
+        # the agent layer of the turn options, as written: the core resolves it over the session's
         self._turn_handling = turn_handling
-        # stored unresolved so the resolution chain can tell "set on agent" from "fall
-        # back to session"; async_options absent on a given tool_handling means NOT_GIVEN
-        self._async_tool_options = (
-            tool_handling.get("async_options", NOT_GIVEN) if is_given(tool_handling) else NOT_GIVEN
-        )
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
@@ -314,7 +299,7 @@ class Agent(Generic[Context_T, Output_T]):
 
     @property
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
-        return self._interruption_detection
+        return (self._turn_handling.get("interruption") or {}).get("mode", NOT_GIVEN)
 
     @property
     def output_type(self) -> type[Output_T]:
@@ -728,7 +713,7 @@ class Agent(Generic[Context_T, Output_T]):
         Returns:
             NotGivenOr[TurnDetectionMode | None]: An optional turn detection mode for managing conversation flow.
         """  # noqa: E501
-        return self._turn_detection
+        return self._turn_handling.get("turn_detection", NOT_GIVEN)
 
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:
@@ -821,7 +806,7 @@ class Agent(Generic[Context_T, Output_T]):
         Returns:
             NotGivenOr[bool]: Whether interruptions are permitted.
         """
-        return self._allow_interruptions
+        return (self._turn_handling.get("interruption") or {}).get("enabled", NOT_GIVEN)
 
     @property
     def min_endpointing_delay(self) -> NotGivenOr[float]:
@@ -834,7 +819,7 @@ class Agent(Generic[Context_T, Output_T]):
 
         If this property was set at Agent creation, it will be used at runtime instead of the session's value.
         """
-        return self._min_endpointing_delay
+        return self._turn_handling.get("endpointing", {}).get("min_delay", NOT_GIVEN)
 
     @property
     def max_endpointing_delay(self) -> NotGivenOr[float]:
@@ -843,7 +828,7 @@ class Agent(Generic[Context_T, Output_T]):
 
         If this property was set at Agent creation, it will be used at runtime instead of the session's value.
         """
-        return self._max_endpointing_delay
+        return self._turn_handling.get("endpointing", {}).get("max_delay", NOT_GIVEN)
 
     @property
     def min_consecutive_speech_delay(self) -> NotGivenOr[float]:
