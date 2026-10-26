@@ -793,11 +793,6 @@ impl<'a> SpeechTrace<'a> {
         })
     }
 
-    /// When the driver armed a retry for one of its requests.
-    pub fn retry_armed_at(&self) -> Option<Observed> {
-        self.first(|s| matches!(s, Step::Generation(GenerationStep::RetryArmed { .. })))
-    }
-
     /// When the driver first asked the voice to synthesize real words for it.
     pub fn synthesis_requested_at(&self) -> Option<Observed> {
         self.first(|s| {

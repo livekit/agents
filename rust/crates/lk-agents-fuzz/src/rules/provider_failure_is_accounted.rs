@@ -6,7 +6,7 @@
 //! may not swallow it. The host's own close, which ends every run, is not the driver closing over
 //! anything. This is the ownership half of provider failure; whether the retry count
 //! and tolerance are right is a separate contract that needs the configured values.
-use lk_agents_voice::trace::{GenerationStep, Step};
+use lk_agents_voice::trace::{GenerationStep, ProviderKind, Step};
 
 use crate::{
     authored::Authored,
@@ -43,7 +43,15 @@ impl Rule for ProviderFailureIsAccounted {
             let Some(id) = inference.request_for(chat.nth) else { continue };
             let speech = host.speech(id);
 
-            let retried = internal.speech(id).retry_armed_at().is_some_and(|armed| armed > sent.at);
+            // A retry armed after this failure, not the speech's first: an earlier failure's retry
+            // says nothing about this one.
+            let retried = internal.speech(id).steps().any(|(at, step)| {
+                at > sent.at
+                    && matches!(
+                        step,
+                        Step::Generation(GenerationStep::RetryArmed { leg: ProviderKind::Llm, .. })
+                    )
+            });
             let surfaced = speech.error().is_some();
             // Only the driver's own error close counts as closing over the failure: the host closing
             // the session at the end of every run says nothing about what the driver did with it.
@@ -68,7 +76,7 @@ fn failed_request(speech: u64) -> Authored {
 /// The driver armed a retry for the speech after the failure.
 fn failure_then_retry() -> Recording {
     use lk_agents_abi::Ts;
-    use lk_agents_voice::{agent_activity::scheduling::SpeechId, trace::ProviderKind};
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
     failed_request(4)
         .journal(Step::Generation(GenerationStep::RetryArmed {
             speech: SpeechId(4),
