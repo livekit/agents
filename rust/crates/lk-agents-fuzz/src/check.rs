@@ -98,8 +98,6 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "forwarded_while_enabled",
     "output_replacement_is_clean",
     "provider_failure_is_accounted",
-    "provider_streams_closed",
-    "speech_error_is_injected",
     "speech_settles",
     "tool_lifecycle",
 ];
