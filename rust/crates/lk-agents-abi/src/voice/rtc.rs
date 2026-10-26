@@ -423,6 +423,42 @@ impl StreamTextOptions {
     }
 }
 
+/// `LocalParticipant.stream_bytes(...)`'s keyword arguments.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[crate::class]
+pub struct StreamBytesOptions {
+    pub name: String,
+    pub topic: String,
+    pub destination_identities: Vec<ParticipantIdentity>,
+    pub attributes: HashMap<String, String>,
+}
+
+/// The host's view: `_core_rtc.LocalParticipant._core_stream_bytes` spreads it into
+/// `stream_bytes(..)`.
+#[crate::host(object)]
+impl StreamBytesOptions {
+    #[host(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+    #[host(getter)]
+    pub fn topic(&self) -> String {
+        self.topic.clone()
+    }
+    #[host(getter)]
+    pub fn destination_identities(&self) -> Vec<ParticipantIdentity> {
+        self.destination_identities.clone()
+    }
+    #[host(getter)]
+    pub fn attributes(&self) -> HashMap<String, String> {
+        self.attributes.clone()
+    }
+}
+
+/// `rtc.TrackKind`'s numbers, as `TrackPublication.kind` carries them.
+pub const TRACK_KIND_AUDIO: i32 = 1;
+pub const TRACK_KIND_VIDEO: i32 = 2;
+
 /// `rtc.TranscriptionSegment`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Host)]
 #[binding(emit)]

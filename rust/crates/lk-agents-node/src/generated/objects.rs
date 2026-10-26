@@ -1514,6 +1514,67 @@ impl CoreAudioSink {
     }
 }
 
+#[napi(js_name = "DataStreamAudioOutput")]
+pub struct DataStreamAudioOutput {
+    pub(crate) inner: std::sync::Arc<lk_agents_voice::avatar::DataStreamAudioOutput>,
+}
+
+#[napi]
+impl DataStreamAudioOutput {
+    #[napi(getter, js_name = "label")]
+    pub fn label(&self) -> String {
+        self.inner.label_for_host()
+    }
+
+    #[napi(getter, js_name = "sampleRate")]
+    pub fn sample_rate(&self) -> Option<u32> {
+        self.inner.sample_rate_for_host()
+    }
+}
+
+#[napi(js_name = "AvatarPlayback")]
+pub struct AvatarPlayback {
+    pub(crate) inner: std::sync::Mutex<lk_agents_voice::avatar::AvatarPlayback>,
+}
+
+#[napi]
+impl AvatarPlayback {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        AvatarPlayback { inner: std::sync::Mutex::new(lk_agents_voice::avatar::AvatarPlayback::new()) }
+    }
+
+    #[napi(js_name = "audioReceived")]
+    pub fn audio_received(&self) {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.audio_received();
+    }
+
+    #[napi(js_name = "audioPlayed")]
+    pub fn audio_played(&self, duration: f64) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.audio_played(duration)
+    }
+
+    #[napi(js_name = "segmentEnded")]
+    pub fn segment_ended(&self) -> Option<f64> {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.segment_ended()
+    }
+
+    #[napi(js_name = "clear")]
+    pub fn clear(&self) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.clear()
+    }
+
+    #[napi(js_name = "cleared")]
+    pub fn cleared(&self) -> f64 {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.cleared()
+    }
+}
+
 /// The host's view: what `_core_rtc.LocalParticipant._core_publish_audio_track` builds its
 /// `rtc.AudioSource`, `LocalAudioTrack` and `rtc.TrackPublishOptions` from.
 #[napi(js_name = "TrackPublishOptions")]
@@ -1600,6 +1661,31 @@ pub struct StreamTextOptions {
 
 #[napi]
 impl StreamTextOptions {
+    #[napi(getter, js_name = "topic")]
+    pub fn topic(&self) -> String {
+        self.inner.topic()
+    }
+
+    #[napi(getter, js_name = "attributes")]
+    pub fn attributes(&self) -> std::collections::HashMap<String, String> {
+        self.inner.attributes().into_iter().map(|(k, v)| (k, v)).collect::<std::collections::HashMap<_, _>>()
+    }
+}
+
+/// The host's view: `_core_rtc.LocalParticipant._core_stream_bytes` spreads it into
+/// `stream_bytes(..)`.
+#[napi(js_name = "StreamBytesOptions")]
+pub struct StreamBytesOptions {
+    pub(crate) inner: lk_agents_abi::voice::rtc::StreamBytesOptions,
+}
+
+#[napi]
+impl StreamBytesOptions {
+    #[napi(getter, js_name = "name")]
+    pub fn name(&self) -> String {
+        self.inner.name()
+    }
+
     #[napi(getter, js_name = "topic")]
     pub fn topic(&self) -> String {
         self.inner.topic()
@@ -1720,6 +1806,16 @@ impl FakeRoom {
     #[napi(js_name = "textStreams")]
     pub fn text_streams(&self) -> Vec<(String, String)> {
         self.inner.text_streams()
+    }
+
+    #[napi(js_name = "byteStreams")]
+    pub fn byte_streams(&self) -> Vec<(String, Vec<String>, std::collections::HashMap<String, String>, i64, bool)> {
+        self.inner.byte_streams().into_iter().map(|v| { let (t0, t1, t2, t3, t4,) = v; (t0, t1, t2.into_iter().map(|(k, v)| (k, v)).collect::<std::collections::HashMap<_, _>>(), i64::try_from(t3).unwrap_or(i64::MAX), t4) }).collect::<Vec<_>>()
+    }
+
+    #[napi(js_name = "rpc")]
+    pub fn rpc(&self, method: String, caller: String, payload: String) -> Option<String> {
+        self.inner.rpc(method, caller, payload)
     }
 
     #[napi(js_name = "sendChat")]

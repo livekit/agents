@@ -190,6 +190,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/tokenize/search.rs", "lk_agents_abi::tokenize::search"),
     ("rust/crates/lk-agents-abi/src/voice/io.rs", "lk_agents_abi::voice::io"),
     ("rust/crates/lk-agents-voice/src/io.rs", "lk_agents_voice::io"),
+    ("rust/crates/lk-agents-voice/src/avatar.rs", "lk_agents_voice::avatar"),
     ("rust/crates/lk-agents-abi/src/vad/vad.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-rtc/src/traits.rs", "lk_agents_rtc"),
     ("rust/crates/lk-agents-rtc/src/events.rs", "lk_agents_rtc"),

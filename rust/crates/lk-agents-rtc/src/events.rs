@@ -218,6 +218,27 @@ impl RoomEventBus {
 // what a host pushes inbound streams and media into
 // ---------------------------------------------------------------------------------------------
 
+/// What answers an RPC method registered on the local participant: the host calls it with the
+/// caller's identity and payload and returns what it returns (`"ok"`, `"reject"`, ...).
+#[lk_agents_abi::class]
+#[derive(Clone)]
+pub struct RpcHandler(pub std::sync::Arc<dyn Fn(&str, &str) -> String + Send + Sync>);
+
+impl RpcHandler {
+    pub fn new(f: impl Fn(&str, &str) -> String + Send + Sync + 'static) -> Self {
+        RpcHandler(std::sync::Arc::new(f))
+    }
+}
+
+#[lk_agents_abi::host(object)]
+impl RpcHandler {
+    /// One invocation: `rtc.RpcInvocationData`'s caller and payload.
+    #[host(method)]
+    pub fn call(&self, caller_identity: String, payload: String) -> String {
+        (self.0)(&caller_identity, &payload)
+    }
+}
+
 /// Where a host room delivers the byte streams opened on a registered topic
 /// ([`RtcRoom::register_byte_stream_handler`](crate::RtcRoom::register_byte_stream_handler)).
 #[lk_agents_abi::class]

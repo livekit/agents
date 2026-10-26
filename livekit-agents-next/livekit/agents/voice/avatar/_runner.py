@@ -7,6 +7,7 @@ from typing import Any
 
 from livekit import rtc
 
+from ... import _core
 from ...utils import aio, log_exceptions
 from ._types import AudioReceiver, AudioSegmentEnd, VideoGenerator
 
@@ -43,8 +44,8 @@ class AvatarRunner:
         self._queue_size_ms = _queue_size_ms
 
         self._audio_recv = audio_recv
-        self._playback_position = 0.0
-        self._audio_playing = False
+        # what played of the segment, and whether one is playing (the core's bookkeeping)
+        self._playback = _core.AvatarPlayback()
         self._tasks: set[asyncio.Task[Any]] = set()
 
         self._lock = asyncio.Lock()
@@ -121,8 +122,8 @@ class AvatarRunner:
     @log_exceptions(logger=logger)
     async def _read_audio(self) -> None:
         async for frame in self._audio_recv:
-            if not self._audio_playing and isinstance(frame, rtc.AudioFrame):
-                self._audio_playing = True
+            if isinstance(frame, rtc.AudioFrame):
+                self._playback.audio_received()
             await self._video_gen.push_audio(frame)
 
     @log_exceptions(logger=logger)
@@ -132,33 +133,27 @@ class AvatarRunner:
         async for frame in self._video_gen:
             if isinstance(frame, AudioSegmentEnd):
                 # notify the agent that the audio has finished playing
-                if self._audio_playing:
-                    notify_task = self._audio_recv.notify_playback_finished(
-                        playback_position=self._playback_position,
-                        interrupted=False,
+                if (position := self._playback.segment_ended()) is not None:
+                    self._notify(
+                        self._audio_recv.notify_playback_finished(
+                            playback_position=position, interrupted=False
+                        )
                     )
-                    self._audio_playing = False
-                    self._playback_position = 0.0
-                    if asyncio.iscoroutine(notify_task):
-                        # avoid blocking the video forwarding
-                        task = asyncio.create_task(notify_task)
-                        self._tasks.add(task)
-                        task.add_done_callback(self._tasks.discard)
                 continue
 
             if not self._video_publication:
                 await self._publish_track()
 
             await self._av_sync.push(frame)
-            if isinstance(frame, rtc.AudioFrame):
-                if self._playback_position == 0.0 and frame.duration > 0.0:
-                    notify_task = self._audio_recv.notify_playback_started()
-                    if asyncio.iscoroutine(notify_task):
-                        task = asyncio.create_task(notify_task)
-                        self._tasks.add(task)
-                        task.add_done_callback(self._tasks.discard)
+            if isinstance(frame, rtc.AudioFrame) and self._playback.audio_played(frame.duration):
+                self._notify(self._audio_recv.notify_playback_started())
 
-                self._playback_position += frame.duration
+    def _notify(self, notify_task: Any) -> None:
+        # a receiver may report asynchronously: never block the video forwarding on it
+        if asyncio.iscoroutine(notify_task):
+            task = asyncio.create_task(notify_task)
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
     def _on_clear_buffer(self) -> None:
         """Handle clearing the buffer and notify about interrupted playback"""
@@ -171,17 +166,14 @@ class AvatarRunner:
 
             if audio_playing:
                 notify_task = self._audio_recv.notify_playback_finished(
-                    playback_position=self._playback_position,
-                    interrupted=True,
+                    playback_position=self._playback.cleared(), interrupted=True
                 )
-                self._playback_position = 0.0
                 if asyncio.iscoroutine(notify_task):
                     await notify_task
 
-        task = asyncio.create_task(_handle_clear_buffer(self._audio_playing))
+        task = asyncio.create_task(_handle_clear_buffer(self._playback.clear()))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-        self._audio_playing = False
 
     def _on_connection_state_changed(self, _: rtc.ConnectionState) -> None:
         if self._room.isconnected() and not self._room_connected_fut.done():

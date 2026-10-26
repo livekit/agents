@@ -38,6 +38,7 @@ from livekit.agents import (
 from livekit.agents.llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import shortuuid
+from livekit.agents.voice.avatar import DataStreamAudioOutput
 
 SAMPLE_RATE = 24000
 
@@ -619,6 +620,32 @@ async def nodes() -> None:
     assert heard == ["my name is [name]"], heard
 
 
+async def avatar() -> None:
+    print("== avatar")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    await session.start(Agent(instructions="You speak through an avatar."), room=room)
+    session.output.replace_audio_tail(DataStreamAudioOutput(room, destination_identity="avatar"))
+    await settle(room, 0.5)
+    handle = session.say("Twenty characters...")
+    await settle(room, 1)
+    assert not room.byte_streams(), "no audio before the avatar joins"
+    room.join("avatar")
+    await settle(room, 2)
+    streams = room.byte_streams()
+    topic, destinations, attributes, size, closed = streams[0]
+    assert (topic, destinations, closed) == ("lk.audio_stream", ["avatar"], True), streams
+    assert attributes == {"sample_rate": "24000", "num_channels": "1"}, attributes
+    assert not handle.done(), "the speech waits for the avatar's playback"
+    payload = json.dumps({"playback_position": 0.5, "interrupted": False})
+    assert room.rpc("lk.playback_finished", "avatar", payload) == "ok"
+    await settle(room, 1)
+    assert handle.done(), "the avatar's lk.playback_finished ends the speech"
+    await session.aclose()
+    print(f"avatar streams={len(streams)} bytes={size} played_in_room={room.played_bytes()}")
+
+
 class RecordingLLM(ScriptedLLM):
     """``ScriptedLLM`` keeping the ids of every context it is asked with."""
 
@@ -755,6 +782,7 @@ async def main() -> int:
     await native_realtime()
 
     await nodes()
+    await avatar()
     await expressive()
     return 0
 

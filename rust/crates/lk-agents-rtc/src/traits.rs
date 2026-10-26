@@ -2,12 +2,13 @@
 //! traits. They are `live`: a getter asks the host every time, since rooms connect after hand-over.
 
 use crate::{
-    AudioFrameSender, ByteStream, ByteStreamSender, Receiver, RoomEvent, RoomEventBus, TextStream,
-    TextStreamSender, VideoFrameSender,
+    AudioFrameSender, ByteStream, ByteStreamSender, Receiver, RoomEvent, RoomEventBus, RpcHandler,
+    TextStream, TextStreamSender, VideoFrameSender,
 };
 use crate::{
     AudioStreamOptions, AudioTrackFeature, ConnectionState, ParticipantIdentity, ParticipantKind,
-    PlaybackInfo, StreamTextOptions, TrackPublishOptions, TrackSid, TrackSource, Transcription,
+    PlaybackInfo, StreamBytesOptions, StreamTextOptions, TrackPublishOptions, TrackSid, TrackSource,
+    Transcription,
     VideoFrameRef,
 };
 use crate::{Result, RtcError};
@@ -125,6 +126,30 @@ pub trait LocalParticipant: Send + Sync {
     /// segment's expression attributes (`_output.py:_flush_task`). A per-call `stream_text` would
     /// open one stream per token, and frontends key rendering on the stream id per segment.
     async fn stream_text(&self, opts: StreamTextOptions) -> Result<Box<dyn TextStreamWriter>>;
+
+    /// Open a byte stream and return its writer: one per avatar audio segment.
+    async fn stream_bytes(&self, _opts: StreamBytesOptions) -> Result<Box<dyn ByteStreamWriter>> {
+        Err(RtcError::Unsupported("stream_bytes"))
+    }
+
+    /// `perform_rpc(destination_identity=, method=, payload=)`: `(0, response)` on success, else
+    /// `(rtc.RpcError.code, message)`, since callers branch on the code.
+    async fn perform_rpc(&self, _destination: ParticipantIdentity, _method: String, _payload: String) -> Result<(u32, String)> {
+        Err(RtcError::Unsupported("perform_rpc"))
+    }
+
+    /// `register_rpc_method(method, handler)`: the SDK keeps one handler per method, the last one.
+    fn register_rpc_method(&self, _method: String, _handler: RpcHandler) -> Result<()> {
+        Err(RtcError::Unsupported("register_rpc_method"))
+    }
+}
+
+/// An open byte stream. `rtc.ByteStreamWriter`; `close` ends it (the stream's trailer).
+#[lk_agents_abi::host(proxy)]
+#[async_trait]
+pub trait ByteStreamWriter: Send + Sync {
+    async fn write(&self, data: &[u8]) -> Result<()>;
+    async fn close(self: Box<Self>) -> Result<()>;
 }
 
 /// An open text stream. `rtc.TextStreamWriter`.
@@ -223,6 +248,16 @@ pub trait TrackPublication: Send + Sync {
         ""
     }
     fn source(&self) -> TrackSource;
+
+    /// `rtc.TrackKind`'s number (`TRACK_KIND_AUDIO`, `TRACK_KIND_VIDEO`); a host without it reads
+    /// the kind off the source.
+    fn kind(&self) -> i32 {
+        match self.source() {
+            TrackSource::Camera | TrackSource::Screenshare => crate::TRACK_KIND_VIDEO,
+            TrackSource::Microphone | TrackSource::ScreenshareAudio => crate::TRACK_KIND_AUDIO,
+            TrackSource::Unknown => 0,
+        }
+    }
 
     /// Whether the track is subscribed and its media can be read. On a remote publication this is
     /// the reference's `publication.track is not None` check.

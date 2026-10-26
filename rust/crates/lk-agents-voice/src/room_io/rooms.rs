@@ -146,6 +146,27 @@ impl ScriptedRoom {
             .collect()
     }
 
+    /// Every byte stream the agent opened, as `(topic, destinations, attributes, bytes, closed)`.
+    #[host(method)]
+    pub fn byte_streams(&self) -> Vec<(String, Vec<String>, std::collections::HashMap<String, String>, usize, bool)> {
+        self.room
+            .local_participant()
+            .byte_streams()
+            .into_iter()
+            .map(|s| {
+                let bytes = s.chunks.iter().map(Vec::len).sum();
+                let dest = s.opts.destination_identities.iter().map(|d| d.0.clone()).collect();
+                (s.opts.topic.clone(), dest, s.opts.attributes.clone(), bytes, s.closed)
+            })
+            .collect()
+    }
+
+    /// `caller` invokes the agent's RPC `method`: its answer, or `None` if none is registered.
+    #[host(method)]
+    pub fn rpc(&self, method: String, caller: String, payload: String) -> Option<String> {
+        self.room.local_participant().invoke_rpc(&method, &caller, &payload)
+    }
+
     /// `identity` sends `text` on `lk.chat`, as a stream with id `stream_id`. `False` if nobody
     /// handles the topic.
     #[host(method)]

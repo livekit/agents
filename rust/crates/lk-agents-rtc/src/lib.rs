@@ -7,13 +7,13 @@ mod server;
 mod traits;
 
 pub use events::{
-    AudioFrameSender, ByteChunks, ByteStream, ByteStreamSender, Receiver, RoomEvent, RoomEventBus,
+    AudioFrameSender, ByteChunks, ByteStream, ByteStreamSender, Receiver, RoomEvent, RoomEventBus, RpcHandler,
     TextChunks, TextStream, TextStreamSender, VideoFrameSender, assert_room_event_is_covered,
     room_event_coverage, room_event_vocabulary,
 };
 pub use fake::{
     ConnectCall, FakeAudioSource, FakeLocalParticipant, FakeRemoteParticipant, FakeRoom, FakeRtc,
-    FakeTrackPublication, FrameSynth, RecordedTextStream, StreamRequests, subscribe_local,
+    FakeTrackPublication, FrameSynth, RecordedByteStream, RecordedTextStream, StreamRequests, subscribe_local,
     tokio_test_block,
 };
 /// Re-exported so the 50 fps audio legs need no copy at this boundary.
@@ -21,14 +21,14 @@ pub use lk_agents_abi::AudioFrame;
 pub use lk_agents_abi::voice::rtc::{
     AudioStreamOptions, AudioTrackFeature, ConnectionState, DEFAULT_QUEUE_SIZE_MS,
     DisconnectReason, ParticipantIdentity, ParticipantKind, PlaybackInfo, StreamInfo,
-    StreamTextOptions, TrackPublishOptions, TrackSid, TrackSource, Transcription,
+    StreamBytesOptions, StreamTextOptions, TRACK_KIND_AUDIO, TRACK_KIND_VIDEO, TrackPublishOptions, TrackSid, TrackSource, Transcription,
     TranscriptionSegment, UnknownDisconnectReason, UnknownWireValue, VIDEO_QUEUE_FRAMES,
     VideoFrameRef, frame_duration, silence_frame,
 };
 pub use playout::PlayoutLedger;
 pub use server::SipParticipantReq;
 pub use traits::{
-    AudioSource, LocalParticipant, RemoteParticipant, RtcHost, RtcRoom, TextStreamWriter,
+    AudioSource, ByteStreamWriter, LocalParticipant, RemoteParticipant, RtcHost, RtcRoom, TextStreamWriter,
     TrackPublication,
 };
 

@@ -309,6 +309,25 @@ impl FakeRoom {
             .map_err(|_| RtcError::Closed("byte stream handler"))
     }
 
+    /// A byte stream left open: chunks go through the returned sender, and dropping it is the
+    /// trailer.
+    pub fn open_byte_stream(
+        &self,
+        sender: impl Into<ParticipantIdentity>,
+        info: StreamInfo,
+    ) -> Result<mpsc::UnboundedSender<Vec<u8>>> {
+        let handler =
+            self.state.lock().unwrap().byte_handlers.get(&info.topic).cloned().ok_or_else(
+                || RtcError::host(format!("no byte handler for topic {:?}", info.topic)),
+            )?;
+        let (tx, rx) = mpsc::unbounded_channel();
+        handler
+            .0
+            .send(ByteStream { info, sender: sender.into(), chunks: rx })
+            .map_err(|_| RtcError::Closed("byte stream handler"))?;
+        Ok(tx)
+    }
+
     pub fn events(&self) -> Receiver<RoomEvent> {
         self.bus.subscribe()
     }
@@ -412,6 +431,11 @@ struct LocalState {
     attribute_calls: Vec<HashMap<String, String>>,
     transcriptions: Vec<Transcription>,
     text_streams: Vec<Arc<Mutex<RecordedTextStream>>>,
+    byte_streams: Vec<Arc<Mutex<RecordedByteStream>>>,
+    rpc_calls: Vec<(ParticipantIdentity, String, String)>,
+    /// What the next `perform_rpc` answers; `(0, "")` when unset.
+    rpc_reply: Option<(u32, String)>,
+    rpc_handlers: HashMap<String, crate::RpcHandler>,
     fail_with: Option<RtcError>,
 }
 
@@ -466,6 +490,26 @@ impl FakeLocalParticipant {
 
     pub fn text_streams(&self) -> Vec<RecordedTextStream> {
         self.state.lock().unwrap().text_streams.iter().map(|s| s.lock().unwrap().clone()).collect()
+    }
+
+    pub fn byte_streams(&self) -> Vec<RecordedByteStream> {
+        self.state.lock().unwrap().byte_streams.iter().map(|s| s.lock().unwrap().clone()).collect()
+    }
+
+    /// Every `perform_rpc`, as `(destination, method, payload)`.
+    pub fn rpc_calls(&self) -> Vec<(ParticipantIdentity, String, String)> {
+        self.state.lock().unwrap().rpc_calls.clone()
+    }
+
+    /// Answer every later `perform_rpc` with `(code, text)`; code 0 is success.
+    pub fn set_rpc_reply(&self, code: u32, text: impl Into<String>) {
+        self.state.lock().unwrap().rpc_reply = Some((code, text.into()));
+    }
+
+    /// `caller` invokes `method` on the agent; `None` when no handler is registered.
+    pub fn invoke_rpc(&self, method: &str, caller: &str, payload: &str) -> Option<String> {
+        let handler = self.state.lock().unwrap().rpc_handlers.get(method).cloned()?;
+        Some(handler.call(caller.to_owned(), payload.to_owned()))
     }
 
     /// Fail every subsequent control call.
@@ -572,6 +616,50 @@ impl LocalParticipant for FakeLocalParticipant {
         self.state.lock().unwrap().text_streams.push(recorded.clone());
         Ok(Box::new(FakeTextStreamWriter { recorded }))
     }
+
+    async fn stream_bytes(&self, opts: crate::StreamBytesOptions) -> Result<Box<dyn crate::ByteStreamWriter>> {
+        self.check()?;
+        let recorded = Arc::new(Mutex::new(RecordedByteStream { opts, chunks: Vec::new(), closed: false }));
+        self.state.lock().unwrap().byte_streams.push(recorded.clone());
+        Ok(Box::new(FakeByteStreamWriter { recorded }))
+    }
+
+    async fn perform_rpc(&self, destination: ParticipantIdentity, method: String, payload: String) -> Result<(u32, String)> {
+        self.check()?;
+        let mut state = self.state.lock().unwrap();
+        state.rpc_calls.push((destination, method, payload));
+        Ok(state.rpc_reply.clone().unwrap_or((0, String::new())))
+    }
+
+    fn register_rpc_method(&self, method: String, handler: crate::RpcHandler) -> Result<()> {
+        self.state.lock().unwrap().rpc_handlers.insert(method, handler);
+        Ok(())
+    }
+}
+
+struct FakeByteStreamWriter {
+    recorded: Arc<Mutex<RecordedByteStream>>,
+}
+
+#[async_trait]
+impl crate::ByteStreamWriter for FakeByteStreamWriter {
+    async fn write(&self, data: &[u8]) -> Result<()> {
+        self.recorded.lock().unwrap().chunks.push(data.to_vec());
+        Ok(())
+    }
+
+    async fn close(self: Box<Self>) -> Result<()> {
+        self.recorded.lock().unwrap().closed = true;
+        Ok(())
+    }
+}
+
+/// One byte stream the agent opened: its options, what was written, and whether it was closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedByteStream {
+    pub opts: crate::StreamBytesOptions,
+    pub chunks: Vec<Vec<u8>>,
+    pub closed: bool,
 }
 
 struct FakeTextStreamWriter {

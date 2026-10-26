@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 271 core items bound (121 functions and consts, 68 classes, 81 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 274 core items bound (121 functions and consts, 71 classes, 81 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -88,7 +88,9 @@
 //! - `lk_agents_abi::tokenize::search::Bm25::build`: parameter `documents`: Slice(Declared { name: "Document", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::tokenize::search::Bm25::search`: parameter `docs`: Slice(Declared { name: "Document", by_ref: false }) borrows inside a container
 //! - `lk_agents_voice::io::CoreAudioSink::capture_frame`: parameter `frame`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_voice::avatar::DataStreamAudioOutput::for_host`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
 //! - `lk_agents_rtc::RoomEventBus`: `lk_agents_rtc` is not linked by lk-agents-node
+//! - `lk_agents_rtc::RpcHandler`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::ByteStreamSender`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::ByteChunks`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::TextStreamSender`: `lk_agents_rtc` is not linked by lk-agents-node
@@ -99,6 +101,7 @@
 //! - `lk_agents_abi::voice::rtc::AudioStreamOptions::noise_cancellation`: return: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_abi::voice::rtc::VideoFrameRef::new`: parameter `frame`: `MediaRef` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::voice::rtc::StreamTextOptions::sender_identity`: return: not yet: `ParticipantIdentity` is an open string (#[host(string)])
+//! - `lk_agents_abi::voice::rtc::StreamBytesOptions::destination_identities`: return: not yet: `ParticipantIdentity` is an open string (#[host(string)])
 //! - `lk_agents_abi::voice::rtc::Transcription::participant_identity`: return: not yet: `ParticipantIdentity` is an open string (#[host(string)])
 //! - `lk_agents_abi::voice::rtc::Transcription::track_sid`: return: not yet: `TrackSid` is an open string (#[host(string)])
 //! - `lk_agents_voice::room_io::rooms::ScriptedRoom::session_clock`: return: not yet: returning an exposed class
@@ -147,6 +150,7 @@
 //! - `lk_agents_abi::Vad`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_rtc::RtcRoom`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::LocalParticipant`: `lk_agents_rtc` is not linked by lk-agents-node
+//! - `lk_agents_rtc::ByteStreamWriter`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::TextStreamWriter`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::AudioSource`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::RemoteParticipant`: `lk_agents_rtc` is not linked by lk-agents-node

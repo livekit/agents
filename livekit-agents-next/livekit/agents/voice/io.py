@@ -358,6 +358,11 @@ class AgentOutput:
         if self._session._core is not None:
             self._session._core.set_audio_output(sink)
 
+    def replace_audio_tail(self, sink: AudioOutput) -> None:
+        """Switch the sink at the bottom of the chain, keeping the wrappers above it: the core
+        owns those (transcript synchroniser, recorder), so this is ``audio = sink``."""
+        self.audio = sink
+
     @property
     def transcription(self) -> TextOutput | None:
         return self._transcription

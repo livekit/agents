@@ -173,6 +173,41 @@ class LocalParticipant:
         )
         return TextStreamWriter(writer)
 
+    async def _core_stream_bytes(self, opts: _core.StreamBytesOptions) -> ByteStreamWriter:
+        writer = await self._participant.stream_bytes(
+            name=opts.name,
+            topic=opts.topic,
+            destination_identities=opts.destination_identities,
+            attributes=opts.attributes,
+        )
+        return ByteStreamWriter(writer)
+
+    async def _core_perform_rpc(
+        self, destination: str, method: str, payload: str
+    ) -> tuple[int, str]:
+        try:
+            return 0, await self._participant.perform_rpc(
+                destination_identity=destination, method=method, payload=payload
+            )
+        except rtc.RpcError as e:
+            return e.code, e.message
+
+    def _core_register_rpc_method(self, method: str, handler: Any) -> None:
+        self._participant.register_rpc_method(
+            method, lambda data: handler.call(data.caller_identity, data.payload)
+        )
+
+
+class ByteStreamWriter:
+    def __init__(self, writer: rtc.ByteStreamWriter) -> None:
+        self._writer = writer
+
+    async def _core_write(self, data: bytes) -> None:
+        await self._writer.write(data)
+
+    async def _core_close(self) -> None:
+        await self._writer.aclose()
+
 
 class TextStreamWriter:
     def __init__(self, writer: rtc.TextStreamWriter) -> None:
@@ -247,6 +282,9 @@ class TrackPublication:
 
     def _core_source(self) -> str:
         return _name(_SOURCES, self._publication.source, "unknown")
+
+    def _core_kind(self) -> int:
+        return self._publication.kind
 
     def _core_is_subscribed(self) -> bool:
         return self._publication.track is not None
