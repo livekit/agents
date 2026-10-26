@@ -771,6 +771,7 @@ class LiveSession:
         keyterm_llm: Any | None = None,
         keyterm_tools: Any | None = None,
         agent_expressive: NotGivenOr[Any] = ...,
+        session_id: str | None = None,
     ) -> None: ...
     async def start(self, *, capture_run: bool = False) -> None: ...
     @property
