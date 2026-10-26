@@ -51,6 +51,7 @@ impl Run {
                 true
             }
             Input::Room { event } => self.room_event(*event),
+            Input::Console { ask } => self.console_ask(*ask),
             _ if fakes::boundary_of(input).is_some() => self.deliver(at, input),
             _ => self.call(at, input),
         };
@@ -703,6 +704,12 @@ impl Run {
             let heard = match leg {
                 Mic::Host(sender) => sender.send(frame).is_ok(),
                 Mic::Room { track, .. } => track.push_frame(frame) > 0,
+                Mic::Console(cli) => cli.send(Message::AudioInput(console_io::AudioFrame {
+                    data: frame.data.to_vec(),
+                    sample_rate: frame.sample_rate,
+                    num_channels: u32::from(frame.num_channels),
+                    samples_per_channel: frame.samples_per_channel,
+                })),
             };
             if !heard {
                 return false;
@@ -710,6 +717,35 @@ impl Run {
             *count = count.wrapping_add(1);
         }
         true
+    }
+
+    /// The CLI asks the session something, as its TUI does; refused with no console.
+    fn console_ask(&mut self, ask: ConsoleAsk) -> bool {
+        use proto::session_request::{self as rq, Request};
+        let Some((_, cli)) = &self.console else { return false };
+        let request = match ask {
+            ConsoleAsk::Ping => Request::Ping(rq::Ping {}),
+            ConsoleAsk::History => Request::GetChatHistory(rq::GetChatHistory {}),
+            ConsoleAsk::AgentInfo => Request::GetAgentInfo(rq::GetAgentInfo {}),
+            ConsoleAsk::RunInput => Request::RunInput(rq::RunInput { text: "hello".into() }),
+            ConsoleAsk::State => Request::GetSessionState(rq::GetSessionState {}),
+            ConsoleAsk::RtcStats => Request::GetRtcStats(rq::GetRtcStats {}),
+            ConsoleAsk::Usage => Request::GetSessionUsage(rq::GetSessionUsage {}),
+            ConsoleAsk::Framework => Request::GetFrameworkInfo(rq::GetFrameworkInfo {}),
+            ConsoleAsk::Mute => Request::UpdateIo(rq::UpdateIo {
+                input: Some(rq::update_io::Input { audio_enabled: Some(false), video_enabled: None }),
+                output: None,
+            }),
+            ConsoleAsk::Finalize => Request::FinalizeSimulation(rq::FinalizeSimulation {
+                provisional_success: true,
+                provisional_reason: "done".into(),
+            }),
+        };
+        self.next_request += 1;
+        cli.send(Message::Request(proto::SessionRequest {
+            request_id: format!("req_{}", self.next_request),
+            request: Some(request),
+        }))
     }
 
     /// The person's microphones in the room, which leave the room with them.

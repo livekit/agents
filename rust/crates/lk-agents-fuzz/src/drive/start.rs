@@ -42,9 +42,16 @@ impl Run {
         // is minted like an output, so its `nth` is what a `Ref<Mic>` names; the room's is the
         // person's track, minted when they join.
         let legs = setup.room_legs;
-        let host_mic = legs.is_none().then(|| {
+        // The console's socket is a leg of the host's like the fakes, so the room's stay off.
+        let console = setup.console.then(|| fakes::FakeCli::connect(Arc::new(TokioSpawner::current())));
+        let host_mic = (legs.is_none() && console.is_none()).then(|| {
             let (mic, frames) = fakes::FakeAudioInput::new();
             (mic, frames, registry.new_mic())
+        });
+        let session_host = console.as_ref().map(|_| {
+            let host = RemoteSessionHost::new(time.clock(), Arc::new(TokioSpawner::current()));
+            host.set_port(Arc::new(fakes::FakeConsolePort));
+            Arc::new(host)
         });
         let options = HostOptions::new(session_kwargs(setup));
         let room_io = RoomIoConfig {
@@ -88,7 +95,7 @@ impl Run {
                 }),
                 None,
                 (setup.tts && pipeline).then(|| fakes::FakeTts::new(registry.clone()) as Arc<Tts>),
-                Some(Arc::new(WireSink)),
+                Some(Arc::new(WireSink { console: session_host.clone(), time: time.clone() })),
                 None,
                 true,
                 SAMPLE_RATE,
@@ -111,14 +118,20 @@ impl Run {
                 None,
                 None,
                 None,
-                host_mic.as_ref().map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
-                legs.is_none().then(|| {
-                    fakes::FakeAudioOutput::new(
-                        registry.clone(),
-                        setup.pausable_output,
-                        setup.lagging_output,
-                    ) as _
-                }),
+                match &console {
+                    Some((io, _)) => Some(io.as_audio_input()),
+                    None => host_mic.as_ref().map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
+                },
+                match &console {
+                    Some((io, _)) => Some(io.as_audio_output()),
+                    None => legs.is_none().then(|| {
+                        fakes::FakeAudioOutput::new(
+                            registry.clone(),
+                            setup.pausable_output,
+                            setup.lagging_output,
+                        ) as _
+                    }),
+                },
                 setup
                     .video
                     .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
@@ -178,6 +191,17 @@ impl Run {
         }
         api.start(false).expect("a new session starts").await.expect("the session started");
         let runtime = runtime_rx.await.expect("the probe takes the session's cores");
+        // `ConsoleCall.start()`: the host runs on the socket, which then carries the microphone.
+        let console = match (console, session_host) {
+            (Some((io, cli)), Some(host)) => {
+                host.start(io.as_transport(), Some(io.as_console()))
+                    .await
+                    .expect("the console's socket is open");
+                Some((host, cli))
+            }
+            _ => None,
+        };
+        let console_mic = console.as_ref().map(|(_, cli)| (registry.new_mic(), cli.clone()));
         // The answering-machine detector, as `await amd.execute()` runs it: attached, its budget
         // armed and its listening window opened as soon as the call is up.
         if setup.amd {
@@ -212,11 +236,16 @@ impl Run {
                 .collect(),
             host_mic: false,
             joins: 0,
+            console,
+            next_request: 0,
             next_filler: 1,
             refs,
             setup: setup.clone(),
             record: Recording::default(),
         };
+        if let Some((nth, cli)) = console_mic {
+            run.mics.insert(nth, (Mic::Console(cli), 0));
+        }
         // The person joins the call the agent just answered.
         if legs.is_some() {
             run.join_caller();
@@ -269,12 +298,78 @@ impl Run {
 pub(super) const CALLER: &str = "caller";
 
 /// `on_event`: the host's sink, handed each event's wire form. What the run reads is the typed
-/// event the probe saw first.
-struct WireSink;
+/// event the probe saw first; a console forwards what the CLI renders.
+struct WireSink {
+    console: Option<Arc<RemoteSessionHost>>,
+    time: Timebase,
+}
 
 impl SessionEvents for WireSink {
-    fn event(&self, _wire: &lk_agents_abi::voice::events::HostWire) {}
+    fn event(&self, wire: &lk_agents_abi::voice::events::HostWire) {
+        let (Some(host), Some(event)) = (&self.console, console_event(wire)) else { return };
+        let _ = host.send_wire(event, Some(self.time.wall_secs()));
+    }
     fn stream_closed(&self, _wire: &lk_agents_abi::voice::events::StreamClosedWire) {}
+}
+
+/// `ConsoleCall.forward` and `_tools_executed`: the events the CLI renders, in its shapes.
+fn console_event(wire: &lk_agents_abi::voice::events::HostWire) -> Option<WireEvent> {
+    use lk_agents_abi::voice::events::{HostWire as W, ToolUpdate};
+    use lk_agents_voice::remote_session::{
+        ErrorWire, FunctionCallOutputRef, FunctionCallRef, FunctionToolsExecutedWire,
+        ToolCallStartedWire, ToolExecutionUpdatedWire, ToolUpdateWire,
+    };
+    Some(match wire {
+        W::AgentStateChanged(ev) => WireEvent::AgentStateChanged(ev.clone()),
+        W::UserStateChanged(ev) => WireEvent::UserStateChanged(ev.clone()),
+        W::UserTranscript(ev) => WireEvent::UserInputTranscribed(ev.clone()),
+        W::EotPrediction(ev) => WireEvent::EotPrediction(ev.clone()),
+        W::AgentFalseInterruption(ev) => WireEvent::AgentFalseInterruption(ev.clone()),
+        W::ItemAdded(ev)
+            if matches!(ev.item, ChatItem::Message(_) | ChatItem::AgentHandoff(_)) =>
+        {
+            WireEvent::ConversationItemAdded(ev.clone())
+        }
+        W::Error(ev) => WireEvent::Error(ErrorWire { message: ev.error.to_string() }),
+        W::ToolExecutionUpdated(ev) => WireEvent::ToolExecutionUpdated(ToolExecutionUpdatedWire {
+            update: match &ev.update {
+                ToolUpdate::Started(started) => {
+                    let call = &started.function_call;
+                    ToolUpdateWire::Started(ToolCallStartedWire {
+                        id: call.id.clone(),
+                        call_id: call.call_id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    })
+                }
+                ToolUpdate::Updated(updated) => ToolUpdateWire::CallUpdated(updated.clone()),
+                ToolUpdate::Ended(ended) => ToolUpdateWire::Ended(ended.clone()),
+                ToolUpdate::Reply(reply) => ToolUpdateWire::ReplyUpdated(reply.clone()),
+            },
+        }),
+        W::FunctionToolsExecuted(ev) => WireEvent::FunctionToolsExecuted(FunctionToolsExecutedWire {
+            function_calls: ev
+                .function_calls
+                .iter()
+                .map(|c| FunctionCallRef {
+                    name: c.name.clone(),
+                    arguments: c.arguments.clone(),
+                    call_id: c.call_id.clone(),
+                })
+                .collect(),
+            function_call_outputs: ev
+                .function_call_outputs
+                .iter()
+                .map(|o| FunctionCallOutputRef {
+                    call_id: o.call_id.clone(),
+                    name: o.name.clone(),
+                    output: o.output.clone(),
+                    is_error: o.is_error,
+                })
+                .collect(),
+        }),
+        _ => return None,
+    })
 }
 
 pub(super) fn turn_detection(mode: TurnMode) -> Option<TurnDetection> {

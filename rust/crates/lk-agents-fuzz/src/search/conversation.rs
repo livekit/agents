@@ -40,7 +40,8 @@ use super::uniform;
 use crate::{
     drive::{Case, Outcome, Policy, Run, Setup},
     input::{
-        AGENT_TURNS, AgentText, Confidence, Count, HookAnswer, Input, Make, Millis, Ref, RoomIn,
+        AGENT_TURNS, AgentText, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make, Millis, Ref,
+        RoomIn,
         RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode, USER_TURNS, UserText,
     },
     record::{Detail, Kind, Tag},
@@ -689,6 +690,11 @@ impl Talk {
             // In a room, the person sometimes types instead of speaking.
             if self.run.setup.room_legs.is_some() && self.rng.u8(0..100) < self.persona.leaves {
                 self.send(Input::Room { event: RoomIn::Chat }).await?;
+            }
+            // On the console, the developer's TUI asks the session things as the call goes.
+            if self.run.setup.console && self.rng.u8(0..100) < self.persona.leaves {
+                let ask: ConsoleAsk = self.draw();
+                self.send(Input::Console { ask }).await?;
             }
             // Nothing to speak into: the developer detached the microphone. The person keeps
             // talking into a dead line, which to the session is silence, so the line is silent for

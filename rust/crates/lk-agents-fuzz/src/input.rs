@@ -413,6 +413,10 @@ plain_enum! {
     IvrInput { Start, SeedTranscript, Close }
 }
 plain_enum! {
+    /// What the console's CLI asks the session (`SessionRequest`), one of each kind.
+    ConsoleAsk { Ping, History, AgentInfo, RunInput, State, RtcStats, Usage, Framework, Mute, Finalize }
+}
+plain_enum! {
     /// What happens in the room the session is in: the link the room io machine reports, the
     /// room's own two events that name no participant, and the person typing in the chat.
     RoomIn { Linked, Unlinked, StateChanged, Closed, Chat }
@@ -468,7 +472,7 @@ macro_rules! unreferenced {
 
 unreferenced!(
     bool, AgentText, UserText, Millis, Count, String, IoKind, SayInput, ToolAnswer, HookAnswer,
-    Knob, TurnMode, IvrInput, Models, Role, RoomIn, Confidence, ToolArgs, Speaker, RtEvent,
+    Knob, TurnMode, IvrInput, Models, Role, RoomIn, ConsoleAsk, Confidence, ToolArgs, Speaker, RtEvent,
     DtmfInput, DtmfKey
 );
 
@@ -708,6 +712,8 @@ inputs! {
     RealtimeEvent { socket: Ref<Realtime>, event: RtEvent } opens [Generation];
     /// Something the room did. Refused by a session with no room legs, which is most of them.
     Room { event: RoomIn };
+    /// The console's CLI asks the session something. Refused by a session with no console.
+    Console { ask: ConsoleAsk };
 
     // --- the clock, and waiting for something the driver owes ---------------------------------
     /// Virtual time passes with nobody acting.

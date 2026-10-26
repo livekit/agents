@@ -20,7 +20,8 @@ lk-agents-abi = { path = "../lk-agents-abi" }
 # fake's signature names. Both already come in through lk-agents-voice.
 lk-agents-media = { path = "../lk-agents-media" }
 lk-agents-rtc = { path = "../lk-agents-rtc" }
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "io-util"] }
+prost.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 fastrand = "2"

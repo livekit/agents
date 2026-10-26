@@ -42,6 +42,12 @@ use lk_agents_abi::{
     },
 };
 use lk_agents_rtc::{FakeRoom, ParticipantKind};
+use lk_agents_abi::TokioSpawner;
+use lk_agents_voice::remote_session::driver::HostRuntime as RemoteSessionHost;
+use lk_agents_voice::remote_session::{
+    WireEvent, proto,
+    proto::agent_session_message::{Message, console_io},
+};
 use lk_agents_voice::room_io::types::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::{
     Runtime,
@@ -76,7 +82,7 @@ use crate::{
     fakes::{self, Control, Record, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot},
     input::{
         AgentText, Confidence, Count, DtmfInput, HookAnswer, Input, IvrInput, Knob, Millis, Models,
-        Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
+        ConsoleAsk, Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
     },
     record::step_name,
     record::{
@@ -177,6 +183,10 @@ pub struct Setup {
     /// speaks into a microphone track, and the agent's voice plays out on the room's clock.
     /// `None` is the host's own legs, the fakes.
     pub room_legs: Option<RoomLegs>,
+    /// `lk agent console`: the CLI's socket is the session's microphone and speaker, and a
+    /// `RemoteSessionHost` on it forwards the session's events and answers the CLI's requests,
+    /// as `voice/console.py` runs it. Never with the room's legs.
+    pub console: bool,
 }
 
 /// The room's legs, and whether the person's app sends the audio it buffered before the agent
@@ -263,6 +273,7 @@ impl Default for Setup {
             room: None,
             text_transforms: None,
             room_legs: None,
+            console: false,
         }
     }
 }
@@ -380,6 +391,8 @@ enum Mic {
     Host(mpsc::UnboundedSender<AudioFrame>),
     /// The track, and how many frames went into it at which instant.
     Room { track: Arc<lk_agents_rtc::FakeTrackPublication>, burst: (u64, u32) },
+    /// The console's socket, as the CLI sends its microphone.
+    Console(fakes::FakeCli),
 }
 
 /// The most frames pushed into the person's track in one instant: half of what each of the
@@ -441,6 +454,10 @@ pub struct Run {
     host_mic: bool,
     /// How many times the person joined the room, which names their microphone track.
     joins: u32,
+    /// The console's session host and the CLI on the other end of its socket.
+    console: Option<(Arc<RemoteSessionHost>, fakes::FakeCli)>,
+    /// The next console request's id.
+    next_request: u64,
     /// The next filler id to mint. The host tells the driver the id rather than letting it
     /// choose, so a case can name a filler in the same burst that started it.
     next_filler: u64,

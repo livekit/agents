@@ -15,7 +15,11 @@ use lk_agents_abi::voice::io::{
     TextOutput, VideoInput,
 };
 use lk_agents_abi::{AudioFrame, MediaRef, Ts, errors::RefRegistry};
+use lk_agents_abi::errors::HostError;
 use lk_agents_media::recorder::{AudioRecorder, RecorderError};
+use lk_agents_voice::remote_session::{self, FrameDecoder, console::ConsoleIo, proto};
+use prost::Message as _;
+use proto::agent_session_message::{Message, console_io};
 
 use super::{Control, Registry};
 use crate::{
@@ -394,5 +398,125 @@ impl AudioRecorder for FakeRecorder {
     fn flush(&self, _now: f64) -> Result<(), RecorderError> {
         self.registry.record_sink(Sink::Recorder(RecorderCall::Flush));
         Ok(())
+    }
+}
+
+/// `lk agent console`'s end of the socket, in process: what it sends the agent (the microphone,
+/// requests, playout acks) goes out in order, and every segment the agent flushes is acked once
+/// its audio has played on the clock, unless a clear cut it first. Its tasks are the CLI's, not
+/// the session's, so nothing judges them.
+#[derive(Clone)]
+pub struct FakeCli {
+    to_agent: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+}
+
+impl FakeCli {
+    /// The session's console over an in-process stream, and the CLI on its other end.
+    pub fn connect(spawner: Arc<dyn lk_agents_abi::Spawner>) -> (Arc<ConsoleIo>, FakeCli) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (agent_end, cli_end) = tokio::io::duplex(1 << 20);
+        let (mut read, mut write) = tokio::io::split(cli_end);
+        let (to_agent, mut outgoing) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        tokio::spawn(async move {
+            while let Some(bytes) = outgoing.recv().await {
+                if write.write_all(&bytes).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let cli = FakeCli { to_agent };
+        let speaker = cli.clone();
+        tokio::spawn(async move {
+            let (mut decoder, mut chunk) = (FrameDecoder::new(), vec![0u8; 16 * 1024]);
+            // The audio of the segment being received, and which segment it is: a clear moves
+            // on, so an ack still waiting for a cut segment's audio is dropped.
+            let (mut pending, mut segment) = (Duration::ZERO, 0u64);
+            let played = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            loop {
+                while let Ok(Some(body)) = decoder.next_frame() {
+                    match proto::AgentSessionMessage::decode(body.as_slice()).ok().and_then(|m| m.message) {
+                        Some(Message::AudioOutput(f)) => {
+                            pending += Duration::from_secs_f64(
+                                f64::from(f.samples_per_channel) / f64::from(f.sample_rate.max(1)),
+                            );
+                        }
+                        Some(Message::AudioPlaybackFlush(_)) => {
+                            let (speaker, played, this) = (speaker.clone(), played.clone(), segment);
+                            let audio = std::mem::take(&mut pending);
+                            tokio::spawn(async move {
+                                tokio::time::sleep(audio).await;
+                                if played.load(std::sync::atomic::Ordering::Relaxed) == this {
+                                    speaker.send(Message::AudioPlaybackFinished(
+                                        console_io::AudioPlaybackFinished {},
+                                    ));
+                                }
+                            });
+                        }
+                        Some(Message::AudioPlaybackClear(_)) => {
+                            pending = Duration::ZERO;
+                            segment += 1;
+                            played.store(segment, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        _ => {}
+                    }
+                }
+                match read.read(&mut chunk).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => decoder.push(&chunk[..n]),
+                }
+            }
+        });
+        (Arc::new(ConsoleIo::over(agent_end, spawner)), cli)
+    }
+
+    /// One message to the agent; `false` once the CLI's socket is gone.
+    pub fn send(&self, message: Message) -> bool {
+        let message = proto::AgentSessionMessage { message: Some(message) };
+        self.to_agent.send(remote_session::frame(&message.encode_to_vec())).is_ok()
+    }
+}
+
+/// What the CLI asks of the session (`ConsoleCall`'s `_core_*` port), answered as the host would
+/// from its own state. Toggling the legs stays with the case's own inputs, so `update_io` is
+/// acknowledged and changes nothing.
+pub struct FakeConsolePort;
+
+#[async_trait::async_trait]
+impl remote_session::SessionPort for FakeConsolePort {
+    async fn chat_history(&self) -> Result<Vec<lk_agents_abi::ChatItem>, HostError> {
+        Ok(Vec::new())
+    }
+    async fn agent_info(&self) -> Result<remote_session::AgentInfo, HostError> {
+        Ok(("agent".into(), Some("You are a test agent.".into()), Vec::new(), Vec::new()))
+    }
+    async fn run_input(&self, text: &str) -> Result<remote_session::RunOutcome, HostError> {
+        Ok(if text.is_empty() { (None, Some("empty run_input text".into())) } else { (Some(Vec::new()), None) })
+    }
+    async fn session_state(&self) -> Result<remote_session::SessionState, HostError> {
+        let options = remote_session::STATE_OPTION_FIELDS
+            .iter()
+            .map(|(key, _)| ((*key).to_owned(), "None".to_owned()))
+            .collect();
+        Ok(("listening".into(), "listening".into(), "agent".into(), options, Some(0.0)))
+    }
+    async fn rtc_stats(&self) -> Result<Option<remote_session::RtcStats>, HostError> {
+        Ok(None)
+    }
+    async fn session_usage(
+        &self,
+    ) -> Result<Vec<lk_agents_abi::metrics::usage::ModelUsage>, HostError> {
+        Ok(Vec::new())
+    }
+    fn framework_info(&self) -> (String, String) {
+        ("rust".into(), "fuzz".into())
+    }
+    async fn update_io(&self, _update: remote_session::IoUpdate) -> Result<(), HostError> {
+        Ok(())
+    }
+    async fn finalize_simulation(
+        &self,
+        _provisional: remote_session::SimulationVerdict,
+    ) -> Result<remote_session::VerdictOutcome, HostError> {
+        Ok((None, None))
     }
 }

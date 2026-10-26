@@ -44,7 +44,10 @@ mod vad;
 pub use eot::FakeEot;
 pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{FakeLlm, request_of};
-pub use output::{FakeAudioInput, FakeAudioOutput, FakeRecorder, FakeTextOutput, FakeVideoInput};
+pub use output::{
+    FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeTextOutput,
+    FakeVideoInput,
+};
 pub use realtime::FakeRealtime;
 pub use stt::FakeStt;
 pub use tools::FakeTools;

@@ -20,7 +20,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         1 => TurnMode::Stt,
         _ => TurnMode::Manual,
     };
-    Setup {
+    let mut setup = Setup {
         stt: rng.bool(),
         vad: rng.bool(),
         eot: rng.bool(),
@@ -72,5 +72,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
                 _ => Some(PreConnect::Malformed),
             },
         }),
-    }
+        console: false,
+    };
+    // `lk agent console` runs on the host's legs only.
+    setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
+    setup
 }

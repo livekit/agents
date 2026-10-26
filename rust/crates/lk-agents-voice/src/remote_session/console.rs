@@ -5,7 +5,6 @@
 //! runs on, and the session's audio input and output legs.
 
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::HostError;
@@ -14,10 +13,10 @@ use lk_agents_abi::voice::io::{
 };
 use lk_agents_abi::{AudioFrame, Spawner, SpawnerExt};
 use prost::Message as _;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
+use tokio::time::Instant;
 
 use super::{ConsoleSink, FrameDecoder, SessionTransport, epoch_secs_now, frame, proto};
 use proto::agent_session_message::{Message, console_io};
@@ -28,16 +27,25 @@ const WIRE_SAMPLE_RATE: u32 = 48_000;
 /// The CLI's socket: transport, console sink and both audio legs. Connected by `start()`; what is
 /// sent before then is queued.
 pub struct ConsoleIo {
-    addr: String,
+    socket: Mutex<Option<Socket>>,
     spawner: Arc<dyn Spawner>,
     outgoing: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
     outgoing_rx: Mutex<Option<mpsc::UnboundedReceiver<Vec<u8>>>>,
-    reader: AsyncMutex<Option<(OwnedReadHalf, FrameDecoder)>>,
+    reader: AsyncMutex<Option<(Box<dyn AsyncRead + Send + Unpin>, FrameDecoder)>>,
     mic: Mutex<Option<mpsc::UnboundedSender<AudioFrame>>>,
     mic_rx: AsyncMutex<mpsc::UnboundedReceiver<AudioFrame>>,
     tracker: Arc<PlaybackTracker>,
     playback: Mutex<Playback>,
 }
+
+/// Where the CLI is: its `host:port`, or a stream already open to it.
+enum Socket {
+    Addr(String),
+    Open(Box<dyn Stream>),
+}
+
+trait Stream: AsyncRead + AsyncWrite + Send + Unpin {}
+impl<T: AsyncRead + AsyncWrite + Send + Unpin> Stream for T {}
 
 /// The segment being played: when its first frame went out and how much audio it holds.
 #[derive(Default)]
@@ -71,10 +79,24 @@ impl ConsoleIo {
     /// `addr` is `host:port`, the CLI's `--connect-addr`.
     #[host(new)]
     pub fn new(addr: String, #[host(ambient)] spawner: Arc<dyn Spawner>) -> Self {
+        Self::on(Socket::Addr(addr), spawner)
+    }
+}
+
+impl ConsoleIo {
+    /// Over a stream already open to the CLI (an in-process one, say).
+    pub fn over(
+        stream: impl AsyncRead + AsyncWrite + Send + Unpin + 'static,
+        spawner: Arc<dyn Spawner>,
+    ) -> Self {
+        Self::on(Socket::Open(Box::new(stream)), spawner)
+    }
+
+    fn on(socket: Socket, spawner: Arc<dyn Spawner>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let (mic, mic_rx) = mpsc::unbounded_channel();
         ConsoleIo {
-            addr,
+            socket: Mutex::new(Some(socket)),
             spawner,
             outgoing: Mutex::new(Some(tx)),
             outgoing_rx: Mutex::new(Some(rx)),
@@ -85,9 +107,7 @@ impl ConsoleIo {
             playback: Mutex::new(Playback::default()),
         }
     }
-}
 
-impl ConsoleIo {
     pub fn as_transport(self: &Arc<Self>) -> Arc<dyn SessionTransport> {
         self.clone()
     }
@@ -123,12 +143,20 @@ impl ConsoleIo {
 impl SessionTransport for ConsoleIo {
     async fn start(&self) -> Result<(), HostError> {
         let Some(mut rx) = self.outgoing_rx.lock().unwrap().take() else { return Ok(()) };
-        let stream = TcpStream::connect(&self.addr)
-            .await
-            .map_err(|e| HostError::new(format!("console: connecting to {}: {e}", self.addr)))?;
-        let _ = stream.set_nodelay(true);
-        let (read, mut write) = stream.into_split();
-        *self.reader.lock().await = Some((read, FrameDecoder::new()));
+        let socket = self.socket.lock().unwrap().take();
+        let stream: Box<dyn Stream> = match socket {
+            Some(Socket::Open(stream)) => stream,
+            Some(Socket::Addr(addr)) => {
+                let stream = TcpStream::connect(&addr)
+                    .await
+                    .map_err(|e| HostError::new(format!("console: connecting to {addr}: {e}")))?;
+                let _ = stream.set_nodelay(true);
+                Box::new(stream)
+            }
+            None => return Ok(()),
+        };
+        let (read, mut write) = tokio::io::split(stream);
+        *self.reader.lock().await = Some((Box::new(read), FrameDecoder::new()));
         self.spawner.spawn_unboxed(async move {
             while let Some(bytes) = rx.recv().await {
                 if write.write_all(&bytes).await.is_err() {

@@ -7,7 +7,7 @@ use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::{AgentText, Input, Ref, SayInput},
-    record::{Answer, Detail, Handle, Kind, Recording},
+    record::{Answer, Detail, Handle, Kind, Observed, Recording},
 };
 
 pub struct NoPrematureCompletion;
@@ -37,10 +37,15 @@ impl Rule for NoPrematureCompletion {
             if !speech.is_known() {
                 continue;
             }
-            // `say(audio=)` with no audio path when it is authorized speaks its text alone and
+            // `say(audio=)` with no audio path when its voice starts speaks its text alone and
             // leaves the frames unread, as the reference's `_tts_task` does with no audio output.
+            // The voice reads the path after the loop's turn, so a switch the same burst sent
+            // behind the say still counts: any gap in the path from the authorization on.
             let authorized = r.internal_view().speech(*id).authorized_at();
-            if *input == SayInput::Audio && authorized.is_some_and(|at| !audio_path.on_at(at)) {
+            let until = speech.done_at().unwrap_or(Observed::END);
+            if *input == SayInput::Audio
+                && authorized.is_some_and(|at| !audio_path.on_throughout(at, until))
+            {
                 continue;
             }
 
