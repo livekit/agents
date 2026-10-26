@@ -323,6 +323,7 @@ async fn follow_up(
         audio_output_enabled: prev.request.tts_enabled,
         text_output_enabled: prev.request.text_output_enabled,
         now: shared.time.wall(),
+        expressive: prev.request.expressive.as_deref(),
     });
     ReplyContext {
         preemptive_tts: prev.preemptive_tts,

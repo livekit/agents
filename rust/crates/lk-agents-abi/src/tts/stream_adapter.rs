@@ -10,6 +10,7 @@ use crate::errors::{ApiError, ProviderError};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+use crate::tts::markup::Markup;
 use crate::tts::tts::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use crate::types::identity::ProviderId;
 use crate::utils::clock::{Clock, Ts};
@@ -24,7 +25,9 @@ pub trait SentenceSplitter: Send {
     fn flush(&mut self) -> Vec<String>;
 }
 
-pub type SplitterFactory = Arc<dyn Fn() -> Box<dyn SentenceSplitter> + Send + Sync>;
+/// Called once per stream with `xml_aware`: on only while markup flows, so a marker is never split
+/// across two sentences (`StreamAdapter._tokenizer_for`).
+pub type SplitterFactory = Arc<dyn Fn(bool) -> Box<dyn SentenceSplitter> + Send + Sync>;
 
 /// `utils.shortuuid()`'s shape; ids only need to be distinct within a session.
 fn stream_uid() -> String {
@@ -39,11 +42,13 @@ pub struct StreamAdapter {
     splitter: SplitterFactory,
     /// Bounds the per-sentence inner closes done inside `next()`.
     clock: Arc<dyn Clock>,
+    /// `_expressive`, set by the framework before each synthesis and snapshotted at `stream()`.
+    expressive: AtomicBool,
 }
 
 impl StreamAdapter {
     pub fn new(tts: Arc<dyn Tts>, splitter: SplitterFactory, clock: Arc<dyn Clock>) -> Self {
-        StreamAdapter { tts, splitter, clock }
+        StreamAdapter { tts, splitter, clock, expressive: AtomicBool::new(false) }
     }
 
     /// Itself when it has a duplex path, else adapted; decided per instance by its capabilities.
@@ -85,7 +90,7 @@ pub async fn adapter_stream(
         ProviderError::Local(ApiError { retryable: false, ..ApiError::new(e.to_string()) })
     })?;
     let provider = provider.with_conn_options(&options).unwrap_or(provider);
-    StreamAdapter::new(provider, Arc::new(|| Box::new(PreSplit)), clock).stream().await
+    StreamAdapter::new(provider, Arc::new(|_| Box::new(PreSplit)), clock).stream().await
 }
 
 #[async_trait]
@@ -116,6 +121,21 @@ impl Tts for StreamAdapter {
         self.tts.num_channels()
     }
 
+    /// A pass-through speaks whatever dialect it wraps.
+    fn markup_provider(&self) -> String {
+        self.tts.markup_provider()
+    }
+
+    /// The framework's input path for every non-streaming TTS: it lowers the markup.
+    fn lowers_markup(&self) -> bool {
+        true
+    }
+
+    fn set_expressive(&self, on: bool) {
+        self.expressive.store(on, Ordering::Release);
+        self.tts.set_expressive(on);
+    }
+
     /// `stream_adapter.py:58`.
     async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
         self.tts.synthesize(text).await
@@ -124,12 +144,17 @@ impl Tts for StreamAdapter {
     async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
         // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
         let (tx, rx) = mpsc::unbounded_channel();
+        // Snapshotted now, while the framework holds it fixed for this synthesis.
+        let markup = Markup::from_provider_key(&self.tts.markup_provider());
+        let lowering = (self.expressive.load(Ordering::Acquire) && !markup.provider_key().is_empty())
+            .then_some(markup);
         let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
         let source = AdapterSource {
             tts: self.tts.clone(),
             clock: Arc::clone(&self.clock),
             rx,
-            splitter: (self.splitter)(),
+            splitter: (self.splitter)(lowering.is_some()),
+            lowering,
             pending: VecDeque::new(),
             current: None,
             inner_timed_out: false,
@@ -197,6 +222,8 @@ struct AdapterSource {
     clock: Arc<dyn Clock>,
     rx: mpsc::UnboundedReceiver<AdapterInput>,
     splitter: Box<dyn SentenceSplitter>,
+    /// The markup lowered before synthesis; `None` when expressive is off or there is no dialect.
+    lowering: Option<Markup>,
     pending: VecDeque<String>,
     current: Option<TtsSource>,
     /// Folded into `close`.
@@ -224,12 +251,20 @@ impl AdapterSource {
         }
     }
 
+    fn push_text(&mut self, text: &str) {
+        let sentences = match &self.lowering {
+            Some(markup) => self.splitter.push(&markup.normalize(text)),
+            None => self.splitter.push(text),
+        };
+        self.pending.extend(sentences);
+    }
+
     /// Without awaiting. Stands in for the reference's concurrent `_forward_input`: otherwise the
     /// adapter would learn input ended only after the last frame, and never mark it final.
     fn drain_input(&mut self) {
         loop {
             match self.rx.try_recv() {
-                Ok(AdapterInput::Text(t)) => self.pending.extend(self.splitter.push(&t)),
+                Ok(AdapterInput::Text(t)) => self.push_text(&t),
                 Ok(AdapterInput::Flush) => self.pending.extend(self.splitter.flush()),
                 Err(mpsc::error::TryRecvError::Empty) => return,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
@@ -253,7 +288,7 @@ impl AdapterSource {
                 return None;
             }
             match self.rx.recv().await {
-                Some(AdapterInput::Text(t)) => self.pending.extend(self.splitter.push(&t)),
+                Some(AdapterInput::Text(t)) => self.push_text(&t),
                 Some(AdapterInput::Flush) => self.pending.extend(self.splitter.flush()),
                 None => {
                     // Sender dropped. A sink dropped without `end_input` never flushed, so flush
@@ -293,12 +328,18 @@ impl AdapterSource {
                 ..TimedString::default()
             });
             // Whitespace-only is falsy in Python; several plugins raise on empty input.
-            if sentence.trim_matches(crate::tokenize::is_py_space).is_empty() {
+            let mut text = sentence.trim_matches(crate::tokenize::is_py_space).to_owned();
+            if let Some(markup) = &self.lowering {
+                // Re-normalized: a marker split across two input chunks escaped the push's pass.
+                text = markup
+                    .convert(&markup.normalize(&text))
+                    .trim_matches(crate::tokenize::is_py_space)
+                    .to_owned();
+            }
+            if text.is_empty() {
                 continue;
             }
-            self.current = Some(
-                self.tts.synthesize(sentence.trim_matches(crate::tokenize::is_py_space)).await?,
-            );
+            self.current = Some(self.tts.synthesize(&text).await?);
         }
     }
 }
@@ -430,7 +471,7 @@ mod tests {
         Observed {
             adapter: StreamAdapter::new(
                 tts,
-                Arc::new(move || {
+                Arc::new(move |_| {
                     Box::new(DotSplitter {
                         buf: String::new(),
                         seen: s.clone(),
@@ -482,6 +523,9 @@ mod tests {
         calls: Mutex<Vec<String>>,
         inner_closed: Arc<AtomicUsize>,
         fail_after: Option<usize>,
+        /// `markup._provider_key()`, and what `set_expressive` last said.
+        markup: &'static str,
+        expressive: AtomicBool,
     }
 
     impl FakeTts {
@@ -491,6 +535,8 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 inner_closed: Arc::new(AtomicUsize::new(0)),
                 fail_after: None,
+                markup: "",
+                expressive: AtomicBool::new(false),
             })
         }
         fn texts(&self) -> Vec<String> {
@@ -512,6 +558,12 @@ mod tests {
         /// Stereo, so an adapter that hard-coded `1` would show.
         fn num_channels(&self) -> u16 {
             2
+        }
+        fn markup_provider(&self) -> String {
+            self.markup.to_owned()
+        }
+        fn set_expressive(&self, on: bool) {
+            self.expressive.store(on, Ordering::Relaxed);
         }
         async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
             self.calls.lock().unwrap().push(text.to_owned());
@@ -540,7 +592,7 @@ mod tests {
     fn adapter(tts: Arc<FakeTts>) -> StreamAdapter {
         StreamAdapter::new(
             tts,
-            Arc::new(|| Box::new(DotSplitter::default())),
+            Arc::new(|_| Box::new(DotSplitter::default())),
             Arc::new(crate::utils::clock::VirtualClock::new()),
         )
     }
@@ -855,5 +907,47 @@ mod tests {
         };
         let out = drained.expect("the drain task panicked").expect("the drain failed");
         assert_eq!(out.len(), 1, "one sentence, one frame, and then end of stream");
+    }
+
+    // Catches: markup spoken aloud by a non-streaming TTS under expressive (the adapter is its
+    // only lowering path), a sentence split inside a marker (the splitter not asked to be
+    // xml-aware), the flag not reaching the wrapped TTS, and a turn with expressive off lowered.
+    #[tokio::test]
+    async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
+        let said = "<expr type=\"emotion\" label=\"happy\"/>Hi there.";
+        let markup = Markup::from_provider_key("cartesia");
+        for on in [true, false] {
+            let tts = Arc::new(FakeTts { markup: "cartesia", ..Arc::into_inner(FakeTts::new(1)).unwrap() });
+            let xml_aware = Arc::new(AtomicBool::new(!on));
+            let seen = xml_aware.clone();
+            let adapter = StreamAdapter::new(
+                tts.clone(),
+                Arc::new(move |xml| {
+                    seen.store(xml, Ordering::Relaxed);
+                    Box::new(DotSplitter::default())
+                }),
+                Arc::new(crate::utils::clock::VirtualClock::new()),
+            );
+            assert!(adapter.lowers_markup());
+            assert_eq!(adapter.markup_provider(), "cartesia");
+            adapter.set_expressive(on);
+            assert_eq!(tts.expressive.load(Ordering::Relaxed), on, "forwarded to the wrapped TTS");
+            let (sink, source) = adapter.stream().await.unwrap();
+            sink.push(said.into()).unwrap();
+            sink.end_input();
+            let out = drain(source).await.unwrap();
+            assert_eq!(xml_aware.load(Ordering::Relaxed), on, "xml-aware only while markup flows");
+            let want = if on {
+                markup.convert(&markup.normalize(said)).trim().to_owned()
+            } else {
+                said.to_owned()
+            };
+            assert_eq!(tts.texts(), vec![want], "expressive={on}");
+            // The transcript keeps the framework's markup; the sinks strip it downstream.
+            assert_eq!(out[0].timed_transcript[0].text, said);
+            if on {
+                assert_ne!(tts.texts()[0], said, "cartesia lowers `expr` to its own tags");
+            }
+        }
     }
 }

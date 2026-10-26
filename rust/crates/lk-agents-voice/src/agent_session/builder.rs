@@ -45,6 +45,8 @@ pub struct DriverBuilder {
     pub capture_run: Option<crate::run_result::RunSpec>,
     /// Consecutive unrecoverable errors of one leg tolerated before closing (default `3`).
     pub max_unrecoverable_errors: u32,
+    /// `expressive=`, the session's and the opening agent's.
+    pub expressive: crate::generation::ExpressiveLayers,
     /// Where the providers below are registered, and every one handed over later.
     pub resources: lk_agents_abi::resources::Resources,
     pub llm: Option<Arc<dyn Llm>>,
@@ -336,6 +338,8 @@ impl DriverBuilder {
             },
         );
 
+        let mut session = session;
+        session.expressive = self.expressive.clone();
         let trace = Arc::new(Mutex::new(Trace::new()));
         {
             let mut t = trace.lock().unwrap_or_else(|p| p.into_inner());

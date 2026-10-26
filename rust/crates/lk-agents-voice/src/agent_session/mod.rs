@@ -84,6 +84,8 @@ pub(crate) struct LiveSession {
     pub(crate) idle: IdleHolds,
     /// The providers held at the end of the last step, and those handed over since.
     pub(crate) providers: std::collections::BTreeSet<lk_agents_abi::resources::ResourceId>,
+    /// `expressive=`, the session's and the active agent's.
+    pub(crate) expressive: crate::generation::ExpressiveLayers,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening frame and
@@ -156,7 +158,18 @@ impl LiveSession {
             runs: Default::default(),
             idle: IdleHolds::default(),
             providers: Default::default(),
+            expressive: Default::default(),
         }
+    }
+
+    /// This turn's markup guide over the session's TTS. A reply that runs with it off scrubs the
+    /// markup from the agent's history (`_pipeline_reply_task`).
+    pub(crate) fn expressive_guide(&mut self, reply: bool) -> Option<String> {
+        let guide = self.expressive.guide(self.tts.as_ref(), lk_agents_abi::Modality::Audio);
+        if guide.is_none() && reply {
+            self.chat_ctx.strip_assistant_markup();
+        }
+        guide
     }
 
     /// The previous state when it changed. A speaking edge means the pipeline produced audio, so

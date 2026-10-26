@@ -488,6 +488,7 @@ impl Driver {
             | Command::Activity(
                 ActivityCommand::UpdateInstructions(_)
                 | ActivityCommand::UpdateTools(_)
+                | ActivityCommand::UpdateExpressive(_)
                 | ActivityCommand::SetAudioInput(_)
                 | ActivityCommand::SetVideoInput(_)
                 | ActivityCommand::SetIoEnabled { .. }

@@ -49,7 +49,8 @@ impl SessionApi {
             text_output = true,
             host_video_sampler = false,
             using_default_vad = false,
-            max_unrecoverable_errors = 3
+            max_unrecoverable_errors = 3,
+            agent_expressive = Maybe::NotGiven
         )
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -110,6 +111,8 @@ impl SessionApi {
         stt_context: Option<lk_agents_abi::turn::keyterms::SttContextConfig>,
         keyterm_llm: Option<Arc<dyn Llm>>,
         keyterm_tools: Option<lk_agents_abi::HostRef>,
+        // The first agent's own `expressive`; `NOT_GIVEN` defers to the session's.
+        agent_expressive: Maybe<crate::agent_activity::options::Expressive>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
     ) -> Result<Self, SessionBuildError> {
         use crate::room_io::types::{
@@ -144,6 +147,10 @@ impl SessionApi {
                     as Arc<dyn lk_agents_abi::Realtime>
             })
         });
+        let expressive = crate::generation::ExpressiveLayers {
+            session: options.map(|o| o.expressive()).unwrap_or_default(),
+            agent: agent_expressive.given(),
+        };
         let (session_layer, diagnostics) = match options {
             Some(o) => (o.session_patch(), o.take_diagnostics()),
             None => (crate::agent_activity::options::SessionPatch::default(), Vec::new()),
@@ -284,6 +291,7 @@ impl SessionApi {
             hook_bound: hook_bound.map(Duration::from_secs_f64),
             capture_run: None,
             max_unrecoverable_errors,
+            expressive,
             eot: turn_detector.clone(),
             llm,
             realtime,
@@ -495,8 +503,8 @@ impl SessionApi {
     ) -> Result<(), SessionRefused>;
 
     /// `AgentSession.update_options(..)` on a running session: the raw update, read into a patch
-    /// the driver merges into its session layer and re-resolves. An update that says nothing is a
-    /// no-op (`keyterms`/`expressive` never reach the driver).
+    /// the driver merges into its session layer and re-resolves; `expressive` reaches the next
+    /// reply. An update that says nothing is a no-op (`keyterms` never reaches the driver).
     #[host(method)]
     pub fn update_turn_options(
         &self,
@@ -507,6 +515,9 @@ impl SessionApi {
             for d in diagnostics {
                 events.event(&HostWire::Diagnostic(d.wire()));
             }
+        }
+        if let Maybe::Given(expressive) = update.expressive {
+            self.send(ActivityCommand::UpdateExpressive(expressive))?;
         }
         if patch == crate::agent_activity::options::SessionPatch::default() {
             return Ok(());

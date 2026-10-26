@@ -416,6 +416,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             on_event=self,
             options=self._options,
             agent_turn_handling=frame.get("turn_handling"),
+            agent_expressive=frame["expressive"],
             tools=frame["tools"],
             tools_host=frame["tools_host"],
             tool_runner=frame["tool_runner"],
@@ -619,7 +620,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._running.update_chat_ctx(to_core_items(chat_ctx.items))
 
     def update_options(self, **update: Any) -> None:
-        """Change the turn options of a running session (``UpdateKwargs``)."""
+        """Change the turn options and ``expressive`` of a session (``UpdateKwargs``)."""
         if self._core is None:
             self._options.update(update)
         else:
@@ -648,6 +649,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "tools_host": pool,
             "tool_runner": ToolRunner(self, agent, pool),
             "turn_handling": agent._turn_handling or None,
+            "expressive": agent.expressive,
         }
         if is_given(agent._vad):
             frame["vad"] = _core_leg(agent._vad)

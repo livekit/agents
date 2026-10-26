@@ -371,8 +371,10 @@ impl Driver {
             stt,
             vad,
             options,
+            expressive,
             ..
         } = update;
+        self.session.expressive.agent = expressive;
         // A reply in flight keeps the instructions and tools it snapshotted.
         let count = toolset.specs.len();
         let previous_agent =

@@ -37,6 +37,10 @@ pub(super) async fn voice_leg(
     rx: mpsc::UnboundedReceiver<SegEvent>,
 ) -> Result<Option<Spoken>, DriverError> {
     let mut gate = PlaybackGate::default();
+    // `tts_node` sets it just before `stream()` snapshots it, for this synthesis only.
+    if let Voice::Tts(tts) = &voice {
+        tts.set_expressive(ctx.request.expressive.is_some());
+    }
     let synthesis = matches!(voice, Voice::Tts(_))
         && shared.output.audio_enabled()
         && shared.output.audio().is_some();

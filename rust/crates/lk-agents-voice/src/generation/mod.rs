@@ -286,6 +286,8 @@ pub struct RequestInputs<'a> {
     pub text_output_enabled: bool,
     /// `Clock::wall`: the stamp of every message this function mints.
     pub now: SystemTime,
+    /// This turn's markup guide ([`ExpressiveLayers::guide`]); `None` is expressive off.
+    pub expressive: Option<&'a str>,
 }
 
 /// One request, ready to send. Its trace step `ChatRequested` is derived from it.
@@ -298,6 +300,8 @@ pub struct Request {
     pub tts_enabled: bool,
     pub text_output_enabled: bool,
     pub instructions_hash: u64,
+    /// The markup guide it was planned with: the TTS is told, and a follow-up step plans with it.
+    pub expressive: Option<String>,
 }
 
 /// Assemble one request. Order matters: stale prompts removed, pending and new items by
@@ -316,6 +320,7 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
         audio_output_enabled,
         text_output_enabled,
         now,
+        expressive,
     } = inputs;
 
     let mut ctx = record.copy(&CopyOptions::default());
@@ -346,10 +351,19 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
         ));
     }
 
-    // Expressive is never resolved for a request: the guide goes and past turns lose their markup,
-    // in the request's copy.
-    lk_agents_abi::tts::markup::remove_expressive_instructions(&mut ctx);
-    lk_agents_abi::tts::markup::strip_assistant_markup(&mut ctx);
+    // On, the guide replaces last turn's instead of stacking; off, it goes and past turns lose
+    // their markup.
+    match expressive {
+        Some(guide) => {
+            if !guide.trim().is_empty() {
+                upsert_expressive_instructions(&mut ctx, guide, now);
+            }
+        }
+        None => {
+            lk_agents_abi::tts::markup::remove_expressive_instructions(&mut ctx);
+            lk_agents_abi::tts::markup::strip_assistant_markup(&mut ctx);
+        }
+    }
 
     inject_running_tool_calls(&mut ctx, running_tool_calls);
 
@@ -359,6 +373,74 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
         tts_enabled: audio_output_enabled,
         text_output_enabled,
         instructions_hash: stable_hash(instructions),
+        expressive: expressive.map(str::to_owned),
+    }
+}
+
+/// `update_expressive_instructions`: the keyed system message, replaced in place (its stamp kept)
+/// or appended.
+fn upsert_expressive_instructions(ctx: &mut ChatContext, text: &str, now: SystemTime) {
+    use lk_agents_abi::tts::markup::EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID as ID;
+    match ctx.items.iter().position(|it| it.id() == ID) {
+        Some(idx) => {
+            let created_at = ctx.items[idx].created_at();
+            ctx.items[idx] = ChatMessage::text(ID, Role::System, text, created_at).into();
+        }
+        None => ctx.push(ChatMessage::text(ID, Role::System, text, now)),
+    }
+}
+
+/// `"You can control how you speak..."`: `DEFAULT_EXPRESSIVE_OPTIONS`' template.
+pub const DEFAULT_TTS_INSTRUCTIONS_TEMPLATE: &str = "You can control how you speak using the \
+following formatting tags. Use them when appropriate to make your speech more expressive and \
+natural:\n\n{tts.markup.llm_instructions}";
+
+/// The session's `expressive=` and the active agent's; the agent's wins when it said one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ExpressiveLayers {
+    pub session: lk_agents_abi::voice::session_options::Expressive,
+    /// `None`: the agent left it unsaid (`NOT_GIVEN`).
+    pub agent: Option<lk_agents_abi::voice::session_options::Expressive>,
+}
+
+impl ExpressiveLayers {
+    /// `_resolve_expressive_options` and `_inject_expressive_instructions`: this turn's markup
+    /// guide, `None` when expressive is off. Off without a TTS, without a markup dialect, and for
+    /// a natively streaming TTS nothing lowers markup for; `Some("")` is on with nothing to inject.
+    pub fn guide(
+        &self,
+        tts: Option<&lk_agents_abi::resources::TtsRef>,
+        modality: lk_agents_abi::Modality,
+    ) -> Option<String> {
+        use lk_agents_abi::tts::markup::SpeechSteering;
+        use lk_agents_abi::voice::session_options::Instructions;
+        let tts = tts?;
+        let markup = tts.markup;
+        markup.llm_instructions(None)?;
+        if tts.capabilities.streaming && !tts.lowers_markup {
+            return None;
+        }
+        let cfg = self.agent.as_ref().unwrap_or(&self.session).0.as_ref()?;
+        // `resolve_expressive_options`: the user's steering over `DEFAULT_SPEECH_STEERING_OPTIONS`.
+        let user = cfg.speech_steering.clone().unwrap_or_default();
+        let steering = SpeechSteering { disfluencies: user.disfluencies.or(Some(true)), ..user };
+        let mut template = cfg
+            .tts_instructions_template
+            .clone()
+            .unwrap_or_else(|| Instructions::plain(DEFAULT_TTS_INSTRUCTIONS_TEMPLATE));
+        // `_append_instructions`: onto the raw common text, so placeholders survive to the render.
+        let fragment = markup.steering_instructions(&steering);
+        for extra in [Some(fragment.as_str()), cfg.tts_instructions_append.as_deref()] {
+            if let Some(extra) = extra.filter(|e| !e.is_empty()) {
+                template.common = format!("{}\n\n{extra}", template.common);
+            }
+        }
+        let llm_instructions = markup.llm_instructions(Some(&steering)).unwrap_or_default();
+        if llm_instructions.is_empty() {
+            return Some(String::new());
+        }
+        let data = serde_json::json!({ "tts": { "markup": { "llm_instructions": llm_instructions } } });
+        Some(safe_render(&template.render(Some(modality)), &data).text)
     }
 }
 
@@ -630,6 +712,8 @@ pub struct PlanSpec {
     pub running_tool_calls: Vec<crate::generation::RunningToolCall>,
     pub audio_output_enabled: bool,
     pub text_output_enabled: bool,
+    /// This turn's markup guide; `None` is expressive off.
+    pub expressive: Option<String>,
 }
 
 impl PlanSpec {
@@ -652,6 +736,7 @@ impl PlanSpec {
             audio_output_enabled: self.audio_output_enabled,
             text_output_enabled: self.text_output_enabled,
             now,
+            expressive: self.expressive.as_deref(),
         })
     }
 }
@@ -752,4 +837,131 @@ pub enum GenEvent {
         recoverable: bool,
         error: Box<ProviderError>,
     },
+}
+
+#[cfg(test)]
+mod expressive_tests {
+    use super::*;
+    use lk_agents_abi::resources::{ResourceId, TtsRef};
+    use lk_agents_abi::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
+    use lk_agents_abi::voice::session_options::{Expressive, ExpressiveConfig};
+    use lk_agents_abi::{ChatContext, TtsCapabilities};
+
+    fn tts(provider: &str, streaming: bool, lowers_markup: bool) -> TtsRef {
+        TtsRef {
+            id: ResourceId(1),
+            provider: lk_agents_abi::ProviderId::of_label("t".to_owned()),
+            capabilities: TtsCapabilities { streaming, aligned_transcript: false },
+            sample_rate: 24_000,
+            num_channels: 1,
+            markup: Markup::from_provider_key(provider),
+            lowers_markup,
+        }
+    }
+
+    fn on(cfg: ExpressiveConfig) -> Expressive {
+        Expressive(Some(cfg))
+    }
+
+    // Catches: the agent's `expressive` not winning over the session's, in either direction.
+    #[test]
+    fn the_agents_setting_overrides_the_sessions() {
+        let t = tts("cartesia", false, true);
+        let mut layers = ExpressiveLayers { session: on(Default::default()), agent: None };
+        assert!(layers.guide(Some(&t), Modality::Audio).is_some());
+        layers.agent = Some(Expressive(None));
+        assert_eq!(layers.guide(Some(&t), Modality::Audio), None, "Agent(expressive=False)");
+        layers.session = Expressive(None);
+        layers.agent = Some(on(Default::default()));
+        assert!(layers.guide(Some(&t), Modality::Audio).is_some(), "Agent(expressive=True)");
+    }
+
+    // Catches: markup taught to the LLM when no TTS can speak it: no dialect, no TTS, or a
+    // natively streaming plugin nothing lowers markup for.
+    #[test]
+    fn it_is_off_without_a_dialect_or_a_lowering_path() {
+        let layers = ExpressiveLayers { session: on(Default::default()), agent: None };
+        assert_eq!(layers.guide(None, Modality::Audio), None);
+        assert_eq!(layers.guide(Some(&tts("", false, true)), Modality::Audio), None);
+        assert_eq!(layers.guide(Some(&tts("cartesia", true, false)), Modality::Audio), None);
+        assert!(layers.guide(Some(&tts("cartesia", true, true)), Modality::Audio).is_some());
+    }
+
+    // Catches: `{}` read as off (the reference's `not expr and not isinstance(expr, dict)`), the
+    // template's placeholder left unfilled, the default disfluencies line missing, and the user's
+    // append not landing last.
+    #[test]
+    fn an_empty_dict_is_on_and_the_guide_is_rendered_from_the_template() {
+        let t = tts("cartesia", false, true);
+        let layers = ExpressiveLayers {
+            session: on(ExpressiveConfig {
+                tts_instructions_append: Some("Be brief.".into()),
+                ..Default::default()
+            }),
+            agent: None,
+        };
+        let guide = layers.guide(Some(&t), Modality::Audio).unwrap();
+        assert!(guide.starts_with("You can control how you speak"), "{guide}");
+        assert!(!guide.contains("{tts.markup.llm_instructions}"), "{guide}");
+        let steering = SpeechSteering { disfluencies: Some(true), ..Default::default() };
+        let taught = Markup::from_provider_key("cartesia").llm_instructions(Some(&steering));
+        assert!(guide.contains(&taught.unwrap()), "{guide}");
+        assert!(guide.contains("natural fillers"), "{guide}");
+        assert!(guide.ends_with("Be brief."), "{guide}");
+    }
+
+    fn inputs<'a>(
+        record: &'a ChatContext,
+        expressive: Option<&'a str>,
+        now: SystemTime,
+    ) -> RequestInputs<'a> {
+        RequestInputs {
+            record,
+            pending: &[],
+            new_message: None,
+            instructions: "be nice",
+            turn_instructions: None,
+            tools: &[],
+            on_enter: false,
+            running_tool_calls: &[],
+            modality: Modality::Audio,
+            audio_output_enabled: true,
+            text_output_enabled: true,
+            now,
+            expressive,
+        }
+    }
+
+    fn texts(ctx: &ChatContext) -> String {
+        format!("{ctx:?}")
+    }
+
+    // Catches: the guide stacking a copy per turn instead of replacing the last one in place, and
+    // an expressive-off turn keeping the guide or the past markup.
+    #[test]
+    fn the_guide_is_upserted_when_on_and_removed_with_the_markup_when_off() {
+        let t0 = SystemTime::UNIX_EPOCH;
+        let t1 = t0 + Duration::from_secs(5);
+        let mut record = ChatContext::new(Vec::new());
+        record.push(ChatMessage::text(EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Role::System, "old", t0));
+        let said = "hi <expr type=\"emotion\" label=\"happy\"/>there";
+        record.push(ChatMessage::text("a", Role::Assistant, said, t0));
+
+        let on = plan_request(inputs(&record, Some("new guide"), t1));
+        let guides: Vec<_> = on
+            .chat_ctx
+            .items
+            .iter()
+            .filter(|it| it.id() == EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID)
+            .collect();
+        assert_eq!(guides.len(), 1);
+        assert_eq!(guides[0].created_at(), t0, "replaced in place, stamp kept");
+        assert_eq!(on.expressive.as_deref(), Some("new guide"));
+        assert!(texts(&on.chat_ctx).contains("new guide"));
+        assert!(texts(&on.chat_ctx).contains("<expr"), "markup kept while on");
+
+        let off = plan_request(inputs(&record, None, t1));
+        assert!(off.chat_ctx.items.iter().all(|it| it.id() != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID));
+        assert!(!texts(&off.chat_ctx).contains("<expr"), "markup stripped when off");
+    }
 }

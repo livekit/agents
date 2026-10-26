@@ -139,6 +139,19 @@ impl Tts for Node<dyn Tts> {
         self.below.num_channels()
     }
 
+    fn markup_provider(&self) -> String {
+        self.below.markup_provider()
+    }
+
+    fn lowers_markup(&self) -> bool {
+        self.below.lowers_markup()
+    }
+
+    /// Set on the TTS the node's default `tts_node` synthesises with.
+    fn set_expressive(&self, on: bool) {
+        self.below.set_expressive(on);
+    }
+
     /// One text, through the node all the same.
     async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
         let (sink, source) = self.stream().await?;

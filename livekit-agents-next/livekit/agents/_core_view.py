@@ -119,6 +119,15 @@ class _Tts(_Provider):
     def _core_num_channels(self) -> int:
         return self._obj.num_channels
 
+    def _core_markup_provider(self) -> str:
+        return self._obj.markup._provider_key()
+
+    def _core_lowers_markup(self) -> bool:
+        return isinstance(self._obj, tts.StreamAdapter)
+
+    def _core_set_expressive(self, on: bool) -> None:
+        self._obj._set_expressive(on)
+
     async def _core_synthesize(self, text: str) -> tts.ChunkedStream:
         return self._obj.synthesize(text, conn_options=self._conn)
 

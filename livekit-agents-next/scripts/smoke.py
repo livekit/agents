@@ -385,6 +385,54 @@ async def nodes() -> None:
     assert heard == ["my name is [name]"], heard
 
 
+class RecordingLLM(ScriptedLLM):
+    """``ScriptedLLM`` keeping the ids of every context it is asked with."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts: list[list[str]] = []
+
+    def chat(self, *, chat_ctx: llm.ChatContext, **kwargs: Any) -> llm.LLMStream:
+        self.contexts.append([item.id for item in chat_ctx.items])
+        return super().chat(chat_ctx=chat_ctx, **kwargs)
+
+
+class MarkupTTS(SilentTTS):
+    """``SilentTTS`` speaking Cartesia's markup, keeping what the core told it about expressive."""
+
+    class Markup(tts.TTS.Markup):
+        def _provider_key(self) -> str:
+            return "cartesia"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.expressive: list[bool] = []
+
+    def _set_expressive(self, enabled: bool) -> None:
+        super()._set_expressive(enabled)
+        self.expressive.append(enabled)
+
+
+async def expressive() -> None:
+    print("== expressive")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    model, voice = RecordingLLM(), MarkupTTS()
+    session = LiveSession(stt=ScriptedSTT(), llm=model, tts=voice, vad=None, expressive=True)
+    await session.start(Agent(instructions="You are expressive."), room=room)
+    await settle(room, 1)
+    session.generate_reply(user_input="hello there")
+    await settle(room, 3)
+    session.update_options(expressive=False)
+    session.generate_reply(user_input="and again")
+    await settle(room, 3)
+    await session.aclose()
+    guide = "lk.expressive.instructions"
+    print(f"guide per request {[guide in ids for ids in model.contexts]}, tts {voice.expressive}")
+    assert [guide in ids for ids in model.contexts] == [True, False], model.contexts
+    assert voice.expressive == [True, False], voice.expressive
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -464,6 +512,7 @@ async def main() -> int:
     await realtime()
 
     await nodes()
+    await expressive()
     return 0
 
 

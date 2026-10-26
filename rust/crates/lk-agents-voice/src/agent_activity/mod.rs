@@ -361,6 +361,9 @@ impl Driver {
                 }
                 self.publish_activity();
             }
+            ActivityCommand::UpdateExpressive(expressive) => {
+                self.session.expressive.session = expressive;
+            }
             ActivityCommand::UpdateTools(toolset) => {
                 let tools = toolset.specs.len();
                 // "Record the configuration change (skip if no visible diff)", in spec order so

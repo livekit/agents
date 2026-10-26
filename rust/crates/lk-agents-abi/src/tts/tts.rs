@@ -136,6 +136,20 @@ pub trait Tts: Send + Sync {
     fn sample_rate(&self) -> u32;
     fn num_channels(&self) -> u16;
 
+    /// `markup._provider_key()`: the markup dialect this TTS speaks, `""` for none.
+    fn markup_provider(&self) -> String {
+        String::new()
+    }
+
+    /// Whether the framework lowers this TTS's markup on a duplex path it owns (the gateway's
+    /// stream, a `StreamAdapter`); a natively streaming plugin owns its input and does not.
+    fn lowers_markup(&self) -> bool {
+        false
+    }
+
+    /// `_set_expressive`: whether markup is active for the synthesis about to open.
+    fn set_expressive(&self, _on: bool) {}
+
     /// A view of this provider whose calls carry `conn`; see [`Stt::with_conn_options`](crate::Stt::with_conn_options).
     fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn Tts>> {
         None

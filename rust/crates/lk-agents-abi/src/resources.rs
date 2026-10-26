@@ -47,6 +47,10 @@ pub struct TtsRef {
     pub capabilities: TtsCapabilities,
     pub sample_rate: u32,
     pub num_channels: u16,
+    /// The markup dialect it speaks (`markup._provider_key()`).
+    pub markup: crate::tts::markup::Markup,
+    /// [`Tts::lowers_markup`].
+    pub lowers_markup: bool,
 }
 
 /// The session a realtime model opened: what it said it can do when it opened.
@@ -126,12 +130,16 @@ impl Resources {
     pub fn register_tts(&self, tts: Arc<dyn Tts>) -> TtsRef {
         let (provider, capabilities) = (tts.id(), tts.capabilities());
         let (sample_rate, num_channels) = (tts.sample_rate(), tts.num_channels());
+        let markup = crate::tts::markup::Markup::from_provider_key(&tts.markup_provider());
+        let lowers_markup = tts.lowers_markup();
         TtsRef {
             id: self.insert(Resource::Tts(tts)),
             provider,
             capabilities,
             sample_rate,
             num_channels,
+            markup,
+            lowers_markup,
         }
     }
 

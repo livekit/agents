@@ -570,6 +570,10 @@ impl Driver {
         // Read once, so the request's specs and host objects cannot disagree.
         let advertised = self.activity.advertised_toolset(&self.session.tools);
         let turn_toolset = spec.toolset.clone().unwrap_or_else(|| Arc::clone(&advertised));
+        let expressive = match &spec.source {
+            ReplySource::Realtime { .. } => None,
+            source => self.session.expressive_guide(matches!(source, ReplySource::Llm)),
+        };
         let plan = crate::generation::PlanSpec {
             record: spec.chat_ctx.clone(),
             new_message: spec.new_message.clone(),
@@ -581,6 +585,7 @@ impl Driver {
             running_tool_calls: self.activity.tools.running_tool_calls(),
             audio_output_enabled: self.session.outputs.plays_audio(),
             text_output_enabled: self.session.outputs.shows_transcription(),
+            expressive,
         };
         let request = match &spec.source {
             ReplySource::Llm
@@ -595,6 +600,7 @@ impl Driver {
                 tts_enabled: false,
                 text_output_enabled: self.session.outputs.shows_transcription(),
                 instructions_hash: crate::generation::stable_hash(&instructions),
+                expressive: None,
             },
         };
 

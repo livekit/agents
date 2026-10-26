@@ -308,6 +308,19 @@ impl Tts for NativeTts {
         1
     }
 
+    fn markup_provider(&self) -> String {
+        wire::markup_provider_key(&self.model()).to_owned()
+    }
+
+    /// The gateway stream lowers the markup itself.
+    fn lowers_markup(&self) -> bool {
+        true
+    }
+
+    fn set_expressive(&self, on: bool) {
+        NativeTts::set_expressive(self, on);
+    }
+
     /// `synthesize(text)` = `_synthesize_with_stream(text)`: the gateway has no one-shot endpoint.
     async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
         let (sink, source) = self.open(None)?;

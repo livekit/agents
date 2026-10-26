@@ -11,7 +11,7 @@ use crate::turn::{
 use lk_agents_abi::Maybe;
 use lk_agents_abi::Vocabulary;
 pub use lk_agents_abi::voice::session_options::{
-    DeprecatedTurnKwargs, DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides,
+    DeprecatedTurnKwargs, Expressive, DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides,
     HostValue, InterruptionGateVerdict, InterruptionKwargs, InterruptionMode, LegSet,
     PreemptiveKwargs, RecordingOptions, RecordingOverrides, ResolvedEndpointing,
     ResolvedInterruption, ResolvedPreemptiveGeneration, ResolvedSessionOptions,
@@ -391,7 +391,7 @@ pub fn session_layer(kw: &SessionKwargs) -> (SessionPatch, Vec<DiagnosticEvent>)
         conn_options: _,
         deprecated,
         keyterms_options,
-    } = *kw;
+    } = kw.clone();
 
     let mut diagnostics = deprecated_diagnostics(&deprecated);
     if keyterms_options.is_given() {
@@ -423,7 +423,8 @@ pub fn update_patch(kw: &UpdateKwargs) -> (SessionPatch, Vec<DiagnosticEvent>) {
         turn_detection,
         min_endpointing_delay,
         max_endpointing_delay,
-    } = *kw;
+        expressive: _,
+    } = kw.clone();
     let mut diagnostics = Vec::new();
     let endpointing = if min_endpointing_delay.is_given() || max_endpointing_delay.is_given() {
         diagnostics.push(deprecation(
@@ -728,6 +729,8 @@ pub struct HostOptions {
 
 struct HostOptionsState {
     kwargs: SessionKwargs,
+    /// `expressive=`, then each `update_options(expressive=)`.
+    expressive: Expressive,
     session: SessionPatch,
     /// Diagnostics (deprecated kwargs) not yet emitted; the session takes them at construction.
     diagnostics: Vec<DiagnosticEvent>,
@@ -746,6 +749,11 @@ impl HostOptions {
     pub fn take_diagnostics(&self) -> Vec<DiagnosticEvent> {
         std::mem::take(&mut self.lock().diagnostics)
     }
+
+    /// The session's `expressive=` as of now.
+    pub fn expressive(&self) -> Expressive {
+        self.lock().expressive.clone()
+    }
 }
 
 /// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict (deprecated kwargs are
@@ -756,8 +764,14 @@ impl HostOptions {
     #[host(new)]
     pub fn new(kwargs: SessionKwargs) -> Self {
         let (session, diagnostics) = session_layer(&kwargs);
+        let expressive = kwargs.expressive.clone();
         HostOptions {
-            state: std::sync::Mutex::new(HostOptionsState { kwargs, session, diagnostics }),
+            state: std::sync::Mutex::new(HostOptionsState {
+                kwargs,
+                expressive,
+                session,
+                diagnostics,
+            }),
         }
     }
 
@@ -768,6 +782,9 @@ impl HostOptions {
         let mut state = self.lock();
         state.session.merge(&patch);
         state.diagnostics.extend(diagnostics);
+        if let Maybe::Given(expressive) = update.expressive {
+            state.expressive = expressive;
+        }
     }
 
     /// Outbound SIP before `start()`: no acoustic echo on a phone line, so the warmup is switched

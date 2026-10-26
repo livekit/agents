@@ -58,7 +58,6 @@ class SessionKwargs(TypedDict):
     """`NotGivenOr[Sequence[TextTransforms] | None]`: unsaid, "none", or a set."""
     min_consecutive_speech_delay: float
     expressive: bool | ExpressiveOptions
-    """`bool | ExpressiveOptions`: whether expressive delivery is on; the dict stays host-side."""
     aec_warmup_duration: NotGivenOr[float | None]
     """`NotGivenOr[float | None]`: unsaid is the default warmup, `None` none at all (outbound SIP)."""
     ivr_detection: bool
@@ -75,13 +74,14 @@ class SessionKwargs(TypedDict):
 
 
 class UpdateKwargs(TypedDict):
-    """`AgentSession.update_options(..)`'s option surface (`keyterms` and `expressive` stay host-side)."""
+    """`AgentSession.update_options(..)`'s option surface (`keyterms` stays host-side)."""
 
     endpointing_opts: NotGivenOr[EndpointingOptions]
     turn_detection: NotGivenOr[TurnDetectionMode | None]
     """`NotGivenOr[TurnDetectionMode | None]`: `None` reverts to automatic selection (`Auto`)."""
     min_endpointing_delay: NotGivenOr[float]
     max_endpointing_delay: NotGivenOr[float]
+    expressive: NotGivenOr[bool | ExpressiveOptions]
 
 
 class SessionLegs(TypedDict):

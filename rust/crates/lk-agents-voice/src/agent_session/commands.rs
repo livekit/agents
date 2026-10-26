@@ -182,7 +182,7 @@ impl Command {
                 ReleaseUserTurn, SetAllowInterruptions, SetRunOutput, ToolUpdate, FillerStart,
                 FillerStop, PauseAuthorization, ResumeAuthorization),
             Command::Activity(c) => leaf!(c; ActivityCommand: Update, UpdateInstructions,
-                UpdateTools, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
+                UpdateTools, UpdateExpressive, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
             Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure),
             Command::Ivr(c) => leaf!(c; IvrCommand: Start, SeedTranscript, Close, AddTools),
             Command::Dtmf(c) => leaf!(c; DtmfCommand: Start, Digit, Stop),
@@ -465,6 +465,8 @@ pub enum ActivityCommand {
     /// the modality variants.
     UpdateInstructions(Instructions),
     UpdateTools(crate::tool_executor::Toolset),
+    /// `update_options(expressive=)`: the session's setting, read by the next reply.
+    UpdateExpressive(crate::agent_activity::options::Expressive),
     /// The old pump is aborted first, so two sources never feed the legs at once.
     SetAudioInput(Option<HostAudio>),
     SetVideoInput(Option<HostVideo>),
@@ -534,6 +536,8 @@ pub struct AgentUpdate {
     pub vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
     /// **Replaced whole** and re-resolved over the resulting legs.
     pub options: crate::agent_activity::options::SessionPatch,
+    /// The agent's `expressive`, replacing the previous agent's; `None` defers to the session's.
+    pub expressive: Option<crate::agent_activity::options::Expressive>,
     pub call: Option<RequestId>,
 }
 
@@ -598,6 +602,7 @@ impl AgentUpdate {
             stt: Maybe::NotGiven,
             vad: Maybe::NotGiven,
             options: Default::default(),
+            expressive: None,
             call: None,
         }
     }
@@ -625,6 +630,7 @@ impl std::fmt::Debug for AgentUpdate {
             .field("stt", &self.stt)
             .field("vad", &self.vad)
             .field("options", &self.options)
+            .field("expressive", &self.expressive)
             .field("call", &self.call)
             .finish()
     }

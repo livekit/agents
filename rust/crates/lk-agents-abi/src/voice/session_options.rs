@@ -461,7 +461,7 @@ pub struct DeprecatedTurnKwargs {
 
 /// Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
 /// (`stt`, `llm`, `tools`, ...) are legs, not options.
-#[derive(Clone, Copy, PartialEq, Host)]
+#[derive(Clone, PartialEq, Host)]
 #[python(typed_dict, module = "session_options", name = "SessionKwargs")]
 pub struct SessionKwargs {
     /// `turn_handling=`, as written. `None` is `NOT_GIVEN`.
@@ -494,9 +494,8 @@ pub struct SessionKwargs {
     pub tts_text_transforms:
         lk_agents_abi::Maybe<Option<lk_agents_abi::voice::session_options::TextTransformSet>>,
     pub min_consecutive_speech_delay: f64,
-    /// `bool | ExpressiveOptions`: whether expressive delivery is on; the dict stays host-side.
     #[python(ty = "bool | ExpressiveOptions", type_import = ".expressive:ExpressiveOptions")]
-    pub expressive: bool,
+    pub expressive: Expressive,
     /// `NotGivenOr[float | None]`: unsaid is the default warmup, `None` none at all (outbound SIP).
     #[python(ty = "NotGivenOr[float | None]")]
     pub aec_warmup_duration: lk_agents_abi::Maybe<Option<f64>>,
@@ -521,8 +520,8 @@ pub struct SessionKwargs {
     pub keyterms_options: HostValue,
 }
 
-/// `AgentSession.update_options(..)`'s option surface (`keyterms` and `expressive` stay host-side).
-#[derive(Clone, Copy, Default, PartialEq, Host)]
+/// `AgentSession.update_options(..)`'s option surface (`keyterms` stays host-side).
+#[derive(Clone, Default, PartialEq, Host)]
 #[python(typed_dict, module = "session_options", name = "UpdateKwargs")]
 pub struct UpdateKwargs {
     #[python(
@@ -545,6 +544,9 @@ pub struct UpdateKwargs {
     #[python(ty = "NotGivenOr[float]")]
     #[binding(default)]
     pub max_endpointing_delay: lk_agents_abi::Maybe<f64>,
+    #[python(ty = "NotGivenOr[bool | ExpressiveOptions]", type_import = ".expressive:ExpressiveOptions")]
+    #[binding(default)]
+    pub expressive: lk_agents_abi::Maybe<Expressive>,
 }
 
 // `Maybe<T>` has `Debug` only for `Maybe<Option<T>>`, so these impls are written out.
@@ -592,7 +594,7 @@ debug_record!(SessionKwargs {
 
 debug_record!(UpdateKwargs {
     endpointing_opts;
-    turn_detection, min_endpointing_delay, max_endpointing_delay
+    turn_detection, min_endpointing_delay, max_endpointing_delay, expressive
 });
 
 /// `LegSet` as the host states it before `start()`, so `session.options` can resolve early.
@@ -815,6 +817,12 @@ pub struct ExpressiveConfig {
     pub tts_instructions_append: Option<String>,
 }
 
+/// `bool | ExpressiveOptions`, as `LiveSession(expressive=)`, `Agent(expressive=)` and
+/// `update_options(expressive=)` take it: `False`/`None` is off, `True` the default options, a dict
+/// (even an empty one) on with those options.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Expressive(pub Option<ExpressiveConfig>);
+
 #[cfg(feature = "python")]
 mod host {
     use pyo3::exceptions::PyValueError;
@@ -837,6 +845,14 @@ mod host {
         fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
             if let Ok((common, audio, text)) = obj.extract::<(String, Option<String>, Option<String>)>() {
                 return Ok(Instructions { common, audio, text });
+            }
+            // `llm.Instructions`: its three parts by attribute.
+            if !obj.is_instance_of::<PyString>() && let Ok(common) = obj.getattr("common") {
+                return Ok(Instructions {
+                    common: common.extract()?,
+                    audio: obj.getattr("audio")?.extract()?,
+                    text: obj.getattr("text")?.extract()?,
+                });
             }
             Ok(Instructions::plain(obj.extract::<String>()?))
         }
@@ -927,11 +943,33 @@ mod host {
                 turn_detection: match d.get_item("turn_detection")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
                 min_endpointing_delay: match d.get_item("min_endpointing_delay")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
                 max_endpointing_delay: match d.get_item("max_endpointing_delay")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
+                expressive: match d.get_item("expressive")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
             })
         }
     }
 
-    /// `expressive` is its truthiness; the dict stays host-side.
+    impl<'a, 'py> FromPyObject<'a, 'py> for Expressive {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            let Ok(d) = obj.cast::<PyDict>() else {
+                return Ok(Expressive(obj.is_truthy()?.then(ExpressiveConfig::default)));
+            };
+            let get = |key: &str| -> PyResult<Option<Bound<'py, PyAny>>> {
+                Ok(d.get_item(key)?.filter(|v| !v.is_none()))
+            };
+            Ok(Expressive(Some(ExpressiveConfig {
+                speech_steering: get("speech_steering")?.map(|v| v.extract()).transpose()?,
+                tts_instructions_template: get("tts_instructions_template")?
+                    .map(|v| v.extract())
+                    .transpose()?,
+                tts_instructions_append: get("tts_instructions_append")?
+                    .map(|v| v.extract())
+                    .transpose()?,
+            })))
+        }
+    }
+
     impl<'a, 'py> FromPyObject<'a, 'py> for SessionKwargs {
         type Error = PyErr;
 
@@ -949,7 +987,7 @@ mod host {
                 use_tts_aligned_transcript: item(obj, OWNER, "use_tts_aligned_transcript")?,
                 tts_text_transforms: item(obj, OWNER, "tts_text_transforms")?,
                 min_consecutive_speech_delay: item(obj, OWNER, "min_consecutive_speech_delay")?,
-                expressive: item_with(obj, OWNER, "expressive", |v| v.is_truthy())?,
+                expressive: item(obj, OWNER, "expressive")?,
                 aec_warmup_duration: item(obj, OWNER, "aec_warmup_duration")?,
                 ivr_detection: item(obj, OWNER, "ivr_detection")?,
                 user_away_timeout: item(obj, OWNER, "user_away_timeout")?,

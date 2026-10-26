@@ -446,6 +446,7 @@ impl SessionApi {
             stt,
             vad,
             turn_handling,
+            expressive,
             llm_node,
             tts_node,
             stt_node,
@@ -465,6 +466,7 @@ impl SessionApi {
             stt,
             vad,
             options,
+            expressive: expressive.given(),
             call: None,
         }
     }
@@ -898,6 +900,8 @@ pub struct UpdateAgentArgs {
     pub vad: Maybe<Option<Arc<dyn Vad>>>,
     #[host(kwarg(default = None))]
     pub turn_handling: Option<crate::agent_activity::options::TurnHandlingKwargs>,
+    /// The agent's `expressive`; `NOT_GIVEN` defers to the session's.
+    pub expressive: Maybe<crate::agent_activity::options::Expressive>,
     #[host(kwarg(default = None))]
     pub llm_node: Option<Arc<dyn NodeFactory>>,
     #[host(kwarg(default = None))]

@@ -711,6 +711,7 @@ class LiveSession:
         stt_context: Any | None = None,
         keyterm_llm: Any | None = None,
         keyterm_tools: Any | None = None,
+        agent_expressive: NotGivenOr[Any] = ...,
     ) -> None: ...
     async def start(self, *, capture_run: bool = False) -> None: ...
     @property
@@ -745,6 +746,7 @@ class LiveSession:
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
+        expressive: NotGivenOr[Any] = ...,
         llm_node: Any | None = None,
         tts_node: Any | None = None,
         stt_node: Any | None = None,

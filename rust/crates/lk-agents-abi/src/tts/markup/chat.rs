@@ -1,6 +1,6 @@
 //! The expressive-off chat edits (`agent_activity.py:3195`). Both mutate the stored history.
 
-use lk_agents_abi::{ChatContent, ChatContext, ChatItem, Role};
+use lk_agents_abi::{ChatContent, ChatContext, ChatItem, ChatMessage, Role};
 
 use crate::tts::markup::transcript::strip_all_markup;
 
@@ -27,20 +27,27 @@ pub fn positions_of(item_ids: impl IntoIterator<Item = impl AsRef<str>>, id: &st
 pub fn strip_assistant_markup(chat_ctx: &mut ChatContext) -> usize {
     let mut changed = 0;
     for item in &mut chat_ctx.items {
-        let ChatItem::Message(msg) = item else { continue };
-        if msg.role != Role::Assistant {
-            continue;
+        if let ChatItem::Message(msg) = item
+            && strip_message_markup(msg)
+        {
+            changed += 1;
         }
-        // Markup is XML-only here, so a message with no `<` is skipped.
-        if !msg.content.iter().any(|c| matches!(c, ChatContent::Text(t) if t.contains('<'))) {
-            continue;
-        }
-        for part in &mut msg.content {
-            if let ChatContent::Text(t) = part {
-                *t = strip_all_markup(t);
-            }
-        }
-        changed += 1;
     }
     changed
+}
+
+/// One assistant message's markup, stripped in place; whether it had any.
+pub fn strip_message_markup(msg: &mut ChatMessage) -> bool {
+    // Markup is XML-only here, so a message with no `<` is skipped.
+    if msg.role != Role::Assistant
+        || !msg.content.iter().any(|c| matches!(c, ChatContent::Text(t) if t.contains('<')))
+    {
+        return false;
+    }
+    for part in &mut msg.content {
+        if let ChatContent::Text(t) = part {
+            *t = strip_all_markup(t);
+        }
+    }
+    true
 }

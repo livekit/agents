@@ -459,8 +459,9 @@ impl SentenceBuffer {
     }
 
     pub fn factory_with(opts: SentenceBufferOptions) -> lk_agents_abi::SplitterFactory {
-        std::sync::Arc::new(move || {
-            Box::new(SentenceBuffer::with_options(opts)) as Box<dyn lk_agents_abi::SentenceSplitter>
+        std::sync::Arc::new(move |xml_aware| {
+            Box::new(SentenceBuffer::with_options(SentenceBufferOptions { xml_aware, ..opts }))
+                as Box<dyn lk_agents_abi::SentenceSplitter>
         })
     }
 
