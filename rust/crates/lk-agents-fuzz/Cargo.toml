@@ -14,7 +14,7 @@ publish = false
 doctest = false
 
 [dependencies]
-lk-agents-voice = { path = "../lk-agents-voice", default-features = false }
+lk-agents-voice = { path = "../lk-agents-voice", default-features = false, features = ["dst"] }
 lk-agents-abi = { path = "../lk-agents-abi" }
 # The recorder trait the recorder fake implements, and the video frame type the video input
 # fake's signature names. Both already come in through lk-agents-voice.

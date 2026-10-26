@@ -61,6 +61,35 @@ pub struct SessionApi {
     host: HostParts,
     /// Every provider handed over is registered here; the driver performs against it.
     resources: lk_agents_abi::resources::Resources,
+    #[cfg(feature = "dst")]
+    probe: Mutex<Option<Probe>>,
+}
+
+/// Test-only (`dst`): what a deterministic simulation needs from a session it drives through this
+/// API, and nothing a host can reach. Installed before `start()`.
+#[cfg(feature = "dst")]
+pub struct Probe {
+    /// Every journal step, in order, from the first the session wrote.
+    pub step: Box<dyn FnMut(&Step) + Send>,
+    /// Every host event, typed, as the drain takes it and before the host sees its wire form.
+    pub host_event: HostEventProbe,
+    /// The session's cores after the opening cycle, for a queue owner other than `Runtime::run`.
+    pub runtime: tokio::sync::oneshot::Sender<crate::Runtime>,
+}
+
+#[cfg(feature = "dst")]
+pub type HostEventProbe = Box<dyn FnMut(&HostEvent) + Send>;
+
+#[cfg(feature = "dst")]
+impl SessionApi {
+    pub fn probe(&self, probe: Probe) {
+        *self.probe.lock().unwrap_or_else(|p| p.into_inner()) = Some(probe);
+    }
+
+    /// Every provider and leg the session still holds.
+    pub fn resources(&self) -> &lk_agents_abi::resources::Resources {
+        &self.resources
+    }
 }
 
 impl SessionApi {
@@ -113,6 +142,8 @@ impl SessionApi {
         let stage = Arc::clone(&self.stage);
         let anchor = self.anchor;
         let time = self.time.clone();
+        #[cfg(feature = "dst")]
+        let probe = self.probe.lock().unwrap_or_else(|p| p.into_inner()).take();
         Ok(async move {
             let Ready { mut builder, interruption } = ready;
             if capture_run {
@@ -133,6 +164,16 @@ impl SessionApi {
 
             let (mut runtime, handle) = builder.start().await?;
             let SessionHandle { api, events, answers, trace, peer, ivr_detection } = handle;
+            #[cfg(feature = "dst")]
+            let (host_event, queue_owner) = match probe {
+                Some(Probe { mut step, host_event, runtime }) => {
+                    let mut trace = trace.lock().unwrap_or_else(|p| p.into_inner());
+                    trace.steps().iter().for_each(&mut step);
+                    trace.observe(step);
+                    (Some(host_event), Some(runtime))
+                }
+                None => (None, None),
+            };
             // The IVR navigator's task, subscribed before the opening cycle.
             start_ivr(&peer, ivr_detection);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
@@ -142,7 +183,19 @@ impl SessionApi {
             let opening = Opening { left: events.len(), delivered: Some(opening_tx) };
 
             let mut tasks = Vec::new();
-            tasks.push(spawner.spawn_unboxed(async move { runtime.run().await }));
+            #[cfg(feature = "dst")]
+            let runtime = match queue_owner {
+                Some(owner) => {
+                    let _ = owner.send(runtime);
+                    None
+                }
+                None => Some(runtime),
+            };
+            #[cfg(not(feature = "dst"))]
+            let runtime = Some(runtime);
+            if let Some(mut runtime) = runtime {
+                tasks.push(spawner.spawn_unboxed(async move { runtime.run().await }));
+            }
             let calls = Calls::default();
             tasks.push(spawner.spawn_unboxed(calls.clone().pump(answers)));
             // Drained whether or not anybody listens: the queue is unbounded.
@@ -153,6 +206,8 @@ impl SessionApi {
                 api: api.clone(),
                 drained: Some(drained_tx),
                 opening,
+                #[cfg(feature = "dst")]
+                host_event,
             };
             tasks.push(spawner.spawn(drain(runner)));
 
@@ -572,6 +627,8 @@ pub struct SessionRunner {
     api: Tx<Command>,
     drained: Option<tokio::sync::oneshot::Sender<()>>,
     opening: Opening,
+    #[cfg(feature = "dst")]
+    host_event: Option<HostEventProbe>,
 }
 
 struct Opening {
@@ -591,6 +648,10 @@ impl SessionRunner {
         }
         let ev = self.events.recv().await?;
         self.opening.left = self.opening.left.saturating_sub(1);
+        #[cfg(feature = "dst")]
+        if let Some(observe) = &mut self.host_event {
+            observe(&ev);
+        }
         if let HostEvent::Session(session) = &ev {
             forward_to_room_io(&self.room_io, session).await;
         }

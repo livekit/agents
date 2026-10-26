@@ -23,6 +23,7 @@ use lk_agents_abi::{
     AudioFrame, EotPrediction, LlmChunk, SpeechEvent, Ts, VadEvent, errors::ProviderError,
     utils::stream::StreamSink,
 };
+use lk_agents_voice::agent_session::SessionApi;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
@@ -41,7 +42,7 @@ mod tts;
 mod vad;
 
 pub use eot::FakeEot;
-pub use interruption::FakeInterruption;
+pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{FakeLlm, request_of};
 pub use output::{FakeAudioInput, FakeAudioOutput, FakeRecorder, FakeTextOutput, FakeVideoInput};
 pub use realtime::FakeRealtime;
@@ -212,13 +213,8 @@ pub struct Registry {
     tool_serial: AtomicU32,
     /// The voice provider is down: every synthesis fails at the open until it comes back.
     voice_down: std::sync::atomic::AtomicBool,
-    /// The session's command queue, once the session exists: what a tool body speaks to the
-    /// driver through from its own origin, as `RunContext` does.
-    api: std::sync::OnceLock<
-        lk_agents_voice::agent_session::Tx<lk_agents_voice::agent_session::Command>,
-    >,
-    /// The session's open calls, the run's and the tool bodies' alike; the run settles them.
-    calls: lk_agents_voice::agent_session::Calls,
+    /// The session, once it exists: what a tool body calls, as `RunContext` does.
+    session: std::sync::OnceLock<Arc<SessionApi>>,
 }
 
 impl Registry {
@@ -231,8 +227,7 @@ impl Registry {
             next,
             tool_serial: AtomicU32::new(0),
             voice_down: std::sync::atomic::AtomicBool::new(false),
-            api: std::sync::OnceLock::new(),
-            calls: Default::default(),
+            session: std::sync::OnceLock::new(),
         };
         (Arc::new(registry), receiver)
     }
@@ -246,12 +241,9 @@ impl Registry {
         self.voice_down.load(Ordering::SeqCst)
     }
 
-    /// The session started: its queue is what running tool bodies command the driver through.
-    pub fn attach_api(
-        &self,
-        api: lk_agents_voice::agent_session::Tx<lk_agents_voice::agent_session::Command>,
-    ) {
-        let _ = self.api.set(api);
+    /// The session was built: what running tool bodies call.
+    pub fn attach_session(&self, session: Arc<SessionApi>) {
+        let _ = self.session.set(session);
     }
 
     /// The session's instant, for what a fake stamps on the driver's clock.
@@ -259,14 +251,8 @@ impl Registry {
         self.stamps.ts()
     }
 
-    pub(super) fn api(
-        &self,
-    ) -> Option<&lk_agents_voice::agent_session::Tx<lk_agents_voice::agent_session::Command>> {
-        self.api.get()
-    }
-
-    pub(crate) fn calls(&self) -> &lk_agents_voice::agent_session::Calls {
-        &self.calls
+    pub(super) fn session(&self) -> Option<&Arc<SessionApi>> {
+        self.session.get()
     }
 
     /// The next slot of a kind.

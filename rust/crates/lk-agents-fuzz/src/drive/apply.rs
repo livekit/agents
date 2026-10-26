@@ -1,12 +1,23 @@
-//! One input into what the product sees: a command, a stream's next piece, a fake's answer, or a
-//! wait.
+//! One input into what the product sees: a call on the host API, a stream's next piece, a fake's
+//! answer, something in the room, or a wait.
 //!
 //! Every input is recorded, taken or refused. A reference that no longer resolves -- a speech the
-//! driver has forgotten, a hook already finished -- makes the input a refused attempt. Nothing is
-//! invented to stand in for it, because a command carrying an id the driver never issued is a
-//! different test from the one the case asked for.
+//! driver has forgotten, a hook already finished -- makes the input a refused attempt, and so does
+//! a call the API refuses. Nothing is invented to stand in for it, because a call carrying an id
+//! the driver never issued is a different test from the one the case asked for.
+use std::task::{Context, Poll, Waker};
+
+use lk_agents_abi::voice::session_options::UpdateKwargs;
+use lk_agents_rtc::{ConnectionState, DisconnectReason, ParticipantKind, RtcRoom};
+use lk_agents_voice::agent_session::{
+    AgentUpdate, CommitSuperseded, DrainRefused, HostMetricsRecord, NewActivity, PreviousActivity,
+};
+use lk_agents_voice::speech_handle::SpeechWireId;
+use lk_agents_voice::tool_executor::{HostTools, Toolset};
+use lk_agents_voice::workflows::builtins::dtmf::{DtmfOutcome, GetDtmfResult};
+
 use super::start::{
-    Llm, Stt, Tts, frame, given, history, instructions, patch, toolset, vad_metrics,
+    Llm, Stt, Tts, frame, history, instructions, patch, tool_specs, turn_detection, vad_metrics,
 };
 use super::*;
 use crate::record::{Task, TaskEnd};
@@ -23,13 +34,6 @@ impl Run {
             eprintln!("> {input:?}");
         }
         let at = self.stamps.next();
-        // The synchroniser closes with the session, as the session layer closes its own: its
-        // pacing task must be gone before the driver's close is judged for what it left behind.
-        if let Input::Close { .. } = input
-            && let Some(sync) = self.sync.take()
-        {
-            self.drive(Some(self.budget()), async move { sync.aclose().await }).await;
-        }
         let accepted = match input {
             Input::Advance { ms } => {
                 let until = self.time.now().saturating_add(Duration::from_millis(ms.0));
@@ -72,7 +76,7 @@ impl Run {
 }
 
 // ==============================================================================================
-// Sending a command
+// Calling the host API
 // ==============================================================================================
 
 /// An answer that arrived, plus the live handle it carried, which only this module keeps.
@@ -85,74 +89,69 @@ impl Settled {
     fn of(answer: Answer) -> Self {
         Settled { answer, handle: None }
     }
-    /// The channel closed without an answer. Recorded as an outcome, because a caller left
-    /// waiting forever is exactly what several rules are looking for.
-    fn lost() -> Self {
-        Settled::of(Answer::Lost)
+}
+
+/// What a call returned that the host awaits: a `Reply`, or the speech handle's creation. Kept
+/// until it resolves; how it is spelled in the recording is decided when it is opened.
+pub(super) struct Pending(BoxFuture<'static, Settled>);
+
+impl Pending {
+    fn reply<T: 'static>(
+        reply: impl std::future::Future<Output = T> + Send + 'static,
+        answer: fn(T) -> Answer,
+    ) -> Self {
+        Pending(Box::pin(async move { Settled::of(answer(reply.await)) }))
+    }
+
+    /// `await handle.wait_until_created()`: the speech, or the handle's refusal when the loop
+    /// dropped it uncreated.
+    fn speech(speech: HostSpeech) -> Self {
+        Pending(Box::pin(async move {
+            match speech.wait_until_created().await {
+                Ok(()) => match speech.peek() {
+                    Some(h) => Settled { answer: Answer::Speech(h.id().0), handle: Some(h) },
+                    None => Settled::of(Answer::Lost),
+                },
+                Err(_) => Settled::of(Answer::Lost),
+            }
+        }))
+    }
+
+    pub(super) fn try_recv(&mut self) -> Option<Settled> {
+        ready_now(self.0.as_mut())
+    }
+
+    pub(super) async fn recv(&mut self) -> Settled {
+        self.0.as_mut().await
     }
 }
 
-/// One real answer receiver per command that carries one, kept until it answers or closes. Which
-/// variant it is decides how the value is spelled in the recording, and nothing else -- so the
-/// table below is the whole of it, and both the polling and the awaiting form come from it.
-macro_rules! answers {
-    ($($variant:ident($carried:ty) $value:pat => $settled:expr;)*) => {
-        pub(super) enum Pending { $($variant(oneshot::Receiver<$carried>)),* }
-
-        impl Pending {
-            pub(super) fn try_recv(&mut self) -> Option<Settled> {
-                use oneshot::error::TryRecvError::*;
-                match self {$(
-                    Pending::$variant(rx) => match rx.try_recv() {
-                        Ok($value) => Some($settled),
-                        Err(Empty) => None,
-                        Err(Closed) => Some(Settled::lost()),
-                    },
-                )*}
-            }
-
-            pub(super) async fn recv(&mut self) -> Settled {
-                match self {$(
-                    Pending::$variant(rx) => match rx.await {
-                        Ok($value) => $settled,
-                        Err(_) => Settled::lost(),
-                    },
-                )*}
-            }
-        }
-    };
-}
-
-answers! {
-    Speech(Arc<SpeechHandle>) h => Settled { answer: Answer::Speech(h.id().0), handle: Some(h) };
-    Interrupt(Result<(), InterruptRefusal>) r =>
-        Settled::of(r.map_or_else(Answer::InterruptRefused, |()| Answer::InterruptOk));
-    Idle(Result<(), IdleRefused>) r =>
-        Settled::of(r.map_or_else(Answer::IdleRefused, |()| Answer::IdleOk));
-    Hold(Result<HoldId, IdleRefused>) r =>
-        Settled::of(r.map_or_else(Answer::IdleRefused, |hold| Answer::Hold(hold.0)));
-    Commit(Result<String, CommitSuperseded>) r =>
-        Settled::of(r.map_or(Answer::CommitSuperseded, Answer::Committed));
-    Handoff(Result<(), HandoffRefused>) r =>
-        Settled::of(r.map_or_else(Answer::HandoffRefused, |()| Answer::HandoffOk));
-    Drain(Result<(), DrainRefused>) r =>
-        Settled::of(r.map_or_else(Answer::DrainRefused, |()| Answer::DrainOk));
-    Dtmf(DtmfOutcome) outcome => Settled::of(Answer::Dtmf(outcome));
-}
-
-/// What a hook answers with, as the driver takes it.
-fn hook_outcome(answer: HookAnswer, text: String) -> HookOutcome {
-    match answer {
-        HookAnswer::Returned => HookOutcome::Returned,
-        HookAnswer::Failed => HookOutcome::Failed,
-        HookAnswer::TurnInstructions => HookOutcome::Turn(vec![TurnEdit::UpdateInstructions(text)]),
-        HookAnswer::TurnStop => HookOutcome::Turn(vec![TurnEdit::StopResponse]),
-        HookAnswer::Rendered => HookOutcome::Rendered(text),
-        HookAnswer::Filler => HookOutcome::Filler { text: Some(text), spoke: false },
+/// One poll, with nobody to wake: what was ready without giving anything another turn. Outside
+/// Tokio's budget, so a resource that is ready never answers "try later".
+pub(super) fn ready_now<F: std::future::Future>(future: F) -> Option<F::Output> {
+    let mut future = std::pin::pin!(tokio::task::unconstrained(future));
+    match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(value) => Some(value),
+        Poll::Pending => None,
     }
+}
+
+/// A `ResolvedSessionOptions` leg name, as `set_io_enabled` takes it.
+fn io_leg(leg: IoKind) -> &'static str {
+    match leg {
+        IoKind::AudioInput => "audio_input",
+        IoKind::AudioOutput => "audio_output",
+        IoKind::Transcription => "transcription",
+    }
+}
+
+fn secs(ms: Millis) -> f64 {
+    ms.0 as f64 / 1000.0
 }
 
 /// A `Ref` is the n-th resource of its kind; the production identity is whatever the run
+/// recorded when it opened that one. Resolution can fail, and a failure is the case pointing at
+/// something that is no longer there -- never a reason to substitute anything.
 macro_rules! resolvers {
     ($($name:ident: $marker:ident -> $id:ident($ty:ty);)*) => {
         impl Run {$(
@@ -174,145 +173,170 @@ resolvers! {
 }
 
 impl Run {
-    /// One thing the room did, on whichever of its two channels reports it. Refused by a session
-    /// built without room legs: there is no room, so nothing happened in it.
+    /// One thing that happened in the room, done to the fake room: the real room io sees it, and
+    /// decides what the session hears of it. Refused in a room nothing happens in, and once the
+    /// room is gone.
     fn room_event(&mut self, event: RoomIn) -> bool {
-        let who = || lk_agents_rtc::ParticipantIdentity::from("caller");
-        let reason = lk_agents_rtc::DisconnectReason::ClientInitiated;
+        if self.setup.room.is_none()
+            || self.room.connection_state() == ConnectionState::Disconnected
+        {
+            return false;
+        }
+        let who = lk_agents_rtc::ParticipantIdentity::from("caller");
+        let reason = DisconnectReason::ClientInitiated;
         match event {
-            RoomIn::Linked => self
-                .room_io
-                .send(RoomIoEvent::ParticipantLinked(ParticipantLinked { identity: who() }))
-                .is_ok(),
-            RoomIn::Unlinked => self
-                .room_io
-                .send(RoomIoEvent::ParticipantUnlinked(ParticipantUnlinked {
-                    identity: who(),
-                    reason,
-                }))
-                .is_ok(),
-            RoomIn::StateChanged => self
-                .room
-                .send(RoomEvent::ConnectionStateChanged {
-                    state: lk_agents_rtc::ConnectionState::Reconnecting,
-                })
-                .is_ok(),
-            RoomIn::Closed => self.room.send(RoomEvent::Close { reason }).is_ok(),
+            RoomIn::Linked => {
+                self.room.add_participant(who, ParticipantKind::Standard);
+                true
+            }
+            RoomIn::Unlinked => self.room.remove_participant(&who, reason),
+            RoomIn::StateChanged => {
+                self.room.set_connection_state(ConnectionState::Reconnecting);
+                true
+            }
+            RoomIn::Closed => {
+                self.room.close(reason);
+                true
+            }
         }
     }
 
-    /// Turn one input into the production command it mirrors and enqueue it.
+    /// The speech handle the host holds for a speech the run saw created.
+    fn host_speech(&self, reference: Ref<crate::input::Speech>) -> Option<HostSpeech> {
+        let handle = self.handles.get(&self.speech_id(reference)?.0)?.clone();
+        Some(HostSpeech::from_core(handle, self.api.api().ok()?))
+    }
+
+    /// Whether the session's loop is still there to take a call that returns nothing.
+    fn loop_runs(&self) -> bool {
+        self.runtime.is_some()
+    }
+
+    /// Make the host API call an input mirrors, with the arguments a host passes.
     ///
-    /// A reference that no longer resolves -- a speech the driver has forgotten, a hook already
-    /// finished -- makes the input a refused attempt. Nothing is invented to stand in for it,
-    /// because a command carrying an id the driver never issued is a different test from the one
-    /// the case asked for.
+    /// A few inputs have no host call: they are sent as the command their real sender sends
+    /// (`send_from`), and say so where they are made.
     fn call(&mut self, at: Observed, input: &Input) -> bool {
+        let api = self.api.clone();
+        let registry = self.registry.clone();
         let mut waiting: Option<Pending> = None;
         let mut stream: Option<(bool, Feeding)> = None;
-        let registry = self.registry.clone();
-        let calls = registry.calls();
+        let mut wait = |pending: Pending| waiting = Some(pending);
 
-        let command: Command = match input {
+        let sent = match input {
             Input::Say { text: AgentText(text), input: say, allow, to_ctx } => {
-                let (call, rx) = calls.open(DriverAnswer::speech);
-                waiting = Some(Pending::Speech(rx));
-                let call = Some(call);
-                let text = match say {
-                    SayInput::Words => SayText::Text(text.clone()),
+                let speech = match say {
+                    SayInput::Words => api.say(text.clone(), *allow, *to_ctx, None).ok(),
                     SayInput::TextStream => {
-                        let (sender, receiver) = mpsc::channel(256);
-                        stream = Some((false, Feeding::Text(sender)));
-                        SayText::Stream(receiver)
+                        api.say_stream(*allow, *to_ctx, None).ok().map(|(speech, pusher)| {
+                            stream = Some((false, Feeding::Text(pusher)));
+                            speech
+                        })
                     }
-                    SayInput::Audio => {
-                        let (sender, rx) = mpsc::channel(256);
-                        stream = Some((true, Feeding::Audio { sender, chunks: 0 }));
-                        SayText::Audio { text: text.clone(), rx }
-                    }
+                    SayInput::Audio => api.say_audio(text.clone(), *allow, *to_ctx, None).ok().map(
+                        |(speech, pusher)| {
+                            stream = Some((true, Feeding::Audio { pusher, chunks: 0 }));
+                            speech
+                        },
+                    ),
                 };
-                let (allow_interruptions, add_to_chat_ctx) = (*allow, *to_ctx);
-                SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call }.into()
+                speech.map(|speech| wait(Pending::speech(speech))).is_some()
             }
-            Input::GenerateReply { user_input, instructions, allow } => {
-                let (call, rx) = calls.open(DriverAnswer::speech);
-                waiting = Some(Pending::Speech(rx));
-                SpeechCommand::GenerateReply {
-                    user_input: user_input.clone().map(|UserText(t)| t),
-                    instructions: instructions.clone().map(|AgentText(t)| t),
-                    allow_interruptions: *allow,
-                    tool_choice: None,
-                    chat_ctx: None,
-                    toolset: None,
-                    on_enter: false,
-                    call: Some(call),
-                }
-                .into()
-            }
-            Input::Interrupt { force, wait } => {
-                let call = wait.then(|| {
-                    let (call, rx) = calls.open(DriverAnswer::interrupt);
-                    waiting = Some(Pending::Interrupt(rx));
-                    call
-                });
-                SpeechCommand::Interrupt { force: *force, call }.into()
-            }
-            Input::InterruptSpeech { speech, force } => {
-                let Some(speech) = self.speech_id(*speech) else { return false };
-                SpeechCommand::InterruptSpeech { speech, force: *force }.into()
-            }
-            Input::SetAllowInterruptions { speech, allow } => {
-                let Some(speech) = self.speech_id(*speech) else { return false };
-                SpeechCommand::SetAllowInterruptions { speech, allow: *allow }.into()
-            }
-            Input::CommitUserTurn { transcript_timeout, stt_flush, skip_reply } => {
-                let (call, rx) = calls.open(DriverAnswer::commit);
-                waiting = Some(Pending::Commit(rx));
-                SpeechCommand::CommitUserTurn {
-                    transcript_timeout: Duration::from_millis(transcript_timeout.0),
-                    stt_flush_duration: Duration::from_millis(stt_flush.0),
-                    skip_reply: *skip_reply,
-                    call: Some(call),
-                }
-                .into()
-            }
+            Input::GenerateReply { user_input, instructions, allow } => api
+                .generate_reply(
+                    user_input.clone().map(|UserText(t)| t),
+                    instructions.clone().map(|AgentText(t)| t),
+                    *allow,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    false,
+                    None,
+                )
+                .map(|speech| wait(Pending::speech(speech)))
+                .is_ok(),
+            // `interrupt()` always returns its future; `wait` is whether the case awaits it.
+            Input::Interrupt { force, wait: awaited } => api
+                .interrupt(*force)
+                .map(|reply| {
+                    if *awaited {
+                        wait(Pending::reply(reply, |r| {
+                            r.map_or(Answer::InterruptRefused, |()| Answer::InterruptOk)
+                        }))
+                    }
+                })
+                .is_ok(),
+            Input::InterruptSpeech { speech, force } => self
+                .host_speech(*speech)
+                .is_some_and(|speech| speech.interrupt(*force, self.tasks.clone()).is_ok()),
+            Input::SetAllowInterruptions { speech, allow } => self
+                .host_speech(*speech)
+                .is_some_and(|speech| speech.set_allow_interruptions(*allow).is_ok()),
+            Input::CommitUserTurn { transcript_timeout, stt_flush, skip_reply } => api
+                .commit_user_turn(secs(*transcript_timeout), secs(*stt_flush), *skip_reply)
+                .map(|reply| {
+                    wait(Pending::reply(reply, |r| {
+                        r.map_or_else(
+                            |CommitSuperseded| Answer::CommitSuperseded,
+                            Answer::Committed,
+                        )
+                    }))
+                })
+                .is_ok(),
             Input::WaitForIdle { hold } => {
                 let hold = match hold.map(|r| self.hold_id(r)) {
                     Some(None) => return false,
                     given => given.flatten(),
                 };
-                let (call, rx) = calls.open(DriverAnswer::idle);
-                waiting = Some(Pending::Idle(rx));
-                SpeechCommand::WaitForIdle { hold, call: Some(call) }.into()
+                api.wait_for_idle(hold.map(|h| h.0))
+                    .map(|reply| {
+                        wait(Pending::reply(reply, |r| {
+                            r.map_or_else(Answer::IdleRefused, |()| Answer::IdleOk)
+                        }))
+                    })
+                    .is_ok()
             }
-            Input::WaitForIdleAndHold {} => {
-                let (call, rx) = calls.open(DriverAnswer::hold);
-                waiting = Some(Pending::Hold(rx));
-                SpeechCommand::WaitForIdleAndHold { call: Some(call) }.into()
-            }
+            Input::WaitForIdleAndHold {} => api
+                .wait_for_idle_and_hold(None)
+                .map(|reply| {
+                    wait(Pending::reply(reply, |r| {
+                        r.map_or_else(Answer::IdleRefused, Answer::Hold)
+                    }))
+                })
+                .is_ok(),
             Input::ReleaseIdleHold { hold } => {
                 let Some(hold) = self.hold_id(*hold) else { return false };
-                SpeechCommand::ReleaseIdleHold { hold }.into()
+                api.release_idle_hold(hold.0);
+                self.loop_runs()
             }
-            Input::ClaimUserTurn {} => SpeechCommand::ClaimUserTurn.into(),
-            Input::ReleaseUserTurn {} => SpeechCommand::ReleaseUserTurn.into(),
+            Input::ClaimUserTurn {} => api.claim_user_turn().is_ok(),
+            Input::ReleaseUserTurn {} => {
+                api.release_user_turn();
+                self.loop_runs()
+            }
             Input::SetRunOutput { speech, ok } => {
-                let Some(speech) = self.speech_id(*speech) else { return false };
-                let host = self.host_ref();
-                let output = if *ok { RunOutput::Value(host) } else { RunOutput::Error(host) };
-                SpeechCommand::SetRunOutput { speech, output }.into()
+                let Some(speech) = self.host_speech(*speech) else { return false };
+                let output = Some(self.host_ref());
+                let (value, error) = if *ok { (output, None) } else { (None, output) };
+                api.set_run_output(&speech, value, error).is_ok()
             }
             Input::ToolUpdate { tool, progress } => {
                 let Some(call_id) = self.tool_call_id(*tool) else { return false };
-                let update = match progress {
+                match progress {
                     Some(AgentText(m)) => {
-                        ToolUpdate::Progress { raw: m.clone(), message: m.clone() }
+                        api.tool_update(call_id, "progress", Some(m.clone()), Some(m.clone()), None)
                     }
-                    None => ToolUpdate::Final {
-                        answer: Answered::Returned { value: None, agents: vec![] },
-                    },
-                };
-                SpeechCommand::ToolUpdate { call_id, update }.into()
+                    None => api.tool_update(
+                        call_id,
+                        "final",
+                        None,
+                        None,
+                        Some(Answered::Returned { value: None, agents: vec![] }),
+                    ),
+                }
+                .is_ok()
             }
             Input::FillerStart { tool, speech, delay, interval, text } => {
                 let (Some(call_id), Some(speech)) =
@@ -320,52 +344,133 @@ impl Run {
                 else {
                     return false;
                 };
-                let id = FillerId(self.next_filler);
+                let id = self.next_filler;
                 self.next_filler += 1;
-                SpeechCommand::FillerStart {
+                api.filler_start(
                     id,
                     call_id,
-                    speech,
-                    delay: Duration::from_millis(delay.0),
-                    interval: interval.map(|ms| Duration::from_millis(ms.0)),
-                    max_steps: None,
-                    source: text
-                        .clone()
-                        .map_or(FillerSource::Host, |AgentText(t)| FillerSource::Text(t)),
-                }
-                .into()
+                    &SpeechWireId(speech).to_string(),
+                    secs(*delay),
+                    interval.map(secs),
+                    None,
+                    text.clone().map(|AgentText(t)| t),
+                )
+                .is_ok()
             }
             Input::FillerStop { filler } => {
                 let Some(id) = self.filler_id(*filler) else { return false };
-                SpeechCommand::FillerStop { id }.into()
+                api.filler_stop(id.0).is_ok()
             }
-            Input::PauseAuthorization {} => SpeechCommand::PauseAuthorization.into(),
-            Input::ResumeAuthorization {} => SpeechCommand::ResumeAuthorization.into(),
-
+            // No host call: the answering-machine detector's own hold, sent as it sends it.
+            Input::PauseAuthorization {} => {
+                api.send_from(Origin::Amd, SpeechCommand::PauseAuthorization).is_ok()
+            }
+            Input::ResumeAuthorization {} => {
+                api.send_from(Origin::Amd, SpeechCommand::ResumeAuthorization).is_ok()
+            }
+            // No host call: the commit `commit_user_turn` makes once its flush and final wait end.
             Input::CommitTurn { skip_reply } => {
-                TurnCommand::Commit { skip_reply: *skip_reply }.into()
+                api.send(TurnCommand::Commit { skip_reply: *skip_reply }).is_ok()
             }
-            Input::ClearTurn {} => TurnCommand::Clear.into(),
+            Input::ClearTurn {} => api.clear_user_turn().is_ok(),
             Input::Configure { knob, mode, ms, on, words } => {
-                TurnCommand::Configure(patch(*knob, *mode, *ms, *on, *words)).into()
+                let endpointing = |patch: fn(&mut EndpointingKwargs, f64)| {
+                    let mut kwargs = EndpointingKwargs::default();
+                    patch(&mut kwargs, secs(*ms));
+                    Some(kwargs)
+                };
+                let update = match knob {
+                    Knob::Detection => Some(UpdateKwargs {
+                        turn_detection: Maybe::Given(
+                            turn_detection(*mode)
+                                .map_or(TurnDetectionKwarg::Null, TurnDetectionKwarg::Mode),
+                        ),
+                        ..UpdateKwargs::default()
+                    }),
+                    Knob::MinEndpointing => Some(UpdateKwargs {
+                        endpointing_opts: endpointing(|k, s| k.min_delay = Some(s)),
+                        ..UpdateKwargs::default()
+                    }),
+                    Knob::MaxEndpointing => Some(UpdateKwargs {
+                        endpointing_opts: endpointing(|k, s| k.max_delay = Some(s)),
+                        ..UpdateKwargs::default()
+                    }),
+                    _ => None,
+                };
+                match update {
+                    Some(update) => api.update_turn_options(update).is_ok(),
+                    // No host call: `update_options` takes endpointing and detection only.
+                    None => api
+                        .send(TurnCommand::Configure(patch(*knob, *mode, *ms, *on, *words)))
+                        .is_ok(),
+                }
             }
-
             Input::Handoff { agent, instructions, tools, pause_previous, resume } => {
-                let (call, rx) = calls.open(DriverAnswer::handoff);
-                waiting = Some(Pending::Handoff(rx));
-                let mut frame = frame(&registry, agent, &instructions.0, tools);
-                frame.previous =
-                    if *pause_previous { PreviousActivity::Pause } else { PreviousActivity::Close };
-                frame.next = if *resume { NewActivity::Resume } else { NewActivity::Start };
-                frame.call = Some(call);
-                ActivityCommand::Update(Box::new(frame)).into()
+                let args = frame(&registry, agent, &instructions.0, tools);
+                if !pause_previous && !resume {
+                    api.update_agent(args)
+                        .map(|reply| {
+                            wait(Pending::reply(reply, |ok| {
+                                if ok { Answer::HandoffOk } else { Answer::HandoffRefused }
+                            }))
+                        })
+                        .is_ok()
+                } else {
+                    // No host call: `update_agent` always closes the frame it leaves and starts
+                    // the next; pausing and resuming are an inline task's, which the driver
+                    // does itself.
+                    let Ok((call, reply)) =
+                        api.call(lk_agents_voice::agent_session::Answer::handoff)
+                    else {
+                        return false;
+                    };
+                    let update = AgentUpdate {
+                        agent: agent.clone(),
+                        instructions: args.instructions,
+                        dynamic_instructions: None,
+                        toolset: Toolset {
+                            specs: tool_specs(tools),
+                            host: None,
+                            runner: Some(Arc::new(HostTools(fakes::FakeTools::new(
+                                registry.clone(),
+                            )))),
+                        },
+                        chat_ctx: None,
+                        llm: Maybe::NotGiven,
+                        tts: Maybe::NotGiven,
+                        stt: Maybe::NotGiven,
+                        vad: Maybe::NotGiven,
+                        options: SessionPatch::default(),
+                        previous: if *pause_previous {
+                            PreviousActivity::Pause
+                        } else {
+                            PreviousActivity::Close
+                        },
+                        next: if *resume { NewActivity::Resume } else { NewActivity::Start },
+                        call: Some(call),
+                        task: None,
+                    };
+                    let sent = api.send(ActivityCommand::Update(Box::new(update))).is_ok();
+                    if sent {
+                        wait(Pending::reply(reply, |r| match r {
+                            Ok(Ok(())) => Answer::HandoffOk,
+                            Ok(Err(_)) => Answer::HandoffRefused,
+                            Err(_) => Answer::Lost,
+                        }));
+                    }
+                    sent
+                }
             }
             Input::UpdateInstructions { text: AgentText(text) } => {
-                ActivityCommand::UpdateInstructions(instructions(text)).into()
+                api.update_instructions(instructions(text)).is_ok()
             }
-            Input::UpdateTools { tools } => {
-                ActivityCommand::UpdateTools(toolset(&registry, tools)).into()
-            }
+            Input::UpdateTools { tools } => api
+                .update_tools(
+                    Some(tool_specs(tools)),
+                    None,
+                    Some(fakes::FakeTools::new(registry.clone())),
+                )
+                .is_ok(),
             Input::SetAudioInput { attach } => {
                 // A new microphone replaces the old one as a detach does: nothing said into the
                 // old one reaches the session any more.
@@ -376,37 +481,33 @@ impl Run {
                     let (mic, frames) = fakes::FakeAudioInput::new();
                     let nth = self.registry.new_mic();
                     self.mics.insert(nth, (frames, 0));
-                    HostAudio(mic as _)
+                    mic as Arc<dyn lk_agents_abi::voice::io::AudioInput>
                 });
-                ActivityCommand::SetAudioInput(source).into()
+                api.set_audio_input(source).is_ok()
             }
-            Input::SetVideoInput { attach } => {
-                let source = attach.then(|| {
-                    HostVideo(fakes::FakeVideoInput::new(&registry, self.refs.clone()) as _)
-                });
-                ActivityCommand::SetVideoInput(source).into()
-            }
+            Input::SetVideoInput { attach } => api
+                .set_video_input(
+                    attach.then(|| fakes::FakeVideoInput::new(&registry, self.refs.clone()) as _),
+                )
+                .is_ok(),
             Input::SetIoEnabled { leg, enabled } => {
-                ActivityCommand::SetIoEnabled { leg: *leg, enabled: *enabled }.into()
+                api.set_io_enabled(io_leg(*leg), *enabled).is_ok()
             }
             Input::UpdateChatCtx { items, text: AgentText(text) } => {
-                ActivityCommand::UpdateChatCtx(history(items, text)).into()
+                api.update_chat_ctx(history(items, text)).is_ok()
             }
             Input::SetAudioOutput { attach } => {
-                let out = attach.then(|| {
-                    let pausable = self.setup.pausable_output;
-                    let sink = fakes::FakeAudioOutput::new(registry.clone(), pausable);
-                    self.resources.register_audio_output(sink)
-                });
-                ActivityCommand::SetAudioOutput(out).into()
+                let pausable = self.setup.pausable_output;
+                api.set_audio_output(
+                    attach.then(|| fakes::FakeAudioOutput::new(registry.clone(), pausable) as _),
+                )
+                .is_ok()
             }
-            Input::SetTranscriptionOutput { attach } => {
-                let out = attach.then(|| {
-                    let sink = fakes::FakeTextOutput::new(registry.clone());
-                    self.resources.register_text_output(sink)
-                });
-                ActivityCommand::SetTranscriptionOutput(out).into()
-            }
+            Input::SetTranscriptionOutput { attach } => api
+                .set_transcription_output(
+                    attach.then(|| fakes::FakeTextOutput::new(registry.clone()) as _),
+                )
+                .is_ok(),
             Input::UpdateModels { models } => {
                 let (stt, llm, tts) = match models {
                     Models::Stt => (true, false, false),
@@ -415,120 +516,118 @@ impl Run {
                     Models::LlmAndTts => (false, true, true),
                     Models::All => (true, true, true),
                 };
-                ActivityCommand::UpdateModels {
-                    stt: given(stt.then(|| {
-                        let connect = Duration::from_millis(self.setup.connect_ms.unwrap_or(0));
-                        let stt = fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>;
-                        self.resources.register_stt(stt)
-                    })),
-                    llm: given(llm.then(|| {
-                        let llm = fakes::FakeLlm::new(registry.clone()) as Arc<Llm>;
-                        self.resources.register_llm(llm)
-                    })),
-                    tts: given(tts.then(|| {
-                        let tts = fakes::FakeTts::new(registry.clone()) as Arc<Tts>;
-                        self.resources.register_tts(tts)
-                    })),
-                    vad: Maybe::NotGiven,
+                fn given<T: ?Sized>(
+                    on: bool,
+                    make: impl FnOnce() -> Arc<T>,
+                ) -> Maybe<Option<Arc<T>>> {
+                    if on { Maybe::Given(Some(make())) } else { Maybe::NotGiven }
                 }
-                .into()
+                let connect = Duration::from_millis(self.setup.connect_ms.unwrap_or(0));
+                api.update_models(
+                    given(llm, || fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
+                    given(tts, || fakes::FakeTts::new(registry.clone()) as Arc<Tts>),
+                    given(stt, || fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>),
+                    Maybe::NotGiven,
+                )
+                .is_ok()
             }
-
-            Input::Drain { wait } => {
-                let call = wait.then(|| {
-                    let (call, rx) = calls.open(DriverAnswer::drain);
-                    waiting = Some(Pending::Drain(rx));
-                    call
-                });
-                ActivityCommand::Drain { call }.into()
-            }
-            Input::PushVideo {} => Command::Video(ImageContent {
-                id: "img_case".into(),
-                image: ImageSource::Frame(MediaRef::new(self.record.now().seq, &self.refs)),
-                inference_width: None,
-                inference_height: None,
-                inference_detail: Default::default(),
-                mime_type: None,
-            }),
+            // `drain()` always returns its future; `wait` is whether the case awaits it.
+            Input::Drain { wait: awaited } => api
+                .drain()
+                .map(|reply| {
+                    if *awaited {
+                        wait(Pending::reply(reply, |refused| match refused.as_deref() {
+                            None => Answer::DrainOk,
+                            Some(r) if r == DrainRefused::ActivityChanging.as_str() => {
+                                Answer::DrainRefused(DrainRefused::ActivityChanging)
+                            }
+                            Some(_) => Answer::DrainRefused(DrainRefused::Closing),
+                        }))
+                    }
+                })
+                .is_ok(),
+            Input::PushVideo {} => api
+                .host_push_video(lk_agents_abi::ChatContent::Image(ImageContent {
+                    id: "img_case".into(),
+                    image: ImageSource::Frame(MediaRef::new(self.record.now().seq, &self.refs)),
+                    inference_width: None,
+                    inference_height: None,
+                    inference_detail: Default::default(),
+                    mime_type: None,
+                }))
+                .unwrap_or(false),
             Input::Close { drain } => {
                 self.record.enter_phase(Phase::Closing);
-                Close { drain: *drain, ..Default::default() }.into()
+                let Ok(closing) = api.aclose("user_initiated", *drain, false) else { return false };
+                // `await session.aclose()`, then the room io's teardown, as the host runs them.
+                let mut closing: BoxFuture<'static, ()> = Box::pin(async move {
+                    closing.await;
+                    api.close_io().await;
+                });
+                // The first poll is what sends the close.
+                if ready_now(closing.as_mut()).is_none() {
+                    self.closing = Some(closing);
+                }
+                return self.loop_runs();
             }
             Input::HookDone { hook, answer, text: AgentText(text) } => {
                 let Some(id) = self.hook_id(*hook) else { return false };
-                Command::HookDone { id, outcome: hook_outcome(*answer, text.clone()) }
+                self.answer_hook(id, *answer, text.clone())
             }
             // The hook is gone from the live set, but the record still knows its id: the answer
             // reaches the driver as a host's late answer does.
             Input::HookDoneLate { hook, answer, text: AgentText(text) } => {
                 let Some(id) = self.hook_id(Ref::new(hook.nth)) else { return false };
-                Command::HookDone { id, outcome: hook_outcome(*answer, text.clone()) }
+                self.answer_hook(id, *answer, text.clone())
             }
-            Input::HostMetrics {} => Command::HostMetrics(Box::new(vad_metrics())),
+            Input::HostMetrics {} => api.host_metrics(HostMetricsRecord(vad_metrics())).is_ok(),
             Input::Ivr { input, silence, text: UserText(text) } => match input {
-                IvrInput::Start => {
-                    IvrCommand::Start { max_silence: Duration::from_millis(silence.0) }.into()
-                }
-                IvrInput::SeedTranscript => {
-                    IvrCommand::SeedTranscript { text: text.clone() }.into()
-                }
-                IvrInput::Close => IvrCommand::Close.into(),
+                IvrInput::Start => api.ivr_start(secs(*silence), None, None).is_ok(),
+                IvrInput::SeedTranscript => api.ivr_final(text).is_ok(),
+                IvrInput::Close => api.ivr_close().is_ok(),
             },
-            Input::SetStaticKeyterms { terms } => Command::SetStaticKeyterms(terms.clone()),
+            Input::SetStaticKeyterms { terms } => api.set_static_keyterms(terms.clone()).is_ok(),
             Input::Dtmf { input, key, digits, confirm, timeout } => match input {
-                DtmfInput::Start => {
-                    let Ok(collector) = DtmfCollector::new(
-                        digits.0 as usize + 1,
-                        *confirm,
-                        Duration::from_millis(timeout.0),
-                        DtmfEvent::Pound,
-                    ) else {
-                        return false;
-                    };
-                    let (call, rx) = calls.open(DriverAnswer::dtmf);
-                    waiting = Some(Pending::Dtmf(rx));
-                    DtmfCommand::Start { collector, call: Some(call) }.into()
+                DtmfInput::Start => api
+                    .dtmf_start(digits.0 as usize + 1, *confirm, secs(*timeout), "#".into())
+                    .map(|reply| {
+                        wait(Pending::reply(reply, |wire| Answer::Dtmf(dtmf_outcome(wire))))
+                    })
+                    .is_ok(),
+                DtmfInput::Digit => api.dtmf_digit(key.digit().to_owned()).is_ok(),
+                DtmfInput::Stop => {
+                    api.dtmf_stop();
+                    self.loop_runs()
                 }
-                DtmfInput::Digit => DtmfCommand::Digit { digit: key.digit().to_owned() }.into(),
-                DtmfInput::Stop => DtmfCommand::Stop.into(),
             },
             Input::Task { agent, speech } => {
                 let speech = match speech.map(|r| self.speech_id(r)) {
                     Some(None) => return false,
                     given => given.flatten(),
                 };
-                let task_id = format!("task_{:04}", self.next_task);
+                let handle = HostTaskHandle::new(format!("task_{:04}", self.next_task).into());
                 self.next_task += 1;
-                TaskCommand::Enter(Box::new(TaskEntry {
-                    handle: TaskHandle::new(task_id.into()),
-                    frame: frame(&registry, agent, &format!("You are {agent}."), &[]),
-                    speech,
-                    preserve_function_call_history: true,
-                    parent: None,
-                }))
-                .into()
+                let frame = frame(&registry, agent, &format!("You are {agent}."), &[]);
+                api.enter_task(&handle, frame, speech.map(|s| s.0), true, None, None).is_ok()
             }
-            Input::Recorder { attach } => Command::Recorder(if *attach {
-                RecorderCommand::Attach(HostRecorder(fakes::FakeRecorder::new(registry.clone())))
-            } else {
-                RecorderCommand::Detach
-            }),
-            Input::Run { user_input, expects_output, retries } => Command::Run(Box::new(RunSpec {
-                user_input: user_input.clone().map(|UserText(t)| t),
-                expects_output: *expects_output,
-                max_retries: retries.0,
-                retry_instructions: "Please try again.".into(),
-            })),
-            _ => unreachable!("{input:?} is not a command"),
+            Input::Recorder { attach } => {
+                api.host_attach_recorder(
+                    attach.then(|| fakes::FakeRecorder::new(registry.clone()) as _),
+                );
+                self.loop_runs()
+            }
+            Input::Run { user_input, expects_output, retries } => api
+                .run(
+                    user_input.clone().map(|UserText(t)| t),
+                    *expects_output,
+                    retries.0,
+                    "Please try again.".into(),
+                    None,
+                )
+                .is_ok(),
+            _ => unreachable!("{input:?} is not a call"),
         };
-
-        // A command the driver never received made no call: the loop is gone, the input is
-        // refused, and nothing is opened for it. Only a command the driver has opens the stream it
-        // feeds and the call it will answer. What it handed over is released, as the host API
-        // does.
-        let handed = command.resources();
-        if self.session.api.send(command).is_err() {
-            handed.into_iter().for_each(|id| self.resources.release(id));
+        if !sent {
             return false;
         }
         if let Some((audio, feeding)) = stream {
@@ -540,6 +639,21 @@ impl Run {
             self.pending.insert(nth, waiting);
         }
         true
+    }
+
+    /// The host's answer to a hook call, through the method each kind of answer is.
+    fn answer_hook(&self, id: HookId, answer: HookAnswer, text: String) -> bool {
+        let api = &self.api;
+        let id = id.0;
+        match answer {
+            HookAnswer::Returned => api.hook_returned(id),
+            HookAnswer::Failed => api.hook_failed(id),
+            HookAnswer::TurnInstructions => api.hook_turn_done(id, Some(text), None, None, false),
+            HookAnswer::TurnStop => api.hook_turn_done(id, None, None, None, true),
+            HookAnswer::Rendered => api.hook_rendered(id, text),
+            HookAnswer::Filler => api.hook_filler(id, Some(text), false),
+        }
+        .is_ok()
     }
 
     /// The live tool invocation running under this call id.
@@ -564,10 +678,18 @@ impl Run {
     }
 
     /// The host's side of a `RunOutput`: an object the driver only ever hands back.
-    /// recorded when it opened that one. Resolution can fail, and a failure is the case pointing
-    /// at something that is no longer there -- never a reason to substitute anything.
     fn host_ref(&self) -> HostRef {
         HostRef::new(self.record.now().seq, &self.refs)
+    }
+}
+
+/// `dtmf_start`'s answer, read back from the record the host gets.
+fn dtmf_outcome(wire: lk_agents_abi::voice::workflows::DtmfOutcomeWire) -> DtmfOutcome {
+    use lk_agents_abi::voice::workflows::DtmfOutcomeWire as W;
+    match wire {
+        W::Complete(c) => DtmfOutcome::Complete(GetDtmfResult { user_input: c.user_input }),
+        W::Incomplete(i) => DtmfOutcome::Incomplete { message: i.message },
+        W::Stopped(_) => DtmfOutcome::Stopped,
     }
 }
 
@@ -575,10 +697,10 @@ impl Run {
 // Feeding a stream, answering a fake
 // ==============================================================================================
 
-/// A stream a `say` opened, until the case ends it with `FeedEnd`.
+/// A stream a `say` opened, until the case ends it with `FeedEnd`: the pusher the host feeds.
 pub(super) enum Feeding {
-    Text(mpsc::Sender<String>),
-    Audio { sender: mpsc::Sender<AudioFrame>, chunks: u16 },
+    Text(TextPusher),
+    Audio { pusher: FramePusher, chunks: u16 },
 }
 
 impl Run {
@@ -613,39 +735,38 @@ impl Run {
 
     /// Push one piece of a `say`'s input stream. Each audio chunk carries its stream and its index
     /// in its samples, so what reaches the sink can be decoded back to what the case fed.
+    ///
+    /// A push is awaited by the host, and a full channel would make it wait: polled once here, it
+    /// must be taken at once, and a channel too full to take it is the fixture's mistake.
     fn feed(&mut self, at: Observed, input: &Input) -> bool {
-        use mpsc::error::TrySendError::*;
         match input {
             Input::FeedText { stream, text: AgentText(text) } => {
-                let Some(Feeding::Text(sender)) = self.streams.get_mut(&stream.nth) else {
+                let Some(Feeding::Text(pusher)) = self.streams.get_mut(&stream.nth) else {
                     return false;
                 };
-                match sender.try_send(text.clone()) {
-                    Ok(()) => true,
-                    Err(Closed(_)) => false,
-                    Err(Full(_)) => panic!("fixture text input full"),
-                }
+                ready_now(pusher.push(text.clone())).expect("fixture text input full")
             }
             Input::FeedAudio { stream, chunks: Count(count) } => {
                 let nth = stream.nth;
-                let Some(Feeding::Audio { sender, chunks }) = self.streams.get_mut(&nth) else {
+                let Some(Feeding::Audio { pusher, chunks }) = self.streams.get_mut(&nth) else {
                     return false;
                 };
                 for _ in 0..*count {
                     let sample = Tag::fed(nth, *chunks);
                     let data = sample.to_le_bytes().repeat(SAMPLES_PER_CHUNK);
                     let frame = AudioFrame::new(data, SAMPLE_RATE, 1, SAMPLES_PER_CHUNK as u32);
-                    match sender.try_send(frame) {
-                        Ok(()) => *chunks += 1,
-                        Err(Closed(_)) => return false,
-                        Err(Full(_)) => panic!("fixture audio input full"),
+                    if !ready_now(pusher.push(frame)).expect("fixture audio input full") {
+                        return false;
                     }
+                    *chunks += 1;
                 }
                 true
             }
             Input::FeedEnd { stream } => {
-                if self.streams.remove(&stream.nth).is_none() {
-                    return false;
+                match self.streams.remove(&stream.nth) {
+                    Some(Feeding::Text(pusher)) => pusher.end(),
+                    Some(Feeding::Audio { pusher, .. }) => pusher.end(),
+                    None => return false,
                 }
                 self.record.close(at, Kind::Stream, stream.nth);
                 true
@@ -785,12 +906,22 @@ impl Run {
     /// Before a close nothing obliges the session to exit, so that wait is an ordinary one. Once a
     /// close is begun it is waited out however long it takes: its phases are each bounded, and
     /// virtual time is free.
+    ///
+    /// Once the loop has exited, the host's `aclose()` and `close_io()` are waited out too, as a
+    /// host awaits them; each of their waits is bounded on the session clock.
     async fn await_exit(&mut self) -> bool {
         let wait = if self.record.close_begun().is_some() { NEVER_MS } else { BUDGET_MS };
         let until = self.time.now().saturating_add(Duration::from_millis(wait));
         self.drive(Some(until), std::future::pending::<()>()).await;
         let exited = self.runtime.is_none();
         if exited {
+            if let Some(closing) = self.closing.take() {
+                let until = self.time.now().saturating_add(Duration::from_millis(NEVER_MS));
+                tokio::select! {
+                    () = closing => {}
+                    () = self.time.wait_until(until) => {}
+                }
+            }
             self.record.enter_phase(Phase::Closed);
         }
         exited
@@ -910,7 +1041,6 @@ impl Run {
     fn step(&mut self, call: impl FnOnce(&mut Runtime)) {
         let Some(runtime) = &mut self.runtime else { return };
         let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(runtime)));
-        self.settle_answers();
         // The observer unwound out of a livelocked step: the loop reports it, not as a panic.
         if self.livelock.lock().unwrap().is_some() {
             self.drop_runtime();
@@ -920,17 +1050,10 @@ impl Run {
         }
     }
 
-    /// Hands every answer the step produced to its caller, as the runtime's answer pump does.
-    fn settle_answers(&mut self) {
-        while let Ok((call, answer)) = self.session.answers.try_recv() {
-            self.registry.calls().settle(call, answer);
-        }
-    }
-
-    /// The cores are gone, as production drops them: a call never answered is closed.
+    /// The cores are gone, as production drops them: the session's answer pump closes every
+    /// call never answered.
     fn drop_runtime(&mut self) {
         self.runtime = None;
-        self.registry.calls().close();
     }
 
     /// Await every retained task, and record how each ended.
