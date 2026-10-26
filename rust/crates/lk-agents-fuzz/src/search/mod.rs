@@ -44,20 +44,26 @@ mod tests {
 
     /// A conversation is a conversation: the person speaks, the detector and the recogniser both
     /// close the speech, and the driver decides the turn. A uniform sampler reaches this in one
-    /// run out of ten; the search must reach it every time it has the legs to.
+    /// run out of ten; the search must reach it in most short runs, and every run in which both
+    /// observers closed a speech must decide it. Over several seeds, so a change to what the
+    /// generator draws does not turn one unlucky seed into a failure.
     #[test]
     fn a_conversation_reaches_a_decided_turn() {
-        let outcome = explore_at(listening(), 3, 150, Dials::conversation());
-        let names = |name: &str| outcome.case.inputs.iter().filter(|i| i.name() == name).count();
-        assert!(
-            names("VadEnd") >= 1 && names("SttFinal") >= 1,
-            "no speech was closed by both observers"
-        );
-        assert!(
-            outcome.reached.iter().any(|v| v.starts_with("Decided::")),
-            "a full turn produced no decision: {:?}",
-            outcome.reached
-        );
+        let mut closed = 0;
+        for seed in 0..12u64 {
+            let outcome = explore_at(listening(), seed, 150, Dials::conversation());
+            let names = |name: &str| outcome.case.inputs.iter().filter(|i| i.name() == name).count();
+            if names("VadEnd") == 0 || names("SttFinal") == 0 {
+                continue;
+            }
+            closed += 1;
+            assert!(
+                outcome.reached.iter().any(|v| v.starts_with("Decided::")),
+                "seed {seed}: a full turn produced no decision: {:?}",
+                outcome.reached
+            );
+        }
+        assert!(closed >= 8, "only {closed} of 12 runs had a speech closed by both observers");
     }
 
     /// The generator's own invariant, which no driver rule can hold it to: every final the

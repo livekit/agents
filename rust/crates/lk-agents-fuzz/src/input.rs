@@ -636,7 +636,6 @@ inputs! {
     /// `key`, or `Stop`. `Start` opens the collection's answer.
     Dtmf { input: DtmfInput, key: DtmfKey, digits: Count, confirm: bool, timeout: Millis }
         opens [Answer] leaf command::Dtmf;
-    /// An inline `AgentTask` entered from a tool body or a hook.
     Recorder { attach: bool } leaf command::Recorder;
     Run { user_input: Option<UserText>, expects_output: bool, retries: Count } leaf command::Run;
 

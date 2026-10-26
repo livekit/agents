@@ -100,6 +100,10 @@ impl Runtime {
         for event in undelivered {
             match event {
                 Event::Input(input) => inputs.push(input),
+                // A microphone attached too late to be read is let go, not left in the table.
+                Event::Forwarder(ForwarderCommand::SetSource(Some(source))) => {
+                    self.driver.shared.resources.release(source);
+                }
                 Event::Forwarder(command) => {
                     for effect in self.forwarder.handle(command) {
                         match effect {

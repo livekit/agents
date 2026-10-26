@@ -565,17 +565,16 @@ mod session_bridge {
         extract_generated::<crate::llm::tool_executor::RawToolAnswer>(v.bind(py))
     }
 
-    // Catches: `value` or `agents` read past, `None` refused, or a non-JSON value accepted.
+    // Catches: `value` read past, `None` refused, or a non-JSON value accepted.
     #[test]
-    fn a_tool_answer_carries_its_json_value_and_interns_its_agents() {
+    fn a_tool_answer_carries_its_json_value() {
         attach(|py| {
-            let a = answer(py, "out = {'kind': 'returned', 'value': {'temp': 12, 'ok': True}, 'agents': [object(), object()]}").unwrap();
+            let a = answer(py, "out = {'kind': 'returned', 'value': {'temp': 12, 'ok': True}}").unwrap();
             assert_eq!(a.value, Some(serde_json::json!({"temp": 12, "ok": true})));
-            assert_eq!(a.agents.len(), 2, "both agents cross as refs; two is `decide`'s to refuse");
-            let a = answer(py, "out = {'kind': 'returned', 'value': None, 'agents': None}").unwrap();
-            assert_eq!((a.value, a.agents.len()), (None, 0), "`None` means the same as absent");
+            let a = answer(py, "out = {'kind': 'returned', 'value': None}").unwrap();
+            assert_eq!(a.value, None, "`None` means the same as absent");
             let a = answer(py, "out = {'kind': 'returned'}").unwrap();
-            assert_eq!((a.value, a.agents.len()), (None, 0), "absent optional keys are absent, not malformed");
+            assert_eq!(a.value, None, "absent optional keys are absent, not malformed");
             assert!(answer(py, "out = {'kind': 'returned', 'value': object()}").is_err(), "a value that is not JSON");
             assert!(answer(py, "out = 'sunny'").is_err(), "not a dict at all");
         });
