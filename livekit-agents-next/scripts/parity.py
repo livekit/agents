@@ -42,23 +42,9 @@ REPO = Path(__file__).resolve().parents[2]
 SAMPLE_RATE = 24000
 
 
-def _tts_metrics_per_segment(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
-    for t in (ref, nxt):
-        for kinds in t.get("metrics", []):
-            seen = "TTSMetrics" in kinds
-            kinds[:] = [k for k in kinds if k != "TTSMetrics"] + (["TTSMetrics..."] if seen else [])
-
-
 # Differences listed rather than fixed (see the report printed with them), as (name, why, a
 # normaliser applied to both transcripts). A scenario they alone separate counts as agreeing.
-KNOWN: list[tuple[str, str, Callable[[dict[str, Any], dict[str, Any]], None]]] = [
-    (
-        "tts_metrics_per_segment",
-        "a non-streaming TTS reports one TTSMetrics per sentence in the reference (its "
-        "StreamAdapter forwards each chunked synthesis's), one per synthesis stream in the core",
-        _tts_metrics_per_segment,
-    ),
-]
+KNOWN: list[tuple[str, str, Callable[[dict[str, Any], dict[str, Any]], None]]] = []
 
 
 # ============================================================================ the orchestrator

@@ -82,6 +82,7 @@ pub(super) async fn perform_tts_inference(
                 let tts_data = TtsGenerationData::new(tts, shared, segment);
                 let streaming = Streaming {
                     shared,
+                    handle,
                     acc,
                     sink: &sink,
                     source,
@@ -142,6 +143,7 @@ async fn synthesize(
         end_input(sink, &mut streaming.transforms);
     }
     let heard = playback.run(shared, handle, &mut streaming).await;
+    streaming.tts_data.take_calls(shared, handle, &mut streaming.source, true);
     let Streaming { words, input_done, source, rx, tts_data, aligned, .. } = streaming;
     // Always: `end_input` before teardown (a second call is a no-op).
     sink.end_input();
@@ -199,6 +201,7 @@ fn end_input(sink: &lk_agents_abi::TtsSink, transforms: &mut Option<Pipeline>) {
 /// text arm drops a borrow, not the future. The text arm is `biased` first.
 struct Streaming<'a, 'b> {
     shared: &'a Arc<SessionShared>,
+    handle: &'a SpeechHandle,
     acc: &'a mut TurnAccumulator,
     sink: &'a lk_agents_abi::TtsSink,
     source: lk_agents_abi::TtsSource,
@@ -261,6 +264,7 @@ impl Segment for Streaming<'_, '_> {
                 }
             }
         };
+        self.tts_data.take_calls(self.shared, self.handle, &mut self.source, false);
         let chunk = match chunk {
             Ok(Some(chunk)) => chunk,
             Ok(None) => {
@@ -314,6 +318,9 @@ struct TtsGenerationData {
     synthesis_started_at: f64,
     started_at: f64,
     metrics: TtsMetricState,
+    /// The source meters its own provider calls (a `StreamAdapter`'s sentences), so the stream
+    /// has no record of its own.
+    metered_calls: bool,
 }
 
 impl TtsGenerationData {
@@ -324,6 +331,25 @@ impl TtsGenerationData {
             synthesis_started_at: shared.time.wall_secs(),
             started_at: shared.time.wall_secs(),
             metrics: TtsMetricState::for_host(true),
+            metered_calls: false,
+        }
+    }
+
+    /// Reports the calls the source finished; `in_flight` ends the running one too.
+    fn take_calls(
+        &mut self,
+        shared: &SessionShared,
+        handle: &SpeechHandle,
+        source: &mut lk_agents_abi::TtsSource,
+        in_flight: bool,
+    ) {
+        let Some(records) = source.take_call_metrics(in_flight) else { return };
+        self.metered_calls = true;
+        for mut record in records {
+            if let AgentMetrics::Tts(tts) = &mut record {
+                tts.speech_id = Some(handle.speech_id().to_owned());
+            }
+            report_metrics(shared, handle, record);
         }
     }
 
@@ -354,6 +380,9 @@ impl TtsGenerationData {
     }
 
     fn finish(mut self, shared: &SessionShared, handle: &SpeechHandle, text: &str) {
+        if self.metered_calls {
+            return;
+        }
         let now = shared.time.wall_secs();
         let context = Context {
             timestamp: now,

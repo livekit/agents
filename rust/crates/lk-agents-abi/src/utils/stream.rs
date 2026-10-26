@@ -44,6 +44,13 @@ pub trait StreamSource<T>: Send {
     fn started_time(&self) -> Option<f64> {
         None
     }
+
+    /// The records of the provider calls this stream makes itself (a `StreamAdapter`'s one
+    /// synthesis per sentence), finished since the last read; `in_flight` also ends the call
+    /// still running, as cancelled. `None` for a stream that is one call, which its reader meters.
+    fn take_call_metrics(&mut self, _in_flight: bool) -> Option<Vec<crate::metrics::base::AgentMetrics>> {
+        None
+    }
 }
 
 /// The reference's `INTERRUPTION_TIMEOUT`. Real teardowns take under a millisecond.

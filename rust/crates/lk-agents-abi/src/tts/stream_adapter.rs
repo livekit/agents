@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::TimedString;
 use crate::errors::{ApiError, ProviderError};
+use crate::metrics::base::AgentMetrics;
+use crate::telemetry::provider::{Context, TtsMetricState};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -162,6 +164,8 @@ impl Tts for StreamAdapter {
             duration: 0.0,
             pending_transcript: Vec::new(),
             held: None,
+            call: None,
+            calls: Vec::new(),
             request_id: stream_uid(),
             segment_id: stream_uid(),
         };
@@ -234,12 +238,39 @@ struct AdapterSource {
     /// Ride on the next frame sent (`tts/tts.py:1104`).
     pending_transcript: Vec<TimedString>,
     held: Option<SynthesizedAudio>,
+    /// The sentence being synthesized, metered as its own call (`ChunkedStream`'s
+    /// `_metrics_monitor_task`): the reference's adapter forwards each one's `TTSMetrics`.
+    call: Option<Call>,
+    /// The calls finished and not yet read.
+    calls: Vec<AgentMetrics>,
     /// One request and one segment for the whole stream (`stream_adapter.py:96`).
     request_id: String,
     segment_id: String,
 }
 
+/// One sentence's synthesis: its text, when it was asked for, and its fold.
+struct Call {
+    text: String,
+    start: f64,
+    fold: TtsMetricState,
+}
+
+fn wall_secs(clock: &dyn Clock) -> f64 {
+    clock.wall().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()
+}
+
 impl AdapterSource {
+    /// The sentence's record; none for a failed one (`_current_attempt_has_error`).
+    fn end_call(&mut self, cancelled: bool) {
+        let Some(mut call) = self.call.take() else { return };
+        let now = wall_secs(&*self.clock);
+        let id = self.tts.id();
+        let label = id.label.clone();
+        let context = Context { timestamp: now, label, cancelled, metadata: Some(id.metadata()) };
+        let record = call.fold.finish(now, call.start, &call.text, 0, 0, 0.0, false, context);
+        self.calls.extend(record.map(AgentMetrics::Tts));
+    }
+
     /// Bounded on the session clock; a timeout is remembered for `close`.
     async fn close_current(&mut self) {
         if let Some(done) = self.current.take() {
@@ -304,8 +335,15 @@ impl AdapterSource {
         loop {
             if let Some(cur) = self.current.as_mut() {
                 match cur.next().await {
-                    Ok(Some(a)) => return Ok(Some(a)),
+                    Ok(Some(a)) => {
+                        if let Some(call) = self.call.as_mut() {
+                            let (clock, start) = (&self.clock, call.start);
+                            call.fold.observe(&a, || wall_secs(&**clock) - start);
+                        }
+                        return Ok(Some(a));
+                    }
                     Ok(None) => {
+                        self.end_call(false);
                         // Dropping a host stream does not cancel its task; close it, bounded.
                         self.close_current().await;
                         continue;
@@ -313,6 +351,7 @@ impl AdapterSource {
                     // Close a failed inner source too, or it counts as open after the retry
                     // decision.
                     Err(e) => {
+                        self.call = None;
                         self.close_current().await;
                         return Err(e);
                     }
@@ -339,7 +378,9 @@ impl AdapterSource {
             if text.is_empty() {
                 continue;
             }
+            let start = wall_secs(&*self.clock);
             self.current = Some(self.tts.synthesize(&text).await?);
+            self.call = Some(Call { text, start, fold: TtsMetricState::for_host(false) });
         }
     }
 }
@@ -395,6 +436,13 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
                 }
             }
         }
+    }
+
+    fn take_call_metrics(&mut self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
+        if in_flight {
+            self.end_call(true);
+        }
+        Some(std::mem::take(&mut self.calls))
     }
 
     /// `TimedOut` if any inner stream did not ack.
@@ -639,6 +687,50 @@ mod tests {
         assert_eq!(out.len(), 6, "three sentences, two frames each");
         let finals: Vec<bool> = out.iter().map(|a| a.is_final).collect();
         assert_eq!(finals, vec![false, false, false, false, false, true]);
+    }
+
+    fn tts_records(records: Vec<AgentMetrics>) -> Vec<(u32, bool, bool)> {
+        let view = |m: AgentMetrics| match m {
+            AgentMetrics::Tts(t) => (t.characters_count, t.cancelled, t.streamed),
+            other => panic!("not a TTS record: {other:?}"),
+        };
+        records.into_iter().map(view).collect()
+    }
+
+    // Catches: one record for the whole stream: the reference's adapter forwards each sentence's
+    // `ChunkedStream` metrics (one non-streamed TTSMetrics per sentence, the one cut by the close
+    // as cancelled), and a failed sentence leaves none.
+    #[tokio::test]
+    async fn each_sentence_is_metered_as_its_own_call() {
+        let tts = FakeTts::new(2);
+        let (sink, mut source) = adapter(tts).stream().await.unwrap();
+        sink.push("one. three.".into()).unwrap();
+        for _ in 0..3 {
+            bounded("frame", source.next()).await.unwrap().expect("a frame");
+        }
+        // The first sentence ended when the second's first frame came.
+        assert_eq!(tts_records(source.take_call_metrics(false).unwrap()), vec![(4, false, false)]);
+        assert_eq!(tts_records(source.take_call_metrics(true).unwrap()), vec![(6, true, false)]);
+        assert_eq!(source.take_call_metrics(true).unwrap(), vec![], "each record is read once");
+
+        let mut failing = FakeTts::new(2);
+        Arc::get_mut(&mut failing).unwrap().fail_after = Some(1);
+        let (sink, mut source) = adapter(failing).stream().await.unwrap();
+        sink.push("one.".into()).unwrap();
+        sink.end_input();
+        assert!(drain_until_error(&mut source).await);
+        assert_eq!(source.take_call_metrics(true).unwrap(), vec![]);
+    }
+
+    async fn drain_until_error(source: &mut TtsSource) -> bool {
+        for _ in 0..MAX_FRAMES {
+            match bounded("frame", source.next()).await {
+                Err(_) => return true,
+                Ok(None) => return false,
+                Ok(Some(_)) => {}
+            }
+        }
+        false
     }
 
     // Catches: holding every frame for the `is_final` lookahead.
