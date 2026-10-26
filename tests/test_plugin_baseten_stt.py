@@ -17,7 +17,7 @@ import pytest
 from aiohttp import web
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, stt
+from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, stt
 from livekit.plugins.baseten import STT
 
 pytestmark = pytest.mark.unit
@@ -26,7 +26,8 @@ _SAMPLE_RATE = 16000
 
 # reply: flush right away. slow: flush after a pause longer than the 5 s idle poll.
 # ignore: never answer end_audio (older runtimes). drop: acknowledge, then close.
-_Mode = Literal["reply", "slow", "ignore", "drop"]
+# stall: acknowledge, then never finish.
+_Mode = Literal["reply", "slow", "ignore", "drop", "stall"]
 
 
 class _FakeWhisperServer:
@@ -56,6 +57,8 @@ class _FakeWhisperServer:
             if self.mode == "drop":
                 await ws.close()
                 break
+            if self.mode == "stall":
+                continue
             if self.mode == "slow":
                 await asyncio.sleep(5.5)
             await ws.send_json(
@@ -70,7 +73,9 @@ class _FakeWhisperServer:
         return ws
 
 
-async def _run_stream(server: _FakeWhisperServer, samples: int) -> list[stt.SpeechEvent]:
+async def _run_stream(
+    server: _FakeWhisperServer, samples: int, timeout: float = 10.0
+) -> list[stt.SpeechEvent]:
     app = web.Application()
     app.router.add_get("/ws", server.handle)
     runner = web.AppRunner(app)
@@ -86,7 +91,9 @@ async def _run_stream(server: _FakeWhisperServer, samples: int) -> list[stt.Spee
                 model_endpoint=f"ws://127.0.0.1:{port}/ws",
                 http_session=session,
             )
-            stream = baseten_stt.stream(conn_options=APIConnectOptions(max_retry=0))
+            stream = baseten_stt.stream(
+                conn_options=APIConnectOptions(max_retry=0, timeout=timeout)
+            )
             stream.push_frame(
                 rtc.AudioFrame(
                     data=b"\x00\x00" * samples,
@@ -144,3 +151,9 @@ async def test_close_before_finished_is_an_error() -> None:
     server = _FakeWhisperServer("drop")
     with pytest.raises(APIStatusError):
         await _run_stream(server, samples=512)
+
+
+async def test_acknowledged_flush_that_never_finishes_times_out() -> None:
+    server = _FakeWhisperServer("stall")
+    with pytest.raises(APITimeoutError):
+        await _run_stream(server, samples=512, timeout=1.0)

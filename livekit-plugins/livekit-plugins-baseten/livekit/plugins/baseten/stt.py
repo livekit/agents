@@ -33,6 +33,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    APITimeoutError,
     LanguageCode,
     stt,
     utils,
@@ -437,9 +438,9 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
-        # set once end_audio is sent, and once the server acknowledges it
+        # set once end_audio is sent; flush_deadline is set when the server acknowledges it
         input_ended = False
-        end_audio_acked = False
+        flush_deadline: float | None = None
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal input_ended
@@ -476,18 +477,23 @@ class SpeechStream(stt.SpeechStream):
                 raise APIConnectionError("Baseten connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws, end_audio_acked
+            nonlocal closing_ws, flush_deadline
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
+            loop = asyncio.get_running_loop()
             while True:
+                wait = 5.0
+                if flush_deadline is not None:
+                    wait = min(wait, flush_deadline - loop.time())
+                    if wait <= 0:
+                        raise APITimeoutError("Baseten did not finish flushing audio")
                 try:
-                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
+                    msg = await asyncio.wait_for(monitor.receive(), timeout=wait)
                 except asyncio.TimeoutError:
-                    # a runtime without end_audio support never acknowledges it; once
-                    # acknowledged, wait for "finished"; the monitor's liveness probe
-                    # still fails a server that stops responding
-                    if closing_ws or (input_ended and not end_audio_acked):
+                    # a runtime without end_audio support never acknowledges it, so
+                    # stop waiting; once acknowledged, wait until flush_deadline
+                    if closing_ws or (input_ended and flush_deadline is None):
                         break
                     continue
 
@@ -517,8 +523,8 @@ class SpeechStream(stt.SpeechStream):
                         status = (data.get("body") or {}).get("status")
                         if status == "finished":
                             return
-                        if status == "acknowledged":
-                            end_audio_acked = True
+                        if status == "acknowledged" and flush_deadline is None:
+                            flush_deadline = loop.time() + self._conn_options.timeout
                         continue
 
                     # Skip non-transcription messages (e.g. error, status)
