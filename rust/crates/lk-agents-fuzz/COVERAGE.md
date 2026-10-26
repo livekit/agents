@@ -131,8 +131,7 @@ appendix, so a lower bound).
 
 **Fixed in every run** (the audit, section 5, has the file references): the end-of-turn
 detector is always streaming, never batch, and always the V1Mini model; turn detection is never
-explicitly `vad` or `realtime_llm`; the AMD runs on its default thresholds; keyterm detection by
-LLM is off; the false-interruption, backchannel-boundary, AEC-warmup, `min_duration` and
+explicitly `vad` or `realtime_llm`; the AMD runs on its default thresholds; the false-interruption, backchannel-boundary, AEC-warmup, `min_duration` and
 `discard_audio_if_uninterruptible` options keep their defaults; `close` is always
 `user_initiated` without an error.
 
@@ -542,6 +541,21 @@ The legs a seed runs on, drawn per seed (`search/setup.rs`):
 Also drawn: `tts_text_transforms`, the deprecated turn keywords (written instead of
 `turn_handling`, so the core migrates them), and the default `VoiceActivityVideoSampler`.
 
+Drawn last in the setup, so a seed keeps the setup it had before they existed (2026-10-26):
+
+- **AMD as `livekit.agents.AMD` attaches it**: `interrupt_on_machine`, `ivr_detection`,
+  `wait_until_finished`, a recogniser of its own or the session's finals, and what
+  `amd_decide_setup_step` makes of the room (the callee's track: listening at once; a SIP call
+  the case answers later, `Amd { Listen }`; nobody: `participant_missing`). The developer runs
+  `execute()` on the verdict (the IVR hand-off on `machine-ivr`) and leaves the block.
+- **Keyterm detection** with the LLM the host resolves, on a recogniser that takes keyterms or
+  not; the model answers the passes with `record_keyterms`.
+- **`RoomOptions(video_input=True)`** on the room's legs: the person publishes a camera the case
+  feeds, which the host's own camera would win over.
+- **Node factories**: the agents override `llm_node`, `tts_node` and `stt_node` as the defaults
+  do, over the session's providers, on the first agent and on every handoff (which then gives the
+  legs again, as `_frame` does).
+
 ## 7. How the search was chosen
 
 Measured on 2026-10-22/23, on reach only: journal variants, distinct edges (consecutive journal
@@ -683,14 +697,17 @@ Each is a choice the search makes for every run that a real call does not.
 ## 10. Code reached
 
 Line coverage of `lk-agents-voice` over every `lk-agents-fuzz` test, the 1,024-seed survey and
-the soak included (2026-10-26): **79.8% of 23,544 lines** (64.8% of 25,678 before the room's
+the soak included (2026-10-26, after AMD, keyterm detection, the room's camera and the node
+factories were wired and drawn): **83.6% of 23,634 lines** (79.6% of 23,544 just before; 64.8% of
+25,678 before the room's
 legs, the console, the transforms and the players were drawn; 65.2% of 25,412 right after the
 switch to the public API).
 
-**Production-reachable: 85.1%** (18,005 of 21,164 lines): the same measurement over the lines a
+**Production-reachable: 87.0%** (19,639 of 22,583 lines): the same measurement over the lines a
 deployed Python agent can run. Left out, each for its reason below: `workflows/` (owned by the
-text-mode rework), `amd/` and the keyterm LLM pass (`livekit-agents-next` never wires them), the
-remote-session client and `room_io/rooms.rs`.
+text-mode rework), the remote-session client and `room_io/rooms.rs`. Before the wiring this read
+85.1% of 21,164 lines, a total that also left out `amd/` and the keyterm LLM pass because
+`livekit-agents-next` never ran them; counted the new way it was 82.9% (18,644 of 22,493).
 
 | Area | Lines | Reached | Note |
 |---|--:|--:|---|
@@ -713,7 +730,10 @@ remote-session client and `room_io/rooms.rs`.
 | `speech_handle.rs` | 587 | 70% | |
 | `avatar.rs` | 561 | 72% | sink and worker receiver |
 | `io.rs` | 174 | 68% | the node chain seams |
-| `room_io/_input.rs` | 373 | 65% | the person's microphone track (was 0%); the camera track is not drawn |
+| `room_io/_input.rs` | 373 | 82% | the person's microphone and camera tracks (65% before the camera was drawn) |
+| `amd/` | 914 | 90% | (was 74%, unwired) |
+| `keyterm_detection.rs` | 567 | 92% | the LLM pass (was 24%, unwired) |
+| `agent_session/nodes.rs` | 107 | 78% | (was 11%) |
 | `remote_session.rs`, `remote_session/driver.rs` | 935 | 49% | the host side runs; the client does not (below) |
 | the rest | 1,716 | 86% | |
 
@@ -721,9 +741,6 @@ The justified gaps, outside the production-reachable figure:
 
 - `workflows/` (733 lines, 15%): what the text-mode rework left (result types, validation
   helpers); owned by that work.
-- `amd/` (899, 74%): no `livekit-agents-next` call site attaches the detector (`attach_amd`).
-- The keyterm LLM pass (430 of `keyterm_detection.rs`'s 567): `agent_session.py` passes
-  `stt_context=` (static keyterms are reached) but never `keyterm_llm=`, so detection never runs.
 - The remote-session client (`ClientRuntime`, 180 lines, and its `event_name`, 17): the far
   end of the protocol, bound for Node and Python clients, never run by an agent.
 - `room_io/rooms.rs` (121, 0%): `_core.FakeRoom`, a Python test fixture, and `OfflineRoom`, a
@@ -731,9 +748,7 @@ The justified gaps, outside the production-reachable figure:
 
 Production-reachable code still unreached, by size: the session API's rarer host calls
 (`set_participant`, `resolved_options`, the AMD and DTMF accessors), `speech_handle.rs`'s
-`hold_interruptions` and the host's `interrupt`, the room's camera track (`ParticipantVideoInput`;
-`RoomOptions(video_input=True)` is not drawn), the node factories (`agent_session/nodes.rs`,
-11%: no seed overrides `llm_node`/`tts_node`), the remote-session encoders of events the job's
+`hold_interruptions` and the host's `interrupt`, the remote-session encoders of events the job's
 `SessionHost` forwards and the console does not (function calls, agent config updates), and the
 avatar sink's interrupted path after a give-up timer.
 
