@@ -46,7 +46,7 @@ pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{FakeLlm, request_of};
 pub use output::{
     FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeSoundStream,
-    FakeTextOutput, Half,
+    FakeTextOutput, Half, FakeAvatarWorker,
     FakeVideoInput,
 };
 pub use realtime::FakeRealtime;

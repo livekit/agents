@@ -748,31 +748,11 @@ impl Run {
         }))
     }
 
-    /// The avatar worker reports on what reached it, as `DataStreamAudioReceiver` does: each closed
-    /// segment stream as played out, and each clear as an interrupted segment.
+    /// The avatar worker and the agent hear what the other sent since the last look.
     pub(super) fn avatar_reports(&mut self) {
-        let Some((played, cleared)) = self.avatar else { return };
-        let local = self.room.local_participant();
-        let streams = local.byte_streams();
-        let closed: Vec<_> = streams.iter().filter(|s| s.closed).skip(played).collect();
-        let clears = local
-            .rpc_calls()
-            .iter()
-            .filter(|(_, method, _)| method == lk_agents_voice::avatar::RPC_CLEAR_BUFFER)
-            .count();
-        let finished = |position: f64, interrupted: bool| {
-            let payload = serde_json::json!({"playback_position": position, "interrupted": interrupted});
-            let method = lk_agents_voice::avatar::RPC_PLAYBACK_FINISHED;
-            local.invoke_rpc(method, super::start::AVATAR, &payload.to_string());
-        };
-        for stream in &closed {
-            let bytes: usize = stream.chunks.iter().map(Vec::len).sum();
-            finished(bytes as f64 / f64::from(SAMPLE_RATE * 2), false);
+        if let Some(worker) = &self.avatar {
+            worker.relay(&self.room, super::start::AVATAR);
         }
-        for _ in cleared..clears {
-            finished(0.0, true);
-        }
-        self.avatar = Some((played + closed.len(), clears));
     }
 
     /// The person's microphones in the room, which leave the room with them.
@@ -974,6 +954,9 @@ impl Run {
         // The player goes with the session (`BackgroundAudioPlayer.aclose()`).
         if exited && let Some(player) = self.background.take() {
             player.close().await;
+        }
+        if exited && let Some(worker) = self.avatar.take() {
+            worker.close();
         }
         if exited {
             if let Some(closing) = self.closing.take() {

@@ -478,8 +478,8 @@ pub struct Run {
     next_request: u64,
     /// The background audio player, as `background_audio.py` runs it beside the session.
     background: Option<Arc<BackgroundAudioPlayer>>,
-    /// The avatar worker's acks so far: segments reported played, and clears answered.
-    avatar: Option<(usize, usize)>,
+    /// The avatar worker the agent's voice streams to, in its own room.
+    avatar: Option<Arc<fakes::FakeAvatarWorker>>,
     /// The next filler id to mint. The host tells the driver the id rather than letting it
     /// choose, so a case can name a filler in the same burst that started it.
     next_filler: u64,

@@ -136,7 +136,10 @@ impl Run {
                             AVATAR.into(),
                             Some(SAMPLE_RATE),
                             None,
-                            Some(Duration::from_secs(2)),
+                            // No give-up timer: the worker's report crosses at the run's next
+                            // look rather than in milliseconds, and a timer firing first would
+                            // hand that late report to the next segment.
+                            None,
                             false,
                             time.clock(),
                             tasks.clone(),
@@ -260,7 +263,7 @@ impl Run {
             console,
             next_request: 0,
             background: None,
-            avatar: setup.avatar.then_some((0, 0)),
+            avatar: None,
             next_filler: 1,
             refs,
             setup: setup.clone(),
@@ -278,6 +281,10 @@ impl Run {
                 let _ = player.play(vec![ambient], true, false, true, &mut || 0.5);
             }
             run.background = Some(player);
+        }
+        if setup.avatar {
+            let name = format!("avatar-{schedule}");
+            run.avatar = Some(fakes::FakeAvatarWorker::start(run.time.clock(), &name).await);
         }
         // The person joins the call the agent just answered.
         if legs.is_some() {

@@ -371,7 +371,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
         }
         let grants_before = run.hold_grants();
         // The avatar worker's playout reports are releases the run makes as they come due.
-        let avatar_before = run.avatar;
+        let avatar_before = run.avatar.as_ref().map(|w| w.progress());
         let mut offered = run.releases();
         let releases = offered.len();
         // Advance regardless, so an armed deadline with nothing else to do still fires.
@@ -388,7 +388,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
         let applied = run.record.applied();
         let taken =
             applied[applied.len() - 1 - releases..applied.len() - 1].iter().any(|a| a.accepted);
-        let avatar_reported = run.avatar != avatar_before;
+        let avatar_reported = run.avatar.as_ref().map(|w| w.progress()) != avatar_before;
         if (releases == 0 && !run.deadline_ahead() && !avatar_reported)
             || (run.record.driver_finished() && !taken)
         {
