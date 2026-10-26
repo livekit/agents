@@ -317,3 +317,51 @@ async def test_an_unreachable_expert_is_a_tool_error_the_front_desk_tells(
     out = tool_output(model, "c1")
     # the reason, not a bare internal error: the front desk can say the expert is unreachable
     assert out.is_error and "connection refused" in out.output
+
+
+class Down(httpx.AsyncBaseTransport):
+    """Refuses every request, the card too: an expert that is down before the first model call."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+
+@pytest.mark.rule("R26", "B33")
+@pytest.mark.xfail(strict=True, reason="B33: a card that cannot be read fails the whole turn")
+async def test_an_expert_down_at_setup_is_a_tool_error_and_the_other_tools_run(
+    door: Callable[..., Door],
+) -> None:
+    model = ScriptedLLM(
+        Reply(
+            tool_calls=[
+                call("ask", "c1", request="what is the fare to Oslo"),
+                call("weather", "c2", city="Oslo"),
+            ]
+        ),
+        Reply("Oslo is sunny; I cannot get the fare right now.", when=output_of("c2")),
+    )
+    http = httpx.AsyncClient(transport=Down(), base_url="http://experts.test")
+    delegate = A2ADelegate(f"http://experts.test/{EXPERT}", httpx_client=http)
+    front = Agent(instructions="front desk", llm=model, tools=[delegate])
+
+    @front.tool
+    async def weather(ctx: RunContext, city: str) -> str:
+        """The weather in a city."""
+        return f"sunny in {city}"
+
+    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+        return (await front.run(ctx.message, message_history=ctx.message_history)).output
+
+    desk = door(handler)
+    try:
+        sent = await desk.send("fare and weather in Oslo?", context_id=await desk.thread())
+    finally:
+        await delegate.aclose()
+        await http.aclose()
+    assert sent.state == "completed"
+    assert sent.answer == "Oslo is sunny; I cannot get the fare right now."
+    asked = tool_output(model, "c1")
+    # the tool was offered and called: the reason, not an unknown tool
+    assert asked is not None and asked.is_error and "connection refused" in asked.output
+    other = tool_output(model, "c2")
+    assert other is not None and other.output == "sunny in Oslo"
