@@ -102,7 +102,6 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "speech_error_is_injected",
     "speech_settles",
     "synthesized_speech_is_played",
-    "text_conservation",
     "tool_lifecycle",
 ];
 

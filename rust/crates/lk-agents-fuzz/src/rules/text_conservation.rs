@@ -56,23 +56,28 @@ impl Rule for TextConservation {
             else {
                 continue;
             };
-            let forwarded: String =
+            let deltas: Vec<String> =
                 internal.speech(speech.id).transcript_forwarded().into_iter().map(squash).collect();
-
-            // Nothing reaches the host that the case did not give it, and nothing is reordered:
-            // what was forwarded so far is a prefix of what was given.
-            check.expect(
-                &speech,
-                given.starts_with(&forwarded),
-                format!("forwarded {forwarded:?} is not a prefix of given {given:?}"),
-            );
-
-            // A speech that ran to the end without interruption or error forwarded everything, as
-            // long as there was a transcript path to forward it down for the whole of its life.
+            let forwarded: String = deltas.concat();
             let until = speech.done_at().unwrap_or(r.now());
             let live_path = speech
                 .created_at()
                 .is_none_or(|created| transcription.on_throughout(created, until));
+
+            // Nothing reaches the host that the case did not give it, and nothing is reordered:
+            // what was forwarded so far is a prefix of what was given. A path closed part of the
+            // way skips the segments it missed, so then each forwarded piece only comes from the
+            // given text after the one before it.
+            let ordered =
+                if live_path { given.starts_with(&forwarded) } else { in_order(&given, &deltas) };
+            check.expect(
+                &speech,
+                ordered,
+                format!("forwarded {forwarded:?} is not drawn in order from given {given:?}"),
+            );
+
+            // A speech that ran to the end without interruption or error forwarded everything, as
+            // long as there was a transcript path to forward it down for the whole of its life.
             if live_path && speech.completed_normally() && speech.is_scheduled() {
                 check.expect(
                     &speech,
@@ -143,6 +148,18 @@ fn generated_text(inputs: &InputsView, inference: &InferenceView, speech: u64) -
 
 fn squash(text: &str) -> String {
     text.split_whitespace().collect()
+}
+
+/// Each piece found in `given` after the end of the one before it.
+fn in_order(given: &str, pieces: &[String]) -> bool {
+    let mut rest = given;
+    pieces.iter().all(|piece| match rest.find(piece.as_str()) {
+        Some(at) => {
+            rest = &rest[at + piece.len()..];
+            true
+        }
+        None => false,
+    })
 }
 
 /// The text the case gave each speech a `say` created.
