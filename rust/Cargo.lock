@@ -1544,6 +1544,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "httparse",
+ "libc",
  "livekit-protocol",
  "livekit-token",
  "lk-agents-abi",

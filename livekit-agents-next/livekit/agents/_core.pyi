@@ -73,6 +73,63 @@ class Worker:
     def job_status(self, job_id: str, status: int) -> None: ...
     def snapshot(self) -> dict[str, Any]: ...
 
+# --- the job process IPC (worker ipc/) -----------------------------------------------------------
+
+def ipc_encode(msg_id: int, fields: dict[str, Any]) -> bytes:
+    """A message's payload from its ``MSG_ID`` and its fields by name."""
+
+def ipc_decode(data: bytes) -> tuple[int, dict[str, Any]]:
+    """A payload's ``MSG_ID`` and its fields by name."""
+
+class ProcHostProtocol(Protocol):
+    """What ``ProcSupervisor`` calls back into: the ``SupervisedProc``, dropped once it exited."""
+
+    def _core_log(
+        self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
+    ) -> None: ...
+    def _core_is_alive(self) -> bool: ...
+    def _core_kill(self) -> None: ...
+    def _sample_memory_mb(self) -> tuple[float, str]: ...
+    def _core_has_running_job(self) -> bool: ...
+
+class ProcSupervisor:
+    """The parent's side of one job or inference process, over the socket ``fd`` it owns."""
+
+    def __init__(
+        self,
+        fd: int,
+        host: ProcHostProtocol,
+        *,
+        pid: int,
+        process_kind: str,
+        initialize_timeout: float,
+        close_timeout: float,
+        memory_warn_mb: float,
+        memory_limit_mb: float,
+        ping_interval: float,
+        ping_timeout: float,
+        high_ping_threshold: float,
+    ) -> None: ...
+    def initialize(self) -> Awaitable[float | None]:
+        """Seconds until the InitializeResponse; ``None`` on timeout (the process was killed)."""
+    def supervise(self) -> None: ...
+    def recv_bytes(self) -> Awaitable[bytes]: ...
+    def send_bytes(self, data: bytes) -> Awaitable[None]: ...
+    def shutdown(self) -> Awaitable[None]: ...
+    def kill(self) -> Awaitable[None]: ...
+    def exited(self, exitcode: int | None) -> Awaitable[None]: ...
+    @property
+    def killed(self) -> bool: ...
+
+class IpcClient:
+    """The child's side of the socket ``fd`` it owns, closed after ``health_timeout`` s of
+    silence from the parent."""
+
+    def __init__(self, fd: int, health_timeout: float | None = None) -> None: ...
+    def recv_bytes(self) -> Awaitable[bytes]: ...
+    def send_bytes(self, data: bytes) -> Awaitable[None]: ...
+    def aclose(self) -> Awaitable[None]: ...
+
 # --- storage.rs ----------------------------------------------------------------------------------
 #
 # Every request is the model of its name, or a dict in the model's shape (its ``model_dump``);

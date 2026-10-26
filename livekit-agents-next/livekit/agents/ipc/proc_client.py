@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import socket
-import sys
 from collections.abc import Callable, Coroutine
 from types import FrameType
 
+from .. import _core
 from ..log import logger
 from ..telemetry import loop_monitor
 from ..utils import aio, log_exceptions, time_ms
@@ -97,10 +97,13 @@ class _ProcClient:
         await asend_message(self._acch, msg)
 
     async def _monitor_task(self) -> None:
-        self._acch = await aio.duplex_unix._AsyncDuplex.open(self._mp_cch)
+        # the core closes the channel when the parent goes quiet past ping_timeout (+10 s)
+        health_timeout = None
+        if self._init_req.ping_interval > 0:
+            health_timeout = self._init_req.ping_timeout + 10
+        self._acch = _core.IpcClient(self._mp_cch.detach(), health_timeout)
         try:
             exit_flag = asyncio.Event()
-            ping_timeout = aio.sleep(self._init_req.ping_timeout + 10)
 
             ipc_ch = aio.Chan[Message]()
 
@@ -112,9 +115,7 @@ class _ProcClient:
                     except aio.duplex_unix.DuplexClosed:
                         break
 
-                    with contextlib.suppress(aio.SleepFinished):
-                        ping_timeout.reset()
-
+                    # answered from this loop: the pong measures its responsiveness
                     if isinstance(msg, PingRequest):
                         await asend_message(
                             self._acch,
@@ -123,18 +124,7 @@ class _ProcClient:
 
                     ipc_ch.send_nowait(msg)
 
-            @log_exceptions(logger=logger)
-            async def _self_health_check() -> None:
-                await ping_timeout
-                print(
-                    "worker process is not responding.. worker crashed?",
-                    file=sys.stderr,
-                )
-
             read_task = asyncio.create_task(_read_ipc_task(), name="ipc_read")
-            health_check_task: asyncio.Task[None] | None = None
-            if self._init_req.ping_interval > 0:
-                health_check_task = asyncio.create_task(_self_health_check(), name="health_check")
             main_task = asyncio.create_task(
                 self._main_task_fnc(ipc_ch), name="main_task_entrypoint"
             )
@@ -146,15 +136,10 @@ class _ProcClient:
                 ipc_ch.close()
 
             read_task.add_done_callback(_done_cb)
-            if health_check_task is not None:
-                health_check_task.add_done_callback(_done_cb)
-
             main_task.add_done_callback(_done_cb)
 
             await exit_flag.wait()
             await aio.cancel_and_wait(read_task, main_task)
-            if health_check_task is not None:
-                await aio.cancel_and_wait(health_check_task)
 
         finally:
             await self._acch.aclose()

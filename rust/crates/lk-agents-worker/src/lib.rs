@@ -27,6 +27,7 @@ pub mod auth;
 mod config;
 pub mod endpoint;
 pub mod hw;
+pub mod ipc;
 mod load;
 #[cfg(test)]
 mod load_tests;

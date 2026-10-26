@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import io
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from livekit.protocol import agent
 
 from ..job import JobAcceptArguments, RunningJobInfo
-from . import channel
 
 
 @dataclass
@@ -23,20 +21,6 @@ class InitializeRequest:
     high_ping_threshold: float = 0
     http_proxy: str = ""  # empty = None
 
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_bool(b, self.asyncio_debug)
-        channel.write_float(b, self.ping_interval)
-        channel.write_float(b, self.ping_timeout)
-        channel.write_float(b, self.high_ping_threshold)
-        channel.write_string(b, self.http_proxy)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.asyncio_debug = channel.read_bool(b)
-        self.ping_interval = channel.read_float(b)
-        self.ping_timeout = channel.read_float(b)
-        self.high_ping_threshold = channel.read_float(b)
-        self.http_proxy = channel.read_string(b)
-
 
 @dataclass
 class InitializeResponse:
@@ -45,12 +29,6 @@ class InitializeResponse:
     MSG_ID: ClassVar[int] = 1
     error: str = ""
 
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_string(b, self.error)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.error = channel.read_string(b)
-
 
 @dataclass
 class PingRequest:
@@ -58,12 +36,6 @@ class PingRequest:
 
     MSG_ID: ClassVar[int] = 2
     timestamp: int = 0
-
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_long(b, self.timestamp)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.timestamp = channel.read_long(b)
 
 
 @dataclass
@@ -74,14 +46,6 @@ class PongResponse:
     last_timestamp: int = 0
     timestamp: int = 0
 
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_long(b, self.last_timestamp)
-        channel.write_long(b, self.timestamp)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.last_timestamp = channel.read_long(b)
-        self.timestamp = channel.read_long(b)
-
 
 @dataclass
 class StartJobRequest:
@@ -91,41 +55,36 @@ class StartJobRequest:
     MSG_ID: ClassVar[int] = 4
     running_job: RunningJobInfo = field(init=False)
 
-    def write(self, b: io.BytesIO) -> None:
-        accept_args = self.running_job.accept_arguments
-        channel.write_bytes(b, self.running_job.job.SerializeToString())
-        channel.write_string(b, accept_args.name)
-        channel.write_string(b, accept_args.identity)
-        channel.write_string(b, accept_args.metadata)
-        channel.write_string(b, self.running_job.url)
-        channel.write_string(b, self.running_job.token)
-        channel.write_string(b, self.running_job.worker_id)
-        channel.write_bool(b, self.running_job.fake_job)
-        # unix timestamps: a 32-bit float only resolves ~128 s at this magnitude
-        channel.write_double(b, self.running_job.received_at)
-        channel.write_double(b, self.running_job.accepted_at)
-        channel.write_double(b, self.running_job.assigned_at)
-        channel.write_double(b, self.running_job.launched_at)
+    def _to_wire(self) -> dict[str, Any]:
+        info = self.running_job
+        return {
+            "job": info.job.SerializeToString(),
+            "name": info.accept_arguments.name,
+            "identity": info.accept_arguments.identity,
+            "metadata": info.accept_arguments.metadata,
+            "url": info.url,
+            "token": info.token,
+            "worker_id": info.worker_id,
+            "fake_job": info.fake_job,
+            # unix timestamps: a 32-bit float only resolves ~128 s at this magnitude
+            "received_at": info.received_at,
+            "accepted_at": info.accepted_at,
+            "assigned_at": info.assigned_at,
+            "launched_at": info.launched_at,
+        }
 
-    def read(self, b: io.BytesIO) -> None:
+    @staticmethod
+    def _from_wire(fields: dict[str, Any]) -> StartJobRequest:
         job = agent.Job()
-        job.ParseFromString(channel.read_bytes(b))
-        self.running_job = RunningJobInfo(
-            accept_arguments=JobAcceptArguments(
-                name=channel.read_string(b),
-                identity=channel.read_string(b),
-                metadata=channel.read_string(b),
-            ),
-            job=job,
-            url=channel.read_string(b),
-            token=channel.read_string(b),
-            worker_id=channel.read_string(b),
-            fake_job=channel.read_bool(b),
-            received_at=channel.read_double(b),
-            accepted_at=channel.read_double(b),
-            assigned_at=channel.read_double(b),
-            launched_at=channel.read_double(b),
+        job.ParseFromString(fields.pop("job"))
+        accept_arguments = JobAcceptArguments(
+            name=fields.pop("name"),
+            identity=fields.pop("identity"),
+            metadata=fields.pop("metadata"),
         )
+        req = StartJobRequest()
+        req.running_job = RunningJobInfo(accept_arguments=accept_arguments, job=job, **fields)
+        return req
 
 
 @dataclass
@@ -136,12 +95,6 @@ class ShutdownRequest:
     MSG_ID: ClassVar[int] = 5
     reason: str = ""
 
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_string(b, self.reason)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.reason = channel.read_string(b)
-
 
 @dataclass
 class Exiting:
@@ -149,12 +102,6 @@ class Exiting:
 
     MSG_ID: ClassVar[int] = 6
     reason: str = ""
-
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_string(b, self.reason)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.reason = channel.read_string(b)
 
 
 @dataclass
@@ -166,16 +113,6 @@ class InferenceRequest:
     request_id: str = ""
     data: bytes = b""
 
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_string(b, self.method)
-        channel.write_string(b, self.request_id)
-        channel.write_bytes(b, self.data)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.method = channel.read_string(b)
-        self.request_id = channel.read_string(b)
-        self.data = channel.read_bytes(b)
-
 
 @dataclass
 class InferenceResponse:
@@ -186,20 +123,6 @@ class InferenceResponse:
     data: bytes | None = None
     error: str = ""
 
-    def write(self, b: io.BytesIO) -> None:
-        channel.write_string(b, self.request_id)
-        channel.write_bool(b, self.data is not None)
-        if self.data is not None:
-            channel.write_bytes(b, self.data)
-        channel.write_string(b, self.error)
-
-    def read(self, b: io.BytesIO) -> None:
-        self.request_id = channel.read_string(b)
-        has_data = channel.read_bool(b)
-        if has_data:
-            self.data = channel.read_bytes(b)
-        self.error = channel.read_string(b)
-
 
 @dataclass
 class DumpStackTraceRequest:
@@ -207,33 +130,15 @@ class DumpStackTraceRequest:
 
     MSG_ID: ClassVar[int] = 9
 
-    def write(self, b: io.BytesIO) -> None:
-        pass
-
-    def read(self, b: io.BytesIO) -> None:
-        pass
-
 
 @dataclass
 class ShutdownRequestAck:
     MSG_ID: ClassVar[int] = 10
 
-    def write(self, b: io.BytesIO) -> None:
-        pass
-
-    def read(self, b: io.BytesIO) -> None:
-        pass
-
 
 @dataclass
 class ShuttingDown:
     MSG_ID: ClassVar[int] = 11
-
-    def write(self, b: io.BytesIO) -> None:
-        pass
-
-    def read(self, b: io.BytesIO) -> None:
-        pass
 
 
 IPC_MESSAGES = {

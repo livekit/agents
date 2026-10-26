@@ -27,6 +27,10 @@ livekit-token.workspace = true
 # `python` only. pyo3's attribute macros spell `::pyo3`, so the crate that expands them names it.
 pyo3 = { workspace = true, optional = true }
 
+[target.'cfg(unix)'.dependencies]
+# SIGUSR1 before the kill of a supervised process (`ipc`).
+libc = "0.2"
+
 [features]
 # The Python binding, expanded in place: every `#[host(..)]` item here becomes its pyo3 class or
 # function (`lk-agents-bindgen`), registered on `_core` through `lk_agents_abi::python`. Enabled by
