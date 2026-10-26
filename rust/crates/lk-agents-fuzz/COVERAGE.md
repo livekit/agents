@@ -181,9 +181,9 @@ was a driver bug).
 | P4 | `tool_call_reaches_runner` | a hosted tool call reaches the runner, an unhosted one does not | 0 / 2 / 1 |
 | P4 | `tool_lifecycle` | each tool call starts once, ends once, settles before its speech is done | 0 / 7 / 4 |
 | P4 | `on_exit_once_per_frame` | each agent's `on_exit` runs at most once | 0 / 0 / 0 |
-| P4 | `output_replacement_is_clean` | a replaced output receives no further calls | 80 / 174 / 249 |
+| P4 | `output_replacement_is_clean` | a replaced output receives no further calls but a running step's and a synchroniser's closing flushes | 80 / 174 / 249 |
 | P4 | `released_provider_unused` | a provider the core released is never named again | 0 / 0 / 0 |
-| P5 | `provider_failure_is_accounted` | every injected failure is retried, surfaced or closes the session | 9 / 23 / 35 |
+| P5 | `provider_failure_is_accounted` | every injected failure is retried, surfaced (on the speech or as its error event), abandoned with an interrupted speech, or closes the session | 9 / 23 / 35 |
 | P5 | `speech_error_is_injected` | a failed speech traces back to an injected failure or an explicit refusal | 1 / 6 / 19 |
 | P5 | `provider_streams_closed` | every LLM, TTS and STT stream is closed by the end | 7 / 41 / 6 |
 | P5 | soak: residue | after a long call and release, nothing opened is still live | red (2026-10-25): seed 6 leaves a floor hold. Every call must reach its close: one that stopped before it fails the soak |
