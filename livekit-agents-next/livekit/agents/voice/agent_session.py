@@ -21,7 +21,7 @@ from typing_extensions import TypedDict, TypeVar
 from livekit import rtc
 
 from .. import _core, inference, llm, stt, tts, vad
-from .._core_view import from_core_item, to_core_items, tool_specs
+from .._core_view import TurnDetector, from_core_item, to_core_items, tool_specs
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
 from .._generated.session_dispatch import IGNORED_EVENTS, PUBLIC_EVENTS
 from ..job import get_job_context
@@ -184,6 +184,11 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._using_default_vad = not is_given(vad)
         self._vad = inference.VAD(model="silero") if not is_given(vad) else vad
         self._tools = tools if is_given(tools) else []
+        turn_handling = options.get("turn_handling") or {}
+        detection = turn_handling.get("turn_detection", deprecated["turn_detection"])
+        if not is_given(detection):
+            detection = inference.TurnDetector()
+        self._turn_detector = None if isinstance(detection, str | None) else TurnDetector(detection)
         self._video_sampler = (
             video_sampler if is_given(video_sampler) else VoiceActivityVideoSampler()
         )
@@ -360,6 +365,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_io_config=room_options._to_core() if is_given(room_options) else None,
             video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
             using_default_vad=self._using_default_vad,
+            turn_detector=self._turn_detector,
+            turn_detector_streaming=self._turn_detector is not None
+            and self._turn_detector.streaming,
             hook_bound=_HOOK_BOUND,
             max_unrecoverable_errors=self._conn_options.max_unrecoverable_errors,
         )
