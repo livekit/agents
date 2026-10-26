@@ -12,11 +12,10 @@ from typing import Any
 
 from huggingface_hub import errors
 
-from livekit.agents import LanguageCode, Plugin, llm
+from livekit.agents import LanguageCode, Plugin, _core, llm
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.agents.ipc.inference_executor import InferenceExecutor
 from livekit.agents.job import get_job_context
-from livekit.agents.utils import hw
 
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
@@ -127,7 +126,7 @@ class _EUORunnerBase(_InferenceRunner):
             )
             sess_options = ort.SessionOptions()
             sess_options.intra_op_num_threads = max(
-                1, min(math.ceil(hw.get_cpu_monitor().cpu_count()) // 2, 4)
+                1, min(math.ceil(_core.CpuMonitor().cpu_count()) // 2, 4)
             )
             sess_options.inter_op_num_threads = 1
             sess_options.add_session_config_entry("session.dynamic_block_base", "4")
