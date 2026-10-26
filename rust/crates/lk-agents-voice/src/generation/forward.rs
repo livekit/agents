@@ -240,14 +240,16 @@ impl Pump<'_> {
                         *idx += 1;
                         heard
                     }
+                    // Cut before a frame played: nothing was heard, the words are dropped.
+                    Err(Lost { lost: false, opening, .. }) => {
+                        drain_segment_text(rx, opening, None).await;
+                        unheard()
+                    }
                     // The voice is gone for the rest of the step; the words are forwarded as text,
-                    // and the item reads as cut short (`interrupted=... or out.tts_failed`). A cut
-                    // speech lost nothing.
-                    Err(Lost { lost, opening, synchronized }) => {
-                        if lost {
-                            self.voice = Voice::Silent;
-                            self.acc.tts_failed();
-                        }
+                    // and the item reads as cut short (`interrupted=... or out.tts_failed`).
+                    Err(Lost { lost: true, opening, synchronized }) => {
+                        self.voice = Voice::Silent;
+                        self.acc.tts_failed();
                         match aligned.as_ref().filter(|a| a.stamped) {
                             // Stamps were already forwarded: the aligned stream never falls back,
                             // so the rest (never heard) is drained and the words are the stamps.
