@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 276 core items bound (121 functions and consts, 71 classes, 83 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 274 core items bound (121 functions and consts, 69 classes, 83 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -43,8 +43,6 @@
 //! - `lk_agents_voice::agent_session::SessionApi::host_new`: parameter `room`: not yet: `Arc<dyn SessionRoom>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::session_clock`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::agent_session::SessionApi::video_input`: return: not yet: `Arc<ParticipantVideoInput>` (a shared handle to an exposed class)
-//! - `lk_agents_voice::agent_session::SessionApi::audio_output`: return: not yet: `Arc<RoomAudioLeg>` (a shared handle to an exposed class)
-//! - `lk_agents_voice::agent_session::SessionApi::transcription_output`: return: not yet: `Arc<RoomTranscriptionLeg>` (a shared handle to an exposed class)
 //! - `lk_agents_voice::agent_session::SessionApi::host_attach_recorder`: parameter `recorder`: not yet: `Arc<dyn AudioRecorder>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::update_models`: parameter `llm`: not yet: `Arc<dyn Llm>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::update_agent`: parameter `frame`: not yet: `UpdateAgentArgs` is a keyword record (spread into keywords in Python; an options object in Node)
@@ -103,11 +101,6 @@
 //! - `lk_agents_abi::voice::rtc::StreamTextOptions::sender_identity`: return: not yet: `ParticipantIdentity` is an open string (#[host(string)])
 //! - `lk_agents_abi::voice::rtc::Transcription::participant_identity`: return: not yet: `ParticipantIdentity` is an open string (#[host(string)])
 //! - `lk_agents_abi::voice::rtc::Transcription::track_sid`: return: not yet: `TrackSid` is an open string (#[host(string)])
-//! - `lk_agents_voice::room_io::_output::RoomAudioLeg::standalone`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
-//! - `lk_agents_voice::room_io::_output::RoomAudioLeg::capture_frame`: parameter `frame`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::room_io::_output::RoomAudioLeg::subscribe`: parameter `listener`: not yet: `Arc<dyn PlaybackListener>` (a host object behind a proxy)
-//! - `lk_agents_voice::room_io::_output::transcription::RoomTranscriptionLeg::standalone`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
-//! - `lk_agents_voice::room_io::_output::transcription::RoomTranscriptionLeg::set_participant`: parameter `identity`: not yet: `ParticipantIdentity` is an open string (#[host(string)])
 //! - `lk_agents_voice::room_io::rooms::ScriptedRoom::session_clock`: return: not yet: returning an exposed class
 //! - `lk_agents_inference::fallback::FallbackLlm::for_host`: parameter `llms`: not yet: `Arc<dyn Llm>` (a host object behind a proxy)
 //! - `lk_agents_inference::fallback::FallbackLlm::chat_for_host`: parameter `chat_ctx_host`: not yet: a `HostRef` (a host object in the side table)
@@ -128,7 +121,6 @@
 //! - `lk_agents_voice::room_io::_input::ParticipantVideoInput::reading`: return: not yet: `TrackSid` is an open string (#[host(string)])
 //! - `lk_agents_voice::room_io::_input::ParticipantVideoInput::next_host_frame`: return: `MediaRef` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::transcription::synchronizer::TranscriptSynchronizer::for_host`: parameter `next_in_chain_audio`: not yet: `Arc<dyn AudioOutput>` (a host object behind a proxy)
-//! - `lk_agents_voice::transcription::synchronizer::TranscriptSynchronizer::audio_leg`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::transcription::synchronizer::TranscriptSynchronizer::text_leg`: return: not yet: returning an exposed class
 //! - `lk_agents_inference::mcp::session::McpSession::attach_client`: parameter `client`: not yet: `Arc<dyn McpClient>` (a host object behind a proxy)
 //! - `lk_agents_inference::mcp::session::McpSession::connect_host`: parameter `transport`: not yet: `Arc<dyn McpTransport>` (a host object behind a proxy)

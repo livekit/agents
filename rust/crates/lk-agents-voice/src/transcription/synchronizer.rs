@@ -969,12 +969,6 @@ impl TranscriptSynchronizer {
         TranscriptSynchronizer { core, audio, text, anchor }
     }
 
-    /// The node to install as `session.output.audio`, as a host object.
-    #[host(getter(name = "audio_output"))]
-    pub fn audio_leg(&self) -> crate::room_io::_output::RoomAudioLeg {
-        crate::room_io::_output::RoomAudioLeg::of(self.audio_output(), self.anchor)
-    }
-
     /// The node to install as `session.output.transcription`, as a host object.
     #[host(getter(name = "text_output"))]
     pub fn text_leg(&self) -> crate::io::CoreTextOutput {

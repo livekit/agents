@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::tts::markup::{ExpressiveTag, expression_attribute};
 use lk_agents_abi::voice::io::Result;
-use lk_agents_abi::voice::io::{IoError, TextOutput};
+use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID, Monotone, Spawner, SpawnerExt, TOPIC_TRANSCRIPTION,
@@ -557,76 +557,6 @@ impl TextOutput for ParticipantTranscriptionOutput {
         self.writer.lock().unwrap().end_segment(&self.ids);
         if let Some(next) = &self.next_in_chain {
             next.flush();
-        }
-    }
-}
-
-/// `_core.RoomTranscriptionOutput`: a participant's transcription leg as a host object (the
-/// agent's, or a standalone one over a host room).
-pub struct RoomTranscriptionLeg {
-    inner: Arc<ParticipantTranscriptionOutput>,
-    /// Built by the constructor, so closed by it; the session's own leg is its `RoomIo`'s.
-    standalone: bool,
-}
-
-impl RoomTranscriptionLeg {
-    pub fn of(inner: Arc<ParticipantTranscriptionOutput>) -> Self {
-        RoomTranscriptionLeg { inner, standalone: false }
-    }
-}
-
-#[lk_agents_abi::host(object(name = "RoomTranscriptionOutput", cell = "arc"))]
-impl RoomTranscriptionLeg {
-    /// A standalone leg over a host room (the reference's constructor). `next_in_chain` is a host
-    /// `io.TextOutput` the text is also handed to.
-    #[host(new(
-        kw_only = "is_delta_stream",
-        defaults(is_delta_stream = true, json_format = false)
-    ))]
-    pub fn standalone(
-        room: Arc<dyn RtcRoom>,
-        is_delta_stream: bool,
-        participant: Option<ParticipantIdentity>,
-        next_in_chain: Option<Arc<dyn TextOutput>>,
-        json_format: bool,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Self {
-        let inner = ParticipantTranscriptionOutput::new(
-            room.clone(),
-            spawner.clone(),
-            Arc::new(CountingSegmentIds::default()),
-            is_delta_stream,
-            json_format,
-            next_in_chain,
-        );
-        inner.start(room.as_ref(), spawner.as_ref());
-        if let Some(identity) = participant {
-            let leg = inner.clone();
-            spawner.spawn(Box::pin(async move { leg.set_participant(Some(identity)).await }));
-        }
-        RoomTranscriptionLeg { inner, standalone: true }
-    }
-
-    /// Point the leg at `identity` (`None` unlinks).
-    #[host(method)]
-    pub async fn set_participant(&self, #[host(required)] identity: Option<ParticipantIdentity>) {
-        self.inner.set_participant(identity).await;
-    }
-
-    #[host(method)]
-    pub async fn capture_text(&self, text: String) -> std::result::Result<(), IoError> {
-        TextOutput::capture_text(&*self.inner, &text).await
-    }
-
-    #[host(method)]
-    pub fn flush(&self) {
-        TextOutput::flush(&*self.inner);
-    }
-
-    #[host(method)]
-    pub async fn aclose(&self) {
-        if self.standalone {
-            self.inner.aclose().await;
         }
     }
 }

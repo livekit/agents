@@ -73,7 +73,6 @@ impl Endpointing {
 
 /// `BaseEndpointing`: fixed delays.
 #[derive(Debug, Clone)]
-#[lk_agents_abi::class(name = "FixedEndpointing", mutable)]
 pub struct Fixed {
     min_delay: Duration,
     max_delay: Duration,
@@ -86,68 +85,9 @@ impl Fixed {
     }
 }
 
-/// Seconds on the host's clock (`time.time()`, or whatever its caller stamps with) as a `Ts`.
-fn ts_of(secs: f64) -> Ts {
-    Ts::from_nanos((secs.max(0.0) * 1e9).round() as u64)
-}
-
-fn secs_of(ts: Ts) -> f64 {
-    ts.as_nanos() as f64 / 1e9
-}
-
-fn delay_of(secs: f64) -> Duration {
-    Duration::try_from_secs_f64(secs).unwrap_or(Duration::ZERO)
-}
-
-/// `voice.endpointing.BaseEndpointing`'s state, for its host class.
-#[lk_agents_abi::host(object(name = "FixedEndpointing", pid = false))]
-impl Fixed {
-    #[host(new)]
-    pub fn for_host(min_delay: f64, max_delay: f64) -> Self {
-        Fixed::new(delay_of(min_delay), delay_of(max_delay))
-    }
-
-    #[host(getter(name = "min_delay"))]
-    pub fn min_delay_secs(&self) -> f64 {
-        self.min_delay.as_secs_f64()
-    }
-
-    #[host(getter(name = "max_delay"))]
-    pub fn max_delay_secs(&self) -> f64 {
-        self.max_delay.as_secs_f64()
-    }
-
-    #[host(getter)]
-    pub fn overlapping(&self) -> bool {
-        self.overlapping
-    }
-
-    /// `update_options(min_delay=, max_delay=)`: each only when given.
-    #[host(method(kw_only))]
-    pub fn update_options(&mut self, min_delay: lk_agents_abi::Maybe<f64>, max_delay: lk_agents_abi::Maybe<f64>) {
-        if let lk_agents_abi::Maybe::Given(d) = min_delay {
-            self.min_delay = delay_of(d);
-        }
-        if let lk_agents_abi::Maybe::Given(d) = max_delay {
-            self.max_delay = delay_of(d);
-        }
-    }
-
-    #[host(method(name = "on_start_of_speech"))]
-    pub fn on_start_of_speech_for_host(&mut self, _started_at: f64, overlapping: bool) {
-        self.overlapping = overlapping;
-    }
-
-    #[host(method(name = "on_end_of_speech"))]
-    pub fn on_end_of_speech_for_host(&mut self, _ended_at: f64, _should_ignore: bool) {
-        self.overlapping = false;
-    }
-}
-
 /// Learns `min_delay` from how the user pauses (`max_delay` only clamps). Learned: an intra-user
 /// pause with no agent turn between, and a pause before an immediate interruption.
 #[derive(Debug, Clone)]
-#[lk_agents_abi::class(name = "DynamicEndpointing", mutable)]
 pub struct Dynamic {
     base: Fixed,
     /// Seconds. The filter is clamped to `[min_delay, max_delay]` at construction.
@@ -158,125 +98,6 @@ pub struct Dynamic {
     agent_ended_at: Option<Ts>,
     /// `_speaking`: between the user's start and end of speech.
     speaking: bool,
-}
-
-/// `voice.endpointing.DynamicEndpointing`'s state, for its host class: seconds in, seconds out.
-#[lk_agents_abi::host(object(name = "DynamicEndpointing", pid = false))]
-impl Dynamic {
-    #[host(new(defaults(alpha = 0.9)))]
-    pub fn for_host(min_delay: f64, max_delay: f64, alpha: f64) -> Result<Self, lk_agents_abi::FilterError> {
-        let (min, max) = (delay_of(min_delay), delay_of(max_delay));
-        let f = ExpFilter::new(alpha, Maybe::Given(max_delay), Maybe::Given(min_delay), Maybe::Given(min_delay))?;
-        Ok(Dynamic { utterance_pause: f, ..Dynamic::new(min, max, 0.5) })
-    }
-
-    /// The learned floor, clamped by the ceiling.
-    #[host(getter(name = "min_delay"))]
-    pub fn min_delay_secs(&self) -> f64 {
-        let learned = self.utterance_pause.value().unwrap_or(self.base.min_delay.as_secs_f64());
-        learned.min(self.base.max_delay.as_secs_f64())
-    }
-
-    #[host(getter(name = "max_delay"))]
-    pub fn max_delay_secs(&self) -> f64 {
-        self.base.max_delay.as_secs_f64()
-    }
-
-    /// `_min_delay`: the configured floor, not the learned one.
-    #[host(getter)]
-    pub fn configured_min_delay(&self) -> f64 {
-        self.base.min_delay.as_secs_f64()
-    }
-
-    #[host(getter)]
-    pub fn overlapping(&self) -> bool {
-        self.base.overlapping
-    }
-
-    #[host(getter)]
-    pub fn speaking(&self) -> bool {
-        self.speaking
-    }
-
-    #[host(getter)]
-    pub fn utterance_started_at(&self) -> Option<f64> {
-        self.utterance_started_at.map(secs_of)
-    }
-
-    #[host(getter)]
-    pub fn utterance_ended_at(&self) -> Option<f64> {
-        self.utterance_ended_at.map(secs_of)
-    }
-
-    #[host(getter)]
-    pub fn agent_speech_started_at(&self) -> Option<f64> {
-        self.agent_started_at.map(secs_of)
-    }
-
-    #[host(getter)]
-    pub fn agent_speech_ended_at(&self) -> Option<f64> {
-        self.agent_ended_at.map(secs_of)
-    }
-
-    #[host(getter)]
-    pub fn between_utterance_delay(&self) -> f64 {
-        self.between_utterance().as_secs_f64()
-    }
-
-    #[host(getter)]
-    pub fn between_turn_delay(&self) -> f64 {
-        self.between_turn().as_secs_f64()
-    }
-
-    #[host(getter)]
-    pub fn immediate_interruption_delay(&self) -> (f64, f64) {
-        let (turn, interruption) = self.immediate_interruption();
-        (turn.as_secs_f64(), interruption.as_secs_f64())
-    }
-
-    #[host(method(name = "on_start_of_agent_speech"))]
-    pub fn on_start_of_agent_speech_for_host(&mut self, started_at: f64) {
-        self.on_start_of_agent_speech(ts_of(started_at));
-    }
-
-    #[host(method(name = "on_end_of_agent_speech"))]
-    pub fn on_end_of_agent_speech_for_host(&mut self, ended_at: f64) {
-        self.on_end_of_agent_speech(ts_of(ended_at));
-    }
-
-    #[host(method(name = "on_start_of_speech"))]
-    pub fn on_start_of_speech_for_host(&mut self, started_at: f64, overlapping: bool) {
-        self.on_start_of_speech(ts_of(started_at), overlapping);
-    }
-
-    /// The learned floor when it moved, for the host's log line.
-    #[host(method(name = "on_end_of_speech"))]
-    pub fn on_end_of_speech_for_host(&mut self, ended_at: f64, should_ignore: bool) -> Option<f64> {
-        self.on_end_of_speech(ts_of(ended_at), should_ignore).map(|_| self.min_delay_secs())
-    }
-
-    /// `update_options`: a new floor resets the filter to it (and clamps from below), a new
-    /// ceiling clamps from above, a new `alpha` keeps the learned value.
-    #[host(method(kw_only))]
-    pub fn update_options(
-        &mut self,
-        min_delay: Maybe<f64>,
-        max_delay: Maybe<f64>,
-        alpha: Maybe<f64>,
-    ) -> Result<(), lk_agents_abi::FilterError> {
-        if let Maybe::Given(d) = min_delay {
-            self.base.min_delay = delay_of(d);
-            self.utterance_pause.reset(Maybe::NotGiven, Maybe::Given(d), Maybe::Given(d), Maybe::NotGiven)?;
-        }
-        if let Maybe::Given(d) = max_delay {
-            self.base.max_delay = delay_of(d);
-            self.utterance_pause.reset(Maybe::NotGiven, Maybe::NotGiven, Maybe::NotGiven, Maybe::Given(d))?;
-        }
-        if let Maybe::Given(a) = alpha {
-            self.utterance_pause.reset(Maybe::Given(a), Maybe::NotGiven, Maybe::NotGiven, Maybe::NotGiven)?;
-        }
-        Ok(())
-    }
 }
 
 impl Dynamic {

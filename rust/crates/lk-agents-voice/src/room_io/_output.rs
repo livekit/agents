@@ -5,10 +5,10 @@ use crate::room_io::types::AudioOutputConfig;
 use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::voice::io::Result;
-use lk_agents_abi::voice::io::{AudioOutput, IoError, PlaybackFinished, PlaybackTracker};
+use lk_agents_abi::voice::io::{AudioOutput, PlaybackFinished, PlaybackTracker};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Monotone, Spawner, SpawnerExt, Ts};
-use lk_agents_rtc::{AudioSource, PlaybackInfo, RtcRoom, TrackSource, frame_duration};
+use lk_agents_rtc::{AudioSource, PlaybackInfo, RtcRoom, frame_duration};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -638,124 +638,5 @@ impl AudioOutput for ParticipantAudioOutput {
         if std::mem::replace(&mut self.shared.lock().paused, false) {
             self.shared.wake.notify_waiters();
         }
-    }
-}
-
-// The session's own leg (`of`, one `Arc`, so assigning it back swaps nothing), or a standalone leg
-// over a host room built by the constructor.
-
-/// `_core.RoomAudioOutput`: a core audio leg as a host object.
-pub struct RoomAudioLeg {
-    inner: Arc<dyn AudioOutput>,
-    /// The concrete leg when the constructor built it: `start`/`aclose` are its.
-    owned: Option<Arc<ParticipantAudioOutput>>,
-    anchor: lk_agents_abi::WallAnchor,
-    listener: Mutex<Option<Arc<dyn lk_agents_abi::voice::io::PlaybackObserver>>>,
-}
-
-impl RoomAudioLeg {
-    /// A leg the session (or a synchroniser) already runs, stamped against its clock's `anchor`.
-    pub fn of(inner: Arc<dyn AudioOutput>, anchor: lk_agents_abi::WallAnchor) -> Self {
-        RoomAudioLeg { inner, owned: None, anchor, listener: Mutex::new(None) }
-    }
-
-    /// The leg itself, for a host handing it back as `session.output.audio`.
-    pub fn leg(&self) -> Arc<dyn AudioOutput> {
-        Arc::clone(&self.inner)
-    }
-}
-
-#[lk_agents_abi::host(object(name = "RoomAudioOutput", cell = "arc", as_dyn(AudioOutput = leg)))]
-impl RoomAudioLeg {
-    /// A standalone leg over a host room (the reference's `_ParticipantAudioOutput(room,
-    /// sample_rate=, num_channels=, track_publish_options=, track_name=)`); `start()` publishes.
-    #[host(new(kw_only = "sample_rate"))]
-    pub fn standalone(
-        room: Arc<dyn RtcRoom>,
-        sample_rate: u32,
-        num_channels: u16,
-        track_source: Option<TrackSource>,
-        track_name: Option<String>,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Self {
-        let clock: Arc<dyn Clock> = Arc::new(lk_agents_abi::RealClock::new());
-        let anchor = lk_agents_abi::WallAnchor::of(&*clock);
-        let mut publish =
-            lk_agents_rtc::TrackPublishOptions { sample_rate, num_channels, ..Default::default() };
-        if let Some(name) = track_name {
-            publish.name = name;
-        }
-        if let Some(source) = track_source {
-            publish.source = source;
-        }
-        let leg = ParticipantAudioOutput::new(room, clock, spawner, AudioOutputConfig { publish });
-        RoomAudioLeg { inner: leg.clone(), owned: Some(leg), anchor, listener: Mutex::new(None) }
-    }
-
-    /// Publish the track; resolves once a remote peer has subscribed. The session's leg is started
-    /// by its `RoomIo`.
-    #[host(method)]
-    pub async fn start(&self) -> std::result::Result<(), IoError> {
-        match &self.owned {
-            Some(leg) => leg.start().await,
-            None => Ok(()),
-        }
-    }
-
-    #[host(method)]
-    pub async fn aclose(&self) {
-        if let Some(leg) = &self.owned {
-            leg.aclose().await;
-        }
-    }
-
-    #[host(getter)]
-    pub fn sample_rate(&self) -> Option<u32> {
-        self.inner.sample_rate()
-    }
-
-    #[host(getter)]
-    pub fn can_pause(&self) -> bool {
-        lk_agents_abi::voice::io::AudioOutputExt::can_pause(&*self.inner)
-    }
-
-    /// One frame, downstream. Awaited: the leg blocks on the track's own backpressure.
-    #[host(method)]
-    pub async fn capture_frame(&self, frame: AudioFrame) -> std::result::Result<(), IoError> {
-        lk_agents_abi::voice::io::AudioOutputExt::capture_frame(&*self.inner, &frame).await
-    }
-
-    #[host(method)]
-    pub fn flush(&self) {
-        lk_agents_abi::voice::io::AudioOutputExt::flush(&*self.inner);
-    }
-
-    #[host(method)]
-    pub fn clear_buffer(&self) {
-        self.inner.clear_buffer();
-    }
-
-    #[host(method)]
-    pub fn pause(&self) {
-        self.inner.pause();
-    }
-
-    #[host(method)]
-    pub fn resume(&self) {
-        self.inner.resume();
-    }
-
-    /// Hand the leg's playback events to `listener` (the wrapper re-emits them as its own). One
-    /// subscription: a second replaces the first.
-    #[host(method)]
-    pub fn subscribe(&self, listener: Arc<dyn lk_agents_abi::voice::io::PlaybackListener>) {
-        let observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
-            Arc::new(lk_agents_abi::voice::io::ListenerObserver { listener, anchor: self.anchor });
-        let mut slot = self.listener.lock().unwrap();
-        if let Some(old) = slot.take() {
-            self.inner.tracker().unobserve(&old);
-        }
-        self.inner.tracker().observe(observer.clone());
-        *slot = Some(observer);
     }
 }

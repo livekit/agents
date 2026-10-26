@@ -381,25 +381,6 @@ impl SessionApi {
         self.room_io.video_input()
     }
 
-    /// The room's publishing audio leg, as `_core.RoomAudioOutput`, when `audio_output` is on. A
-    /// fresh handle each call over the same leg.
-    #[host(getter)]
-    pub fn audio_output(&self) -> Option<Arc<crate::room_io::_output::RoomAudioLeg>> {
-        self.room_io
-            .audio_output()
-            .map(|out| Arc::new(crate::room_io::_output::RoomAudioLeg::of(out, self.anchor)))
-    }
-
-    /// The agent's transcription leg, as `_core.RoomTranscriptionOutput`, when `text_output` is on.
-    #[host(getter)]
-    pub fn transcription_output(
-        &self,
-    ) -> Option<Arc<crate::room_io::_output::transcription::RoomTranscriptionLeg>> {
-        self.room_io
-            .agent_transcription()
-            .map(|t| Arc::new(crate::room_io::_output::transcription::RoomTranscriptionLeg::of(t)))
-    }
-
     /// Record the session into `recorder`; `None` detaches (`RecorderIO.start()`/`aclose()`). The
     /// recorder taps the driver's audio path, so no chain node wraps a leg. Safe before or after
     /// `start()`; the file's `finish` stays the host's.
