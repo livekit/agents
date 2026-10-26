@@ -227,6 +227,12 @@ impl AudioRecognition {
     }
 
     /// `self._speaking`, i.e. `not self._user_silence_ev.is_set()`. Read off the phase.
+    /// Speaking on the recogniser's word alone: no detector heard the start, so none will hear
+    /// the end.
+    pub fn speaking_on_recogniser(&self) -> bool {
+        self.user_speaking() && !self.vad_speech_started
+    }
+
     pub fn user_speaking(&self) -> bool {
         match &self.phase {
             Phase::Speaking { .. } => true,

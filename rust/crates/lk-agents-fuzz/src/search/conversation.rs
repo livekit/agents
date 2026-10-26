@@ -686,6 +686,10 @@ impl Talk {
                 self.send(Input::Room { event: RoomIn::Linked }).await?;
                 continue;
             }
+            // In a room, the person sometimes types instead of speaking.
+            if self.run.setup.room_legs.is_some() && self.rng.u8(0..100) < self.persona.leaves {
+                self.send(Input::Room { event: RoomIn::Chat }).await?;
+            }
             // Nothing to speak into: the developer detached the microphone. The person keeps
             // talking into a dead line, which to the session is silence, so the line is silent for
             // a beat and the conversation carries on -- the developer may attach one again.

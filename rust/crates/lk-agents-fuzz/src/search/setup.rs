@@ -3,7 +3,7 @@ use fastrand::Rng;
 use lk_agents_abi::voice::session_options::TextTransformSet;
 
 use crate::{
-    drive::{RealtimeSetup, RoomSetup, Setup},
+    drive::{PreConnect, RealtimeSetup, RoomLegs, RoomSetup, Setup},
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
 
@@ -64,5 +64,13 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
                 filter_emoji: rng.bool(),
             })),
         },
+        room_legs: rng.bool().then(|| RoomLegs {
+            pre_connect: match rng.usize(0..4) {
+                0 => None,
+                1 => Some(PreConnect::Sent),
+                2 => Some(PreConnect::Never),
+                _ => Some(PreConnect::Malformed),
+            },
+        }),
     }
 }

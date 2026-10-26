@@ -38,17 +38,33 @@ impl Run {
             );
         let connect = Duration::from_millis(setup.connect_ms.unwrap_or(0));
         let refs: Arc<dyn RefRegistry> = Arc::new(NoopRefs);
-        // A voice call always has a microphone; the legs are what listens to it. Minted like an
-        // output so its `nth` is what a `Ref<Mic>` names.
-        let (mic, frames) = fakes::FakeAudioInput::new();
-        let mic_nth = registry.new_mic();
+        // A voice call always has a microphone; the legs are what listens to it. The host's own
+        // is minted like an output, so its `nth` is what a `Ref<Mic>` names; the room's is the
+        // person's track, minted when they join.
+        let legs = setup.room_legs;
+        let host_mic = legs.is_none().then(|| {
+            let (mic, frames) = fakes::FakeAudioInput::new();
+            (mic, frames, registry.new_mic())
+        });
         let options = HostOptions::new(session_kwargs(setup));
         let room_io = RoomIoConfig {
             close_on_disconnect: setup.room.is_some_and(|r| r.close_on_disconnect),
             delete_room_on_close: setup.room.is_some_and(|r| r.delete_room_on_close),
-            // The host's own legs replace the room's, which `agent_session.py` turns off.
-            audio_input: None,
-            audio_output: None,
+            // With its own legs, the host has turned the room's off, as `agent_session.py` does.
+            audio_input: legs.map(|legs| AudioInputConfig {
+                sample_rate: SAMPLE_RATE,
+                pre_connect_audio: legs.pre_connect.is_some(),
+                // Shorter than the half second of frames the track's queue holds, so the frames
+                // spoken while the session waits for a buffer that never comes are not dropped.
+                pre_connect_audio_timeout: Duration::from_millis(200),
+                ..AudioInputConfig::default()
+            }),
+            audio_output: legs.map(|_| AudioOutputConfig {
+                publish: lk_agents_rtc::TrackPublishOptions {
+                    sample_rate: SAMPLE_RATE,
+                    ..Default::default()
+                },
+            }),
             text_output: Some(TextOutputConfig {
                 sync_transcription: Some(setup.sync_transcription),
                 ..TextOutputConfig::default()
@@ -95,18 +111,20 @@ impl Run {
                 None,
                 None,
                 None,
-                Some(mic as Arc<AudioIn>),
-                Some(fakes::FakeAudioOutput::new(
-                    registry.clone(),
-                    setup.pausable_output,
-                    setup.lagging_output,
-                ) as _),
+                host_mic.as_ref().map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
+                legs.is_none().then(|| {
+                    fakes::FakeAudioOutput::new(
+                        registry.clone(),
+                        setup.pausable_output,
+                        setup.lagging_output,
+                    ) as _
+                }),
                 setup
                     .video
                     .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
                 None,
                 false,
-                Some(fakes::FakeTextOutput::new(registry.clone()) as _),
+                legs.is_none().then(|| fakes::FakeTextOutput::new(registry.clone()) as _),
                 false,
                 setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
                 setup.max_unrecoverable_errors,
@@ -188,16 +206,67 @@ impl Run {
             streams: BTreeMap::new(),
             handles: BTreeMap::new(),
             utterances: BTreeMap::new(),
-            mics: BTreeMap::from([(mic_nth, (frames, 0))]),
+            mics: host_mic
+                .into_iter()
+                .map(|(_, frames, nth)| (nth, (Mic::Host(frames), 0)))
+                .collect(),
+            host_mic: false,
+            joins: 0,
             next_filler: 1,
             refs,
             setup: setup.clone(),
             record: Recording::default(),
         };
+        // The person joins the call the agent just answered.
+        if legs.is_some() {
+            run.join_caller();
+        }
         run.collect();
         run
     }
+
+    /// The person joins the room. With the room's legs they publish a microphone, which is then
+    /// the session's (unless the host replaced it), and their app sends what it buffered before
+    /// the agent was there, as the setup says.
+    pub(super) fn join_caller(&mut self) {
+        let caller = self.room.add_participant(CALLER, ParticipantKind::Standard);
+        let Some(legs) = self.setup.room_legs else { return };
+        if self.host_mic {
+            return;
+        }
+        self.joins += 1;
+        let track = format!("TR_mic_{}", self.joins);
+        let mic = caller.publish_microphone(track.as_str());
+        if let Some(pre_connect) = legs.pre_connect {
+            mic.set_audio_features(vec![lk_agents_rtc::AudioTrackFeature::PreconnectBuffer]);
+            let mut attributes = std::collections::HashMap::from([("trackId".into(), track)]);
+            if pre_connect != PreConnect::Malformed {
+                attributes.insert("sampleRate".into(), SAMPLE_RATE.to_string());
+                attributes.insert("channels".into(), "1".into());
+            }
+            let info = lk_agents_rtc::StreamInfo {
+                id: format!("pre_connect_{}", self.joins),
+                topic: PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
+                mime_type: "audio/pcm".into(),
+                total_length: None,
+                attributes,
+                timestamp: 0,
+                attachments: Vec::new(),
+            };
+            // Half a second of what the person said before the agent joined: samples no case
+            // frame carries, so nothing mistakes them for the microphone's.
+            let buffered = vec![0u8; SAMPLE_RATE as usize];
+            if pre_connect != PreConnect::Never {
+                let _ = self.room.send_byte_stream(CALLER, info, [buffered]);
+            }
+        }
+        let nth = self.registry.new_mic();
+        self.mics.insert(nth, (Mic::Room { track: mic, burst: (0, 0) }, 0));
+    }
 }
+
+/// The person on the call: who joins, leaves and speaks in the room.
+pub(super) const CALLER: &str = "caller";
 
 /// `on_event`: the host's sink, handed each event's wire form. What the run reads is the typed
 /// event the probe saw first.

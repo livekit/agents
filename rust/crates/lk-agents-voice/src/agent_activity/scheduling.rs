@@ -822,7 +822,12 @@ impl Driver {
             return;
         };
         handle.authorize_generation();
-        self.release_paused_speech(candidate, out);
+        // Whoever was paused has lost the floor to this speech, or is this speech: either way the
+        // sink plays again. A pause left on a speech that ended under it would hold every later
+        // speech's audio until the close.
+        if let Some(paused) = self.activity.paused_speech.paused_handle() {
+            self.release_paused_speech(paused, out);
+        }
         out.trace(SpeechStep::Authorized { speech: candidate });
         self.shared.launch.note_authorized(candidate);
     }

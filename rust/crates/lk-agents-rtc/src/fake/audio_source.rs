@@ -11,7 +11,9 @@ use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::pin::Pin;
 use tokio::sync::Notify;
+use tokio::sync::futures::Notified;
 
 /// `rtc.AudioSource`, minus the speaker.
 pub struct FakeAudioSource {
@@ -88,6 +90,19 @@ impl FakeAudioSource {
         // `drain_at` is deliberately not clamped to `now`: its readers handle a stale value.
     }
 
+    /// Wait for a wake or for the clock to reach `at`, whichever comes first.
+    async fn parked_until(&self, parked: Pin<&mut Notified<'_>>, at: Option<Ts>) {
+        match at {
+            Some(at) => {
+                tokio::select! {
+                    () = parked => {}
+                    () = self.clock.wait_until(at) => {}
+                }
+            }
+            None => parked.await,
+        }
+    }
+
     fn queued_locked(state: &SourceState, now: Ts) -> Duration {
         state.drain_at.saturating_duration_since(now)
     }
@@ -100,7 +115,7 @@ impl AudioSource for FakeAudioSource {
             let parked = self.wake.notified();
             tokio::pin!(parked);
             parked.as_mut().enable();
-            {
+            let room = {
                 let now = self.clock.now();
                 let mut state = self.state.lock().unwrap();
                 if state.closed {
@@ -120,8 +135,11 @@ impl AudioSource for FakeAudioSource {
                     self.wake.notify_waiters();
                     return Ok(());
                 }
-            }
-            parked.await;
+                state.queue.front().map(|q| q.ends_at)
+            };
+            // Room frees up as the head frame finishes playing, on the clock: a speaker drains
+            // whether or not anyone settles it.
+            self.parked_until(parked, room).await;
         }
     }
 
@@ -159,15 +177,16 @@ impl AudioSource for FakeAudioSource {
             let parked = self.wake.notified();
             tokio::pin!(parked);
             parked.as_mut().enable();
-            {
+            let drained = {
                 let now = self.clock.now();
                 let mut state = self.state.lock().unwrap();
                 Self::settle_locked(&mut state, now);
                 if state.closed || Self::queued_locked(&state, now).is_zero() {
                     return state.ledger.settle();
                 }
-            }
-            parked.await;
+                state.drain_at
+            };
+            self.parked_until(parked, Some(drained)).await;
         }
     }
 

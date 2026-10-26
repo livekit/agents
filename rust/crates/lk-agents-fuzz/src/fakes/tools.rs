@@ -71,11 +71,15 @@ impl FakeTools {
                 answer
             }
             Ok(Body::AfterIdle(answer)) => {
-                // `await session.wait_for_idle()` in the body: the driver's answer, idle or
-                // refused by the close, ends the wait either way.
-                if let Some(idle) = self.registry.session().and_then(|s| s.wait_for_idle(None).ok())
+                // `async with ctx.foreground():` in the body: idle asked from the tool's own
+                // origin (so the driver can tell it apart from its speech), the floor held, and
+                // released on the way out. Refused by the close, the wait ends all the same.
+                let origin = format!("tool:{}", call.call_id);
+                if let Some(session) = self.registry.session()
+                    && let Ok(hold) = session.wait_for_idle_and_hold(Some(&origin))
+                    && let Ok(hold) = hold.await
                 {
-                    let _ = idle.await;
+                    session.release_idle_hold(hold);
                 }
                 answer
             }

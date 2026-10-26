@@ -46,7 +46,7 @@ impl Rule for TextConservation {
         let inputs = r.inputs_view();
         let (host, internal, inference) = (r.host_view(), r.internal_view(), r.inference_view());
         let spoken = said_text(&inputs, &host);
-        let transcription = inputs.transcription_output();
+        let transcription = inputs.transcription_output_applied();
 
         for speech in host.speeches().into_iter().filter(SpeechView::is_known) {
             let Some(given) = spoken

@@ -145,6 +145,49 @@ impl<'a> InputsView<'a> {
         })
     }
 
+    /// The audio output path as the driver had it (see [`applied`](Self::applied)).
+    pub fn audio_output_applied(&self) -> Switch {
+        self.applied(self.audio_output())
+    }
+
+    /// The transcription path as the driver had it (see [`applied`](Self::applied)).
+    pub fn transcription_output_applied(&self) -> Switch {
+        self.applied(self.transcription_output())
+    }
+
+    /// A path with each change moved to when its command reached the driver's loop. A burst
+    /// sends a switch ahead of a call the loop then takes first, so a rule asking what the driver
+    /// had when it decided reads this; a switch the loop never took stays at its call.
+    fn applied(&self, switch: Switch) -> Switch {
+        use lk_agents_voice::{agent_session::Origin, trace::CoreStep};
+        let kind = |input: &Input| match input {
+            Input::SetIoEnabled { .. } => Some("ActivityCommand::SetIoEnabled"),
+            Input::SetAudioInput { .. } => Some("ActivityCommand::SetAudioInput"),
+            Input::SetAudioOutput { .. } => Some("ActivityCommand::SetAudioOutput"),
+            Input::SetTranscriptionOutput { .. } => Some("ActivityCommand::SetTranscriptionOutput"),
+            _ => None,
+        };
+        let mut taken: std::collections::BTreeMap<&str, Vec<Observed>> = Default::default();
+        for (at, kind) in self.0.journal_where(|step| match step {
+            Step::Core(CoreStep::CommandReceived { origin: Origin::Host, kind }) => Some(*kind),
+            _ => None,
+        }) {
+            taken.entry(kind).or_default().push(at);
+        }
+        let mut sent: std::collections::BTreeMap<&str, usize> = Default::default();
+        let moved: std::collections::BTreeMap<Observed, Observed> = self
+            .accepted()
+            .filter_map(|a| {
+                let kind = kind(&a.input)?;
+                let n = sent.entry(kind).or_default();
+                *n += 1;
+                Some((a.at, *taken.get(kind)?.get(*n - 1)?))
+            })
+            .collect();
+        let changes = switch.changes.into_iter().map(|(at, on)| (moved.get(&at).copied().unwrap_or(at), on));
+        Switch { changes: changes.collect() }
+    }
+
     /// A leg's path is on while both of its independent switches are: the enable, which holds
     /// whatever is attached, and the attachment. Either one alone turning on again does not
     /// reopen a path the other still holds shut.

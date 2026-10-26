@@ -386,8 +386,8 @@ plain_enum! {
 plain_enum! {
     /// What a tool body answers with. `Detached` is `ctx.update()`: the step is answered with a
     /// progress message and the tool keeps running, its real end coming later as a deferred reply.
-    /// `AfterIdle` is `ctx.wait_for_idle()` inside the body: the tool asks the agent to go idle,
-    /// from its own origin, and returns once it has.
+    /// `AfterIdle` is `async with ctx.foreground()` inside the body: the tool asks the agent to go
+    /// idle, from its own origin, holds the floor and returns once it has.
     ToolAnswer { Return, Value, Error, StopResponse, Cancelled, Detached, AfterIdle }
 }
 plain_enum! {
@@ -413,9 +413,9 @@ plain_enum! {
     IvrInput { Start, SeedTranscript, Close }
 }
 plain_enum! {
-    /// What happens in the room the session is in: the link the room io machine reports, and the
-    /// room's own two events that name no participant.
-    RoomIn { Linked, Unlinked, StateChanged, Closed }
+    /// What happens in the room the session is in: the link the room io machine reports, the
+    /// room's own two events that name no participant, and the person typing in the chat.
+    RoomIn { Linked, Unlinked, StateChanged, Closed, Chat }
 }
 plain_enum! {
     /// What `GetDtmfTask`'s event half is told: start collecting, a SIP digit, stop.

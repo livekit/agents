@@ -23,7 +23,7 @@ impl Rule for NoPrematureCompletion {
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let host = r.host_view();
-        let audio_path = r.inputs_view().audio_output();
+        let audio_path = r.inputs_view().audio_output_applied();
         for call in host.api_calls() {
             let Some((_, Answer::Speech(id))) = call.returned() else { continue };
             let Input::Say { input: input @ (SayInput::TextStream | SayInput::Audio), .. } =

@@ -175,7 +175,8 @@ impl Run {
     /// the next round reads fakes that have not moved.
     pub fn release_advance(&self) -> Input {
         let now = self.record.now().at_ms;
-        let furthest = self.deadlines().map(|(_, at)| at).max().unwrap_or(now);
+        let playing = now + self.room_audio_queued().as_millis() as u64;
+        let furthest = self.deadlines().map(|(_, at)| at).max().unwrap_or(now).max(playing);
         Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
     }
 
@@ -186,6 +187,15 @@ impl Run {
     fn deadline_ahead(&self) -> bool {
         let now = self.record.now().at_ms;
         self.deadlines().any(|(periodic, at)| !periodic && at > now)
+            || !self.room_audio_queued().is_zero()
+    }
+
+    /// The agent's voice still queued in the room's speaker: the room's own output plays on the
+    /// clock and owes the driver its playout, so a round that leaves audio there is not quiet.
+    fn room_audio_queued(&self) -> Duration {
+        use lk_agents_rtc::AudioSource as _;
+        let sources = self.room.local_participant().sources();
+        sources.iter().map(|source| source.queued_duration()).max().unwrap_or_default()
     }
 
     /// Every deadline the driver journalled, in milliseconds, and whether it is the recorder's
@@ -206,7 +216,8 @@ impl Run {
     }
 
     /// Whether the person's speech the driver last heard of began on the recogniser's word, has
-    /// not ended, and no utterance was opened since. Once only: a recogniser the driver no longer
+    /// not ended, and no utterance since was ended: each one went with a recogniser that was
+    /// swapped or failed under it. Once only, in the release: a recogniser the driver no longer
     /// takes the end of speech from (another turn detection) cannot end it, and asking again
     /// would never go quiet.
     fn recogniser_left_speaking(&self) -> bool {
@@ -221,11 +232,16 @@ impl Run {
         else {
             return false;
         };
-        !self
-            .record
-            .applied()
-            .iter()
-            .any(|a| a.accepted && a.at > began && matches!(a.input, Input::SttStart { .. }))
+        let released = self.record.released().unwrap_or(Observed::END);
+        !self.record.applied().iter().any(|a| {
+            a.accepted
+                && a.at > began
+                && match a.input {
+                    Input::SttEnd { .. } => true,
+                    Input::SttStart { .. } => a.at > released,
+                    _ => false,
+                }
+        })
     }
 
     /// Whether the driver is still holding a turn open.

@@ -35,13 +35,14 @@ use lk_agents_abi::{
     metrics::base::AgentMetrics,
     turn::interruption::InterruptionSource,
     turn::keyterms::SttContextConfig,
-    voice::room_io::{RoomIoConfig, TextOutputConfig},
+    voice::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig},
     voice::session_options::{
         EndpointingKwargs, HostValue, InterruptionKwargs, PreemptiveKwargs, SessionKwargs,
         TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
     },
 };
-use lk_agents_rtc::FakeRoom;
+use lk_agents_rtc::{FakeRoom, ParticipantKind};
+use lk_agents_voice::room_io::types::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::{
     Runtime,
     agent_activity::options::{
@@ -171,6 +172,27 @@ pub struct Setup {
     /// `tts_text_transforms`: `None` is not given (markdown and emoji filtered), `Some` the set
     /// written, `Some(None)` none.
     pub text_transforms: Option<Option<TextTransformSet>>,
+    /// The room's own audio and transcription legs, which a host that hands none of its own
+    /// runs on (`agent_session.py`'s default): the person is in the room from the start and
+    /// speaks into a microphone track, and the agent's voice plays out on the room's clock.
+    /// `None` is the host's own legs, the fakes.
+    pub room_legs: Option<RoomLegs>,
+}
+
+/// The room's legs, and whether the person's app sends the audio it buffered before the agent
+/// joined (`pre_connect_audio`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoomLegs {
+    pub pre_connect: Option<PreConnect>,
+}
+
+/// What the person's app does with its pre-connect buffer: sends it, never sends it (the
+/// session waits out its timeout), or sends one the session cannot read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PreConnect {
+    Sent,
+    Never,
+    Malformed,
 }
 
 /// The realtime server a session is built against: what it can do, as its capabilities say.
@@ -240,6 +262,7 @@ impl Default for Setup {
             keyterms: Vec::new(),
             room: None,
             text_transforms: None,
+            room_legs: None,
         }
     }
 }
@@ -352,6 +375,17 @@ impl Drop for Tasks {
     }
 }
 
+/// Where a microphone's frames go: the host's own leg, or the person's track in the room.
+enum Mic {
+    Host(mpsc::UnboundedSender<AudioFrame>),
+    /// The track, and how many frames went into it at which instant.
+    Room { track: Arc<lk_agents_rtc::FakeTrackPublication>, burst: (u64, u32) },
+}
+
+/// The most frames pushed into the person's track in one instant: half of what each of the
+/// track's two queues holds (`AUDIO_QUEUE_FRAMES`), which drain only as time moves.
+const ROOM_BURST_FRAMES: u32 = (lk_agents_abi::AUDIO_QUEUE_FRAMES / 2) as u32;
+
 /// The side table a host ref points into. Releases are no-ops: no host holds these objects.
 struct NoopRefs;
 
@@ -400,8 +434,13 @@ pub struct Run {
     /// Which recognition stream each utterance is on: an `SttInterim` names the utterance, and the
     /// fake behind it is reached through its stream.
     utterances: BTreeMap<u32, u32>,
-    /// Each attached microphone's frame channel, and how many frames it has carried.
-    mics: BTreeMap<u32, (mpsc::UnboundedSender<AudioFrame>, u16)>,
+    /// Each attached microphone, and how many frames it has carried.
+    mics: BTreeMap<u32, (Mic, u16)>,
+    /// The host replaced the room's microphone: the person's track is no longer what the session
+    /// hears, so a rejoin publishes one nobody listens to.
+    host_mic: bool,
+    /// How many times the person joined the room, which names their microphone track.
+    joins: u32,
     /// The next filler id to mint. The host tells the driver the id rather than letting it
     /// choose, so a case can name a filler in the same burst that started it.
     next_filler: u64,

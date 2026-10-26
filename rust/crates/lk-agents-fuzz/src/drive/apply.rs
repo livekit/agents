@@ -8,7 +8,7 @@
 use std::task::{Context, Poll, Waker};
 
 use lk_agents_abi::voice::session_options::UpdateKwargs;
-use lk_agents_rtc::{ConnectionState, DisconnectReason, ParticipantKind, RtcRoom};
+use lk_agents_rtc::{ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_voice::agent_session::{CommitSuperseded, DrainRefused, HostMetricsRecord};
 use lk_agents_voice::speech_handle::SpeechWireId;
 use lk_agents_voice::workflows::builtins::dtmf::{DtmfOutcome, GetDtmfResult};
@@ -171,22 +171,29 @@ resolvers! {
 
 impl Run {
     /// One thing that happened in the room, done to the fake room: the real room io sees it, and
-    /// decides what the session hears of it. Refused in a room nothing happens in, and once the
-    /// room is gone.
+    /// decides what the session hears of it. Refused in a room nothing happens in (no room
+    /// switches and no room legs), and once the room is gone.
     fn room_event(&mut self, event: RoomIn) -> bool {
-        if self.setup.room.is_none()
+        if (self.setup.room.is_none() && self.setup.room_legs.is_none())
             || self.room.connection_state() == ConnectionState::Disconnected
         {
             return false;
         }
-        let who = lk_agents_rtc::ParticipantIdentity::from("caller");
+        let who = lk_agents_rtc::ParticipantIdentity::from(super::start::CALLER);
         let reason = DisconnectReason::ClientInitiated;
         match event {
             RoomIn::Linked => {
-                self.room.add_participant(who, ParticipantKind::Standard);
+                self.join_caller();
                 true
             }
-            RoomIn::Unlinked => self.room.remove_participant(&who, reason),
+            RoomIn::Unlinked => {
+                // Their microphone leaves with them.
+                for nth in self.room_mics() {
+                    self.mics.remove(&nth);
+                    self.record.close(self.stamps.next(), Kind::Mic, nth);
+                }
+                self.room.remove_participant(&who, reason)
+            }
             RoomIn::StateChanged => {
                 self.room.set_connection_state(ConnectionState::Reconnecting);
                 true
@@ -194,6 +201,18 @@ impl Run {
             RoomIn::Closed => {
                 self.room.close(reason);
                 true
+            }
+            RoomIn::Chat => {
+                let info = lk_agents_rtc::StreamInfo {
+                    id: format!("chat_{}", self.record.now().seq),
+                    topic: lk_agents_abi::TOPIC_CHAT.into(),
+                    mime_type: "text/plain".into(),
+                    total_length: None,
+                    attributes: Default::default(),
+                    timestamp: 0,
+                    attachments: Vec::new(),
+                };
+                self.room.send_text_stream(who, info, ["can you hear me"]).is_ok()
             }
         }
     }
@@ -426,10 +445,11 @@ impl Run {
                 for (nth, _) in std::mem::take(&mut self.mics) {
                     self.record.close(at, Kind::Mic, nth);
                 }
+                self.host_mic = true;
                 let source = attach.then(|| {
                     let (mic, frames) = fakes::FakeAudioInput::new();
                     let nth = self.registry.new_mic();
-                    self.mics.insert(nth, (frames, 0));
+                    self.mics.insert(nth, (Mic::Host(frames), 0));
                     mic as Arc<dyn lk_agents_abi::voice::io::AudioInput>
                 });
                 api.set_audio_input(source).is_ok()
@@ -662,17 +682,39 @@ impl Run {
     /// Push tagged frames into an attached microphone. The driver's audio leg forwards them to
     /// every provider listening, which is where they are recorded.
     fn speak(&mut self, mic: u32, chunks: u32) -> bool {
-        let Some((sender, count)) = self.mics.get_mut(&mic) else { return false };
+        let now = self.record.now().at_ms;
+        let Some((leg, count)) = self.mics.get_mut(&mic) else { return false };
+        // A track's queues drain only as the session's tasks run, which is when time moves: a burst
+        // they cannot hold is dropped oldest-first, as a real track would, so it is refused whole.
+        if let Mic::Room { burst, .. } = leg {
+            if burst.0 != now {
+                *burst = (now, 0);
+            }
+            if burst.1 + chunks > ROOM_BURST_FRAMES {
+                return false;
+            }
+            burst.1 += chunks;
+        }
         for _ in 0..chunks {
             let sample = Tag::mic(mic, *count % (Tag::MAX_CHUNK + 1));
             let data = sample.to_le_bytes().repeat(SAMPLES_PER_CHUNK);
             let frame = AudioFrame::new(data, SAMPLE_RATE, 1, SAMPLES_PER_CHUNK as u32);
-            if sender.send(frame).is_err() {
+            // A track nobody reads yet (the room io has not subscribed) carries the words nowhere.
+            let heard = match leg {
+                Mic::Host(sender) => sender.send(frame).is_ok(),
+                Mic::Room { track, .. } => track.push_frame(frame) > 0,
+            };
+            if !heard {
                 return false;
             }
             *count = count.wrapping_add(1);
         }
         true
+    }
+
+    /// The person's microphones in the room, which leave the room with them.
+    fn room_mics(&self) -> Vec<u32> {
+        self.mics.iter().filter(|(_, (leg, _))| matches!(leg, Mic::Room { .. })).map(|(n, _)| *n).collect()
     }
 
     /// Push one piece of a `say`'s input stream. Each audio chunk carries its stream and its index

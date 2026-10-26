@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use lk_agents_voice::agent_session::IoKind;
+use lk_agents_voice::trace::{InputStep, Step};
 
 use crate::{
     authored::Authored,
@@ -50,6 +51,18 @@ impl Rule for ForwardedWhileEnabled {
             .filter(|(_, kind, _)| *kind == Kind::Mic)
             .map(|(at, _, nth)| (*nth, *at))
             .collect();
+        // The close's edge detaches the microphone and takes the frame census in the same breath:
+        // what had not reached a stream by the census never will, whichever microphone it is on.
+        let detached = r
+            .journal_where(|step| {
+                matches!(
+                    step,
+                    Step::Input(InputStep::LegFrames { .. } | InputStep::InputShape { .. })
+                )
+                .then_some(())
+            })
+            .next()
+            .map(|(at, ())| at);
         for sent in inputs.accepted() {
             let Input::MicFrames { mic, chunks: Count(chunks) } = &sent.input else { continue };
             let counter = next_chunk.entry(mic.nth).or_default();
@@ -63,7 +76,7 @@ impl Rule for ForwardedWhileEnabled {
                     continue;
                 }
                 pushed_enabled.entry((mic.nth, chunk)).or_insert(sent.at);
-                let replaced = mic_closed.get(&mic.nth).copied();
+                let replaced = mic_closed.get(&mic.nth).copied().into_iter().chain(detached).min();
                 let frame = (mic.nth, chunk);
                 expect_reached(&inputs, &inference, &gate_closed, replaced, check, frame, sent.at);
             }

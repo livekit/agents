@@ -191,11 +191,20 @@ impl Driver {
         let leg = end.leg;
         // Not `remove_sink`: the items the stream sent before its end are still consumed.
         let installed = self.input.sinks.iter().find(|(_, sink)| Some(**sink) == end.sink);
-        if let Some((&channel, &sink)) = installed {
+        let installed = installed.map(|(&channel, &sink)| (channel, sink));
+        if let Some((channel, sink)) = installed {
             self.input.sinks.remove(&channel);
             out.machine().push(Effect::Forwarder(ForwarderCommand::Remove(sink)));
         }
+        // The live recogniser died or ran out mid-utterance: it will never say the speech it
+        // began has ended, so it ends here, or the user speaks for the rest of the call and the
+        // session is never idle again.
+        let recogniser_gone = matches!(installed, Some((AudioChannel::Stt, _)))
+            && end.cause != crate::trace::ChannelEndCause::Closing;
         on_leg_ended(end, out);
+        if recogniser_gone && self.activity.audio_recognition.speaking_on_recogniser() {
+            self.host_end_of_speech(now, out);
+        }
         if let Some(error) = error
             && leg == AudioChannel::Stt.label()
         {
