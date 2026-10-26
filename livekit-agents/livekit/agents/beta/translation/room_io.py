@@ -363,7 +363,10 @@ class TranslationRoomIO:
         """Stop translating any track, leaving the session with nothing to hear."""
         self._track_sid = None
         self._participant_identity = None
-        self._track_available_fut = asyncio.Future[_LinkedTrack]()
+        if self._track_available_fut.done():
+            # a pending one is kept: startup may still be waiting on it, and would wait on a
+            # replaced one forever, never publishing the translation
+            self._track_available_fut = asyncio.Future[_LinkedTrack]()
         if self._audio_input:
             self._audio_input.set_track_sid(None)
             self._audio_input.set_participant(None)

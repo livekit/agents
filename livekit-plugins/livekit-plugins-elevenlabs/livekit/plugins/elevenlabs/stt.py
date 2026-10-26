@@ -287,16 +287,17 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        if is_given(language):
-            self._opts.language_code = LanguageCode(language)
+        request_language = (
+            LanguageCode(language) if is_given(language) else self._opts.language_code
+        )
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
         form = aiohttp.FormData()
         form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/x-wav")
         form.add_field("model_id", self._opts.model_id)
         form.add_field("tag_audio_events", str(self._opts.tag_audio_events).lower())
-        if self._opts.language_code:
-            form.add_field("language_code", self._opts.language_code)
+        if request_language:
+            form.add_field("language_code", request_language)
         if is_given(self._opts.keyterms):
             for keyterm in self._opts.keyterms:
                 form.add_field("keyterms", keyterm)
@@ -350,7 +351,7 @@ class STT(stt.STT):
         except Exception as e:
             raise APIConnectionError() from e
 
-        normalized_language = LanguageCode(language_code or self._opts.language_code or "")
+        normalized_language = LanguageCode(language_code or request_language or "")
         return self._transcription_to_speech_event(
             language_code=normalized_language,
             text=extracted_text,
@@ -639,8 +640,11 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
@@ -662,6 +666,12 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     parsed = json.loads(msg.data)
                     self._process_stream_event(parsed)
+                    if parsed.get("message_type") in (
+                        "partial_transcript",
+                        "committed_transcript",
+                        "committed_transcript_with_timestamps",
+                    ):
+                        self._mark_provider_progress()
                 except APIError:
                     raise
                 except Exception:
@@ -772,6 +782,7 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     ws_url,
                     headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )

@@ -427,6 +427,61 @@ class _RecordingSession:
         return self._ws
 
 
+class _URLRecordingSession:
+    """Hands out a fresh socket per connect and keeps every URL it was asked to open."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.urls: list[str] = []
+
+    async def ws_connect(self, url: str, **kwargs):
+        self.urls.append(url)
+        ws = _LiveWS()
+        ws._response = SimpleNamespace(headers={})  # read for the dg- response headers
+        return ws
+
+
+async def test_stt_update_options_reaches_open_streams_diarization_and_tags():
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.deepgram import STT
+
+    session = _URLRecordingSession()
+    instance = STT(api_key="test-key", language="en-US", http_session=session)
+    stream = instance.stream()
+    try:
+        await _wait_until(lambda: len(session.urls) == 1)
+        assert "diarize" not in parse_qs(urlparse(session.urls[0]).query)
+
+        instance.update_options(enable_diarization=True, tags=["prod"])
+
+        await _wait_until(lambda: len(session.urls) == 2)
+        query = parse_qs(urlparse(session.urls[1]).query)
+        assert query["diarize"] == ["true"]
+        assert query["tag"] == ["prod"]
+    finally:
+        await stream.aclose()
+        await instance.aclose()
+
+
+async def test_update_options_keeps_diarization_capability_in_sync():
+    from livekit.agents.stt import MultiSpeakerAdapter
+    from livekit.plugins.deepgram import STT
+
+    instance = STT(api_key="test-key")
+    try:
+        assert not instance.capabilities.diarization
+
+        instance.update_options(enable_diarization=True)
+        assert instance.capabilities.diarization
+        MultiSpeakerAdapter(stt=instance)
+
+        instance.update_options(enable_diarization=False)
+        assert not instance.capabilities.diarization
+    finally:
+        await instance.aclose()
+
+
 class _DeadSocket:
     """A socket that has silently gone away: writes fail, the read side never notices.
 
@@ -478,16 +533,13 @@ def _v1_stream(*, http_session=None, connect=None):
     return stream
 
 
-async def test_v1_socket_is_opened_with_a_heartbeat():
-    # aiohttp defaults heartbeat and receive_timeout to None, so without this the
-    # read side of a half-open socket parks forever and the reconnect loop in _run,
-    # which only runs when something raises, never gets a turn. stt_v2 already does
-    # this; v1 is the Nova-3 path and was the only Deepgram stream left unbounded.
+async def test_v1_socket_exposes_control_frames_to_monitor():
+    # Control frames must reach the shared monitor to reset its silence deadline.
     session = _RecordingSession()
     stream = _v1_stream(http_session=session)
     try:
-        await _wait_until(lambda: "heartbeat" in session.kwargs)
-        assert session.kwargs["heartbeat"] == 30.0
+        await _wait_until(lambda: "autoping" in session.kwargs)
+        assert session.kwargs["autoping"] is False
     finally:
         await stream.aclose()
 

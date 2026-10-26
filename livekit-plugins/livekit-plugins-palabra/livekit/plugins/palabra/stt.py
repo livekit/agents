@@ -335,6 +335,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 if isinstance(event, SttTranscript):
                     _emit(event)
+                    self._mark_provider_progress()
             # The iterator ends when the connection closes.
             # That is expected only after _send_task closed the WS at end of input.
             if not input_closed.is_set():

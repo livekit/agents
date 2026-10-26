@@ -21,6 +21,7 @@ def test_azure_recognized_emits_final_transcript(monkeypatch):
 
     stream = azure_stt.SpeechStream.__new__(azure_stt.SpeechStream)
     stream._opts = SimpleNamespace(language=["en-US"], pronunciation_assessment=None)
+    stream._on_provider_progress = None
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
     stream._start_time_offset = 0.0
@@ -102,6 +103,7 @@ def _recognized_stream(monkeypatch, *, assessment: bool, events: list) -> azure_
     stream._opts = SimpleNamespace(
         language=["ja-JP"], pronunciation_assessment='{"x": 1}' if assessment else None
     )
+    stream._on_provider_progress = None
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
     stream._start_time_offset = 0.0
@@ -172,3 +174,22 @@ def test_azure_pronunciation_assessment_survives_stream_copy_and_applies():
 
     applied = recognizer.properties.get_property_by_name("PronunciationAssessment_Params")
     assert json.loads(applied)["granularity"] == "Phoneme"
+
+
+@pytest.mark.parametrize(
+    "callback", ["_on_recognized", "_on_recognizing", "_on_speech_start", "_on_speech_end"]
+)
+def test_provider_progress_resets_retries_without_transcript(monkeypatch, callback):
+    monkeypatch.setattr(
+        azure_stt.speechsdk,
+        "AutoDetectSourceLanguageResult",
+        lambda result: SimpleNamespace(language="en-US"),
+    )
+    stream = azure_stt.SpeechStream.__new__(azure_stt.SpeechStream)
+    stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
+    stream._event_ch = SimpleNamespace(send_nowait=lambda event: None)
+    stream._on_provider_progress = None
+    stream._num_retries = 2
+    stream._speaking = False
+    getattr(stream, callback)(SimpleNamespace(result=SimpleNamespace(text="")))
+    assert stream._num_retries == 0
