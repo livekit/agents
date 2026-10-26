@@ -118,9 +118,9 @@ impl Out {
                 Effect::Decision(d) => self.record(Step::Decided(d.clone())),
                 // Journalled through the data plane's reports.
                 Effect::Forwarder(_) => {}
-                Effect::Realtime(send) => self.record(Step::Realtime(RealtimeStep::Sent {
-                    kind: send.0.kind(),
-                    req_id: send.0.req_id().map(str::to_owned),
+                Effect::Realtime(cmd) => self.record(Step::Realtime(RealtimeStep::Sent {
+                    kind: cmd.kind(),
+                    req_id: cmd.req_id().map(str::to_owned),
                 })),
                 Effect::CancelTool { call_id, .. } => {
                     self.record(Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() }))
@@ -185,7 +185,7 @@ impl Out {
 
 /// One ordered list, not per-kind fields: order within and across kinds is inherited from the
 /// reference, where these ran inline in exactly this order.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Effect {
     /// Arming an armed timer *replaces* it ([`TimerSet`](lk_agents_abi::TimerSet)).
     Arm(Timer, Ts),
@@ -196,7 +196,7 @@ pub enum Effect {
     Emit(SessionEvent),
     Decision(Decision),
     /// Per-frame `PushAudio` never comes this way.
-    Realtime(RealtimeSend),
+    Realtime(lk_agents_abi::RealtimeCommand),
     Audio(AudioOp),
     Detector(DetectorCall),
     /// Sent to the data plane through the queue.
@@ -208,7 +208,7 @@ pub enum Effect {
     },
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone)]
 #[must_use = "effects a transition asked for must reach the driver's out"]
 pub struct Effects {
     effects: Vec<Effect>,
@@ -431,15 +431,6 @@ pub enum GateCause {
     Released,
 }
 
-/// Compares equal by kind and request id, as the journal records it (payloads are not `PartialEq`).
-#[derive(Debug, Clone)]
-pub struct RealtimeSend(pub lk_agents_abi::RealtimeCommand);
-
-impl PartialEq for RealtimeSend {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.kind() == other.0.kind() && self.0.req_id() == other.0.req_id()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum Decision {
@@ -858,7 +849,7 @@ impl Driver {
             E::Audio(AudioOp::SetVideoInput) => {
                 self.input.swap_video_forwarder(&*self.shared.spawner)
             }
-            E::Realtime(crate::agent_session::effects::RealtimeSend(cmd)) => {
+            E::Realtime(cmd) => {
                 let session = self.activity.rt_session.as_ref();
                 if let Some(session) = session.and_then(|s| self.shared.resources.realtime(s.id)) {
                     session.send(cmd);

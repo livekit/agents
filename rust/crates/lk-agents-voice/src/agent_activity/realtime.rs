@@ -418,8 +418,7 @@ impl Driver {
         if self.activity.rt_session.is_none() {
             return;
         }
-        let send = crate::agent_session::effects::RealtimeSend(cmd);
-        out.machine().push(crate::agent_session::effects::Effect::Realtime(send));
+        out.machine().push(crate::agent_session::effects::Effect::Realtime(cmd));
     }
 
     pub(crate) fn on_realtime(&mut self, now: Ts, wake: RealtimeWake, out: &mut Out) {

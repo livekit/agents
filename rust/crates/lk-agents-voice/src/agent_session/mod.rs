@@ -768,7 +768,7 @@ mod label_tests {
         assert!(s.aec.armed());
 
         let eff = s.aec.set(None);
-        assert_eq!(eff.as_slice(), &[Effect::Cancel(Timer::AecWarmup)]);
+        assert!(matches!(eff.as_slice(), [Effect::Cancel(Timer::AecWarmup)]), "{eff:?}");
         assert!(!s.aec.armed());
         assert_eq!(s.aec.remaining(), Duration::ZERO);
 
