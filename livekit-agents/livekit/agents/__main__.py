@@ -132,7 +132,13 @@ def main(argv: list[str] | None = None) -> int:
         logging.basicConfig(level=logging.INFO, format="%(message)s")
         return _download_files()
 
-    _dispatch(_discover_server(args.entrypoint), args)
+    from .cli.cli import _dev_mode_env
+
+    # set this before importing the entrypoint so that modules calling
+    # utils.is_dev_mode() at import time see the mode the CLI was started in
+    devmode = args.command == "console" or (args.command == "start" and args.dev)
+    with _dev_mode_env(devmode):
+        _dispatch(_discover_server(args.entrypoint), args)
     return 0
 
 
