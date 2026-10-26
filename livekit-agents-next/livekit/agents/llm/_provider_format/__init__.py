@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -69,6 +70,10 @@ def to_chat_ctx(
     if format in _DATA:
         # the dialects that hoist the system preamble keep later instructions where they are
         chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+    if format in ("anthropic", "google", "aws"):
+        # these send arguments as a JSON object: stored ones are repaired, else emptied
+        chat_ctx = chat_ctx.copy()
+        chat_ctx.items = [_object_arguments(item) for item in chat_ctx.items]
     images = {
         content.id: serialize_image(content)
         for item in chat_ctx.items
@@ -84,8 +89,28 @@ def to_chat_ctx(
         inject_trailing_user_message=inject_trailing_user_message,
         thought_signatures=thought_signatures,
     )
+    if format == "mistralai" and inject_dummy_user_message and messages:
+        if messages[-1].get("role") == "assistant":
+            messages.append({"type": "message.input", "role": "user", "content": "(empty)"})
     cls = _DATA.get(format)
     return messages, cls(**data) if cls is not None else None
+
+
+def _object_arguments(item: Any) -> Any:
+    from ...log import logger
+    from ..utils import parse_function_arguments
+
+    if item.type != "function_call":
+        return item
+    try:
+        arguments = parse_function_arguments(item.arguments) if item.arguments else {}
+    except ValueError:
+        logger.warning(
+            "could not parse stored tool call arguments as a JSON object, using empty arguments",
+            extra={"call_id": item.call_id, "tool_name": item.name},
+        )
+        arguments = {}
+    return item.model_copy(update={"arguments": json.dumps(arguments)})
 
 
 def to_fnc_ctx(

@@ -856,7 +856,7 @@ class ChatContext:
         self.add_message(
             role="assistant",
             content=_core.chat_history_summary_xml(summary),
-            created_at=created_at.timestamp(),
+            created_at=created_at,
             extra={"is_summary": True},
         )
         self._items.extend(tail)
