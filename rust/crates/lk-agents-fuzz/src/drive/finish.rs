@@ -161,35 +161,34 @@ impl Run {
     /// the next round reads fakes that have not moved.
     pub fn release_advance(&self) -> Input {
         let now = self.record.now().at_ms;
-        let furthest = self
-            .record
-            .journal_where(|step| match step {
-                Step::Core(CoreStep::TimerArmed { at, .. }) => Some(*at),
-                _ => None,
-            })
-            .map(|(_, at)| at.saturating_duration_since(Ts::ZERO).as_millis() as u64)
-            .max()
-            .unwrap_or(now);
+        let furthest = self.deadlines().map(|(_, at)| at).max().unwrap_or(now);
         Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
     }
 
     /// Whether the driver armed a deadline the clock has not reached: a speech queued behind
-    /// `min_consecutive_speech_delay` waits on the driver's own timer, not on the case, so a round
-    /// that leaves one ahead is not quiet. The recorder's flush re-arms for as long as the session
-    /// lives and owes nobody anything.
+    /// `min_consecutive_speech_delay`, or a retry waiting out its backoff, waits on the driver's
+    /// own clock, not on the case, so a round that leaves one ahead is not quiet. The recorder's
+    /// flush re-arms for as long as the session lives and owes nobody anything.
     fn deadline_ahead(&self) -> bool {
-        use lk_agents_voice::{agent_session::effects::Timer, trace::TimerName};
         let now = self.record.now().at_ms;
+        self.deadlines().any(|(periodic, at)| !periodic && at > now)
+    }
+
+    /// Every deadline the driver journalled, in milliseconds, and whether it is the recorder's
+    /// periodic flush: its timers, and the retries it waits out on its own.
+    fn deadlines(&self) -> impl Iterator<Item = (bool, u64)> + '_ {
+        use lk_agents_voice::{agent_session::effects::Timer, trace::TimerName};
         self.record
             .journal_where(|step| match step {
-                Step::Core(CoreStep::TimerArmed { timer, at })
-                    if *timer != TimerName::Session(Timer::RecorderFlush) =>
-                {
-                    Some(*at)
+                Step::Core(CoreStep::TimerArmed { timer, at }) => {
+                    Some((*timer == TimerName::Session(Timer::RecorderFlush), *at))
                 }
+                Step::Generation(GenerationStep::RetryArmed { at, .. }) => Some((false, *at)),
                 _ => None,
             })
-            .any(|(_, at)| at.saturating_duration_since(Ts::ZERO).as_millis() as u64 > now)
+            .map(|(_, (periodic, at))| {
+                (periodic, at.saturating_duration_since(Ts::ZERO).as_millis() as u64)
+            })
     }
 
     /// Whether the driver is still holding a turn open.
