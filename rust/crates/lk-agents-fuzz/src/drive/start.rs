@@ -135,7 +135,7 @@ impl Run {
                 setup
                     .video
                     .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
-                None,
+                setup.video_sampler.then_some((1.0, 0.3)),
                 false,
                 legs.is_none().then(|| fakes::FakeTextOutput::new(registry.clone()) as _),
                 false,
@@ -423,7 +423,23 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         transcription_timeout: setup.transcription_timeout_ms.map(secs),
         session_close_transcript_timeout: 2.0,
         conn_options: HostValue::NotGiven,
-        deprecated: Default::default(),
+        deprecated: if setup.deprecated_turn {
+            DeprecatedTurnKwargs {
+                min_endpointing_delay: Maybe::Given(0.4),
+                max_endpointing_delay: Maybe::Given(4.0),
+                false_interruption_timeout: Maybe::Given(Some(1.5)),
+                discard_audio_if_uninterruptible: Maybe::Given(true),
+                min_interruption_duration: Maybe::Given(0.4),
+                min_interruption_words: Maybe::Given(1),
+                allow_interruptions: Maybe::Given(true),
+                resume_false_interruption: Maybe::Given(true),
+                agent_false_interruption_timeout: Maybe::Given(Some(4.0)),
+                preemptive_generation: Maybe::Given(setup.preemptive),
+                ..DeprecatedTurnKwargs::default()
+            }
+        } else {
+            Default::default()
+        },
         keyterms_options: HostValue::NotGiven,
     }
 }

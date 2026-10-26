@@ -37,7 +37,7 @@ use lk_agents_abi::{
     turn::keyterms::SttContextConfig,
     voice::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig},
     voice::session_options::{
-        EndpointingKwargs, HostValue, InterruptionKwargs, PreemptiveKwargs, SessionKwargs,
+        DeprecatedTurnKwargs, EndpointingKwargs, HostValue, InterruptionKwargs, PreemptiveKwargs, SessionKwargs,
         TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
     },
 };
@@ -187,6 +187,12 @@ pub struct Setup {
     /// `RemoteSessionHost` on it forwards the session's events and answers the CLI's requests,
     /// as `voice/console.py` runs it. Never with the room's legs.
     pub console: bool,
+    /// The turn keywords a host still writes the pre-`turn_handling` way (`min_endpointing_delay`,
+    /// `allow_interruptions`, ...), which the core migrates.
+    pub deprecated_turn: bool,
+    /// `VoiceActivityVideoSampler()`, which `agent_session.py` hands over by default: camera
+    /// frames reach the model at one rate while the person speaks and another while silent.
+    pub video_sampler: bool,
 }
 
 /// The room's legs, and whether the person's app sends the audio it buffered before the agent
@@ -274,6 +280,8 @@ impl Default for Setup {
             text_transforms: None,
             room_legs: None,
             console: false,
+            deprecated_turn: false,
+            video_sampler: false,
         }
     }
 }
