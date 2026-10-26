@@ -340,6 +340,19 @@ impl Driver {
             }
             self.finish_turn(now, previous.finished(now), Vec::new(), out);
         }
+        // `_user_turn_completed_impl`: a turn that asks for a reply while the current speech
+        // cannot be interrupted is dropped, before the hook and with no user item.
+        if !info.skip_reply && self.current_handle().is_some_and(|h| !h.allow_interruptions()) {
+            out.machine().emit(crate::events::SessionEvent::Diagnostic(
+                crate::events::DiagnosticEvent::warning(
+                    crate::events::diagnostics::UNINTERRUPTIBLE_SPEECH,
+                )
+                .with("lk.pii.user_input", info.new_transcript.clone()),
+            ));
+            self.activity.last_turn = Some(info.turn_id);
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+            return;
+        }
         match self.activity.hook_bound {
             Some(bound) => self.issue_turn_hook(now, info, bound, out),
             None => self.finish_turn(now, info, Vec::new(), out),

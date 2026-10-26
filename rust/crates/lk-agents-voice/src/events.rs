@@ -179,6 +179,10 @@ pub mod diagnostics {
     /// `AgentActivity._user_turn_completed_task`, the reply-path variant of `.on_end_of_turn`'s.
     pub const SCHEDULING_PAUSED: &str = "skipping reply to user input, speech scheduling is paused";
 
+    /// `AgentActivity._user_turn_completed_impl`: the turn is dropped, the speech plays on.
+    pub const UNINTERRUPTIBLE_SPEECH: &str =
+        "skipping reply to user input, current speech generation cannot be interrupted";
+
     /// `generation._execute_tools_task` (error level): a call answering `tool_choice="none"` is
     /// dropped, so the budget's forced `"none"` ends the turn.
     pub const TOOL_CHOICE_NONE: &str =
