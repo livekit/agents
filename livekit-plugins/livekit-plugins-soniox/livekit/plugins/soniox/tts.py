@@ -65,6 +65,17 @@ MAX_STREAM_AGE = 90.0  # seconds
 MODELS_WITHOUT_SILENCE_REDUCTION = frozenset({"tts-rt-v1", "tts-rt-v1-preview"})
 
 
+def _validate_options(
+    *,
+    speed: NotGivenOr[float],
+    stream_idle_timeout: NotGivenOr[float],
+) -> None:
+    if is_given(speed) and not MIN_SPEED <= speed <= MAX_SPEED:
+        raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+    if is_given(stream_idle_timeout) and stream_idle_timeout <= 0:
+        raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
+
+
 def _validate_reduce_silence(model: str, reduce_silence: bool) -> None:
     if reduce_silence and model in MODELS_WITHOUT_SILENCE_REDUCTION:
         raise ValueError(
@@ -143,12 +154,7 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("Soniox API key is required. Set SONIOX_API_KEY or provide api_key.")
 
-        if not MIN_SPEED <= speed <= MAX_SPEED:
-            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
-
-        if stream_idle_timeout <= 0:
-            raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
-
+        _validate_options(speed=speed, stream_idle_timeout=stream_idle_timeout)
         _validate_reduce_silence(model, reduce_silence)
 
         self._opts = _TTSOptions(
@@ -232,6 +238,9 @@ class TTS(tts.TTS):
                 supports_silence_reduction only).
             stream_idle_timeout: Idle seconds before the current stream is finalized.
         """
+        # check every given value before changing anything, so a rejected update leaves
+        # the current options (and the live streams) as they were
+        _validate_options(speed=speed, stream_idle_timeout=stream_idle_timeout)
         _validate_reduce_silence(
             model if is_given(model) else self._opts.model,
             reduce_silence if is_given(reduce_silence) else self._opts.reduce_silence,
@@ -243,16 +252,10 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
         if is_given(speed):
-            if not MIN_SPEED <= speed <= MAX_SPEED:
-                raise ValueError(
-                    f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
-                )
             self._opts.speed = speed
         if is_given(reduce_silence):
             self._opts.reduce_silence = reduce_silence
         if is_given(stream_idle_timeout):
-            if stream_idle_timeout <= 0:
-                raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
             self._opts.stream_idle_timeout = stream_idle_timeout
             # _run re-reads this every loop iteration, so live streams pick it up
             for stream in list(self._streams):
