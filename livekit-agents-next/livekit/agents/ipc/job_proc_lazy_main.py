@@ -15,7 +15,6 @@ if current_process().name == "job_proc":
         signal.signal(signal.SIGUSR1, _dump_stack_traces)
 
 import asyncio
-import contextlib
 import contextvars
 import socket
 import time
@@ -31,17 +30,11 @@ from .. import _core
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
-from ..utils import aio, http_context, log_exceptions, shortuuid
-from .channel import Message
-from .inference_executor import InferenceExecutor
+from ..utils import aio, http_context, log_exceptions
 from .proc_client import _dump_stack_traces_impl, _ProcClient
 from .proto import (
-    DumpStackTraceRequest,
     Exiting,
-    InferenceRequest,
-    InferenceResponse,
     InitializeRequest,
-    ShutdownRequest,
     ShutdownRequestAck,
     ShuttingDown,
     StartJobRequest,
@@ -93,7 +86,7 @@ def proc_main(args: ProcStartArgs) -> None:
         simulation_end_fnc=args.simulation_end_fnc,
     )
 
-    client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
+    client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc)
     try:
         client.initialize()
     except Exception:
@@ -140,48 +133,6 @@ def proc_main(args: ProcStartArgs) -> None:
     log_handler.close()
 
 
-class _InfClient(InferenceExecutor):
-    def __init__(self, proc_client: _ProcClient) -> None:
-        self._client = proc_client
-        self._active_requests: dict[str, asyncio.Future[InferenceResponse]] = {}
-
-    async def do_inference(self, method: str, data: bytes) -> bytes | None:
-        request_id = shortuuid("inference_job_")
-        fut = asyncio.Future[InferenceResponse]()
-        self._active_requests[request_id] = fut
-
-        try:
-            await self._client.send(
-                InferenceRequest(request_id=request_id, method=method, data=data),
-            )
-        except Exception:
-            if not fut.done():
-                fut.cancel()
-            self._active_requests.pop(request_id, None)
-            raise
-
-        inf_resp = await fut
-        if inf_resp.error:
-            raise RuntimeError(f"inference of {method} failed: {inf_resp.error}")
-
-        return inf_resp.data
-
-    def close(self) -> None:
-        for fut in self._active_requests.values():
-            if not fut.done():
-                fut.cancel()
-        self._active_requests.clear()
-
-    def _on_inference_response(self, resp: InferenceResponse) -> None:
-        fut = self._active_requests.pop(resp.request_id, None)
-        if fut is None:
-            logger.warning("received unexpected inference response", extra={"resp": resp})
-            return
-
-        with contextlib.suppress(asyncio.InvalidStateError):
-            fut.set_result(resp)
-
-
 class _JobProc:
     """A job process's (or job thread's) job. The core decides what ends the job and runs the
     shutdown in order and within its bounds (``_core.JobRun``); the ``_core_*`` methods are the
@@ -213,7 +164,6 @@ class _JobProc:
 
     def initialize(self, init_req: InitializeRequest, client: _ProcClient) -> None:
         self._client = client
-        self._inf_client = _InfClient(client)
         self._job_proc = JobProcess(
             executor_type=self._executor_type,
             user_arguments=self._user_arguments,
@@ -224,40 +174,30 @@ class _JobProc:
 
         self._initialize_process_fnc(self._job_proc)
 
-    @log_exceptions(logger=logger)
-    async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
-        self._exit_proc_flag = asyncio.Event()
-        read_task = asyncio.create_task(self._read_ipc(cch), name="job_ipc_read")
-        try:
-            await self._exit_proc_flag.wait()
-        finally:
-            # ensure cleanup on cancellation (e.g. parent channel closes)
-            if self._job_task is not None:
-                await aio.cancel_and_wait(self._job_task)
-            await aio.cancel_and_wait(read_task)
+    # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
-    @log_exceptions(logger=logger)
-    async def _read_ipc(self, cch: aio.ChanReceiver[Message]) -> None:
-        async for msg in cch:
-            if isinstance(msg, StartJobRequest):
-                if self.has_running_job:
-                    logger.warning("trying to start a new job while one is already running")
-                else:
-                    self._start_job(msg)
-            elif isinstance(msg, ShutdownRequest):
-                await self._client.send(ShutdownRequestAck())
-                if not self.has_running_job:
-                    await self._client.send(ShuttingDown())
-                    self._exit_proc_flag.set()
-                    break  # exit immediately
-                self._run.shutdown(msg.reason or "parent process shutdown", False)
-            elif isinstance(msg, InferenceResponse):
-                self._inf_client._on_inference_response(msg)
-            elif isinstance(msg, DumpStackTraceRequest):
-                _dump_stack_traces_impl()
+    async def _core_start_job(self, fields: dict[str, Any]) -> None:
+        if self.has_running_job:
+            logger.warning("trying to start a new job while one is already running")
+            return
+        self._start_job(StartJobRequest._from_wire(fields))
 
-        # unblock any pending do_inference() calls
-        self._inf_client.close()
+    async def _core_shutdown(self, reason: str) -> bool:
+        """Whether the process is done: with no job, at once."""
+        await self._client.send(ShutdownRequestAck())
+        if not self.has_running_job:
+            await self._client.send(ShuttingDown())
+            return True
+        self._run.shutdown(reason or "parent process shutdown", False)
+        return False
+
+    async def _core_dump_stacks(self) -> None:
+        _dump_stack_traces_impl()
+
+    async def aclose(self) -> None:
+        # the parent went or the job ended: a job still running is cancelled
+        if self._job_task is not None:
+            await aio.cancel_and_wait(self._job_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
         info = msg.running_job
@@ -279,13 +219,13 @@ class _JobProc:
             room=self._room,
             on_connect=self._run.connected,
             on_shutdown=lambda reason: self._run.shutdown(reason or "user requested", True),
-            inference_executor=self._inf_client,
+            inference_executor=self._client,
         )
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
 
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
-        self._job_task.add_done_callback(lambda _: self._exit_proc_flag.set())
+        self._job_task.add_done_callback(lambda _: self._client.stop())
 
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
@@ -534,6 +474,6 @@ def thread_main(
         simulation_end_fnc=args.simulation_end_fnc,
     )
 
-    client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
+    client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc)
     client.initialize()
     client.run()

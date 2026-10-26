@@ -1,36 +1,35 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import socket
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from types import FrameType
+from typing import Any
 
 from .. import _core
 from ..log import logger
 from ..telemetry import loop_monitor
-from ..utils import aio, log_exceptions, time_ms
-from .channel import Message, arecv_message, asend_message, recv_message, send_message
-from .proto import (
-    IPC_MESSAGES,
-    InitializeRequest,
-    InitializeResponse,
-    PingRequest,
-    PongResponse,
-)
+from ..utils import aio, log_exceptions
+from .channel import Message, asend_message, recv_message, send_message
+from .proto import IPC_MESSAGES, InitializeRequest, InitializeResponse
 
 
 class _ProcClient:
+    """A child process's side of the parent's socket: the initialize handshake, then its loop,
+    on which ``_core.IpcClient.serve`` hands the parent's messages to ``host`` (its
+    ``_core_start_job``, ``_core_shutdown``, ``_core_inference`` and ``_core_dump_stacks``) until
+    the parent goes, ``host._core_shutdown`` says the child is done, or ``stop()``."""
+
     def __init__(
         self,
         mp_cch: socket.socket,
         log_cch: socket.socket | None,
         initialize_fnc: Callable[[InitializeRequest, _ProcClient], None],
-        main_task_fnc: Callable[[aio.ChanReceiver[Message]], Coroutine[None, None, None]],
+        host: Any,
     ) -> None:
         self._mp_cch = mp_cch
         self._initialize_fnc = initialize_fnc
-        self._main_task_fnc = main_task_fnc
+        self._host = host
         self._initialized = False
 
     def initialize(self) -> None:
@@ -96,6 +95,13 @@ class _ProcClient:
     async def send(self, msg: Message) -> None:
         await asend_message(self._acch, msg)
 
+    async def do_inference(self, method: str, data: bytes) -> bytes | None:
+        return await self._acch.do_inference(method, data)  # type: ignore[no-any-return]
+
+    def stop(self) -> None:
+        self._acch.stop()
+
+    @log_exceptions(logger=logger)
     async def _monitor_task(self) -> None:
         # the core closes the channel when the parent goes quiet past ping_timeout (+10 s); a
         # job thread's parent sets no ping_timeout
@@ -104,45 +110,9 @@ class _ProcClient:
             health_timeout = self._init_req.ping_timeout + 10
         self._acch = _core.IpcClient(self._mp_cch.detach(), health_timeout)
         try:
-            exit_flag = asyncio.Event()
-
-            ipc_ch = aio.Chan[Message]()
-
-            @log_exceptions(logger=logger)
-            async def _read_ipc_task() -> None:
-                while True:
-                    try:
-                        msg = await arecv_message(self._acch, IPC_MESSAGES)
-                    except aio.duplex_unix.DuplexClosed:
-                        break
-
-                    # answered from this loop: the pong measures its responsiveness
-                    if isinstance(msg, PingRequest):
-                        await asend_message(
-                            self._acch,
-                            PongResponse(last_timestamp=msg.timestamp, timestamp=time_ms()),
-                        )
-
-                    ipc_ch.send_nowait(msg)
-
-            read_task = asyncio.create_task(_read_ipc_task(), name="ipc_read")
-            main_task = asyncio.create_task(
-                self._main_task_fnc(ipc_ch), name="main_task_entrypoint"
-            )
-
-            def _done_cb(_: asyncio.Task[None]) -> None:
-                with contextlib.suppress(asyncio.InvalidStateError):
-                    exit_flag.set()
-
-                ipc_ch.close()
-
-            read_task.add_done_callback(_done_cb)
-            main_task.add_done_callback(_done_cb)
-
-            await exit_flag.wait()
-            await aio.cancel_and_wait(read_task, main_task)
-
+            await self._acch.serve(self._host)
         finally:
+            await self._host.aclose()
             await self._acch.aclose()
 
 

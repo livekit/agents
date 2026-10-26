@@ -24,9 +24,7 @@ from dataclasses import dataclass
 from .. import _core
 from ..inference_runner import _RunnersDict
 from ..log import logger
-from ..utils import aio, log_exceptions
 from . import proto
-from .channel import Message
 from .proc_client import _dump_stack_traces_impl, _ProcClient
 
 
@@ -42,7 +40,7 @@ def proc_main(args: ProcStartArgs) -> None:
 
     inf_proc = _InferenceProc(args.runners)
 
-    client = _ProcClient(args.mp_cch, args.log_cch, inf_proc.initialize, inf_proc.entrypoint)
+    client = _ProcClient(args.mp_cch, args.log_cch, inf_proc.initialize, inf_proc)
     try:
         client.initialize()
     except Exception:
@@ -81,32 +79,27 @@ class _InferenceProc:
                     extra={"runner": runner.__class__.INFERENCE_METHOD},
                 )
 
-    @log_exceptions(logger=logger)
-    async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
-        async for msg in cch:
-            if isinstance(msg, proto.InferenceRequest):
-                await self._handle_inference_request(msg)
+    # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
-            if isinstance(msg, proto.ShutdownRequest):
-                await self._client.send(proto.Exiting(reason=msg.reason))
-                break
+    async def _core_shutdown(self, reason: str) -> bool:
+        await self._client.send(proto.Exiting(reason=reason))
+        return True
 
-            if isinstance(msg, proto.DumpStackTraceRequest):
-                _dump_stack_traces_impl()
+    async def _core_dump_stacks(self) -> None:
+        _dump_stack_traces_impl()
 
-    async def _handle_inference_request(self, msg: proto.InferenceRequest) -> None:
+    async def _core_inference(self, method: str, request_id: str, data: bytes) -> None:
         loop = asyncio.get_running_loop()
 
-        if msg.method not in self._runners:
-            logger.warning("unknown inference method", extra={"method": msg.method})
+        if method not in self._runners:
+            logger.warning("unknown inference method", extra={"method": method})
 
         try:
-            data = await loop.run_in_executor(
-                self._executor, self._runners[msg.method].run, msg.data
-            )
-            await self._client.send(proto.InferenceResponse(request_id=msg.request_id, data=data))
+            out = await loop.run_in_executor(self._executor, self._runners[method].run, data)
+            await self._client.send(proto.InferenceResponse(request_id=request_id, data=out))
         except Exception as e:
             logger.exception("error running inference")
-            await self._client.send(
-                proto.InferenceResponse(request_id=msg.request_id, error=str(e))
-            )
+            await self._client.send(proto.InferenceResponse(request_id=request_id, error=str(e)))
+
+    async def aclose(self) -> None:
+        pass
