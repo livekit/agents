@@ -42,9 +42,60 @@ REPO = Path(__file__).resolve().parents[2]
 SAMPLE_RATE = 24000
 
 
+def _later(moves: Callable[[list[Any]], bool], past: Callable[[list[Any]], bool]) -> Any:
+    """A normaliser moving each event `moves` names after the events `past` names that follow it,
+    in both transcripts: one same-instant order for the two."""
+
+    def normalise(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
+        for t in (ref, nxt):
+            events = t.get("events", [])
+            for i in range(len(events) - 1, -1, -1):
+                j = i
+                while moves(events[j]) and j + 1 < len(events) and past(events[j + 1]):
+                    events[j], events[j + 1] = events[j + 1], events[j]
+                    j += 1
+
+    return normalise
+
+
+def _is_cut_item(e: list[Any]) -> bool:
+    return e[0] == "conversation_item_added" and bool(e[1].get("interrupted"))
+
+
+def _is_turn_commit(e: list[Any]) -> bool:
+    user_item = e[0] == "conversation_item_added" and e[1].get("role") == "user"
+    return user_item or e[0] == "agent_state_changed"
+
+
+def _is_transcript_or_state(e: list[Any]) -> bool:
+    return e[0] in ("user_input_transcribed", "agent_state_changed", "user_state_changed")
+
+
 # Differences listed rather than fixed (see the report printed with them), as (name, why, a
 # normaliser applied to both transcripts). A scenario they alone separate counts as agreeing.
-KNOWN: list[tuple[str, str, Callable[[dict[str, Any], dict[str, Any]], None]]] = []
+KNOWN: list[tuple[str, str, Callable[[dict[str, Any], dict[str, Any]], None]]] = [
+    (
+        "cut_item_before_user_state",
+        "an interruption cuts the sink and reads where it stopped inside the core's step, so the "
+        "cut reply's item lands before the STT's end of speech that came at the same instant; the "
+        "reference awaits its playout event in later task turns",
+        _later(_is_cut_item, lambda e: e == ["user_state_changed", "speaking->listening"]),
+    ),
+    (
+        "provider_error_after_turn_commit",
+        "the core authorizes a speech inside the step that scheduled it, so a provider failing at "
+        "the same instant is reported after the turn's commit (user item, thinking); the reference "
+        "authorizes from its scheduling task, a task turn later",
+        _later(lambda e: e[0] == "error", _is_turn_commit),
+    ),
+    (
+        "realtime_command_before_step_events",
+        "a realtime command reaches the host session straight from the core while the events of "
+        "the same step go through the session's event stream, so the command is seen first; the "
+        "reference calls the session and emits from one task",
+        _later(lambda e: e[0].startswith("realtime."), _is_transcript_or_state),
+    ),
+]
 
 
 # ============================================================================ the orchestrator
@@ -1097,10 +1148,16 @@ def _realtime_models(call: Call) -> Any:
         def generate_reply(self, **kw: object) -> asyncio.Future[llm.GenerationCreatedEvent]:
             call.log("realtime.generate_reply", sorted(k for k, v in kw.items() if v))
             loop = asyncio.get_running_loop()
+            # a server ends the response's streams once it has generated all of it
+            generated = asyncio.Event()
 
             async def frames() -> AsyncIterable[rtc.AudioFrame]:
-                for _ in range(20):  # 2 s
+                # 2 s, streamed as a server does: faster than it plays, frame by frame
+                for i in range(20):
+                    if i:
+                        await asyncio.sleep(0.05)
                     yield rtc.AudioFrame(b"\x00\x00" * 2400, SAMPLE_RATE, 1, 2400)
+                generated.set()
 
             async def text() -> AsyncIterable[str]:
                 for w in _words("Hello from the realtime model, a longer reply."):
@@ -1108,8 +1165,10 @@ def _realtime_models(call: Call) -> Any:
 
             async def one(v: Any) -> AsyncIterable[Any]:
                 yield v
+                await generated.wait()
 
             async def empty() -> AsyncIterable[Any]:
+                await generated.wait()
                 return
                 yield
 
