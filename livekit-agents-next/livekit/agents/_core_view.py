@@ -335,7 +335,11 @@ class _RealtimeSession:
             put({"kind": "message_done", **mid})
 
         async def _messages() -> None:
-            await asyncio.gather(*[_message(m) async for m in ev.message_stream])
+            # each message forwards as it arrives, not once the server has sent them all
+            started = []
+            async for m in ev.message_stream:
+                started.append(asyncio.ensure_future(_message(m)))
+            await asyncio.gather(*started)
 
         async def _calls() -> None:
             async for call in ev.function_stream:
