@@ -7,7 +7,7 @@
 //! them, space-separated, when there are `num_digits` of them; `Incomplete` when there are not;
 //! `Stopped` only once the collection was ended -- a `Stop`, a newer `Start`, or a close (the
 //! host's, or the session's own).
-use lk_agents_voice::workflows::builtins::dtmf::{DtmfOutcome, GetDtmfResult};
+use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
 
 use crate::{
     authored::Authored,

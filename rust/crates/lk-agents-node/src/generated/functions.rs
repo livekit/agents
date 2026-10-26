@@ -133,12 +133,12 @@ pub fn recording_enabled(options: &crate::generated::objects::RecordingOptions) 
 
 #[napi(js_name = "luhnValid")]
 pub fn luhn_valid(card_number: String) -> bool {
-    lk_agents_voice::workflows::builtins::credit_card::luhn_valid(&card_number)
+    lk_agents_voice::workflows::luhn_valid(&card_number)
 }
 
 #[napi(js_name = "cardErrorClassNames")]
 pub fn card_error_class_names() -> (String, String) {
-    { let (t0, t1,) = lk_agents_voice::workflows::builtins::credit_card::card_error_class_names(); (t0.to_string(), t1.to_string()) }
+    { let (t0, t1,) = lk_agents_voice::workflows::card_error_class_names(); (t0.to_string(), t1.to_string()) }
 }
 
 #[napi(js_name = "assembleCreditCard")]
@@ -148,7 +148,7 @@ pub fn assemble_credit_card(env: Env, cardholder: crate::generated::records::Get
         let card_number = card_number.try_into()?;
         let security_code = security_code.try_into()?;
         let expiration_date = expiration_date.try_into()?;
-        Ok(crate::generated::records::GetCreditCardResult::from(&lk_agents_voice::workflows::builtins::credit_card::assemble_credit_card(&cardholder, &card_number, &security_code, &expiration_date)))
+        Ok(crate::generated::records::GetCreditCardResult::from(&lk_agents_voice::workflows::assemble_credit_card(&cardholder, &card_number, &security_code, &expiration_date)))
     })
 }
 
@@ -290,7 +290,7 @@ pub fn default_input_modality() -> String {
 #[napi(js_name = "dtmfCode")]
 pub fn dtmf_code(env: Env, symbol: String) -> napi::Result<u8> {
     crate::host_error::run(&env, || {
-        lk_agents_voice::workflows::builtins::dtmf::dtmf_code(&symbol).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))
+        lk_agents_voice::workflows::dtmf::dtmf_code(&symbol).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))
     })
 }
 
@@ -299,7 +299,7 @@ pub fn dtmf_code(env: Env, symbol: String) -> napi::Result<u8> {
 #[napi(js_name = "formatDtmf")]
 pub fn format_dtmf(env: Env, symbols: Vec<String>) -> napi::Result<String> {
     crate::host_error::run(&env, || {
-        lk_agents_voice::workflows::builtins::dtmf::format_dtmf_symbols(symbols).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))
+        lk_agents_voice::workflows::dtmf::format_dtmf_symbols(symbols).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))
     })
 }
 
@@ -351,7 +351,7 @@ pub fn min_reasoning_effort(model: String) -> Option<String> {
 /// reads them from, so the Python modules hold no second copy.
 #[napi(js_name = "workflowPrompts")]
 pub fn workflow_prompts() -> crate::generated::records::WorkflowPrompts {
-    crate::generated::records::WorkflowPrompts::from(&lk_agents_voice::workflows::builtins::prompts::workflow_prompts())
+    crate::generated::records::WorkflowPrompts::from(&lk_agents_voice::workflows::prompts::workflow_prompts())
 }
 
 /// `_DEFAULT_AEC_WARMUP_DURATION`, as a `Duration`.

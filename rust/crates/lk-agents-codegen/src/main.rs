@@ -107,8 +107,8 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ),
     ("rust/crates/lk-agents-abi/src/telemetry/report.rs", "lk_agents_abi::telemetry::report"),
     (
-        "rust/crates/lk-agents-voice/src/workflows/builtins/credit_card.rs",
-        "lk_agents_voice::workflows::builtins::credit_card",
+        "rust/crates/lk-agents-voice/src/workflows/mod.rs",
+        "lk_agents_voice::workflows",
     ),
     ("rust/crates/lk-agents-voice/src/background_audio.rs", "lk_agents_voice::background_audio"),
     ("rust/crates/lk-agents-voice/src/tool_executor.rs", "lk_agents_voice::tool_executor"),
@@ -124,20 +124,20 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ),
     ("rust/crates/lk-agents-voice/src/speech_handle.rs", "lk_agents_voice::speech_handle"),
     (
-        "rust/crates/lk-agents-voice/src/workflows/builtins/dtmf.rs",
-        "lk_agents_voice::workflows::builtins::dtmf",
+        "rust/crates/lk-agents-voice/src/workflows/dtmf.rs",
+        "lk_agents_voice::workflows::dtmf",
     ),
     (
-        "rust/crates/lk-agents-voice/src/workflows/builtins/warm_transfer.rs",
-        "lk_agents_voice::workflows::builtins::warm_transfer",
+        "rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs",
+        "lk_agents_voice::workflows::warm_transfer",
     ),
     ("rust/crates/lk-agents-abi/src/voice/workflows.rs", "lk_agents_abi::voice::workflows"),
     ("rust/crates/lk-agents-abi/src/voice/host_policy.rs", "lk_agents_abi::voice::host_policy"),
     ("rust/crates/lk-agents-inference/src/llm/models.rs", "lk_agents_inference::llm::models"),
     ("rust/crates/lk-agents-inference/src/llm/mod.rs", "lk_agents_inference::llm"),
     (
-        "rust/crates/lk-agents-voice/src/workflows/builtins/prompts.rs",
-        "lk_agents_voice::workflows::builtins::prompts",
+        "rust/crates/lk-agents-voice/src/workflows/prompts.rs",
+        "lk_agents_voice::workflows::prompts",
     ),
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.

@@ -258,7 +258,7 @@ pub struct WarmTransferResult {
     pub human_agent_identity: String,
 }
 
-// Keyed exactly as published (hence capitals); the strings live in `workflows::builtins::prompts`.
+// Keyed exactly as published (hence capitals); the strings live in `workflows::prompts`.
 
 /// The five a capture module publishes, in the reference's own order: `address`.
 #[derive(Debug, Clone, PartialEq, Eq, Host)]

@@ -1,7 +1,7 @@
-use crate::workflows::builtins::instructions::{
+use crate::workflows::instructions::{
     InstructionsArg, TemplateValue, WorkflowInstructions,
 };
-use crate::workflows::builtins::prompts::warm_transfer as p;
+use crate::workflows::prompts::warm_transfer as p;
 
 use lk_agents_abi::voice::workflows::SipParticipantRequest;
 use lk_agents_abi::{ChatContext, ToolFlags, ToolSpec};
@@ -304,7 +304,7 @@ impl WarmTransferPlan {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WarmTransferRefused {
     #[error(transparent)]
-    Instructions(#[from] crate::workflows::builtins::instructions::BothInstructionForms),
+    Instructions(#[from] crate::workflows::instructions::BothInstructionForms),
     #[error(transparent)]
     Config(#[from] WarmTransferError),
 }

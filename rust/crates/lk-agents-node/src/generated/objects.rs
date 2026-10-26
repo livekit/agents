@@ -425,14 +425,14 @@ impl SpeechHandle {
 /// GetDtmfResult(user_input: 'str')
 #[napi(js_name = "GetDtmfResult")]
 pub struct GetDtmfResult {
-    pub(crate) inner: lk_agents_voice::workflows::builtins::dtmf::DtmfResult,
+    pub(crate) inner: lk_agents_voice::workflows::dtmf::DtmfResult,
 }
 
 #[napi]
 impl GetDtmfResult {
     #[napi(constructor)]
     pub fn new(user_input: String) -> Self {
-        GetDtmfResult { inner: lk_agents_voice::workflows::builtins::dtmf::DtmfResult::new(user_input) }
+        GetDtmfResult { inner: lk_agents_voice::workflows::dtmf::DtmfResult::new(user_input) }
     }
 
     #[napi(getter, js_name = "userInput")]
@@ -443,7 +443,7 @@ impl GetDtmfResult {
 
 #[napi(js_name = "WarmTransferPlan")]
 pub struct WarmTransferPlan {
-    pub(crate) inner: lk_agents_voice::workflows::builtins::warm_transfer::HostWarmTransfer,
+    pub(crate) inner: lk_agents_voice::workflows::warm_transfer::HostWarmTransfer,
 }
 
 #[napi]
@@ -460,12 +460,12 @@ impl WarmTransferPlan {
 
     #[napi(js_name = "humanAgentRoom")]
     pub fn human_agent_room(caller_room: String) -> String {
-        lk_agents_voice::workflows::builtins::warm_transfer::HostWarmTransfer::human_agent_room(&caller_room)
+        lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::human_agent_room(&caller_room)
     }
 
     #[napi(js_name = "humanAgentIdentity")]
     pub fn human_agent_identity() -> String {
-        lk_agents_voice::workflows::builtins::warm_transfer::HostWarmTransfer::human_agent_identity()
+        lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::human_agent_identity()
     }
 
     #[napi(js_name = "sipRequest")]

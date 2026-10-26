@@ -409,7 +409,7 @@ pub enum Answer {
     DrainOk,
     DrainRefused(lk_agents_voice::agent_session::DrainRefused),
     /// What a driver-run DTMF collection answered its `Start` with.
-    Dtmf(lk_agents_voice::workflows::builtins::dtmf::DtmfOutcome),
+    Dtmf(lk_agents_voice::workflows::dtmf::DtmfOutcome),
     /// The channel closed without an answer.
     Lost,
 }

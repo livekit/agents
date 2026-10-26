@@ -25,7 +25,7 @@ use crate::trace::{
     CloseAct, CloseStep, CoreStep, HandoffStep, InputStep, InterruptCause, InterruptStep,
     SpeechStep, TurnStep,
 };
-use crate::workflows::builtins::dtmf::DtmfOutcome;
+use crate::workflows::dtmf::DtmfOutcome;
 use std::time::Duration;
 
 /// Silence pushed into the recogniser so a streaming STT finalises: `stt_flush_duration`.

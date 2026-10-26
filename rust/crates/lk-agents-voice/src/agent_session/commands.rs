@@ -136,7 +136,7 @@ pub enum Answer {
     Hold(Result<HoldId, IdleRefused>),
     Drain(Result<(), DrainRefused>),
     Handoff(Result<(), HandoffRefused>),
-    Dtmf(crate::workflows::builtins::dtmf::DtmfOutcome),
+    Dtmf(crate::workflows::dtmf::DtmfOutcome),
 }
 
 macro_rules! answer_picks {
@@ -160,7 +160,7 @@ answer_picks! {
     hold: Hold(Result<HoldId, IdleRefused>),
     drain: Drain(Result<(), DrainRefused>),
     handoff: Handoff(Result<(), HandoffRefused>),
-    dtmf: Dtmf(crate::workflows::builtins::dtmf::DtmfOutcome),
+    dtmf: Dtmf(crate::workflows::dtmf::DtmfOutcome),
 }
 
 #[derive(Debug)]
@@ -272,7 +272,7 @@ pub enum DtmfCommand {
     /// Answered once with the first outcome, or `Stopped`; the confirm arm is spoken by the
     /// driver.
     Start {
-        collector: crate::workflows::builtins::dtmf::DtmfCollector,
+        collector: crate::workflows::dtmf::DtmfCollector,
         call: Option<RequestId>,
     },
     /// Ignored with no collection running.

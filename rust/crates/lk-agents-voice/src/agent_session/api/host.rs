@@ -992,7 +992,7 @@ impl SessionApi {
         dtmf_input_timeout: f64,
         dtmf_stop_event: String,
     ) -> Result<Reply<lk_agents_abi::voice::workflows::DtmfOutcomeWire>, CommandRefused> {
-        use crate::workflows::builtins::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome};
+        use crate::workflows::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome};
         let stop = DtmfEvent::parse(&dtmf_stop_event).ok_or_else(|| {
             CommandRefused::Invalid(format!("{dtmf_stop_event:?} is not a DTMF key"))
         })?;

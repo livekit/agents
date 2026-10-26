@@ -11,7 +11,7 @@ use lk_agents_abi::voice::session_options::UpdateKwargs;
 use lk_agents_rtc::{ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_voice::agent_session::{CommitSuperseded, DrainRefused, HostMetricsRecord};
 use lk_agents_voice::speech_handle::SpeechWireId;
-use lk_agents_voice::workflows::builtins::dtmf::{DtmfOutcome, GetDtmfResult};
+use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
 
 use super::start::{
     Llm, Tts, frame, history, instructions, patch, session_stt, tool_specs, turn_detection,

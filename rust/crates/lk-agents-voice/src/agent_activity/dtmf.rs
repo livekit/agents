@@ -7,7 +7,7 @@ use crate::agent_session::signals::Signal;
 use crate::agent_session::{Answer, Driver, DtmfCommand, RequestId};
 use crate::events::SessionEvent;
 use crate::trace::{InterruptCause, InterruptStep};
-use crate::workflows::builtins::dtmf::{DtmfAction, DtmfCollector, DtmfOutcome, DtmfReply};
+use crate::workflows::dtmf::{DtmfAction, DtmfCollector, DtmfOutcome, DtmfReply};
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
 

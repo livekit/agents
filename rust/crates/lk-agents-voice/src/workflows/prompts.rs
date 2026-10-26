@@ -28,7 +28,7 @@ pub fn workflow_prompts() -> WorkflowPrompts {
             instructions_template: warm_transfer::INSTRUCTIONS_TEMPLATE.to_owned(),
         },
         credit_card: CardPrompts {
-            card_issuers_lookup: crate::workflows::builtins::credit_card::CARD_ISSUERS
+            card_issuers_lookup: crate::workflows::CARD_ISSUERS
                 .iter()
                 .map(|(digit, name)| (digit.to_string(), (*name).to_owned()))
                 .collect(),

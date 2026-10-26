@@ -1,5 +1,5 @@
-use crate::workflows::builtins::instructions::render;
-use crate::workflows::builtins::prompts::dtmf as p;
+use crate::workflows::instructions::render;
+use crate::workflows::prompts::dtmf as p;
 use lk_agents_abi::Ts;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

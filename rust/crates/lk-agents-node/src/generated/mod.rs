@@ -33,10 +33,10 @@
 //! - `lk_agents_voice::speech_handle::HostSpeech::chat_items`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::speech_handle::HostSpeech::exception`: return: `SpeechException` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::speech_handle::HostSpeech::interrupt`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)
-//! - `lk_agents_voice::workflows::builtins::dtmf::DtmfResult::host_repr`: not yet: `__repr__` is a Python protocol method
-//! - `lk_agents_voice::workflows::builtins::dtmf::DtmfResult::from_dtmf_inputs`: return: `Self` outside a constructor
-//! - `lk_agents_voice::workflows::builtins::warm_transfer::HostWarmTransfer::new`: parameter `instructions`: `Instructions` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::workflows::builtins::warm_transfer::HostWarmTransfer::tools`: no core path: the IR names none (give the declaration #[node(from = "..")] or a binding target)
+//! - `lk_agents_voice::workflows::dtmf::DtmfResult::host_repr`: not yet: `__repr__` is a Python protocol method
+//! - `lk_agents_voice::workflows::dtmf::DtmfResult::from_dtmf_inputs`: return: `Self` outside a constructor
+//! - `lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::new`: parameter `instructions`: `Instructions` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::tools`: no core path: the IR names none (give the declaration #[node(from = "..")] or a binding target)
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::for_host`: parameter `date_of_birth`: `Date` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_date_of_birth`: return: `Date` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_time_of_birth`: return: `Time` is not a #[derive(Host)] type or a #[host(wire_enum)]
