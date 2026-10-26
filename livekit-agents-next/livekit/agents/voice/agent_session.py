@@ -139,6 +139,14 @@ class VoiceActivityVideoSampler:
         self.silent_fps = silent_fps
 
 
+def _core_leg(leg: Any) -> Any:
+    """A fallback chain as the core's own (``_core.FallbackStt`` and the like), which the session
+    drives directly rather than through the Python adapter."""
+    if isinstance(leg, (stt.FallbackAdapter, llm.FallbackAdapter, tts.FallbackAdapter)):
+        return leg._native
+    return leg
+
+
 class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
@@ -358,11 +366,11 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             dynamic_instructions=frame["dynamic_instructions"],
             agent=frame["agent"],
             chat_ctx=to_core_items(self._chat_ctx.items),
-            stt=frame.get("stt", self._stt),
+            stt=_core_leg(frame.get("stt", self._stt)),
             vad=frame.get("vad", self._vad),
-            llm=None if realtime else model,
+            llm=None if realtime else _core_leg(model),
             realtime_host=realtime,
-            tts=frame.get("tts", self._tts),
+            tts=_core_leg(frame.get("tts", self._tts)),
             host_audio_input=self._input.audio,
             host_video_input=self._input.video,
             host_audio_output=self._output.audio,
@@ -570,7 +578,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         }
         for leg in ("stt", "vad", "llm", "tts"):
             if is_given(value := getattr(agent, f"_{leg}")):
-                frame[leg] = value
+                frame[leg] = _core_leg(value)
         return frame
 
     def _legs(self) -> dict[str, Any]:
