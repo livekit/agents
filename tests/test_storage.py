@@ -531,6 +531,11 @@ async def test_input_required_pending_call_is_the_next_messages_output(
     assert answered.data.metadata[MERGED_INTO_KEY] == second.task.id
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="approval per task: the old turn engine runs the answer as a new task, whose message "
+    "cannot approve the read-back; the Rust continuation replaces this test",
+)
 async def test_requires_approval_asks_then_runs_on_the_approved_call(
     agentdb_storage: AgentDBStorage,
 ) -> None:

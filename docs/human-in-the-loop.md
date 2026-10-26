@@ -29,7 +29,8 @@ async def request_photo(ctx: RunContext[None, Loss]) -> InputRequired:
 Use it only for an input the tool needs to go on: an email, a yes or no on
 a read-back, a card number. A conversational question, such as "would you
 like one of these slots?", is a plain reply: the task completes, and the
-next message is a new task.
+next message is a new task. The questions of one step's calls are one
+question, each once and in order, exact only when every part is.
 
 The turn waits. What is stored: the function call, its output,
 `waiting for the person's answer to: <question>`, and the question as an
