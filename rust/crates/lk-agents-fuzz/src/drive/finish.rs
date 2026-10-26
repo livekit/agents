@@ -215,11 +215,10 @@ impl Run {
             })
     }
 
-    /// Whether the person's speech the driver last heard of began on the recogniser's word, has
-    /// not ended, and no utterance since was ended: each one went with a recogniser that was
-    /// swapped or failed under it. Once only, in the release: a recogniser the driver no longer
-    /// takes the end of speech from (another turn detection) cannot end it, and asking again
-    /// would never go quiet.
+    /// Whether the person's speech the driver last heard of began on the recogniser's word and
+    /// has not ended: the utterances since went with a recogniser that was swapped or failed
+    /// under them. Once only: a recogniser the driver no longer takes the end of speech from
+    /// (another turn detection) cannot end it, and asking again would never go quiet.
     fn recogniser_left_speaking(&self) -> bool {
         let Some((began, true)) = self
             .record
@@ -232,15 +231,12 @@ impl Run {
         else {
             return false;
         };
-        let released = self.record.released().unwrap_or(Observed::END);
-        !self.record.applied().iter().any(|a| {
-            a.accepted
-                && a.at > began
-                && match a.input {
-                    Input::SttEnd { .. } => true,
-                    Input::SttStart { .. } => a.at > released,
-                    _ => false,
-                }
+        // A whole utterance since, started and ended, that did not end the speech: the driver
+        // does not take the recogniser's word for it.
+        let accepted = self.record.applied().iter().filter(|a| a.accepted && a.at > began);
+        let restarted = accepted.clone().find(|a| matches!(a.input, Input::SttStart { .. }));
+        !restarted.is_some_and(|start| {
+            accepted.clone().any(|a| a.at > start.at && matches!(a.input, Input::SttEnd { .. }))
         })
     }
 

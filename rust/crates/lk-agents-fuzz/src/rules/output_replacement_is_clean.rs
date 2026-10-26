@@ -13,7 +13,8 @@
 //! once when the session closes it.
 use lk_agents_voice::{
     events::SessionEvent,
-    trace::{PlayoutStep, SpeechStep, Step, ToolStep},
+    agent_session::effects::GateOp,
+    trace::{InterruptStep, PlayoutStep, SpeechStep, Step, ToolStep},
 };
 
 use crate::{
@@ -57,12 +58,24 @@ impl Rule for OutputReplacementIsClean {
                 .filter(|(from, to)| *from < swapped && to.is_none_or(|to| to > swapped))
                 .map(|(_, to)| to.unwrap_or(Observed::END))
                 .max();
+            // A pause the old instance held is released on it as the swap happens: the speech it
+            // was paused under keeps that instance.
+            let released = r.internal_view().steps().iter().any(|(at, step)| {
+                *at >= replaced_at
+                    && *at <= swapped
+                    && matches!(
+                        step,
+                        Step::Interrupt(InterruptStep::PlayoutGate { op: GateOp::Resume, .. })
+                    )
+            });
+            let mut release_owed = released && output.is_audio();
             // One closing flush before the session's close and one at it, text outputs only.
             let text = !output.is_audio();
             let (mut swap_flush, mut close_flush) = (text, text);
             for (at, sink) in output.received() {
                 let owed = at < swapped
                     || running.is_some_and(|end| at <= end)
+                    || (matches!(sink, Sink::Resumed { .. }) && std::mem::take(&mut release_owed))
                     || (matches!(sink, Sink::TextFlush { .. })
                         && std::mem::take(if at < close {
                             &mut swap_flush

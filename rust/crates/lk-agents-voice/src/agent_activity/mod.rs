@@ -420,9 +420,10 @@ impl Driver {
                 // A segment in flight keeps the sink it started with; an unstarted speech reads the
                 // new one at its next segment.
                 let id = output.as_ref().map(|o| o.id);
+                let now = self.step.now;
+                self.release_pause_before_swap(now, out);
                 self.session.outputs.audio = output;
                 out.machine().push(Effect::Audio(AudioOp::SetAudioOutput(id)));
-                let now = self.step.now;
                 let playing = self.session.states.agent_state() == AgentState::Speaking;
                 if !audio || playing {
                     // A segment playing into the old sink can't move: force-interrupt it (and the

@@ -569,6 +569,19 @@ impl Driver {
         }
     }
 
+    /// The audio output is about to be replaced: a pause held on the old sink is released there.
+    /// The paused speech keeps the sink it started with, which nothing would resume (every later
+    /// gate goes to the new one), so it would play nothing until the close. The user speaking
+    /// interrupts it first, as any release does.
+    pub(crate) fn release_pause_before_swap(&mut self, now: Ts, out: &mut Out) {
+        let Some(paused) = self.activity.paused_speech.take_paused() else { return };
+        self.cancel_false_interruption_timer(out);
+        if self.activity.audio_recognition.user_speaking() {
+            self.interrupt_paused(now, paused.handle, out);
+        }
+        self.gate_op(out, paused.handle, GateOp::Resume, GateCause::Released);
+    }
+
     /// `on_start_of_speech`'s pause: cancel the resume timer (the pause survives), then pause the
     /// current speech if not already paused (an onset before the agent flipped to `speaking`).
     pub(crate) fn on_start_of_speech(&mut self, out: &mut Out) {

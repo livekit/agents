@@ -968,12 +968,11 @@ impl Driver {
 
     pub(crate) fn release_speech(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
         self.activity.spoke.remove(&speech);
-        // `_scheduling_task`'s post-await release: a finished current speech that is the paused one
-        // drops the pause and resumes the sink. The release at `Authorized` can miss a pause taken
-        // in the same instant, which would leave the sink paused until the close.
-        if self.activity.speech_scheduler.current_speech() == Some(speech) {
-            self.release_paused_speech(speech, out);
-        }
+        // `_scheduling_task`'s post-await release: a finished speech that is the paused one drops
+        // the pause and resumes the sink, current or not (the floor left it at its last step).
+        // The release at `Authorized` can miss a pause taken in the same instant, which would
+        // leave the sink paused until the close.
+        self.release_paused_speech(speech, out);
         // A close ending a speech with blocking tools still running: they are answered with the
         // closing error before the speech's own `SpeechDone`; nothing is journalled after `close`.
         // Their bodies are cancelled, as the reference's close cancels its tool tasks
