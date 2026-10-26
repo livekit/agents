@@ -25,21 +25,48 @@ export MISTRAL_API_KEY=your_api_key_here
 ```python
 from livekit.plugins import mistralai
 
-stt = mistralai.STT()
+# the default model is the realtime voxtral-mini-transcribe-realtime-3, pass a batch model for offline transcription
+stt = mistralai.STT(model="voxtral-mini-transcribe-3")
 
 # With context biasing
 stt = mistralai.STT(
-    model="voxtral-mini-latest",
+    model="voxtral-mini-transcribe-3",
     context_bias=["LiveKit", "Voxtral", "Mistral"]
 )
+
+# The larger model
+stt = mistralai.STT(model="voxtral-small-transcribe-3", language="en")
 ```
 
 #### Realtime streaming transcription
 
-Voxtral Realtime streams interim transcripts over a WebSocket connection. Since this
-model has no server-side endpointing, the voice pipeline (`AgentSession`) tells the plugin when
-the user stopped speaking, based on its own VAD and turn detection, and the plugin flushes the
-audio to get the final transcript.
+Voxtral Realtime streams interim transcripts over a WebSocket connection.
+
+**Voxtral 3** (`voxtral-mini-transcribe-realtime-3`) has server-side turn detection: the
+server tells the plugin when the user starts and stops speaking and the plugin finalizes the
+transcript of each turn. It is enabled by default, and can be tuned with `turn_detection`.
+
+```python
+from livekit.plugins import mistralai
+
+# server-side turn detection with the server defaults (the default model)
+stt = mistralai.STT(language="en")
+
+# tuned turn detection
+stt = mistralai.STT(
+    model="voxtral-mini-transcribe-realtime-3",
+    turn_detection={"min_silence_ms": 400, "end_timeout_ms": 1500},
+)
+```
+
+To let the voice pipeline decide when a turn ends instead of the server, pass `turn_detection=None`.
+To use the end of the turns detected by the server as the end of the user turns of an
+`AgentSession`, set `turn_detection="stt"` on the session or the agent.
+
+**Earlier realtime models** (e.g. `voxtral-mini-transcribe-realtime-2602`) have no server-side
+endpointing, and neither does Voxtral 3 with `turn_detection=None`. The voice pipeline
+(`AgentSession`) tells the plugin when the user stopped speaking, based on its own VAD and turn
+detection, and the plugin flushes the audio to get the final transcript.
 
 ```python
 from livekit.agents import AgentSession
@@ -53,6 +80,34 @@ session = AgentSession(
 
 To use the STT on its own, outside of an `AgentSession`, flush the stream yourself with
 `stream.flush()` when the user stops speaking to get the final transcript.
+
+#### Speaker diarization
+
+`diarize=True` labels each piece of text with its speaker. The speaker is exposed as `speaker_id` on the
+transcripts, and on each segment (`words`).
+
+```python
+# batch models (Voxtral 2 and 3)
+stt = mistralai.STT(model="voxtral-small-transcribe-3", diarize=True)
+
+# Voxtral 3 realtime
+stt = mistralai.STT(model="voxtral-mini-transcribe-realtime-3", diarize=True)
+```
+
+Earlier realtime models don't support it. On the Voxtral 3 realtime model, diarization can't be
+used together with server-side turn detection, so `turn_detection` is disabled by default when
+`diarize=True` and passing both raises a `ValueError`. The voice pipeline then decides when a turn
+ends, like with `turn_detection=None`. The realtime model numbers the speakers within one
+transcript only: the numbering restarts after each flush, so the speakers of different transcripts
+can't be compared. The transcripts carry no timestamps.
+
+#### Updating the options
+
+`stt.update_options(...)` accepts `model`, `language`, `context_bias`, `target_streaming_delay_ms`,
+`diarize` and `turn_detection`. Batch models apply them to the next transcription. The settings of a realtime
+session can't change once audio has started, so changing one reconnects the active streams, and a
+transcript that was not finalized yet is lost. The model can only be changed to one of the same
+kind (batch or realtime).
 
 ### Text-to-Speech (TTS)
 
