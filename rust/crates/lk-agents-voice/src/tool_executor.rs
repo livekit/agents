@@ -906,7 +906,7 @@ impl Driver {
     pub(crate) fn tool_speech(&self, origin: &Origin) -> Option<SpeechId> {
         match origin {
             Origin::Tool { call_id } => self.activity.tools.speech_of(call_id),
-            Origin::Host | Origin::Hook | Origin::Task | Origin::Amd | Origin::Ivr => None,
+            Origin::Host | Origin::Hook | Origin::Amd | Origin::Ivr => None,
         }
     }
 }

@@ -89,12 +89,11 @@ pub enum Origin {
     Host,
     Tool { call_id: String },
     Hook,
-    Task,
     Amd,
     Ivr,
 }
 
-/// `"host"`, `"hook"`, `"task"` or `"tool:<call_id>"`; anything else is refused.
+/// `"host"`, `"hook"` or `"tool:<call_id>"`; anything else is refused.
 impl std::str::FromStr for Origin {
     type Err = String;
 
@@ -102,13 +101,12 @@ impl std::str::FromStr for Origin {
         match s {
             "host" => Ok(Origin::Host),
             "hook" => Ok(Origin::Hook),
-            "task" => Ok(Origin::Task),
             other => match other.strip_prefix("tool:") {
                 Some(call_id) if !call_id.is_empty() => {
                     Ok(Origin::Tool { call_id: call_id.to_owned() })
                 }
                 Some(_) | None => Err(format!(
-                    "origin must be None, \"host\", \"hook\", \"task\" or \"tool:<call_id>\", got {other:?}"
+                    "origin must be None, \"host\", \"hook\" or \"tool:<call_id>\", got {other:?}"
                 )),
             },
         }

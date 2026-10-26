@@ -282,7 +282,6 @@ impl Driver {
                     Origin::Host
                     | Origin::Tool { .. }
                     | Origin::Hook
-                    | Origin::Task
                     | Origin::Ivr => InterruptCause::Host,
                 };
                 if cause == InterruptCause::Host {
