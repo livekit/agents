@@ -1,15 +1,9 @@
-use crate::workflows::ToolError;
-use crate::workflows::builtins::ConfigError;
 use crate::workflows::builtins::instructions::render;
 use crate::workflows::builtins::prompts::dtmf as p;
 use lk_agents_abi::Ts;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-
-/// Order matters: it is the tool schema's `enum` order, which the model sees.
-pub const DTMF_VALUES: [&str; 16] =
-    ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "*", "#", "A", "B", "C", "D"];
 
 /// `DtmfEvent(str, Enum)` (`utils.DtmfEvent`). Declared in code order: the discriminant is
 /// [`dtmf_event_to_code`]'s answer.
@@ -150,8 +144,8 @@ pub enum DtmfAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DtmfReply {
-    /// `self.complete(ToolError(...))` -- the timeout fired before `num_digits` arrived.
-    Incomplete(ToolError),
+    /// `self.complete(ToolError(message))`: the timeout fired before `num_digits` arrived.
+    Incomplete(String),
     /// `self.complete(GetDtmfResult(...))`.
     Complete(GetDtmfResult),
     /// `generate_reply(user_input=...)`, then [`DtmfCollector::finish_reply`].
@@ -202,9 +196,9 @@ impl DtmfCollector {
         ask_for_confirmation: bool,
         timeout: Duration,
         stop_event: DtmfEvent,
-    ) -> Result<Self, ConfigError> {
+    ) -> Result<Self, &'static str> {
         if num_digits == 0 {
-            return Err(ConfigError::NonPositiveDigits);
+            return Err("num_digits must be greater than 0");
         }
         Ok(DtmfCollector {
             num_digits,
@@ -214,10 +208,6 @@ impl DtmfCollector {
             inputs: Vec::new(),
             reply_running: Arc::new(AtomicBool::new(false)),
         })
-    }
-
-    pub fn pending(&self) -> &[DtmfEvent] {
-        &self.inputs
     }
 
     /// `dtmf_reply_running()`.
@@ -278,13 +268,13 @@ impl DtmfCollector {
 
         // if input not fully received (i.e. timeout), return None
         if self.inputs.len() != self.num_digits {
-            return DtmfReply::Incomplete(ToolError::plain(render(
+            return DtmfReply::Incomplete(render(
                 p::NOT_FULLY_RECEIVED,
                 &[
                     ("expected", &self.num_digits.to_string()),
                     ("got", &self.inputs.len().to_string()),
                 ],
-            )));
+            ));
         }
 
         // if not asking for confirmation, return the DTMF inputs
@@ -331,7 +321,7 @@ mod tests {
         );
         assert_eq!(c.on_sip_dtmf("#", now), DtmfAction::RunNow);
         assert_eq!(c.on_sip_dtmf("E", now), DtmfAction::Ignored);
-        assert_eq!(c.pending(), &[DtmfEvent::One]);
+        assert_eq!(c.inputs, &[DtmfEvent::One]);
     }
 
     // Catches: treating `thinking` as idle (a half-entered sequence reported).
@@ -355,10 +345,10 @@ mod tests {
         c.on_sip_dtmf("1", now);
         c.on_sip_dtmf("2", now);
         let DtmfReply::Incomplete(e) = c.generate_reply() else { panic!("expected an error") };
-        assert!(e.message.contains('3') && e.message.contains('2'), "got {:?}", e.message);
+        assert!(e.contains('3') && e.contains('2'), "got {e:?}");
         assert!(c.reply_running(), "and the guard is held until finish_reply");
         c.finish_reply();
         assert!(!c.reply_running());
-        assert!(c.pending().is_empty(), "the buffer clears on every arm");
+        assert!(c.inputs.is_empty(), "the buffer clears on every arm");
     }
 }

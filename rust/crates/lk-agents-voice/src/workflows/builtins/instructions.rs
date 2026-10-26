@@ -17,15 +17,6 @@ impl TemplateValue {
         TemplateValue::Plain(s.into())
     }
 
-    /// The `Instructions(audio=A, text=T)` shape the two callers use.
-    pub fn modal(audio: impl Into<String>, text: impl Into<String>) -> Self {
-        TemplateValue::Modal(Instructions {
-            common: String::new(),
-            audio: Some(audio.into()),
-            text: Some(text.into()),
-        })
-    }
-
     fn for_audio(&self) -> String {
         match self {
             TemplateValue::Plain(s) => s.clone(),

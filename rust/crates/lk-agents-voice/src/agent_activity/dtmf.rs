@@ -141,7 +141,7 @@ impl Dtmf {
         let Some(dtmf) = &mut self.running else { return };
         out.signal(Signal::InterruptForDtmf);
         let outcome = match dtmf.collector.generate_reply() {
-            DtmfReply::Incomplete(error) => DtmfOutcome::Incomplete { message: error.message },
+            DtmfReply::Incomplete(message) => DtmfOutcome::Incomplete { message },
             DtmfReply::Complete(result) => DtmfOutcome::Complete(result),
             DtmfReply::Confirm { user_input } => {
                 return out.signal(Signal::ReadBackDtmf(user_input));

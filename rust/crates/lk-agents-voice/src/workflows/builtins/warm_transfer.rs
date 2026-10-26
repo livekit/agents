@@ -1,21 +1,19 @@
-use crate::workflows::Warning;
 use crate::workflows::builtins::instructions::{
     InstructionsArg, TemplateValue, WorkflowInstructions,
 };
 use crate::workflows::builtins::prompts::warm_transfer as p;
-use crate::workflows::builtins::schema::{Param, nullary, tool};
+
 use lk_agents_abi::voice::workflows::SipParticipantRequest;
 use lk_agents_abi::{ChatContext, ToolFlags, ToolSpec};
 use lk_agents_rtc::{ParticipantIdentity, SipParticipantReq};
 use lk_agents_voice::generation::Instructions;
+use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
 
 /// `self._human_agent_identity`: the SIP participant's identity, the second session's
 /// `participant_identity`, and what `move_participant` names.
 pub const HUMAN_AGENT_IDENTITY: &str = "human-agent-sip";
-
-pub use lk_agents_abi::voice::workflows::WarmTransferResult;
 
 /// `room.name + "-human-agent"` (`warm_transfer.WarmTransferPlan._dial_human_agent`).
 pub fn human_agent_room_name(caller_room: &str) -> String {
@@ -85,6 +83,22 @@ pub struct SipDialConfig {
     pub sip_headers: HashMap<String, String>,
     pub dtmf: Option<String>,
     pub ringing_timeout: Option<Duration>,
+}
+
+/// What the reference logs while building the plan; the host owns the wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Warning {
+    ExtraInstructionsIgnored,
+    TargetPhoneNumberDeprecated,
+}
+
+impl Warning {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Warning::ExtraInstructionsIgnored => "extra_instructions_ignored",
+            Warning::TargetPhoneNumberDeprecated => "target_phone_number_deprecated",
+        }
+    }
 }
 
 /// Config the reference rejects in `__init__` with a `ValueError`.
@@ -249,23 +263,29 @@ impl WarmTransferPlan {
 /// All three tools are `IGNORE_ON_ENTER`: the entering turn summarises the call to the human, and
 /// connecting then would cut the summary off.
 fn tools_for_transfer() -> Vec<ToolSpec> {
+    fn tool(name: &str, description: &str, reason: Option<&str>) -> ToolSpec {
+        let (properties, required) = match reason {
+            Some(d) => {
+                (json!({ "reason": { "type": "string", "description": d } }), json!(["reason"]))
+            }
+            None => (json!({}), json!([])),
+        };
+        ToolSpec {
+            name: name.to_owned(),
+            description: description.to_owned(),
+            json_schema: json!({
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": false,
+            }),
+            flags: ToolFlags { ignore_on_enter: true },
+        }
+    }
     vec![
-        {
-            let mut t = nullary(p::CONNECT_TOOL, p::CONNECT_DESC);
-            t.flags = ToolFlags { ignore_on_enter: true };
-            t
-        },
-        tool(
-            p::DECLINE_TOOL,
-            p::DECLINE_DESC,
-            &[Param::string("reason", p::DECLINE_ARG_REASON)],
-            ToolFlags { ignore_on_enter: true },
-        ),
-        {
-            let mut t = nullary(p::VOICEMAIL_TOOL, p::VOICEMAIL_DESC);
-            t.flags = ToolFlags { ignore_on_enter: true };
-            t
-        },
+        tool(p::CONNECT_TOOL, p::CONNECT_DESC, None),
+        tool(p::DECLINE_TOOL, p::DECLINE_DESC, Some(p::DECLINE_ARG_REASON)),
+        tool(p::VOICEMAIL_TOOL, p::VOICEMAIL_DESC, None),
     ]
 }
 
