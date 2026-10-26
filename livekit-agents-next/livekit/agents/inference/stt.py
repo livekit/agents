@@ -282,26 +282,10 @@ class SpeechStream(stt.SpeechStream):
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
-                self._event_ch.send_nowait(self._event(ev))
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent._from_core(ev, offset=self.start_time_offset)
+                )
         finally:
             self._native = None
             await aio.cancel_and_wait(push)
             await native.aclose()
-
-    def _event(self, ev: dict[str, Any]) -> stt.SpeechEvent:
-        offset = self.start_time_offset
-        alternatives = []
-        for alt in ev.pop("alternatives"):
-            alt["start_time"] += offset
-            alt["end_time"] += offset
-            for word in alt["words"] or []:
-                word.start_time = (word.start_time or 0.0) + offset
-                word.end_time = (word.end_time or 0.0) + offset
-                word.start_time_offset = offset
-            alternatives.append(stt.SpeechData(**alt))
-        usage = ev.pop("recognition_usage")
-        return stt.SpeechEvent(
-            **ev,
-            alternatives=alternatives,
-            recognition_usage=stt.RecognitionUsage(**usage) if usage else None,
-        )

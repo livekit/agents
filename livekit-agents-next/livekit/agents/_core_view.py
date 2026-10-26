@@ -28,7 +28,7 @@ from .llm.tool_context import (
     Toolset,
 )
 from .llm.utils import function_arguments_to_pydantic_model
-from .types import NOT_GIVEN
+from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions
 from .voice import io
 
 
@@ -47,9 +47,19 @@ def _identity(obj: Any) -> dict[str, str]:
 # --- providers --------------------------------------------------------------------------------
 
 
-class _Stt:
-    def __init__(self, obj: stt.STT) -> None:
+class _Provider:
+    """A provider view; ``_core_with_conn_options`` binds the budget its calls carry."""
+
+    def __init__(self, obj: Any, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> None:
         self._obj = obj
+        self._conn = conn
+
+    def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
+        return type(self)(self._obj, APIConnectOptions(**conn))
+
+
+class _Stt(_Provider):
+    _obj: stt.STT
 
     def _core_label(self) -> str:
         return self._obj.label
@@ -66,26 +76,24 @@ class _Stt:
     def _core_update_keyterms(self, keyterms: list[str]) -> None:
         self._obj._update_session_keyterms(keyterms)
 
-    def _core_with_conn_options(self, conn: Any) -> None:
-        return None
-
     async def _core_recognize(self, buffer: list[Any], language: str | None) -> stt.SpeechEvent:
-        return await self._obj.recognize(buffer, language=language or NOT_GIVEN)
+        return await self._obj.recognize(
+            buffer, language=language or NOT_GIVEN, conn_options=self._conn
+        )
 
     async def _core_stream(
         self, language: str | None, start_time_offset: float | None
     ) -> _InputStream | None:
         if not self._obj.capabilities.streaming:
             return None
-        stream = self._obj.stream(language=language or NOT_GIVEN)
+        stream = self._obj.stream(language=language or NOT_GIVEN, conn_options=self._conn)
         if start_time_offset is not None:
             stream.start_time_offset = start_time_offset
         return _InputStream(stream, stream.push_frame)
 
 
-class _Tts:
-    def __init__(self, obj: tts.TTS) -> None:
-        self._obj = obj
+class _Tts(_Provider):
+    _obj: tts.TTS
 
     def _core_label(self) -> str:
         return self._obj.label
@@ -105,16 +113,13 @@ class _Tts:
     def _core_num_channels(self) -> int:
         return self._obj.num_channels
 
-    def _core_with_conn_options(self, conn: Any) -> None:
-        return None
-
     async def _core_synthesize(self, text: str) -> tts.ChunkedStream:
-        return self._obj.synthesize(text)
+        return self._obj.synthesize(text, conn_options=self._conn)
 
     async def _core_stream(self) -> _InputStream:
         if not self._obj.capabilities.streaming:
             raise RuntimeError(f"{self._obj.label} has no duplex path")
-        stream = self._obj.stream()
+        stream = self._obj.stream(conn_options=self._conn)
         return _InputStream(stream, stream.push_text)
 
 
@@ -165,9 +170,8 @@ class _InputStream:
         await self._stream.aclose()
 
 
-class _Llm:
-    def __init__(self, obj: llm.LLM) -> None:
-        self._obj = obj
+class _Llm(_Provider):
+    _obj: llm.LLM
 
     def _core_label(self) -> str:
         return self._obj.label
@@ -180,9 +184,6 @@ class _Llm:
 
     def _core_prewarm(self) -> None:
         self._obj.prewarm()
-
-    def _core_with_conn_options(self, conn: Any) -> None:
-        return None
 
     async def _core_chat(self, req: _core.ChatRequest) -> llm.LLMStream:
         if req.chat_ctx_host is not None:
@@ -197,6 +198,7 @@ class _Llm:
         choice = req.tool_choice
         return self._obj.chat(
             chat_ctx=chat_ctx,
+            conn_options=self._conn,
             tools=tools,
             tool_choice=NOT_GIVEN if choice is None else choice,
             parallel_tool_calls=(

@@ -1,5 +1,4 @@
-from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
-from .stream_adapter import StreamAdapter, StreamAdapterWrapper
+from .adapters import AvailabilityChangedEvent, FallbackAdapter, StreamAdapter, StreamAdapterWrapper
 from .stt import (
     STT,
     RecognitionUsage,
@@ -29,12 +28,3 @@ __all__ = [
     "STTError",
     "SpeakerContext",
 ]
-
-# Cleanup docs of unexported modules
-_module = dir()
-NOT_IN_ALL = [m for m in _module if m not in __all__]
-
-__pdoc__ = {}
-
-for n in NOT_IN_ALL:
-    __pdoc__[n] = False
