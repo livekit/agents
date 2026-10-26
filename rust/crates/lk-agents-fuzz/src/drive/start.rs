@@ -93,6 +93,9 @@ impl Run {
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
                 Some(mic as Arc<AudioIn>),
                 Some(fakes::FakeAudioOutput::new(registry.clone(), setup.pausable_output) as _),
                 setup
@@ -306,6 +309,9 @@ pub(super) fn frame(
         stt: Maybe::NotGiven,
         vad: Maybe::NotGiven,
         turn_handling: None,
+        llm_node: None,
+        tts_node: None,
+        stt_node: None,
     }
 }
 

@@ -57,9 +57,11 @@ def _download_files() -> int:
 
 def _dispatch(server: AgentServer, args: argparse.Namespace) -> None:
     from .cli import proto
-    from .cli.cli import _run_worker
+    from .cli.cli import _run_console, _run_worker
 
-    if args.command == "start":
+    if args.command == "console":
+        _run_console(server, args.connect_addr, args.record)
+    elif args.command == "start":
         _run_worker(
             server=server,
             args=proto.CliArgs(
@@ -118,6 +120,11 @@ def _parser() -> argparse.ArgumentParser:
     # set by `lk simulate`: disables the worker load limit so simulation runs
     # can saturate the agent
     start_p.add_argument("--simulation", action="store_true", default=False)
+
+    console_p = sub.add_parser("console")
+    console_p.add_argument("entrypoint", nargs="?")
+    console_p.add_argument("--connect-addr", required=True)
+    console_p.add_argument("--record", action="store_true", default=False)
     return parser
 
 

@@ -174,6 +174,10 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
         "rust/crates/lk-agents-voice/src/remote_session/driver.rs",
         "lk_agents_voice::remote_session::driver",
     ),
+    (
+        "rust/crates/lk-agents-voice/src/remote_session/console.rs",
+        "lk_agents_voice::remote_session::console",
+    ),
     ("rust/crates/lk-agents-abi/src/errors/host.rs", "lk_agents_abi::errors"),
     ("rust/crates/lk-agents-abi/src/errors/api.rs", "lk_agents_abi::errors"),
     ("rust/crates/lk-agents-abi/src/tts/markup/mod.rs", "lk_agents_abi::tts::markup"),

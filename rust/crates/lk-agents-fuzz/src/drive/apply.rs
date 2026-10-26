@@ -528,6 +528,9 @@ impl Run {
                     given(tts, || fakes::FakeTts::new(registry.clone()) as Arc<Tts>),
                     given(stt, || fakes::FakeStt::new(registry.clone(), connect) as Arc<Stt>),
                     Maybe::NotGiven,
+                    None,
+                    None,
+                    None,
                 )
                 .is_ok()
             }

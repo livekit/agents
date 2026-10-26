@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 284 core items bound (120 functions and consts, 78 classes, 85 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 285 core items bound (120 functions and consts, 79 classes, 85 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -97,6 +97,7 @@
 //! - `lk_agents_voice::remote_session::driver::HostRuntime::start`: parameter `transport`: not yet: `Arc<dyn SessionTransport>` (a host object behind a proxy)
 //! - `lk_agents_voice::remote_session::driver::ClientRuntime::new`: parameter `clock`: not yet: `Arc<dyn Clock>` (a host object behind a proxy)
 //! - `lk_agents_voice::remote_session::driver::ClientRuntime::start`: parameter `transport`: not yet: `Arc<dyn SessionTransport>` (a host object behind a proxy)
+//! - `lk_agents_voice::remote_session::console::ConsoleIo::new`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)
 //! - `lk_agents_abi::tts::markup::Markup::llm_instructions`: field `nonverbal_sounds`: `NonverbalSounds` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_abi::ChatContent::text`: return: `Self` outside a constructor
 //! - `lk_agents_abi::ChatContent::image_url`: return: `Self` outside a constructor
