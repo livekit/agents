@@ -709,6 +709,7 @@ impl Driver {
         // preemptive generation.
         let abandoned = crate::agent_activity::scheduling::PreemptiveDiscard::TurnAbandoned;
         self.cancel_preemptive_generation(now, abandoned, out);
+        let generating = self.activity.realtime_state.generating();
         let mut reached = Vec::new();
         let mut socket_told = false;
         if let Some(id) = self.activity.speech_scheduler.current_speech() {
@@ -730,6 +731,7 @@ impl Driver {
         if !socket_told {
             self.realtime_interrupt(cause, out);
         }
+        self.realtime_interrupt_session(generating, out);
         // Speeches whose step is spoken and tools running: still `_current_speech` to the
         // reference, so they end (outputs commit, no follow-up).
         let working: Vec<SpeechId> = self

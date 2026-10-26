@@ -124,6 +124,11 @@ pub(crate) mod realtime_state {
         pub(super) request: Request,
         pub(super) call: Option<SpeechCall>,
         pub(super) allow_interruptions: Option<bool>,
+        /// The speech announced when it was asked for, which the server's answer plays into (a
+        /// `Say`, a `GenerateReply` or a user turn: `_realtime_reply_task`'s handle).
+        pub(super) speech: Option<SpeechId>,
+        /// Held until that speech is authorized, as the reference asks the server only then.
+        pub(super) unsent: Option<RealtimeCommand>,
     }
 
     struct Open {
@@ -207,18 +212,31 @@ pub(crate) mod realtime_state {
             }
         }
 
-        /// A request sent: pending under `req_id` until answered, its timer keyed by the returned
-        /// key.
+        /// A request: pending under `req_id` until answered, its timer keyed by the returned key.
+        /// `speech` is the speech announced for it; `unsent`, its command until that speech is
+        /// authorized.
         pub(super) fn register(
             &mut self,
             req_id: String,
             request: Request,
             call: Option<SpeechCall>,
             allow_interruptions: Option<bool>,
+            speech: Option<SpeechId>,
+            unsent: Option<RealtimeCommand>,
         ) -> RequestKey {
             let key = self.mint_key();
-            self.pending.insert(req_id, Pending { key, request, call, allow_interruptions });
+            let pending = Pending { key, request, call, allow_interruptions, speech, unsent };
+            self.pending.insert(req_id, pending);
             key
+        }
+
+        /// The request whose speech is `speech` and that waits for its authorization to be sent.
+        pub(super) fn take_unsent(
+            &mut self,
+            speech: SpeechId,
+        ) -> Option<(RealtimeCommand, RequestKey)> {
+            let p = self.pending.values_mut().find(|p| p.speech == Some(speech))?;
+            Some((p.unsent.take()?, p.key))
         }
 
         pub(super) fn take_by_key(&mut self, key: RequestKey) -> Option<(String, Pending)> {
@@ -251,6 +269,11 @@ pub(crate) mod realtime_state {
                 self.auto_follow_up = None;
                 reuse.speech
             })
+        }
+
+        /// A generation is still generating and not yet told to stop.
+        pub(crate) fn generating(&self) -> bool {
+            self.open.iter().any(|o| !o.cancelled)
         }
 
         /// The speeches of the generations still generating.
@@ -556,7 +579,7 @@ impl Driver {
     ) {
         let t = &self.activity.realtime_state;
         if t.ended() {
-            return self.settle(request, call, Settled::Ended, out);
+            return self.settle_request(request, call, Settled::Ended, out);
         }
         if t.closing {
             // Closing: a turn's own actuation still goes out whole and settles at once; a caller's
@@ -567,12 +590,13 @@ impl Driver {
                 }
                 self.rt_send(bare_reply(&req_id), out);
             }
-            return self.settle(request, call, Settled::Interrupted(InterruptCause::Closing), out);
+            let closing = Settled::Interrupted(InterruptCause::Closing);
+            return self.settle_request(request, call, closing, out);
         }
         let cmd = match &request {
             Request::Say { .. } if !t.caps.supports_say => {
                 let error = RealtimeError::new("say() on a realtime model that has no say");
-                return self.settle(request, call, Settled::Failed(error), out);
+                return self.settle_request(request, call, Settled::Failed(error), out);
             }
             Request::Say { text, add_to_chat_ctx } => RealtimeCommand::Say(rt::Say {
                 req_id: req_id.clone(),
@@ -595,7 +619,49 @@ impl Driver {
             }
             Request::ToolFollowUp { .. } => bare_reply(&req_id),
         };
-        let key = self.activity.realtime_state.register(req_id, request, call, allow_interruptions);
+        // A caller's reply, or a user turn's, is announced now and asks the server once its speech
+        // is authorized (`_realtime_reply_task`); a tool follow-up continues a speech that plays.
+        let (allow, mut call) = (allow_interruptions, call);
+        let speech = match &request {
+            Request::ToolFollowUp { .. } => None,
+            Request::Say { add_to_chat_ctx, .. } => {
+                let add = *add_to_chat_ctx;
+                Some(self.start_realtime_speech(now, Some(call.take()), false, allow, add, out))
+            }
+            Request::GenerateReply { read_back, .. } => {
+                let asked = Some(call.take());
+                let speech = self.start_realtime_speech(now, asked, false, allow, true, out);
+                if *read_back {
+                    let ev = crate::workflows::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
+                    self.dtmf_step(ev, out);
+                }
+                Some(speech)
+            }
+            Request::UserTurn { .. } => {
+                Some(self.start_realtime_speech(now, None, true, allow, true, out))
+            }
+        };
+        let t = &mut self.activity.realtime_state;
+        match speech {
+            // Refused by the scheduler: it never plays, so nothing is asked.
+            Some(speech) if !self.activity.speech_scheduler.contains(speech) => {
+                self.activity.realtime_players.remove(&speech);
+            }
+            // The caller was answered with the speech.
+            Some(speech) => {
+                t.register(req_id, request, None, allow, Some(speech), Some(cmd));
+            }
+            None => {
+                let key = t.register(req_id, request, call, allow, None, None);
+                self.rt_send(cmd, out);
+                out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
+            }
+        }
+    }
+
+    /// The speech announced for a request is authorized: the request goes to the server now.
+    pub(crate) fn realtime_authorized(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+        let Some((cmd, key)) = self.activity.realtime_state.take_unsent(speech) else { return };
         self.rt_send(cmd, out);
         out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
     }
@@ -607,7 +673,31 @@ impl Driver {
         Some(pending)
     }
 
-    fn settle(&mut self, request: Request, call: Option<SpeechCall>, how: Settled, out: &mut Out) {
+    /// A pending request leaves. One announced with its speech ends that speech: a failure plays
+    /// into it as its error (`speech_handle._mark_done(error=e)`); an interruption already cut it.
+    fn settle(&mut self, pending: Pending, how: Settled, out: &mut Out) {
+        let Some(speech) = pending.speech else {
+            return self.settle_request(pending.request, pending.call, how, out);
+        };
+        let error = match how {
+            Settled::Interrupted(_) => None,
+            Settled::Failed(error) | Settled::TimedOut(error) => Some(error),
+            Settled::Ended => Some(RealtimeError::new(REALTIME_SESSION_ENDED)),
+        };
+        if let Some(error) = error {
+            let failed = rt::GenerateReplyFailed { req_id: String::new(), error };
+            self.activity.play_realtime(speech, Event::GenerateReplyFailed(failed));
+        }
+        self.activity.realtime_players.remove(&speech);
+    }
+
+    fn settle_request(
+        &mut self,
+        request: Request,
+        call: Option<SpeechCall>,
+        how: Settled,
+        out: &mut Out,
+    ) {
         let kind = match request {
             Request::Say { .. } => SpeechKind::Say,
             // A follow-up that will never come: the player finishes with what it has.
@@ -628,17 +718,23 @@ impl Driver {
     }
 
     /// Every pending request leaves through exactly one settlement; `cancel` also sends
-    /// `CancelReply`.
+    /// `CancelReply` for those on the wire. An interruption leaves the request of a speech it did
+    /// not cut: queued, it is asked when that speech is authorized.
     fn settle_all(&mut self, how: Settled, cancel: bool, out: &mut Out) {
-        for (req_id, Pending { key, request, call, .. }) in
-            std::mem::take(&mut self.activity.realtime_state.pending)
-        {
-            out.machine().cancel(Timer::RealtimeRequest(key));
-            if cancel && !self.activity.realtime_state.ended() {
+        for (req_id, pending) in std::mem::take(&mut self.activity.realtime_state.pending) {
+            let playing_on = pending.speech.is_some_and(|s| {
+                self.activity.speech_scheduler.handle(s).is_some_and(|h| !h.interrupted())
+            });
+            if playing_on && matches!(how, Settled::Interrupted(_)) {
+                self.activity.realtime_state.pending.insert(req_id, pending);
+                continue;
+            }
+            out.machine().cancel(Timer::RealtimeRequest(pending.key));
+            if cancel && pending.unsent.is_none() && !self.activity.realtime_state.ended() {
                 self.activity.realtime_state.cancelled_requests.insert(req_id.clone());
                 self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
             }
-            self.settle(request, call, how.clone(), out);
+            self.settle(pending, how.clone(), out);
         }
     }
 
@@ -653,7 +749,7 @@ impl Driver {
         }
         let t = &mut self.activity.realtime_state;
         // Answered in the same instant the timer fired: nothing owed.
-        let Some((req_id, Pending { request, call, .. })) = t.take_by_key(key) else { return };
+        let Some((req_id, pending)) = t.take_by_key(key) else { return };
         if !t.ended() && !t.closing {
             t.cancelled_requests.insert(req_id.clone());
             self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
@@ -661,15 +757,15 @@ impl Driver {
         let error = RealtimeError::new(format!(
             "generate_reply timed out: no generation was created within {REQUEST_TIMEOUT:?}"
         ));
-        self.settle(request, call, Settled::TimedOut(error), out);
+        self.settle(pending, Settled::TimedOut(error), out);
     }
 
     fn fail_request(&mut self, req_id: &str, error: RealtimeError, out: &mut Out) {
         // A cancelled request that will not generate is forgotten.
         let _ = self.activity.realtime_state.cancelled_requests.remove(req_id);
         // Unknown: already claimed by a `GenerationCreated`, or cancelled by the driver.
-        if let Some(Pending { request, call, .. }) = self.take_pending(req_id, out) {
-            self.settle(request, call, Settled::Failed(error), out);
+        if let Some(pending) = self.take_pending(req_id, out) {
+            self.settle(pending, Settled::Failed(error), out);
         }
     }
 
@@ -682,12 +778,16 @@ impl Driver {
         out: &mut Out,
     ) {
         let pending = req_id.as_deref().map(|id| self.take_pending(id, out));
+        // The speech announced for it is over: nothing plays the answer.
+        let players = &self.activity.realtime_players;
+        let orphaned = matches!(&pending, Some(Some(Pending { speech: Some(s), .. })) if !players.contains_key(s));
         // Settled before the server answered (interrupted, closed, timed out), or closing.
-        if matches!(pending, Some(None)) || self.activity.realtime_state.closing {
+        if matches!(pending, Some(None)) || orphaned || self.activity.realtime_state.closing {
             let t = &mut self.activity.realtime_state;
             // Cancelled while the request was in flight: the response landed anyway, and only an
             // interrupt reaches it now.
-            let cancelled = req_id.as_deref().is_some_and(|id| t.cancelled_requests.remove(id));
+            let cancelled =
+                orphaned || req_id.as_deref().is_some_and(|id| t.cancelled_requests.remove(id));
             t.discarded = Some(response_id.clone());
             if cancelled && !t.ended() {
                 let response_id = Some(response_id.clone());
@@ -704,6 +804,10 @@ impl Driver {
         // `turn`: the reply to a user turn the client committed, which the reference creates
         // through `_generate_reply` and so announces as user-initiated.
         let (asked, allow_interruptions, add_to_chat_ctx, reuse, turn) = match pending.flatten() {
+            // Announced at the request: the answer plays into it.
+            Some(Pending { speech: Some(speech), allow_interruptions, .. }) => {
+                (None, allow_interruptions, true, Some(Reuse { speech, step: 0 }), false)
+            }
             Some(Pending { request, call, allow_interruptions, .. }) => match request {
                 Request::Say { add_to_chat_ctx, .. } => {
                     (Some(call), allow_interruptions, add_to_chat_ctx, None, false)
@@ -842,9 +946,9 @@ impl Driver {
                 .as_deref()
                 .and_then(|id| self.activity.realtime_state.pending.remove(id));
             self.report_error(now, source, true, reported, None, out);
-            if let Some(Pending { key, request, call, .. }) = pending {
-                out.machine().cancel(Timer::RealtimeRequest(key));
-                self.settle(request, call, Settled::Failed(error), out);
+            if let Some(pending) = pending {
+                out.machine().cancel(Timer::RealtimeRequest(pending.key));
+                self.settle(pending, Settled::Failed(error), out);
             }
             return;
         }
@@ -858,9 +962,9 @@ impl Driver {
         for (cmd, ..) in interrupts {
             self.rt_send(cmd, out);
         }
-        for (_, Pending { key, request, call, .. }) in pending {
-            out.machine().cancel(Timer::RealtimeRequest(key));
-            self.settle(request, call, Settled::Failed(error.clone()), out);
+        for (_, pending) in pending {
+            out.machine().cancel(Timer::RealtimeRequest(pending.key));
+            self.settle(pending, Settled::Failed(error.clone()), out);
         }
         if close {
             self.close_on_realtime_failure(now, out);
@@ -1148,6 +1252,16 @@ impl Driver {
             audio_transcript: None,
         };
         self.rt_send(RealtimeCommand::Truncate(truncate), out);
+    }
+
+    /// The session-level `interrupt()`'s `self._rt_session.interrupt()`, unconditional: with no
+    /// generation of its own to cancel (`generating`, read before the speeches were cut) the
+    /// socket is still told, unaddressed.
+    pub(crate) fn realtime_interrupt_session(&mut self, generating: bool, out: &mut Out) {
+        let ended = self.activity.realtime_state.ended();
+        if self.activity.rt_session.is_some() && !ended && !generating {
+            self.rt_send(RealtimeCommand::Interrupt(rt::Interrupt { response_id: None }), out);
+        }
     }
 
     /// The session closes: every pending request settles `Closing`; every open generation is

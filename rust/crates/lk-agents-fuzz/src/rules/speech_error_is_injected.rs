@@ -1,12 +1,13 @@
 //! A speech fails only from a failure the case injected into one of its own requests, or from
-//! closing before it was scheduled, from a synthesis the case failed while it was live, or from a
-//! refusal the driver journals itself.
+//! closing before it was scheduled, from a synthesis the case failed while it was live, from the
+//! realtime socket the case dropped while it was live, or from a refusal the driver journals
+//! itself.
 use lk_agents_voice::trace::{SpeechStep, Step};
 
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
-    input::{Input, Ref},
+    input::{Input, Ref, RtEvent},
     record::{Applied, Handle, Recording},
 };
 
@@ -15,7 +16,7 @@ pub struct SpeechErrorIsInjected;
 impl Rule for SpeechErrorIsInjected {
     const CONTRACT: Contract = Contract {
         id: "speech_error_is_injected",
-        guarantee: "A failed speech had a provider failure delivered to one of its own requests, was refused by Close before scheduling, or was a say the driver refused on the journal.",
+        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on, was refused by Close before scheduling, or was a say the driver refused on the journal.",
         examples: &[failed_by_injection],
         counterexamples: &[failed_without_injection],
         probe: None,
@@ -56,6 +57,10 @@ impl Rule for SpeechErrorIsInjected {
                 })
                 .last()
                 .is_some_and(|down| down);
+            // A realtime speech waits on the socket for its reply; dropped, the request fails.
+            let socket_dropped = inputs.accepted().filter(before_done).any(|sent| {
+                matches!(sent.input, Input::RealtimeEvent { event: RtEvent::Disconnected, .. })
+            });
             let refused_by_close = inputs.close_asked_at().is_some() && !speech.is_scheduled();
             // A `say` the driver refused on its own terms -- words with no voice to speak them --
             // fails without ever making a request; the refusal is on the journal.
@@ -64,8 +69,12 @@ impl Rule for SpeechErrorIsInjected {
                     .steps()
                     .iter()
                     .any(|(_, step)| matches!(step, Step::Speech(SpeechStep::SayRefused { .. })));
-            let accounted =
-                injected || voice_failed || voice_down || refused_by_close || refused_by_driver;
+            let accounted = injected
+                || voice_failed
+                || voice_down
+                || socket_dropped
+                || refused_by_close
+                || refused_by_driver;
             check.expect(
                 &speech,
                 accounted,

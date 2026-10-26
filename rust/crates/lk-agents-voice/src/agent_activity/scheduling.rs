@@ -822,6 +822,7 @@ impl Driver {
         }
         out.trace(SpeechStep::Authorized { speech: candidate });
         self.shared.launch.note_authorized(candidate);
+        self.realtime_authorized(now, candidate, out);
     }
 
     /// The reply's tools are done and it has a next step: a `Working` speech goes back on the

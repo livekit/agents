@@ -109,10 +109,13 @@ impl Driver {
         // `allow_interruptions`, a false-interruption pause released so a later turn never
         // resolves it as false, and every pending socket request settled `Closing`.
         if !drain {
+            // The reference's close runs the session-level `interrupt(force=True)`.
+            let generating = self.activity.realtime_state.generating();
             self.force_cut_open(now, out);
             self.cancel_speech_pause(now, out);
             if self.activity.rt_session.is_some() {
                 self.realtime_on_close(out);
+                self.realtime_interrupt_session(generating, out);
             }
         }
         self.close_on_exit(now, exit, out);

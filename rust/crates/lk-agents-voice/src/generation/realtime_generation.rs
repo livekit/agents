@@ -81,14 +81,15 @@ pub(crate) async fn realtime_generation_task(
         speaks_text: out.is_none(),
         leg: None,
     };
-    // `Generation::next` never fails; a failure would be a bug in this file.
     let played = perform_audio_forwarding(shared, handle, out, &mut generation).await;
     // The node's invocation ends with the generation, so cut-off frames never reach the next one.
     if let Some(node) = &node {
         node.end();
     }
+    // `Generation::next` fails only on the speech's own request failing: nothing was generated.
+    let heard = played.map_err(|failed| failed.error)?;
     let Generation { segments, received, first_token_at, response_id, message_id, .. } = generation;
-    let interrupted = played.as_ref().is_ok_and(|heard| !heard.complete) || handle.interrupted();
+    let interrupted = !heard.complete || handle.interrupted();
     // The metrics' `llm_started_at` anchor, on the driver's clock. `None` when nothing arrived.
     let ttft = first_token_at.map(|at| (at - started_at).max(0.0));
     drop(rx);
@@ -98,12 +99,11 @@ pub(crate) async fn realtime_generation_task(
     }
     // The transcript *is* the provider's: the words committed are the ones the voice said, or,
     // cut, what the synchroniser says was heard of them (`_ForwardOutput.forwarded_text`).
-    match &played {
-        Ok(heard) if interrupted => acc.record(&heard.text),
-        Ok(_) | Err(_) => {
-            for text in &segments {
-                acc.record(text);
-            }
+    if interrupted {
+        acc.record(&heard.text);
+    } else {
+        for text in &segments {
+            acc.record(text);
         }
     }
     let has_calls = !tools.is_empty();
@@ -259,6 +259,11 @@ impl Segment for Generation<'_> {
                 Event::GenerationDone(_) => {
                     self.end_message();
                     return Ok(Next::End);
+                }
+                // The request this speech was announced for failed (`_mark_done(error=e)`).
+                Event::GenerateReplyFailed(failed) => {
+                    let error = crate::generation::pipeline_reply::fatal(failed.error.message);
+                    return Err(DriverError::Provider(error));
                 }
                 // The loop routes only a generation's own events here; the rest are the loop's.
                 _ => {}
