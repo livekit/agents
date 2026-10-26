@@ -50,17 +50,6 @@ pub struct TfidfLoopDetector {
     consecutive: u32,
 }
 
-/// A constructor argument out of range; returned since host values must not abort the process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum LoopDetectorError {
-    #[error("window_size must be greater than 0")]
-    WindowSize,
-    #[error("similarity_threshold must be between 0.0 and 1.0")]
-    SimilarityThreshold,
-    #[error("consecutive_threshold must be greater than 0")]
-    ConsecutiveThreshold,
-}
-
 impl Default for TfidfLoopDetector {
     fn default() -> Self {
         TfidfLoopDetector {
@@ -74,44 +63,12 @@ impl Default for TfidfLoopDetector {
 }
 
 /// TF-IDF loop detection over a sliding window of final transcripts.
-#[lk_agents_abi::host(object(name = "IvrLoopDetector", cell = "mutex"))]
 impl TfidfLoopDetector {
-    #[host(new(defaults(
-        window_size = 20,
-        similarity_threshold = 0.85,
-        consecutive_threshold = 3
-    )))]
-    pub fn new(
-        window_size: usize,
-        similarity_threshold: f64,
-        consecutive_threshold: u32,
-    ) -> Result<Self, LoopDetectorError> {
-        if window_size == 0 {
-            return Err(LoopDetectorError::WindowSize);
-        }
-        if !(0.0..=1.0).contains(&similarity_threshold) || similarity_threshold.is_nan() {
-            return Err(LoopDetectorError::SimilarityThreshold);
-        }
-        if consecutive_threshold == 0 {
-            return Err(LoopDetectorError::ConsecutiveThreshold);
-        }
-        Ok(TfidfLoopDetector {
-            window_size,
-            similarity_threshold,
-            consecutive_threshold,
-            chunks: Vec::new(),
-            consecutive: 0,
-        })
-    }
-
-    /// Reset the window and the counter, so the next loop builds up from nothing.
-    #[host(method)]
     pub fn reset(&mut self) {
         self.chunks.clear();
         self.consecutive = 0;
     }
 
-    #[host(method)]
     pub fn add_chunk(&mut self, chunk: &str) {
         self.chunks.push(chunk.to_owned());
         if self.chunks.len() > self.window_size {
@@ -122,7 +79,6 @@ impl TfidfLoopDetector {
 
     /// Is the newest document a repeat? Stateful: advances or resets the counter, once per chunk.
     /// Fewer than two documents is `false`, counter untouched.
-    #[host(method)]
     pub fn check_loop_detection(&mut self) -> bool {
         if self.chunks.len() < 2 {
             return false;

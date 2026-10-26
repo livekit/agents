@@ -288,43 +288,6 @@ impl BackgroundAudioPlayer {
     }
 }
 
-/// TF-IDF loop detection over a sliding window of final transcripts.
-#[napi(js_name = "IvrLoopDetector")]
-pub struct IvrLoopDetector {
-    pub(crate) inner: std::sync::Mutex<lk_agents_voice::ivr::ivr_activity::TfidfLoopDetector>,
-}
-
-#[napi]
-impl IvrLoopDetector {
-    #[napi(constructor)]
-    pub fn new(env: Env, window_size: Option<i64>, similarity_threshold: Option<f64>, consecutive_threshold: Option<u32>) -> napi::Result<Self> {
-        crate::host_error::run(&env, || {
-            let window_size = match window_size { Some(v) => <usize>::try_from(v).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("window_size: {e}")))?, None => 20 };
-            let similarity_threshold = similarity_threshold.unwrap_or(0.85);
-            let consecutive_threshold = consecutive_threshold.unwrap_or(3);
-            Ok(IvrLoopDetector { inner: std::sync::Mutex::new(lk_agents_voice::ivr::ivr_activity::TfidfLoopDetector::new(window_size, similarity_threshold, consecutive_threshold).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))?) })
-        })
-    }
-
-    #[napi(js_name = "reset")]
-    pub fn reset(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.reset();
-    }
-
-    #[napi(js_name = "addChunk")]
-    pub fn add_chunk(&self, chunk: String) {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.add_chunk(&chunk);
-    }
-
-    #[napi(js_name = "checkLoopDetection")]
-    pub fn check_loop_detection(&self) -> bool {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.check_loop_detection()
-    }
-}
-
 /// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict (deprecated kwargs are
 /// migrated here), and the resolved configuration comes back as the dict `session.options` views.
 #[napi(js_name = "SessionOptions")]
@@ -1288,18 +1251,6 @@ impl FrameDecoder {
     #[napi(constructor)]
     pub fn new() -> Self {
         FrameDecoder { inner: lk_agents_voice::remote_session::FrameDecoder::new() }
-    }
-
-    #[napi(getter, js_name = "pending")]
-    pub fn pending(&self) -> i64 {
-        i64::try_from(self.inner.pending()).unwrap_or(i64::MAX)
-    }
-
-    #[napi(js_name = "decodeFrames")]
-    pub fn decode_frames(&mut self, env: Env, chunk: napi::bindgen_prelude::Buffer) -> napi::Result<Vec<napi::bindgen_prelude::Buffer>> {
-        crate::host_error::run(&env, || {
-            Ok(self.inner.decode_frames(&chunk).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))?.into_iter().map(|v| napi::bindgen_prelude::Buffer::from(v)).collect::<Vec<_>>())
-        })
     }
 }
 

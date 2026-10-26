@@ -582,20 +582,6 @@ class BackgroundAudioPlayer:
     async def aclose(self) -> None: ...
 
 
-class IvrLoopDetector:
-    """TF-IDF loop detection over a sliding window of final transcripts."""
-
-    def __init__(
-        self,
-        window_size: int = 20,
-        similarity_threshold: float = 0.85,
-        consecutive_threshold: int = 3,
-    ) -> None: ...
-    def reset(self) -> None: ...
-    def add_chunk(self, chunk: str) -> None: ...
-    def check_loop_detection(self) -> bool: ...
-
-
 class SessionOptions:
     """`AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict (deprecated kwargs are
     migrated here), and the resolved configuration comes back as the dict `session.options` views.
@@ -1099,9 +1085,6 @@ class AudioDecoder:
 
 class FrameDecoder:
     def __init__(self) -> None: ...
-    @property
-    def pending(self) -> int: ...
-    def decode_frames(self, chunk: bytes) -> list[bytes]: ...
 
 
 class RemoteSessionHost:

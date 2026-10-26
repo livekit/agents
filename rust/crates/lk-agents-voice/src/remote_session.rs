@@ -617,22 +617,6 @@ impl FrameDecoder {
         Ok(Some(body))
     }
 
-    /// Bytes held but not yet a frame; non-zero at end of stream is a truncated frame.
-    #[host(getter)]
-    pub fn pending(&self) -> usize {
-        self.buf.len()
-    }
-
-    /// Push `chunk` and return every complete frame. An oversize frame is always an error.
-    #[host(method)]
-    pub fn decode_frames(&mut self, chunk: &[u8]) -> Result<Vec<Vec<u8>>, FrameError> {
-        self.push(chunk);
-        let mut out = Vec::new();
-        while let Some(f) = self.next_frame()? {
-            out.push(f);
-        }
-        Ok(out)
-    }
 }
 
 pub mod proto {
@@ -870,15 +854,15 @@ mod frame_tests {
         assert_eq!(frame(b"ab"), [0, 0, 0, 2, b'a', b'b']);
     }
 
-    // Catches: a stateless `decode_frames` dropping frames that span reads.
+    // Catches: a stateless decoder dropping frames that span reads.
     #[test]
     fn frames_reassemble_across_read_boundaries() {
         let mut d = FrameDecoder::new();
         let wire = frame(b"hello");
         let (a, b) = wire.split_at(3);
-        assert!(d.decode_frames(a).unwrap().is_empty(), "a partial header yields nothing");
-        assert_eq!(d.pending(), 3);
-        assert_eq!(d.decode_frames(b).unwrap(), [b"hello".to_vec()]);
-        assert_eq!(d.pending(), 0, "a truncated tail at EOS is what pending detects");
+        d.push(a);
+        assert_eq!(d.next_frame().unwrap(), None, "a partial header yields nothing");
+        d.push(b);
+        assert_eq!(d.next_frame().unwrap(), Some(b"hello".to_vec()));
     }
 }

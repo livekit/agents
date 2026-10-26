@@ -62,7 +62,6 @@
   "InterruptionDetector",
   "InterruptionDetectorStream",
   "IpcClient",
-  "IvrLoopDetector",
   "Judge",
   "JudgeGroup",
   "JudgeLlm",
