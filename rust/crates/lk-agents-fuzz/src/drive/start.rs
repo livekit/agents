@@ -20,7 +20,9 @@ impl Run {
 
         // The host's own gate (`agent_session.py`) decides whether an adaptive detector is handed
         // over: a port under `Manual` turn detection, say, is a session no host ever assembles.
+        // The deprecated keywords have no interruption mode to ask for adaptive with.
         let adaptive = setup.interruption
+            && !setup.deprecated_turn
             && matches!(
                 resolve_interruption_detector(&InterruptionGateInputs {
                     stt: (setup.stt && setup.realtime.is_none())
@@ -386,7 +388,8 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
     let secs = |ms: u64| ms as f64 / 1000.0;
     let limit = setup.user_turn_max_words.is_some() || setup.user_turn_max_ms.is_some();
     SessionKwargs {
-        turn_handling: Some(TurnHandlingKwargs {
+        // A host writing the deprecated keywords writes no `turn_handling`: the core migrates them.
+        turn_handling: (!setup.deprecated_turn).then(|| TurnHandlingKwargs {
             turn_detection: turn_detection(setup.turn).map(TurnDetectionKwarg::Mode),
             endpointing: Some(EndpointingKwargs {
                 mode: Some(if setup.dynamic_endpointing {
@@ -426,6 +429,8 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         conn_options: HostValue::NotGiven,
         deprecated: if setup.deprecated_turn {
             DeprecatedTurnKwargs {
+                turn_detection: turn_detection(setup.turn)
+                    .map_or(Maybe::NotGiven, |mode| Maybe::Given(TurnDetectionKwarg::Mode(mode))),
                 min_endpointing_delay: Maybe::Given(0.4),
                 max_endpointing_delay: Maybe::Given(4.0),
                 false_interruption_timeout: Maybe::Given(Some(1.5)),
