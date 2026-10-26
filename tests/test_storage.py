@@ -27,6 +27,7 @@ from livekit.agents._generated.storage_run import TaskRecord
 from livekit.agents._generated.storage_turn import TurnOptions, TurnResult
 from livekit.agents.a2a.endpoint import A2AEndpoint
 from livekit.agents.llm import ChatItem, FunctionToolCall
+from livekit.agents.llm.tool_context import WAITING_PREFIX
 from livekit.agents.llm.utils import build_legacy_openai_schema
 from livekit.agents.storage import AgentDBStorage, Ref, RunRejected
 from livekit.agents.storage.context import A2ASessionContext, Handler, TurnHost
@@ -479,9 +480,11 @@ async def test_a_resend_after_the_holder_died_fails_worker_lost(
 # -- input required --
 
 
-async def test_input_required_pending_call_is_the_next_messages_output(
+async def test_input_required_is_continued_by_the_answer_and_keeps_its_question(
     agentdb_storage: AgentDBStorage,
 ) -> None:
+    """The answer names the waiting task: the same task goes on, the asking call keeps its
+    question as its output, and the answer is the person's message."""
     storage = agentdb_storage
     sid = await new_session(storage, LANE)
     fnol = Agent(instructions="claims")
@@ -521,27 +524,29 @@ async def test_input_required_pending_call_is_the_next_messages_output(
     }
     assert first.task.status_message["parts"][0]["text"] == "Could you send a photo?"
 
-    second = await run_turn(storage, sid, LANE, a2a("here it is", "m2"), "interrupt", handler)
-    assert second.output == "thanks"
+    answer = a2a("here it is", "m2", task_id=first.task.id)
+    second = await run_turn(storage, sid, LANE, answer, "interrupt", handler)
+    assert second.output == "thanks" and second.task.id == first.task.id
     items = await history_items(storage, sid, LANE)
     outputs = [i for i in items if i.type == "function_call_output" and i.call_id == "p1"]
-    assert outputs[0].output == "here it is"
+    assert outputs[0].output == f"{WAITING_PREFIX}Could you send a photo?"
+    assert [i.text_content for i in items if i.type == "message" and i.role == "user"] == [
+        "my car is damaged",
+        "here it is",
+    ]
     answered = await task_of(storage, sid, LANE, first.task.id)
     assert answered is not None and answered.status == "completed"
-    assert answered.data.metadata[MERGED_INTO_KEY] == second.task.id
+    assert MERGED_INTO_KEY not in answered.data.metadata
+    assert [m["messageId"] for m in answered.data.history] == ["m1", "m2"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="approval per task: the old turn engine runs the answer as a new task, whose message "
-    "cannot approve the read-back; the Rust continuation replaces this test",
-)
 async def test_requires_approval_asks_then_runs_on_the_approved_call(
     agentdb_storage: AgentDBStorage,
 ) -> None:
     """Plan 7.4: ``requires_approval=True`` returns the ``InputRequired`` for you. The first call
-    asks yes or no and does not run; the answer is its output; the model's repeat of the same
-    call after the answer runs the body. The schema has no approval flag for the model."""
+    asks yes or no and does not run; the answer is the person's next message; the model's repeat
+    of the same call after the answer runs the body. The schema has no approval flag for the
+    model."""
     storage = agentdb_storage
     sid = await new_session(storage, LANE)
     desk = Agent(instructions="front desk")
@@ -594,11 +599,13 @@ async def test_requires_approval_asks_then_runs_on_the_approved_call(
     assert first.task.status_message["parts"][0]["text"] == (
         "Please confirm: Cancel the appointment on a date (date='monday'). Yes or no?"
     )
-    second = await run_turn(storage, sid, LANE, a2a("yes", "m2"), "interrupt", handler)
+    yes = a2a("yes", "m2", task_id=first.task.id)
+    second = await run_turn(storage, sid, LANE, yes, "interrupt", handler)
     assert second.output == "done" and ran == ["monday"]
     items = await history_items(storage, sid, LANE)
     outputs = {i.call_id: i.output for i in items if i.type == "function_call_output"}
-    assert outputs == {"c1": "yes", "c2": "canceled monday"}
+    question = "Please confirm: Cancel the appointment on a date (date='monday'). Yes or no?"
+    assert outputs == {"c1": f"{WAITING_PREFIX}{question}", "c2": "canceled monday"}
 
 
 # -- concurrent and reject --

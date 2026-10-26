@@ -184,43 +184,92 @@ impl Turn {
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
         let mut ctx =
             Ctx { lane: self.thread.lane(&self.lane), policy, last_run_id: None, caller_history };
+        // a message that names a task waiting on a question continues that task; any other
+        // message is a new task, whatever questions are open
+        let named = match msg.task_id.as_deref() {
+            Some(named) => ctx.lane.task(named).await?,
+            None => None,
+        };
+        if let Some(row) = &named
+            && row.data.history.iter().any(|m| {
+                m.get("messageId").and_then(Value::as_str) == Some(msg.message_id.as_str())
+            })
+        {
+            // a resend of a message that already continued this task: its answer, once
+            let mut record = Some(row.clone());
+            if !row.terminal() && row.state() != Some(TaskState::InputRequired) {
+                record = self.await_task(&ctx, &row.id, false, true).await?;
+            }
+            return Ok(result_for(record, self.thread.id(), &row.id, None));
+        }
+        let waiting = named.filter(|r| r.state() == Some(TaskState::InputRequired)).map(|r| r.id);
+        let continues = waiting.as_deref();
         match policy {
-            Policy::Batch => self.batch(&mut ctx, &msg, &task_id, debounce).await,
+            Policy::Batch => {
+                self.batch(&mut ctx, &msg, continues.unwrap_or(&task_id), debounce).await
+            }
             Policy::Concurrent => self.concurrent(&ctx, &msg, &task_id).await,
             Policy::Reject => self.reject(&ctx, &msg, &task_id).await,
             Policy::Interrupt | Policy::Queue => {
                 if !debounce.is_zero() {
                     tokio::time::sleep(debounce).await;
                 }
-                self.exclusive(&ctx, &msg, &task_id, policy == Policy::Interrupt).await
+                let interrupt = policy == Policy::Interrupt;
+                self.exclusive(&ctx, &msg, &task_id, interrupt, continues).await
             }
         }
     }
 
     // -- interrupt and queue --
 
+    /// `continues` is the task waiting on a question that this message answers: the turn runs
+    /// under it, with no row of its own; `own_task_id` is the message's own row otherwise.
     async fn exclusive(
         &self,
         ctx: &Ctx,
         msg: &Message,
-        task_id: &str,
+        own_task_id: &str,
         interrupt: bool,
+        continues: Option<&str>,
     ) -> Result<TurnResult, StorageError> {
         // the early `submitted` row, the lease and the pickup, one batch (plan 3.3.4): a
-        // `tasks/get` before the commit finds the task, and a holder that dies leaves an orphan
+        // `tasks/get` before the commit finds the task, and a holder that dies leaves an orphan.
+        // A continuation picks the waiting row up instead, under a run id of its message, so a
+        // resend of the message finds the run committed and runs nothing twice
+        let task_id = continues.unwrap_or(own_task_id);
+        let (run_id, submit) = match continues {
+            Some(waiting) => (format!("{waiting}:{}", msg.message_id), None),
+            None => (task_id.to_owned(), Some(submitted_task(&self.lane, msg, task_id))),
+        };
         let opened = ctx
             .lane
             .open(RunOptions {
                 interrupt,
                 channel: Some(msg.channel.clone()),
                 wait_timeout: self.opts.wait_timeout(),
-                submit: Some(submitted_task(&self.lane, msg, task_id)),
+                submit,
                 pickup: true,
-                ..RunOptions::new(task_id, task_id)
+                ..RunOptions::new(run_id, task_id)
             })
             .await;
         let mut run = match opened {
             Ok(run) => run,
+            Err(StorageError::LeaseTimeout(_)) if continues.is_some() => {
+                // the question still waits; the message failed, on a row never written
+                log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id, threadId = self.thread.id(); "the lane was not released in time; the answer fails lease-timeout and the question stays open");
+                return Ok(TurnResult {
+                    task: unpersisted_failed(
+                        own_task_id,
+                        &self.lane,
+                        Some(msg),
+                        REASON_LEASE_TIMEOUT,
+                    ),
+                    output: None,
+                    thread_id: self.thread.id().to_owned(),
+                    answered_by: own_task_id.to_owned(),
+                    run_id: None,
+                });
+            }
             Err(StorageError::LeaseTimeout(_)) => {
                 log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id, threadId = self.thread.id(); "the lane was not released in time; the task fails lease-timeout");
                 let record = self.fail_unrun(ctx, task_id, REASON_LEASE_TIMEOUT).await?;
@@ -248,6 +297,11 @@ impl Turn {
                 existing = ended;
             }
             return Ok(result_for(Some(existing), self.thread.id(), task_id, None));
+        }
+        if continues.is_some() && !run.closed && !run.picked_up {
+            // another message answered the question first: this one is a new task
+            self.close_run(&mut run, Ok(())).await?;
+            return Box::pin(self.exclusive(ctx, msg, own_task_id, interrupt, None)).await;
         }
         let body = async {
             if run.closed || !run.picked_up {

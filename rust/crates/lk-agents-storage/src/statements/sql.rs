@@ -45,7 +45,8 @@ pub const WAITER: &str = "SELECT waiter FROM lanes WHERE lane = ?";
 /// inserted (`lane, message_id, task_id`), so a retried `messageId` inserts nothing, takes nothing,
 /// and reads back the task it belongs to.
 pub const INSERT_INBOX: &str = "INSERT OR IGNORE INTO inbox (lane, task_id, message_id, message, received_at) VALUES (?, ?, ?, jsonb(?), unixepoch())";
-pub const INSERT_TASK_SUBMITTED: &str = "INSERT INTO tasks (task_id, lane, seq, name, message_id, status, status_message, \
+/// `OR IGNORE`: a message that continues a waiting task has its row already.
+pub const INSERT_TASK_SUBMITTED: &str = "INSERT OR IGNORE INTO tasks (task_id, lane, seq, name, message_id, status, status_message, \
      data, internal, updated_at) \
      SELECT ?, ?, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = ?), 0) + 1, ?, ?, 'submitted', NULL, \
      jsonb(?), jsonb(?), unixepoch() \
@@ -67,14 +68,15 @@ pub const COUNT_PENDING: &str = "SELECT COUNT(*) FROM inbox WHERE lane = ? AND i
 /// statement, so a row inserted between the count and the release keeps the lease held.
 pub const RELEASE_IF_DRAINED: &str = "UPDATE lanes SET lease_until = 0, lease_token = NULL WHERE lane = ? AND lease_token = ? \
      AND NOT EXISTS (SELECT 1 FROM inbox WHERE inbox.lane = lanes.lane AND inbox.id > lanes.drained_id)";
-/// The pickup is these two in one batch: the status before, then the move to `working`.
+/// The pickup is these two in one batch: the status before, then the move to `working`. An
+/// `input-required` row is picked up by the message that continues it.
 pub const PICKUP_STATUS: &str = "SELECT status FROM tasks \
-     WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working')";
+     WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working', 'input-required')";
 pub const PICKUP_TASK: &str = "UPDATE tasks SET status = 'working', updated_at = unixepoch() \
-     WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working')";
+     WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working', 'input-required')";
 /// The pickup inside the acquire batch: the run's row goes `working` only under this lease.
 pub const PICKUP_HELD: &str = "UPDATE tasks SET status = 'working', updated_at = unixepoch() \
-     WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working') \
+     WHERE lane = ? AND task_id = ? AND status IN ('submitted', 'working', 'input-required') \
      AND EXISTS (SELECT 1 FROM lanes WHERE lane = tasks.lane AND lease_token = ?)";
 pub const TASK_STATUS: &str = "SELECT status FROM tasks WHERE lane = ? AND task_id = ?";
 pub const MARK_ORPHAN_FAILED: &str = "UPDATE tasks SET status = 'failed', status_message = jsonb(?), updated_at = unixepoch() \

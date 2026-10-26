@@ -146,10 +146,6 @@ async def test_a_question_pauses_the_task_and_frees_the_lane(door: Callable[...,
 
 
 @pytest.mark.rule("R32", "R39")
-@pytest.mark.xfail(
-    strict=True,
-    reason="R32, R39: Rust ask, continuation by taskId: today the next message answers the newest open ask by position (B15), and the answer overwrites the asking call's output",
-)
 async def test_the_answer_continues_the_waiting_task_as_one_record(
     door: Callable[..., Door],
 ) -> None:
@@ -184,10 +180,6 @@ async def test_the_answer_continues_the_waiting_task_as_one_record(
 
 
 @pytest.mark.rule("R32")
-@pytest.mark.xfail(
-    strict=True,
-    reason="R32: Rust ask, continuation by taskId: today the next message answers the newest open ask by position (B15)",
-)
 async def test_a_resent_answer_runs_nothing(door: Callable[..., Door]) -> None:
     model = ScriptedLLM(
         Reply(tool_calls=[call("book", "b1")]),
@@ -214,9 +206,6 @@ async def test_a_resent_answer_runs_nothing(door: Callable[..., Door]) -> None:
 
 
 @pytest.mark.rule("R34")
-@pytest.mark.xfail(
-    strict=True, reason="R34: the door does not route the person's message to the question in front"
-)
 async def test_the_persons_message_answers_the_question_in_front(
     door: Callable[..., Door],
 ) -> None:
@@ -235,10 +224,6 @@ async def test_the_persons_message_answers_the_question_in_front(
 
 
 @pytest.mark.rule("R34")
-@pytest.mark.xfail(
-    strict=True,
-    reason="R34: Rust ask, continuation by taskId: a delegation answers the open question by position (B15)",
-)
 async def test_a_delegation_with_no_task_id_is_a_new_task(door: Callable[..., Door]) -> None:
     model = ScriptedLLM(
         Reply(tool_calls=[call("book", "b1")]),
@@ -284,9 +269,6 @@ async def test_a_task_id_of_a_running_task_is_a_new_task(door: Callable[..., Doo
 
 
 @pytest.mark.rule("R35")
-@pytest.mark.xfail(
-    strict=True, reason="R35: the door refuses a resend of the answer that ended the task"
-)
 async def test_a_task_id_of_an_ended_task_is_refused_but_a_resend_is_answered(
     door: Callable[..., Door],
 ) -> None:
@@ -335,10 +317,6 @@ async def test_a_task_id_of_another_lane_is_not_found(
 
 
 @pytest.mark.rule("R52")
-@pytest.mark.xfail(
-    strict=True,
-    reason="R52: the answer after the late question is a new task: no routing to the question in front (R34)",
-)
 async def test_a_message_taken_before_a_late_question_is_not_its_answer(
     door: Callable[..., Door],
 ) -> None:
@@ -388,10 +366,6 @@ def front_desk(delegate: A2ADelegate, model: ScriptedLLM) -> Agent:
 
 
 @pytest.mark.rule("R40")
-@pytest.mark.xfail(
-    strict=True,
-    reason="R40: the delegate sends the answer as a new expert task, which answers by position (B15)",
-)
 async def test_a_non_answer_goes_to_the_experts_model_in_the_same_task(
     door: Callable[..., Door], experts: Callable[..., Expert]
 ) -> None:
@@ -466,10 +440,6 @@ async def test_an_experts_question_after_streamed_text_is_its_status_message(
 
 
 @pytest.mark.rule("R45", "B19")
-@pytest.mark.xfail(
-    strict=True,
-    reason="B19: Rust ask, continuation by taskId: the answer overwrites the first asking call's output",
-)
 async def test_the_questions_of_one_step_are_one_and_the_model_reads_the_answer(
     door: Callable[..., Door],
 ) -> None:
@@ -520,10 +490,6 @@ async def test_different_questions_of_one_step_are_asked_in_order_and_exact_only
 
 
 @pytest.mark.rule("R53", "B20")
-@pytest.mark.xfail(
-    strict=True,
-    reason="B20: Rust ask, continuation by taskId: the other task's message answers the read-back by position",
-)
 async def test_a_read_back_is_answered_only_by_a_message_of_its_task(
     door: Callable[..., Door],
 ) -> None:
@@ -560,10 +526,6 @@ async def test_a_read_back_is_answered_only_by_a_message_of_its_task(
 
 
 @pytest.mark.rule("R54")
-@pytest.mark.xfail(
-    strict=True,
-    reason="R54: Rust ask, continuation by taskId: the answer goes to the newest open question by position",
-)
 async def test_a_continued_task_does_not_read_what_other_open_tasks_added(
     door: Callable[..., Door],
 ) -> None:

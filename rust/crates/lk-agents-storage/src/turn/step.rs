@@ -1,6 +1,7 @@
 //! One turn over a batch inside an open run: the `_turn` of `storage/policies.py`. It writes the
-//! task rows of plan 5.5 for every outcome and commits nothing itself; the pending input-required
-//! call (plan 7.4), the boundary and the host call are here, with the helpers `_turn` reads.
+//! task rows of plan 5.5 for every outcome and commits nothing itself; the continuation of a task
+//! waiting on a question (plan 7.4), the boundary and the host call are here, with the helpers
+//! `_turn` reads.
 
 use serde_json::{Map, Value};
 
@@ -34,7 +35,7 @@ impl Turn {
         interrupt: bool,
     ) -> Result<Outcome, StorageError> {
         let last = batch.last().ok_or_else(|| StorageError::Invalid("an empty batch".into()))?;
-        let mut answer_task = task_ids
+        let answer_task = task_ids
             .last()
             .ok_or_else(|| StorageError::Invalid("a batch without task ids".into()))?
             .clone();
@@ -47,68 +48,21 @@ impl Turn {
             now = after + 2e-6;
         }
 
-        // a pending conversation tool's InputRequired: this message is the call's output, and
-        // the tool the ask named, if any, takes it before the model runs
-        let mut answer_tool = None;
-        let pending = run.tasks.pending_ask().await?;
-        if let Some(pending) = pending
-            && let Some(call_id) = pending.ask().and_then(|a| a.get("call_id"))
-            && truthy(call_id)
-        {
-            let call_id = text_of(call_id);
-            answer_tool =
-                pending.ask().and_then(|a| a.get("answer_tool")).filter(|t| truthy(t)).map(text_of);
-            let placeholder = run.history.iter_mut().rev().find(|i| {
-                i.kind() == "function_call_output"
-                    && i.payload.get("call_id").and_then(Value::as_str) == Some(call_id.as_str())
-            });
-            match placeholder {
-                Some(item) => {
-                    // the run recorded a placeholder output when the tool asked; the answer
-                    // replaces it
-                    item.payload["output"] = Value::String(last.text());
-                    item.payload["created_at"] = Value::from(now - 1e-6);
-                }
-                None => {
-                    let tool = pending
-                        .ask()
-                        .and_then(|a| a.get("tool"))
-                        .filter(|t| truthy(t))
-                        .map(text_of)
-                        .unwrap_or_default();
-                    let item = function_call_output_item(&tool, &call_id, &last.text(), now - 1e-6);
-                    insert_by_created_at(&mut run.history, Item::new(item)?);
-                }
-            }
-            if last.task_id.as_deref() == Some(pending.id.as_str()) {
-                // the client continued the waiting task: it gets the answer, and the row this
-                // message was received under is merged into it, so no working row outlives it
-                answer_task = pending.id.clone();
-                run.tasks
-                    .write(
-                        task_ids.last().expect("checked"),
-                        TaskState::Completed,
-                        TaskPatch {
-                            message_id: Some(last.message_id.clone()),
-                            history: Some(vec![last.to_a2a()]),
-                            metadata: Some(merged_into(&pending.id)),
-                            ..TaskPatch::default()
-                        },
-                    )
-                    .await?;
-            } else {
-                run.tasks
-                    .write(
-                        &pending.id,
-                        TaskState::Completed,
-                        TaskPatch {
-                            metadata: Some(merged_into(&answer_task)),
-                            ..TaskPatch::default()
-                        },
-                    )
-                    .await?;
-            }
-        }
+        // the task this batch continues, when it waits on a question: the batch is the answer,
+        // recorded once as the person's message; the asking call keeps its question as its
+        // output, and the tool the question named, if any, takes the answer before the model runs
+        let answered = run.tasks.get(&answer_task).await?.filter(|r| r.ask().is_some());
+        let answer_tool = answered
+            .as_ref()
+            .and_then(TaskRecord::ask)
+            .and_then(|a| a.get("answer_tool"))
+            .filter(|t| truthy(t))
+            .map(text_of);
+        // a continued task keeps its first messageId and adds the batch to its history
+        let row_message_id = answered.is_none().then(|| last.message_id.clone());
+        let mut history: Vec<Value> =
+            answered.as_ref().map(|r| r.data.history.clone()).unwrap_or_default();
+        history.extend(batch.iter().map(Message::to_a2a));
 
         let mut user_message = batch_to_chat_message(batch);
         user_message["created_at"] = Value::from(now);
@@ -195,7 +149,6 @@ impl Turn {
 
         run.answer_task = Some(answer_task.clone());
         let interrupted = boundary.tripped() || out.interrupted;
-        let history: Vec<Value> = batch.iter().map(Message::to_a2a).collect();
         let outcome = |output: Option<Value>, interrupted: bool| Outcome {
             task_id: answer_task.clone(),
             output,
@@ -233,7 +186,7 @@ impl Turn {
                     &answer_task,
                     TaskState::Failed,
                     TaskPatch {
-                        message_id: Some(last.message_id.clone()),
+                        message_id: row_message_id.clone(),
                         history: Some(history),
                         status_message: Some(agent_text(&answer_task, err)),
                         ..TaskPatch::default()
@@ -251,7 +204,7 @@ impl Turn {
                     &answer_task,
                     TaskState::Canceled,
                     TaskPatch {
-                        message_id: Some(last.message_id.clone()),
+                        message_id: row_message_id.clone(),
                         history: Some(history),
                         metadata: Some(interrupted_metadata()),
                         ..TaskPatch::default()
@@ -282,7 +235,7 @@ impl Turn {
                     &answer_task,
                     TaskState::InputRequired,
                     TaskPatch {
-                        message_id: Some(last.message_id.clone()),
+                        message_id: row_message_id.clone(),
                         history: Some(history),
                         metadata,
                         ..TaskPatch::default()
@@ -300,7 +253,7 @@ impl Turn {
                 &answer_task,
                 TaskState::Completed,
                 TaskPatch {
-                    message_id: Some(last.message_id.clone()),
+                    message_id: row_message_id,
                     history: Some(history),
                     artifacts: Some(artifacts),
                     status_message: text.map(|t| agent_text(&answer_task, t)),
@@ -459,24 +412,6 @@ pub fn created_at_of(payload: &Value) -> f64 {
     payload.get("created_at").and_then(Value::as_f64).unwrap_or(0.0)
 }
 
-/// A `FunctionCallOutput` as `item_to_payload` dumps it.
-pub fn function_call_output_item(
-    name: &str,
-    call_id: &str,
-    output: &str,
-    created_at: f64,
-) -> Value {
-    serde_json::json!({
-        "id": shortuuid("item_"),
-        "type": "function_call_output",
-        "name": name,
-        "call_id": call_id,
-        "output": output,
-        "is_error": false,
-        "created_at": created_at,
-    })
-}
-
 /// An assistant `ChatMessage` with one text, as `item_to_payload` dumps it.
 pub fn assistant_message_item(text: &str, created_at: f64) -> Value {
     serde_json::json!({
@@ -547,12 +482,6 @@ mod tests {
         assert_eq!(
             f.to_string(),
             r#"{"messageId":"msg_X","role":"agent","parts":[{"kind":"text","text":"the task failed: worker-lost"}],"taskId":"AST_1","metadata":{"livekit/reason":"worker-lost"}}"#
-        );
-        let mut o = function_call_output_item("ask", "c1", "yes", 3.5);
-        o["id"] = json!("item_X");
-        assert_eq!(
-            o.to_string(),
-            r#"{"id":"item_X","type":"function_call_output","name":"ask","call_id":"c1","output":"yes","is_error":false,"created_at":3.5}"#
         );
         let mut a = assistant_message_item("hi", 4.0);
         a["id"] = json!("item_X");

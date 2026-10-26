@@ -45,11 +45,6 @@ def test_a_question_names_no_tool_and_no_timeout() -> None:
 
 
 @pytest.mark.rule("R44", "B28")
-@pytest.mark.xfail(
-    strict=True,
-    reason="R44: Rust ask, continuation by taskId: the routed answer leaves a working row and "
-    "the question open",
-)
 async def test_the_answer_goes_to_the_tasks_model(door: Callable[..., Door]) -> None:
     model = ScriptedLLM(
         Reply(tool_calls=[call("book", "b1", request="")], when=said("book me in")),

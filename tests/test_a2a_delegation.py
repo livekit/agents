@@ -448,10 +448,6 @@ def _expert_that_asks(*, verbatim: bool = False) -> Agent:
 
 
 @pytest.mark.rule("R23")
-@pytest.mark.xfail(
-    strict=True,
-    reason="R32: Rust ask, continuation by taskId: the routed answer ends in a store error",
-)
 @pytest.mark.parametrize("verbatim", [False, True])
 async def test_the_experts_question_is_answered_through_the_delegates_tool(
     agentdb_workers: tuple[AgentDBStorage, AgentDBStorage], verbatim: bool
