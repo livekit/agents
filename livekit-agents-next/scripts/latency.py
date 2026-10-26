@@ -86,7 +86,8 @@ async def entry(ctx: JobContext) -> None:
 
 
 def run_agent(name: str) -> None:
-    server = AgentServer(agent_name=name, port=0)
+    # the scripted calls are the only load: a busy machine must not turn them away
+    server = AgentServer(agent_name=name, port=0, load_fnc=lambda: 0.0)
     server.rtc_session()(entry)
     sys.argv = [sys.argv[0], "start"]
     cli.run_app(server)
