@@ -21,7 +21,6 @@ from card_services import (
     BACKEND_MODEL,
     GREETING,
     VOICE_MODEL,
-    CallState,
     CardServices,
     FraudAlert,
     caller_script,
@@ -76,9 +75,8 @@ async def card_verification(ctx: JobContext) -> None:
         },
     )
 
-    session = AgentSession[CallState](
+    session = AgentSession(
         vad=inference.VAD(),
-        userdata=CallState(),
         tools=[EndCallTool(end_instructions=None)],
     )
     if outbound:
