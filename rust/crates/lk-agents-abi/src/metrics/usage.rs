@@ -94,6 +94,7 @@ impl ModelUsageCollector {
         u.input_cached_tokens += u64::from(m.prompt_cached_tokens);
         u.input_cache_creation_tokens += u64::from(m.cache_creation_tokens);
         u.output_tokens += u64::from(m.completion_tokens);
+        u.output_reasoning_tokens += u64::from(m.reasoning_tokens);
         // No per-modality breakdown: inventing one would double count against a realtime model.
     }
 
@@ -140,6 +141,7 @@ impl ModelUsageCollector {
         u.provider = provider;
         u.model = model;
         u.input_tokens += u64::from(m.input_tokens);
+        u.input_audio_tokens += u64::from(m.input_audio_tokens);
         u.output_tokens += u64::from(m.output_tokens);
         u.audio_duration += m.audio_duration;
     }
@@ -404,6 +406,7 @@ mod tests {
             let mut m = tk::stt();
             m.metadata = tk::meta("deepgram", "nova-3");
             m.input_tokens = input;
+            m.input_audio_tokens = input - 1;
             m.output_tokens = output;
             m.audio_duration = audio;
             c.collect(&AgentMetrics::Stt(m));
@@ -424,11 +427,27 @@ mod tests {
                     provider: "deepgram".into(),
                     model: "nova-3".into(),
                     input_tokens: 42,
+                    input_audio_tokens: 40,
                     output_tokens: 60,
                     audio_duration: 4.0,
                 }),
             ]
         );
+    }
+
+    // Catches: dropping the reasoning tokens a text LLM reports.
+    #[test]
+    fn llm_reasoning_tokens_accumulate_as_output_reasoning_tokens() {
+        let mut c = ModelUsageCollector::new();
+        for reasoning in [7, 5] {
+            let mut m = tk::llm();
+            m.metadata = tk::meta("openai", "gpt-5.1");
+            m.completion_tokens = 20;
+            m.reasoning_tokens = reasoning;
+            c.collect(&AgentMetrics::Llm(m));
+        }
+        let usage = &llm_of(&c)[0];
+        assert_eq!((usage.output_tokens, usage.output_reasoning_tokens), (40, 12));
     }
 
     // Catches: dropping `session_duration` (xAI bills by it), or not summing it.

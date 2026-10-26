@@ -80,12 +80,20 @@ pub struct WireUsage {
     pub total_tokens: Option<u32>,
     #[serde(default)]
     pub prompt_tokens_details: Option<WirePromptTokensDetails>,
+    #[serde(default)]
+    pub completion_tokens_details: Option<WireCompletionTokensDetails>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WirePromptTokensDetails {
     #[serde(default)]
     pub cached_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WireCompletionTokensDetails {
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
 }
 
 /// `llm/utils.py`'s `strip_thinking_tokens` over one stream: the tags and the state carried across
@@ -243,6 +251,11 @@ pub fn usage_chunk(chunk: &WireChunk) -> Option<LlmChunk> {
             // OpenAI's schema has no cache-creation/read equivalent.
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
+            reasoning_tokens: usage
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens)
+                .unwrap_or(0),
             total_tokens: usage.total_tokens.unwrap_or(0),
             service_tier: chunk.service_tier.clone(),
         }),
@@ -441,7 +454,14 @@ mod tests {
         let u = usage_chunk(&c).unwrap().usage.unwrap();
         assert_eq!((u.completion_tokens, u.prompt_tokens, u.total_tokens), (7, 11, 18));
         assert_eq!(u.prompt_cached_tokens, 0);
+        assert_eq!(u.reasoning_tokens, 0);
         assert_eq!(u.service_tier.as_deref(), Some("flex"));
+
+        let c = chunk(json!({
+            "id": "c1",
+            "usage": {"completion_tokens": 9, "completion_tokens_details": {"reasoning_tokens": 4}}
+        }));
+        assert_eq!(usage_chunk(&c).unwrap().usage.unwrap().reasoning_tokens, 4);
 
         assert!(usage_chunk(&chunk(json!({"id": "c1"}))).is_none(), "no usage, no chunk");
     }

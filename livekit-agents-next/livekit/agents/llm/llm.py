@@ -12,6 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 
 from .._exceptions import APIError, APIStatusError
+from .._generated.llm import (
+    ChatChunk,
+    ChoiceDelta as ChoiceDelta,
+    CompletionUsage,
+    FunctionToolCall,
+)
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -19,41 +25,8 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import aio
-from .chat_context import ChatContext, ChatRole, MetricsMetadata
+from .chat_context import ChatContext, MetricsMetadata
 from .tool_context import Tool, ToolChoice
-
-
-class CompletionUsage(BaseModel):
-    completion_tokens: int
-    """The number of tokens in the completion."""
-    prompt_tokens: int
-    """The number of input tokens used (includes cached tokens)."""
-    prompt_cached_tokens: int = 0
-    """The number of cached input tokens used."""
-    cache_creation_tokens: int = 0
-    """The number of tokens used to create the cache."""
-    cache_read_tokens: int = 0
-    """The number of tokens read from the cache."""
-    reasoning_tokens: int = 0
-    """The number of completion tokens spent on hidden reasoning.
-    Already counted in ``completion_tokens``; do not add it to totals. Only reported by
-    providers that break reasoning out separately (e.g. OpenAI-compatible responses
-    carrying ``completion_tokens_details.reasoning_tokens``), 0 everywhere else.
-    """
-    total_tokens: int
-    """The total number of tokens used (completion + prompt tokens)."""
-    service_tier: str | None = None
-    """The service tier used for processing the request (e.g. 'default', 'priority', 'flex').
-    Returned by providers that support tiered processing (e.g. OpenAI)."""
-
-
-class FunctionToolCall(BaseModel):
-    type: Literal["function"] = "function"
-    name: str
-    arguments: str
-    call_id: str
-    extra: dict[str, Any] | None = None
-    """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
 class CollectedResponse(BaseModel):
@@ -63,29 +36,6 @@ class CollectedResponse(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
     """Provider-specific extra data accumulated across chunks
     (e.g., xAI encrypted reasoning, Google thought signatures)."""
-
-
-class ChoiceDelta(BaseModel):
-    role: ChatRole | None = None
-    content: str | None = None
-    tool_calls: list[FunctionToolCall] = Field(default_factory=list)
-    extra: dict[str, Any] | None = None
-    """Provider-specific extra data (e.g., Google thought signatures)."""
-
-
-class ChatChunk(BaseModel):
-    id: str
-    delta: ChoiceDelta | None = None
-    usage: CompletionUsage | None = None
-
-    def has_response(self) -> bool:
-        """Whether this chunk delivered generation the caller can see.
-
-        Token counts and provider metadata (a gateway deployment stamp, a thought
-        signature) reach the caller without being output: they neither start the
-        clock on time-to-first-token nor give a retry anything to duplicate.
-        """
-        return bool(self.delta and (self.delta.content or self.delta.tool_calls))
 
 
 class LLMError(BaseModel):
