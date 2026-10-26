@@ -109,6 +109,17 @@ def _api_version(model: str) -> str:
     return "v1" if model in _V1_MODELS else "v2"
 
 
+def _with_api_version(base_url: str, version: str) -> str:
+    """Point *base_url* at *version* by swapping its trailing ``/v1`` or ``/v2``.
+
+    A base URL without a version segment is returned unchanged.
+    """
+    head, _, tail = base_url.rstrip("/").rpartition("/")
+    if tail in ("v1", "v2"):
+        return f"{head}/{version}"
+    return base_url
+
+
 def _validate_model(model: str) -> str:
     if model not in _SUPPORTED_MODELS:
         raise ValueError(
@@ -245,8 +256,7 @@ class LLM(OpenAILLM):
             timeout=timeout,
         )
 
-        # Track the endpoint for runtime model switching
-        self._explicit_base_url = is_given(base_url)
+        # Track the API version for runtime model switching
         self._sarvam_api_version = _api_version(validated_model)
 
     # ------------------------------------------------------------------
@@ -268,9 +278,9 @@ class LLM(OpenAILLM):
     ) -> None:
         """Update the model at runtime.
 
-        Validates the new model and points the client at the new model's endpoint
-        when the API version changes (``/v1`` ↔ ``/v2``). An explicit ``base_url``
-        is kept as is.
+        Validates the new model and, when the API version changes (``/v1`` ↔ ``/v2``),
+        swaps the version segment of the current base URL, so a custom ``base_url``
+        such as a proxy keeps being used.
         """
         if not is_given(model):
             return
@@ -279,10 +289,11 @@ class LLM(OpenAILLM):
         new_version = _api_version(new_model)
 
         if new_version != self._sarvam_api_version:
-            if not self._explicit_base_url:
-                # with_options shares the http client, so the timeout and connection pool
-                # carry over and the client being replaced has nothing left to close
-                self._client = self._client.with_options(base_url=_resolve_base_url(new_model))
+            # with_options shares the http client, so the timeout and connection pool
+            # carry over and the client being replaced has nothing left to close
+            self._client = self._client.with_options(
+                base_url=_with_api_version(str(self._client.base_url), new_version)
+            )
             self._sarvam_api_version = new_version
 
         self._opts.model = new_model

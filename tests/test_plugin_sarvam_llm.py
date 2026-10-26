@@ -686,10 +686,23 @@ async def test_model_switch_moves_to_the_new_endpoint_on_the_same_http_client() 
 
 
 async def test_model_switch_keeps_an_explicit_base_url() -> None:
-    proxy = "https://proxy.example.com/sarvam/v2"
-    llm = SarvamLLM(model="sarvam-105b", api_key="sk_test", base_url=proxy)
+    proxy = "https://proxy.example.com/sarvam"
+    llm = SarvamLLM(model="sarvam-105b", api_key="sk_test", base_url=f"{proxy}/v2")
+
+    # the conversations model only exists on /v1, so the version follows the model
+    llm.update_options(model="sarvam-105b-conversations")
+    assert await _sent_url(llm) == f"{proxy}/v1/chat/completions"
+
+    llm.update_options(model="gemma4")
+    assert await _sent_url(llm) == f"{proxy}/v2/chat/completions"
+    await llm.aclose()
+
+
+async def test_model_switch_leaves_a_base_url_without_a_version() -> None:
+    gateway = "https://gateway.example.com/sarvam-llm"
+    llm = SarvamLLM(model="sarvam-105b", api_key="sk_test", base_url=gateway)
 
     llm.update_options(model="sarvam-105b-conversations")
 
-    assert await _sent_url(llm) == f"{proxy}/chat/completions"
+    assert await _sent_url(llm) == f"{gateway}/chat/completions"
     await llm.aclose()
