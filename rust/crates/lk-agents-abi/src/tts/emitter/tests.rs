@@ -357,24 +357,17 @@ fn a_segment_whose_only_audio_was_the_flushed_tail_still_closes() {
 
 // --------------------------------------------------------------------- torn samples
 
-// Catches: the dropped-byte counter folded with anything but `+`, and `take_dropped_bytes`
-// answering a constant.
+// Catches: a flush dropping a partial sample more bytes complete, or an ended segment's torn
+// tail not counted; `take_dropped_bytes` answering a constant.
 #[test]
-fn a_tail_that_is_not_a_whole_sample_is_dropped_and_counted() {
-    // Through `flush`.
+fn a_flush_keeps_a_partial_sample_and_an_ended_segment_drops_it() {
     let mut fx = Fx::streaming("s");
     fx.em.push(fx.now, &[0xff, 0xff, 0xff], &mut fx.eff).unwrap(); // 1.5 samples at 16-bit mono
     fx.flush();
-    assert!(sent(&fx.eff).is_empty(), "a torn sample is discarded, never emitted");
-    assert_eq!(fx.em.take_dropped_bytes(), 3);
-    assert_eq!(fx.em.take_dropped_bytes(), 0, "reading it is destructive");
-
-    // ...and through `end_segment`, which has its own copy of the fold.
-    let mut fx = Fx::streaming("s");
-    fx.em.push(fx.now, &[0xff, 0xff, 0xff, 0xff, 0xff], &mut fx.eff).unwrap();
+    assert_eq!(fx.em.take_dropped_bytes(), 0, "a flush mid-stream keeps the partial sample");
     fx.end_segment();
-    assert!(sent(&fx.eff).is_empty());
-    assert_eq!(fx.em.take_dropped_bytes(), 5);
+    assert_eq!(fx.em.take_dropped_bytes(), 1, "the segment ended inside a sample");
+    assert_eq!(fx.em.take_dropped_bytes(), 0, "reading it is destructive");
 }
 
 // --------------------------------------------------------------------- the 150 ms floor

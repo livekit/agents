@@ -575,7 +575,7 @@ impl AudioOutput for ParticipantAudioOutput {
             // The tail first, so the watcher sees it in the backlog when the segment closes.
             st.pending = 0;
             let frames =
-                st.bstream.flush().frames.into_iter().map(|f| self.shared.framed(f)).collect();
+                st.bstream.flush().into_iter().map(|f| self.shared.framed(f)).collect();
             let tail = st.extend_backlog(frames);
             // Nothing captured is no playout to wait for; a cut's measurement is the one that counts.
             let watch = st.phase == Phase::Capturing;

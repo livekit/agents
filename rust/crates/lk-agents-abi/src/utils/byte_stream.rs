@@ -6,14 +6,6 @@ pub struct Frame {
     pub samples_per_channel: u32,
 }
 
-/// The reference only logs a truncated tail; the core reports it and the binding logs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Flushed {
-    pub frames: Vec<Frame>,
-    /// Bytes discarded from a tail that was not a whole number of samples.
-    pub dropped_bytes: usize,
-}
-
 /// Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
 /// the target) to cut TTS time-to-first-audio.
 #[crate::class(mutable, module = "livekit.agents.utils.audio")]
@@ -100,19 +92,36 @@ impl AudioByteStream {
         frames
     }
 
-    /// Emit whatever remains, even though it is short of a frame.
-    pub fn flush(&mut self) -> Flushed {
-        if self.buf.is_empty() {
-            return Flushed { frames: Vec::new(), dropped_bytes: 0 };
+    /// Emit the buffered whole samples, short of a frame or not. A trailing partial sample stays
+    /// for the next push: a flush can land mid-stream, inside a sample, and dropping its bytes
+    /// would misalign every later sample. Progressive sizing is not reset.
+    pub fn flush(&mut self) -> Vec<Frame> {
+        let complete = self.buf.len() - self.buf.len() % self.bytes_per_sample;
+        if complete == 0 {
+            return Vec::new();
         }
-        if !self.buf.len().is_multiple_of(self.bytes_per_sample) {
-            let dropped = self.buf.len();
-            self.buf.clear();
-            return Flushed { frames: Vec::new(), dropped_bytes: dropped };
-        }
-        let data = std::mem::take(&mut self.buf);
+        let rest = self.buf.split_off(complete);
+        let data = std::mem::replace(&mut self.buf, rest);
         let samples_per_channel = (data.len() / self.bytes_per_sample) as u32;
-        Flushed { frames: vec![Frame { data, samples_per_channel }], dropped_bytes: 0 }
+        vec![Frame { data, samples_per_channel }]
+    }
+
+    /// Bytes waiting for the next frame.
+    pub fn buffered_bytes(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Seconds of audio waiting for the next frame.
+    #[host(getter)]
+    pub fn buffered_duration(&self) -> f64 {
+        self.buf.len() as f64 / self.bytes_per_sample as f64 / f64::from(self.sample_rate)
+    }
+
+    /// Restart progressive sizing, keeping the buffered audio: after a mid-stream flush, the
+    /// next burst starts with small frames without losing a partial sample.
+    #[host(method)]
+    pub fn reset_progressive(&mut self) {
+        self.current_bytes_per_frame = self.initial_bytes_per_frame;
     }
 
     /// Drop everything buffered and restart progressive sizing (called on interruption, so the next
@@ -120,7 +129,7 @@ impl AudioByteStream {
     #[host(method)]
     pub fn clear(&mut self) {
         self.buf.clear();
-        self.current_bytes_per_frame = self.initial_bytes_per_frame;
+        self.reset_progressive();
     }
 }
 
@@ -154,16 +163,8 @@ impl AudioByteStream {
         &mut self,
         py: pyo3::Python<'_>,
     ) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
-        use pyo3::types::PyAnyMethods as _;
-        let flushed = self.flush();
-        if flushed.dropped_bytes > 0 {
-            // Logged host-side so the warning keeps its text and the host's logging config.
-            py.import("livekit.agents.log")?.getattr("logger")?.call_method1(
-                "warning",
-                ("AudioByteStream: incomplete frame during flush, dropping",),
-            )?;
-        }
-        self.to_host_frames(py, flushed.frames)
+        let frames = self.flush();
+        self.to_host_frames(py, frames)
     }
 }
 
@@ -234,7 +235,7 @@ mod tests {
         let one_shot = {
             let mut s = AudioByteStream::new(SR, 1, Some(500), false);
             let mut out: Vec<u8> = s.push(&payload).into_iter().flat_map(|f| f.data).collect();
-            out.extend(s.flush().frames.into_iter().flat_map(|f| f.data));
+            out.extend(s.flush().into_iter().flat_map(|f| f.data));
             out
         };
         let dribbled = {
@@ -243,28 +244,41 @@ mod tests {
             for c in payload.chunks(7) {
                 out.extend(s.push(c).into_iter().flat_map(|f| f.data));
             }
-            out.extend(s.flush().frames.into_iter().flat_map(|f| f.data));
+            out.extend(s.flush().into_iter().flat_map(|f| f.data));
             out
         };
         assert_eq!(one_shot, payload);
         assert_eq!(dribbled, payload, "7-byte chunks must produce identical bytes");
     }
 
-    // Catches: a torn final sample being emitted as a frame.
+    // Catches: a torn final sample emitted, or dropped (misaligning every later sample).
     #[test]
-    fn flush_drops_a_partial_sample_and_says_so() {
+    fn flush_keeps_a_partial_sample_for_the_next_push() {
         let mut s = AudioByteStream::new(SR, 2, Some(100), false); // 4 bytes per sample
-        s.push(&bytes(6)); // 1 whole sample + 2 bytes
-        let f = s.flush();
-        assert_eq!(f.frames, vec![], "must not emit a torn sample");
-        assert_eq!(f.dropped_bytes, 6);
+        s.push(&[1, 2, 3, 4, 5, 6]); // 1 whole sample + 2 bytes
+        assert_eq!(s.flush(), vec![Frame { data: vec![1, 2, 3, 4], samples_per_channel: 1 }]);
+        assert_eq!(s.flush(), vec![], "a lone partial sample is not a frame");
+        s.push(&[7, 8]);
+        assert_eq!(s.flush(), vec![Frame { data: vec![5, 6, 7, 8], samples_per_channel: 1 }]);
     }
 
     // Catches: flush emitting an empty frame, which downstream treats as a real frame.
     #[test]
     fn flush_on_an_empty_buffer_emits_nothing() {
         let mut s = AudioByteStream::new(SR, 1, Some(100), false);
-        assert_eq!(s.flush(), Flushed { frames: vec![], dropped_bytes: 0 });
+        assert_eq!(s.flush(), vec![]);
+    }
+
+    // Catches: `reset_progressive` dropping the buffer, or `buffered_duration` counting bytes.
+    #[test]
+    fn reset_progressive_keeps_the_buffer_and_restarts_the_ramp() {
+        let mut s = AudioByteStream::new(SR, 1, Some(3200), true);
+        s.push(&bytes(11_200 * 2)); // exactly 20/40/80/160/200/200 ms
+        s.push(&bytes(160 * 2 + 1));
+        assert_eq!(s.buffered_duration(), 160.5 / f64::from(SR));
+        s.reset_progressive();
+        assert_eq!(sizes(&s.push(&bytes(320 * 2))), vec![320], "back to 20 ms");
+        assert_eq!(s.buffered_duration(), 160.5 / f64::from(SR), "the rest stays buffered");
     }
 
     // Catches: `flush` miscomputing the tail's sample count (the sink would over-read).
@@ -273,14 +287,13 @@ mod tests {
         let mut s = AudioByteStream::new(SR, 1, Some(1000), false);
         s.push(&bytes(300 * 2)); // 300 samples: well short of a 1000-sample frame
         let f = s.flush();
-        assert_eq!(sizes(&f.frames), vec![300], "300 samples, not 600 and not 0");
-        assert_eq!(f.frames[0].data.len(), 600);
-        assert_eq!(f.dropped_bytes, 0);
+        assert_eq!(sizes(&f), vec![300], "300 samples, not 600 and not 0");
+        assert_eq!(f[0].data.len(), 600);
 
         // Stereo, where "bytes / 2" and "bytes / bytes_per_sample" finally disagree.
         let mut st = AudioByteStream::new(SR, 2, Some(1000), false);
         st.push(&bytes(300 * 4));
-        assert_eq!(sizes(&st.flush().frames), vec![300], "per channel, not per sample slot");
+        assert_eq!(sizes(&st.flush()), vec![300], "per channel, not per sample slot");
     }
 
     // Catches: sample size computed per channel rather than per frame.

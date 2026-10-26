@@ -1237,6 +1237,16 @@ impl AudioByteStream {
         AudioByteStream { inner: lk_agents_abi::AudioByteStream::new(sample_rate, num_channels, samples_per_channel, progressive) }
     }
 
+    #[napi(getter, js_name = "bufferedDuration")]
+    pub fn buffered_duration(&self) -> f64 {
+        self.inner.buffered_duration()
+    }
+
+    #[napi(js_name = "resetProgressive")]
+    pub fn reset_progressive(&mut self) {
+        self.inner.reset_progressive();
+    }
+
     #[napi(js_name = "clear")]
     pub fn clear(&mut self) {
         self.inner.clear();
