@@ -13,7 +13,7 @@ use crate::{ConnectionState, DisconnectReason, ParticipantIdentity, StreamInfo, 
 /// waits forever. Control events are rare; only media is lossy.
 pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
-/// One of the eight.
+/// One of the ten.
 ///
 /// Handles rather than identifiers in the payloads: §1.5 chose an object graph over a flat session
 /// so that "which participant, which publication" and "this publication is gone" are expressible.
@@ -45,6 +45,15 @@ pub enum RoomEvent {
         publication: Arc<dyn TrackPublication>,
     },
     ParticipantConnected {
+        participant: Arc<dyn RemoteParticipant>,
+    },
+    /// A remote participant is active: connected and ready to exchange media
+    /// (`utils.wait_for_participant` waits on it).
+    ParticipantActive {
+        participant: Arc<dyn RemoteParticipant>,
+    },
+    /// A remote participant's attributes changed; the participant holds the new ones.
+    ParticipantAttributesChanged {
         participant: Arc<dyn RemoteParticipant>,
     },
     /// Carries the reason **on the event**.
@@ -92,6 +101,14 @@ impl fmt::Debug for RoomEvent {
                 .finish(),
             RoomEvent::ParticipantConnected { participant } => f
                 .debug_struct("ParticipantConnected")
+                .field("participant", participant.identity())
+                .finish(),
+            RoomEvent::ParticipantActive { participant } => f
+                .debug_struct("ParticipantActive")
+                .field("participant", participant.identity())
+                .finish(),
+            RoomEvent::ParticipantAttributesChanged { participant } => f
+                .debug_struct("ParticipantAttributesChanged")
                 .field("participant", participant.identity())
                 .finish(),
             RoomEvent::ParticipantDisconnected { participant, reason } => f
@@ -172,6 +189,16 @@ impl RoomEventBus {
     #[host(method)]
     pub fn participant_connected(&self, participant: Arc<dyn RemoteParticipant>) {
         self.emit(RoomEvent::ParticipantConnected { participant });
+    }
+
+    #[host(method)]
+    pub fn participant_active(&self, participant: Arc<dyn RemoteParticipant>) {
+        self.emit(RoomEvent::ParticipantActive { participant });
+    }
+
+    #[host(method)]
+    pub fn participant_attributes_changed(&self, participant: Arc<dyn RemoteParticipant>) {
+        self.emit(RoomEvent::ParticipantAttributesChanged { participant });
     }
 
     /// The reason is read inside the host's handler and travels on the event; read later, it races

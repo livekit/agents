@@ -514,6 +514,8 @@ impl Driver {
             | RoomEvent::TrackUnpublished { .. }
             | RoomEvent::LocalTrackPublished { .. }
             | RoomEvent::ParticipantConnected { .. }
+            | RoomEvent::ParticipantActive { .. }
+            | RoomEvent::ParticipantAttributesChanged { .. }
             | RoomEvent::ParticipantDisconnected { .. }
             | RoomEvent::ConnectionStateChanged { .. } => {}
         }

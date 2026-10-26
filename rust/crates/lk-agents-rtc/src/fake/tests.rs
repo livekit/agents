@@ -418,6 +418,7 @@ async fn a_duplicate_identity_drops_the_older_participant_first() {
                 assert_eq!(participant.identity().as_str(), "user");
                 "participant_connected".to_owned()
             }
+            RoomEvent::ParticipantActive { .. } => "participant_active".to_owned(),
             other => panic!("unexpected {other:?}"),
         });
     }
@@ -426,7 +427,8 @@ async fn a_duplicate_identity_drops_the_older_participant_first() {
         [
             "track_unpublished",
             "participant_disconnected DuplicateIdentity",
-            "participant_connected"
+            "participant_connected",
+            "participant_active"
         ]
     );
 }
@@ -518,6 +520,8 @@ async fn all_eight_room_events_can_be_produced() {
         seen.push(match ev {
             RoomEvent::ConnectionStateChanged { .. } => "connection_state_changed",
             RoomEvent::ParticipantConnected { .. } => "participant_connected",
+            RoomEvent::ParticipantActive { .. } => "participant_active",
+            RoomEvent::ParticipantAttributesChanged { .. } => "participant_attributes_changed",
             RoomEvent::TrackPublished { .. } => "track_published",
             RoomEvent::TrackSubscribed { .. } => "track_subscribed",
             RoomEvent::TrackUnpublished { .. } => "track_unpublished",
@@ -775,6 +779,7 @@ async fn a_subscribed_track_is_readable_from_the_event_it_arrived_on() {
         eventually(events.recv()).await,
         Some(RoomEvent::ParticipantConnected { .. })
     ));
+    assert!(matches!(eventually(events.recv()).await, Some(RoomEvent::ParticipantActive { .. })));
     assert!(matches!(eventually(events.recv()).await, Some(RoomEvent::TrackPublished { .. })));
     let mut stream = match eventually(events.recv()).await {
         Some(RoomEvent::TrackSubscribed { participant, publication }) => {

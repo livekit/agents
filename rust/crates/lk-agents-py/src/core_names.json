@@ -312,6 +312,10 @@
   "update_load_interval",
   "validate_synthesis",
   "video_queue_frames",
+  "wait_for_agent",
+  "wait_for_participant",
+  "wait_for_participant_attribute",
+  "wait_for_track_publication",
   "workflow_prompts",
   "xml_has_unclosed_tags",
   "xml_tokenize"

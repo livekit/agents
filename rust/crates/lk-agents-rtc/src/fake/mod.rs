@@ -222,6 +222,8 @@ impl FakeRoom {
         );
         self.state.lock().unwrap().participants.push(p.clone());
         self.bus.emit(RoomEvent::ParticipantConnected { participant: p.clone() });
+        // a fake participant is active as it joins
+        self.bus.emit(RoomEvent::ParticipantActive { participant: p.clone() });
         p
     }
 
@@ -541,6 +543,10 @@ impl FakeLocalParticipant {
 
 #[async_trait]
 impl LocalParticipant for FakeLocalParticipant {
+    fn kind(&self) -> ParticipantKind {
+        ParticipantKind::Agent
+    }
+
     fn identity(&self) -> ParticipantIdentity {
         self.identity.clone()
     }
@@ -730,8 +736,11 @@ impl FakeRemoteParticipant {
     }
 
     /// `RoomIO` refuses to link a participant whose `lk.publish_on_behalf` is the agent's identity.
+    /// Emits `participant_attributes_changed`.
     pub fn set_attribute(&self, key: impl Into<String>, value: impl Into<String>) {
         self.state.lock().unwrap().attributes.insert(key.into(), value.into());
+        let me = self.me.upgrade().expect("participant dropped while changing its attributes");
+        self.bus.emit(RoomEvent::ParticipantAttributesChanged { participant: me });
     }
 
     /// Emits `track_published`, and `track_subscribed` unless auto-subscribe is off.
@@ -793,6 +802,10 @@ impl RemoteParticipant for FakeRemoteParticipant {
 
     fn kind(&self) -> ParticipantKind {
         self.kind
+    }
+
+    fn active(&self) -> bool {
+        true
     }
 
     fn attributes(&self) -> HashMap<String, String> {

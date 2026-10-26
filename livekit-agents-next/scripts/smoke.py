@@ -960,8 +960,9 @@ async def room_camera() -> None:
 
 
 async def job() -> None:
-    """A console job, as a job process runs it: the entrypoint connects (twice: once is made), a
-    participant entrypoint runs for the participant in the room, an API call is skipped, the
+    """A console job, as a job process runs it: the entrypoint connects (twice: once is made) and
+    waits for the participant in the room, for whom a participant entrypoint runs, an API call is
+    skipped, the
     shutdown it asks for runs the shutdown callback and tells the parent."""
     from livekit.agents.ipc import proto
     from livekit.agents.ipc.job_proc_lazy_main import _JobProc
@@ -990,6 +991,7 @@ async def job() -> None:
             seen.append("added twice")
         ctx.add_shutdown_callback(on_shutdown)
         await asyncio.gather(ctx.connect(), ctx.connect())
+        seen.append(f"waited for {(await ctx.wait_for_participant()).identity}")
         seen.append(f"delete_room {type(await ctx.delete_room()).__name__}")
         ctx.shutdown("done")
 
@@ -1033,6 +1035,7 @@ async def job() -> None:
         "delete_room DeleteRoomResponse",
         "participant mock_user",
         "shutdown callback 'done'",
+        "waited for mock_user",
     ], seen
     assert Parent.sent == ["ShuttingDown", "Exiting"], Parent.sent
 

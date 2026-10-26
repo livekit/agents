@@ -20,7 +20,16 @@ def _name(names: list[str], value: int, unknown: str) -> str:
 
 
 class Room:
-    """The session's ``rtc.Room``. Its SDK events are re-emitted into the core's event bus."""
+    """An ``rtc.Room`` as the core sees it. Its SDK events are re-emitted into the core's event
+    bus; one per room (``of``), so the handlers are registered once."""
+
+    @classmethod
+    def of(cls, room: rtc.Room) -> Room:
+        adapter = getattr(room, "_lk_core_room", None)
+        if adapter is None:
+            adapter = cls(room)
+            room._lk_core_room = adapter  # type: ignore[attr-defined]
+        return adapter  # type: ignore[no-any-return]
 
     def __init__(self, room: rtc.Room) -> None:
         self._room = room
@@ -45,6 +54,8 @@ class Room:
             lambda pub, track: bus.local_track_published(self._publication(pub)),
         )
         room.on("participant_connected", lambda p: bus.participant_connected(self._remote(p)))
+        room.on("participant_active", lambda p: bus.participant_active(self._remote(p)))
+        room.on("participant_attributes_changed", self._attributes_changed)
         room.on(
             "participant_disconnected",
             lambda p: bus.participant_disconnected(
@@ -59,6 +70,11 @@ class Room:
             "disconnected",
             lambda reason: bus.disconnected(_name(_DISCONNECT, reason, "unknown_reason")),
         )
+
+    def _attributes_changed(self, changed: list[str], participant: rtc.Participant) -> None:
+        # the agent's own attributes are not a remote participant's
+        if isinstance(participant, rtc.RemoteParticipant):
+            self._bus.participant_attributes_changed(self._remote(participant))
 
     def _remote(self, participant: rtc.RemoteParticipant) -> RemoteParticipant:
         return RemoteParticipant(self, participant)
@@ -136,6 +152,9 @@ class LocalParticipant:
 
     def _core_identity(self) -> str:
         return self._participant.identity
+
+    def _core_kind(self) -> str:
+        return _name(_KINDS, self._participant.kind, "agent")
 
     def _core_track_publications(self) -> list[TrackPublication]:
         return [self._room._publication(p) for p in self._participant.track_publications.values()]
@@ -259,6 +278,9 @@ class RemoteParticipant:
 
     def _core_kind(self) -> str:
         return _name(_KINDS, self._participant.kind, "standard")
+
+    def _core_active(self) -> bool:
+        return self._participant.state == rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE
 
     def _core_attributes(self) -> dict[str, str]:
         return dict(self._participant.attributes)

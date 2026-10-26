@@ -427,6 +427,8 @@ impl RoomIo {
             | RoomEvent::TrackPublished { .. }
             | RoomEvent::TrackUnpublished { .. }
             | RoomEvent::LocalTrackPublished { .. }
+            | RoomEvent::ParticipantActive { .. }
+            | RoomEvent::ParticipantAttributesChanged { .. }
             | RoomEvent::Close { .. } => {}
         }
     }

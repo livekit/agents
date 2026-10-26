@@ -493,6 +493,8 @@ impl ParticipantTranscriptionOutput {
             RoomEvent::TrackSubscribed { participant: _, publication: _ }
             | RoomEvent::TrackUnpublished { participant: _, publication: _ }
             | RoomEvent::ParticipantConnected { participant: _ }
+            | RoomEvent::ParticipantActive { participant: _ }
+            | RoomEvent::ParticipantAttributesChanged { participant: _ }
             | RoomEvent::ParticipantDisconnected { participant: _, reason: _ } => {}
         }
     }

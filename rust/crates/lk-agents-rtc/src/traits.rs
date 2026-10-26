@@ -93,6 +93,9 @@ pub trait LocalParticipant: Send + Sync {
     /// connects it is `""`, which no reader can match (N409).
     fn identity(&self) -> ParticipantIdentity;
 
+    /// The agent's own kind (`agent`), which `wait_for_participant(include_local=True)` filters.
+    fn kind(&self) -> ParticipantKind;
+
     /// `find_micro_track_id` scans these when the agent is its own transcription target.
     fn track_publications(&self) -> Vec<Arc<dyn TrackPublication>>;
 
@@ -225,6 +228,10 @@ pub trait RemoteParticipant: Send + Sync {
 
     /// `RoomOptions.participant_kinds` filters auto-linking on this.
     fn kind(&self) -> ParticipantKind;
+
+    /// Whether the participant is active (`ParticipantState.PARTICIPANT_STATE_ACTIVE`): connected
+    /// and ready to exchange media.
+    fn active(&self) -> bool;
 
     /// Read for `ATTRIBUTE_PUBLISH_ON_BEHALF`: a participant publishing on the agent's behalf (an
     /// avatar worker) must not be linked as the user. Returned by value because the host's map is

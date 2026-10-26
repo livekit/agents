@@ -5,6 +5,7 @@ mod fake;
 mod playout;
 mod server;
 mod traits;
+mod wait;
 
 pub use events::{
     AudioFrameSender, ByteChunks, ByteStream, ByteStreamSender, Receiver, RoomEvent, RoomEventBus, RpcHandler,
@@ -31,6 +32,7 @@ pub use traits::{
     AudioSource, ByteStreamWriter, LocalParticipant, RemoteParticipant, RtcHost, RtcRoom, TextStreamWriter,
     TrackPublication,
 };
+pub use wait::{wait_for_agent, wait_for_participant, wait_for_participant_attribute, wait_for_track_publication};
 
 pub type Result<T> = std::result::Result<T, RtcError>;
 
@@ -77,6 +79,11 @@ pub enum RtcError {
     /// SDK object; the alternative was eight traits for two call sites.
     #[error("{0} is not supported on this publication")]
     Unsupported(&'static str),
+
+    /// A wait on the room (`wait_for_participant` and the like) ended before what it waited for:
+    /// the room disconnected, or the participant it waited on left or was never there.
+    #[error("{0}")]
+    WaitEnded(String),
 }
 
 /// A host failure keeps the original exception: re-raising it raises what the host raised.

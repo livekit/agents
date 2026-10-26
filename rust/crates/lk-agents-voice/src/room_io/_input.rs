@@ -343,6 +343,8 @@ impl<T> TrackReader<T> {
             RoomEvent::TrackPublished { .. }
             | RoomEvent::LocalTrackPublished { .. }
             | RoomEvent::ParticipantConnected { .. }
+            | RoomEvent::ParticipantActive { .. }
+            | RoomEvent::ParticipantAttributesChanged { .. }
             | RoomEvent::ParticipantDisconnected { .. }
             | RoomEvent::ConnectionStateChanged { .. }
             | RoomEvent::Close { .. } => {}

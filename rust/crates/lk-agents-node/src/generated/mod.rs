@@ -16,6 +16,10 @@
 //! - `lk_agents_abi::llm::provider_format::host::to_provider_format`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::llm::provider_format::host::convert_mid_conversation_instructions`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::tokenize::search::keyword_search`: parameter `docs`: Slice(Declared { name: "Document", by_ref: false }) borrows inside a container
+//! - `lk_agents_rtc::wait_for_participant`: `lk_agents_rtc` is not linked by lk-agents-node
+//! - `lk_agents_rtc::wait_for_agent`: `lk_agents_rtc` is not linked by lk-agents-node
+//! - `lk_agents_rtc::wait_for_participant_attribute`: `lk_agents_rtc` is not linked by lk-agents-node
+//! - `lk_agents_rtc::wait_for_track_publication`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_abi::adapter_stream`: parameter `provider`: not yet: `Arc<dyn Tts>` (a host object behind a proxy)
 //! - `lk_agents_abi::stt::stream_adapter::capabilities`: field `aligned_transcript`: `AlignedTranscript` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_abi::stt::stream_adapter::recognized`: parameter `event`: `SpeechEvent` cannot be built from JS: `kind`: a declared enum is read from JS only as a parameter (it has no `FromStr` to rely on)

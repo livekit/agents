@@ -713,7 +713,7 @@ def _views() -> dict[type, Any]:
         io.VideoInput: _VideoInput,
         io.AudioOutput: _AudioOutput,
         io.TextOutput: _TextOutput,
-        _core_rtc.Room: _core_rtc.Room,
+        _core_rtc.Room: _core_rtc.Room.of,
     }
 
 
