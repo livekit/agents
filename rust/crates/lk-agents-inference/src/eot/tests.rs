@@ -873,3 +873,52 @@ fn every_warning_has_its_own_tag() {
         ]
     );
 }
+
+/// A gateway connection that dies as soon as it runs.
+struct DyingTransport;
+
+#[async_trait]
+impl EotTransport for DyingTransport {
+    fn session_id(&self) -> Option<String> {
+        None
+    }
+    fn run_inference(&self, _request_id: &EotRequestId) {}
+    fn push_frame(&self, _frame: &lk_agents_abi::AudioFrame) {}
+    fn flush(&self) {}
+    fn end_input(&self) {}
+    fn detach(&self) {}
+    async fn run(&self) -> Result<(), ApiError> {
+        Err(ApiError::new("gateway gone"))
+    }
+}
+
+// Catches: the stream driver not remounting after a cloud failure (the swap's new transport never
+// run), the waiter left hanging, or a request the dead transport held never answered.
+#[tokio::test]
+async fn a_cloud_failure_swaps_the_stream_to_the_local_model_which_answers_the_next_request() {
+    use crate::eot::{EotStream, TransportFactory, TransportShell};
+
+    let (session, shared) = cloud_session_sharing(true);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let model = Arc::new(RecordingModel { seen: Arc::clone(&seen), answer: Ok(0.7) });
+    let make: TransportFactory = Arc::new(move |m: TurnDetectorModel| {
+        let model = Arc::clone(&model) as Arc<dyn LocalEotModel>;
+        TransportShell::mount(m.as_str(), Arc::clone(&shared), move |sink| match m {
+            TurnDetectorModel::V1 => Arc::new(DyingTransport) as Arc<dyn EotTransport>,
+            _ => Arc::new(LocalTransport::new(model, sink)) as Arc<dyn EotTransport>,
+        })
+    });
+    let spawner = lk_agents_abi::TokioSpawner::current();
+    let stream = EotStream::open(session, 16_000, make, None, &spawner);
+    until("the swap", || stream.is_fallback()).await;
+    assert_eq!(stream.model(), "turn-detector-v1-mini");
+
+    stream.push_audio(pcm_frame(16_000, &[100; 1600]));
+    let answer = tokio::time::timeout(Duration::from_secs(5), stream.predict()).await.unwrap().unwrap();
+    assert!((answer.end_of_turn_probability - 0.7).abs() < 1e-9, "{answer:?}");
+    assert!(!seen.lock().unwrap().is_empty(), "the local model heard the audio");
+
+    stream.aclose();
+    let after = tokio::time::timeout(Duration::from_secs(5), stream.predict()).await.unwrap().unwrap();
+    assert_eq!(after.end_of_turn_probability, 1.0, "a closed stream answers 1.0 at once");
+}

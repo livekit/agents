@@ -14,6 +14,8 @@ pub mod options;
 #[cfg(feature = "python")]
 mod python;
 mod session;
+/// The stream driver a session and the host's `TurnDetector.stream()` use.
+mod stream;
 /// The channel sink and the mounted-transport shell a binding's `run()`/`recv_event()` drive.
 mod shell;
 mod transport;
@@ -41,4 +43,5 @@ pub use session::{
     EotWarn, TransportPrediction,
 };
 pub use shell::{ChannelSink, PROVIDER, SinkEvent, TransportShell};
+pub use stream::{EotStream, MetricsCallback, TransportFactory};
 pub use transport::{EotTransport, PredictionSink};

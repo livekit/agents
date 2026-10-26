@@ -222,7 +222,14 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a realtime model keeps its server's turn detection unless one is named
             realtime = isinstance(self._llm, RealtimeModel)
             detection = None if realtime else inference.TurnDetector()
-        self._turn_detector = None if isinstance(detection, str | None) else TurnDetector(detection)
+        # the gateway detector's stream is the core's own detector; a plugin's is seen through a view
+        self._turn_detector = (
+            None
+            if isinstance(detection, str | None)
+            else detection.stream()
+            if isinstance(detection, inference.TurnDetector)
+            else TurnDetector(detection)
+        )
         self._video_sampler = (
             video_sampler if is_given(video_sampler) else VoiceActivityVideoSampler()
         )
