@@ -73,6 +73,10 @@ class SuggestedReplies:
         item = ev.item
         if not isinstance(item, llm.ChatMessage) or item.role != "assistant":
             return
+        # The caller is talking over the agent, maybe reading the line out: leave it up. Their turn
+        # gets a reply of its own, and that reply brings the next suggestions.
+        if item.interrupted or self._session.user_state == "speaking":
+            return
         if self._task and not self._task.done():
             self._task.cancel()
         self._task = asyncio.create_task(self._run(item.text_content or ""))
