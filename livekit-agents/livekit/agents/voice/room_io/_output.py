@@ -100,6 +100,31 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def subscribed(self) -> asyncio.Future[None]:
         return self._subscribed_fut
 
+    @property
+    def track_name(self) -> str:
+        return self._track_name
+
+    async def set_track_name(self, track_name: str) -> None:
+        """Publish under another name.
+
+        A track's name is fixed once published, so a published track is replaced by a new one
+        on the same audio source. Waits behind the first publish, which holds until the track
+        is subscribed.
+        """
+        async with self._lock:
+            if track_name == self._track_name:
+                return
+
+            self._track_name = track_name
+            if self._publication is None:
+                return
+
+            await self._room.local_participant.unpublish_track(self._publication.sid)
+            track = rtc.LocalAudioTrack.create_audio_track(self._track_name, self._audio_source)
+            self._publication = await self._room.local_participant.publish_track(
+                track, self._publish_options
+            )
+
     async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
         self._forwarding_task = asyncio.create_task(self._forward_audio())
         # detached: publishing spawns the track's tasks, which must not inherit this span
@@ -672,6 +697,10 @@ class _ParticipantStreamTranscriptionOutput:
         self._stripper = TranscriptMarkupStripper()
         self._segment_tags: list[ExpressiveTag] = []
 
+    def set_attributes(self, attributes: dict[str, str]) -> None:
+        """Replace the extra attributes stamped on segments opened from here on."""
+        self._additional_attributes = dict(attributes)
+
     def _encode(self, clean_text: str, timing_src: str | None = None) -> str:
         """Wrap visible text for the wire (JSON TimedString when json_format, else raw)."""
         if not self._json_format:
@@ -914,6 +943,15 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
     def set_track(self, track_sid: str | None) -> None:
         for source in self.__outputs:
             source.set_track(track_sid)
+
+    def set_attributes(self, attributes: dict[str, str]) -> None:
+        """Replace the extra attributes stamped on segments opened from here on.
+
+        Only text streams carry attributes; the legacy transcription has nowhere to put them.
+        """
+        for source in self.__outputs:
+            if isinstance(source, _ParticipantStreamTranscriptionOutput):
+                source.set_attributes(attributes)
 
     async def capture_text(self, text: str) -> None:
         await asyncio.gather(*[sink.capture_text(text) for sink in self.__outputs])

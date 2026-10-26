@@ -184,6 +184,8 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._model_session.update_options(target_language=language)
 
         self._model.update_options(target_language=language)
+        if self._room_io is not None:
+            self._room_io._on_target_language_changed()
 
     async def start(
         self,

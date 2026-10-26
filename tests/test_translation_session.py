@@ -836,3 +836,177 @@ async def test_a_segment_is_finalized_on_the_track_that_carried_it() -> None:
     assert flushed == [("TR_a", "alice")]
     assert sink._pinned_track_id == "TR_b"
     await sink.aclose()
+
+
+# -- attributing the translation to the speaker, and naming its track --
+
+
+class _RecordingTaggedOutput(_RecordingTranscriptOutput):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attributes: list[dict[str, str]] = []
+        self.captured: list[tuple[str, dict[str, str]]] = []
+
+    def set_attributes(self, attributes: dict[str, str]) -> None:
+        self.attributes.append(dict(attributes))
+
+    async def capture_text(self, text: str) -> None:
+        self.captured.append((text, self.attributes[-1] if self.attributes else {}))
+
+    def flush(self) -> None:
+        pass
+
+
+class _NamingAudioOutput:
+    def __init__(self) -> None:
+        self.names: list[str] = []
+        self.started = False
+
+    async def set_track_name(self, name: str) -> None:
+        self.names.append(name)
+
+    async def start(self) -> None:
+        self.started = True
+
+
+async def test_the_translation_is_attributed_to_the_speakers_track() -> None:
+    room_io = _room_io()
+    _linked(room_io)
+    translation = _RecordingTaggedOutput()
+    room_io._output_tr_output = translation  # type: ignore[assignment]
+    alice = _FakeParticipant("alice")
+
+    room_io._apply_link(_LinkedTrack(_FakePublication("TR_a"), alice))  # type: ignore[arg-type]
+
+    # the speaker's words in another language: theirs, on their track, told apart by language
+    assert translation.participants == ["alice"]
+    assert translation.tracks == ["TR_a"]
+    assert translation.attributes == [{"lk.transcription_language": "es"}]
+
+
+async def test_the_source_transcript_carries_the_language_heard() -> None:
+    room_io = _room_io()
+    heard = _RecordingTaggedOutput()
+    room_io._input_tr_output = heard  # type: ignore[assignment]
+    ch = utils.aio.Chan[tuple[str, bool, str | None]]()
+    task = asyncio.create_task(room_io._forward_input_transcript(ch))
+    try:
+        ch.send_nowait(("hello", False, "en"))
+        ch.send_nowait(("hello there", True, None))
+        ch.close()
+        await asyncio.wait_for(task, 1.0)
+    finally:
+        await utils.aio.cancel_and_wait(task)
+
+    assert heard.captured == [
+        ("hello", {"lk.transcription_language": "en"}),
+        # a model that does not say leaves it off rather than guess
+        ("hello there", {}),
+    ]
+
+
+async def test_the_translated_track_is_named_for_its_source_and_language() -> None:
+    room_io = _room_io(text_output=False, track="TR_a")
+    _linked(room_io)
+    audio_out = _NamingAudioOutput()
+    room_io._audio_output = audio_out  # type: ignore[assignment]
+    room_io._init_atask = asyncio.create_task(room_io._init_task())
+    room_io._room_connected_fut.set_result(None)
+    try:
+        room_io._on_track_published(
+            _FakePublication("TR_a"),  # type: ignore[arg-type]
+            _FakeParticipant("alice"),  # type: ignore[arg-type]
+        )
+        await asyncio.wait_for(room_io.wait_for_ready(), timeout=1.0)
+    finally:
+        await utils.aio.cancel_and_wait(room_io._init_atask)
+
+    # named before the first publish, so it never goes out under the default
+    assert audio_out.names == ["TR_a-es"]
+    assert audio_out.started
+
+
+async def test_retargeting_or_relinking_renames_the_translated_track() -> None:
+    model = _FakeTranslationModel()
+    session = TranslationSession(model=model)
+    room_io = TranslationRoomIO(session, rtc.Room())
+    session._room_io = room_io
+    _linked(room_io)
+    translation = _RecordingTaggedOutput()
+    room_io._output_tr_output = translation  # type: ignore[assignment]
+    audio_out = _NamingAudioOutput()
+    room_io._audio_output = audio_out  # type: ignore[assignment]
+    done: asyncio.Future[None] = asyncio.Future()
+    done.set_result(None)
+    room_io._init_atask = done  # type: ignore[assignment]
+    alice = _FakeParticipant("alice")
+    room_io._apply_link(_LinkedTrack(_FakePublication("TR_a"), alice))  # type: ignore[arg-type]
+
+    session.set_target_language("fr")
+    room_io._apply_link(_LinkedTrack(_FakePublication("TR_b"), alice))  # type: ignore[arg-type]
+    await asyncio.gather(*room_io._tasks)
+
+    assert audio_out.names == ["TR_a-es", "TR_a-fr", "TR_b-fr"]
+    assert translation.attributes[-1] == {"lk.transcription_language": "fr"}
+
+
+async def test_a_track_name_given_outright_is_kept() -> None:
+    from livekit.agents.voice.room_io import AudioOutputOptions
+
+    room_io = _room_io(audio_output=AudioOutputOptions(track_name="translation"))
+    _linked(room_io)
+    audio_out = _NamingAudioOutput()
+    room_io._audio_output = audio_out  # type: ignore[assignment]
+    done: asyncio.Future[None] = asyncio.Future()
+    done.set_result(None)
+    room_io._init_atask = done  # type: ignore[assignment]
+
+    room_io._apply_link(
+        _LinkedTrack(_FakePublication("TR_a"), _FakeParticipant("alice"))  # type: ignore[arg-type]
+    )
+    await asyncio.gather(*room_io._tasks)
+
+    assert audio_out.names == []
+
+
+async def test_renaming_a_published_track_replaces_it() -> None:
+    from types import SimpleNamespace
+
+    from livekit.agents.voice.room_io._output import _ParticipantAudioOutput
+
+    published: list[str] = []
+    unpublished: list[str] = []
+
+    async def _publish(track: rtc.LocalAudioTrack, _: object) -> object:
+        published.append(track.name)
+        return SimpleNamespace(sid=f"TR_{len(published)}")
+
+    async def _unpublish(sid: str) -> None:
+        unpublished.append(sid)
+
+    room = SimpleNamespace(
+        local_participant=SimpleNamespace(publish_track=_publish, unpublish_track=_unpublish)
+    )
+    output = _ParticipantAudioOutput(
+        room,  # type: ignore[arg-type]
+        sample_rate=24000,
+        num_channels=1,
+        track_publish_options=rtc.TrackPublishOptions(),
+    )
+    try:
+        # before publishing, only the name changes
+        await output.set_track_name("TR_a-es")
+        assert published == []
+
+        output._publication = await _publish(  # type: ignore[assignment]
+            rtc.LocalAudioTrack.create_audio_track("TR_a-es", output._audio_source), None
+        )
+        await output.set_track_name("TR_a-fr")
+        await output.set_track_name("TR_a-fr")
+
+        # a track's name is fixed once published, so the track itself is replaced, once
+        assert unpublished == ["TR_1"]
+        assert published == ["TR_a-es", "TR_a-fr"]
+        assert output.track_name == "TR_a-fr"
+    finally:
+        await output.aclose()
