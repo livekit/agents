@@ -50,7 +50,6 @@ enum State {
 /// `_FillerScheduler`'s decisions; its host class keeps the waits (`wait_for_idle`, the dwell
 /// race, the cooldown sleep) and the `say`.
 #[derive(Debug)]
-#[lk_agents_abi::class(name = "FillerScheduler", mutable)]
 pub struct FillerScheduler {
     delay: Duration,
     /// `None` means "fire at most once", not "no cooldown".
@@ -158,56 +157,5 @@ impl FillerScheduler {
         let deadline = now.saturating_add(interval);
         self.state = State::CoolingDown { deadline };
         FillerAction::CoolDown(deadline)
-    }
-}
-
-/// The next wait or step, for the host: `("wait_for_idle", None)`, `("dwell", deadline)`,
-/// `("cool_down", deadline)`, `("fire", step)` or `("done", None)`; instants in the host's seconds.
-fn host_action(action: FillerAction) -> (&'static str, Option<f64>) {
-    let secs = |ts: Ts| ts.as_nanos() as f64 / 1e9;
-    match action {
-        FillerAction::WaitForIdle => ("wait_for_idle", None),
-        FillerAction::Dwell(at) => ("dwell", Some(secs(at))),
-        FillerAction::CoolDown(at) => ("cool_down", Some(secs(at))),
-        FillerAction::Fire { step } => ("fire", Some(f64::from(step))),
-        FillerAction::Done => ("done", None),
-    }
-}
-
-fn host_ts(secs: f64) -> Ts {
-    Ts::from_nanos((secs.max(0.0) * 1e9).round() as u64)
-}
-
-/// `voice.filler_scheduler._FillerScheduler`'s machine, stamped with the host loop's seconds.
-#[lk_agents_abi::host(object(name = "FillerScheduler", pid = false))]
-impl FillerScheduler {
-    #[host(new(kw_only = "delay"))]
-    pub fn for_host(delay: f64, interval: Option<f64>, max_steps: Option<u32>) -> Result<Self, FillerError> {
-        FillerScheduler::new(delay, interval, max_steps)
-    }
-
-    #[host(getter(name = "steps"))]
-    pub fn steps_for_host(&self) -> u32 {
-        self.steps
-    }
-
-    #[host(method(name = "on_idle"))]
-    pub fn on_idle_for_host(&mut self, now: f64) -> (&'static str, Option<f64>) {
-        host_action(self.on_idle(host_ts(now)))
-    }
-
-    #[host(method(name = "on_busy"))]
-    pub fn on_busy_for_host(&mut self, now: f64) -> (&'static str, Option<f64>) {
-        host_action(self.on_busy(host_ts(now)))
-    }
-
-    #[host(method(name = "tick"))]
-    pub fn tick_for_host(&mut self, now: f64) -> (&'static str, Option<f64>) {
-        host_action(self.tick(host_ts(now)))
-    }
-
-    #[host(method(name = "fired"))]
-    pub fn fired_for_host(&mut self, now: f64, produced: bool) -> (&'static str, Option<f64>) {
-        host_action(self.fired(host_ts(now), produced))
     }
 }
