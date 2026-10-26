@@ -178,7 +178,9 @@ async fn read_llm_stream(
     // delta, so no empty segment ever reaches the TTS.
     let mut open = false;
     let mut produced = false;
-    let mut tokens = 0u64;
+    // `usage.completion_tokens` over the streaming window, the first to the last text chunk.
+    let mut completion_tokens = None;
+    let mut window: Option<(f64, f64)> = None;
     // One splitter per segment: a tag straddling two deltas is held until it closes.
     let mut visible = VisibleStream::new();
     let end_segment = |open: &mut bool, visible: &mut VisibleStream| {
@@ -216,12 +218,16 @@ async fn read_llm_stream(
                 tools.dispatch(shared, handle, ctx, mint_call(shared, raw));
             }
             if let Some(text) = &delta.content {
-                tokens += 1;
                 if !text.is_empty() {
+                    let now = shared.time.wall_secs();
+                    window = Some((window.map_or(now, |(first, _)| first), now));
                     open = true;
                     let _ = tx.send(SegEvent::Chunk(visible.push(text)));
                 }
             }
+        }
+        if let Some(usage) = &chunk.usage {
+            completion_tokens = Some(usage.completion_tokens);
         }
         // After the calls are minted: their stamps come first.
         data.metrics.observe(&chunk, || shared.time.wall_secs());
@@ -232,9 +238,13 @@ async fn read_llm_stream(
     };
     // A segment left open when the stream ends, for any reason, is still a segment.
     end_segment(&mut open, &mut visible);
-    let elapsed = shared.time.wall_secs() - data.started_at;
-    // `Clock::wall` is strictly increasing, so the guard only rules out "no interval".
-    data.tps = (elapsed > 0.0 && tokens > 0).then(|| tokens as f64 / elapsed);
+    // A reply in one chunk has no window, and no rate.
+    data.tps = match (completion_tokens, window) {
+        (Some(tokens), Some((first, last))) if last > first => {
+            Some(f64::from(tokens) / (last - first))
+        }
+        _ => None,
+    };
     ended
 }
 

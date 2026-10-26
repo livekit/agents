@@ -93,6 +93,9 @@ impl StreamSource<LlmChunk> for Response {
     }
 }
 
+/// The completion tokens every reply reports.
+pub const COMPLETION_TOKENS: u32 = 10;
+
 /// One model delivery onto a registered chat request's stream. True when the stream still had
 /// a reader. `End` and `Fail` close the stream; the registry drops the control afterwards.
 pub(super) fn deliver(
@@ -128,7 +131,17 @@ pub(super) fn deliver(
                 ..Default::default()
             }))
             .is_ok(),
-        Input::LlmEnd { .. } => !sender.is_closed(),
+        // The usage a provider reports with its last chunk.
+        Input::LlmEnd { .. } => sender
+            .send(Ok(LlmChunk {
+                id: response_id,
+                usage: Some(lk_agents_abi::CompletionUsage {
+                    completion_tokens: COMPLETION_TOKENS,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .is_ok(),
         Input::LlmFail { .. } => sender
             .send(Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
                 "injected provider failure",

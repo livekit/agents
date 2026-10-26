@@ -61,3 +61,4 @@ mod vad_interruption_has_cause;
 mod vad_left_speaking;
 mod wordless_audio_say;
 mod late_mic_released;
+mod llm_tokens_per_second;
