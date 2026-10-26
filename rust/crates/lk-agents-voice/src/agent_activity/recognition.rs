@@ -99,6 +99,8 @@ impl Driver {
         let has_vad = self.input.sinks.contains_key(&AudioChannel::Vad);
         match ev.kind {
             SpeechEventType::FinalTranscript => {
+                self.activity.live_speech_at_final =
+                    self.activity.speech_scheduler.current_speech_uninterrupted();
                 self.interrupt_by_audio_activity(
                     now,
                     out,
@@ -614,8 +616,9 @@ impl Driver {
         out: &mut Out,
     ) {
         let policy = self.session.config.effective.turn.preemptive;
+        let live_at_final = std::mem::take(&mut self.activity.live_speech_at_final);
         let s = &self.activity.speech_scheduler;
-        let speaking = s.current_speech_uninterrupted();
+        let speaking = s.current_speech_uninterrupted() || live_at_final;
         let refusal = if !policy.enabled {
             Some(PreemptiveRefusal::Disabled)
         } else if self.activity.rt_session.is_some() {

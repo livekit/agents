@@ -82,6 +82,10 @@ pub(crate) struct AgentActivity {
     pub(crate) pending_turn: Option<crate::audio_recognition::PendingTurn>,
     /// So a preemptive generation can be keyed to the turn after it.
     pub(crate) last_turn: Option<crate::audio_recognition::TurnId>,
+    /// A final arrived while the current speech was still uninterrupted: the preemptive
+    /// generation that final asks for this cycle sees it so, as the reference's does (its final
+    /// cuts a paused speech in a task, after `on_preemptive_generation` ran).
+    pub(crate) live_speech_at_final: bool,
     /// `generate_reply` matches on it.
     pub(crate) preemptive_turn: Option<crate::audio_recognition::TurnId>,
     /// The record version a preemptive generation was planned against.
@@ -159,6 +163,7 @@ impl AgentActivity {
             dtmf: Default::default(),
             pending_turn: None,
             last_turn: None,
+            live_speech_at_final: false,
             preemptive_turn: None,
             preemptive_record_version: 0,
             rt_session,

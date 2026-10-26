@@ -780,6 +780,7 @@ impl Driver {
         for (transcript, started_speaking_at) in preflights {
             self.on_preemptive_generation(now, transcript, started_speaking_at, out);
         }
+        self.activity.live_speech_at_final = false;
     }
 
     /// `_scheduling_task`: due interruption watchdogs, then the current speech. Its timers fire

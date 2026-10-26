@@ -15,6 +15,7 @@ mod filler_source;
 mod filler_source_no_host;
 mod filler_source_raises;
 mod final_ends_pause;
+mod final_over_paused_no_preemptive;
 mod filler_while_draining;
 mod held_turn_idle;
 mod hold_at_close;
