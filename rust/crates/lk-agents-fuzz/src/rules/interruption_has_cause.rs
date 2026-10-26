@@ -69,7 +69,8 @@ fn host_interrupted_before(inputs: &InputsView, at: Observed) -> bool {
     })
 }
 
-/// Any recognition event delivered, or a user-turn claim or commit issued, before `at`.
+/// Any recognition or voice-activity event delivered, or a user-turn claim or commit issued,
+/// before `at`. The detector hearing speech is what `_interrupt_by_audio_activity` acts on.
 fn user_input_before(inputs: &InputsView, at: Observed) -> bool {
     // A recognition event the stream refused never reached the turn, so it permits nothing. A
     // turn command is judged by its issue: whether the driver acted on it is what is in question.
@@ -83,6 +84,9 @@ fn user_input_before(inputs: &InputsView, at: Observed) -> bool {
                     | Input::SttPreflight { .. }
                     | Input::SttFinal { .. }
                     | Input::SttEnd { .. }
+                    | Input::VadStart { .. }
+                    | Input::VadInference { .. }
+                    | Input::VadEnd { .. }
             )
     });
     let claimed = inputs.sent().iter().any(|sent| {
