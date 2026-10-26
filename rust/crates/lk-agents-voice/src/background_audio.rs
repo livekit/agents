@@ -229,7 +229,7 @@ impl Playback {
 
 /// A caller-supplied stream. Cancellation must reach any pending host-side pull. A host
 /// `AsyncIterator[rtc.AudioFrame]` is this trait through `background_audio.py`'s `_FrameStream`.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.background_audio._FrameStream"))]
+#[lk_agents_abi::host(proxy)]
 #[async_trait]
 pub trait FrameStream: Send + Sync {
     async fn next(&self) -> Result<Option<AudioFrame>, ProviderError>;
@@ -276,7 +276,7 @@ impl Sound {
 
 /// Uniform draws in `[0, 1)` for [`select_sound`]: the host's `random.random`, so a seeded host
 /// run picks what the reference picks, one draw at a time.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.background_audio._Random", live))]
+#[lk_agents_abi::host(proxy(live))]
 pub trait RandomDraw: Send + Sync {
     fn draw(&self) -> f64;
 }

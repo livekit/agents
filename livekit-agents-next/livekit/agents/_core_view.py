@@ -185,15 +185,7 @@ class _Llm:
         return None
 
     async def _core_chat(self, req: _core.ChatRequest) -> llm.LLMStream:
-        if req.chat_ctx_host is not None:
-            chat_ctx = _core.resolve_host_ref(req.chat_ctx_host)
-        else:
-            chat_ctx = llm.ChatContext.from_dict(req.chat_ctx)
-        pools = [req.tools_host, *req.tools_host_extra]
-        tools = offered_tools(
-            [t for key in pools if key is not None for t in _core.resolve_host_ref(key)],
-            req.tool_names,
-        )
+        chat_ctx, tools = chat_request(req)
         choice = req.tool_choice
         return self._obj.chat(
             chat_ctx=chat_ctx,
@@ -204,6 +196,20 @@ class _Llm:
             ),
             extra_kwargs=req.extra or NOT_GIVEN,
         )
+
+
+def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
+    """The context and the offered tools of a request the core makes."""
+    if req.chat_ctx_host is not None:
+        chat_ctx = _core.resolve_host_ref(req.chat_ctx_host)
+    else:
+        chat_ctx = llm.ChatContext.from_dict(req.chat_ctx)
+    pools = [req.tools_host, *req.tools_host_extra]
+    tools = offered_tools(
+        [t for key in pools if key is not None for t in _core.resolve_host_ref(key)],
+        req.tool_names,
+    )
+    return chat_ctx, tools
 
 
 class Realtime:

@@ -24,6 +24,7 @@ pub mod driver;
 pub mod effects;
 pub mod host_events;
 pub(crate) mod idle;
+pub mod nodes;
 pub(crate) mod outputs;
 pub(crate) mod providers;
 pub(crate) mod signals;

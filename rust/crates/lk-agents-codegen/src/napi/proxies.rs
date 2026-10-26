@@ -13,10 +13,8 @@ use crate::ir::*;
 /// block a worker on the JS thread).
 pub(super) fn proxy(cx: &Cx, p: &Proxy, wanted: &mut Vec<String>) -> Result<String, String> {
     linked(&p.trait_path)?;
-    if p.host.is_some() {
-        return Err(
-            "not yet: a bare proxy (`host = ..`: every method calls `_core_<method>`)".to_owned()
-        );
+    if p.methods.iter().any(|m| matches!(m.action, ProxyAction::Core)) {
+        return Err("not yet: a bare proxy (every method calls `_core_<method>`)".to_owned());
     }
     let name = &p.name;
     let fields: Vec<(String, String)> = p.state.to_vec();

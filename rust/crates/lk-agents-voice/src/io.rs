@@ -72,8 +72,7 @@ impl AudioOutput for AudioSinkProxy {
 // back arbitrarily long, and awaiting it per delta would pace the LLM leg by the host.
 
 /// A host transcription node (`TranscriptionNodeSink`): pushes are fire-and-forget on its loop.
-/// Seen through `voice/io.py`'s `_TextNode` surface, which a node need not subclass.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.io._TextNode"))]
+#[lk_agents_abi::host(proxy)]
 pub trait TextNode: Send + Sync {
     fn capture_text(&self, text: &str);
     fn capture_timed(&self, text: &TimedString);

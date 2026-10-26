@@ -81,7 +81,7 @@ pub use lk_agents_abi::llm::fallback::AvailabilityChanged;
 ///
 /// A host adapter is this trait through its bare `#[host(proxy)]` (`PyChainObserver`): the
 /// `FallbackAdapter` itself, whose `_core_availability_changed` maps the index back to its instance.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.llm.FallbackAdapter"))]
+#[lk_agents_abi::host(proxy)]
 pub trait ChainObserver: Send + Sync {
     fn availability_changed(&self, ev: AvailabilityChanged);
 

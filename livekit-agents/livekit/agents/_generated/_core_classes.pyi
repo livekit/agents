@@ -858,6 +858,9 @@ class LiveSession:
         tool_runner: Any | None = None,
         transcription_node: Any | None = None,
         realtime_audio_output_node: Any | None = None,
+        llm_node: Any | None = None,
+        tts_node: Any | None = None,
+        stt_node: Any | None = None,
         tts_text_transforms: Any | None = None,
         host_audio_input: Any | None = None,
         host_audio_output: Any | None = None,
@@ -890,6 +893,9 @@ class LiveSession:
         tts: NotGivenOr[Any | None] = ...,
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
+        llm_node: Any | None = None,
+        tts_node: Any | None = None,
+        stt_node: Any | None = None,
     ) -> None: ...
     def hook_described(
         self,
@@ -907,6 +913,9 @@ class LiveSession:
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
+        llm_node: Any | None = None,
+        tts_node: Any | None = None,
+        stt_node: Any | None = None,
     ) -> None: ...
     async def update_agent(
         self,
@@ -923,6 +932,9 @@ class LiveSession:
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
+        llm_node: Any | None = None,
+        tts_node: Any | None = None,
+        stt_node: Any | None = None,
     ) -> bool: ...
     def enter_task(
         self,
@@ -940,6 +952,9 @@ class LiveSession:
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
+        llm_node: Any | None = None,
+        tts_node: Any | None = None,
+        stt_node: Any | None = None,
         speech_id: int | None = None,
         preserve_function_call_history: bool = False,
         parent: str | None = None,
