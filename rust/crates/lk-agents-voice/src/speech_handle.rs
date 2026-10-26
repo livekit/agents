@@ -1,8 +1,9 @@
 use crate::agent_activity::scheduling::SpeechId;
+
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, Modality, Monotone};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -35,46 +36,6 @@ pub fn default_input_modality() -> &'static str {
 
 type Api = crate::agent_session::Tx<crate::agent_session::Command>;
 
-/// `say()` and `generate_reply()` hand one back before the loop has created the speech; every sync
-/// read answers as the reference's freshly constructed handle would.
-pub struct HostSpeech {
-    promise: Arc<SpeechPromise>,
-    api: Api,
-    /// A detached handle's id, given at construction; a loop-created speech's id is its own.
-    detached_id: String,
-    /// The host's object for the speech, shared with the speech the loop creates for this handle.
-    host: HostSlot,
-}
-
-/// The host's own object for one speech (its `SpeechHandle`), so every event, tool and hook that
-/// names the speech hands back the object `say()` / `generate_reply()` returned. Shared by the
-/// handle returned before the loop created the speech and the speech the loop then creates.
-#[derive(Clone, Default)]
-pub struct HostSlot(Arc<Mutex<Option<lk_agents_abi::HostRef>>>);
-
-impl HostSlot {
-    pub fn get(&self) -> Option<lk_agents_abi::HostRef> {
-        lock(&self.0).clone()
-    }
-
-    pub fn set(&self, host: lk_agents_abi::HostRef) {
-        *lock(&self.0) = Some(host);
-    }
-}
-
-impl std::fmt::Debug for HostSlot {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("HostSlot")
-    }
-}
-
-/// Two calls' slots are the same slot.
-impl PartialEq for HostSlot {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
 /// A refusal on a host's speech handle; each `Display` is the `RuntimeError` it raises.
 #[lk_agents_abi::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -82,7 +43,7 @@ pub enum SpeechRefused {
     #[error(transparent)]
     Speech(#[from] SpeechError),
     #[error(transparent)]
-    Promise(#[from] PromiseError),
+    Creation(#[from] CreationError),
     #[error(
         "this SpeechHandle was constructed directly, so no speech is behind it. In this port the \
          driver creates the speech; use `session.say()` or `session.generate_reply()`, which return \
@@ -121,227 +82,6 @@ impl<'py> pyo3::IntoPyObject<'py> for SpeechException {
             },
             other => runtime_error(other.to_string()),
         })
-    }
-}
-
-impl HostSpeech {
-    /// `host` goes to the loop with the command, which hands it to the speech it creates.
-    pub fn pending(
-        api: Api,
-        rx: tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>,
-        requested_allow: Option<bool>,
-        host: HostSlot,
-    ) -> Self {
-        let promise = SpeechPromise::pending(rx, requested_allow);
-        HostSpeech { promise: Arc::new(promise), api, detached_id: String::new(), host }
-    }
-
-    pub fn from_core(handle: Arc<SpeechHandle>, api: Api) -> Self {
-        HostSpeech {
-            host: handle.host_slot(),
-            promise: Arc::new(SpeechPromise::ready(handle)),
-            api,
-            detached_id: String::new(),
-        }
-    }
-
-    pub fn object(handle: &Arc<SpeechHandle>, api: &Api) -> lk_agents_abi::CoreObject {
-        lk_agents_abi::CoreObject(Arc::new(HostSpeech::from_core(Arc::clone(handle), api.clone())))
-    }
-
-    pub fn peek(&self) -> Option<Arc<SpeechHandle>> {
-        self.promise.peek()
-    }
-
-    fn attached(&self) -> Result<Arc<SpeechHandle>, SpeechRefused> {
-        self.peek().ok_or(SpeechRefused::Detached)
-    }
-}
-
-#[lk_agents_abi::host(object(name = "SpeechHandle", cell = "arc"))]
-impl HostSpeech {
-    /// A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
-    /// behind it.
-    #[host(new(kw_only, defaults(speech_id = String::new(), allow_interruptions = true)))]
-    pub fn detached(speech_id: String, allow_interruptions: bool) -> Self {
-        HostSpeech {
-            promise: Arc::new(SpeechPromise::detached(allow_interruptions)),
-            api: crate::agent_session::Tx::disconnected(),
-            detached_id: speech_id,
-            host: HostSlot::default(),
-        }
-    }
-
-    /// The host's object for this speech, as it set it; `None` until then.
-    #[host(getter)]
-    pub fn host(&self) -> Option<lk_agents_abi::HostRef> {
-        self.host.get()
-    }
-
-    /// Set by the host when it creates its handle over this one: from then on every event, tool
-    /// and hook naming the speech hands back this object.
-    #[host(setter)]
-    pub fn set_host(&self, host: lk_agents_abi::HostRef) {
-        self.host.set(host);
-    }
-
-    /// `speech_handle.id`. Empty until the loop has minted `speech_{n}`; a detached handle answers
-    /// the id it was constructed with.
-    #[host(getter)]
-    pub fn id(&self) -> String {
-        self.peek().map_or_else(|| self.detached_id.clone(), |h| h.speech_id().to_owned())
-    }
-
-    #[host(getter)]
-    pub fn num_steps(&self) -> u32 {
-        self.peek().map_or(1, |h| h.num_steps())
-    }
-
-    /// `chat_items` (`speech_handle.py:156`): what this speech committed to the conversation.
-    /// Empty before the speech is created; a copy, so it does not grow under a caller.
-    #[host(getter)]
-    pub fn chat_items(&self) -> Vec<ChatItem> {
-        self.peek().map(|h| h.chat_items()).unwrap_or_default()
-    }
-
-    #[host(getter)]
-    pub fn scheduled(&self) -> bool {
-        self.peek().is_some_and(|h| h.scheduled())
-    }
-
-    /// `True` from the tick `interrupt()` was called, and once the loop has interrupted the speech
-    /// for any reason (a interruption, a supersede, the close).
-    #[host(getter)]
-    pub fn interrupted(&self) -> bool {
-        self.promise.interrupted()
-    }
-
-    #[host(method)]
-    pub fn done(&self) -> bool {
-        self.peek().is_some_and(|h| h.done())
-    }
-
-    /// `allow_interruptions`. While pending: the value the caller passed, or `True` when it passed
-    /// none (the session default is resolved by the loop).
-    #[host(getter)]
-    pub fn allow_interruptions(&self) -> bool {
-        self.promise.allow_interruptions()
-    }
-
-    /// The setter (`speech_handle.py:117`): sent to the loop, the one writer of a speech's
-    /// interruption state, which journals it. Raises the reference's `RuntimeError` on an
-    /// already-interrupted speech; the getter follows the loop's write by one wake.
-    #[host(setter)]
-    pub fn set_allow_interruptions(&self, value: bool) -> Result<(), SpeechRefused> {
-        if !value {
-            self.promise.check_can_disallow()?;
-        }
-        match self.peek() {
-            Some(h) => {
-                if !value && h.interrupted() {
-                    return Err(SpeechError::AlreadyInterrupted.into());
-                }
-                // A closed loop has no speech left to protect.
-                let _ = self.api.send(
-                    crate::agent_session::SpeechCommand::SetAllowInterruptions {
-                        speech: h.id(),
-                        allow: value,
-                    }
-                    .into(),
-                );
-                Ok(())
-            }
-            None if self.promise.is_detached() => {
-                self.promise.set_requested_allow(value);
-                Ok(())
-            }
-            None => Err(SpeechRefused::NotCreated),
-        }
-    }
-
-    /// The exception the speech failed with, as the original Python object.
-    #[host(method)]
-    pub fn exception(&self) -> Result<Option<SpeechException>, SpeechRefused> {
-        let Some(h) = self.peek() else { return Ok(None) };
-        Ok(h.exception()?.map(SpeechException))
-    }
-
-    /// `interrupt(force=)` (`speech_handle.py:185`). Synchronous; if the speech does not exist yet,
-    /// a task sends the command once it does, so the interrupt is not lost.
-    #[host(method(kw_only, defaults(force = false)))]
-    pub fn interrupt(
-        &self,
-        force: bool,
-        #[host(ambient)] spawner: Arc<dyn lk_agents_abi::Spawner>,
-    ) -> Result<(), SpeechRefused> {
-        match self.promise.interrupt(force)? {
-            InterruptRequest::Nothing => {}
-            InterruptRequest::Now(speech) => {
-                // A closed loop has nothing left to interrupt.
-                let _ = self.api.send(
-                    crate::agent_session::SpeechCommand::InterruptSpeech { speech, force }.into(),
-                );
-            }
-            InterruptRequest::WhenCreated => {
-                let promise = Arc::clone(&self.promise);
-                let api = self.api.clone();
-                spawner.spawn(Box::pin(async move {
-                    promise.interrupt_once_created(&api, force).await;
-                }));
-            }
-        }
-        Ok(())
-    }
-
-    /// `_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
-    /// the reference's `RuntimeError` when the speech is already interrupted, without counting the
-    /// attempt.
-    #[host(method)]
-    pub fn hold_interruptions(&self) -> Result<(), SpeechRefused> {
-        Ok(self.attached()?.hold_interruptions()?)
-    }
-
-    /// `_release_interruptions`. Idempotent past zero, like the reference's.
-    #[host(method)]
-    pub fn release_interruptions(&self) -> Result<(), SpeechRefused> {
-        self.attached()?.release_interruptions();
-        Ok(())
-    }
-
-    /// `wait_for_playout()`, and therefore `__await__`. The self-wait guard is not here: it reads
-    /// the ambient tool frame, so it belongs on the shim's `__await__`.
-    #[host(method)]
-    pub async fn wait_for_playout(&self) -> Result<(), SpeechRefused> {
-        self.promise.resolve().await?.wait_for_playout().await;
-        Ok(())
-    }
-
-    /// `_wait_for_generation(step_idx)`: wait for one step of the turn, not the whole thing.
-    /// `step=None` is the reference's `step_idx=-1`. No generation, no such step, and a
-    /// never-created speech are distinct errors.
-    #[host(method)]
-    pub async fn wait_for_generation(&self, step: Option<usize>) -> Result<(), SpeechRefused> {
-        let handle = self.promise.resolve().await?;
-        match step {
-            Some(step) => handle.wait_for_generation(step).await?,
-            None => handle.wait_for_latest_generation().await?,
-        }
-        Ok(())
-    }
-
-    /// Resolve when the speech is interrupted, and only then: a speech that finishes normally never
-    /// resolves this, so `wait_if_not_interrupted` can race it.
-    #[host(method)]
-    pub async fn wait_for_interrupted(&self) -> Result<(), SpeechRefused> {
-        self.promise.resolve().await?.wait_for_interrupted().await;
-        Ok(())
-    }
-
-    /// Resolve once the loop has created the speech and put it in the queue.
-    #[host(method)]
-    pub async fn wait_until_created(&self) -> Result<(), SpeechRefused> {
-        self.promise.resolve().await?;
-        Ok(())
     }
 }
 
@@ -422,6 +162,17 @@ pub enum SpeechError {
     NotDoneYet,
 }
 
+/// Why a handle has no speech to wait on. Each `Display` is the message a host raises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CreationError {
+    /// The session closed before the loop handled the command.
+    #[error("the session ended before this speech was created, so it will never run")]
+    Ended,
+    /// A handle constructed directly: no loop will ever create its speech.
+    #[error("this speech handle's promise was consumed without being fulfilled")]
+    Consumed,
+}
+
 /// How wide an interruption is. A tool's own `interrupt()` (or a session `Interrupt` while its tools
 /// run) stops only the playing step, cleared at [`SpeechHandle::step`]; everything else is the
 /// whole speech. Not [`Monotone`]: `Step` regresses to `None` at the step boundary.
@@ -441,6 +192,17 @@ struct Interruptions {
     restore: bool,
 }
 
+/// Whether the host's call was answered: `say()` and `generate_reply()` return before the loop
+/// creates the speech, and a handle constructed directly never gets one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Creation {
+    Pending,
+    Created,
+    /// The session ended before the loop created the speech.
+    Lost,
+    Detached,
+}
+
 struct Inner {
     error: Option<ProviderError>,
     chat_items: Vec<ChatItem>,
@@ -449,13 +211,25 @@ struct Inner {
     watchdog_armed: bool,
     /// The metrics of the user turn a preemptive reply was adopted for.
     user_metrics: Option<lk_agents_abi::MetricsReport>,
-    /// The host's object for the speech.
-    host: HostSlot,
+    /// The host's own object for the speech (its `SpeechHandle`), so every event, tool and hook
+    /// that names the speech hands back the object `say()` / `generate_reply()` returned.
+    host: Option<lk_agents_abi::HostRef>,
 }
 
+/// `SpeechHandle`: one speech's id, state and outcome, shared by the loop that runs the speech and
+/// the host that holds it. A host's `say()` gets it before the loop has created the speech; until
+/// then every read answers as the reference's freshly constructed handle would.
 pub struct SpeechHandle {
-    id: SpeechId,
-    speech_id: Arc<str>,
+    /// Minted by the loop as it creates the speech.
+    id: OnceLock<SpeechId>,
+    /// `SpeechHandle.id`: `speech_{n}`, or what a detached handle was constructed with.
+    speech_id: OnceLock<Arc<str>>,
+    creation: watch::Sender<Creation>,
+    /// The loop, for what the host asks of the speech.
+    api: Api,
+    /// `interrupt()` was called from the host; `interrupted` reads `true` from this tick on, even
+    /// before the loop has acted on it.
+    interrupt_requested: AtomicBool,
 
     scheduled: Monotone<bool>,
     /// Level-triggered: a step-scoped interruption is cleared at the step boundary.
@@ -474,20 +248,30 @@ pub struct SpeechHandle {
     inner: Mutex<Inner>,
 }
 
-/// By id, not pointer: ids are per-session and monotone.
+/// By id once created, so a speech is itself across handles; by identity before.
 impl PartialEq for SpeechHandle {
     fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
+        match (self.id.get(), other.id.get()) {
+            (Some(a), Some(b)) => a == b,
+            _ => std::ptr::eq(self, other),
+        }
     }
 }
 
 impl Eq for SpeechHandle {}
 
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 impl SpeechHandle {
-    pub fn new(id: SpeechId, allow_interruptions: bool) -> Self {
+    fn base(creation: Creation, allow_interruptions: bool, api: Api) -> Self {
         SpeechHandle {
-            id,
-            speech_id: id.to_string().into(),
+            id: OnceLock::new(),
+            speech_id: OnceLock::new(),
+            creation: watch::Sender::new(creation),
+            api,
+            interrupt_requested: AtomicBool::new(false),
             scheduled: Monotone::new(false),
             interrupted: watch::Sender::new(Interruption::None),
             done: Monotone::new(false),
@@ -507,33 +291,80 @@ impl SpeechHandle {
                 tasks: Vec::new(),
                 watchdog_armed: false,
                 user_metrics: None,
-                host: HostSlot::default(),
+                host: None,
             }),
         }
     }
 
+    /// A speech the loop creates on its own (a reply, a tool's follow-up).
+    pub fn new(id: SpeechId, allow_interruptions: bool, api: Api) -> Self {
+        let handle = SpeechHandle::base(Creation::Created, allow_interruptions, api);
+        handle.create(id, allow_interruptions);
+        handle
+    }
+
+    /// What a host's `say()` / `generate_reply()` answers, before the loop creates the speech.
+    /// `allow_interruptions` is what was passed; `None` reads `True` until the loop resolves it.
+    pub fn pending(api: Api, allow_interruptions: Option<bool>) -> Arc<Self> {
+        Arc::new(SpeechHandle::base(Creation::Pending, allow_interruptions.unwrap_or(true), api))
+    }
+
+    /// The loop creates the speech behind this handle: its id, and its resolved interruptibility.
+    pub fn create(&self, id: SpeechId, allow_interruptions: bool) {
+        // Untouched since `pending`: the host can neither set nor hold it before this.
+        self.interruptions.send_replace(Interruptions {
+            allow: allow_interruptions,
+            holds: 0,
+            restore: allow_interruptions,
+        });
+        let _ = self.speech_id.set(id.to_string().into());
+        let _ = self.id.set(id);
+    }
+
+    /// The loop answered the host's call: with the speech it created over this handle, or, when
+    /// the session ended first, not at all. Wakes whoever awaits the creation.
+    pub(crate) fn answered(&self, created: bool) {
+        self.creation.send_if_modified(|c| {
+            let pending = *c == Creation::Pending;
+            if pending {
+                *c = if created { Creation::Created } else { Creation::Lost };
+            }
+            pending
+        });
+    }
+
     pub fn id(&self) -> SpeechId {
-        self.id
+        *self.id.get().expect("a speech the loop has created")
     }
 
-    /// The host's object for the speech, shared with the handle the host was answered with.
-    pub fn host_slot(&self) -> HostSlot {
-        lock(&self.inner).host.clone()
+    /// The handle as the host receives it in an event, a tool or a hook: this same object.
+    pub fn object(self: &Arc<Self>) -> lk_agents_abi::CoreObject {
+        lk_agents_abi::CoreObject(Arc::clone(self) as Arc<dyn std::any::Any + Send + Sync>)
     }
 
-    /// The slot the host's command brought: set before the speech is first announced, so the
-    /// announcement already names the host's object.
-    pub fn adopt_host(&self, slot: HostSlot) {
-        lock(&self.inner).host = slot;
+    /// The id once the loop has created the speech.
+    pub fn created(&self) -> Option<SpeechId> {
+        self.id.get().copied()
     }
 
     /// `SpeechHandle.id`: `speech_{n}`.
     pub fn speech_id(&self) -> &str {
-        &self.speech_id
+        self.speech_id.get().map_or("", |s| s)
     }
 
-    pub fn num_steps(&self) -> u32 {
-        self.num_steps.load(Ordering::Acquire)
+    /// The created speech, or why there is none to wait on.
+    async fn wait_created(&self) -> Result<(), CreationError> {
+        let mut rx = self.creation.subscribe();
+        let creation = *rx.wait_for(|c| *c != Creation::Pending).await.expect("held by self");
+        match creation {
+            Creation::Created => Ok(()),
+            Creation::Lost => Err(CreationError::Ended),
+            Creation::Pending | Creation::Detached => Err(CreationError::Consumed),
+        }
+    }
+
+    fn attached(&self) -> Result<SpeechId, SpeechRefused> {
+        self.created().ok_or(SpeechRefused::Detached)
     }
 
     /// `speech_handle._num_steps += 1` on the tool-loop back edge. Ends a step-scoped interruption
@@ -553,10 +384,6 @@ impl SpeechHandle {
         n
     }
 
-    pub fn scheduled(&self) -> bool {
-        self.scheduled.get()
-    }
-
     /// Whether the speech or its playing step is interrupted right now.
     pub fn interrupted(&self) -> bool {
         !matches!(*self.interrupted.borrow(), Interruption::None)
@@ -565,10 +392,6 @@ impl SpeechHandle {
     /// Whether the whole speech was interrupted: decides whether a tool's follow-up reply is owed.
     pub fn interrupted_speech(&self) -> bool {
         matches!(*self.interrupted.borrow(), Interruption::Speech)
-    }
-
-    pub fn done(&self) -> bool {
-        self.done.get()
     }
 
     /// `SpeechHandle._mark_scheduled`. Idempotent, like the `suppress(InvalidStateError)`.
@@ -589,10 +412,6 @@ impl SpeechHandle {
 
     pub async fn wait_for_done(&self) {
         self.done.wait_for(|d| *d).await;
-    }
-
-    pub fn allow_interruptions(&self) -> bool {
-        self.interruptions.borrow().allow
     }
 
     /// The user may cut it now: not interrupted already, and interruptions allowed.
@@ -830,11 +649,6 @@ impl SpeechHandle {
         self.inner.lock().unwrap().chat_items.push(item.clone());
     }
 
-    /// `chat_items`, as a clone.
-    pub fn chat_items(&self) -> Vec<ChatItem> {
-        self.inner.lock().unwrap().chat_items.clone()
-    }
-
     /// `preemptive.user_message.metrics = metrics_report`: the turn a preemptive reply answers.
     pub(crate) fn set_user_metrics(&self, metrics: lk_agents_abi::MetricsReport) {
         self.inner.lock().unwrap().user_metrics = Some(metrics);
@@ -845,256 +659,217 @@ impl SpeechHandle {
     }
 }
 
-/// Why a [`SpeechPromise`] could not be resolved. Each `Display` is the message a host raises.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum PromiseError {
-    /// The session closed before the loop handled the command.
-    #[error("the session ended before this speech was created, so it will never run")]
-    Ended,
-    /// A caller constructed a handle over no channel at all.
-    #[error("this speech handle's promise was consumed without being fulfilled")]
-    Consumed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InterruptRequest {
-    Nothing,
-    /// The speech exists: send `InterruptSpeech` for it now.
-    Now(SpeechId),
-    /// Not created yet: send it once it exists ([`SpeechPromise::interrupt_once_created`]).
-    WhenCreated,
-}
-
-/// `stash` is where `peek` leaves a speech taken while `resolve` holds the cell; `rx` is put back
-/// if a `resolve` is dropped mid-await; `lost` is sticky. Otherwise the speech could be lost for
-/// good (`done() == False` forever). `interrupt()` is synchronous (`speech_handle.py:185`):
-/// recorded here.
-pub struct SpeechPromise {
-    cell: tokio::sync::OnceCell<Arc<SpeechHandle>>,
-    rx: Mutex<Option<tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>>>,
-    stash: Mutex<Option<Arc<SpeechHandle>>>,
-    lost: std::sync::atomic::AtomicBool,
-    /// `allow_interruptions=` as passed; `None` is the session default.
-    requested_allow: Mutex<Option<bool>>,
-    /// Constructed directly (`SpeechHandle.create()`): no loop will ever fulfil it.
-    detached: bool,
-    /// `interrupt()` was called; `interrupted` reads `true` from this tick on.
-    interrupt_requested: std::sync::atomic::AtomicBool,
-}
-
-/// `rx`, on loan to one `resolve`: given back on drop unless the await consumed it.
-struct Borrowed<'a> {
-    rx: Option<tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>>,
-    slot: &'a Mutex<Option<tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>>>,
-}
-
-impl Drop for Borrowed<'_> {
-    fn drop(&mut self) {
-        if let Some(rx) = self.rx.take() {
-            *lock(self.slot) = Some(rx);
-        }
-    }
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
-}
-
-impl SpeechPromise {
-    fn base(
-        cell: tokio::sync::OnceCell<Arc<SpeechHandle>>,
-        rx: Option<tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>>,
-        requested_allow: Option<bool>,
-        detached: bool,
-    ) -> Self {
-        SpeechPromise {
-            cell,
-            rx: Mutex::new(rx),
-            stash: Mutex::new(None),
-            lost: std::sync::atomic::AtomicBool::new(false),
-            requested_allow: Mutex::new(requested_allow),
-            detached,
-            interrupt_requested: Default::default(),
-        }
+// What `voice/speech_handle.py`'s `SpeechHandle` wraps. Before the loop has created the speech
+// every read is a fresh handle's.
+#[lk_agents_abi::host(object(name = "SpeechHandle", cell = "arc"))]
+impl SpeechHandle {
+    /// A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
+    /// behind it.
+    #[host(new(kw_only, defaults(speech_id = String::new(), allow_interruptions = true)))]
+    pub fn detached(speech_id: String, allow_interruptions: bool) -> Self {
+        let handle = SpeechHandle::base(
+            Creation::Detached,
+            allow_interruptions,
+            crate::agent_session::Tx::disconnected(),
+        );
+        let _ = handle.speech_id.set(speech_id.into());
+        handle
     }
 
-    pub fn pending(
-        rx: tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>,
-        requested_allow: Option<bool>,
-    ) -> Self {
-        Self::base(Default::default(), Some(rx), requested_allow, false)
+    /// The host's object for this speech, as it set it; `None` until then.
+    #[host(getter)]
+    pub fn host(&self) -> Option<lk_agents_abi::HostRef> {
+        lock(&self.inner).host.clone()
     }
 
-    pub fn detached(allow_interruptions: bool) -> Self {
-        Self::base(Default::default(), None, Some(allow_interruptions), true)
+    /// Set by the host when it creates its handle over this one: from then on every event, tool
+    /// and hook naming the speech hands back this object.
+    #[host(setter)]
+    pub fn set_host(&self, host: lk_agents_abi::HostRef) {
+        lock(&self.inner).host = Some(host);
     }
 
-    pub fn is_detached(&self) -> bool {
-        self.detached
+    /// `speech_handle.id`. Empty until the loop has minted `speech_{n}`; a detached handle answers
+    /// the id it was constructed with.
+    #[host(getter(name = "id"))]
+    pub fn id_for_host(&self) -> String {
+        self.speech_id().to_owned()
     }
 
-    /// `allow_interruptions = value` on a detached promise; the guard is the caller's.
-    pub fn set_requested_allow(&self, value: bool) {
-        *lock(&self.requested_allow) = Some(value);
+    #[host(getter)]
+    pub fn num_steps(&self) -> u32 {
+        self.num_steps.load(Ordering::Acquire)
     }
 
-    /// A promise already kept: a speech the loop announced (`speech_created`, `run_settled`).
-    pub fn ready(handle: Arc<SpeechHandle>) -> Self {
-        Self::base(tokio::sync::OnceCell::new_with(Some(handle)), None, None, false)
+    /// `chat_items` (`speech_handle.py:156`): what this speech committed to the conversation.
+    /// A copy, so it does not grow under a caller.
+    #[host(getter)]
+    pub fn chat_items(&self) -> Vec<ChatItem> {
+        self.inner.lock().unwrap().chat_items.clone()
     }
 
-    fn mark_lost(&self) {
-        self.lost.store(true, Ordering::Release);
+    #[host(getter)]
+    pub fn scheduled(&self) -> bool {
+        self.scheduled.get()
     }
 
-    fn is_lost(&self) -> bool {
-        self.lost.load(Ordering::Acquire)
+    /// `True` from the tick `interrupt()` was called, and once the loop has interrupted the speech
+    /// for any reason (a interruption, a supersede, the close).
+    #[host(getter(name = "interrupted"))]
+    pub fn interrupted_for_host(&self) -> bool {
+        self.interrupt_requested.load(Ordering::Acquire) || self.interrupted()
     }
 
-    /// Whether `interrupt()` was called on this promise, whatever the loop has done since.
-    pub fn interrupt_requested(&self) -> bool {
-        self.interrupt_requested.load(Ordering::Acquire)
+    #[host(method)]
+    pub fn done(&self) -> bool {
+        self.done.get()
     }
 
-    pub fn interrupted(&self) -> bool {
-        self.interrupt_requested() || self.peek().is_some_and(|h| h.interrupted())
-    }
-
-    /// `allow_interruptions`; while pending, the passed value or `true`.
+    /// `allow_interruptions`. Before the loop creates the speech: the value the caller passed, or
+    /// `True` when it passed none (the session default is resolved by the loop).
+    #[host(getter)]
     pub fn allow_interruptions(&self) -> bool {
-        match self.peek() {
-            Some(h) => h.allow_interruptions(),
-            None => lock(&self.requested_allow).unwrap_or(true),
-        }
+        self.interruptions.borrow().allow
     }
 
-    /// The speech if the loop already produced it, without awaiting. Also fulfils the promise on
-    /// the sync path; `resolve` reports a closed channel.
-    pub fn peek(&self) -> Option<Arc<SpeechHandle>> {
-        if let Some(handle) = self.cell.get() {
-            return Some(Arc::clone(handle));
+    /// The setter (`speech_handle.py:117`): sent to the loop, the one writer of a speech's
+    /// interruption state, which journals it. Raises the reference's `RuntimeError` on an
+    /// already-interrupted speech; the getter follows the loop's write by one wake.
+    #[host(setter(name = "allow_interruptions"))]
+    pub fn set_allow_interruptions_for_host(&self, value: bool) -> Result<(), SpeechRefused> {
+        if !value && self.interrupt_requested.load(Ordering::Acquire) {
+            return Err(SpeechError::AlreadyInterrupted.into());
         }
-        if let Some(handle) = lock(&self.stash).as_ref() {
-            return Some(Arc::clone(handle));
+        if *self.creation.borrow() == Creation::Detached {
+            return Ok(self.set_allow_interruptions(value)?);
         }
-        let mut guard = lock(&self.rx);
-        if let Some(rx) = guard.as_mut() {
-            match rx.try_recv() {
-                Ok(handle) => {
-                    *guard = None;
-                    if let Err(tokio::sync::SetError::InitializingError(handle)) =
-                        self.cell.set(Arc::clone(&handle))
-                    {
-                        // Left before `guard` is released, so the initialiser finds it.
-                        *lock(&self.stash) = Some(handle);
+        let Some(speech) = self.created() else { return Err(SpeechRefused::NotCreated) };
+        if !value && self.interrupted() {
+            return Err(SpeechError::AlreadyInterrupted.into());
+        }
+        // A closed loop has no speech left to protect.
+        let _ = self.api.send(
+            crate::agent_session::SpeechCommand::SetAllowInterruptions { speech, allow: value }
+                .into(),
+        );
+        Ok(())
+    }
+
+    /// The exception the speech failed with, as the original Python object.
+    #[host(method(name = "exception"))]
+    pub fn exception_for_host(&self) -> Result<Option<SpeechException>, SpeechRefused> {
+        if self.created().is_none() {
+            return Ok(None);
+        }
+        Ok(self.exception()?.map(SpeechException))
+    }
+
+    /// `interrupt(force=)` (`speech_handle.py:185`), synchronous and in the reference's order. If
+    /// the speech does not exist yet, a task sends the command once it does, so the interrupt is
+    /// not lost.
+    #[host(method(name = "interrupt", kw_only, defaults(force = false)))]
+    pub fn interrupt_for_host(
+        self: &Arc<Self>,
+        force: bool,
+        #[host(ambient)] spawner: Arc<dyn lk_agents_abi::Spawner>,
+    ) -> Result<(), SpeechRefused> {
+        let created = self.created();
+        if self.interrupt_requested.load(Ordering::Acquire)
+            || (created.is_some() && (self.interrupted() || self.done()))
+        {
+            return Ok(());
+        }
+        if !force && !self.allow_interruptions() {
+            return Err(SpeechError::InterruptionsNotAllowed.into());
+        }
+        self.interrupt_requested.store(true, Ordering::Release);
+        let interrupt = move |api: &Api, speech| {
+            // A closed loop has nothing left to interrupt.
+            let _ = api.send(
+                crate::agent_session::SpeechCommand::InterruptSpeech { speech, force }.into(),
+            );
+        };
+        let creation = *self.creation.borrow();
+        match (created, creation) {
+            (Some(speech), _) => interrupt(&self.api, speech),
+            // Recorded above; a detached handle has no speech to interrupt, now or later.
+            (None, Creation::Detached) => {}
+            (None, _) => {
+                let handle = Arc::clone(self);
+                spawner.spawn(Box::pin(async move {
+                    if handle.wait_created().await.is_ok() {
+                        interrupt(&handle.api, handle.id());
                     }
-                    return Some(handle);
-                }
-                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    *guard = None;
-                    self.mark_lost();
-                }
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }));
             }
-        }
-        self.cell.get().cloned()
-    }
-
-    /// Wait for the loop to create the speech. One awaiter borrows the receiver; it is returned if
-    /// the future is dropped.
-    pub async fn resolve(&self) -> Result<Arc<SpeechHandle>, PromiseError> {
-        self.cell
-            .get_or_try_init(|| async {
-                let taken = lock(&self.rx).take();
-                let Some(rx) = taken else {
-                    // `peek` got there first, or the channel closed, or a directly constructed handle.
-                    if let Some(handle) = lock(&self.stash).take() {
-                        return Ok(handle);
-                    }
-                    if self.is_lost() {
-                        return Err(PromiseError::Ended);
-                    }
-                    return Err(PromiseError::Consumed);
-                };
-                let mut borrowed = Borrowed { rx: Some(rx), slot: &self.rx };
-                // `&mut Receiver` is itself a future; a dropped poll leaves the receiver usable.
-                let outcome = borrowed.rx.as_mut().expect("just set").await;
-                borrowed.rx = None;
-                match outcome {
-                    Ok(handle) => Ok(handle),
-                    Err(_) => {
-                        self.mark_lost();
-                        Err(PromiseError::Ended)
-                    }
-                }
-            })
-            .await
-            .cloned()
-    }
-
-    /// The `allow_interruptions = false` guard, counting an interrupt requested from this promise.
-    pub fn check_can_disallow(&self) -> Result<(), SpeechError> {
-        if self.interrupt_requested() {
-            return Err(SpeechError::AlreadyInterrupted);
         }
         Ok(())
     }
 
-    /// `interrupt(force=)` (`speech_handle.py:185`), synchronous and in the reference's order. The
-    /// caller sends `InterruptSpeech`; a pending speech is interrupted once it exists.
-    pub fn interrupt(&self, force: bool) -> Result<InterruptRequest, SpeechError> {
-        let attached = self.peek();
-        if self.interrupt_requested()
-            || attached.as_ref().is_some_and(|h| h.interrupted() || h.done())
-        {
-            return Ok(InterruptRequest::Nothing);
-        }
-        let allow = match &attached {
-            Some(h) => h.allow_interruptions(),
-            None => lock(&self.requested_allow).unwrap_or(true),
-        };
-        if !force && !allow {
-            return Err(SpeechError::InterruptionsNotAllowed);
-        }
-        self.interrupt_requested.store(true, Ordering::Release);
-        Ok(match attached {
-            Some(h) => InterruptRequest::Now(h.id()),
-            // Recorded above; a detached handle has no speech to interrupt, now or later.
-            None if self.detached => InterruptRequest::Nothing,
-            None => InterruptRequest::WhenCreated,
-        })
+    /// `_hold_interruptions`: disallow interruptions until every hold taken is released. Raises
+    /// the reference's `RuntimeError` when the speech is already interrupted, without counting the
+    /// attempt.
+    #[host(method(name = "hold_interruptions"))]
+    pub fn hold_interruptions_for_host(&self) -> Result<(), SpeechRefused> {
+        self.attached()?;
+        Ok(self.hold_interruptions()?)
     }
 
-    /// Wait for the speech, then send its interruption through `api`. Run from a caller's task.
-    pub async fn interrupt_once_created(
+    /// `_release_interruptions`. Idempotent past zero, like the reference's.
+    #[host(method(name = "release_interruptions"))]
+    pub fn release_interruptions_for_host(&self) -> Result<(), SpeechRefused> {
+        self.attached()?;
+        self.release_interruptions();
+        Ok(())
+    }
+
+    /// `wait_for_playout()`, and therefore `__await__`. The self-wait guard is not here: it reads
+    /// the ambient tool frame, so it belongs on the shim's `__await__`.
+    #[host(method(name = "wait_for_playout"))]
+    pub async fn wait_for_playout_for_host(&self) -> Result<(), SpeechRefused> {
+        self.wait_created().await?;
+        self.wait_for_playout().await;
+        Ok(())
+    }
+
+    /// `_wait_for_generation(step_idx)`: wait for one step of the turn, not the whole thing.
+    /// `step=None` is the reference's `step_idx=-1`. No generation, no such step, and a
+    /// never-created speech are distinct errors.
+    #[host(method(name = "wait_for_generation"))]
+    pub async fn wait_for_generation_for_host(
         &self,
-        api: &crate::agent_session::Tx<crate::agent_session::Command>,
-        force: bool,
-    ) {
-        if let Ok(h) = self.resolve().await {
-            let _ = api.send(
-                crate::agent_session::SpeechCommand::InterruptSpeech { speech: h.id(), force }
-                    .into(),
-            );
+        step: Option<usize>,
+    ) -> Result<(), SpeechRefused> {
+        self.wait_created().await?;
+        match step {
+            Some(step) => self.wait_for_generation(step).await?,
+            None => self.wait_for_latest_generation().await?,
         }
+        Ok(())
     }
-}
 
-impl std::fmt::Debug for SpeechPromise {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SpeechPromise")
-            .field("speech", &self.peek().map(|h| h.id()))
-            .field("lost", &self.is_lost())
-            .field("interrupt_requested", &self.interrupt_requested())
-            .finish()
+    /// Resolve when the speech is interrupted, and only then: a speech that finishes normally never
+    /// resolves this, so `wait_if_not_interrupted` can race it.
+    #[host(method(name = "wait_for_interrupted"))]
+    pub async fn wait_for_interrupted_for_host(&self) -> Result<(), SpeechRefused> {
+        self.wait_created().await?;
+        self.wait_for_interrupted().await;
+        Ok(())
+    }
+
+    /// Resolve once the loop has created the speech and put it in the queue.
+    #[host(method)]
+    pub async fn wait_until_created(&self) -> Result<(), SpeechRefused> {
+        Ok(self.wait_created().await?)
     }
 }
 
 impl std::fmt::Debug for SpeechHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SpeechHandle")
-            .field("id", &self.id)
-            .field("speech_id", &self.speech_id)
+            .field("id", &self.created())
+            .field("speech_id", &self.speech_id())
+            .field("creation", &*self.creation.borrow())
             .field("scheduled", &self.scheduled())
             .field("interrupted", &self.interrupted())
             .field("done", &self.done())

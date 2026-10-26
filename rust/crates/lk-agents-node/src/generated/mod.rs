@@ -34,11 +34,11 @@
 //! - `lk_agents_voice::agent_activity::options::HostOptions::new`: field `mode`: `EndpointingMode` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::agent_activity::options::HostOptions::update`: field `mode`: `EndpointingMode` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::agent_activity::options::HostOptions::resolved`: field `detector`: `lk_agents_abi::voice::session_options::DetectorKind` has no Node shape (not a declared record, enum or JSON)
-//! - `lk_agents_voice::speech_handle::HostSpeech::host`: return: not yet: a `HostRef` (a host object in the side table)
-//! - `lk_agents_voice::speech_handle::HostSpeech::set_host`: parameter `host`: not yet: a `HostRef` (a host object in the side table)
-//! - `lk_agents_voice::speech_handle::HostSpeech::chat_items`: return: not yet: returning an exposed class
-//! - `lk_agents_voice::speech_handle::HostSpeech::exception`: return: `SpeechException` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::speech_handle::HostSpeech::interrupt`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)
+//! - `lk_agents_voice::speech_handle::SpeechHandle::host`: return: not yet: a `HostRef` (a host object in the side table)
+//! - `lk_agents_voice::speech_handle::SpeechHandle::set_host`: parameter `host`: not yet: a `HostRef` (a host object in the side table)
+//! - `lk_agents_voice::speech_handle::SpeechHandle::chat_items`: return: not yet: returning an exposed class
+//! - `lk_agents_voice::speech_handle::SpeechHandle::exception_for_host`: return: `SpeechException` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_voice::speech_handle::SpeechHandle::interrupt_for_host`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)
 //! - `lk_agents_voice::workflows::dtmf::DtmfResult::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::workflows::dtmf::DtmfResult::from_dtmf_inputs`: return: `Self` outside a constructor
 //! - `lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::new`: parameter `instructions`: `Instructions` is not a #[derive(Host)] type or a #[host(wire_enum)]
@@ -74,9 +74,9 @@
 //! - `lk_agents_voice::agent_session::SessionApi::tool_update`: parameter `answer`: `ToolAnswer` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::update_chat_ctx`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_voice::agent_session::SessionApi::run`: parameter `host`: not yet: a `HostRef` (a host object in the side table)
-//! - `lk_agents_voice::agent_session::SessionApi::say`: return: not yet: returning an exposed class
-//! - `lk_agents_voice::agent_session::SessionApi::say_stream`: return: not yet: returning an exposed class
-//! - `lk_agents_voice::agent_session::SessionApi::say_audio`: return: not yet: returning an exposed class
+//! - `lk_agents_voice::agent_session::SessionApi::say`: return: not yet: `Arc<SpeechHandle>` (a shared handle to an exposed class)
+//! - `lk_agents_voice::agent_session::SessionApi::say_stream`: return: not yet: `Arc<SpeechHandle>` (a shared handle to an exposed class)
+//! - `lk_agents_voice::agent_session::SessionApi::say_audio`: return: not yet: `Arc<SpeechHandle>` (a shared handle to an exposed class)
 //! - `lk_agents_voice::agent_session::SessionApi::host_metrics`: parameter `record`: `HostMetricsRecord` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::amd_push_audio`: parameter `frame`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_media::StreamBuffer::len`: not yet: `__len__` is a Python protocol method

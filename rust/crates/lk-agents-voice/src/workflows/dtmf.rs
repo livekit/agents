@@ -491,6 +491,7 @@ impl Driver {
             None,
             None,
             false,
+            None,
             out,
         );
         let queued = self.activity.speech_scheduler.contains(h.id());

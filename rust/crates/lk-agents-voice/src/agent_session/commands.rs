@@ -124,19 +124,21 @@ pub struct CommitSuperseded;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(pub u64);
 
-/// A `say()` / `generate_reply()` the host awaits: its call, and the slot for the host's object,
-/// which the speech created for it takes.
-#[derive(Debug, Clone, PartialEq)]
+/// A `say()` / `generate_reply()` the host awaits: its call, and the handle it already holds, which
+/// the loop creates the speech over.
+#[derive(Debug)]
 pub struct SpeechCall {
     pub id: RequestId,
-    pub host: crate::speech_handle::HostSlot,
+    pub speech: Arc<SpeechHandle>,
 }
 
 /// What an awaited command is answered with, once, on the session's answer stream.
 #[derive(Debug)]
 pub enum Answer {
-    Speech(Arc<SpeechHandle>),
+    /// The speech of a [`SpeechCall`] is created.
+    Speech,
     Interrupt(Result<(), InterruptRefusal>),
+
     Commit(Result<String, CommitSuperseded>),
     Idle(Result<(), IdleRefused>),
     Hold(Result<HoldId, IdleRefused>),
@@ -159,7 +161,6 @@ macro_rules! answer_picks {
 }
 
 answer_picks! {
-    speech: Speech(Arc<SpeechHandle>),
     interrupt: Interrupt(Result<(), InterruptRefusal>),
     commit: Commit(Result<String, CommitSuperseded>),
     idle: Idle(Result<(), IdleRefused>),

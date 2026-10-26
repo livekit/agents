@@ -97,7 +97,7 @@ impl ToolStep {
         let rx = {
             let (tx, rx) = tokio::sync::oneshot::channel();
             let handle = Arc::clone(handle);
-            let host_speech = crate::speech_handle::HostSpeech::object(&handle, &shared.api);
+            let host_speech = handle.object();
             let spawner = Arc::clone(&shared.spawner);
             let shared = Arc::clone(shared);
             // Deferred starts are reported in the model's order.

@@ -17,6 +17,7 @@ use crate::agent_session::nodes::Nodes;
 use crate::agent_session::time::Timebase;
 use crate::events::SessionEvent;
 use crate::generation::Instructions;
+use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use crate::trace::{CoreStep, Step, Trace};
 use lk_agents_abi::errors::ProviderError;
@@ -284,6 +285,19 @@ impl SessionApi {
         self.running(|r| Ok(r.calls.open(pick)))
     }
 
+    /// A `say()` / `generate_reply()`: the handle the host gets now, and the call that brings it
+    /// to the loop.
+    pub fn speech_call(
+        &self,
+        allow_interruptions: Option<bool>,
+    ) -> Result<(Arc<SpeechHandle>, SpeechCall), SessionRefused> {
+        self.running(|r| {
+            let speech = SpeechHandle::pending(r.api.clone(), allow_interruptions);
+            let id = r.calls.open_speech(&speech);
+            Ok((Arc::clone(&speech), SpeechCall { id, speech }))
+        })
+    }
+
     pub fn send(&self, cmd: impl Into<Command>) -> Result<(), SessionRefused> {
         self.send_from(Origin::Host, cmd)
     }
@@ -485,17 +499,10 @@ impl SessionApi {
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<&str>,
-    ) -> Result<crate::speech_handle::HostSpeech, CommandRefused> {
+    ) -> Result<Arc<SpeechHandle>, CommandRefused> {
         let origin = origin_of(origin)?;
-        let (id, rx) = self.call(Answer::speech)?;
-        let host = crate::speech_handle::HostSlot::default();
-        let speech = crate::speech_handle::HostSpeech::pending(
-            self.api()?,
-            rx,
-            allow_interruptions,
-            host.clone(),
-        );
-        let call = Some(SpeechCall { id, host });
+        let (speech, call) = self.speech_call(allow_interruptions)?;
+        let call = Some(call);
         self.send_from(
             origin,
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call },
@@ -1113,19 +1120,39 @@ impl Calls {
         pick: fn(Answer) -> Option<T>,
     ) -> (RequestId, oneshot::Receiver<T>) {
         let (tx, rx) = oneshot::channel();
+        let call = self.insert(Box::new(move |answer| {
+            if let Some(value) = pick(answer) {
+                let _ = tx.send(value);
+            }
+        }));
+        (call, rx)
+    }
+
+    /// A speech call: its answer marks `speech` created; another answer, or none before the
+    /// session ends, marks it lost.
+    pub fn open_speech(&self, speech: &Arc<SpeechHandle>) -> RequestId {
+        struct Answering(Arc<SpeechHandle>);
+        impl Drop for Answering {
+            fn drop(&mut self) {
+                self.0.answered(false);
+            }
+        }
+        let answering = Answering(Arc::clone(speech));
+        self.insert(Box::new(move |answer| {
+            answering.0.answered(matches!(answer, Answer::Speech));
+        }))
+    }
+
+    fn insert(&self, settle: Settle) -> RequestId {
         let mut table = self.lock();
         let call = RequestId(table.next);
         table.next += 1;
         if !table.closed {
-            let settle = move |answer| {
-                if let Some(value) = pick(answer) {
-                    let _ = tx.send(value);
-                }
-            };
-            table.open.insert(call, Box::new(settle));
+            table.open.insert(call, settle);
         }
-        (call, rx)
+        call
     }
+
 
     /// A late or unknown call's answer is dropped.
     pub fn settle(&self, call: RequestId, answer: Answer) {

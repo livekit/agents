@@ -1,8 +1,7 @@
 //! The host event stream: what the driver hands its host, in order, and each item's wire record.
 
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::commands::{Command, HookId};
-use crate::agent_session::driver::Tx;
+use crate::agent_session::commands::HookId;
 use crate::events::SessionEvent;
 use crate::filler_scheduler::FillerId;
 use lk_agents_abi::voice::events::HostWire;
@@ -108,10 +107,10 @@ pub enum HostEvent {
 }
 
 impl HostEvent {
-    /// `anchor` turns monotonic stamps into epoch seconds; `api` rides with each speech handle.
-    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, api: &Tx<Command>) -> HostWire {
+    /// `anchor` turns monotonic stamps into epoch seconds.
+    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor) -> HostWire {
         match self {
-            HostEvent::Session(ev) => ev.wire(anchor, api),
+            HostEvent::Session(ev) => ev.wire(anchor),
             HostEvent::Room(ev) => match ev {
                 crate::room_io::RoomIoEvent::ParticipantLinked(e) => {
                     HostWire::ParticipantLinked(e.clone())
@@ -198,9 +197,8 @@ impl HookCall {
 }
 
 impl SessionEvent {
-    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, api: &Tx<Command>) -> HostWire {
+    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor) -> HostWire {
         use crate::events::{RunFailure, RunOutcome};
-        use crate::speech_handle::HostSpeech;
         use lk_agents_abi::voice::events as w;
         let speech_id = |id: SpeechId| id.to_string();
         // `created_at` is the host's stamp (`#[binding(skip)]`): inert here.
@@ -222,7 +220,7 @@ impl SessionEvent {
                 HostWire::SpeechCreated(w::SpeechCreated {
                     user_initiated: *user_initiated,
                     source: kind.as_source_str().to_owned(),
-                    speech_handle: HostSpeech::object(speech, api),
+                    speech_handle: speech.object(),
                     created_at: host_stamp,
                 })
             }
@@ -339,7 +337,7 @@ impl SessionEvent {
                     outcome: outcome.as_str().to_owned(),
                     final_output,
                     error,
-                    speech_handle: speech.as_ref().map(|h| HostSpeech::object(h, api)),
+                    speech_handle: speech.as_ref().map(crate::speech_handle::SpeechHandle::object),
                 })
             }
             SessionEvent::SpeechDone { speech, outcome } => {

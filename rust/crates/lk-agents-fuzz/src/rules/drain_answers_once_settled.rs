@@ -9,7 +9,7 @@
 //! such step behind it is an call the driver never decided.
 use lk_agents_voice::{
     agent_activity::scheduling::{SpeechId, SpeechKind},
-    agent_session::{HookId, HookKind},
+    agent_session::{HookId, HookKind, Tx},
     events::SessionEvent,
     speech_handle::SpeechHandle,
     trace::{HandoffStep, HookEnd, Step},
@@ -170,7 +170,7 @@ fn answered_without_step() -> Recording {
 
 /// A speech announced and never announced done, yet the drain says the frame is quiet.
 fn answered_while_speaking() -> Recording {
-    let handle = SpeechHandle::new(SpeechId(7), true);
+    let handle = SpeechHandle::new(SpeechId(7), true, Tx::disconnected());
     let announced = Step::Emitted(SessionEvent::SpeechCreated {
         speech: std::sync::Arc::new(handle),
         kind: SpeechKind::Say,

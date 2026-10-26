@@ -235,25 +235,22 @@ async fn a_drain_during_the_close_is_answered_by_the_closes_drain() {
     api.close(CloseReason::UserInitiated, false, None).await;
 }
 
-/// A `say(audio=)` from `origin`, its frames held by the returned sender, and its answer.
+/// A `say(audio=)` from `origin`, its frames held by the returned sender, and its handle.
 fn say_from(
     api: &SessionApi,
     origin: Origin,
-) -> (
-    tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>,
-    tokio::sync::oneshot::Receiver<Arc<SpeechHandle>>,
-) {
+) -> (tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>, Arc<SpeechHandle>) {
     let (words, rx) = tokio::sync::mpsc::channel(4);
-    let (id, answer) = api.call(Answer::speech).expect("the loop runs");
+    let (handle, call) = api.speech_call(None).expect("the loop runs");
     let text = SayText::Audio { text: "Hello there.".into(), rx };
     let say = SpeechCommand::Say {
         text,
         allow_interruptions: None,
         add_to_chat_ctx: true,
-        call: Some(crate::agent_session::SpeechCall { id, host: Default::default() }),
+        call: Some(call),
     };
     api.send_from(origin, say).expect("the loop runs");
-    (words, answer)
+    (words, handle)
 }
 
 /// A host handoff whose drain waits on a speech still being said: the window a switch holds the
@@ -301,17 +298,14 @@ fn rejected(
 async fn a_host_say_during_a_handoff_is_spoken_by_the_arriving_agent_before_its_on_enter() {
     let (api, mut exits) = session_holding_exits().await;
     let (words, swap) = handoff_draining(&api, &mut exits).await;
-    let (_held, mut answer) = say_from(&api, Origin::Host);
+    let (_held, handle) = say_from(&api, Origin::Host);
     settle().await;
-    assert!(
-        matches!(answer.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
-        "the say was created on the leaving agent: {:#?}",
-        api.steps()
-    );
+    assert!(handle.created().is_none(), "created on the leaving agent: {:#?}", api.steps());
 
     drop(words);
     assert_eq!(swap.await.expect("answered"), Ok(()), "the handoff lands");
-    let speech = answer.await.expect("answered at the swap").id();
+    handle.wait_until_created().await.expect("created at the swap");
+    let speech = handle.id();
     settle().await;
     assert_eq!(rejected(&api, speech), None, "{:#?}", api.steps());
     let updated = position(&api, |s| {
@@ -341,8 +335,8 @@ async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
     let (api, mut exits) = session_holding_exits().await;
     let (_words, _swap) = handoff_draining(&api, &mut exits).await;
     for origin in [Origin::Tool { call_id: "call_1".into() }, Origin::Hook] {
-        let (_held, answer) = say_from(&api, origin.clone());
-        let handle = answer.await.expect("answered at once");
+        let (_held, handle) = say_from(&api, origin.clone());
+        handle.wait_until_created().await.expect("created at once");
         assert_eq!(
             rejected(&api, handle.id()),
             Some(crate::agent_activity::scheduling::Rejected::Draining),
@@ -360,21 +354,15 @@ async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
 async fn a_held_say_interrupted_before_the_swap_does_not_play() {
     let (api, mut exits) = session_holding_exits().await;
     let (words, swap) = handoff_draining(&api, &mut exits).await;
-    let (_held, answer) = say_from(&api, Origin::Host);
-    let host = crate::speech_handle::HostSpeech::pending(
-        api.api().expect("runs"),
-        answer,
-        None,
-        Default::default(),
-    );
+    let (_held, handle) = say_from(&api, Origin::Host);
     let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
-    host.interrupt(false, spawner).expect("an interruptible say");
-    assert!(host.interrupted(), "the interrupt is the handle's at once");
+    handle.interrupt_for_host(false, spawner).expect("an interruptible say");
+    assert!(handle.interrupted_for_host(), "the interrupt is the handle's at once");
 
     drop(words);
     assert_eq!(swap.await.expect("answered"), Ok(()), "the handoff lands");
     settle().await;
-    let handle = host.peek().expect("created at the swap");
+    assert!(handle.created().is_some(), "created at the swap");
     assert!(handle.interrupted() && handle.done(), "{:#?}", api.steps());
     let played = position(
         &api,
@@ -391,13 +379,14 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
     for drain in [true, false] {
         let (api, mut exits) = session_holding_exits().await;
         let (words, swap) = handoff_draining(&api, &mut exits).await;
-        let (_held, answer) = say_from(&api, Origin::Host);
+        let (_held, handle) = say_from(&api, Origin::Host);
         settle().await;
         let close = Close { drain, ..Close::default() };
         api.send(Command::Close(close)).expect("the loop runs");
         settle().await;
         drop(words);
-        let handle = answer.await.expect("answered, not hung");
+        handle.wait_until_created().await.expect("created, not hung");
+
         assert_eq!(swap.await.expect("answered"), Err(HandoffRefused::Closing), "drain={drain}");
         settle().await;
         assert!(rejected(&api, handle.id()).is_some(), "drain={drain}: {:#?}", api.steps());

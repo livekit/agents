@@ -175,6 +175,8 @@ impl<T> Tx<T> {
     }
 }
 
+
+
 pub(super) fn host_input(command: Command) -> Event {
     Event::Input(Input::Host(Sent { origin: Origin::Host, command }))
 }
@@ -328,12 +330,27 @@ impl Driver {
         }
     }
 
-    /// The speech made for a host's `say()` / `generate_reply()` takes the host's slot, in the
-    /// cycle that announces it, then answers the call.
-    pub(crate) fn answer_speech(&self, call: Option<SpeechCall>, speech: Arc<SpeechHandle>) {
-        if let Some(SpeechCall { id, host }) = call {
-            speech.adopt_host(host);
-            self.answer(Some(id), Answer::Speech(speech));
+    /// The handle of a speech the loop creates now: the one the host already holds for its
+    /// `say()` / `generate_reply()`, else a new one.
+    pub(crate) fn new_speech(
+        &self,
+        host: Option<&Arc<SpeechHandle>>,
+        id: SpeechId,
+        allow_interruptions: bool,
+    ) -> Arc<SpeechHandle> {
+        match host {
+            Some(handle) => {
+                handle.create(id, allow_interruptions);
+                Arc::clone(handle)
+            }
+            None => Arc::new(SpeechHandle::new(id, allow_interruptions, self.shared.api.clone())),
+        }
+    }
+
+    /// The host's call is answered once its speech exists, in the cycle that announces it.
+    pub(crate) fn answer_speech(&self, call: Option<SpeechCall>) {
+        if let Some(call) = call {
+            self.answer(Some(call.id), Answer::Speech);
         }
     }
 
@@ -465,13 +482,8 @@ impl Driver {
     /// **Already done**, not dropped: an unattached handle would answer `done() == false` forever.
     pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<SpeechCall>) {
         let id = self.session.ids.next_speech_id();
-        let handle = Arc::new(SpeechHandle::new(
-            id,
-            self.session.config.effective.turn.interruption.enabled(),
-        ));
-        if let Some(call) = &call {
-            handle.adopt_host(call.host.clone());
-        }
+        let allow_interruptions = self.session.config.effective.turn.interruption.enabled();
+        let handle = self.new_speech(call.as_ref().map(|c| &c.speech), id, allow_interruptions);
         handle.mark_done(Some(lk_agents_abi::errors::ProviderError::Local(
             lk_agents_abi::errors::ApiError::new(format!(
                 "the session loop ended before {what}() ran"
@@ -496,8 +508,9 @@ impl Driver {
         let done =
             SessionEvent::SpeechDone { speech: id, outcome: crate::events::SpeechOutcome::Failed };
         self.emit_now(done);
-        self.answer_speech(call, handle);
+        self.answer_speech(call);
     }
+
 
     pub(super) fn on_rtc(&mut self, now: Ts, ev: RoomEvent, out: &mut Out) {
         out.trace(RoomStep::Event(crate::trace::RoomEventKind::of(&ev)));

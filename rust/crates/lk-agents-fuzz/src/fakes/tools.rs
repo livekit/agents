@@ -9,7 +9,7 @@ use lk_agents_abi::{
     errors::HostError,
     llm::tool_executor::{RawToolAnswer, ToolAnswerKind, ToolRaiseKind},
 };
-use lk_agents_voice::speech_handle::HostSpeech;
+use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{HostToolRunner, ToolAnswer, ToolRaise};
 use tokio::sync::oneshot;
 
@@ -48,10 +48,9 @@ impl HostToolRunner for FakeTools {
     ) -> Result<RawToolAnswer, HostError> {
         let speech = speech
             .0
-            .downcast_ref::<HostSpeech>()
-            .and_then(HostSpeech::peek)
+            .downcast_ref::<SpeechHandle>()
+            .and_then(SpeechHandle::created)
             .expect("a tool runs in a created speech")
-            .id()
             .0;
         Ok(raw(self.answer(call, speech).await))
     }

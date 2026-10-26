@@ -66,7 +66,7 @@ use lk_agents_voice::{
     runtime::Runtime,
     filler_scheduler::FillerId,
     generation::Instructions,
-    speech_handle::{HostSpeech, SpeechHandle},
+    speech_handle::SpeechHandle,
     tool_executor::{HostToolRunner, ToolAnswer as Answered},
     trace::{
         CoreStep, DetectorStep, GenerationStep, HandoffStep, PlayoutStep, SpeechStep, Step,

@@ -12,7 +12,6 @@ use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::generation::ReplySource;
 use crate::generation::pipeline_reply::fatal;
-use crate::speech_handle::SpeechHandle;
 use crate::trace::{InterruptCause, InterruptStep, RealtimeStep};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::realtime::{
@@ -894,6 +893,7 @@ impl Driver {
         let spec = SpeechSpec {
             add_to_chat_ctx,
             host_asked: asked.is_some() || turn,
+            host_handle: asked.as_ref().and_then(Option::as_ref).map(|c| Arc::clone(&c.speech)),
             ..SpeechSpec::new(SpeechKind::Realtime, source, allow)
         };
         let handle = self.start_speech(now, spec, out);
@@ -901,7 +901,7 @@ impl Driver {
         if let Some(call) = asked {
             // Asked for by the host, so an open run owns it.
             self.run_own(crate::run_result::Owned::Speech(handle.id()), out);
-            self.answer_speech(call, Arc::clone(&handle));
+            self.answer_speech(call);
         }
         handle.id()
     }
@@ -1044,7 +1044,7 @@ impl Driver {
         }
         let id = self.session.ids.next_speech_id();
         let allow_interruptions = self.session.config.effective.turn.interruption.enabled();
-        let handle = Arc::new(SpeechHandle::new(id, allow_interruptions));
+        let handle = self.new_speech(call.as_ref().map(|c| &c.speech), id, allow_interruptions);
         match how {
             Settled::Failed(err) | Settled::TimedOut(err) => {
                 handle.mark_done(Some(fatal(err.message)))
@@ -1059,8 +1059,9 @@ impl Driver {
         let speech = Arc::clone(&handle);
         out.machine().emit(SessionEvent::SpeechCreated { speech, kind, user_initiated: true });
         out.machine().emit(SessionEvent::SpeechDone { speech: id, outcome: handle.outcome() });
-        self.answer_speech(call, handle);
+        self.answer_speech(call);
     }
+
     /// The server's turn detection was fixed at the open. After a re-resolution the mode is
     /// refined through the open's table and written back; a change that takes (local to local)
     /// or is refused (the server keeps the turn) is said once, never flipped silently.

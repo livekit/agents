@@ -315,7 +315,7 @@ impl SessionOptions {
 
 #[napi(js_name = "SpeechHandle")]
 pub struct SpeechHandle {
-    pub(crate) inner: std::sync::Arc<lk_agents_voice::speech_handle::HostSpeech>,
+    pub(crate) inner: std::sync::Arc<lk_agents_voice::speech_handle::SpeechHandle>,
 }
 
 #[napi]
@@ -324,12 +324,12 @@ impl SpeechHandle {
     pub fn new(speech_id: Option<String>, allow_interruptions: Option<bool>) -> Self {
         let speech_id = speech_id.unwrap_or(String::new());
         let allow_interruptions = allow_interruptions.unwrap_or(true);
-        SpeechHandle { inner: std::sync::Arc::new(lk_agents_voice::speech_handle::HostSpeech::detached(speech_id, allow_interruptions)) }
+        SpeechHandle { inner: std::sync::Arc::new(lk_agents_voice::speech_handle::SpeechHandle::detached(speech_id, allow_interruptions)) }
     }
 
     #[napi(getter, js_name = "id")]
     pub fn id(&self) -> String {
-        self.inner.id()
+        self.inner.id_for_host()
     }
 
     #[napi(getter, js_name = "numSteps")]
@@ -344,7 +344,7 @@ impl SpeechHandle {
 
     #[napi(getter, js_name = "interrupted")]
     pub fn interrupted(&self) -> bool {
-        self.inner.interrupted()
+        self.inner.interrupted_for_host()
     }
 
     #[napi(js_name = "done")]
@@ -360,7 +360,7 @@ impl SpeechHandle {
     #[napi(setter, js_name = "allowInterruptions")]
     pub fn set_allow_interruptions(&self, env: Env, value: bool) -> napi::Result<()> {
         crate::host_error::run(&env, || {
-            self.inner.set_allow_interruptions(value).map_err(crate::generated::errors::speech_refused_to_node)?;
+            self.inner.set_allow_interruptions_for_host(value).map_err(crate::generated::errors::speech_refused_to_node)?;
             Ok(())
         })
     }
@@ -368,7 +368,7 @@ impl SpeechHandle {
     #[napi(js_name = "holdInterruptions")]
     pub fn hold_interruptions(&self, env: Env) -> napi::Result<()> {
         crate::host_error::run(&env, || {
-            self.inner.hold_interruptions().map_err(crate::generated::errors::speech_refused_to_node)?;
+            self.inner.hold_interruptions_for_host().map_err(crate::generated::errors::speech_refused_to_node)?;
             Ok(())
         })
     }
@@ -376,7 +376,7 @@ impl SpeechHandle {
     #[napi(js_name = "releaseInterruptions")]
     pub fn release_interruptions(&self, env: Env) -> napi::Result<()> {
         crate::host_error::run(&env, || {
-            self.inner.release_interruptions().map_err(crate::generated::errors::speech_refused_to_node)?;
+            self.inner.release_interruptions_for_host().map_err(crate::generated::errors::speech_refused_to_node)?;
             Ok(())
         })
     }
@@ -384,7 +384,7 @@ impl SpeechHandle {
     #[napi(js_name = "waitForPlayout", ts_return_type = "Promise<void>")]
     pub fn wait_for_playout<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
         let inner = std::sync::Arc::clone(&self.inner);
-        env.spawn_future_with_callback(async move { Ok(inner.wait_for_playout().await.map_err(crate::generated::errors::speech_refused_to_node)) }, |env, out| match out {
+        env.spawn_future_with_callback(async move { Ok(inner.wait_for_playout_for_host().await.map_err(crate::generated::errors::speech_refused_to_node)) }, |env, out| match out {
             Ok(out) => Ok(()),
             Err(e) => Err(e.into_napi(env)),
         })
@@ -397,7 +397,7 @@ impl SpeechHandle {
             Ok((step,))
         })?;
         let inner = std::sync::Arc::clone(&self.inner);
-        env.spawn_future_with_callback(async move { Ok(inner.wait_for_generation(step).await.map_err(crate::generated::errors::speech_refused_to_node)) }, |env, out| match out {
+        env.spawn_future_with_callback(async move { Ok(inner.wait_for_generation_for_host(step).await.map_err(crate::generated::errors::speech_refused_to_node)) }, |env, out| match out {
             Ok(out) => Ok(()),
             Err(e) => Err(e.into_napi(env)),
         })
@@ -406,7 +406,7 @@ impl SpeechHandle {
     #[napi(js_name = "waitForInterrupted", ts_return_type = "Promise<void>")]
     pub fn wait_for_interrupted<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
         let inner = std::sync::Arc::clone(&self.inner);
-        env.spawn_future_with_callback(async move { Ok(inner.wait_for_interrupted().await.map_err(crate::generated::errors::speech_refused_to_node)) }, |env, out| match out {
+        env.spawn_future_with_callback(async move { Ok(inner.wait_for_interrupted_for_host().await.map_err(crate::generated::errors::speech_refused_to_node)) }, |env, out| match out {
             Ok(out) => Ok(()),
             Err(e) => Err(e.into_napi(env)),
         })

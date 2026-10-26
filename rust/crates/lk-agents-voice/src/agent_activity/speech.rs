@@ -64,6 +64,8 @@ pub(crate) struct SpeechSpec {
     /// The decided turn this speech replies to: its `EOUMetrics` go out between the speech's
     /// announcement and the user item, as the reference's `on_end_of_turn` emits them.
     pub(crate) end_of_turn: Option<EndOfTurnInfo>,
+    /// The handle a host's `say()` / `generate_reply()` answered: the speech is created over it.
+    pub(crate) host_handle: Option<Arc<SpeechHandle>>,
 }
 
 impl SpeechSpec {
@@ -84,6 +86,7 @@ impl SpeechSpec {
             on_enter: false,
             host_asked: false,
             end_of_turn: None,
+            host_handle: None,
         }
     }
 }
@@ -213,10 +216,11 @@ impl Driver {
                     return;
                 }
                 let interruptible = self.session.config.effective.turn.interruption.enabled();
-                let h = self.start_speech(
+                self.start_speech(
                     now,
                     SpeechSpec {
                         add_to_chat_ctx,
+                        host_handle: call.as_ref().map(|c| Arc::clone(&c.speech)),
                         ..SpeechSpec::new(
                             SpeechKind::Say,
                             match text {
@@ -233,7 +237,8 @@ impl Driver {
                     },
                     out,
                 );
-                self.answer_speech(call, h);
+                self.answer_speech(call);
+
             }
             SpeechCommand::GenerateReply {
                 user_input,
@@ -245,7 +250,7 @@ impl Driver {
                 on_enter,
                 call,
             } => {
-                let h = self.generate_reply_speech(
+                self.generate_reply_speech(
                     now,
                     user_input,
                     instructions,
@@ -254,9 +259,10 @@ impl Driver {
                     chat_ctx,
                     toolset,
                     on_enter,
+                    call.as_ref().map(|c| Arc::clone(&c.speech)),
                     out,
                 );
-                self.answer_speech(call, h);
+                self.answer_speech(call);
             }
             // accepted output from a speech's tool: recorded for the run that ends on it.
             SpeechCommand::SetRunOutput { speech, output } => {
@@ -375,6 +381,7 @@ impl Driver {
         chat_ctx: Option<ChatContext>,
         toolset: Option<Arc<Toolset>>,
         on_enter: bool,
+        host_handle: Option<Arc<SpeechHandle>>,
         out: &mut Out,
     ) -> Arc<SpeechHandle> {
         let wall = self.step.wall();
@@ -394,6 +401,7 @@ impl Driver {
                 tool_choice,
                 chat_ctx,
                 toolset,
+                host_handle,
                 ..SpeechSpec::new(
                     SpeechKind::GenerateReply,
                     ReplySource::Llm,
@@ -622,7 +630,8 @@ impl Driver {
 
         let id = self.session.ids.next_speech_id();
 
-        let handle = Arc::new(SpeechHandle::new(id, spec.allow_interruptions));
+        let handle = self.new_speech(spec.host_handle.as_ref(), id, spec.allow_interruptions);
+
         self.activity.note_speech_agent(id);
 
         let message_id = self.session.ids.mint("item");

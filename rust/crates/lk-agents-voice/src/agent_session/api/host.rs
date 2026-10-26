@@ -12,7 +12,7 @@ use crate::agent_activity::DriverConfig;
 use crate::agent_session::DriverBuilder;
 use crate::agent_session::commands::{
     ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId, HookId, HookOutcome,
-    HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCall, SpeechCommand,
+    HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand,
     ToolUpdate, TurnCommand,
 };
 use crate::agent_session::nodes::Nodes;
@@ -20,6 +20,7 @@ use crate::agent_session::time::Timebase;
 use crate::agent_session::{Answer, CommitSuperseded};
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
+use crate::speech_handle::SpeechHandle;
 use crate::trace::Step;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::HostWire;
@@ -380,10 +381,9 @@ impl SessionApi {
         // The drain: one event per call, in driver order.
         let opening = self.open(capture_run, move |mut runner: SessionRunner| {
             Box::pin(async move {
-                let api = runner.api().clone();
                 while let Some(ev) = runner.next_host_event().await {
                     if let Some(events) = &events {
-                        let mut wire = ev.wire(anchor, &api);
+                        let mut wire = ev.wire(anchor);
                         agents.resolve(&mut wire);
                         events.event(&wire);
                     }
@@ -594,18 +594,18 @@ impl SessionApi {
     #[host(method(kw_only = "value"))]
     pub fn set_run_output(
         &self,
-        speech: &crate::speech_handle::HostSpeech,
+        speech: &SpeechHandle,
         value: Option<lk_agents_abi::HostRef>,
         error: Option<lk_agents_abi::HostRef>,
     ) -> Result<(), SessionRefused> {
         // A handle the loop has not created yet has no speech: the caller is outside any speech.
-        let Some(handle) = speech.peek() else { return Ok(()) };
+        let Some(speech) = speech.created() else { return Ok(()) };
         let output = match (value, error) {
             (_, Some(err)) => crate::run_result::RunOutput::Error(err),
             (Some(v), None) => crate::run_result::RunOutput::Value(v),
             (None, None) => return Ok(()),
         };
-        self.send(SpeechCommand::SetRunOutput { speech: handle.id(), output })
+        self.send(SpeechCommand::SetRunOutput { speech, output })
     }
 
     /// `AgentSession.generate_reply()`: reply now, with no end of turn behind it.
@@ -628,19 +628,12 @@ impl SessionApi {
         // Decided by the host: the reference tests a `ContextVar` plus agent/session identity.
         on_enter: bool,
         origin: Option<&str>,
-    ) -> Result<crate::speech_handle::HostSpeech, CommandRefused> {
+    ) -> Result<Arc<SpeechHandle>, CommandRefused> {
         let origin = origin_of(origin)?;
         // An empty toolset would tell the model about no tool at all; `None` keeps the agent's.
         let toolset =
             tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, tool_runner)));
-        let (id, rx) = self.call(Answer::speech)?;
-        let host = crate::speech_handle::HostSlot::default();
-        let speech = crate::speech_handle::HostSpeech::pending(
-            self.api()?,
-            rx,
-            allow_interruptions,
-            host.clone(),
-        );
+        let (speech, call) = self.speech_call(allow_interruptions)?;
         self.send_from(
             origin,
             SpeechCommand::GenerateReply {
@@ -651,7 +644,7 @@ impl SessionApi {
                 chat_ctx: chat_ctx.map(lk_agents_abi::ChatContext::new),
                 toolset,
                 on_enter,
-                call: Some(SpeechCall { id, host }),
+                call: Some(call),
             },
         )?;
         Ok(speech)
@@ -1107,7 +1100,7 @@ impl SessionApi {
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<&str>,
-    ) -> Result<crate::speech_handle::HostSpeech, CommandRefused> {
+    ) -> Result<Arc<SpeechHandle>, CommandRefused> {
         self.speak(SayText::Text(text), allow_interruptions, add_to_chat_ctx, origin)
     }
 
@@ -1119,7 +1112,7 @@ impl SessionApi {
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<&str>,
-    ) -> Result<(crate::speech_handle::HostSpeech, TextPusher), CommandRefused> {
+    ) -> Result<(Arc<SpeechHandle>, TextPusher), CommandRefused> {
         // Backpressure against a runaway producer, not a buffer.
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let speech =
@@ -1136,7 +1129,7 @@ impl SessionApi {
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<&str>,
-    ) -> Result<(crate::speech_handle::HostSpeech, FramePusher), CommandRefused> {
+    ) -> Result<(Arc<SpeechHandle>, FramePusher), CommandRefused> {
         // Deeper than the text channel: at 20 ms a frame, 64 would be 1.3 s of audio.
         let (tx, rx) = tokio::sync::mpsc::channel(512);
         let speech =

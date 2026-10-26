@@ -106,13 +106,10 @@ impl Pending {
 
     /// `await handle.wait_until_created()`: the speech, or the handle's refusal when the loop
     /// dropped it uncreated.
-    fn speech(speech: HostSpeech) -> Self {
+    fn speech(speech: Arc<SpeechHandle>) -> Self {
         Pending(Box::pin(async move {
             match speech.wait_until_created().await {
-                Ok(()) => match speech.peek() {
-                    Some(h) => Settled { answer: Answer::Speech(h.id().0), handle: Some(h) },
-                    None => Settled::of(Answer::Lost),
-                },
+                Ok(()) => Settled { answer: Answer::Speech(speech.id().0), handle: Some(speech) },
                 Err(_) => Settled::of(Answer::Lost),
             }
         }))
@@ -236,9 +233,10 @@ impl Run {
     }
 
     /// The speech handle the host holds for a speech the run saw created.
-    fn host_speech(&self, reference: Ref<crate::input::Speech>) -> Option<HostSpeech> {
+    fn host_speech(&self, reference: Ref<crate::input::Speech>) -> Option<Arc<SpeechHandle>> {
         let handle = self.handles.get(&self.speech_id(reference)?.0)?.clone();
-        Some(HostSpeech::from_core(handle, self.api.api().ok()?))
+        self.api.api().ok()?;
+        Some(handle)
     }
 
     /// Whether the session's loop is still there to take a call that returns nothing.
@@ -304,10 +302,12 @@ impl Run {
                 .is_ok(),
             Input::InterruptSpeech { speech, force } => self
                 .host_speech(*speech)
-                .is_some_and(|speech| speech.interrupt(*force, self.tasks.clone()).is_ok()),
+                .is_some_and(|speech| {
+                    speech.interrupt_for_host(*force, self.tasks.clone()).is_ok()
+                }),
             Input::SetAllowInterruptions { speech, allow } => self
                 .host_speech(*speech)
-                .is_some_and(|speech| speech.set_allow_interruptions(*allow).is_ok()),
+                .is_some_and(|speech| speech.set_allow_interruptions_for_host(*allow).is_ok()),
             Input::CommitUserTurn { transcript_timeout, stt_flush, skip_reply } => api
                 .commit_user_turn(secs(*transcript_timeout), secs(*stt_flush), *skip_reply)
                 .map(|reply| {
@@ -1013,19 +1013,23 @@ impl Run {
         let Some(resource) = self.record.resource(Kind::Speech, nth) else { return false };
         let Id::Speech(speech) = resource.id() else { return false };
         let Some(handle) = self.handles.get(&speech.0).cloned() else { return false };
-        let Some(api) = self.api.api().ok() else { return false };
-        let host = Arc::new(HostSpeech::from_core(handle, api));
-        // `await handle.wait_for_generation()`, `await handle`, then what a program reads off it.
-        let waited = host.clone();
+        if self.api.api().is_err() {
+            return false;
+        }
+        // `await handle.wait_for_generation()`, `await handle`, then what a program reads off it: a
+        // speech the run saw created, so its waits are the speech's own.
+        let waited = handle.clone();
         let done = self.drive(Some(self.budget()), async move {
-            let _ = waited.wait_for_generation(None).await;
+            let _ = waited.wait_for_latest_generation().await;
             waited.wait_for_playout().await
         });
         if done.await.is_none() {
             return false;
         }
-        let _ = (host.id(), host.num_steps(), host.chat_items(), host.scheduled());
-        let _ = (host.interrupted(), host.allow_interruptions(), host.exception());
+        let _ = (handle.id_for_host(), handle.num_steps(), handle.chat_items(), handle.scheduled());
+        let _ = (handle.interrupted_for_host(), handle.allow_interruptions());
+        let _ = handle.exception_for_host();
+
         true
     }
 
