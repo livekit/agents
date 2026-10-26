@@ -439,13 +439,14 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
-        # input_ended is set once the input channel is drained; flush_deadline once the
-        # server acknowledges end_audio
+        # input_ended is set once the input channel is drained, end_audio_sent_at once
+        # end_audio is on the wire, flush_deadline once the server acknowledges it
         input_ended = False
+        end_audio_sent_at: float | None = None
         flush_deadline: float | None = None
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal input_ended
+            nonlocal input_ended, end_audio_sent_at
             samples_per_buffer = 512
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -473,6 +474,7 @@ class SpeechStream(stt.SpeechStream):
                 for frame in audio_bstream.flush():
                     await ws.send_bytes(frame.data.tobytes())
                 await ws.send_str(SpeechStream._END_AUDIO_MSG)
+                end_audio_sent_at = asyncio.get_running_loop().time()
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws or self._session.closed:
                     return
@@ -495,7 +497,13 @@ class SpeechStream(stt.SpeechStream):
                 except asyncio.TimeoutError:
                     # a runtime without end_audio support never acknowledges it, so
                     # stop waiting; once acknowledged, wait until flush_deadline
-                    if closing_ws or (input_ended and flush_deadline is None):
+                    if closing_ws:
+                        break
+                    if (
+                        end_audio_sent_at is not None
+                        and flush_deadline is None
+                        and loop.time() - end_audio_sent_at >= 5.0
+                    ):
                         break
                     continue
 
