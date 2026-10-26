@@ -271,7 +271,7 @@ def match_mood(label: str, fallback: str | None = None) -> str | None: ...
 def chat_message_raw_text_content(parts: list[str]) -> str | None: ...
 def chat_message_text_content(parts: list[str], assistant: bool) -> str | None: ...
 def chat_ctx_copy_plan(
-    facts: list[tuple[str, str, str | None, int, str | None, float]],
+    facts: list[tuple[str, str, str | None, int, str | None, float, str | None]],
     *,
     exclude_function_call: bool = False,
     exclude_instructions: bool = False,
@@ -281,12 +281,12 @@ def chat_ctx_copy_plan(
     tools: list[str] | None = None,
 ) -> list[int]: ...
 def chat_ctx_truncate_plan(
-    facts: list[tuple[str, str, str | None, int, str | None, float]],
+    facts: list[tuple[str, str, str | None, int, str | None, float, str | None]],
     max_items: int,
 ) -> list[int] | None: ...
 def chat_ctx_merge_plan(
-    mine: list[tuple[str, str, str | None, int, str | None, float]],
-    theirs: list[tuple[str, str, str | None, int, str | None, float]],
+    mine: list[tuple[str, str, str | None, int, str | None, float, str | None]],
+    theirs: list[tuple[str, str, str | None, int, str | None, float, str | None]],
     *,
     exclude_function_call: bool = False,
     exclude_instructions: bool = False,

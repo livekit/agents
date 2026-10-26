@@ -935,6 +935,8 @@ pub struct ItemFacts<'a> {
     /// `len(item.content)`: the reference tests the list, so one empty string survives.
     pub content_len: usize,
     pub tool_name: Option<&'a str>,
+    /// A function call's or output's `call_id`: an output with no name pairs with its call by it.
+    pub call_id: Option<&'a str>,
     pub id: &'a str,
     pub created_at: SystemTime,
 }
@@ -946,6 +948,11 @@ impl<'a> ItemFacts<'a> {
             role: item.as_message().map(|m| m.role),
             content_len: item.as_message().map_or(0, |m| m.content.len()),
             tool_name: item.tool_name(),
+            call_id: match item {
+                ChatItem::FunctionCall(f) => Some(&f.call_id),
+                ChatItem::FunctionCallOutput(f) => Some(&f.call_id),
+                _ => None,
+            },
             id: item.id(),
             created_at: item.created_at(),
         }
@@ -960,7 +967,8 @@ impl<'a> ItemFacts<'a> {
     }
 }
 
-pub fn copy_excludes_facts(f: &ItemFacts<'_>, opts: &CopyOptions) -> bool {
+/// `valid_call_ids`: the calls `opts.tools` keeps, which an output with no name is paired by.
+pub fn copy_excludes_facts(f: &ItemFacts<'_>, opts: &CopyOptions, valid_call_ids: &HashSet<&str>) -> bool {
     let is_message = f.kind == ItemKind::Message;
 
     if opts.exclude_function_call && f.is_function_call_pair() {
@@ -980,11 +988,19 @@ pub fn copy_excludes_facts(f: &ItemFacts<'_>, opts: &CopyOptions) -> bool {
     if opts.exclude_config_update && f.kind == ItemKind::AgentConfigUpdate {
         return true;
     }
-    if let Some(valid) = &opts.tools
-        && let Some(name) = f.tool_name
-        && !valid.iter().any(|t| t == name)
-    {
-        return true;
+    if let Some(valid) = &opts.tools {
+        let named = |name: &str| valid.iter().any(|t| t == name);
+        match f.kind {
+            ItemKind::FunctionCall => return !f.tool_name.is_some_and(named),
+            // `FunctionCallOutput.name` is optional: one with none goes with its call
+            ItemKind::FunctionCallOutput => {
+                return match f.tool_name.filter(|n| !n.is_empty()) {
+                    Some(name) => !named(name),
+                    None => !f.call_id.is_some_and(|c| valid_call_ids.contains(c)),
+                };
+            }
+            _ => {}
+        }
     }
     false
 }
@@ -999,19 +1015,32 @@ fn merge_excludes_facts(f: &ItemFacts<'_>, opts: &MergeOptions) -> bool {
 // ids, so duplicate ids pick the right object.
 
 pub fn copy_plan(facts: &[ItemFacts<'_>], opts: &CopyOptions) -> Vec<usize> {
-    (0..facts.len()).filter(|&i| !copy_excludes_facts(&facts[i], opts)).collect()
+    let valid_call_ids: HashSet<&str> = match &opts.tools {
+        Some(valid) => facts
+            .iter()
+            .filter(|f| f.kind == ItemKind::FunctionCall && f.tool_name.is_some_and(|n| valid.iter().any(|t| t == n)))
+            .filter_map(|f| f.call_id)
+            .collect(),
+        None => HashSet::new(),
+    };
+    (0..facts.len()).filter(|&i| !copy_excludes_facts(&facts[i], opts, &valid_call_ids)).collect()
 }
 
 /// `None` when under the limit. Leading function calls are dropped; the first instruction message
-/// comes back unless the window holds its id (#4845). Sliced like `self._items[-max_items:]`: `0`
-/// keeps everything, a negative `n` drops the first `|n|`.
+/// comes back unless the window holds its id (#4845). Sliced like `self._items[-max_items:]`, but a
+/// zero budget keeps no conversational item (only that instruction); a negative `n` drops the
+/// first `|n|` (the host refuses one).
 pub fn truncate_plan(facts: &[ItemFacts<'_>], max_items: i64) -> Option<Vec<usize>> {
     let n = facts.len();
     if (n as i64) <= max_items {
         return None;
     }
     let instructions = facts.iter().position(ItemFacts::is_instruction);
-    let start = if max_items > 0 { n - max_items as usize } else { max_items.unsigned_abs().min(n as u64) as usize };
+    let start = match max_items {
+        0 => n,
+        m if m > 0 => n - m as usize,
+        m => m.unsigned_abs().min(n as u64) as usize,
+    };
     let mut kept: Vec<usize> = (start..n).collect();
     let lead = kept.iter().take_while(|&&i| facts[i].is_function_call_pair()).count();
     kept.drain(..lead);
@@ -1044,18 +1073,19 @@ pub fn merge_plan(
     plan
 }
 
-/// `(type, id, role, len(content), name, created_at)`.
-pub type HostFacts = (String, String, Option<String>, usize, Option<String>, f64);
+/// `(type, id, role, len(content), name, created_at, call_id)`.
+pub type HostFacts = (String, String, Option<String>, usize, Option<String>, f64, Option<String>);
 
 fn host_facts(facts: &[HostFacts]) -> Result<Vec<ItemFacts<'_>>, String> {
     facts
         .iter()
-        .map(|(kind, id, role, content_len, name, created_at)| {
+        .map(|(kind, id, role, content_len, name, created_at, call_id)| {
             Ok(ItemFacts {
                 kind: kind.parse()?,
                 role: role.as_deref().map(str::parse).transpose()?,
                 content_len: *content_len,
                 tool_name: name.as_deref(),
+                call_id: call_id.as_deref(),
                 id,
                 created_at: crate::wall_from_secs(*created_at)
                     .ok_or_else(|| format!("created_at={created_at} is not a usable wall clock"))?,

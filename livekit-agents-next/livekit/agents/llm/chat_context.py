@@ -467,6 +467,23 @@ ChatItem = Annotated[
 ]
 
 
+def _facts(items: list[ChatItem]) -> list[tuple[Any, ...]]:
+    """What the core's plans read of each item: ``(type, id, role, len(content), name,
+    created_at, call_id)``."""
+    return [
+        (
+            item.type,
+            item.id,
+            getattr(item, "role", None),
+            len(item.content) if item.type == "message" else 0,
+            getattr(item, "name", None) if item.type.startswith("function_call") else None,
+            item.created_at,
+            getattr(item, "call_id", None),
+        )
+        for item in items
+    ]
+
+
 class ChatContext:
     def __init__(self, items: NotGivenOr[list[ChatItem]] = NOT_GIVEN):
         self._items: list[ChatItem] = items if is_given(items) else []
@@ -558,8 +575,6 @@ class ChatContext:
         exclude_config_update: bool = False,
         tools: NotGivenOr[Sequence[Tool | Toolset | str]] = NOT_GIVEN,
     ) -> ChatContext:
-        items = []
-
         from .tool_context import FunctionTool, RawFunctionTool, Toolset
 
         def get_tool_names(
@@ -572,55 +587,17 @@ class ChatContext:
                     yield tool.info.name
                 elif isinstance(tool, Toolset):
                     yield from get_tool_names(tool.tools)
-                else:
-                    # TODO(theomonnom): other tools
-                    continue
 
-        valid_tools = set(get_tool_names(tools)) if tools else set()
-        # FunctionCallOutput.name is optional, so an output that has none is paired with its
-        # call by call_id instead
-        valid_call_ids = {
-            item.call_id
-            for item in self.items
-            if item.type == "function_call" and item.name in valid_tools
-        }
-        for item in self.items:
-            if exclude_function_call and item.type in [
-                "function_call",
-                "function_call_output",
-            ]:
-                continue
-
-            if (
-                exclude_instructions
-                and item.type == "message"
-                and item.role in ["system", "developer"]
-            ):
-                continue
-
-            if exclude_empty_message and item.type == "message" and not item.content:
-                continue
-
-            if exclude_handoff and item.type == "agent_handoff":
-                continue
-
-            if exclude_config_update and item.type == "agent_config_update":
-                continue
-
-            if is_given(tools):
-                if item.type == "function_call" and item.name not in valid_tools:
-                    continue
-
-                if item.type == "function_call_output" and (
-                    item.name not in valid_tools
-                    if item.name
-                    else item.call_id not in valid_call_ids
-                ):
-                    continue
-
-            items.append(item)
-
-        return ChatContext(items)
+        plan = _core.chat_ctx_copy_plan(
+            _facts(self.items),
+            exclude_function_call=exclude_function_call,
+            exclude_instructions=exclude_instructions,
+            exclude_empty_message=exclude_empty_message,
+            exclude_handoff=exclude_handoff,
+            exclude_config_update=exclude_config_update,
+            tools=list(get_tool_names(tools)) if is_given(tools) else None,
+        )
+        return ChatContext([self.items[i] for i in plan])
 
     def truncate(self, *, max_items: int) -> ChatContext:
         """Truncate the chat context to the last N items in place.
@@ -632,37 +609,11 @@ class ChatContext:
         A `max_items` of 0 leaves nothing but that instruction: it asks for no conversational
         items, so none are kept. A negative value is a programming error and raises ValueError.
         """
-
         if max_items < 0:
             raise ValueError("max_items must be non-negative")
-
-        if len(self._items) <= max_items:
-            return self
-
-        instructions = next(
-            (
-                item
-                for item in self._items
-                if item.type == "message" and item.role in ("system", "developer")
-            ),
-            None,
-        )
-
-        # `-0` is `0` and `items[0:]` is the whole list, so a zero budget would otherwise
-        # keep every item.
-        new_items = self._items[-max_items:] if max_items else []
-
-        # chat_ctx shouldn't start with function_call or function_call_output
-        while new_items and new_items[0].type in [
-            "function_call",
-            "function_call_output",
-        ]:
-            new_items.pop(0)
-
-        if instructions and not any(item.id == instructions.id for item in new_items):
-            new_items.insert(0, instructions)
-
-        self._items[:] = new_items
+        plan = _core.chat_ctx_truncate_plan(_facts(self._items), max_items)
+        if plan is not None:
+            self._items[:] = [self._items[i] for i in plan]
         return self
 
     def merge(
@@ -674,30 +625,15 @@ class ChatContext:
         exclude_config_update: bool = False,
     ) -> ChatContext:
         """Add messages from `other_chat_ctx` into this one, avoiding duplicates, and keep items sorted by created_at."""
-        existing_ids = {item.id for item in self._items}
-
-        for item in other_chat_ctx.items:
-            if exclude_function_call and item.type in [
-                "function_call",
-                "function_call_output",
-            ]:
-                continue
-
-            if (
-                exclude_instructions
-                and item.type == "message"
-                and item.role in ["system", "developer"]
-            ):
-                continue
-
-            if exclude_config_update and item.type == "agent_config_update":
-                continue
-
-            if item.id not in existing_ids:
-                idx = self.find_insertion_index(created_at=item.created_at)
-                self._items.insert(idx, item)
-                existing_ids.add(item.id)
-
+        plan = _core.chat_ctx_merge_plan(
+            _facts(self._items),
+            _facts(other_chat_ctx.items),
+            exclude_function_call=exclude_function_call,
+            exclude_instructions=exclude_instructions,
+            exclude_config_update=exclude_config_update,
+        )
+        for idx, j in plan:
+            self._items.insert(idx, other_chat_ctx.items[j])
         return self
 
     def to_dict(

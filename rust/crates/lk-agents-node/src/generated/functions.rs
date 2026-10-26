@@ -484,9 +484,9 @@ pub fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<
 
 /// `ChatContext.copy` as an index plan over the host's own items.
 #[napi(js_name = "chatCtxCopyPlan")]
-pub fn chat_ctx_copy_plan(env: Env, facts: Vec<(String, String, Option<String>, i64, Option<String>, f64)>, exclude_function_call: Option<bool>, exclude_instructions: Option<bool>, exclude_empty_message: Option<bool>, exclude_handoff: Option<bool>, exclude_config_update: Option<bool>, tools: Option<Vec<String>>) -> napi::Result<Vec<i64>> {
+pub fn chat_ctx_copy_plan(env: Env, facts: Vec<(String, String, Option<String>, i64, Option<String>, f64, Option<String>)>, exclude_function_call: Option<bool>, exclude_instructions: Option<bool>, exclude_empty_message: Option<bool>, exclude_handoff: Option<bool>, exclude_config_update: Option<bool>, tools: Option<Vec<String>>) -> napi::Result<Vec<i64>> {
     crate::host_error::run(&env, || {
-        let facts = facts.into_iter().map(|v| Ok::<_, crate::host_error::JsError>({ let (t0, t1, t2, t3, t4, t5,) = v; (t0, t1, t2, <usize>::try_from(t3).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("facts: {e}")))?, t4, t5) })).collect::<Result<Vec<_>, _>>()?;
+        let facts = facts.into_iter().map(|v| Ok::<_, crate::host_error::JsError>({ let (t0, t1, t2, t3, t4, t5, t6,) = v; (t0, t1, t2, <usize>::try_from(t3).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("facts: {e}")))?, t4, t5, t6) })).collect::<Result<Vec<_>, _>>()?;
         let exclude_function_call = exclude_function_call.unwrap_or(false);
         let exclude_instructions = exclude_instructions.unwrap_or(false);
         let exclude_empty_message = exclude_empty_message.unwrap_or(false);
@@ -498,19 +498,19 @@ pub fn chat_ctx_copy_plan(env: Env, facts: Vec<(String, String, Option<String>, 
 
 /// `ChatContext.truncate` as an index plan; `None` when under the limit.
 #[napi(js_name = "chatCtxTruncatePlan")]
-pub fn chat_ctx_truncate_plan(env: Env, facts: Vec<(String, String, Option<String>, i64, Option<String>, f64)>, max_items: i64) -> napi::Result<Option<Vec<i64>>> {
+pub fn chat_ctx_truncate_plan(env: Env, facts: Vec<(String, String, Option<String>, i64, Option<String>, f64, Option<String>)>, max_items: i64) -> napi::Result<Option<Vec<i64>>> {
     crate::host_error::run(&env, || {
-        let facts = facts.into_iter().map(|v| Ok::<_, crate::host_error::JsError>({ let (t0, t1, t2, t3, t4, t5,) = v; (t0, t1, t2, <usize>::try_from(t3).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("facts: {e}")))?, t4, t5) })).collect::<Result<Vec<_>, _>>()?;
+        let facts = facts.into_iter().map(|v| Ok::<_, crate::host_error::JsError>({ let (t0, t1, t2, t3, t4, t5, t6,) = v; (t0, t1, t2, <usize>::try_from(t3).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("facts: {e}")))?, t4, t5, t6) })).collect::<Result<Vec<_>, _>>()?;
         Ok(lk_agents_abi::truncate_plan_of(facts, max_items).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))?.map(|v| v.into_iter().map(|v| i64::try_from(v).unwrap_or(i64::MAX)).collect::<Vec<_>>()))
     })
 }
 
 /// `ChatContext.merge` as `(index, j)` insertions.
 #[napi(js_name = "chatCtxMergePlan")]
-pub fn chat_ctx_merge_plan(env: Env, mine: Vec<(String, String, Option<String>, i64, Option<String>, f64)>, theirs: Vec<(String, String, Option<String>, i64, Option<String>, f64)>, exclude_function_call: Option<bool>, exclude_instructions: Option<bool>, exclude_config_update: Option<bool>) -> napi::Result<Vec<(i64, i64)>> {
+pub fn chat_ctx_merge_plan(env: Env, mine: Vec<(String, String, Option<String>, i64, Option<String>, f64, Option<String>)>, theirs: Vec<(String, String, Option<String>, i64, Option<String>, f64, Option<String>)>, exclude_function_call: Option<bool>, exclude_instructions: Option<bool>, exclude_config_update: Option<bool>) -> napi::Result<Vec<(i64, i64)>> {
     crate::host_error::run(&env, || {
-        let mine = mine.into_iter().map(|v| Ok::<_, crate::host_error::JsError>({ let (t0, t1, t2, t3, t4, t5,) = v; (t0, t1, t2, <usize>::try_from(t3).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("mine: {e}")))?, t4, t5) })).collect::<Result<Vec<_>, _>>()?;
-        let theirs = theirs.into_iter().map(|v| Ok::<_, crate::host_error::JsError>({ let (t0, t1, t2, t3, t4, t5,) = v; (t0, t1, t2, <usize>::try_from(t3).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("theirs: {e}")))?, t4, t5) })).collect::<Result<Vec<_>, _>>()?;
+        let mine = mine.into_iter().map(|v| Ok::<_, crate::host_error::JsError>({ let (t0, t1, t2, t3, t4, t5, t6,) = v; (t0, t1, t2, <usize>::try_from(t3).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("mine: {e}")))?, t4, t5, t6) })).collect::<Result<Vec<_>, _>>()?;
+        let theirs = theirs.into_iter().map(|v| Ok::<_, crate::host_error::JsError>({ let (t0, t1, t2, t3, t4, t5, t6,) = v; (t0, t1, t2, <usize>::try_from(t3).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("theirs: {e}")))?, t4, t5, t6) })).collect::<Result<Vec<_>, _>>()?;
         let exclude_function_call = exclude_function_call.unwrap_or(false);
         let exclude_instructions = exclude_instructions.unwrap_or(false);
         let exclude_config_update = exclude_config_update.unwrap_or(false);

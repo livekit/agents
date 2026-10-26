@@ -39,7 +39,7 @@ fn truncate_plan_slices_a_negative_limit_as_python_does() {
     ]);
     assert_eq!(truncate_plan(&facts(&c), -1), Some(vec![1, 2]));
     assert_eq!(truncate_plan(&facts(&c), -5), Some(vec![]));
-    assert_eq!(truncate_plan(&facts(&c), 0), Some(vec![0, 1, 2]));
+    assert_eq!(truncate_plan(&facts(&c), 0), Some(vec![]), "a zero budget keeps no item");
     assert_eq!(truncate_plan(&facts(&c), 3), None);
 }
 
@@ -303,4 +303,29 @@ fn media_content_survives_a_copy_and_compares_by_side_table_id() {
         ChatMessage::new("m", Role::User, vec![text("look"), image(2), audio], t(1)).into(),
     ]);
     assert_ne!(a, b, "two different frames must not read as the same context");
+}
+
+// Catches: an output with no name (it is optional) dropped by a `tools` filter that keeps its call,
+// or kept when its call is dropped: it pairs with its call by `call_id`.
+#[test]
+fn a_nameless_output_follows_its_call_through_a_tools_filter() {
+    let at = |s: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(s);
+    let f = |kind, name, call_id, id| ItemFacts {
+        kind,
+        role: None,
+        content_len: 0,
+        tool_name: Some(name),
+        call_id: Some(call_id),
+        id,
+        created_at: at(1),
+    };
+    let facts = vec![
+        f(ItemKind::FunctionCall, "keep", "c1", "a"),
+        f(ItemKind::FunctionCallOutput, "", "c1", "b"),
+        f(ItemKind::FunctionCall, "drop", "c2", "c"),
+        f(ItemKind::FunctionCallOutput, "", "c2", "d"),
+        f(ItemKind::FunctionCallOutput, "keep", "c9", "e"),
+    ];
+    let opts = CopyOptions { tools: Some(vec!["keep".into()]), ..CopyOptions::default() };
+    assert_eq!(copy_plan(&facts, &opts), [0, 1, 4]);
 }
