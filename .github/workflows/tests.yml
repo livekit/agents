@@ -66,6 +66,28 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: make unit-tests
 
+  rime-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        core: ["1.7.1", "1.8.6", "1.8.8"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: Test Rime against published LiveKit
+        run: >-
+          uv run --no-project --python 3.11
+          --with 'livekit-agents[codecs]==${{ matrix.core }}'
+          scripts/test_rime_compatibility.py --core-version '${{ matrix.core }}'
+          --junitxml 'rime-compatibility-${{ matrix.core }}.xml'
+      - name: Upload compatibility results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rime-compatibility-${{ matrix.core }}
+          path: rime-compatibility-${{ matrix.core }}.xml
+
   evaluation:
     # don't run tests for PRs on forks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false

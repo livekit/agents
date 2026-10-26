@@ -173,6 +173,30 @@ model = RealtimeModelFallbackAdapter([
 session = AgentSession(llm=model)
 ```
 
+### LiveKit compatibility
+
+Prism targets LiveKit's standard realtime interface from 1.7.1 onward. We test
+1.7.1, 1.8.6, and 1.8.8 with `rimelabs-sdk==0.1.0a22`. The package still requires
+`livekit-agents>=1.8.8`; installation on 1.7.1 needs a release that permits it.
+
+LiveKit 1.7.1 fixes active-response cancellation through `SpeechHandle.interrupt()`.
+Versions 1.7.1 through 1.8.5 still ignore realtime `max_tool_steps`, including for
+OpenAI. Use [1.8.6 or later](https://github.com/livekit/agents/pull/7555) if you need
+that limit. Explicit `tool_choice="none"` works on 1.7.1.
+
+Run the source compatibility check from the repository root:
+
+```sh
+uv run --no-project --python 3.11 \
+  --with 'livekit-agents[codecs]==1.7.1' \
+  scripts/test_rime_compatibility.py --core-version 1.7.1
+```
+
+Substitute both version values to test another release. The runner verifies import
+paths and runs all Rime regressions locally without API keys. Three tool-limit
+cases are expected failures before 1.8.6; other failures or skips fail the check.
+Package installation and live services need separate validation.
+
 ### Turns and interruption
 
 Microphone input uses Prism's server turn detection. The adapter forwards

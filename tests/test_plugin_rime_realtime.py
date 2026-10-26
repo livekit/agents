@@ -7,8 +7,10 @@ import asyncio
 import base64
 import json
 from contextlib import asynccontextmanager
+from importlib.metadata import version
 
 import pytest
+from packaging.version import Version
 
 pytestmark = pytest.mark.unit
 
@@ -600,7 +602,7 @@ async def test_standard_session_tool_limit_produces_final_reply_and_restores_too
                 )
                 await peer.end(parent)
             final = await peer.next()
-            assert peer.settings["tools"] == []
+            tools_disabled_at_limit = peer.settings["tools"] == []
             assert final["response"]["metadata"]["prism_cause"] == "tool_continuation"
             response = await peer.start(final)
             await peer.message(response, text="The result is 42.")
@@ -611,6 +613,11 @@ async def test_standard_session_tool_limit_produces_final_reply_and_restores_too
             assert peer.settings["tools"][0]["function"]["name"] == "lookup"
             assert model._session._tool_choice == "auto"
             assert peer.receipts.empty()
+            # Check the full reply before accepting the older core's tool-limit failure.
+            if Version(version("livekit-agents")) < Version("1.8.6"):
+                if not tools_disabled_at_limit:
+                    pytest.xfail("LiveKit <1.8.6 does not enforce realtime max_tool_steps (#7555)")
+            assert tools_disabled_at_limit
 
 
 async def test_tool_disabled_response_never_executes_unexpected_call():
@@ -713,7 +720,8 @@ async def test_failed_tool_restoration_fails_session():
         assert session._failure is not None
 
 
-async def test_ordinary_session_application_stop_truncates_without_completion_receipt():
+@pytest.mark.parametrize("entrypoint", ["speech_handle", "session"])
+async def test_ordinary_session_application_stop_truncates_without_completion_receipt(entrypoint):
     async with peer_model() as (peer, model, _):
         output = FakeAudioOutput(can_pause=True)
         async with AgentSession(llm=model) as session:
@@ -725,11 +733,14 @@ async def test_ordinary_session_application_stop_truncates_without_completion_re
             async with asyncio.timeout(3):
                 while output._started_at is None:
                     await asyncio.sleep(0)
-            speech.interrupt(force=True)
+            if entrypoint == "session":
+                session.interrupt(force=True)
+            else:
+                speech.interrupt(force=True)
             await asyncio.wait_for(speech.wait_for_playout(), 3)
             truncate = await asyncio.wait_for(peer.truncations.get(), 3)
             assert truncate["item_id"] == item
-            assert peer.cancel_received.is_set()
+            await asyncio.wait_for(peer.cancel_received.wait(), 3)
             assert peer.receipts.empty()
 
 
