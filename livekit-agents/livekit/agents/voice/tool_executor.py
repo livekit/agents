@@ -405,8 +405,14 @@ class _ToolExecutor:
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
             return output
 
-        exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
         from .agent import _pass_through_activity_task_info
+        from .agent_activity import _mark_drain_graph
+
+        # an activity-scoped tool is awaited by that activity's drain, so it and its child
+        # tasks keep the wait_for_idle fast failure; a session-scoped tool survives the
+        # handoff and clears the marker inherited from the caller
+        exe_coro = _mark_drain_graph(self._owning_activity, _execute_tool)
+        exe_task = asyncio.create_task(exe_coro, name=f"tool_exec_{fnc_name}")
 
         _pass_through_activity_task_info(exe_task)
 
@@ -535,9 +541,12 @@ class _ToolExecutor:
         self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
 
         if self._reply_task is None or self._reply_task.done():
-            self._reply_task = asyncio.create_task(
-                self._deliver_reply(ctx.session), name="tool_executor_deliver_reply"
+            from .agent_activity import _mark_drain_graph
+
+            reply_coro = _mark_drain_graph(
+                self._owning_activity, lambda: self._deliver_reply(ctx.session)
             )
+            self._reply_task = asyncio.create_task(reply_coro, name="tool_executor_deliver_reply")
             # let an active RunResult wait for the deferred reply to land
             run_state = ctx.session._global_run_state
             if run_state is not None:

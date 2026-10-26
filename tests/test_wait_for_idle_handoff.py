@@ -111,7 +111,8 @@ async def test_wait_for_idle_retargets_during_live_handoff() -> None:
         await asyncio.wait_for(session.aclose(), timeout=10.0)
 
 
-async def test_wait_for_idle_fails_fast_from_a_draining_tool() -> None:
+@pytest.mark.parametrize("wrapper", ["wait_for", "create_task", "nested_task"])
+async def test_wait_for_idle_fails_fast_from_a_draining_tool(wrapper: str) -> None:
     """A caller inside the outgoing activity's drain graph must not await the handoff.
 
     An agent-scoped, non-cancellable tool that calls ``ctx.update()`` keeps running in
@@ -119,6 +120,11 @@ async def test_wait_for_idle_fails_fast_from_a_draining_tool() -> None:
     waits for the session to be idle, waiting for the handoff would close a cycle
     (wait -> handoff -> drain -> tool -> wait). Keep the pre-fix fast failure for
     callers the outgoing activity is draining.
+
+    ``wrapper`` covers the wrappers that run the wait in a child task instead of the
+    tool's own task: ``asyncio.wait_for`` schedules one before Python 3.12, and
+    ``asyncio.create_task`` always does. Such a caller must still fail fast rather than
+    reach the inner timeout.
     """
     tool_started = asyncio.Event()
     wait_go = asyncio.Event()
@@ -136,9 +142,24 @@ async def test_wait_for_idle_fails_fast_from_a_draining_tool() -> None:
             await ctx.update("working")
             tool_started.set()
             await wait_go.wait()
+
+            async def _wait_for_idle() -> None:
+                await ctx.session.wait_for_idle()
+
             try:
-                await asyncio.wait_for(ctx.session.wait_for_idle(), timeout=1.0)
-            except (ActivityClosedError, TimeoutError) as exc:
+                if wrapper == "wait_for":
+                    # before Python 3.12, wait_for schedules the coroutine in a child task
+                    await asyncio.wait_for(_wait_for_idle(), timeout=1.0)
+                elif wrapper == "create_task":
+                    await asyncio.wait_for(asyncio.create_task(_wait_for_idle()), timeout=1.0)
+                else:
+                    # nested_task: two levels of child tasks must inherit the guard
+                    async def _spawn_wait() -> None:
+                        await asyncio.create_task(_wait_for_idle())
+
+                    await asyncio.wait_for(asyncio.create_task(_spawn_wait()), timeout=1.0)
+            # asyncio.TimeoutError is a distinct class on 3.10, an alias of the builtin later
+            except (ActivityClosedError, asyncio.TimeoutError, TimeoutError) as exc:
                 outcome = exc
             wait_done.set()
             return "done"

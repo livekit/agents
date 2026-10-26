@@ -1798,7 +1798,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     continue
 
                 current_task = asyncio.current_task()
-                if current_task is not None and activity._is_draining_task(current_task):
+                if current_task is not None and activity._is_draining_caller(current_task):
                     # a caller awaited by the outgoing activity's own drain (a function
                     # tool or foreground task inside it) must not wait for the handoff
                     # that is waiting for it — keep the fast failure instead
