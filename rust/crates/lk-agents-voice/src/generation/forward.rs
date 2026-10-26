@@ -143,11 +143,17 @@ impl Pump<'_> {
                 return Ok(true);
             }
             // An `End` with nothing before it is an empty segment: skip, don't synthesise silence.
+            // Caller frames are never empty: they play with or without words.
+            let frames = matches!(self.voice, Voice::Frames(_));
             let first = loop {
                 match self.rx.recv().await {
                     // The words leg is done (or stopped by the interruption ending this step).
                     None => return Ok(self.handle.interrupted()),
-                    Some(SegEvent::Chunk(v)) if !v.raw.is_empty() || !v.text.is_empty() => break v,
+                    Some(SegEvent::Chunk(v))
+                        if frames || !v.raw.is_empty() || !v.text.is_empty() =>
+                    {
+                        break v;
+                    }
                     Some(SegEvent::Chunk(_) | SegEvent::End) => {}
                 }
             };

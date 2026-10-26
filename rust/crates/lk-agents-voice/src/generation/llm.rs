@@ -51,7 +51,13 @@ pub(super) async fn produce_segments(
             let data = perform_llm_inference(shared, handle, ctx, &tx, &mut tools).await;
             return (data, tools);
         }
-        ReplySource::Text(text) | ReplySource::Audio { text, .. } => one_segment(text.clone()),
+        ReplySource::Text(text) => one_segment(text.clone()),
+        // The caller's frames are the segment, with words or without (`_tts_task` forwards
+        // `audio` whatever the text).
+        ReplySource::Audio { text, .. } => {
+            let _ = tx.send(SegEvent::Chunk(Visible::of(text)));
+            let _ = tx.send(SegEvent::End);
+        }
         // Taken, not borrowed: no lock across an await, and a second read finds `None`.
         ReplySource::TextStream(rx) => {
             let rx = rx.lock().expect("say stream poisoned").take();

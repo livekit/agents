@@ -96,7 +96,6 @@ impl Check {
 /// `session_settles` is the release phase's own verdict, not a rule.
 pub const KNOWN_FINDINGS: &[&str] = &[
     "forwarded_while_enabled",
-    "no_premature_completion",
     "output_replacement_is_clean",
     "provider_failure_is_accounted",
     "provider_streams_closed",
