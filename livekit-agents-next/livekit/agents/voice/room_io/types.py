@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 
 from livekit import rtc
 
-from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ..io import TextOutput
@@ -201,81 +200,6 @@ class RoomOptions:
                 "json_format": text_out.json_format,
             },
         }
-
-    @classmethod
-    def _ensure_options(
-        cls,
-        options: NotGivenOr[RoomOptions],
-        *,
-        room_input_options: NotGivenOr[RoomInputOptions] = NOT_GIVEN,
-        room_output_options: NotGivenOr[RoomOutputOptions] = NOT_GIVEN,
-    ) -> RoomOptions:
-        if is_given(room_input_options) or is_given(room_output_options):
-            logger.warning(
-                "RoomInputOptions and RoomOutputOptions are deprecated, use RoomOptions instead"
-            )
-            if not is_given(options):
-                return cls._create_from_legacy(room_input_options, room_output_options)
-
-        if isinstance(options, RoomOptions):
-            return options
-        elif is_given(options):
-            raise ValueError(f"expected RoomOptions, got {type(options)}")
-        else:
-            return cls()
-
-    @classmethod
-    def _create_from_legacy(
-        cls,
-        input_options: NotGivenOr[RoomInputOptions],
-        output_options: NotGivenOr[RoomOutputOptions],
-    ) -> RoomOptions:
-        opts = cls()
-        if input_options:
-            opts.text_input = (
-                TextInputOptions(text_input_cb=input_options.text_input_cb)
-                if input_options.text_enabled is not False
-                else False
-            )
-            opts.audio_input = (
-                AudioInputOptions(
-                    sample_rate=input_options.audio_sample_rate,
-                    num_channels=input_options.audio_num_channels,
-                    frame_size_ms=input_options.audio_frame_size_ms,
-                    noise_cancellation=input_options.noise_cancellation,
-                    pre_connect_audio=input_options.pre_connect_audio,
-                    pre_connect_audio_timeout=input_options.pre_connect_audio_timeout,
-                )
-                if input_options.audio_enabled is not False
-                else False
-            )
-            opts.video_input = input_options.video_enabled
-
-            opts.participant_kinds = input_options.participant_kinds
-            opts.participant_identity = input_options.participant_identity
-            opts.close_on_disconnect = input_options.close_on_disconnect
-            opts.delete_room_on_close = input_options.delete_room_on_close
-
-        if output_options:
-            opts.audio_output = (
-                AudioOutputOptions(
-                    sample_rate=output_options.audio_sample_rate,
-                    num_channels=output_options.audio_num_channels,
-                    track_publish_options=output_options.audio_publish_options,
-                    track_name=output_options.audio_track_name,
-                )
-                if output_options.audio_enabled is not False
-                else False
-            )
-            opts.text_output = (
-                TextOutputOptions(
-                    sync_transcription=output_options.sync_transcription,
-                    transcription_speed_factor=output_options.transcription_speed_factor,
-                )
-                if output_options.transcription_enabled is not False
-                else False
-            )
-        return opts
 
 
 # RoomInputOptions and RoomOutputOptions are deprecated

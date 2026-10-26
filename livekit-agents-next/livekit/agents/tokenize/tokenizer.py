@@ -65,9 +65,6 @@ class SentenceStream(ABC):
     def __aiter__(self) -> AsyncIterator[TokenData]:
         return self
 
-    def _do_close(self) -> None:
-        self._event_ch.close()
-
     def _check_not_closed(self) -> None:
         if self._event_ch.closed:
             cls = type(self)
@@ -112,9 +109,6 @@ class WordStream(ABC):
 
     def __aiter__(self) -> AsyncIterator[TokenData]:
         return self
-
-    def _do_close(self) -> None:
-        self._event_ch.close()
 
     def _check_not_closed(self) -> None:
         if self._event_ch.closed:

@@ -739,11 +739,6 @@ class Agent(Generic[Context_T, Output_T]):
             return None
         return binding  # type: ignore[no-any-return]
 
-    def _bound_session(self) -> LiveSession | None:
-        """The voice session running this agent in the current context, if any (internal)."""
-        binding = self._bound_binding()
-        return binding.session if isinstance(binding, _VoiceBinding) else None
-
     def _get_binding_or_raise(self) -> _VoiceBinding | AgentRun[Any]:
         binding = self._bound_binding()
         if binding is None:

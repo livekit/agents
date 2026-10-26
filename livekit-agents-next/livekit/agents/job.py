@@ -1058,9 +1058,3 @@ class JobRequest:
         )
 
         await self._on_accept(accept_arguments)
-
-
-@dataclass
-class _JobShutdownInfo:
-    user_initiated: bool
-    reason: str
