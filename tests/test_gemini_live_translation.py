@@ -444,7 +444,7 @@ async def test_a_transient_handshake_failure_is_retried(monkeypatch: pytest.Monk
         await session.aclose()
 
 
-async def test_a_transcript_stopped_mid_sentence_waits_for_its_punctuation(
+async def test_punctuation_trailing_past_the_quiet_does_not_open_the_next_transcript(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     conns = _connect_hook(monkeypatch)
@@ -454,11 +454,34 @@ async def test_a_transcript_stopped_mid_sentence_waits_for_its_punctuation(
     try:
         await _wait_for(lambda: bool(conns))
         conns[0].emit(input_transcription=types.Transcription(text="where is the restroom"))
-        # the question mark trails the words by more than one quiet period
-        await asyncio.sleep(0.08)
-        conns[0].emit(input_transcription=types.Transcription(text="?"))
         await _wait_for(lambda: any(t.is_final for t in heard))
+        # the question mark arrives after the quiet ended the sentence, with the next one
+        conns[0].emit(input_transcription=types.Transcription(text="? What are you saying?"))
+        await _wait_for(lambda: sum(t.is_final for t in heard) == 2)
 
-        assert [t.text for t in heard if t.is_final] == ["where is the restroom?"]
+        assert [t.text for t in heard if t.is_final] == [
+            "where is the restroom",
+            "What are you saying?",
+        ]
+    finally:
+        await session.aclose()
+
+
+async def test_utterances_apart_by_more_than_the_quiet_stay_apart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(transcript_segment_timeout=0.05).session()
+    heard: list[InputTranscript] = []
+    session.on("input_transcript", heard.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        # neither carries punctuation or a finished mark
+        conns[0].emit(input_transcription=types.Transcription(text="hello"))
+        await asyncio.sleep(0.1)
+        conns[0].emit(input_transcription=types.Transcription(text="goodbye"))
+        await _wait_for(lambda: sum(t.is_final for t in heard) == 2)
+
+        assert [t.text for t in heard if t.is_final] == ["hello", "goodbye"]
     finally:
         await session.aclose()

@@ -250,19 +250,18 @@ class GeminiTranslationModel(TranslationModel):
         pass
 
 
-# what ends a sentence, in the scripts the model speaks and hears
-_SENTENCE_END = (".", "?", "!", "…", "。", "？", "！", "؟", "।")
-# quiet periods a transcript that has not ended a sentence waits through before it is ended:
-# its closing punctuation can trail the words by more than one
-_UNFINISHED_SENTENCE_GRACE = 2
+# what ends a sentence, in the scripts the model speaks and hears. A transcript never opens
+# with these: arriving after the quiet that ended the last one, they are its closing
+# punctuation, and would otherwise lead the next one ("? What are you talking about?")
+_SENTENCE_END = ".?!…。？！؟।"
 
 
 class _TranscriptSegmenter:
     """Ends a transcript when the server marks it finished, or once its pieces go quiet.
 
-    One that goes quiet mid-sentence is given a little longer, or a late ``?`` would open the
-    next one. Each callback gets the piece and the transcript so far, so a consumer can take
-    either.
+    The quiet that ends one is the boundary between utterances, kept as given; punctuation
+    that trails past it is dropped rather than opening the next. Each callback gets the piece
+    and the transcript so far, so a consumer can take either.
     """
 
     def __init__(
@@ -279,12 +278,12 @@ class _TranscriptSegmenter:
         self._timer: asyncio.TimerHandle | None = None
         self._language: str | None = None
         self._text = ""
-        self._grace_left = 0
 
     def push(self, text: str, *, language: str | None, finished: bool) -> None:
         if self._timer is None:
-            # gemini opens a transcript with a space, which does not belong at its start
-            text = text.lstrip()
+            # gemini opens a transcript with a space, which does not belong at its start, and
+            # the last transcript's closing punctuation can trail in after it ended
+            text = text.lstrip(_SENTENCE_END + " ")
 
         if language:
             self._language = language
@@ -292,22 +291,12 @@ class _TranscriptSegmenter:
         if text:
             self._text += text
             self._on_text(text, self._text, self._language)
-            self._grace_left = _UNFINISHED_SENTENCE_GRACE
             if self._timer is not None:
                 self._timer.cancel()
-            self._timer = self._loop.call_later(self._timeout, self._on_quiet)
+            self._timer = self._loop.call_later(self._timeout, self.flush)
 
         if finished:
             self.flush()
-
-    def _on_quiet(self) -> None:
-        """End the transcript, unless it stopped mid-sentence and has grace left."""
-        if self._grace_left > 0 and not self._text.rstrip(" \"'”»)").endswith(_SENTENCE_END):
-            self._grace_left -= 1
-            self._timer = self._loop.call_later(self._timeout, self._on_quiet)
-            return
-
-        self.flush()
 
     def flush(self) -> None:
         """End the open transcript, if one is open."""
