@@ -1005,12 +1005,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     continue
                 if self._session_ended:
                     break
-            elif msg.type == aiohttp.WSMsgType.ERROR:
-                self._logger.error(
-                    "Sarvam realtime STT WebSocket error",
-                    extra={**self._build_log_context(), "raw_message": msg.data},
-                )
-                raise APIConnectionError(f"Sarvam realtime STT WebSocket error: {msg.data}")
             elif msg.type in (
                 aiohttp.WSMsgType.CLOSED,
                 aiohttp.WSMsgType.CLOSE,

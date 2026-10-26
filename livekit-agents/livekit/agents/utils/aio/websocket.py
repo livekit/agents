@@ -17,6 +17,7 @@ class WebSocketMonitor:
     The socket must be connected with ``autoping=False`` and without aiohttp's
     heartbeat. Incoming control frames are handled here so they count as activity.
     Use one monitor per active connection, including across cancelled receive calls.
+    Transport errors raise ``APIConnectionError`` with the original error as the cause.
     """
 
     def __init__(
@@ -50,6 +51,12 @@ class WebSocketMonitor:
                 )
                 if receiver in done:
                     msg = receiver.result()
+                    if msg.type == aiohttp.WSMsgType.ERROR:
+                        cause = self._ws.exception()
+                        if cause is None and isinstance(msg.data, BaseException):
+                            cause = msg.data
+                        raise APIConnectionError("WebSocket connection lost") from cause
+
                     if msg.type in (
                         aiohttp.WSMsgType.TEXT,
                         aiohttp.WSMsgType.BINARY,
@@ -81,11 +88,18 @@ class WebSocketMonitor:
                     )
                 self._ping_sent = True
                 ping = asyncio.create_task(self._ws.ping())
-        except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError) as exc:
+        except (
+            aiohttp.ClientError,
+            ConnectionError,
+            asyncio.TimeoutError,
+            APIConnectionError,
+        ) as exc:
             # A dead peer cannot complete a close handshake. Bound cleanup so the
             # original failure reaches retry/fallback without another close timeout.
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._ws.close(), _CLOSE_TIMEOUT)
+            if isinstance(exc, APIConnectionError):
+                raise
             raise APIConnectionError("WebSocket connection lost") from exc
         finally:
             receiver.cancel()

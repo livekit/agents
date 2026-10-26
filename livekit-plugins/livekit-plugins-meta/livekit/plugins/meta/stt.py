@@ -637,11 +637,6 @@ class SpeechStream(stt.RecognizeStream):
                 )
             if raw.type == aiohttp.WSMsgType.CLOSING:
                 continue
-            if raw.type == aiohttp.WSMsgType.ERROR:
-                raise APIConnectionError(
-                    "Meta Muse realtime ASR WebSocket failed",
-                    retryable=not self._audio_consumed,
-                ) from None
 
             message = _parse_ws_message(raw, phase="stream")
             event_type = message.get("type")

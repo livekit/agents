@@ -421,8 +421,6 @@ class SpeechStream(stt.SpeechStream):
                 if not self._input_done:
                     raise self._stream_failure("nabrah STT closed unexpectedly")
                 return
-            if msg.type == aiohttp.WSMsgType.ERROR:
-                raise self._stream_failure("nabrah STT WebSocket failed")
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:

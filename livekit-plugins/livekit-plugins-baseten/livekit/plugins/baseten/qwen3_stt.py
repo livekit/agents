@@ -339,8 +339,6 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                     if input_ended.is_set():
                         return
                     raise APIConnectionError("Baseten closed the STT websocket")
-                if msg.type is aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError(f"websocket error: {ws.exception()}")
                 if msg.type is not aiohttp.WSMsgType.TEXT:
                     continue
 

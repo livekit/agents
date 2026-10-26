@@ -543,11 +543,6 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     break
 
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    # Preserve the underlying transport error.
-                    logger.warning("Soniox STT WebSocket error frame: %r", self._ws.exception())
-                    break
-
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning(
                         f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"

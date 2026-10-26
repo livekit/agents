@@ -365,7 +365,12 @@ class SpeechStream(stt.RecognizeStream):
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                msg = await monitor.receive()
+                try:
+                    msg = await monitor.receive()
+                except APIConnectionError:
+                    if closing_ws or self._session.closed:
+                        return
+                    raise
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -375,12 +380,6 @@ class SpeechStream(stt.RecognizeStream):
                         return
 
                     raise APIStatusError(message="xAI connection closed unexpectedly")
-
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws or self._session.closed:
-                        return
-                    # Preserve the underlying transport error.
-                    raise APIConnectionError("xAI connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected xAI message type %s", msg.type)

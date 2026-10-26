@@ -215,7 +215,12 @@ class SpeechStream(stt.RecognizeStream):
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                msg = await monitor.receive()
+                try:
+                    msg = await monitor.receive()
+                except APIConnectionError:
+                    if closing_ws:
+                        return
+                    raise
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -238,11 +243,6 @@ class SpeechStream(stt.RecognizeStream):
                             self._mark_provider_progress()
                     except Exception:
                         logger.exception("Failed to process Telnyx STT message")
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws:
-                        return
-                    # Preserve the underlying transport error.
-                    raise APIConnectionError("Telnyx STT connection lost") from ws.exception()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:

@@ -443,8 +443,5 @@ class SpeechStream(stt.SpeechStream):
                 aiohttp.WSMsgType.CLOSED,
             ):
                 break
-            elif msg.type == aiohttp.WSMsgType.ERROR:
-                logger.error("WebSocket error: %s", ws.exception())
-                raise APIConnectionError("WebSocket error occurred")
             else:
                 logger.debug("Ignored WebSocket message type: %s", msg.type)

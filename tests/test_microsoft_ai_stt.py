@@ -1649,3 +1649,21 @@ async def test_real_model_less_session_speaks_final_text_and_can_interrupt() -> 
         next(iter(ElementTree.fromstring(call.kwargs["data"]))).text
         for call in http.post.call_args_list
     ] == ["First echo.", "Next echo."]
+
+
+async def test_websocket_error_redacts_transport_details(caplog):
+    cause = aiohttp.ClientConnectionError("do-not-log-private-endpoint")
+
+    class ErrorSocket(FakeSocket):
+        def exception(self):
+            return cause
+
+    socket = ErrorSocket()
+    socket.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, cause, None))
+    instance, _ = provider(socket)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        with pytest.raises(APIConnectionError) as caught:
+            await collect(stream)
+    assert caught.value.__cause__ is None
+    assert "do-not-log" not in str(caught.value)
+    assert "do-not-log" not in caplog.text

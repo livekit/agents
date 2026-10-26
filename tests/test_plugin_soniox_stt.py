@@ -976,7 +976,8 @@ async def test_write_drop_uses_retry_budget(task_name):
     assert isinstance(exc_info.value.__cause__, aiohttp.ClientConnectionResetError)
 
 
-async def test_closed_socket_reconnect_exhausts_retry_budget(monkeypatch):
+@pytest.mark.parametrize("error_frame", [False, True])
+async def test_socket_failure_exhausts_retry_budget(monkeypatch, error_frame):
     from livekit.agents import APIConnectOptions
     from livekit.plugins.soniox import STT
     from livekit.plugins.soniox.stt import SpeechStream
@@ -984,10 +985,13 @@ async def test_closed_socket_reconnect_exhausts_retry_budget(monkeypatch):
     connections = 0
 
     class ClosedWebSocket:
-        closed = True
+        closed = not error_frame
 
         async def close(self):
-            pass
+            self.closed = True
+
+        async def receive(self):
+            return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, self.exception(), None)
 
         def exception(self):
             return aiohttp.ServerTimeoutError("liveness timeout")
@@ -1007,7 +1011,8 @@ async def test_closed_socket_reconnect_exhausts_retry_budget(monkeypatch):
     monkeypatch.setattr(SpeechStream, "_prepare_audio_task", idle)
     monkeypatch.setattr(SpeechStream, "_send_audio_task", idle)
     monkeypatch.setattr(SpeechStream, "_keepalive_task", idle)
-    monkeypatch.setattr(SpeechStream, "_recv_messages_task", request_reconnect)
+    if not error_frame:
+        monkeypatch.setattr(SpeechStream, "_recv_messages_task", request_reconnect)
     instance = STT(api_key="test-key")
     stream = instance.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
     try:
@@ -1018,7 +1023,7 @@ async def test_closed_socket_reconnect_exhausts_retry_budget(monkeypatch):
         await stream.aclose()
 
 
-async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
+async def test_error_frame_ends_recv_loop_and_keeps_the_cause():
     """A heartbeat timeout arrives as WSMsgType.ERROR, not as a close frame.
     Logging it as an unexpected type and continuing only worked because aiohttp
     happens to report CLOSED next, and it threw away the one value that says
@@ -1030,9 +1035,13 @@ async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
 
         def __init__(self) -> None:
             self.receives = 0
+            self.error = aiohttp.ServerTimeoutError("No PONG received after 15.0 seconds")
 
         def exception(self) -> BaseException:
-            return aiohttp.ServerTimeoutError("No PONG received after 15.0 seconds")
+            return self.error
+
+        async def close(self) -> None:
+            self.closed = True
 
         def __aiter__(self) -> HeartbeatTimeoutWebSocket:
             return self
@@ -1052,9 +1061,9 @@ async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
     ws = HeartbeatTimeoutWebSocket()
     stream._ws = ws
 
-    with caplog.at_level("WARNING", logger="livekit.plugins.soniox"):
+    with pytest.raises(APIConnectionError) as exc_info:
         await asyncio.wait_for(stream._recv_messages_task(), timeout=1.0)
 
     assert ws.receives == 1
-    assert stream._reconnect_event.is_set()
-    assert any("No PONG received" in r.getMessage() for r in caplog.records)
+    assert ws.closed
+    assert exc_info.value.__cause__ is ws.error

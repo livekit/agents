@@ -373,7 +373,12 @@ class SpeechStream(stt.SpeechStream):
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                msg = await monitor.receive()
+                try:
+                    msg = await monitor.receive()
+                except APIConnectionError:
+                    if self._session.closed:
+                        return
+                    raise
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -385,14 +390,6 @@ class SpeechStream(stt.SpeechStream):
                         return
 
                     # this will trigger a reconnection, see the _run loop
-                    self._reconnect_event.set()
-                    return
-
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if self._session.closed:
-                        return
-                    # Preserve the underlying transport error.
-                    logger.warning("simplismart connection lost: %r", ws.exception())
                     self._reconnect_event.set()
                     return
 

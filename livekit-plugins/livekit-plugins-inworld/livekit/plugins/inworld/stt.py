@@ -399,9 +399,6 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     return
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"Inworld STT WebSocket error: {self._ws.exception()}")
-                    return
         except aiohttp.ClientError as e:
             logger.error(f"WebSocket error while receiving: {e}")
             raise

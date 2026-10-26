@@ -648,3 +648,32 @@ async def test_half_open_socket_raises_retryable_error() -> None:
 
     assert exc_info.value.retryable is True
     assert isinstance(exc_info.value.__cause__, aiohttp.ServerTimeoutError)
+
+
+@pytest.mark.parametrize("input_ended", [False, True])
+async def test_websocket_error_preserves_shutdown_handling(monkeypatch, input_ended):
+    cause = aiohttp.ClientConnectionError("connection reset")
+
+    class Socket(_Socket):
+        def exception(self):
+            return cause
+
+    socket = Socket()
+    monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
+    async with aiohttp.ClientSession() as session:
+        stream = _make_stt("http://unused", session).stream(
+            conn_options=APIConnectOptions(max_retry=0)
+        )
+        try:
+            if input_ended:
+                stream.end_input()
+                await asyncio.wait_for(socket.finalized.wait(), 1)
+            socket.messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, cause, None))
+            if input_ended:
+                assert await asyncio.wait_for(_final_transcripts(stream), 1) == []
+            else:
+                with pytest.raises(APIConnectionError) as exc_info:
+                    await asyncio.wait_for(_final_transcripts(stream), 1)
+                assert exc_info.value.__cause__ is cause
+        finally:
+            await stream.aclose()

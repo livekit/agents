@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
@@ -15,6 +15,44 @@ from livekit.agents import APIConnectionError
 from livekit.agents.utils.aio import WebSocketMonitor
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("cause_source", ["socket", "message", "absent"])
+@pytest.mark.parametrize("iterate", [False, True])
+async def test_error_frame_fails_once_and_preserves_cause(cause_source, iterate) -> None:
+    cause = aiohttp.WebSocketError(1002, "invalid frame")
+    socket_error = cause if cause_source == "socket" else None
+    data = RuntimeError("other frame error") if cause_source == "socket" else cause
+    if cause_source == "absent":
+        data = None
+    ws = AsyncMock()
+    ws.exception = Mock(return_value=socket_error)
+    ws.receive.return_value = aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, data, None)
+    monitor = WebSocketMonitor(cast(aiohttp.ClientWebSocketResponse, ws))
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await (anext(monitor) if iterate else monitor.receive())
+
+    assert exc_info.value.retryable
+    assert exc_info.value.__cause__ is (None if cause_source == "absent" else cause)
+    ws.receive.assert_awaited_once()
+    ws.close.assert_awaited_once()
+
+
+async def test_error_frame_cleanup_is_bounded_and_preserves_cause() -> None:
+    cause = aiohttp.ClientConnectionError("connection reset")
+    ws = AsyncMock()
+    ws.exception = Mock(return_value=cause)
+    ws.receive.return_value = aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, None, None)
+    ws.close.side_effect = asyncio.Event().wait
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await asyncio.wait_for(
+            WebSocketMonitor(cast(aiohttp.ClientWebSocketResponse, ws)).receive(), 0.5
+        )
+
+    assert exc_info.value.__cause__ is cause
+    ws.close.assert_awaited_once()
 
 
 @pytest.mark.virtual_time

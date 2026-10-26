@@ -367,12 +367,14 @@ class SpeechStream(stt.RecognizeStream):
         return monitor
 
     async def _receive_event(self, monitor: utils.aio.WebSocketMonitor) -> dict[str, object]:
-        message = await monitor.receive()
+        try:
+            message = await monitor.receive()
+        except APIConnectionError:
+            raise APIConnectionError("Microsoft AI STT transport failed") from None
         if message.type in (
             aiohttp.WSMsgType.CLOSE,
             aiohttp.WSMsgType.CLOSED,
             aiohttp.WSMsgType.CLOSING,
-            aiohttp.WSMsgType.ERROR,
         ):
             raise APIConnectionError("Microsoft AI STT connection closed unexpectedly")
         if message.type != aiohttp.WSMsgType.TEXT or not isinstance(message.data, (str, bytes)):

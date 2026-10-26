@@ -1468,11 +1468,6 @@ class SpeechStream(stt.SpeechStream):
                             body={"raw_message": msg.data},
                         ) from e
 
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    error_msg = f"WebSocket error: {msg.data}"
-                    self._logger.error(error_msg, extra=self._build_log_context())
-                    raise APIConnectionError(error_msg)
-
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,

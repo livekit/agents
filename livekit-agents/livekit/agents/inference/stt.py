@@ -1190,7 +1190,12 @@ class SpeechStream(stt.SpeechStream):
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                msg = await monitor.receive()
+                try:
+                    msg = await monitor.receive()
+                except APIConnectionError:
+                    if input_ended.is_set() or http_session.closed:
+                        return
+                    raise
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -1203,14 +1208,6 @@ class SpeechStream(stt.SpeechStream):
                         status_code=ws.close_code or -1,
                         retryable=True,
                     )
-
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if input_ended.is_set() or http_session.closed:
-                        return
-                    # Preserve the underlying transport error.
-                    raise APIConnectionError(
-                        "LiveKit Inference STT connection lost"
-                    ) from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected LiveKit Inference STT message type %s", msg.type)
