@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use lk_agents_abi::{
     AudioFrame, LegEvent, ReqId, Ts,
     errors::ProviderError,
-    turn::interruption::{InterruptionPort, InterruptionSignal, InterruptionSource, OverlapVerdict},
+    turn::interruption::{
+        InterruptionPort, InterruptionSignal, InterruptionSource, OverlapVerdict,
+    },
     utils::stream::StreamSink,
 };
 use tokio::sync::mpsc;

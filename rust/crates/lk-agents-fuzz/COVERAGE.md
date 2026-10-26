@@ -2,8 +2,8 @@
 
 What `lk-agents-fuzz` covers of the Rust voice driver (`lk-agents-voice`), and what it does not.
 Every number is measured, not claimed: a 1,024-seed survey and `cargo llvm-cov` over the same
-suite. Sections 7 to 10 and the line counts of section 6 were re-measured at `049e7e332`
-(2026-10-25), after a seed became the whole of its run; sections 2 to 5 and the appendix are
+suite. Sections 6 and 10 describe the harness through the public API (2026-10-25); sections 7
+to 9 were re-measured at `049e7e332` (2026-10-25), after a seed became the whole of its run; sections 2 to 5 and the appendix are
 still the measurement at `56e265f06`. Written by hand for now; section 12 says how to re-measure
 and what makes it generated.
 
@@ -80,7 +80,8 @@ The generator plays four actors, each of which acts only on what it observed:
 - **The room**: linked, unlinked, closed, state changes.
 
 Every driver command variant has an input except `IvrCommand::AddTools`. The gaps are in the
-arguments the inputs carry (section 5) and in the layer above the commands (section 6).
+arguments the inputs carry (section 5); every input that is a host call is made as one (section
+6).
 
 ### 2.2 Phases of a conversation
 
@@ -472,7 +473,7 @@ Ranked by what a person on the call or a developer would hit:
    the false-interruption options are never varied (5.4).
 4. **Updates apply to the right reply**: no rule for `update_*` against in-flight work, nor for
    the next agent's instructions and tools after a handoff (5.2, 5.6).
-5. **The public API is never called** (section 6).
+5. **Four inputs have no host call** and are sent as their real sender's command (section 6).
 6. **Handoffs and tasks are not journalled**, so neither a column nor a rule can see them;
    tool-driven handoffs are unreachable (5.5, 5.6).
 7. **Hooks without deadlines** may block a run forever (5.6).
@@ -481,32 +482,43 @@ Ranked by what a person on the call or a developer would hit:
 9. **The error budget** (count, threshold, reset) has no rule (5.7).
 10. **Realtime tool calls and a realtime model with a separate TTS** are not modelled (2.3).
 
-## 6. Why the fuzzer goes around the public API
+## 6. Through the public API
 
-The fuzzer builds the driver with the internal `DriverBuilder` (`src/drive/start.rs:131`) and
-sends each input as a driver `Command` (`src/drive/apply.rs:515`). The public `SessionApi`
-(`lk-agents-voice/src/agent_session/api.rs`, `api/host.rs`) is what Python and Node call: it
-parses arguments, validates them, builds the command and owns room I/O. None of that runs
-under the fuzzer: 1,275 lines at 0%, plus `room_io/` at 2% (only `link.rs`).
+The fuzzer drives the core as its host does. `Run::start` (`src/drive/start.rs`) assembles the
+session with `SessionApi::host_new`, the `LiveSession(...)` `lk-agents-py` binds, over a
+`FakeRoom` from `lk-agents-rtc` and the fakes, with the setup as `SessionOptions` kwargs, and
+awaits `start()`. Every input that is a host call (`src/drive/apply.rs`) is that method with its
+argument shapes: `say`/`say_stream`/`say_audio` and their pushers, `generate_reply`,
+`interrupt`, `SpeechHandle.interrupt` and `.allow_interruptions`, `commit_user_turn`,
+`wait_for_idle(_and_hold)`, `update_agent`, `enter_task`, `update_turn_options`, `drain`,
+`aclose` then `close_io`, the `hook_*` answers, `filler_*`, `tool_update`, `dtmf_*`, `ivr_*`,
+`attach_amd` and `amd_start_*`, `push_video`, the io setters. Tools run through a
+`HostToolRunner` answering the marshal's report. People join and leave the fake room, and the
+real room io decides what the session hears of it.
 
-There is no principled reason. `TEST_STRATEGY.md` says the opposite ("actual public API
-payloads are the inputs to the system under test", "do not bypass the real interface"). The
-methods are plain Rust (`host_new` takes trait objects and a `SessionRoom`; `lk-agents-rtc` has
-a fake room), so nothing technical forces the shortcut. Two things make the switch more than a
-rename:
+Observation is a test-only probe on `SessionApi` (feature `dst`, enabled by this crate only): it
+sees every journal step as it is written and every host event, typed, as the drain takes it, and
+hands the session's cores to the run, which stays their queue owner (so the queue policies,
+the panic catch and the livelock stop are unchanged). The host's own `on_event` sink still gets
+every wire record.
 
-- **Construction**: `host_new` takes the session's arguments as the host passes them; the
-  harness's setups map onto them, and room events would then go through the real room I/O over
-  the fake room instead of being injected.
-- **Observation**: the rules need every journal step stamped in order with the fakes' records.
-  The harness gets that by installing an observer on the driver's trace, which `SessionApi`
-  exposes only as a `steps()` snapshot. Polling the snapshot loses the interleaving; reaching
-  into the trace is a test-only API. This is the design decision to take before the switch.
+Inputs with no host call, sent as the command their real sender sends:
 
-What the switch would reach: argument validation (`ivr_start(max_silence=)`, `aclose(reason=)`,
-`set_io_enabled` leg names, `update_turn_options` and its empty-patch no-op, `push_video`'s
-`NotAnImage`), `set_aec_warmup`, `hook_described`, `hook_tools_executed`, set/unset participant,
-the `amd_*` calls, and room I/O.
+- `PauseAuthorization`/`ResumeAuthorization`: the AMD detector's own hold (`Origin::Amd`).
+- `CommitTurn`: the commit `commit_user_turn` makes after its flush and final wait.
+- `Configure` for interruptions, min interruption words, user away and max tool steps:
+  `update_options` takes endpointing and turn detection only.
+- `Handoff` with `pause_previous` or `resume`: `update_agent` always closes and starts; pausing
+  and resuming are an inline task's, which the driver does itself.
+
+What the switch changed in what a run can reach: the backchannel threshold left the setup
+(`host_new` never overrides the end-of-turn thresholds, so no host can set one), and a tool body's
+`wait_for_idle()` is the host's (no origin), so a tool-origin idle ask (`IdleAskWithdrawn`) is
+no longer reached. A `Reply` resolves a dropped call as the host sees it (`interrupt` as done,
+`wait_for_idle` as closing, `commit_user_turn` as superseded, `drain` as closing, a DTMF
+collection as stopped); only a speech handle the loop dropped is still `Lost`. The room's own
+audio legs are off, as `agent_session.py` turns them off when the host hands its own, so
+`room_io/_input.rs` and `_output.rs` stay unreached.
 
 ## 7. How the search was chosen
 
@@ -648,39 +660,39 @@ Each is a choice the search makes for every run that a real call does not.
 
 ## 10. Code reached
 
-Line coverage of `lk-agents-voice` over every `lk-agents-fuzz` test, the 1,024-seed
-survey and the soak included (`049e7e332`): **56.7% of 25,285 lines** (56.9% of 25,558 at
-`56e265f06`). `cargo llvm-cov` warns that 30 functions have mismatched data.
+Line coverage of `lk-agents-voice` over every `lk-agents-fuzz` test, the 1,024-seed survey and
+the soak included, after the switch to the public API (section 6): **65.2% of 25,412 lines**
+(56.7% of 25,285 at `049e7e332`, before it). `cargo llvm-cov` warns that 62 functions have
+mismatched data.
 
 | Area | Lines | Reached | Note |
 |---|--:|--:|---|
-| `audio_recognition/` | 1,513 | 95% | hearing: VAD, STT, end of turn, overlap |
-| `trace.rs` | 152 | 92% | |
-| `agent_session/` but the API and `host_events.rs` | 2,378 | 88% | the loop: driver, effects, signals, close |
-| `generation/` | 2,002 | 89% | LLM and TTS requests, replans |
+| `audio_recognition/` | 1,509 | 94% | hearing: VAD, STT, end of turn, overlap |
+| `trace.rs` | 155 | 93% | |
+| `agent_session/` but the API and `host_events.rs` | 2,403 | 88% | the loop: driver, effects, signals, close |
+| `generation/` | 2,056 | 89% | LLM and TTS requests, replans |
 | `ivr/` | 247 | 89% | |
 | `audio.rs` | 121 | 91% | legs and gates |
 | `data_plane/` | 168 | 96% | |
-| `tool_executor.rs` | 594 | 86% | |
-| `agent_activity/` | 6,030 | 86% | scheduling, interruption, tools, hooks, handoff |
-| `transcription/synchronizer.rs` | 593 | 86% | |
-| `io.rs` | 174 | 68% | the host output seam (the IO traits moved to `lk-agents-abi`) |
-| `amd/` | 899 | 73% | |
+| `tool_executor.rs` | 594 | 89% | |
+| `agent_activity/` | 6,037 | 87% | scheduling, interruption, tools, hooks, handoff |
+| `transcription/synchronizer.rs` | 593 | 85% | |
+| `agent_session/api.rs`, `api/host.rs` | 1,310 | 77% | the public API (was 0%) |
+| `turn.rs`, `events.rs`, `host_events.rs` | 516 | 76% | the host's kwargs and wire records (was 10%) |
+| `amd/` | 899 | 74% | |
+| `io.rs` | 174 | 68% | the host output seam |
+| `speech_handle.rs` | 580 | 65% | the handle the developer holds (was 40%) |
 | `endpointing.rs` | 266 | 58% | |
-| `speech_handle.rs` | 573 | 40% | the handle the developer holds |
+| `room_io/` | 1,969 | 30% | room io over the fake room (was 2%); its audio legs are the host's (section 6) |
 | `keyterm_detection.rs` | 566 | 24% | the LLM pass is never set up |
-| **`agent_session/api.rs`, `api/host.rs`** | **1,275** | **0%** | **the public API (section 6)** |
-| `room_io/` | 1,969 | 2% | the real room input and output (section 6); only `link.rs` |
 | `transcription/filters.rs`, `text_transforms.rs` | 543 | 0% | text transforms never configured |
 | `background_audio.rs` | 547 | 0% | |
 | `remote_session*` | 946 | 0% | |
 | `workflows/` (builtin tasks) | 2,440 | 7% | host-side tasks; only the DTMF collector is used |
-| `turn.rs`, `events.rs`, `host_events.rs` | 516 | 10% | |
-| the rest (`agent.rs`, `filler_scheduler.rs`, `recorder_io/`, `run_result.rs`, `runtime.rs`, `transcription/mod.rs`) | 773 | 85% | |
+| the rest (`agent.rs`, `filler_scheduler.rs`, `recorder_io/`, `run_result.rs`, `runtime.rs`, `transcription/mod.rs`) | 773 | 86% | |
 
-The core loop is well reached and the search changes above barely moved this number: what is
-left is not reachable by any search until the fuzzer goes through the public API and the room
-I/O (section 6) and sets up what section 2.3 lists as fixed.
+What is left is not reachable by any search until the search sets up what section 2.3 lists as
+fixed (text transforms, a keyterm LLM, background audio, the room's own audio legs).
 
 ## 11. Outside this suite
 

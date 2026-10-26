@@ -68,10 +68,13 @@ pub struct Probe {
     /// Every journal step, in order, from the first the session wrote.
     pub step: Box<dyn FnMut(&Step) + Send>,
     /// Every host event, typed, as the drain takes it and before the host sees its wire form.
-    pub host_event: Box<dyn FnMut(&HostEvent) + Send>,
+    pub host_event: HostEventProbe,
     /// The session's cores after the opening cycle, for a queue owner other than `Runtime::run`.
     pub runtime: tokio::sync::oneshot::Sender<crate::Runtime>,
 }
+
+#[cfg(feature = "dst")]
+pub type HostEventProbe = Box<dyn FnMut(&HostEvent) + Send>;
 
 #[cfg(feature = "dst")]
 impl SessionApi {
@@ -615,7 +618,7 @@ pub struct SessionRunner {
     drained: Option<tokio::sync::oneshot::Sender<()>>,
     opening: Opening,
     #[cfg(feature = "dst")]
-    host_event: Option<Box<dyn FnMut(&HostEvent) + Send>>,
+    host_event: Option<HostEventProbe>,
 }
 
 struct Opening {

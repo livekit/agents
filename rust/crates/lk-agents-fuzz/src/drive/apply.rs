@@ -227,12 +227,12 @@ impl Run {
             Input::Say { text: AgentText(text), input: say, allow, to_ctx } => {
                 let speech = match say {
                     SayInput::Words => api.say(text.clone(), *allow, *to_ctx, None).ok(),
-                    SayInput::TextStream => api.say_stream(*allow, *to_ctx, None).ok().map(
-                        |(speech, pusher)| {
+                    SayInput::TextStream => {
+                        api.say_stream(*allow, *to_ctx, None).ok().map(|(speech, pusher)| {
                             stream = Some((false, Feeding::Text(pusher)));
                             speech
-                        },
-                    ),
+                        })
+                    }
                     SayInput::Audio => api.say_audio(text.clone(), *allow, *to_ctx, None).ok().map(
                         |(speech, pusher)| {
                             stream = Some((true, Feeding::Audio { pusher, chunks: 0 }));
@@ -278,7 +278,10 @@ impl Run {
                 .commit_user_turn(secs(*transcript_timeout), secs(*stt_flush), *skip_reply)
                 .map(|reply| {
                     wait(Pending::reply(reply, |r| {
-                        r.map_or_else(|CommitSuperseded| Answer::CommitSuperseded, Answer::Committed)
+                        r.map_or_else(
+                            |CommitSuperseded| Answer::CommitSuperseded,
+                            Answer::Committed,
+                        )
                     }))
                 })
                 .is_ok(),
@@ -289,14 +292,18 @@ impl Run {
                 };
                 api.wait_for_idle(hold.map(|h| h.0))
                     .map(|reply| {
-                        wait(Pending::reply(reply, |r| r.map_or_else(Answer::IdleRefused, |()| Answer::IdleOk)))
+                        wait(Pending::reply(reply, |r| {
+                            r.map_or_else(Answer::IdleRefused, |()| Answer::IdleOk)
+                        }))
                     })
                     .is_ok()
             }
             Input::WaitForIdleAndHold {} => api
                 .wait_for_idle_and_hold(None)
                 .map(|reply| {
-                    wait(Pending::reply(reply, |r| r.map_or_else(Answer::IdleRefused, Answer::Hold)))
+                    wait(Pending::reply(reply, |r| {
+                        r.map_or_else(Answer::IdleRefused, Answer::Hold)
+                    }))
                 })
                 .is_ok(),
             Input::ReleaseIdleHold { hold } => {
@@ -412,7 +419,8 @@ impl Run {
                     // No host call: `update_agent` always closes the frame it leaves and starts
                     // the next; pausing and resuming are an inline task's, which the driver
                     // does itself.
-                    let Ok((call, reply)) = api.call(lk_agents_voice::agent_session::Answer::handoff)
+                    let Ok((call, reply)) =
+                        api.call(lk_agents_voice::agent_session::Answer::handoff)
                     else {
                         return false;
                     };
@@ -423,7 +431,9 @@ impl Run {
                         toolset: Toolset {
                             specs: tool_specs(tools),
                             host: None,
-                            runner: Some(Arc::new(HostTools(fakes::FakeTools::new(registry.clone())))),
+                            runner: Some(Arc::new(HostTools(fakes::FakeTools::new(
+                                registry.clone(),
+                            )))),
                         },
                         chat_ctx: None,
                         llm: Maybe::NotGiven,
@@ -476,11 +486,13 @@ impl Run {
                 api.set_audio_input(source).is_ok()
             }
             Input::SetVideoInput { attach } => api
-                .set_video_input(attach.then(|| {
-                    fakes::FakeVideoInput::new(&registry, self.refs.clone()) as _
-                }))
+                .set_video_input(
+                    attach.then(|| fakes::FakeVideoInput::new(&registry, self.refs.clone()) as _),
+                )
                 .is_ok(),
-            Input::SetIoEnabled { leg, enabled } => api.set_io_enabled(io_leg(*leg), *enabled).is_ok(),
+            Input::SetIoEnabled { leg, enabled } => {
+                api.set_io_enabled(io_leg(*leg), *enabled).is_ok()
+            }
             Input::UpdateChatCtx { items, text: AgentText(text) } => {
                 api.update_chat_ctx(history(items, text)).is_ok()
             }
@@ -504,7 +516,10 @@ impl Run {
                     Models::LlmAndTts => (false, true, true),
                     Models::All => (true, true, true),
                 };
-                fn given<T: ?Sized>(on: bool, make: impl FnOnce() -> Arc<T>) -> Maybe<Option<Arc<T>>> {
+                fn given<T: ?Sized>(
+                    on: bool,
+                    make: impl FnOnce() -> Arc<T>,
+                ) -> Maybe<Option<Arc<T>>> {
                     if on { Maybe::Given(Some(make())) } else { Maybe::NotGiven }
                 }
                 let connect = Duration::from_millis(self.setup.connect_ms.unwrap_or(0));
@@ -575,7 +590,9 @@ impl Run {
             Input::Dtmf { input, key, digits, confirm, timeout } => match input {
                 DtmfInput::Start => api
                     .dtmf_start(digits.0 as usize + 1, *confirm, secs(*timeout), "#".into())
-                    .map(|reply| wait(Pending::reply(reply, |wire| Answer::Dtmf(dtmf_outcome(wire)))))
+                    .map(|reply| {
+                        wait(Pending::reply(reply, |wire| Answer::Dtmf(dtmf_outcome(wire))))
+                    })
                     .is_ok(),
                 DtmfInput::Digit => api.dtmf_digit(key.digit().to_owned()).is_ok(),
                 DtmfInput::Stop => {
