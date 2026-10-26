@@ -315,7 +315,7 @@ impl SessionApi {
     fn amd_input(&self, input: crate::amd::classifier::In) -> Result<(), SessionRefused> {
         self.running(|r| {
             if let Some(handle) = &r.amd {
-                let _ = handle.input(input);
+                handle.input(input);
             }
             Ok(())
         })

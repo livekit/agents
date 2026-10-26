@@ -1,5 +1,5 @@
 use crate::agent_session::{
-    IvrCommand, Origin, PeerHandle, SpeechCommand, SystemGone, SystemTap, TurnCommand,
+    IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand,
 };
 use crate::amd::classifier::{
     Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out,
@@ -95,15 +95,16 @@ pub struct AmdHandle {
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
 }
 
+/// A gone system drops what it is sent.
 impl AmdHandle {
-    pub fn input(&self, input: In) -> Result<(), SystemGone> {
-        self.tx.send(Msg::Input(input)).map_err(|_| SystemGone)
+    pub fn input(&self, input: In) {
+        let _ = self.tx.send(Msg::Input(input));
     }
 
     /// `AMD.push_audio(frame)`: a frame for AMD's own STT, heard only while listening (a system
     /// without an STT of its own reads the session's finals and drops it).
-    pub fn push_audio(&self, frame: AudioFrame) -> Result<(), SystemGone> {
-        self.tx.send(Msg::Audio(frame)).map_err(|_| SystemGone)
+    pub fn push_audio(&self, frame: AudioFrame) {
+        let _ = self.tx.send(Msg::Audio(frame));
     }
 
     /// `AMD.aclose()`: timers swept, request cancelled, hold released, tap cleared. Idempotent.
@@ -194,7 +195,7 @@ pub struct AmdSystem {
 
 impl AmdSystem {
     /// `AMD._run`: holding authorization from now, subscribed to the feed, the tap opening off the
-    /// loop. Past the close request nothing is attached and the handle answers `SystemGone`.
+    /// loop. Past the close request nothing is attached and the handle drops what it is sent.
     pub fn spawn(peer: PeerHandle, setup: AmdSetup) -> AmdHandle {
         if *peer.closing.borrow() {
             peer.journal(Step::Core(CoreStep::PortFailure("amd: attached after the close")));

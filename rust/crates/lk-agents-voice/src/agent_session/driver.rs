@@ -711,5 +711,3 @@ pub fn start_ivr(peer: &PeerHandle, ivr_detection: bool) {
     crate::ivr::IvrSystem::spawn(peer.clone(), ivr_detection);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SystemGone;

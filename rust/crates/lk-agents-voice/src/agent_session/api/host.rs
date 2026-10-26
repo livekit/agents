@@ -1188,7 +1188,7 @@ impl SessionApi {
     pub fn amd_push_audio(&self, frame: lk_agents_abi::AudioFrame) -> Result<(), SessionRefused> {
         self.running(|r| {
             if let Some(handle) = &r.amd {
-                let _ = handle.push_audio(frame);
+                handle.push_audio(frame);
             }
             Ok(())
         })
