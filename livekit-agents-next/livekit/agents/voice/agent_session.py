@@ -344,7 +344,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if chat_ctx is not None:
             self._chat_ctx = chat_ctx.copy()
 
-        frame = self._frame(agent)
+        frame = await self._frame(agent)
         realtime = frame.get("llm") if isinstance(frame.get("llm"), llm.RealtimeModel) else None
         sampler = self._video_sampler
         self._core = _core.LiveSession(
@@ -396,6 +396,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         await self._core.close_io()
         for task in list(self._tasks):
             task.cancel()
+        await asyncio.gather(*(t.aclose() for t in self._tools if isinstance(t, llm.Toolset)))
 
     async def __aenter__(self) -> LiveSession[Userdata_T]:
         return self
@@ -522,8 +523,16 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def update_agent(self, agent: Agent) -> None:
         """Hand the conversation to ``agent``; the session and its history stay."""
-        self._spawn(self._running.update_agent(**self._frame(agent)))
+
+        async def _update() -> None:
+            await self._running.update_agent(**await self._frame(agent))
+
+        self._spawn(_update())
         self._agent = agent
+
+    def _update_chat_ctx(self, chat_ctx: ChatContext) -> None:
+        """Replace the context the running agent works on."""
+        self._running.update_chat_ctx(to_core_items(chat_ctx.items))
 
     def update_options(self, **update: Any) -> None:
         """Change the turn options of a running session (``UpdateKwargs``)."""
@@ -537,10 +546,11 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _pool(self, agent: Agent) -> list[llm.Tool | llm.Toolset]:
         return [*agent.tools, *self._tools]
 
-    def _frame(self, agent: Agent) -> dict[str, Any]:
-        """``agent`` as the core installs it (``update_agent``'s keywords)."""
+    async def _frame(self, agent: Agent) -> dict[str, Any]:
+        """``agent`` as the core installs it (``update_agent``'s keywords), its toolsets set up."""
         self._agents[agent.id] = agent
         pool = self._pool(agent)
+        await asyncio.gather(*(t.setup() for t in pool if isinstance(t, llm.Toolset)))
         frame: dict[str, Any] = {
             "instructions": _instructions(agent.instructions),
             "agent": agent.id,
@@ -752,6 +762,10 @@ async def _answer_hook(session: LiveSession[Any], wire: dict[str, Any]) -> None:
                 else:
                     await agent.on_exit()
             core.hook_returned(hook_id)
+            if hook == "on_exit":
+                await asyncio.gather(
+                    *(t.aclose() for t in agent.tools if isinstance(t, llm.Toolset))
+                )
         elif hook == "on_user_turn_completed":
             await _turn_completed(session, wire)
         elif hook == "describe_agent":
@@ -759,7 +773,7 @@ async def _answer_hook(session: LiveSession[Any], wire: dict[str, Any]) -> None:
             if agent is None:
                 core.hook_failed(hook_id)
                 return
-            core.hook_described(hook_id, **session._frame(agent))
+            core.hook_described(hook_id, **await session._frame(agent))
             session._agent = agent
         elif hook == "function_tools_executed":
             ev = FunctionToolsExecutedEvent(

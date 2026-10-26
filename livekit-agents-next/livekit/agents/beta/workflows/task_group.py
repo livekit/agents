@@ -106,14 +106,6 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 self._visited_tasks.add(task_id)
                 res = await self._current_task
 
-                # AgentTask handoff merges omit function calls. Re-merge the completed
-                # task context so task-group summarization can incorporate tool results.
-                if (task_activity := self._current_task._task_activity) is not None:
-                    self._get_activity_or_raise()._chat_ctx.merge(
-                        task_activity._chat_ctx.copy(),
-                        exclude_instructions=True,
-                    )
-
                 task_results[task_id] = res
 
                 if self._task_completed_callback is not None:
@@ -152,7 +144,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                     exclude_function_call=False,
                 )._summarize(llm_v=self.session.llm, keep_last_turns=0)
 
-                await self._get_activity_or_raise().update_chat_ctx(summarized_chat_ctx)
+                self.session._update_chat_ctx(summarized_chat_ctx)
             except Exception as e:
                 self._complete(e)
                 return

@@ -5,6 +5,7 @@ from typing import Any
 from ...job import get_job_context
 from ...llm import RealtimeModel, ToolFlag, Toolset, function_tool
 from ...log import logger
+from ...utils import is_given
 from ...voice.events import CloseEvent, RunContext, SpeechCreatedEvent
 from ...voice.speech_handle import SpeechHandle
 
@@ -65,17 +66,14 @@ class EndCallTool(Toolset):
 
     async def _end_call(self, ctx: RunContext) -> Any | None:
         logger.debug("end_call tool called")
-        activity = ctx.session.current_agent._get_activity_or_raise()
-        llm_v = activity.llm
+        agent_llm = ctx.session.current_agent.llm
+        llm_v = agent_llm if is_given(agent_llm) else ctx.session.llm
 
         def _on_speech_done(_: SpeechHandle) -> None:
-            # read auto_tool_reply_generation from the active realtime session so a fallback
-            # adapter reports the model actually in use
-            rt_session = activity.realtime_llm_session
             auto_tool_reply = (
-                rt_session is not None and rt_session.capabilities.auto_tool_reply_generation
+                isinstance(llm_v, RealtimeModel) and llm_v.capabilities.auto_tool_reply_generation
             )
-            if not isinstance(llm_v, RealtimeModel) or not auto_tool_reply:
+            if not auto_tool_reply:
                 # tool reply will reuse the same speech handle, so we can shutdown the session
                 # directly after this speech handle is done
                 ctx.session.shutdown()

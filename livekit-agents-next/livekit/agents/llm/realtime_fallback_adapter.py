@@ -323,11 +323,10 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 except Exception:
                     logger.debug("failed to interrupt the agent before swap", exc_info=True)
 
-            # replay the activity's history (what the user heard); fall back to the child's
+            # replay the session's history (what the user heard); fall back to the child's
             # when unbound
-            activity = self._agent_session._activity if self._agent_session is not None else None
-            if activity is not None:
-                chat_ctx = activity.chat_ctx
+            if self._agent_session is not None:
+                chat_ctx = self._agent_session.history
             else:
                 chat_ctx = self._active.chat_ctx
 

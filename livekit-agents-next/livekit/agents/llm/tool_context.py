@@ -90,7 +90,7 @@ class Toolset:
     async def setup(self) -> Self:
         """Initialize the toolset and any nested toolsets.
 
-        Called automatically by ``AgentActivity`` when an agent starts.
+        Called by the session when an agent using it starts.
         """
         toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
         if toolsets:
@@ -101,7 +101,7 @@ class Toolset:
         """Close the toolset and release any held resources.
 
         Agent-scoped toolsets (passed to ``Agent(tools=...)``) are closed when the
-        ``AgentActivity`` ends (on agent transition or session close). Session-scoped
+        agent exits (on agent transition or session close). Session-scoped
         toolsets (passed to ``LiveSession(tools=...)``) are closed only when the
         ``LiveSession`` shuts down.
         """

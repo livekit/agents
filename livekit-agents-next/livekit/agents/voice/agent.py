@@ -1034,7 +1034,7 @@ class AgentTask(Agent, Generic[TaskResult_T, TaskState_T]):
         self._handle = handle = _core.TaskHandle()
         session._running.enter_task(
             handle,
-            **session._frame(self),
+            **await session._frame(self),
             speech_id=binding.speech_id,
             preserve_function_call_history=self._preserve_function_call_history,
             parent=binding.agent.id,
