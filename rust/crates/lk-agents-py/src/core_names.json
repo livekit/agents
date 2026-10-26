@@ -296,6 +296,7 @@
   "to_xml",
   "token_identity",
   "tool_call_output_shape",
+  "tool_proxy_arguments",
   "tool_reply_templates",
   "tool_search_loaded",
   "tool_search_validate",

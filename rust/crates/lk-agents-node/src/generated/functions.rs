@@ -621,6 +621,16 @@ pub fn tool_search_loaded(env: Env, query: String, count: i64) -> napi::Result<S
     })
 }
 
+/// `ToolProxyToolset`'s `call_tool` arguments: the tool's name and its parameters (an object, or
+/// the JSON string of one), refused as the model's error when missing, mistyped, or naming no tool
+/// in `known`.
+#[napi(js_name = "toolProxyArguments")]
+pub fn tool_proxy_arguments(env: Env, arguments: serde_json::Value, known: Vec<String>) -> napi::Result<(String, serde_json::Value)> {
+    crate::host_error::run(&env, || {
+        lk_agents_abi::tokenize::search::proxy_arguments(arguments, known).map_err(|e| crate::host_error::JsError::new("livekit.agents.llm.tool_context.ToolError", e.to_string()))
+    })
+}
+
 /// Each `ALL` array's names, indexed by wire value, for the host adapter's reads of SDK ints:
 /// `(connection states, disconnect reasons, participant kinds, track sources, audio features)`.
 #[napi(js_name = "rtcWireNames")]

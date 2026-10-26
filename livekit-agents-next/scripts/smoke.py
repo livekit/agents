@@ -1310,6 +1310,55 @@ async def tools() -> None:
     assert spoken[-1] == "The tool said: say goodbye to the user", spoken
 
 
+async def toolsets() -> None:
+    """Tool search: a search loads the matching tools (ranked by the core); the proxy returns
+    their schemas and calls one by name, its arguments checked by the core."""
+    from livekit.agents.beta.toolsets import (
+        KeywordSearchStrategy,
+        ToolProxyToolset,
+        ToolSearchToolset,
+    )
+    from livekit.agents.llm import ToolError
+
+    print("== toolsets")
+
+    @function_tool
+    async def get_weather(city: str) -> str:
+        """The weather in a city."""
+        return f"sunny in {city}"
+
+    @function_tool
+    async def get_stock(symbol: str) -> str:
+        """A stock's price."""
+        return f"{symbol}: 100"
+
+    search = ToolSearchToolset(id="search", tools=[get_weather, get_stock])
+    await search.setup()
+    print(await search._handle_search({"query": "weather"}))
+    assert [t.id for t in search.tools] == ["tool_search", "get_weather"], search.tools
+    with contextlib.suppress(ToolError):
+        await search._handle_search({"query": "nothing matches"})
+        raise AssertionError("an empty search loaded tools")
+    keyword = ToolSearchToolset(
+        id="kw", tools=[get_weather, get_stock], search_strategy=KeywordSearchStrategy()
+    )
+    await keyword.setup()
+    await keyword._handle_search({"query": "stock"})
+    assert [t.id for t in keyword.tools] == ["tool_search", "get_stock"], keyword.tools
+
+    proxy = ToolProxyToolset(id="proxy", tools=[get_weather, get_stock])
+    await proxy.setup()
+    schemas = await proxy._handle_search({"query": "stock"})
+    assert json.loads(schemas)["name"] == "get_stock", schemas
+    called = await proxy._handle_call(None, {"name": "get_weather", "parameters": {"city": "Oslo"}})
+    print(f"proxy called: {called}")
+    assert called == "sunny in Oslo", called
+    for bad in ({"name": "", "parameters": {}}, {"name": "nope", "parameters": {}}):
+        with contextlib.suppress(ToolError):
+            await proxy._handle_call(None, bad)
+            raise AssertionError(f"{bad} was called")
+
+
 async def warm_transfer() -> None:
     """The warm transfer the core runs over a host: dialled over SIP and connected (the caller
     leaving then deletes their room), declined, and dialled through Twilio, whose rejected caller
@@ -1533,6 +1582,7 @@ async def main() -> int:
     await workflows()
     await warm_transfer()
     await tools()
+    await toolsets()
     log_transport()
     return 0
 

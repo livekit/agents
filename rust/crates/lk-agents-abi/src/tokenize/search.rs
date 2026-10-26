@@ -239,3 +239,31 @@ pub fn loaded_result(query: &str, count: usize) -> Result<&'static str, String> 
         Ok("Tools loaded successfully.")
     }
 }
+
+/// `ToolProxyToolset`'s `call_tool` arguments: the tool's name and its parameters (an object, or
+/// the JSON string of one), refused as the model's error when missing, mistyped, or naming no tool
+/// in `known`.
+#[crate::host(export(name = "tool_proxy_arguments", err = "livekit.agents.llm.tool_context.ToolError"))]
+pub fn proxy_arguments(
+    arguments: serde_json::Value,
+    known: Vec<String>,
+) -> Result<(String, serde_json::Value), String> {
+    use serde_json::Value;
+    let name = match arguments.get("name") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+    };
+    if name.is_empty() {
+        return Err("tool name cannot be empty".into());
+    }
+    let parameters = match arguments.get("parameters") {
+        None | Some(Value::Null) => return Err("parameters is required".into()),
+        Some(p @ (Value::Object(_) | Value::String(_))) => p.clone(),
+        Some(_) => return Err("parameters must be a dictionary or a string".into()),
+    };
+    if !known.contains(&name) {
+        return Err(format!("unknown tool '{name}', use tool_search to discover available tools"));
+    }
+    Ok((name, parameters))
+}
