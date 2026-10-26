@@ -88,9 +88,10 @@ class SimliConfig:
         avatar_position_y (float | None):
             Where the avatar sits down the video, from 0 (top) to 1 (bottom).
             Trinity-2 only. Simli's default is 1.0.
-        camera (CameraSetting | None):
-            The camera the session starts with. Trinity-2 only. Defaults to the
-            avatar's own framing.
+        camera (CameraSetting | dict[str, float] | None):
+            The camera the session starts with, as a CameraSetting or a dict of its
+            fields, e.g. ``{"zoom": 1.2}``. Trinity-2 only. Defaults to the avatar's own
+            framing.
         background_id (str | None):
             ID of one of your uploaded backgrounds (``POST /assets/backgrounds``) to show
             behind the avatar. Trinity-2 only. Defaults to the avatar's own.
@@ -111,7 +112,7 @@ class SimliConfig:
     streaming_height: int | None = None
     avatar_position_x: float | None = None
     avatar_position_y: float | None = None
-    camera: CameraSetting | None = None
+    camera: CameraSetting | dict[str, float] | None = None
     background_id: str | None = None
     foreground_id: str | None = None
 
@@ -133,7 +134,8 @@ class SimliConfig:
             if (value := getattr(self, name)) is not None:
                 result[name] = value
         if self.camera is not None:
-            result["camera"] = {k: v for k, v in asdict(self.camera).items() if v is not None}
+            camera = asdict(self.camera) if isinstance(self.camera, CameraSetting) else self.camera
+            result["camera"] = {k: v for k, v in camera.items() if v is not None}
         return result
 
 

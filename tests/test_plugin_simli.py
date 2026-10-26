@@ -248,6 +248,16 @@ def test_unset_trinity2_options_are_left_out():
         assert name not in body
 
 
+def test_camera_can_be_a_dict():
+    """As in Simli's API docs, and in create_json() overrides written before
+    SimliConfig had a camera field."""
+    from livekit.plugins.simli import SimliConfig
+
+    body = SimliConfig(api_key="test-key", face_id="face", camera={"zoom": 1.2}).create_json()
+
+    assert body["camera"] == {"zoom": 1.2}
+
+
 async def test_start_posts_the_config_body_to_compose_token(monkeypatch):
     from livekit.plugins.simli import SimliConfig, avatar as simli_avatar
 
