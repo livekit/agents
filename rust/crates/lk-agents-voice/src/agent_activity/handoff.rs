@@ -26,7 +26,7 @@ pub(crate) struct Handoff {
     in_progress: Option<InProgress>,
     /// The order switches were asked for, which is the order they land in (each `update_agent`
     /// chains behind the one before).
-    queue: VecDeque<Queued>,
+    queue: VecDeque<(HandoffId, Box<AgentUpdate>)>,
     /// A user turn decided while a switch runs, delivered to the arriving agent once.
     pub(crate) held_user_turn: Option<HeldUserTurn>,
     /// The host's `say()` / `generate_reply()` asked while the leaving agent drains, in order: the
@@ -44,14 +44,8 @@ struct InProgress {
 enum Phase {
     /// The leaving agent may still speak its goodbye.
     Exiting { hook: HookId },
-    /// `PauseScheduling { cause: Handoff }` asked: the swap lands once every speech not blocked
-    /// on an inline task has finished.
+    /// `PauseScheduling { cause: Handoff }` asked: the swap lands once every speech has finished.
     Draining,
-}
-
-enum Queued {
-    /// Waiting for the switch in progress.
-    Ready { id: HandoffId, update: Box<AgentUpdate> },
 }
 
 /// A turn kept for the arriving agent. `edits: None`: the arriving agent runs its own
@@ -62,11 +56,11 @@ pub(crate) struct HeldUserTurn {
 }
 
 pub(crate) enum HandoffEvent {
-    /// `update_agent()`: by the host, an inline task, or a tool whose agent was described.
+    /// `update_agent()`, by the host or a tool's handoff.
     Asked(Box<AgentUpdate>),
     OnExitEnded(HookId),
     Paused(PauseResult),
-    /// The swap landed, or a describe gave up its place: the next queued switch begins.
+    /// The swap landed: the next queued switch begins.
     Next,
     /// The close: the switch in progress and every queued one refused, and a held turn dropped,
     /// since no agent arrives.
@@ -132,9 +126,7 @@ impl Handoff {
 
     /// Every switch it holds: the one in progress, then the queued ones.
     pub(crate) fn updates(&self) -> impl Iterator<Item = &AgentUpdate> {
-        let queued = self.queue.iter().filter_map(|q| match q {
-            Queued::Ready { update, .. } => Some(&**update),
-        });
+        let queued = self.queue.iter().map(|(_, update)| &**update);
         self.in_progress().into_iter().chain(queued)
     }
 
@@ -142,10 +134,9 @@ impl Handoff {
         self.in_progress.take().map(|InProgress { id, update, phase: _ }| (id, update))
     }
 
-    /// Every queued switch refused as closing (a held describe just goes).
+    /// Every queued switch refused as closing.
     pub(crate) fn refuse_queued(&mut self, out: &mut Out) {
-        while let Some(queued) = self.queue.pop_front() {
-            let Queued::Ready { id, update } = queued;
+        while let Some((id, update)) = self.queue.pop_front() {
             refuse(Some(id), update, HandoffRefused::Closing, out);
         }
     }
@@ -155,12 +146,9 @@ impl Handoff {
         HandoffId(self.next)
     }
 
-    /// Refused when closing (a resume is not), queued behind a switch in progress or a pending
-    /// describe, begun otherwise.
+    /// Refused when closing, queued behind a switch in progress, begun otherwise.
     fn asked(&mut self, update: Box<AgentUpdate>, cx: &mut Cx<'_>, out: &mut Out) {
         let id = self.mint();
-        // A task's resume completes the current transition before a queued host switch: queued
-        // behind it, the task's old parent would overwrite the host's agent.
         let queued = self.switching() || !self.queue.is_empty();
         if cx.closing {
             return refuse(Some(id), update, HandoffRefused::Closing, out);
@@ -168,26 +156,25 @@ impl Handoff {
         // An open run owns every switch asked for while it is open.
         out.signal(Signal::RunOwn(Owned::Handoff(id)));
         if queued {
-            self.queue.push_back(Queued::Ready { id, update });
+            self.queue.push_back((id, update));
             return;
         }
         self.start(id, update, cx, out);
     }
 
-    /// The next switch, unless one is in progress or a describe holds the head.
+    /// The next queued switch, unless one is in progress.
     fn start_next(&mut self, cx: &mut Cx<'_>, out: &mut Out) {
-        if self.switching() || !matches!(self.queue.front(), Some(Queued::Ready { .. })) {
+        if self.switching() {
             return;
         }
-        if let Some(Queued::Ready { id, update }) = self.queue.pop_front() {
+        if let Some((id, update)) = self.queue.pop_front() {
             self.start(id, update, cx, out);
         }
     }
 
-    /// The first phase: `on_exit` on the agent being left (`Close`), or straight to the drain
-    /// (`Pause`: an awaited agent's parent runs no `on_exit`).
+    /// The first phase: the leaving agent's `on_exit`, or straight to the drain when it already
+    /// ran.
     fn start(&mut self, id: HandoffId, update: Box<AgentUpdate>, cx: &mut Cx<'_>, out: &mut Out) {
-        // The parent is captured now that the entry starts (it may have changed while queued).
         let exit = cx.leave.claim();
         let phase = match exit.hook() {
             Some(hook) => Phase::Exiting { hook },
@@ -206,7 +193,7 @@ fn refuse(id: Option<HandoffId>, update: Box<AgentUpdate>, cause: HandoffRefused
 }
 
 impl Driver {
-    /// The caller answered and the run lets go; an inline task's entry or exit tells the task.
+    /// The caller answered and the run lets go.
     pub(crate) fn refuse_handoff(
         &mut self,
         id: Option<HandoffId>,
@@ -243,14 +230,11 @@ impl Driver {
         // The run's `on_enter`, owned above, keeps the run open.
         self.run_release(Owned::Handoff(id), out);
         out.signal(Signal::DeliverHeldTurn);
-        // Unless this swap began a switch itself (a task whose handle settled before its agent
-        // landed hands back at once): starting the queued one over it would lose the exit.
         out.signal(Signal::NextHandoff);
     }
 
     /// The transition window: from a tool's handoff request (`_new_turns_blocked` is set in
-    /// `update_agent`) through the swap. A describe pending across a swap opens none for the
-    /// arriving agent.
+    /// `update_agent`) through the swap.
     pub(crate) fn in_window(&self) -> bool {
         self.activity.handoff.switching()
     }
@@ -359,7 +343,6 @@ impl Driver {
     /// changed legs move.
     pub(crate) fn update_agent(&mut self, now: Ts, update: AgentUpdate, out: &mut Out) {
         let reopened = update.reopens();
-        // `previous`, `next`, `call` and `task` are the caller's, read before the swap.
         let AgentUpdate {
             agent,
             instructions,
@@ -391,8 +374,7 @@ impl Driver {
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
             }
             None => {
-                // The resume's carry: the task's calls leave the view first, then the host is told
-                // which of the task's items are now the parent's.
+                // The conversation carried forward; the host is told which items changed agent.
                 let from = self.session.chat_ctx.agent().to_owned();
                 let items = self.session.chat_ctx.hand_to(&agent, &tool_names);
                 if from != agent {

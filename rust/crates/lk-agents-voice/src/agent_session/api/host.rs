@@ -460,8 +460,7 @@ impl SessionApi {
         &self,
         #[host(kwargs)] frame: UpdateAgentArgs,
     ) -> Result<Reply<bool>, SessionRefused> {
-        // Always `_update_activity(previous_activity="close", new_activity="start")`; the
-        // pause/resume pair is an inline task's (`enter_task`).
+        // Always `_update_activity(previous_activity="close", new_activity="start")`.
         // The answer first: a refused handoff registers no provider it would never release.
         let (call, rx) = self.call(Answer::handoff)?;
         let mut update = self.frame(frame);

@@ -461,7 +461,7 @@ impl Driver {
             let unheard = match scheduling.status(id)? {
                 Status::Queued => true,
                 Status::Current => !speaking && paused != Some(id),
-                Status::Preemptive | Status::Working | Status::Parked | Status::Discarded => false,
+                Status::Preemptive | Status::Working | Status::Discarded => false,
             };
             (reply && unheard).then_some(id)
         });

@@ -591,9 +591,8 @@ impl SpeechHandle {
         Ok(())
     }
 
-    /// Disallow interruptions until every hold taken here is released. Counted: parallel tool
-    /// calls' inline tasks each hold, and an early release would let one task's sub-conversation
-    /// interrupt the speech the rest are anchored to. The first holder's value is restored.
+    /// Disallow interruptions until every hold taken here is released: counted, so one holder's
+    /// release cannot lift another's. The first holder's value is restored.
     pub fn hold_interruptions(&self) -> Result<(), SpeechError> {
         // Read before writing, as the setter's guard does.
         let interrupted = self.interrupted();

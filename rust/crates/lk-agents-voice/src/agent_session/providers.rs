@@ -1,5 +1,5 @@
-//! The providers the core holds by id: received in commands, kept by the session, a switch or an
-//! inline task. One no longer held anywhere at the end of a step is released.
+//! The providers the core holds by id: received in commands, kept by the session or a switch. One
+//! no longer held anywhere at the end of a step is released.
 
 use crate::agent_session::Driver;
 use crate::agent_session::effects::{Effect, Out, ProviderCall};

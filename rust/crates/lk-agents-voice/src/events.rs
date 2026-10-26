@@ -461,8 +461,8 @@ pub enum SessionEvent {
         visibility: crate::agent::Visibility,
         run: Option<RunRef>,
     },
-    /// A resumed frame took over the replaced frame's conversation (the reference's merge at an
-    /// inline task's return). `items` already announced under `from`; no new `ItemAdded`.
+    /// The arriving agent took over the leaving agent's conversation. `items` were already
+    /// announced under `from`; no new `ItemAdded`.
     ContextCarried {
         from: String,
         to: String,

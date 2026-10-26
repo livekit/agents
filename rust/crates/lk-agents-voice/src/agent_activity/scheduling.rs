@@ -72,9 +72,6 @@ mod speech_scheduler {
         Current,
         /// Step spoken, tools running: neither current nor queued until requeued or finished.
         Working,
-        /// A current speech whose tool awaits an inline task: it stays current until its step is
-        /// spoken, then becomes `Working`.
-        Parked,
         /// Rejected or discarded: the driver interrupted it and it is winding down to its end.
         Discarded,
     }
@@ -263,9 +260,8 @@ mod speech_scheduler {
             self.speech_q.push_back(speech);
         }
 
-        /// `_scheduling_task`'s pass: the owed gap expires where it is read, a parked speech
-        /// no longer blocked becomes current again before the queue, and the head is authorized,
-        /// armed behind the gap, or held for AMD.
+        /// `_scheduling_task`'s pass: the owed gap expires where it is read, and the head is
+        /// authorized, armed behind the gap, or held for AMD.
         pub(super) fn scheduling_pass(&mut self, now: Ts, gap_elapsed: bool) -> SchedulingPass {
             let mut released = false;
             let candidate = loop {
@@ -286,8 +282,6 @@ mod speech_scheduler {
                         next
                     }
                     SchedulingStep::AuthorizationPaused { next } => next,
-                    // A parked speech whose tool is no longer blocked was mid-tool: it precedes the
-                    // queue.
                     SchedulingStep::Idle => {
                         let Some(speech) = self.speech_q.pop_front() else {
                             return SchedulingPass { released, next: NextSpeech::Stay };
@@ -416,12 +410,10 @@ mod speech_scheduler {
             }
         }
 
-        /// The pause's callers, once nothing it waits on is outstanding (a blocked speech excepted
-        /// once `Working`).
+        /// The pause's callers, once no speech is held.
         pub(super) fn settle_pause(&mut self) -> Vec<PauseCause> {
             let Some(pause) = &mut self.paused else { return Vec::new() };
-            let outstanding = !self.speeches.is_empty();
-            if outstanding {
+            if !self.speeches.is_empty() {
                 return Vec::new();
             }
             std::mem::take(&mut pause.callers)
@@ -457,14 +449,13 @@ mod speech_scheduler {
             Some((speech, verdict))
         }
 
-        /// The step was spoken: the current speech is released and becomes `Working`, as does a
-        /// parked speech (requeueing is the way back). No `listening`: tools may still run.
+        /// The step was spoken: the current speech is released and becomes `Working` (requeueing
+        /// is the way back). No `listening`: tools may still run.
         pub(in crate::agent_activity) fn spoken(&mut self, speech: SpeechId, now: Ts) {
-            if self.step == SchedulingStep::Current(speech) {
-                self.step = SchedulingStep::Idle;
-            } else if self.entry(speech).is_none_or(|e| e.status != Status::Parked) {
+            if self.step != SchedulingStep::Current(speech) {
                 return;
             }
+            self.step = SchedulingStep::Idle;
             self.last_playout = Some(now);
             self.set_status(speech, Status::Working);
         }
@@ -484,12 +475,10 @@ mod speech_scheduler {
                 "the preemptive generation slot and the Preemptive entries disagree"
             );
             match self.step {
-                // The current speech is `Current`, or parked: blocked for an inline task, its step
-                // still playing.
-                SchedulingStep::Current(speech) => debug_assert!(
-                    matches!(status(&speech), Some(Status::Current | Status::Parked)),
-                    "the current speech is neither current nor parked: {:?}",
-                    status(&speech)
+                SchedulingStep::Current(speech) => debug_assert_eq!(
+                    status(&speech),
+                    Some(Status::Current),
+                    "the current speech is not current"
                 ),
                 SchedulingStep::Delaying { next: Some(next), .. }
                 | SchedulingStep::AuthorizationPaused { next } => debug_assert_eq!(
@@ -871,12 +860,10 @@ impl Driver {
     }
 
     /// `_pause_scheduling_task`: new speech is refused (tool replies excepted) and queued speech
-    /// still plays; its caller is answered once nothing outstanding remains, the speeches blocked on
-    /// an inline task excepted. Journalled with the speeches it waits for. Two pauses before the
+    /// still plays; its caller is answered once nothing outstanding remains. Two pauses before the
     /// drain completes are two promises; a closing session refuses (drops) it.
     pub(crate) fn pause_scheduling(&mut self, now: Ts, cause: PauseCause, out: &mut Out) {
-        let except = std::collections::BTreeSet::new();
-        out.trace(SpeechStep::SchedulingPaused { except });
+        out.trace(SpeechStep::SchedulingPaused);
         if self.session.closing_past_edge() {
             return refuse_pause(vec![cause], CLOSING, out);
         }
@@ -915,7 +902,7 @@ impl Driver {
     }
 
     /// Answer every pending pause once nothing it waits on is outstanding (released, tools
-    /// included). A blocked speech is excepted once `Working`: the pause came from inside its tool.
+    /// included).
     pub(super) fn settle_scheduling_pause(&mut self, out: &mut Out) {
         for cause in self.activity.speech_scheduler.settle_pause() {
             out.signal(Signal::Paused(cause, PauseResult::Settled));

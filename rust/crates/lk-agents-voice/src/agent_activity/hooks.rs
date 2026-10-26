@@ -1,6 +1,6 @@
 //! The developer's callbacks the driver awaits (`on_enter`, `on_exit`, `on_user_turn_completed`,
-//! the agent a tool hands off to, a tool reply's rendering, a filler's source, the
-//! `function_tools_executed` handlers), and how long each is waited on.
+//! a tool reply's rendering, a filler's source, the `function_tools_executed` handlers), and how
+//! long each is waited on.
 
 use crate::agent::TurnEdit;
 use crate::agent_session::effects::{Out, Timer};
@@ -19,12 +19,8 @@ pub const HOOK_BOUND: Duration = crate::speech_handle::INTERRUPTION_TIMEOUT;
 /// The callbacks in flight, by id.
 #[derive(Default)]
 pub(crate) struct Hooks {
-    pending: BTreeMap<HookId, Pending>,
+    pending: BTreeMap<HookId, HookKind>,
     next: u64,
-}
-
-struct Pending {
-    kind: HookKind,
 }
 
 impl Hooks {
@@ -35,17 +31,17 @@ impl Hooks {
 
     /// The host was asked `hook`.
     pub(crate) fn wait_for(&mut self, hook: HookId, kind: HookKind) {
-        self.pending.insert(hook, Pending { kind });
+        self.pending.insert(hook, kind);
     }
 
     /// The callback is answered or given up on: its kind, if it was waited on.
     pub(crate) fn finish(&mut self, hook: HookId) -> Option<HookKind> {
-        self.pending.remove(&hook).map(|h| h.kind)
+        self.pending.remove(&hook)
     }
 
     /// Every callback still waited on, taken, in id order.
     pub(crate) fn take_all(&mut self) -> Vec<(HookId, HookKind)> {
-        std::mem::take(&mut self.pending).into_iter().map(|(id, h)| (id, h.kind)).collect()
+        std::mem::take(&mut self.pending).into_iter().collect()
     }
 }
 
@@ -81,7 +77,7 @@ impl Driver {
         if let Some(wait) = wait {
             out.machine().arm(Timer::Hook(id), now.saturating_add(wait));
         }
-        // An open run owns the agent's `on_enter` and the describe a tool's handoff waits on.
+        // An open run owns the agent's `on_enter`.
         match kind {
             HookKind::OnEnter => self.run_own(Owned::Hook(id), out),
             HookKind::OnExit
@@ -157,8 +153,7 @@ impl Driver {
     }
 
     /// What waited on the callback goes on. `Failed` is also one that will not be answered (its
-    /// bound passed): an exit proceeds, a describe is dropped, a render or a filler source falls
-    /// back to its default. A turn callback's bound is `pending_turn`'s. A mismatched answer
+    /// bound passed): an exit proceeds, a render or a filler source falls back to its default. A turn callback's bound is `pending_turn`'s. A mismatched answer
     /// counts as unanswered.
     fn hook_ended(
         &mut self,
@@ -239,8 +234,7 @@ impl Driver {
         }
     }
 
-    /// The bound passed: an unreturned `on_exit` lets the drain go on; an unanswered describe drops
-    /// the handoff.
+    /// The bound passed: an unreturned `on_exit` lets the drain go on.
     pub(crate) fn hook_timed_out(&mut self, now: Ts, id: HookId, out: &mut Out) {
         if let Some(kind) = self.finish_hook(id, HookEnd::TimedOut, out) {
             self.hook_ended(now, kind, id, HookOutcome::Failed, out);

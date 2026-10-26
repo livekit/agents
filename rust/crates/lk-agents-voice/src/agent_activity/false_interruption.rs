@@ -738,7 +738,7 @@ impl Driver {
             .speech_ids()
             .filter(|id| {
                 let status = self.activity.speech_scheduler.status(*id);
-                matches!(status, Some(Status::Working | Status::Parked))
+                status == Some(Status::Working)
             })
             .collect();
         for id in working {

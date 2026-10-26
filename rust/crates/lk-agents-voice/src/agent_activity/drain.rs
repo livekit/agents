@@ -12,9 +12,8 @@ use crate::trace::HandoffStep;
 #[derive(Default)]
 pub(crate) struct Drain {
     current: Option<AgentDrain>,
-    /// Answered `Ok` once no speech is open and, for an agent an inline task paused
-    /// (`Some(hook)`), once its `on_exit` ended.
-    left: Vec<(Option<HookId>, RequestId)>,
+    /// Answered `Ok` once no speech is open.
+    left: Vec<RequestId>,
 }
 
 struct AgentDrain {
@@ -32,8 +31,7 @@ enum Phase {
     /// on the lock the switch holds.
     Joined,
     Pausing,
-    /// The pause settled with a speech blocked on an inline task still open: wait for its end.
-    /// (The reference's drain deadlocks here on the task's `pause()`.)
+    /// The pause settled with a speech still open: wait for its end.
     Settling,
     /// Exited and paused: the agent stays, idle, until a close or a new agent.
     Drained,
@@ -46,7 +44,7 @@ pub(crate) enum DrainEvent {
     Paused(PauseResult),
     /// No speech is open any more.
     Quiet,
-    /// The swap leaves the agent: paused under an inline task, or for good.
+    /// The swap leaves the agent.
     Leaving,
     /// The handoff it joined ended without a swap: its callers' drain runs on this agent.
     AgentStays,
@@ -67,11 +65,6 @@ impl Drain {
                 {
                     *phase = Phase::Pausing;
                     out.signal(Signal::PauseScheduling(PauseCause::Drain));
-                }
-                for (waits_on, _) in &mut self.left {
-                    if *waits_on == Some(hook) {
-                        *waits_on = None;
-                    }
                 }
                 self.left_ready(cx.quiet, out);
             }
@@ -122,8 +115,7 @@ impl Drain {
     /// Every caller still waiting, taken: a left agent's first, then the driving agent's (whose
     /// drain is forgotten).
     pub(crate) fn take_waiters(&mut self) -> Vec<RequestId> {
-        let mut waiters: Vec<_> =
-            std::mem::take(&mut self.left).into_iter().map(|(_, w)| w).collect();
+        let mut waiters = std::mem::take(&mut self.left);
         if let Some(drain) = self.current.take() {
             waiters.extend(drain.waiters);
         }
@@ -168,33 +160,23 @@ impl Drain {
         }
     }
 
-    /// Left for good (`Close`): answered `Ok` once nothing it said is open. Paused under an inline
-    /// task: the paused agent's `on_exit` runs now, once, before the task's `on_enter`, as the
-    /// reference does.
+    /// The agent is left: its callers are answered `Ok` once nothing it said is open.
     fn leaving(&mut self, cx: &mut Cx<'_>, out: &mut Out) {
         let Some(drain) = self.current.take() else { return };
         if drain.waiters.is_empty() {
             return;
         }
-        let waiting_on = None;
-        self.left.extend(drain.waiters.into_iter().map(|w| (waiting_on, w)));
+        self.left.extend(drain.waiters);
         self.left_ready(cx.quiet, out);
     }
 
-    /// Callers whose agent was left, answered `Ok` once nothing is open and no `on_exit` is
-    /// awaited.
+    /// Callers whose agent was left, answered `Ok` once nothing is open.
     fn left_ready(&mut self, quiet: bool, out: &mut Out) {
-        if !quiet {
-            return;
-        }
-        let (ready, waiting): (Vec<_>, _) =
-            std::mem::take(&mut self.left).into_iter().partition(|(h, _)| h.is_none());
-        self.left = waiting;
-        if ready.is_empty() {
+        if !quiet || self.left.is_empty() {
             return;
         }
         out.trace(HandoffStep::Drained { refused: None });
-        for (_, call) in ready {
+        for call in std::mem::take(&mut self.left) {
             out.answer(Some(call), Answer::Drain(Ok(())));
         }
     }

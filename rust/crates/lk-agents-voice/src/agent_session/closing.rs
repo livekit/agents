@@ -1,5 +1,5 @@
 //! `AgentSession._aclose_impl`: the close in flight (`_closing_task`), the step it is at and the
-//! `drain()` callers it answers, and the sequence: unwind, `on_exit`, drain, hard edge, trailing
+//! `drain()` callers it answers, and the sequence: `on_exit`, drain, hard edge, trailing
 //! transcript, legs. Also the commands refused past the edge and the errors that close.
 
 use lk_agents_abi::Ts;
@@ -54,13 +54,11 @@ pub(crate) struct Closing {
     drains_answered: bool,
 }
 
-/// Unwinding, draining, the edge and the legs are bounded by [`Timer::Close`], armed as each
-/// begins.
+/// Draining, the edge and the legs are bounded by [`Timer::Close`], armed as each begins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClosePhase {
-    /// An inline task chain is being unwound, innermost first, before the remaining frame's
-    /// `on_exit`.
-    Unwinding,
+    /// Inside `begin_closing`, before the `on_exit` is issued or the drain begins.
+    Requested,
     Exiting {
         hook: HookId,
     },
@@ -79,18 +77,18 @@ pub(crate) enum ClosePhase {
 impl ClosePhase {
     /// Past the hard edge no command may take effect any more.
     pub(crate) fn past_edge(self) -> bool {
-        !matches!(self, ClosePhase::Unwinding | ClosePhase::Exiting { .. } | ClosePhase::Draining)
+        !matches!(self, ClosePhase::Requested | ClosePhase::Exiting { .. } | ClosePhase::Draining)
     }
 }
 
 impl Closing {
-    /// Begins unwinding, answering `drains` with its drain.
+    /// The close as requested, answering `drains` with its drain.
     pub(crate) fn new(
         reason: CloseReason,
         error: Option<ProviderError>,
         drains: Vec<RequestId>,
     ) -> Self {
-        Closing { reason, error, phase: ClosePhase::Unwinding, drains, drains_answered: false }
+        Closing { reason, error, phase: ClosePhase::Requested, drains, drains_answered: false }
     }
 
     /// Whether a caller of `drain()` can still wait on the close's own drain.
@@ -117,9 +115,9 @@ impl Closing {
 }
 
 impl Driver {
-    /// `AgentSession._aclose_impl`: an inline task chain unwound innermost first, the frame's
-    /// `on_exit`, the drain, the hard edge, the trailing transcript, the legs, `close`. A second
-    /// request joins the close in progress (a drain asked for again restarts its bound).
+    /// `AgentSession._aclose_impl`: the agent's `on_exit`, the drain, the hard edge, the trailing
+    /// transcript, the legs, `close`. A second request joins the close in progress (a drain asked
+    /// for again restarts its bound).
     pub(crate) fn begin_closing(&mut self, now: Ts, close: Close, out: &mut Out) {
         let Close { reason, drain, error } = close;
         if let Some(closing) = &self.session.closing {
@@ -136,7 +134,7 @@ impl Driver {
         // DTMF collection stop, the first thing the close runs, stops listening: a key pressed
         // during the drain is not collected, a pending debounce never answers.
         self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Stop, out);
-        let exit = Some(self.plan_exit(out));
+        let exit = self.plan_exit(out);
         // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's,
         // and the caller is answered with the close's drain.
         let drains = self.activity.drain.take_waiters();
@@ -151,13 +149,7 @@ impl Driver {
                 self.realtime_on_close(out);
             }
         }
-        match exit {
-            Some(exit) => self.close_on_exit(now, exit, out),
-            None => {
-                self.enter_close_phase(ClosePhase::Unwinding, Some(DRAIN_BOUND), now, out);
-                self.close_unwind_step(now, out)
-            }
-        }
+        self.close_on_exit(now, exit, out);
     }
 
     /// The close moves to `phase`, bounded by `bound` from now; an unbounded phase cancels the
@@ -257,15 +249,6 @@ impl Driver {
         }
     }
 
-    /// A task left the chain during unwinding: cancel the next innermost, or go on to the
-    /// remaining frame's `on_exit`.
-    pub(crate) fn close_unwind_step(&mut self, now: Ts, out: &mut Out) {
-        let unwinding = matches!(self.session.close_phase(), Some(ClosePhase::Unwinding));
-        if unwinding {
-            let exit = self.plan_exit(out);
-            self.close_on_exit(now, exit, out);
-        }
-    }
 
     /// The close moves on when what its phase waits for is over: every speech the edge cut has
     /// reported (or the bound released it), the trailing commit, the legs. Raised on each of those
@@ -288,7 +271,7 @@ impl Driver {
                 self.close_legs(now, out);
             }
             (
-                ClosePhase::Unwinding
+                ClosePhase::Requested
                 | ClosePhase::Exiting { .. }
                 | ClosePhase::Draining
                 | ClosePhase::Edge
@@ -333,13 +316,6 @@ impl Driver {
     pub(crate) fn close_tick(&mut self, now: Ts, out: &mut Out) -> bool {
         let Some(phase) = self.session.close_phase() else { return false };
         match phase {
-            // The unwind's bound: every pushed frame popped without a handoff, every awaiter
-            // released, then the remaining frame's `on_exit`.
-            ClosePhase::Unwinding => {
-                let exit = self.plan_exit(out);
-                self.close_on_exit(now, exit, out);
-                true
-            }
             ClosePhase::Draining => {
                 self.close_edge(now, out);
                 true
@@ -361,7 +337,10 @@ impl Driver {
                 out.signal(Signal::CloseProgress);
                 false
             }
-            ClosePhase::Exiting { .. } | ClosePhase::Committing | ClosePhase::Closed => false,
+            ClosePhase::Requested
+            | ClosePhase::Exiting { .. }
+            | ClosePhase::Committing
+            | ClosePhase::Closed => false,
         }
     }
 

@@ -34,7 +34,7 @@ pub const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 
 /// `voice/agent_activity.py`'s `AgentActivity`: the running agent's frame (its name, prompt and
 /// tools), its audio recognition, the speech queue and the current speech, the false-interruption
-/// pause, the hooks and inline tasks, and the realtime session. The `Driver` orchestrates it
+/// pause, the hooks, and the realtime session. The `Driver` orchestrates it
 /// together with the [`LiveSession`](crate::agent_session::LiveSession): what spans two of its
 /// components is the driver's to answer.
 pub(crate) struct AgentActivity {
@@ -604,8 +604,8 @@ impl Driver {
         visibility: Visibility,
         out: &mut Out,
     ) {
-        // Attributed to the frame that created the speech, not the driving one (a task's tool
-        // commits after the parent is back); an item with no speech is the driving frame's.
+        // Attributed to the frame that created the speech, not the driving one (a tool may commit
+        // after its agent was left); an item with no speech is the driving frame's.
         let agent = source
             .speech()
             .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))

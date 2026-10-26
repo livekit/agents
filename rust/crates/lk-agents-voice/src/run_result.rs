@@ -41,7 +41,7 @@ pub enum RunOutput {
 pub enum Owned {
     /// A session-level speech created while the run was open, or the run's own reply.
     Speech(SpeechId),
-    /// An `on_enter` issued during the run, or the `DescribeAgent` a tool's handoff waits on.
+    /// An `on_enter` issued during the run.
     Hook(HookId),
     /// A frame change begun during the run, until it landed or was refused.
     Handoff(HandoffId),
@@ -118,7 +118,7 @@ impl Runs {
         r.owned.insert(what).then_some(r.run.id)
     }
 
-    /// Release `what`; `ended` becomes the verdict speech (`None` for an inline task's suspension).
+    /// Release `what`; a speech's handle (`ended`) becomes the verdict speech.
     pub(super) fn release(
         &mut self,
         what: Owned,

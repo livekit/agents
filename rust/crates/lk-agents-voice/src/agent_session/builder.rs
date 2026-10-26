@@ -38,7 +38,7 @@ pub struct DriverBuilder {
     /// the system message lands in it.
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     /// `Some(bound)`: the hooks the sequence needs wait up to `bound`; an overrun is journalled and
-    /// skipped. `None`: each hook is finished in place, and a tool's handoff cannot be described.
+    /// skipped. `None`: each hook is finished in place.
     pub hook_bound: Option<Duration>,
     /// Opened before the opening frame's handoff record, so that record and the opening `on_enter`
     /// are the run's.

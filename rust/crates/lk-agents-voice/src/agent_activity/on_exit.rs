@@ -4,7 +4,7 @@
 use crate::agent_activity::hooks::Hooks;
 use crate::agent_session::HookId;
 
-/// The driving agent's exit, and the exits of agents paused under an inline task, innermost last.
+/// The driving agent's `on_exit`, and the ones claimed but not yet asked of the host.
 #[derive(Default)]
 pub(crate) struct OnExit {
     current: State,
@@ -52,26 +52,20 @@ impl OnExit {
         std::mem::take(&mut self.claimed)
     }
 
-    /// The `on_exit` `hook` ended: every agent's exit it was is over.
     pub(crate) fn ended(&mut self, hook: HookId) {
-        for exit in std::iter::once(&mut self.current) {
-            if *exit == State::Exiting(hook) {
-                *exit = State::Exited;
-            }
+        if self.current == State::Exiting(hook) {
+            self.current = State::Exited;
         }
     }
 
-    /// The close: no exit still running is waited on.
+    /// The close: an exit still running is no longer waited on.
     pub(crate) fn abandon(&mut self) {
-        for exit in std::iter::once(&mut self.current) {
-            if let State::Exiting(hook) = *exit {
-                *exit = State::Abandoned(hook);
-            }
+        if let State::Exiting(hook) = self.current {
+            self.current = State::Abandoned(hook);
         }
     }
 
-    /// The swap: a paused agent keeps its exit beneath the arriving one and gets it back on
-    /// resume.
+    /// The swap: the arriving agent owes its own `on_exit`.
     pub(crate) fn swapped(&mut self) {
         self.current = State::Running;
     }

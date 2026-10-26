@@ -1056,14 +1056,13 @@ impl Driver {
             Phase::Committed { speaking, .. } => *speaking,
         };
         // Busy: every held handle is in flight, except one whose tools run (the current speech is
-        // released for `foreground()` from inside a tool) and a live preemptive generation. A
-        // speech parked for an inline task still plays its step, so it counts.
+        // released for `foreground()` from inside a tool) and a live preemptive generation.
         let scheduling = &activity.speech_scheduler;
         let winding_down = scheduling.speech_ids().any(|id| match scheduling.status(id) {
             None => true,
             Some(Status::Working) => !activity.tools_in_flight.contains(&id),
             Some(Status::Preemptive) => false,
-            Some(Status::Parked | Status::Current | Status::Queued | Status::Discarded) => true,
+            Some(Status::Current | Status::Queued | Status::Discarded) => true,
         });
         scheduling.no_current_speech()
             && scheduling.speech_q().is_empty()

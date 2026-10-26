@@ -40,7 +40,7 @@ pub enum Source {
     },
     Handoff,
     ConfigUpdate,
-    /// `UpdateChatCtx`, `Agent(chat_ctx=..)`, a task's context merged back.
+    /// `UpdateChatCtx`, `Agent(chat_ctx=..)`.
     HostCtx,
     /// An item the realtime server created; `item_id` is the server's.
     Remote {
@@ -157,14 +157,8 @@ pub struct SessionChatCtx {
 }
 
 impl SessionChatCtx {
-    pub fn new() -> Self {
-        SessionChatCtx::default()
-    }
-
-    /// Set the driving frame. `carry`: the frame brought no context, so the previous frame's
-    /// conversation becomes its own (a resume after an inline task). Returns the ids carried.
-    pub fn set_agent(&mut self, agent: &str, carry: bool) -> Vec<String> {
-        self.carry(agent, carry, |_| true)
+    pub fn new(agent: &str) -> Self {
+        SessionChatCtx { agent: agent.to_owned(), ..Default::default() }
     }
 
     /// A handoff's carry to an agent with `tools`: `AgentActivity(chat_ctx=...)` copies with
@@ -182,31 +176,24 @@ impl SessionChatCtx {
                 _ => None,
             })
             .collect();
-        self.carry(agent, true, |item| match item {
+        let keep = |item: &ChatItem| match item {
             ChatItem::FunctionCall(call) => tools.contains(&call.name),
             ChatItem::FunctionCallOutput(out) if !out.name.is_empty() => {
                 tools.contains(&out.name)
             }
             ChatItem::FunctionCallOutput(out) => valid.contains(&out.call_id),
             _ => true,
-        })
-    }
-
-    fn carry(&mut self, agent: &str, carry: bool, keep: impl Fn(&ChatItem) -> bool) -> Vec<String> {
+        };
         let mut carried = Vec::new();
-        if carry {
-            let from = std::mem::replace(&mut self.agent, agent.to_owned());
-            if from == agent {
-                return carried;
+        let from = std::mem::replace(&mut self.agent, agent.to_owned());
+        if from == agent {
+            return carried;
+        }
+        for c in &mut self.items {
+            if c.agent == from && c.visibility.model() && keep(&c.item) {
+                c.agent = agent.to_owned();
+                carried.push(c.item.id().to_owned());
             }
-            for c in &mut self.items {
-                if c.agent == from && c.visibility.model() && keep(&c.item) {
-                    c.agent = agent.to_owned();
-                    carried.push(c.item.id().to_owned());
-                }
-            }
-        } else {
-            self.agent = agent.to_owned();
         }
         carried
     }
@@ -384,8 +371,7 @@ mod tests {
             ChatItem::FunctionCall(call),
             ChatItem::FunctionCallOutput(output),
         ];
-        let mut ctx = SessionChatCtx::new();
-        ctx.set_agent("front_desk", false);
+        let mut ctx = SessionChatCtx::new("front_desk");
         for item in items {
             let _ = ctx.commit(item, Source::HostCtx, Visibility::Both, "front_desk");
         }

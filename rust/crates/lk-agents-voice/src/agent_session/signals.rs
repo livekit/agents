@@ -20,7 +20,6 @@ pub(crate) enum Signal {
     /// An `on_exit` ended: answered, timed out, or with nobody to ask.
     OnExitEnded(HookId),
     RunOwn(Owned),
-    /// A switch begins: an inline task entering captures its parent now.
     /// The switch's drain settled: the swap is due.
     Swap,
     RefuseHandoff {

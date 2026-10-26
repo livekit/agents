@@ -435,9 +435,7 @@ impl SessionApi {
         models
     }
 
-    /// Used by `update_agent`. A host frame change closes the
-    /// frame it leaves and starts the one it installs; the driver sets an inline task's pair
-    /// itself.
+    /// Used by `update_agent`.
     fn frame(&self, frame: UpdateAgentArgs) -> AgentUpdate {
         let UpdateAgentArgs {
             instructions,

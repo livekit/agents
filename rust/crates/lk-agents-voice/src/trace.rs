@@ -5,7 +5,6 @@ pub use crate::agent_session::effects::{GateCause, GateOp};
 use crate::audio_recognition::CommitVerdict;
 use crate::events::SessionEvent;
 use lk_agents_abi::Ts;
-use std::collections::BTreeSet;
 
 /// The exhaustive match in `Step::speech` makes a new variant say whether it names a speech.
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -187,11 +186,8 @@ pub enum SpeechStep {
     IdleHoldReleased {
         hold: crate::agent_session::HoldId,
     },
-    /// Scheduling stopped accepting new turns. `except` is every speech the pause doesn't wait for
-    /// (the asking tool's and every other blocked on an inline task); a set, as `_drain_blocked_tasks`.
-    SchedulingPaused {
-        except: BTreeSet<SpeechId>,
-    },
+    /// Scheduling stopped accepting new turns.
+    SchedulingPaused,
     SchedulingPauseSettled,
     SchedulingPauseRefused {
         cause: &'static str,

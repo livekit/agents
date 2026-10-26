@@ -65,7 +65,6 @@ pub(crate) struct LiveSession {
     pub(crate) llm: Option<lk_agents_abi::resources::LlmRef>,
     pub(crate) tts: Option<lk_agents_abi::resources::TtsRef>,
     pub(crate) stt: Option<lk_agents_abi::resources::SttRef>,
-    /// Restored to a task's parent on exit.
     pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
     /// `session.output` as the core decides with it.
     pub(crate) outputs: outputs::Outputs,
@@ -133,8 +132,7 @@ impl LiveSession {
             chat_ctx: opening_items,
             session_id,
         } = parts;
-        let mut chat_ctx = crate::agent::SessionChatCtx::new();
-        chat_ctx.set_agent(&agent, false);
+        let mut chat_ctx = crate::agent::SessionChatCtx::new(&agent);
         if let Some(items) = opening_items {
             chat_ctx.update_agent_chat_ctx(items, &agent);
         }
@@ -505,8 +503,8 @@ impl AgentOutput {
     }
 }
 
-/// **As they stand now**, published after every commit and instruction change (a tool may run an
-/// inline task or call `update_instructions`).
+/// **As they stand now**, published after every commit and instruction change (a tool may call
+/// `update_instructions`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ActivitySnapshot {
     pub chat_ctx: lk_agents_abi::ChatContext,

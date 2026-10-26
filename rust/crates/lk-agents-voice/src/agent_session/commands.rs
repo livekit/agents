@@ -78,7 +78,7 @@ pub enum HookOutcome {
         reply_required: Vec<bool>,
         handoff_required: bool,
     },
-    /// `on_user_turn_completed` skips the reply; a describe drops the handoff.
+    /// `on_user_turn_completed` skips the reply.
     Failed,
 }
 
@@ -545,7 +545,7 @@ pub struct AgentUpdate {
     pub call: Option<RequestId>,
 }
 
-/// Checked before and after the drain. A resume while closing is not refused.
+/// Checked before and after the drain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandoffRefused {
     Closing,

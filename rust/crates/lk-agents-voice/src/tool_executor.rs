@@ -1032,8 +1032,8 @@ impl Driver {
             }
             self.commit_item(item, source, Visibility::Both, out);
         }
-        // `self.scheduling_paused`: the activity that made the speech
-        // drains: paused, left behind by a handoff, or a task that has its result.
+        // `self.scheduling_paused`: the activity that made the speech drains: paused, or left
+        // behind by a handoff.
         let draining = self.activity.speech_scheduler.is_paused()
             || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent);
         // The step's follow-up plans against the frame once this is published.
