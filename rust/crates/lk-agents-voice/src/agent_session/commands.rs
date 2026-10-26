@@ -265,7 +265,7 @@ pub enum TurnCommand {
     Clear,
     /// Unnamed leaves keep their answer; a changed endpointing replaces the model (a running
     /// countdown keeps its deadline); `turn_detection=None` arrives as `Some(Auto)`.
-    Configure(crate::agent_activity::options::SessionPatch),
+    Configure(crate::agent_activity::options::AgentSessionOptions),
     /// `AMD._on_end_of_turn`, from `Origin::Amd`: while the detector holds a machine verdict under
     /// `interrupt_on_machine`, every turn is committed with no reply (the developer is leaving a
     /// voicemail over the greeting's tail). Cleared when the detector closes.
@@ -545,7 +545,7 @@ pub struct AgentUpdate {
     pub stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
     pub vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
     /// **Replaced whole** and re-resolved over the resulting legs.
-    pub options: crate::agent_activity::options::SessionPatch,
+    pub options: crate::agent_activity::options::AgentSessionOptions,
     /// The agent's `expressive`, replacing the previous agent's; `None` defers to the session's.
     pub expressive: Option<crate::agent_activity::options::Expressive>,
     pub call: Option<RequestId>,

@@ -212,6 +212,7 @@ impl Driver {
                     self.fail_waiter(call, SpeechKind::Say, SAY_WITHOUT_TTS_REFUSED, out);
                     return;
                 }
+                let interruptible = self.session.config.effective.turn.interruption.enabled();
                 let h = self.start_speech(
                     now,
                     SpeechSpec {
@@ -227,8 +228,7 @@ impl Driver {
                                     ReplySource::Audio { text, rx: std::sync::Mutex::new(Some(rx)) }
                                 }
                             },
-                            allow_interruptions
-                                .unwrap_or(self.session.config.effective.turn.interruption.enabled),
+                            allow_interruptions.unwrap_or(interruptible),
                         )
                     },
                     out,
@@ -384,6 +384,7 @@ impl Driver {
             instructions: Instructions::plain(text),
             message_id: self.session.ids.mint("item"),
         });
+        let interruptible = self.session.config.effective.turn.interruption.enabled();
         self.start_speech(
             now,
             SpeechSpec {
@@ -396,8 +397,7 @@ impl Driver {
                 ..SpeechSpec::new(
                     SpeechKind::GenerateReply,
                     ReplySource::Llm,
-                    allow_interruptions
-                        .unwrap_or(self.session.config.effective.turn.interruption.enabled),
+                    allow_interruptions.unwrap_or(interruptible),
                 )
             },
             out,
@@ -467,7 +467,7 @@ impl Driver {
                 ..SpeechSpec::new(
                     SpeechKind::TurnReply,
                     ReplySource::Llm,
-                    self.session.config.effective.turn.interruption.enabled,
+                    self.session.config.effective.turn.interruption.enabled(),
                 )
             },
             out,
@@ -483,7 +483,7 @@ impl Driver {
         out: &mut Out,
     ) {
         use crate::agent_activity::options::TurnDetection;
-        let detection = self.session.config.effective.turn.detection;
+        let detection = self.session.config.effective.turn.detection();
         let metadata = match (self.activity.audio_recognition.eot(), detection) {
             (Some(eot), _) => Some(eot.id().metadata()),
             (None, TurnDetection::Vad) => Some(mode_metadata("vad")),
@@ -626,8 +626,8 @@ impl Driver {
 
         let message_id = self.session.ids.mint("item");
         let ctx = ReplyContext {
-            preemptive_tts: self.session.config.effective.turn.preemptive.enabled
-                && self.session.config.effective.turn.preemptive.preemptive_tts,
+            preemptive_tts: self.session.config.effective.turn.preemptive.enabled()
+                && self.session.config.effective.turn.preemptive.preemptive_tts(),
             request,
             replan,
             source: spec.source,
@@ -904,7 +904,7 @@ impl Driver {
             has_tool_output,
             tools_running || self.tools_running_elsewhere(speech),
             self.session.states.agent_state() == AgentState::Speaking,
-            self.session.config.effective.turn.interruption.detection_enabled,
+            self.session.config.effective.turn.interruption.detection_enabled(),
         );
         self.apply_end_of_speech(now, eos, out);
         self.commit_spoken(speech, item, out);
@@ -967,7 +967,7 @@ impl Driver {
             false,
             false,
             was_current && self.session.states.agent_state() == AgentState::Speaking,
-            self.session.config.effective.turn.interruption.detection_enabled,
+            self.session.config.effective.turn.interruption.detection_enabled(),
         );
         self.apply_end_of_speech(now, eos, out);
 

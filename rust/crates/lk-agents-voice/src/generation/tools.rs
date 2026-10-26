@@ -186,7 +186,7 @@ pub(crate) async fn run_tools(
         // or step increment.
         interrupted: handle.interrupted_speech(),
         num_steps: handle.num_steps(),
-        max_tool_steps: ctx.speech.max_tool_steps,
+        max_tool_steps: ctx.speech.max_tool_steps(),
         forwarded_text_empty,
         user_metrics: ctx.user_metrics.clone(),
     });

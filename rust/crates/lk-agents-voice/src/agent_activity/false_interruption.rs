@@ -1,7 +1,7 @@
 //! Interruption: interruption, `interrupt()`, and the false-interruption pause
 //! ([`PausedSpeech`]).
 
-use crate::agent_activity::options::SessionConfig;
+use crate::agent_activity::options::AgentSessionOptions;
 use crate::agent_activity::scheduling::{SpeechId, Status};
 use crate::agent_session::effects::Out;
 use crate::agent_session::effects::{AudioOp, Effect};
@@ -45,7 +45,7 @@ mod paused_speech {
     impl PausedSpeech {
         /// A session with no sink passes `AudioOutputCapabilities::default()` and `false`.
         pub fn new(
-            cfg: &SessionConfig,
+            cfg: &AgentSessionOptions,
             sink: AudioOutputCapabilities,
             audio_enabled: bool,
         ) -> Self {
@@ -64,8 +64,8 @@ mod paused_speech {
         /// pausing off.
         pub fn pause_timeout(&self) -> Option<Duration> {
             let i = &self.interruption;
-            let enabled = i.resume_false_interruption && self.audio_enabled && self.sink.pause;
-            i.false_interruption_timeout.filter(|_| enabled)
+            let enabled = i.resume_false_interruption() && self.audio_enabled && self.sink.pause;
+            i.false_interruption_timeout().filter(|_| enabled)
         }
 
         pub fn paused_handle(&self) -> Option<SpeechId> {
@@ -359,7 +359,7 @@ impl Driver {
     /// `true` (a manual or realtime-detected session had it off).
     pub(crate) fn restore_audio_activity_guard(&mut self) {
         self.session.by_audio_activity =
-            self.session.config.effective.turn.interruption.by_audio_activity;
+            self.session.config.effective.turn.interruption.by_audio_activity();
     }
 
     /// `_on_overlap_speech_event` plus `on_interruption`; the decisions are
@@ -455,7 +455,7 @@ impl Driver {
                 let eff = turn.on_end_of_agent_speech(now, ignore_user_transcript_until);
                 out.machine().append(eff);
                 // Hands interruption back to audio activity (undoes guard 1).
-                if self.session.config.effective.turn.interruption.detection_enabled {
+                if self.session.config.effective.turn.interruption.detection_enabled() {
                     self.session.by_audio_activity = true;
                 }
             }
@@ -500,7 +500,7 @@ impl Driver {
                     return Err(R::ManualTurnDetection);
                 }
                 // `>=`: a segment exactly on the threshold interrupts.
-                if duration < options.min_duration {
+                if duration < options.min_duration() {
                     return Err(R::TooShort);
                 }
                 // "STT may send EOS before VAD EOS, we only interrupt if: turn detection is not
@@ -546,7 +546,7 @@ impl Driver {
         }
         // Guard 4: `min_words > 0` enables it; with no transcript source it is skipped. The
         // transcript is the accumulated final **plus** the live interim.
-        let min_words = options.min_words as usize;
+        let min_words = options.min_words() as usize;
         if stt_enabled && min_words > 0 && count_min_words(&turn.current_transcript()) < min_words {
             return Err(R::TooFewWords);
         }

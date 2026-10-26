@@ -2,7 +2,7 @@
 //! streams, and the types it decides with.
 
 use crate::agent_activity::false_interruption::count_min_words;
-use crate::agent_activity::options::{DetectorKind, LegSet, SessionConfig};
+use crate::agent_activity::options::{DetectorKind, LegSet, AgentSessionOptions};
 use crate::agent_session::effects::{Effects, Timer};
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
@@ -108,26 +108,26 @@ pub struct AudioRecognition {
 }
 
 impl AudioRecognition {
-    pub fn new(cfg: &SessionConfig, legs: &LegSet, thresholds: ThresholdOptions) -> Self {
+    pub fn new(cfg: &AgentSessionOptions, legs: &LegSet, thresholds: ThresholdOptions) -> Self {
         let i = &cfg.turn.interruption;
         let turn = TurnConfig {
             stt_enabled: legs.stt,
             vad_enabled: legs.vad,
             using_default_vad: legs.using_default_vad,
-            turn_detection_mode: cfg.turn.owner,
+            turn_detection_mode: cfg.turn.owner(),
             // Without an adaptive detector, transcripts over agent speech reach the turn at once.
-            interruption_enabled: i.detection_enabled,
-            transcription_timeout: cfg.timers.transcription_timeout,
+            interruption_enabled: i.detection_enabled(),
+            transcription_timeout: cfg.timers.transcription_timeout(),
             user_turn_limit: UserTurnLimit {
-                max_words: cfg.turn.user_turn_limit.max_words.map(|w| w as usize),
-                max_duration: cfg.turn.user_turn_limit.max_duration,
+                max_words: cfg.turn.user_turn_limit.max_words().map(|w| w as usize),
+                max_duration: cfg.turn.user_turn_limit.max_duration(),
             },
-            backchannel_boundary: i.backchannel_boundary,
+            backchannel_boundary: i.backchannel_boundary(),
             detector: match legs.detector {
                 None => Detector::None,
                 Some(DetectorKind::Batch) => Detector::Batch,
                 Some(DetectorKind::Streaming) => {
-                    Detector::Streaming { prediction_timeout: cfg.turn.endpointing.max_delay }
+                    Detector::Streaming { prediction_timeout: cfg.turn.endpointing.max_delay() }
                 }
             },
         };

@@ -54,7 +54,7 @@ use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::{
     agent_activity::options::{
         Deployment, HostOptions, InterruptionGate, InterruptionGateInputs, RealtimeGate,
-        SessionPatch, SttGate, TurnDetection, resolve_interruption_detector,
+        AgentSessionOptions, SttGate, TurnDetection, resolve_interruption_detector,
     },
     agent_activity::scheduling::SpeechId,
     agent_session::{
@@ -72,7 +72,6 @@ use lk_agents_voice::{
         CoreStep, DetectorStep, GenerationStep, HandoffStep, PlayoutStep, SpeechStep, Step,
         ToolStep, TurnStep,
     },
-    turn::Nullable,
 };
 use tokio::{
     sync::{mpsc, oneshot},

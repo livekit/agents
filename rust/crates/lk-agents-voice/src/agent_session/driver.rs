@@ -467,7 +467,7 @@ impl Driver {
         let id = self.session.ids.next_speech_id();
         let handle = Arc::new(SpeechHandle::new(
             id,
-            self.session.config.effective.turn.interruption.enabled,
+            self.session.config.effective.turn.interruption.enabled(),
         ));
         if let Some(call) = &call {
             handle.adopt_host(call.host.clone());
@@ -658,7 +658,7 @@ impl Driver {
                 .effective
                 .turn
                 .interruption
-                .discard_audio_if_uninterruptible,
+                .discard_audio_if_uninterruptible(),
         };
         let discard = crate::audio::audio_gate(&inputs);
         if self.input.gate_discard.replace(discard) != Some(discard) {

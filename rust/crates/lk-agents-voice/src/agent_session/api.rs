@@ -3,7 +3,8 @@
 //! errors it speaks through. Its host methods are in `host`.
 
 use crate::agent_activity::options::{
-    RECORDING_ALL_OFF, RecordingRequest, records_anything, resolve_recording_options,
+    AgentSessionOptions, RECORDING_ALL_OFF, RecordingRequest, records_anything,
+    resolve_recording_options,
 };
 use crate::agent_session::builder::DriverBuilder;
 use crate::agent_session::commands::{
@@ -112,12 +113,12 @@ impl SessionApi {
     }
 
     /// Merged here too, as the driver does.
-    pub fn configure(&self, patch: &crate::agent_activity::options::SessionPatch) {
-        self.stack.lock().unwrap_or_else(|p| p.into_inner()).session.merge(patch);
+    pub fn configure(&self, update: &AgentSessionOptions) {
+        self.stack.lock().unwrap_or_else(|p| p.into_inner()).session.merge(update);
     }
 
     /// Its `turn_handling` becomes the agent layer, replaced whole.
-    pub fn set_agent_layer(&self, agent: Option<crate::agent_activity::options::SessionPatch>) {
+    pub fn set_agent_layer(&self, agent: Option<AgentSessionOptions>) {
         self.stack.lock().unwrap_or_else(|p| p.into_inner()).agent = agent;
     }
 
@@ -458,7 +459,7 @@ impl SessionApi {
             stt_node,
         } = frame;
         self.agents.install(&agent, agent_host);
-        let options = turn_handling.as_ref().map(crate::turn::agent_patch).unwrap_or_default();
+        let options = turn_handling.as_ref().map(crate::turn::agent_layer).unwrap_or_default();
         self.set_agent_layer(Some(options));
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
         let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);

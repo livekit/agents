@@ -226,7 +226,8 @@ impl Driver {
         let Some(Closing { phase, reason, .. }) = &self.session.closing else { return };
         match (*phase, *reason) {
             (ClosePhase::Edge, reason) if self.activity.speech_scheduler.is_empty() => {
-                let timeout = self.session.config.effective.timers.session_close_transcript_timeout;
+                let timers = &self.session.config.effective.timers;
+                let timeout = timers.session_close_transcript_timeout();
                 if reason != CloseReason::Error && self.transcript_pending(now) {
                     self.close_await_transcript(now, timeout, out);
                 } else {

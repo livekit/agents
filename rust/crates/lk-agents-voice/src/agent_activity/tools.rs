@@ -343,7 +343,7 @@ impl Driver {
                 ..SpeechSpec::new(
                     SpeechKind::GenerateReply,
                     ReplySource::Llm,
-                    self.session.config.effective.turn.interruption.enabled,
+                    self.session.config.effective.turn.interruption.enabled(),
                 )
             },
             out,
@@ -493,7 +493,7 @@ impl Driver {
                 SpeechSpec::new(
                     SpeechKind::Say,
                     ReplySource::Text(text),
-                    self.session.config.effective.turn.interruption.enabled,
+                    self.session.config.effective.turn.interruption.enabled(),
                 ),
                 out,
             )

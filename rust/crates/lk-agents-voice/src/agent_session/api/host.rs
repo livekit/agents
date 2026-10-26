@@ -162,8 +162,8 @@ impl SessionApi {
             agent: agent_expressive.given(),
         };
         let (session_layer, diagnostics) = match options {
-            Some(o) => (o.session_patch(), o.take_diagnostics()),
-            None => (crate::agent_activity::options::SessionPatch::default(), Vec::new()),
+            Some(o) => (o.session(), o.take_diagnostics()),
+            None => (crate::agent_activity::options::AgentSessionOptions::default(), Vec::new()),
         };
         let forward_chat_context =
             stt_context.as_ref().and_then(|cfg| cfg.forward_chat_context).unwrap_or(true);
@@ -175,7 +175,7 @@ impl SessionApi {
         });
         let stack = crate::agent_activity::options::ConfigStack {
             session: session_layer,
-            agent: agent_turn_handling.as_ref().map(crate::turn::agent_patch),
+            agent: agent_turn_handling.as_ref().map(crate::turn::agent_layer),
         };
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
         let stt = stt.map(|s| nodes.stt(stt_leg(s)));
@@ -530,7 +530,7 @@ impl SessionApi {
         &self,
         update: crate::agent_activity::options::UpdateKwargs,
     ) -> Result<(), SessionRefused> {
-        let (patch, diagnostics) = crate::agent_activity::options::update_patch(&update);
+        let (patch, diagnostics) = crate::agent_activity::options::update_layer(&update);
         if let Some(events) = &self.host.events {
             for d in diagnostics {
                 events.event(&HostWire::Diagnostic(d.wire()));
@@ -539,7 +539,7 @@ impl SessionApi {
         if let Maybe::Given(expressive) = update.expressive {
             self.send(ActivityCommand::UpdateExpressive(expressive))?;
         }
-        if patch == crate::agent_activity::options::SessionPatch::default() {
+        if patch == crate::agent_activity::options::AgentSessionOptions::default() {
             return Ok(());
         }
         self.configure(&patch);
@@ -553,7 +553,7 @@ impl SessionApi {
         &self,
         #[host(required)] duration: Option<f64>,
     ) -> Result<(), SessionRefused> {
-        let patch = crate::agent_activity::options::aec_warmup_patch(duration);
+        let patch = crate::agent_activity::options::aec_warmup_layer(duration);
         self.configure(&patch);
         self.send(TurnCommand::Configure(patch))
     }

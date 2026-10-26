@@ -72,7 +72,7 @@ pub enum CoreStep {
     /// re-resolution changed is the diff against the previous `ConfigApplied`. Boxed: largest, rarest.
     ConfigApplied {
         layer: crate::agent_activity::options::ConfigLayer,
-        effective: Box<crate::agent_activity::options::SessionConfig>,
+        effective: Box<crate::agent_activity::options::AgentSessionOptions>,
     },
     WallEpoch {
         at: std::time::SystemTime,

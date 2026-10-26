@@ -1,7 +1,8 @@
-//! `voice/turn.py`: `TurnHandlingOptions`, resolved ([`TurnPolicy`]) and as one layer's patch
-//! ([`TurnPatch`]), and `_migrate_turn_handling` from the deprecated keywords.
+//! `voice/turn.py`: `TurnHandlingOptions`, and `_migrate_turn_handling` from the deprecated
+//! keywords. One struct per group is both what a layer says (`None` and `NotGiven` are unsaid)
+//! and the resolved answer, where every leaf is said.
 
-use crate::agent_activity::options::SessionPatch;
+use crate::agent_activity::options::{AgentSessionOptions, option_group};
 use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::voice::session_options::{
@@ -10,134 +11,100 @@ use lk_agents_abi::voice::session_options::{
 };
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TurnHandlingOptions {
-    pub detection: TurnDetection,
-    /// What the session runs (four-way); what the turn machine reads.
-    pub owner: TurnDetectionMode,
+    pub detection: Option<TurnDetection>,
+    /// What the session runs (four-way); what the turn machine reads. Derived from `detection`
+    /// and the legs by `resolve`, never said by a layer.
+    pub owner: Option<TurnDetectionMode>,
     pub endpointing: EndpointingOptions,
     pub interruption: InterruptionOptions,
     pub preemptive: PreemptiveGenerationOptions,
     pub user_turn_limit: UserTurnLimitOptions,
     /// `ivr_detection`: a turn's outcome is also fed to the IVR machine.
-    pub ivr_detection: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct EndpointingOptions {
-    pub mode: EndpointingMode,
-    pub min_delay: Duration,
-    pub max_delay: Duration,
-    /// The dynamic mode's smoothing factor. Dimensionless, so the one `f64` that stays.
-    pub alpha: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InterruptionOptions {
-    pub enabled: bool,
-    /// `None` is "the session picks the best available strategy" -- a state no concrete mode names.
-    pub mode: Option<InterruptionMode>,
-    /// Resolved from `legs.adaptive_detector`; not settable.
-    pub detection_enabled: bool,
-    /// Resolved from `detection`: off under `Manual` and `RealtimeLlm`; not settable.
-    pub by_audio_activity: bool,
-    pub discard_audio_if_uninterruptible: bool,
-    pub min_duration: Duration,
-    pub min_words: u32,
-    pub resume_false_interruption: bool,
-    pub false_interruption_timeout: Option<Duration>,
-    /// `(start, end)`: the scalar form is widened to the pair at the binding edge.
-    pub backchannel_boundary: Option<(Duration, Duration)>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PreemptiveGenerationOptions {
-    pub enabled: bool,
-    pub preemptive_tts: bool,
-    pub max_speech_duration: Duration,
-    pub max_retries: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UserTurnLimitOptions {
-    pub max_words: Option<u32>,
-    pub max_duration: Option<Duration>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TurnPatch {
-    pub detection: Option<TurnDetection>,
-    pub endpointing: EndpointingPatch,
-    pub interruption: InterruptionPatch,
-    pub preemptive: PreemptivePatch,
-    pub user_turn_limit: UserTurnLimitPatch,
     pub ivr_detection: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EndpointingPatch {
+option_group!(TurnHandlingOptions {
+    detection: TurnDetection,
+    owner: TurnDetectionMode,
+    ivr_detection: bool,
+} groups(endpointing, interruption, preemptive, user_turn_limit));
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EndpointingOptions {
     pub mode: Option<EndpointingMode>,
     pub min_delay: Option<Duration>,
     pub max_delay: Option<Duration>,
+    /// The dynamic mode's smoothing factor. Dimensionless, so the one `f64` that stays.
     pub alpha: Option<f64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct InterruptionPatch {
+option_group!(EndpointingOptions {
+    mode: EndpointingMode,
+    min_delay: Duration,
+    max_delay: Duration,
+    alpha: f64,
+});
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InterruptionOptions {
     pub enabled: Option<bool>,
+    /// `None` is "the session picks the best available strategy", resolved too.
     pub mode: Option<InterruptionMode>,
+    /// Resolved from `legs.adaptive_detector`; not settable.
+    pub detection_enabled: Option<bool>,
+    /// Resolved from `detection`: off under `Manual` and `RealtimeLlm`; not settable.
+    pub by_audio_activity: Option<bool>,
     pub discard_audio_if_uninterruptible: Option<bool>,
     pub min_duration: Option<Duration>,
     pub min_words: Option<u32>,
     pub resume_false_interruption: Option<bool>,
-    pub false_interruption_timeout: Option<Nullable<Duration>>,
-    pub backchannel_boundary: Option<Nullable<(Duration, Duration)>>,
+    pub false_interruption_timeout: Maybe<Option<Duration>>,
+    /// `(start, end)`: the scalar form is widened to the pair at the binding edge.
+    pub backchannel_boundary: Maybe<Option<(Duration, Duration)>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreemptivePatch {
+option_group!(InterruptionOptions {
+    enabled: bool,
+    detection_enabled: bool,
+    by_audio_activity: bool,
+    discard_audio_if_uninterruptible: bool,
+    min_duration: Duration,
+    min_words: u32,
+    resume_false_interruption: bool,
+    false_interruption_timeout: Option<Duration>,
+    backchannel_boundary: Option<(Duration, Duration)>,
+} optional(mode));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PreemptiveGenerationOptions {
     pub enabled: Option<bool>,
     pub preemptive_tts: Option<bool>,
     pub max_speech_duration: Option<Duration>,
     pub max_retries: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct UserTurnLimitPatch {
-    pub max_words: Option<Nullable<u32>>,
-    pub max_duration: Option<Nullable<Duration>>,
+option_group!(PreemptiveGenerationOptions {
+    enabled: bool,
+    preemptive_tts: bool,
+    max_speech_duration: Duration,
+    max_retries: u32,
+});
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UserTurnLimitOptions {
+    pub max_words: Maybe<Option<u32>>,
+    pub max_duration: Maybe<Option<Duration>>,
 }
 
-/// A patch leaf whose value may be "off": `None` -- unsaid; `Some(Null)` -- off; `Some(Value(v))`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub enum Nullable<T> {
-    Null,
-    Value(T),
-}
+option_group!(UserTurnLimitOptions {
+    max_words: Option<u32>,
+    max_duration: Option<Duration>,
+});
 
-impl<T> Nullable<T> {
-    pub fn into_option(self) -> Option<T> {
-        match self {
-            Nullable::Null => None,
-            Nullable::Value(v) => Some(v),
-        }
-    }
-
-    pub fn from_option(o: Option<T>) -> Self {
-        match o {
-            None => Nullable::Null,
-            Some(v) => Nullable::Value(v),
-        }
-    }
-}
-
-pub fn turn_handling_patch(kw: &TurnHandlingKwargs) -> SessionPatch {
+/// `turn_handling=` as the layer it says.
+pub fn turn_handling_layer(kw: &TurnHandlingKwargs) -> AgentSessionOptions {
     let TurnHandlingKwargs {
         endpointing,
         interruption,
@@ -145,34 +112,34 @@ pub fn turn_handling_patch(kw: &TurnHandlingKwargs) -> SessionPatch {
         preemptive_generation,
         user_turn_limit,
     } = *kw;
-    let mut p = SessionPatch::default();
+    let mut o = AgentSessionOptions::default();
     if let Some(e) = endpointing {
-        p.turn.endpointing = endpointing_patch(&e);
+        o.turn.endpointing = endpointing_options(&e);
     }
     if let Some(i) = interruption {
-        p.turn.interruption = interruption_patch(&i);
+        o.turn.interruption = interruption_options(&i);
     }
     if let Some(g) = preemptive_generation {
-        p.turn.preemptive = preemptive_patch(&g);
+        o.turn.preemptive = preemptive_options(&g);
     }
     if let Some(u) = user_turn_limit {
-        p.turn.user_turn_limit = user_turn_limit_patch(&u);
+        o.turn.user_turn_limit = user_turn_limit_options(&u);
     }
-    p.turn.detection = turn_detection.and_then(TurnDetectionKwarg::detection);
-    p
+    o.turn.detection = turn_detection.and_then(TurnDetectionKwarg::detection);
+    o
 }
 
 /// The leaves an `Agent(turn_handling=..)` may override: endpointing, `interruption` enabled and
 /// mode, preemptive generation, and a `turn_detection` literal. The turn limit is session-only.
-pub fn agent_patch(kw: &TurnHandlingKwargs) -> SessionPatch {
-    let mut p = turn_handling_patch(&TurnHandlingKwargs { user_turn_limit: None, ..*kw });
-    let InterruptionPatch { enabled, mode, .. } = p.turn.interruption;
-    p.turn.interruption = InterruptionPatch { enabled, mode, ..InterruptionPatch::default() };
-    p
+pub fn agent_layer(kw: &TurnHandlingKwargs) -> AgentSessionOptions {
+    let mut o = turn_handling_layer(&TurnHandlingKwargs { user_turn_limit: None, ..*kw });
+    let InterruptionOptions { enabled, mode, .. } = o.turn.interruption;
+    o.turn.interruption = InterruptionOptions { enabled, mode, ..InterruptionOptions::default() };
+    o
 }
 
-pub(crate) fn endpointing_patch(kw: &EndpointingKwargs) -> EndpointingPatch {
-    EndpointingPatch {
+pub(crate) fn endpointing_options(kw: &EndpointingKwargs) -> EndpointingOptions {
+    EndpointingOptions {
         mode: kw.mode,
         min_delay: kw.min_delay.map(secs),
         max_delay: kw.max_delay.map(secs),
@@ -180,10 +147,12 @@ pub(crate) fn endpointing_patch(kw: &EndpointingKwargs) -> EndpointingPatch {
     }
 }
 
-fn interruption_patch(kw: &InterruptionKwargs) -> InterruptionPatch {
-    InterruptionPatch {
+fn interruption_options(kw: &InterruptionKwargs) -> InterruptionOptions {
+    InterruptionOptions {
         enabled: kw.enabled,
         mode: kw.mode,
+        detection_enabled: None,
+        by_audio_activity: None,
         discard_audio_if_uninterruptible: kw.discard_audio_if_uninterruptible,
         min_duration: kw.min_duration.map(secs),
         min_words: kw.min_words.map(count),
@@ -195,8 +164,8 @@ fn interruption_patch(kw: &InterruptionKwargs) -> InterruptionPatch {
     }
 }
 
-fn preemptive_patch(kw: &PreemptiveKwargs) -> PreemptivePatch {
-    PreemptivePatch {
+fn preemptive_options(kw: &PreemptiveKwargs) -> PreemptiveGenerationOptions {
+    PreemptiveGenerationOptions {
         enabled: kw.enabled,
         preemptive_tts: kw.preemptive_tts,
         max_speech_duration: kw.max_speech_duration.map(secs),
@@ -204,8 +173,8 @@ fn preemptive_patch(kw: &PreemptiveKwargs) -> PreemptivePatch {
     }
 }
 
-fn user_turn_limit_patch(kw: &UserTurnLimitKwargs) -> UserTurnLimitPatch {
-    UserTurnLimitPatch {
+fn user_turn_limit_options(kw: &UserTurnLimitKwargs) -> UserTurnLimitOptions {
+    UserTurnLimitOptions {
         max_words: nullable(kw.max_words, count),
         max_duration: nullable(kw.max_duration, secs),
     }
@@ -347,11 +316,10 @@ pub(crate) fn count(v: i64) -> u32 {
     u32::try_from(v.max(0)).unwrap_or(u32::MAX)
 }
 
-/// A `Maybe<Option<T>>` leaf as a patch leaf: unsaid stays unsaid, `None` is "said off".
-pub(crate) fn nullable<T, U>(v: Maybe<Option<T>>, f: impl FnOnce(T) -> U) -> Option<Nullable<U>> {
+/// A nullable kwarg's value mapped: unsaid stays unsaid, `None` is "said off".
+pub(crate) fn nullable<T, U>(v: Maybe<Option<T>>, f: impl FnOnce(T) -> U) -> Maybe<Option<U>> {
     match v {
-        Maybe::NotGiven => None,
-        Maybe::Given(None) => Some(Nullable::Null),
-        Maybe::Given(Some(t)) => Some(Nullable::Value(f(t))),
+        Maybe::NotGiven => Maybe::NotGiven,
+        Maybe::Given(o) => Maybe::Given(o.map(f)),
     }
 }

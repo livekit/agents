@@ -15,7 +15,7 @@ pub mod tools;
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_activity::false_interruption::{InterruptOutcome, PausedSpeech};
-use crate::agent_activity::options::{ConfigStack, LegSet, SessionConfig};
+use crate::agent_activity::options::{AgentSessionOptions, ConfigStack, LegSet};
 use crate::agent_activity::scheduling::{SpeechId, SpeechScheduler};
 use crate::agent_session::effects::{AudioOp, Effect, Out};
 use crate::agent_session::{ActivityCommand, Driver, HostAudio, HostVideo};
@@ -209,7 +209,7 @@ impl AgentActivity {
 pub struct DriverConfig {
     pub stack: ConfigStack,
     pub legs: LegSet,
-    pub effective: SessionConfig,
+    pub effective: AgentSessionOptions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -229,25 +229,19 @@ impl DriverConfig {
     }
 
     /// Before `start()`: no machine exists yet to tell.
-    pub fn edit(
-        &mut self,
-        f: impl FnOnce(&mut crate::agent_activity::options::SessionPatch, &mut LegSet),
-    ) {
+    pub fn edit(&mut self, f: impl FnOnce(&mut AgentSessionOptions, &mut LegSet)) {
         f(&mut self.stack.session, &mut self.legs);
         self.effective = self.stack.resolve(&self.legs);
     }
 
     /// Merged into the session layer, re-resolved.
-    pub fn configure(
-        &mut self,
-        patch: &crate::agent_activity::options::SessionPatch,
-    ) -> ConfigDiff {
-        self.stack.session.merge(patch);
+    pub fn configure(&mut self, update: &AgentSessionOptions) -> ConfigDiff {
+        self.stack.session.merge(update);
         self.resolve()
     }
 
     /// The agent layer, replaced whole, re-resolved.
-    pub fn set_agent(&mut self, agent: crate::agent_activity::options::SessionPatch) -> ConfigDiff {
+    pub fn set_agent(&mut self, agent: AgentSessionOptions) -> ConfigDiff {
         self.stack.agent = Some(agent);
         self.resolve()
     }
@@ -257,10 +251,10 @@ impl DriverConfig {
         let diff = ConfigDiff {
             endpointing: (next.turn.endpointing != self.effective.turn.endpointing)
                 .then_some(next.turn.endpointing),
-            turn_detection_mode: (next.turn.owner != self.effective.turn.owner)
-                .then_some(next.turn.owner),
-            aec_warmup: (next.timers.aec_warmup != self.effective.timers.aec_warmup)
-                .then_some(next.timers.aec_warmup),
+            turn_detection_mode: (next.turn.owner() != self.effective.turn.owner())
+                .then_some(next.turn.owner()),
+            aec_warmup: (next.timers.aec_warmup() != self.effective.timers.aec_warmup())
+                .then_some(next.timers.aec_warmup()),
         };
         self.effective = next;
         diff

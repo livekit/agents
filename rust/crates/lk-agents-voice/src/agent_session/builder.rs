@@ -223,21 +223,21 @@ impl DriverBuilder {
             let side = crate::agent_activity::realtime::SessionSide {
                 stt: self.stt.is_some(),
                 vad: self.vad.is_some(),
-                detection: self.config.effective.turn.detection,
+                detection: self.config.effective.turn.detection(),
                 streaming_detector: self.config.legs.detector
                     == Some(crate::agent_activity::options::DetectorKind::Streaming),
                 interruption_given: self.config.effective.turn.interruption.mode.is_some(),
-                turn_detection_mode: self.config.effective.turn.owner,
+                turn_detection_mode: self.config.effective.turn.owner(),
             };
             let disabled = crate::agent_activity::realtime::turn_detection_disabled(&caps, side);
             realtime_disabled = Some(disabled);
             // The refined mode goes into the config; the pre-refinement answer is kept so a later
             // re-resolution is compared against it.
             realtime_resolved = Some(side.turn_detection_mode);
-            self.config.effective.turn.owner =
-                crate::agent_activity::realtime::realtime_turn_detection_mode(
-                    &caps, side, disabled,
-                );
+            let owner = crate::agent_activity::realtime::realtime_turn_detection_mode(
+                &caps, side, disabled,
+            );
+            self.config.effective.turn.owner = Some(owner);
             let session = model.session(disabled).await?;
             realtime_caps = Some(caps);
             install(
@@ -280,7 +280,7 @@ impl DriverBuilder {
             recorder_observer: std::sync::Mutex::new(None),
             launch: crate::audio::LaunchGate::new(),
             tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
-                self.config.effective.speech.tts_text_transforms,
+                self.config.effective.speech.tts_text_transforms(),
             ),
             realtime_audio: self.realtime_audio_node.clone(),
             events: gen_tx,
@@ -315,7 +315,7 @@ impl DriverBuilder {
             PausedSpeech::new(&config.effective, sink, audio_enabled)
         };
         let speech_scheduler =
-            SpeechScheduler::new(config.effective.speech.min_consecutive_speech_delay);
+            SpeechScheduler::new(config.effective.speech.min_consecutive_speech_delay());
 
         // `_adaptive_interruption_active` is "a detector was supplied"; without it the sentinels
         // are unreachable.
@@ -359,7 +359,7 @@ impl DriverBuilder {
             }
         }
 
-        let resolved_mode = realtime_resolved.unwrap_or(session.config.effective.turn.owner);
+        let resolved_mode = realtime_resolved.unwrap_or(session.config.effective.turn.owner());
         audio_recognition.set_detectors(eot, self.interruption);
         let activity = AgentActivity {
             agent: self.agent,
@@ -395,7 +395,7 @@ impl DriverBuilder {
             realtime_players: Default::default(),
             realtime_turn_detection_disabled: realtime_disabled.unwrap_or(false),
             realtime_resolved_mode: resolved_mode,
-            realtime_requested_detection: session.config.effective.turn.detection,
+            realtime_requested_detection: session.config.effective.turn.detection(),
         };
         let input = crate::agent_activity::io::AgentInput::new(
             sinks,
@@ -457,7 +457,7 @@ impl DriverBuilder {
             driver.execute(out);
         }
         // `ivr_detection=True` is the IVR system's to start; the core starts no system.
-        let ivr_detection = driver.session.config.effective.turn.ivr_detection;
+        let ivr_detection = driver.session.config.effective.turn.ivr_detection();
         let peer = PeerHandle {
             api: api_tx.clone(),
             events: ev_tx_for_peers,

@@ -4,9 +4,9 @@
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::DiagnosticEvent;
 use crate::turn::{
-    EndpointingOptions, InterruptionOptions, Nullable, PreemptiveGenerationOptions, TurnPatch, TurnHandlingOptions,
-    UserTurnLimitOptions, count, endpointing_patch, migrate_turn_handling, nullable, secs,
-    turn_handling_patch,
+    EndpointingOptions, InterruptionOptions, PreemptiveGenerationOptions, TurnHandlingOptions,
+    UserTurnLimitOptions, count, endpointing_options, migrate_turn_handling, nullable, secs,
+    turn_handling_layer,
 };
 use lk_agents_abi::Maybe;
 use lk_agents_abi::Vocabulary;
@@ -53,135 +53,107 @@ pub enum ConfigLayer {
     Agent,
 }
 
-/// Built only by [`ConfigStack::resolve`].
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SessionConfig {
-    pub turn: TurnHandlingOptions,
-    pub speech: SpeechPolicy,
-    pub timers: Timers,
+/// One leaf of an option group: `None` / `NotGiven` is unsaid.
+pub trait Leaf: Copy {
+    type Value;
+    fn is_said(&self) -> bool;
+    /// The value of a resolved leaf, which `ConfigStack::resolve` guarantees is said.
+    fn resolved(self) -> Self::Value;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SpeechPolicy {
-    pub max_tool_steps: u32,
-    pub min_consecutive_speech_delay: Duration,
-    /// `use_tts_aligned_transcript`: `None` is the reference's `NOT_GIVEN`, "if the TTS can".
-    pub use_tts_aligned_transcript: Option<bool>,
-    /// `tts_text_transforms`: `None` is "run none".
-    pub tts_text_transforms: Option<TextTransformSet>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Timers {
-    pub user_away: Option<Duration>,
-    /// `Some(ZERO)` is a region ("fire at end of speech"), not "off".
-    pub transcription_timeout: Option<Duration>,
-    /// `None` is no warmup at all (an outbound SIP call).
-    pub aec_warmup: Option<Duration>,
-    pub session_close_transcript_timeout: Duration,
-}
-
-/// [`SessionConfig`] with every leaf optional: what one layer said. `Default` is the empty patch.
-#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SessionPatch {
-    pub turn: TurnPatch,
-    pub speech: SpeechPatch,
-    pub timers: TimersPatch,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpeechPatch {
-    pub max_tool_steps: Option<u32>,
-    pub min_consecutive_speech_delay: Option<Duration>,
-    pub use_tts_aligned_transcript: Option<Nullable<bool>>,
-    pub tts_text_transforms: Option<Nullable<TextTransformSet>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TimersPatch {
-    pub user_away: Option<Nullable<Duration>>,
-    pub transcription_timeout: Option<Nullable<Duration>>,
-    pub aec_warmup: Option<Nullable<Duration>>,
-    pub session_close_transcript_timeout: Option<Duration>,
-}
-
-/// How a said value lands: `set` (the value), `some` (a layer picks a mode, never "no mode"),
-/// `nullable` (`Null` is off). A leaf added to [`SessionPatch`] must be listed here, or no layer
-/// can say it.
-macro_rules! each_leaf {
-    ($m:ident, $into:expr, $from:expr) => {
-        $m!($into, $from, set, turn.detection);
-        $m!($into, $from, set, turn.endpointing.mode);
-        $m!($into, $from, set, turn.endpointing.min_delay);
-        $m!($into, $from, set, turn.endpointing.max_delay);
-        $m!($into, $from, set, turn.endpointing.alpha);
-        $m!($into, $from, set, turn.interruption.enabled);
-        $m!($into, $from, some, turn.interruption.mode);
-        $m!($into, $from, set, turn.interruption.discard_audio_if_uninterruptible);
-        $m!($into, $from, set, turn.interruption.min_duration);
-        $m!($into, $from, set, turn.interruption.min_words);
-        $m!($into, $from, set, turn.interruption.resume_false_interruption);
-        $m!($into, $from, nullable, turn.interruption.false_interruption_timeout);
-        $m!($into, $from, nullable, turn.interruption.backchannel_boundary);
-        $m!($into, $from, set, turn.preemptive.enabled);
-        $m!($into, $from, set, turn.preemptive.preemptive_tts);
-        $m!($into, $from, set, turn.preemptive.max_speech_duration);
-        $m!($into, $from, set, turn.preemptive.max_retries);
-        $m!($into, $from, nullable, turn.user_turn_limit.max_words);
-        $m!($into, $from, nullable, turn.user_turn_limit.max_duration);
-        $m!($into, $from, set, turn.ivr_detection);
-        $m!($into, $from, set, speech.max_tool_steps);
-        $m!($into, $from, set, speech.min_consecutive_speech_delay);
-        $m!($into, $from, nullable, speech.use_tts_aligned_transcript);
-        $m!($into, $from, nullable, speech.tts_text_transforms);
-        $m!($into, $from, nullable, timers.user_away);
-        $m!($into, $from, nullable, timers.transcription_timeout);
-        $m!($into, $from, nullable, timers.aec_warmup);
-        $m!($into, $from, set, timers.session_close_transcript_timeout);
-    };
-}
-
-/// One leaf of a merge: said wins, unsaid keeps.
-macro_rules! merge_leaf {
-    ($into:expr, $from:expr, $kind:ident, $($f:ident).+) => {
-        if let Some(v) = $from.$($f).+ {
-            $into.$($f).+ = Some(v);
-        }
-    };
-}
-
-macro_rules! apply_leaf {
-    ($cfg:expr, $patch:expr, set, $($f:ident).+) => {
-        if let Some(v) = $patch.$($f).+ {
-            $cfg.$($f).+ = v;
-        }
-    };
-    ($cfg:expr, $patch:expr, some, $($f:ident).+) => {
-        if let Some(v) = $patch.$($f).+ {
-            $cfg.$($f).+ = Some(v);
-        }
-    };
-    ($cfg:expr, $patch:expr, nullable, $($f:ident).+) => {
-        if let Some(v) = $patch.$($f).+ {
-            $cfg.$($f).+ = v.into_option();
-        }
-    };
-}
-
-impl SessionPatch {
-    /// Lay `over` on top of this patch (`update_options`): unsaid leaves keep their earlier
-    /// answer rather than falling back to the default.
-    pub fn merge(&mut self, over: &SessionPatch) {
-        each_leaf!(merge_leaf, self, over);
+impl<T: Copy> Leaf for Option<T> {
+    type Value = T;
+    fn is_said(&self) -> bool {
+        self.is_some()
+    }
+    fn resolved(self) -> T {
+        self.expect("an option leaf read before resolve")
     }
 }
 
-/// The reference's defaults, as one `SessionConfig`. The endpointing base tightens to
-/// `0.3 / 2.5` with a streaming detector, and the owner is what `Auto` means for these legs.
-pub const fn defaults(legs: &LegSet) -> SessionConfig {
+impl<T: Copy> Leaf for Maybe<Option<T>> {
+    type Value = Option<T>;
+    fn is_said(&self) -> bool {
+        self.is_given()
+    }
+    fn resolved(self) -> Option<T> {
+        self.given().expect("an option leaf read before resolve")
+    }
+}
+
+/// An option group's `merge` (a said leaf wins, an unsaid one keeps) and its resolved reads, one
+/// per leaf. `optional` leaves have no read: their `None` is a resolved answer.
+macro_rules! option_group {
+    ($ty:ident { $($leaf:ident: $value:ty),* $(,)? }
+        $(optional($($opt:ident),+))? $(groups($($group:ident),+))?) => {
+        impl $ty {
+            /// Lay `over` on top: a said leaf wins, an unsaid one keeps its answer.
+            pub fn merge(&mut self, over: &Self) {
+                $(
+                    if $crate::agent_activity::options::Leaf::is_said(&over.$leaf) {
+                        self.$leaf = over.$leaf;
+                    }
+                )*
+                $($(if over.$opt.is_some() { self.$opt = over.$opt; })+)?
+                $($(self.$group.merge(&over.$group);)+)?
+            }
+            $(
+                pub fn $leaf(&self) -> $value {
+                    $crate::agent_activity::options::Leaf::resolved(self.$leaf)
+                }
+            )*
+        }
+    };
+}
+pub(crate) use option_group;
+
+/// The session's options, one layer or all of them resolved. `Default` says nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AgentSessionOptions {
+    pub turn: TurnHandlingOptions,
+    pub speech: SpeechOptions,
+    pub timers: TimerOptions,
+}
+
+option_group!(AgentSessionOptions {} groups(turn, speech, timers));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpeechOptions {
+    pub max_tool_steps: Option<u32>,
+    pub min_consecutive_speech_delay: Option<Duration>,
+    /// `use_tts_aligned_transcript`: `None` is the reference's `NOT_GIVEN`, "if the TTS can",
+    /// resolved too.
+    pub use_tts_aligned_transcript: Option<bool>,
+    /// `tts_text_transforms`: `None` is "run none".
+    pub tts_text_transforms: Maybe<Option<TextTransformSet>>,
+}
+
+option_group!(SpeechOptions {
+    max_tool_steps: u32,
+    min_consecutive_speech_delay: Duration,
+    tts_text_transforms: Option<TextTransformSet>,
+} optional(use_tts_aligned_transcript));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TimerOptions {
+    pub user_away: Maybe<Option<Duration>>,
+    /// `Some(ZERO)` is a region ("fire at end of speech"), not "off".
+    pub transcription_timeout: Maybe<Option<Duration>>,
+    /// `None` is no warmup at all (an outbound SIP call).
+    pub aec_warmup: Maybe<Option<Duration>>,
+    pub session_close_transcript_timeout: Option<Duration>,
+}
+
+option_group!(TimerOptions {
+    user_away: Option<Duration>,
+    transcription_timeout: Option<Duration>,
+    aec_warmup: Option<Duration>,
+    session_close_transcript_timeout: Duration,
+});
+
+/// The reference's defaults: every leaf said. The endpointing base tightens to `0.3 / 2.5` with a
+/// streaming detector, and the owner is what `Auto` means for these legs.
+pub const fn defaults(legs: &LegSet) -> AgentSessionOptions {
     let (min_delay, max_delay) = match legs.detector {
         Some(DetectorKind::Streaming) => (Duration::from_millis(300), Duration::from_millis(2500)),
         Some(DetectorKind::Batch) | None => {
@@ -189,55 +161,57 @@ pub const fn defaults(legs: &LegSet) -> SessionConfig {
         }
     };
     let detection = TurnDetection::Auto;
-    SessionConfig {
+    AgentSessionOptions {
         turn: TurnHandlingOptions {
-            detection,
-            owner: resolve_turn_detection_mode(detection, legs),
+            detection: Some(detection),
+            owner: Some(resolve_turn_detection_mode(detection, legs)),
             endpointing: EndpointingOptions {
-                mode: EndpointingMode::Fixed,
-                min_delay,
-                max_delay,
-                alpha: 0.9,
+                mode: Some(EndpointingMode::Fixed),
+                min_delay: Some(min_delay),
+                max_delay: Some(max_delay),
+                alpha: Some(0.9),
             },
             interruption: InterruptionOptions {
-                enabled: true,
+                enabled: Some(true),
                 mode: None,
-                detection_enabled: legs.adaptive_detector,
-                by_audio_activity: by_audio_activity(detection),
-                discard_audio_if_uninterruptible: true,
-                min_duration: Duration::from_millis(500),
-                min_words: 0,
-                resume_false_interruption: true,
-                false_interruption_timeout: Some(Duration::from_millis(2000)),
-                backchannel_boundary: Some((
+                detection_enabled: Some(legs.adaptive_detector),
+                by_audio_activity: Some(by_audio_activity(detection)),
+                discard_audio_if_uninterruptible: Some(true),
+                min_duration: Some(Duration::from_millis(500)),
+                min_words: Some(0),
+                resume_false_interruption: Some(true),
+                false_interruption_timeout: Maybe::Given(Some(Duration::from_millis(2000))),
+                backchannel_boundary: Maybe::Given(Some((
                     Duration::from_millis(1000),
                     Duration::from_millis(1000),
-                )),
+                ))),
             },
             preemptive: PreemptiveGenerationOptions {
-                enabled: true,
-                preemptive_tts: false,
-                max_speech_duration: Duration::from_millis(10_000),
-                max_retries: 3,
+                enabled: Some(true),
+                preemptive_tts: Some(false),
+                max_speech_duration: Some(Duration::from_millis(10_000)),
+                max_retries: Some(3),
             },
-            user_turn_limit: UserTurnLimitOptions { max_words: None, max_duration: None },
-            ivr_detection: false,
+            user_turn_limit: UserTurnLimitOptions {
+                max_words: Maybe::Given(None),
+                max_duration: Maybe::Given(None),
+            },
+            ivr_detection: Some(false),
         },
-        speech: SpeechPolicy {
-            max_tool_steps: 3,
-            min_consecutive_speech_delay: Duration::ZERO,
+        speech: SpeechOptions {
+            max_tool_steps: Some(3),
+            min_consecutive_speech_delay: Some(Duration::ZERO),
             use_tts_aligned_transcript: None,
-            tts_text_transforms: Some(TextTransformSet::ALL),
+            tts_text_transforms: Maybe::Given(Some(TextTransformSet::ALL)),
         },
-        timers: Timers {
-            user_away: Some(Duration::from_millis(15_000)),
-            transcription_timeout: None,
-            aec_warmup: Some(Duration::from_millis(3000)),
-            session_close_transcript_timeout: Duration::from_millis(2000),
+        timers: TimerOptions {
+            user_away: Maybe::Given(Some(Duration::from_millis(15_000))),
+            transcription_timeout: Maybe::Given(None),
+            aec_warmup: Maybe::Given(Some(Duration::from_millis(3000))),
+            session_close_transcript_timeout: Some(Duration::from_millis(2000)),
         },
     }
 }
-
 /// `Auto` falls `realtime_llm` → `vad` → `manual`. A mode the legs cannot honour falls back as
 /// `Auto` does; `Manual` always holds. `RealtimeLlm` only when no local leg can decide;
 /// `DriverBuilder::start` refines it. Only an asked-for `stt` is `Stt`: the reference's unset mode
@@ -282,30 +256,27 @@ const fn by_audio_activity(detection: TurnDetection) -> bool {
 /// The layers, in the order they apply: `defaults(legs)` ⊕ `session` ⊕ `agent`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ConfigStack {
-    /// `__init__` (after the deprecated-kwarg migration) ∪ `update_options` patches.
-    pub session: SessionPatch,
+    /// `__init__` (after the deprecated-kwarg migration), each `update_options` merged in.
+    pub session: AgentSessionOptions,
     /// The active `Agent`'s overrides; replaced whole by `update_agent`.
-    pub agent: Option<SessionPatch>,
+    pub agent: Option<AgentSessionOptions>,
 }
 
 impl ConfigStack {
-    /// Pure. The only place a default is read and the only constructor of [`SessionConfig`].
-    pub fn resolve(&self, legs: &LegSet) -> SessionConfig {
+    /// Pure. The only place a default is read, and every leaf of its answer is said.
+    pub fn resolve(&self, legs: &LegSet) -> AgentSessionOptions {
         let mut cfg = defaults(legs);
-        apply(&mut cfg, &self.session);
+        cfg.merge(&self.session);
         if let Some(agent) = &self.agent {
-            apply(&mut cfg, agent);
+            cfg.merge(agent);
         }
-        // The two derived leaves follow the layered `detection`, not the default's.
-        cfg.turn.owner = resolve_turn_detection_mode(cfg.turn.detection, legs);
-        cfg.turn.interruption.by_audio_activity = by_audio_activity(cfg.turn.detection);
-        cfg.turn.interruption.detection_enabled = legs.adaptive_detector;
+        // The derived leaves follow the layered `detection` and the legs, whatever a layer said.
+        let detection = cfg.turn.detection();
+        cfg.turn.owner = Some(resolve_turn_detection_mode(detection, legs));
+        cfg.turn.interruption.by_audio_activity = Some(by_audio_activity(detection));
+        cfg.turn.interruption.detection_enabled = Some(legs.adaptive_detector);
         cfg
     }
-}
-
-fn apply(cfg: &mut SessionConfig, patch: &SessionPatch) {
-    each_leaf!(apply_leaf, cfg, patch);
 }
 
 fn deprecation(kwarg: &'static str, hint: &'static str) -> DiagnosticEvent {
@@ -370,9 +341,9 @@ pub fn stt_context_source(kw: &SessionKwargs) -> &'static str {
     }
 }
 
-/// **The session layer** and its diagnostics: said leaves are `Some`, the rest fall to
-/// `defaults(legs)`. Past this line nothing is `f64`.
-pub fn session_layer(kw: &SessionKwargs) -> (SessionPatch, Vec<DiagnosticEvent>) {
+/// **The session layer** and its diagnostics: what it leaves unsaid falls to `defaults(legs)`.
+/// Past this line nothing is `f64`.
+pub fn session_layer(kw: &SessionKwargs) -> (AgentSessionOptions, Vec<DiagnosticEvent>) {
     let SessionKwargs {
         turn_handling: _,
         stt_context_options: _,
@@ -397,26 +368,23 @@ pub fn session_layer(kw: &SessionKwargs) -> (SessionPatch, Vec<DiagnosticEvent>)
         diagnostics.push(deprecation("keyterms_options", STT_CONTEXT_HINT));
     }
 
-    let mut p = turn_handling_patch(&session_turn_handling(kw));
-    p.turn.ivr_detection = Some(ivr_detection);
-    p.speech.max_tool_steps = Some(count(max_tool_steps));
-    p.speech.min_consecutive_speech_delay = Some(secs(min_consecutive_speech_delay));
-    // `NOT_GIVEN` resolves to `None`.
-    p.speech.use_tts_aligned_transcript = match use_tts_aligned_transcript {
-        Maybe::NotGiven => None,
-        Maybe::Given(on) => Some(Nullable::Value(on)),
-    };
-    p.speech.tts_text_transforms = nullable(tts_text_transforms, |t| t);
-    p.timers.user_away = Some(Nullable::from_option(user_away_timeout.map(secs)));
-    p.timers.transcription_timeout = Some(Nullable::from_option(transcription_timeout.map(secs)));
-    p.timers.aec_warmup = nullable(aec_warmup_duration, secs);
-    p.timers.session_close_transcript_timeout = Some(secs(session_close_transcript_timeout));
-    (p, diagnostics)
+    let mut o = turn_handling_layer(&session_turn_handling(kw));
+    o.turn.ivr_detection = Some(ivr_detection);
+    o.speech.max_tool_steps = Some(count(max_tool_steps));
+    o.speech.min_consecutive_speech_delay = Some(secs(min_consecutive_speech_delay));
+    o.speech.use_tts_aligned_transcript = use_tts_aligned_transcript.given();
+    o.speech.tts_text_transforms = tts_text_transforms;
+    o.timers.user_away = Maybe::Given(user_away_timeout.map(secs));
+    o.timers.transcription_timeout = Maybe::Given(transcription_timeout.map(secs));
+    o.timers.aec_warmup = nullable(aec_warmup_duration, secs);
+    o.timers.session_close_transcript_timeout = Some(secs(session_close_transcript_timeout));
+    (o, diagnostics)
 }
 
-/// The deprecated pair builds a **fresh** endpointing patch (`EndpointingOptions()`), so the old
-/// form wins when both are passed. One diagnostic for the pair.
-pub fn update_patch(kw: &UpdateKwargs) -> (SessionPatch, Vec<DiagnosticEvent>) {
+/// What `update_options(..)` says. The deprecated pair builds a **fresh** endpointing group
+/// (`EndpointingOptions()`), so the old form wins when both are passed. One diagnostic for the
+/// pair.
+pub fn update_layer(kw: &UpdateKwargs) -> (AgentSessionOptions, Vec<DiagnosticEvent>) {
     let UpdateKwargs {
         endpointing_opts,
         turn_detection,
@@ -439,35 +407,34 @@ pub fn update_patch(kw: &UpdateKwargs) -> (SessionPatch, Vec<DiagnosticEvent>) {
     } else {
         endpointing_opts
     };
-    let mut p = SessionPatch::default();
+    let mut o = AgentSessionOptions::default();
     if let Some(e) = endpointing {
-        p.turn.endpointing = endpointing_patch(&e);
+        o.turn.endpointing = endpointing_options(&e);
     }
-    p.turn.detection = match turn_detection {
+    o.turn.detection = match turn_detection {
         Maybe::NotGiven => None,
         Maybe::Given(TurnDetectionKwarg::Null) => Some(TurnDetection::Auto),
         Maybe::Given(TurnDetectionKwarg::Mode(m)) => Some(m),
         // A detector *object* is the host's to swap; it says nothing about the owner.
         Maybe::Given(TurnDetectionKwarg::Detector { streaming: _ }) => None,
     };
-    (p, diagnostics)
+    (o, diagnostics)
 }
 
-/// [`SessionConfig`] as the host's `ResolvedSessionOptions`. `session` is read for
+/// The resolved options as the host's `ResolvedSessionOptions`. `session` is read for
 /// `endpointing_overrides` only. No `..`, so a new leaf must be named.
 pub fn resolved_session_options(
-    cfg: &SessionConfig,
-    session: &SessionPatch,
+    cfg: &AgentSessionOptions,
+    session: &AgentSessionOptions,
 ) -> ResolvedSessionOptions {
-    use crate::agent_activity::options as c;
-    let SessionConfig {
+    let AgentSessionOptions {
         turn:
-            crate::turn::TurnHandlingOptions {
+            TurnHandlingOptions {
                 detection,
                 owner: _,
-                endpointing: crate::turn::EndpointingOptions { mode, min_delay, max_delay, alpha },
+                endpointing: EndpointingOptions { mode, min_delay, max_delay, alpha },
                 interruption:
-                    crate::turn::InterruptionOptions {
+                    InterruptionOptions {
                         enabled,
                         mode: interruption_mode,
                         detection_enabled: _,
@@ -480,77 +447,80 @@ pub fn resolved_session_options(
                         backchannel_boundary,
                     },
                 preemptive:
-                    crate::turn::PreemptiveGenerationOptions {
+                    PreemptiveGenerationOptions {
                         enabled: preemptive_enabled,
                         preemptive_tts,
                         max_speech_duration,
                         max_retries,
                     },
-                user_turn_limit: crate::turn::UserTurnLimitOptions { max_words, max_duration },
+                user_turn_limit: UserTurnLimitOptions { max_words, max_duration },
                 ivr_detection,
             },
         speech:
-            c::SpeechPolicy {
+            SpeechOptions {
                 max_tool_steps,
                 min_consecutive_speech_delay,
                 use_tts_aligned_transcript,
                 tts_text_transforms,
             },
         timers:
-            c::Timers { user_away, transcription_timeout, aec_warmup, session_close_transcript_timeout },
+            TimerOptions {
+                user_away,
+                transcription_timeout,
+                aec_warmup,
+                session_close_transcript_timeout,
+            },
     } = *cfg;
-    let crate::turn::EndpointingPatch {
-        mode: o_mode,
-        min_delay: o_min,
-        max_delay: o_max,
-        alpha: o_alpha,
-    } = session.turn.endpointing;
+    let secs = |d: Duration| d.as_secs_f64();
+    let detection = detection.resolved();
+    let overrides = session.turn.endpointing;
     ResolvedSessionOptions {
         endpointing: ResolvedEndpointing {
-            mode: mode.as_str().to_owned(),
-            min_delay: min_delay.as_secs_f64(),
-            max_delay: max_delay.as_secs_f64(),
-            alpha,
+            mode: mode.resolved().as_str().to_owned(),
+            min_delay: secs(min_delay.resolved()),
+            max_delay: secs(max_delay.resolved()),
+            alpha: alpha.resolved(),
         },
         interruption: ResolvedInterruption {
-            enabled,
+            enabled: enabled.resolved(),
             mode: interruption_mode.map(|m| m.as_str().to_owned()),
-            discard_audio_if_uninterruptible,
-            min_duration: min_duration.as_secs_f64(),
-            min_words,
-            resume_false_interruption,
-            false_interruption_timeout: false_interruption_timeout.map(|d| d.as_secs_f64()),
+            discard_audio_if_uninterruptible: discard_audio_if_uninterruptible.resolved(),
+            min_duration: secs(min_duration.resolved()),
+            min_words: min_words.resolved(),
+            resume_false_interruption: resume_false_interruption.resolved(),
+            false_interruption_timeout: false_interruption_timeout.resolved().map(secs),
             backchannel_boundary: backchannel_boundary
-                .map(|(s, e)| (s.as_secs_f64(), e.as_secs_f64())),
+                .resolved()
+                .map(|(s, e)| (secs(s), secs(e))),
         },
         preemptive_generation: ResolvedPreemptiveGeneration {
-            enabled: preemptive_enabled,
-            preemptive_tts,
-            max_speech_duration: max_speech_duration.as_secs_f64(),
-            max_retries,
+            enabled: preemptive_enabled.resolved(),
+            preemptive_tts: preemptive_tts.resolved(),
+            max_speech_duration: secs(max_speech_duration.resolved()),
+            max_retries: max_retries.resolved(),
         },
         user_turn_limit: ResolvedUserTurnLimit {
-            max_words,
-            max_duration: max_duration.map(|d| d.as_secs_f64()),
+            max_words: max_words.resolved(),
+            max_duration: max_duration.resolved().map(secs),
         },
         // The literal, or `None` for `Auto`: "from the legs".
         turn_detection_mode: (detection != TurnDetection::Auto)
             .then(|| detection.as_str().to_owned()),
         endpointing_overrides: EndpointingOverrides {
-            mode: o_mode.map(|m| m.as_str().to_owned()),
-            min_delay: o_min.map(|d| d.as_secs_f64()),
-            max_delay: o_max.map(|d| d.as_secs_f64()),
-            alpha: o_alpha,
+            mode: overrides.mode.map(|m| m.as_str().to_owned()),
+            min_delay: overrides.min_delay.map(secs),
+            max_delay: overrides.max_delay.map(secs),
+            alpha: overrides.alpha,
         },
-        max_tool_steps,
-        min_consecutive_speech_delay: min_consecutive_speech_delay.as_secs_f64(),
+        max_tool_steps: max_tool_steps.resolved(),
+        min_consecutive_speech_delay: secs(min_consecutive_speech_delay.resolved()),
         use_tts_aligned_transcript,
-        tts_text_transforms: tts_text_transforms.map(TextTransformSet::names),
-        ivr_detection,
-        user_away_timeout: user_away.map(|d| d.as_secs_f64()),
-        transcription_timeout: transcription_timeout.map(|d| d.as_secs_f64()),
-        aec_warmup_duration: aec_warmup.map(|d| d.as_secs_f64()),
-        session_close_transcript_timeout: session_close_transcript_timeout.as_secs_f64(),
+        tts_text_transforms: tts_text_transforms.resolved().map(TextTransformSet::names),
+        ivr_detection: ivr_detection.resolved(),
+        user_away_timeout: user_away.resolved().map(secs),
+        transcription_timeout: transcription_timeout.resolved().map(secs),
+        aec_warmup_duration: aec_warmup.resolved().map(secs),
+        session_close_transcript_timeout: secs(session_close_transcript_timeout.resolved()),
     }
 }
 
@@ -730,7 +700,7 @@ struct HostOptionsState {
     kwargs: SessionKwargs,
     /// `expressive=`, then each `update_options(expressive=)`.
     expressive: Expressive,
-    session: SessionPatch,
+    session: AgentSessionOptions,
     /// Diagnostics (deprecated kwargs) not yet emitted; the session takes them at construction.
     diagnostics: Vec<DiagnosticEvent>,
 }
@@ -740,7 +710,7 @@ impl HostOptions {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    pub fn session_patch(&self) -> SessionPatch {
+    pub fn session(&self) -> AgentSessionOptions {
         self.lock().session
     }
 
@@ -777,7 +747,7 @@ impl HostOptions {
     /// `update_options(..)` before the session runs, on the same `merge` the driver uses.
     #[host(method)]
     pub fn update(&self, update: UpdateKwargs) {
-        let (patch, diagnostics) = update_patch(&update);
+        let (patch, diagnostics) = update_layer(&update);
         let mut state = self.lock();
         state.session.merge(&patch);
         state.diagnostics.extend(diagnostics);
@@ -790,14 +760,14 @@ impl HostOptions {
     /// off (`None`).
     #[host(method)]
     pub fn set_aec_warmup(&self, #[host(required)] duration: Option<f64>) {
-        self.lock().session.merge(&aec_warmup_patch(duration));
+        self.lock().session.merge(&aec_warmup_layer(duration));
     }
 
     /// The resolved configuration over the host-supplied legs, as the dict `session.options` reads
     /// before `start()`.
     #[host(method)]
     pub fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions {
-        let stack = ConfigStack { session: self.session_patch(), agent: None };
+        let stack = ConfigStack { session: self.session(), agent: None };
         resolved_session_options(&stack.resolve(&LegSet::from(legs)), &stack.session)
     }
 
@@ -814,10 +784,10 @@ impl HostOptions {
     }
 }
 
-/// `aec_warmup_duration` said again: the patch that says only that leaf.
-pub fn aec_warmup_patch(duration: Option<f64>) -> SessionPatch {
-    let mut p = SessionPatch::default();
-    p.timers.aec_warmup = Some(Nullable::from_option(duration.map(secs)));
+/// `aec_warmup_duration` said again: the layer that says only that leaf.
+pub fn aec_warmup_layer(duration: Option<f64>) -> AgentSessionOptions {
+    let mut p = AgentSessionOptions::default();
+    p.timers.aec_warmup = Maybe::Given(duration.map(secs));
     p
 }
 

@@ -316,7 +316,7 @@ impl Driver {
             manual_turn_detection: self.activity.audio_recognition.turn_detection_mode()
                 == crate::audio_recognition::TurnDetectionMode::Manual,
             current_speech: guard,
-            min_interruption_words: self.session.config.effective.turn.interruption.min_words
+            min_interruption_words: self.session.config.effective.turn.interruption.min_words()
                 as usize,
             new_transcript: &info.new_transcript,
             realtime_llm: self.activity.rt_session.is_some(),
@@ -327,7 +327,7 @@ impl Driver {
                 .effective
                 .turn
                 .interruption
-                .detection_enabled,
+                .detection_enabled(),
             backchannel_over_agent: info.backchannel_over_agent,
             skip_reply: info.skip_reply,
             late: info.late,
@@ -654,7 +654,7 @@ impl Driver {
         let live_at_final = std::mem::take(&mut self.activity.live_speech_at_final);
         let s = &self.activity.speech_scheduler;
         let speaking = s.current_speech_uninterrupted() || live_at_final;
-        let refusal = if !policy.enabled {
+        let refusal = if !policy.enabled() {
             Some(PreemptiveRefusal::Disabled)
         } else if self.activity.rt_session.is_some() {
             Some(PreemptiveRefusal::Realtime)
@@ -672,10 +672,10 @@ impl Driver {
             Some(PreemptiveRefusal::AgentSpeaking)
         // Strictly past `max_speech_duration`; a limit of zero refuses any timed onset.
         } else if started_speaking_at
-            .is_some_and(|at| now.saturating_duration_since(at) > policy.max_speech_duration)
+            .is_some_and(|at| now.saturating_duration_since(at) > policy.max_speech_duration())
         {
             Some(PreemptiveRefusal::TooLong)
-        } else if s.preemptive_generation_count() >= policy.max_retries {
+        } else if s.preemptive_generation_count() >= policy.max_retries() {
             Some(PreemptiveRefusal::RetriesExhausted)
         } else {
             None
@@ -703,7 +703,7 @@ impl Driver {
                 ..SpeechSpec::new(
                     SpeechKind::Preemptive,
                     ReplySource::Llm,
-                    self.session.config.effective.turn.interruption.enabled,
+                    self.session.config.effective.turn.interruption.enabled(),
                 )
             },
             out,

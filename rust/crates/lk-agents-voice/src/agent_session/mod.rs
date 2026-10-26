@@ -125,9 +125,9 @@ impl LiveSession {
         }
         let cfg = &config.effective;
         LiveSession {
-            states: AgentUserState::new(cfg.timers.user_away),
-            aec: AecWarmup::new(cfg.timers.aec_warmup),
-            by_audio_activity: cfg.turn.interruption.by_audio_activity,
+            states: AgentUserState::new(cfg.timers.user_away()),
+            aec: AecWarmup::new(cfg.timers.aec_warmup()),
+            by_audio_activity: cfg.turn.interruption.by_audio_activity(),
             errors: ErrorCounts { max: max_unrecoverable_errors, ..Default::default() },
             ids: IdMint { session: session_id, next: 1, user_item: None },
             config,
@@ -706,7 +706,7 @@ mod label_tests {
     fn state(aec: Option<Duration>) -> LiveSession {
         let legs = crate::agent_activity::options::LegSet::none();
         let mut config = DriverConfig::new(Default::default(), legs);
-        config.effective.timers.aec_warmup = aec;
+        config.effective.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec);
         LiveSession::new(config, SessionParts::default())
     }
 

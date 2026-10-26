@@ -714,8 +714,8 @@ pub(super) fn patch(
     ms: Millis,
     on: bool,
     words: Count,
-) -> SessionPatch {
-    let mut patch = SessionPatch::default();
+) -> AgentSessionOptions {
+    let mut patch = AgentSessionOptions::default();
     let delay = Some(Duration::from_millis(ms.0));
     match knob {
         Knob::Detection => {
@@ -729,7 +729,7 @@ pub(super) fn patch(
         Knob::MaxEndpointing => patch.turn.endpointing.max_delay = delay,
         Knob::Interruptions => patch.turn.interruption.enabled = Some(on),
         Knob::MinInterruptionWords => patch.turn.interruption.min_words = Some(words.0),
-        Knob::UserAway => patch.timers.user_away = delay.map(Nullable::Value),
+        Knob::UserAway => patch.timers.user_away = lk_agents_abi::Maybe::Given(delay),
         Knob::MaxToolSteps => patch.speech.max_tool_steps = Some(words.0),
     }
     patch

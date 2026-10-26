@@ -17,11 +17,13 @@ pub enum Endpointing {
 
 impl Endpointing {
     pub fn new(cfg: &crate::turn::EndpointingOptions) -> Self {
-        match cfg.mode {
+        match cfg.mode() {
             EndpointingMode::Dynamic => {
-                Endpointing::Dynamic(Dynamic::new(cfg.min_delay, cfg.max_delay, cfg.alpha))
+                Endpointing::Dynamic(Dynamic::new(cfg.min_delay(), cfg.max_delay(), cfg.alpha()))
             }
-            EndpointingMode::Fixed => Endpointing::Fixed(Fixed::new(cfg.min_delay, cfg.max_delay)),
+            EndpointingMode::Fixed => {
+                Endpointing::Fixed(Fixed::new(cfg.min_delay(), cfg.max_delay()))
+            }
         }
     }
 

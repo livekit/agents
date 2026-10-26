@@ -648,7 +648,7 @@ pub struct ReplyContext {
     pub providers: Providers,
     /// The speech options as of the reply's creation: a later `update_options` reaches the next
     /// reply, not this one.
-    pub speech: crate::agent_activity::options::SpeechPolicy,
+    pub speech: crate::agent_activity::options::SpeechOptions,
 }
 
 /// The agent's `@agent.instructions` functions, rendered by the host for each model request of a

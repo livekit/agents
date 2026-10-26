@@ -704,8 +704,9 @@ pub struct EndpointingOverrides {
     pub alpha: Option<f64>,
 }
 
-/// `SessionConfig` as the host reads it: every public option of `session.options`, seconds as
-/// `f64`. Built only by `resolved_session_options`, whose exhaustive destructure keeps it complete.
+/// The resolved `AgentSessionOptions` as the host reads it: every public option of
+/// `session.options`, seconds as `f64`. Built only by `resolved_session_options`, whose exhaustive
+/// destructure keeps it complete.
 #[derive(Debug, Clone, PartialEq, Host)]
 #[python(typed_dict, module = "session_options", name = "ResolvedSessionOptions")]
 #[binding(emit)]

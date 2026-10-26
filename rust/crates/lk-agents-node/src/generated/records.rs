@@ -2043,8 +2043,9 @@ impl TryFrom<LlmChunk> for lk_agents_abi::LlmChunk {
     }
 }
 
-/// `SessionConfig` as the host reads it: every public option of `session.options`, seconds as
-/// `f64`. Built only by `resolved_session_options`, whose exhaustive destructure keeps it complete.
+/// The resolved `AgentSessionOptions` as the host reads it: every public option of
+/// `session.options`, seconds as `f64`. Built only by `resolved_session_options`, whose exhaustive
+/// destructure keeps it complete.
 #[napi(object, js_name = "ResolvedSessionOptions")]
 pub struct ResolvedSessionOptions {
     pub endpointing: crate::generated::records::ResolvedEndpointing,

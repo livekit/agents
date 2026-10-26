@@ -874,8 +874,8 @@ impl Driver {
             caps.turn_detection && caps.auto_turn_reply_generation
         }) && self.activity.audio_recognition.turn_detection_mode()
             == TurnDetectionMode::RealtimeLlm;
-        let mut allow =
-            allow_interruptions.unwrap_or(self.session.config.effective.turn.interruption.enabled);
+        let enabled = self.session.config.effective.turn.interruption.enabled();
+        let mut allow = allow_interruptions.unwrap_or(enabled);
         if !allow && server_replies {
             allow = true;
             diagnose(
@@ -1041,7 +1041,7 @@ impl Driver {
             return;
         }
         let id = self.session.ids.next_speech_id();
-        let allow_interruptions = self.session.config.effective.turn.interruption.enabled;
+        let allow_interruptions = self.session.config.effective.turn.interruption.enabled();
         let handle = Arc::new(SpeechHandle::new(id, allow_interruptions));
         match how {
             Settled::Failed(err) | Settled::TimedOut(err) => {
@@ -1067,14 +1067,14 @@ impl Driver {
         caps: &lk_agents_abi::llm::realtime::RealtimeCapabilities,
         out: &mut Out,
     ) -> Option<crate::audio_recognition::TurnDetectionMode> {
-        let resolved = self.session.config.effective.turn.owner;
+        let resolved = self.session.config.effective.turn.owner();
         let requested = self
             .activity
-            .note_resolved_mode(resolved, self.session.config.effective.turn.detection);
+            .note_resolved_mode(resolved, self.session.config.effective.turn.detection());
         let side = SessionSide {
             stt: self.activity.audio_recognition.stt_enabled(),
             vad: self.input.sinks.contains_key(&crate::audio::AudioChannel::Vad),
-            detection: self.session.config.effective.turn.detection,
+            detection: self.session.config.effective.turn.detection(),
             streaming_detector: self.session.config.legs.detector
                 == Some(crate::agent_activity::options::DetectorKind::Streaming),
             interruption_given: self.session.config.effective.turn.interruption.mode.is_some(),
@@ -1082,7 +1082,7 @@ impl Driver {
         };
         let disabled = self.activity.realtime_turn_detection_disabled;
         let mode = realtime_turn_detection_mode(caps, side, disabled);
-        self.session.config.effective.turn.owner = mode;
+        self.session.config.effective.turn.owner = Some(mode);
         let previous = self.activity.audio_recognition.turn_detection_mode();
         let honoured = mode != previous;
         // `update_options(turn_detection=..)`: the server's detection was resolved at the open and
