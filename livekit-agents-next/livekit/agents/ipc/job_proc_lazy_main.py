@@ -19,9 +19,9 @@ import contextlib
 import contextvars
 import socket
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from opentelemetry import trace
 
@@ -51,6 +51,8 @@ from .proto import (
 # paths that hang: past it the rest of the shutdown (on_session_end, ShuttingDown,
 # room.disconnect, the shutdown callbacks) runs anyway.
 _SESSION_ACLOSE_TIMEOUT = 60.0
+
+_T = TypeVar("_T")
 
 
 @dataclass
@@ -294,6 +296,9 @@ class _JobProc:
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
+        # the core calls the steps below from its own tasks: user code gets the job's context
+        # (get_job_context() and its http session) back
+        self._http_session = http_context._ContextVar.get()
 
         # the job's root span, from the availability request to the end of shutdown; the
         # entrypoint returning is an event on it
@@ -317,8 +322,14 @@ class _JobProc:
 
     # --- the steps the core runs -------------------------------------------------------
 
+    def _in_job(self, coro: Coroutine[Any, Any, _T], name: str) -> asyncio.Task[_T]:
+        ctx = contextvars.copy_context()
+        ctx.run(_JobContextVar.set, self._job_ctx)
+        ctx.run(http_context._ContextVar.set, self._http_session)
+        return ctx.run(asyncio.create_task, coro, name=name)
+
     async def _core_start_entrypoint(self) -> asyncio.Task[None]:
-        return asyncio.create_task(self._traceable_entrypoint(), name="job_user_entrypoint")
+        return self._in_job(self._traceable_entrypoint(), "job_user_entrypoint")
 
     async def _traceable_entrypoint(self) -> None:
         job_span = self._job_span
@@ -377,7 +388,7 @@ class _JobProc:
 
     async def _core_close_session(self) -> None:
         if session := self._job_ctx._primary_agent_session:
-            await session.aclose()
+            await self._in_job(session.aclose(), "job_close_session")
 
     def _core_has_session_end(self) -> bool:
         return self._session_end_fnc is not None
@@ -385,11 +396,11 @@ class _JobProc:
     async def _core_session_end(self, span: trace.Span) -> None:
         assert self._session_end_fnc is not None
         with trace.use_span(span, end_on_exit=False, record_exception=False):
-            await self._session_end_fnc(self._job_ctx)
+            await self._in_job(self._session_end_fnc(self._job_ctx), "job_session_end")
 
     async def _core_upload(self, span: trace.Span) -> None:
         with trace.use_span(span, end_on_exit=False, record_exception=False):
-            await self._job_ctx._on_session_end()
+            await self._in_job(self._job_ctx._on_session_end(), "job_upload")
 
     async def _core_finish(self, reason: str, user_initiated: bool) -> None:
         await self._client.send(ShuttingDown())
@@ -415,7 +426,7 @@ class _JobProc:
             end_on_exit=False,
             record_exception=False,
         ):
-            await callback(reason)
+            await self._in_job(callback(reason), "job_shutdown_callback")
 
 
 def _is_framework_callback(fnc: Any) -> bool:
