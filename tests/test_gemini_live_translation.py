@@ -485,3 +485,25 @@ async def test_utterances_apart_by_more_than_the_quiet_stay_apart(
         assert [t.text for t in heard if t.is_final] == ["hello", "goodbye"]
     finally:
         await session.aclose()
+
+
+async def test_punctuation_that_is_the_transcripts_own_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(transcript_segment_timeout=0.05).session()
+    heard: list[InputTranscript] = []
+    session.on("input_transcript", heard.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        # the session's first transcript: nothing earlier could own the period
+        conns[0].emit(
+            input_transcription=types.Transcription(text=".NET is available", finished=True)
+        )
+        # after a finished mark, not a quiet: the ellipsis opens this transcript
+        conns[0].emit(input_transcription=types.Transcription(text="... and so on"))
+        await _wait_for(lambda: sum(t.is_final for t in heard) == 2)
+
+        assert [t.text for t in heard if t.is_final] == [".NET is available", "... and so on"]
+    finally:
+        await session.aclose()
