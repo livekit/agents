@@ -195,7 +195,9 @@ class RoomOptions:
             },
             "text_output": text_out
             and {
-                "sync_transcription": text_out.sync_transcription,
+                "sync_transcription": (
+                    text_out.sync_transcription if is_given(text_out.sync_transcription) else None
+                ),
                 "transcription_speed_factor": text_out.transcription_speed_factor,
                 "json_format": text_out.json_format,
             },

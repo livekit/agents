@@ -53,6 +53,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         tts: rng.bool(),
         connect_ms: rng.bool().then(|| ms(rng)),
         video: rng.bool(),
+        room_camera: false,
         sync_transcription: rng.bool(),
         lagging_output: false,
         pausable_output: rng.bool(),
@@ -110,5 +111,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         max_keyterms: rng.bool().then(|| rng.usize(0..4)),
         timeout_ms: rng.bool().then(|| DELAYS_MS[rng.usize(0..DELAYS_MS.len())]),
     });
+    // The room's camera, drawn last too. The host's camera wins over the room's, as
+    // `session.input.video` does: a seed that draws the room's has none of its own.
+    setup.room_camera = setup.room_legs.is_some() && rng.u8(0..100) < 40;
+    setup.video &= !setup.room_camera;
     setup
 }

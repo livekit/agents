@@ -38,6 +38,7 @@ from livekit.agents import (
     _core,
     function_tool,
     llm,
+    room_io,
     stt,
     tts,
 )
@@ -892,6 +893,23 @@ async def keyterms() -> None:
     await session.aclose()
 
 
+async def room_camera() -> None:
+    """``RoomOptions(video_input=True)``: the core reads the person's camera, as
+    ``session.input.video``."""
+    print("== room camera")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    session = LiveSession(llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    await session.start(
+        Agent(instructions="You can see."),
+        room=room,
+        room_options=room_io.RoomOptions(video_input=True),
+    )
+    assert isinstance(session.input.video, _core.RoomVideoInput), session.input.video
+    print(f"video input {type(session.input.video).__name__}")
+    await session.aclose()
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -990,6 +1008,7 @@ async def main() -> int:
     await background_audio()
     await amd()
     await keyterms()
+    await room_camera()
     return 0
 
 

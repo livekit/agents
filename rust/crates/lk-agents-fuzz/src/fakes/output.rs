@@ -85,6 +85,41 @@ impl VideoInput for FakeVideoInput {
     }
 }
 
+/// The person's camera track as a resource the case feeds by `VideoFrames`.
+pub fn room_camera(
+    registry: &Registry,
+    camera: Arc<lk_agents_rtc::FakeTrackPublication>,
+    refs: Arc<dyn RefRegistry>,
+) {
+    registry.register(Kind::Video, Detail::RoomCamera, Control::RoomVideo(camera, refs));
+}
+
+/// So many frames onto the person's camera track, minted as the host camera's are. Accepted
+/// when a reader took them.
+pub(super) fn feed_room_video(
+    camera: &lk_agents_rtc::FakeTrackPublication,
+    refs: &Arc<dyn RefRegistry>,
+    video: u32,
+    what: &Input,
+) -> bool {
+    let (sender, mut frames) = tokio::sync::mpsc::unbounded_channel();
+    if !feed_video(&sender, video, what) {
+        return false;
+    }
+    drop(sender);
+    let mut read = false;
+    while let Ok(ordinal) = frames.try_recv() {
+        let frame = lk_agents_rtc::VideoFrameRef {
+            media: MediaRef::new(ordinal, refs),
+            width: 1280,
+            height: 720,
+            timestamp_us: (ordinal & 0xffff_ffff) as i64 * 33_000,
+        };
+        read |= camera.push_video_frame(frame) > 0;
+    }
+    read
+}
+
 /// So many frames into a camera, each named by the camera's index and its ordinal.
 pub(super) fn feed_video(
     sender: &tokio::sync::mpsc::UnboundedSender<u64>,

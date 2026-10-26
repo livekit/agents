@@ -173,6 +173,9 @@ pub struct Setup {
     pub connect_ms: Option<u64>,
     /// A camera attached from the start, for the case to feed frames into.
     pub video: bool,
+    /// `RoomOptions(video_input=True)` on the room's legs: the person publishes a camera with
+    /// their microphone, and the room's video input reads it.
+    pub room_camera: bool,
     /// The transcript synchroniser between the two outputs: the agent's words are shown paced
     /// against its audio rather than as they are generated, which is the default with a room.
     pub sync_transcription: bool,
@@ -315,6 +318,7 @@ impl Default for Setup {
             tts: true,
             connect_ms: None,
             video: false,
+            room_camera: false,
             sync_transcription: false,
             lagging_output: false,
             ivr: None,

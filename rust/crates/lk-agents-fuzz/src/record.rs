@@ -206,6 +206,8 @@ pub enum Detail {
     /// A recognition stream of AMD's own (`AMD(stt=..)`): fed through the detector's listening
     /// gate, not the session's input path.
     AmdStt,
+    /// The person's camera track in the room, which leaves with them.
+    RoomCamera,
 }
 
 /// What the run still holds: the resources an input may point at right now.

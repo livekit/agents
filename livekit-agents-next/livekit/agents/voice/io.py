@@ -320,7 +320,11 @@ class AgentInput:
             self._session._core.set_audio_input(source)
 
     @property
-    def video(self) -> VideoInput | None:
+    def video(self) -> VideoInput | _core.RoomVideoInput | None:
+        # the room's camera (``RoomOptions(video_input=True)``) when the host gave none, as
+        # ``RoomIO`` sets it
+        if self._video is None and self._session._core is not None:
+            return self._session._core.video_input
         return self._video
 
     @video.setter

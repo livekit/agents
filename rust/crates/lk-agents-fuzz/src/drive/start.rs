@@ -76,6 +76,7 @@ impl Run {
                     ..Default::default()
                 },
             }),
+            video_input: setup.room_camera,
             text_output: Some(TextOutputConfig {
                 sync_transcription: Some(setup.sync_transcription),
                 ..TextOutputConfig::default()
@@ -375,6 +376,14 @@ impl Run {
         }
         let nth = self.registry.new_mic();
         self.mics.insert(nth, (Mic::Room { track: mic, burst: (0, 0) }, 0));
+        // `RoomOptions(video_input=True)`: their camera, which the case feeds like the host's.
+        if self.setup.room_camera {
+            let camera = caller.publish_track(
+                format!("TR_cam_{}", self.joins).as_str(),
+                lk_agents_rtc::TrackSource::Camera,
+            );
+            fakes::room_camera(&self.registry, camera, self.refs.clone());
+        }
     }
 }
 

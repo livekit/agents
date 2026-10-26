@@ -190,10 +190,24 @@ impl Run {
                 true
             }
             RoomIn::Unlinked => {
-                // Their microphone leaves with them.
+                // Their microphone and camera leave with them.
                 for nth in self.room_mics() {
                     self.mics.remove(&nth);
                     self.record.close(self.stamps.next(), Kind::Mic, nth);
+                }
+                let cameras: Vec<u32> = self
+                    .record
+                    .live()
+                    .of(Kind::Video)
+                    .into_iter()
+                    .filter(|nth| {
+                        self.record
+                            .resource(Kind::Video, *nth)
+                            .is_some_and(|r| *r.detail() == Detail::RoomCamera)
+                    })
+                    .collect();
+                for nth in cameras {
+                    self.record.close(self.stamps.next(), Kind::Video, nth);
                 }
                 self.room.remove_participant(&who, reason)
             }

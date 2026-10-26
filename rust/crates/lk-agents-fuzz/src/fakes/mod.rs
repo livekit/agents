@@ -45,6 +45,7 @@ pub use eot::FakeEot;
 pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{COMPLETION_TOKENS, FakeLlm, request_of};
 pub use output::{
+    room_camera,
     FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeSoundStream,
     FakeTextOutput, Half, FakeAvatarWorker,
     FakeVideoInput,
@@ -93,6 +94,11 @@ pub enum Control {
     Output(Arc<output::Playout>),
     /// A camera: the frames the case feeds it, as ordinals it mints frames from.
     Video(mpsc::UnboundedSender<u64>),
+    /// The person's camera track in the room: frames pushed onto it, minted the same way.
+    RoomVideo(
+        Arc<lk_agents_rtc::FakeTrackPublication>,
+        Arc<dyn lk_agents_abi::errors::RefRegistry>,
+    ),
     /// The realtime socket: the server-side events the case injects.
     Realtime(Arc<realtime::Session>),
     /// A realtime turn in progress: nothing to deliver to it, its end comes through the socket.
@@ -394,6 +400,10 @@ impl Registry {
             }
             Control::Video(sender) => {
                 (output::feed_video(&sender, slot.nth, input), Some(Control::Video(sender)))
+            }
+            Control::RoomVideo(camera, refs) => {
+                let accepted = output::feed_room_video(&camera, &refs, slot.nth, input);
+                (accepted, Some(Control::RoomVideo(camera, refs)))
             }
             Control::Realtime(socket) => {
                 (realtime::deliver(&socket, input), Some(Control::Realtime(socket)))
