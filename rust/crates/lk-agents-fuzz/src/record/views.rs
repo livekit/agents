@@ -379,7 +379,7 @@ impl<'a> HostView<'a> {
         self.0
             .opened
             .iter()
-            .filter(|o| o.kind == Kind::Output)
+            .filter(|o| attached_output(self.0, o))
             .map(|opened| OutputView { r: self.0, opened })
             .collect()
     }
@@ -659,7 +659,7 @@ impl<'a> OutputView<'a> {
             .opened
             .iter()
             .find(|o| {
-                o.kind == Kind::Output
+                attached_output(self.r, o)
                     && matches!(o.detail, Detail::Output { audio: a } if a == audio)
                     && o.at > self.opened.at
             })
@@ -675,6 +675,23 @@ impl<'a> OutputView<'a> {
             .map(|(at, sink)| (*at, sink))
             .collect()
     }
+}
+
+/// An output the session took: the harness builds one before the attach it is handed to, so an
+/// attach the session refused (a closing session) leaves an instance that was never attached.
+fn attached_output(r: &Recording, o: &Opened) -> bool {
+    if o.kind != Kind::Output {
+        return false;
+    }
+    let refused = r.applied.iter().rev().find(|a| a.at <= o.at).is_some_and(|a| {
+        !a.accepted
+            && matches!(
+                a.input,
+                Input::SetAudioOutput { attach: true }
+                    | Input::SetTranscriptionOutput { attach: true }
+            )
+    });
+    !refused
 }
 
 /// The instance a sink call landed on, for the calls that name one. A reset is the output's own

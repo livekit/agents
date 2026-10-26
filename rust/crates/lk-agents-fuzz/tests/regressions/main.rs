@@ -32,6 +32,7 @@ mod realtime_items_filled;
 mod realtime_transcript_forwarded;
 mod recogniser_failed_speaking;
 mod realtime_waiter_journalled;
+mod refused_attach_replaces_nothing;
 mod refused_speech_announced;
 mod replaced_inputs;
 mod replaced_output_detached;

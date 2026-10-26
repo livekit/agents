@@ -97,9 +97,8 @@ impl Check {
 pub const KNOWN_FINDINGS: &[&str] = &[
     "tool_lifecycle",
     // One seed each in the 4096-seed window after the text-mode rework met the public-API
-    // harness (seeds 2921, 2597, 3007); being fixed.
+    // harness (seeds 2921, 3007); being fixed.
     "forwarded_while_enabled",
-    "output_replacement_is_clean",
     "speech_settles",
 ];
 
