@@ -15,6 +15,18 @@ use lk_agents_rtc::{
 use crate::agent_session::SessionRoom;
 use crate::agent_session::Timebase;
 
+/// The running asyncio loop's clock when it is on virtual time.
+#[cfg(feature = "python")]
+fn loop_clock() -> Option<Arc<dyn lk_agents_abi::Clock>> {
+    let runtime = pyo3::Python::try_attach(lk_agents_abi::python::LoopRuntime::current).flatten();
+    runtime.map(|rt| rt.clock())
+}
+
+#[cfg(not(feature = "python"))]
+fn loop_clock() -> Option<Arc<dyn lk_agents_abi::Clock>> {
+    None
+}
+
 /// 20 ms, the frame the room's own tests push. Not configurable: everything downstream rebuffers.
 const FRAME_MS: u32 = 20;
 
@@ -34,14 +46,16 @@ pub enum RoomRefused {
     Reason(#[from] UnknownDisconnectReason),
 }
 
-/// A room, a clock, and a microphone: no network. The session takes the room's `VirtualClock`
-/// as its `Timebase`, so driver timers and the playout model cannot drift. A test drives it from
-/// the loop thread while the driver reads it from a tokio worker.
+/// A room, a clock, and a microphone: no network. The session takes the room's clock as its
+/// `Timebase`, so driver timers and the playout model cannot drift. The clock is a `VirtualClock`
+/// the test moves with [`advance`](Self::advance), or, built on a virtual-time asyncio loop, that
+/// loop's own clock: one clock for the core and the host code beside it, which two clocks moved
+/// in turn would put a step apart.
 #[lk_agents_abi::class(name = "FakeRoom")]
 pub struct ScriptedRoom {
     rtc: Arc<FakeRtc>,
     room: Arc<FakeRoom>,
-    clock: Arc<VirtualClock>,
+    time: Timebase,
     /// The microphone of the last participant to join, which [`speak`](Self::speak) pushes into.
     mic: Mutex<Option<Arc<FakeTrackPublication>>>,
     /// The microphone's audio: distinct speech per frame.
@@ -56,12 +70,15 @@ impl ScriptedRoom {
         if sample_rate == 0 || !sample_rate.is_multiple_of(1_000) {
             return Err(RoomRefused::SampleRate);
         }
-        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let time = loop_clock()
+            .map(Timebase::of_clock)
+            .unwrap_or_else(|| Timebase::from_virtual(Arc::new(VirtualClock::new())));
+        let rtc = FakeRtc::new(time.clock());
         let room = rtc.room(&name);
         Ok(ScriptedRoom {
             rtc,
             room,
-            clock,
+            time,
             mic: Mutex::new(None),
             synth: FrameSynth::new(sample_rate, FRAME_MS),
         })
@@ -74,7 +91,7 @@ impl ScriptedRoom {
 
     /// The session's clock, shared rather than copied, so timers and playout agree.
     pub fn timebase(&self) -> Timebase {
-        Timebase::from_virtual(Arc::clone(&self.clock))
+        self.time.clone()
     }
 
     /// The room and its clock, as a session is built on them.
@@ -112,13 +129,16 @@ impl ScriptedRoom {
     }
 
     /// Move the clock, settle the playout model, and wake the driver's timers. A deadline inside a
-    /// jump fires at its end, so step when order matters.
+    /// jump fires at its end, so step when order matters. On a virtual-time loop's clock the loop
+    /// moves time, and this only settles.
     #[host(method)]
     pub fn advance(&self, seconds: f64) -> Result<(), RoomRefused> {
         if !(seconds.is_finite() && seconds >= 0.0) {
             return Err(RoomRefused::Advance);
         }
-        self.clock.advance(Duration::from_secs_f64(seconds));
+        if self.time.is_virtual() {
+            self.time.advance(Duration::from_secs_f64(seconds));
+        }
         self.rtc.settle();
         Ok(())
     }

@@ -8,8 +8,8 @@ SpeechHandle outcomes, the tool calls, and what reached the room (seconds of age
 Ids and timestamps are dropped. The orchestrator compares the two transcripts and prints a diff.
 
 Both stacks run on the reference tests' virtual-time loop (``tests/virtual_time.py``) with the same
-scripted STT/LLM/TTS: the copy over ``_core.FakeRoom``, whose clock moves in lockstep with the
-loop's, the reference over the tests' fake audio/text IO behind a ``TranscriptSynchronizer``, as its
+scripted STT/LLM/TTS: the copy over ``_core.FakeRoom``, which runs on the loop's own clock, the
+reference over the tests' fake audio/text IO behind a ``TranscriptSynchronizer``, as its
 ``RoomIO`` wires it.
 
     python livekit-agents-next/scripts/parity.py                 # build if needed, every scenario
@@ -694,11 +694,15 @@ class Call:
             await self.session.start(agent)
 
     async def settle(self, seconds: float) -> None:
-        """Move both clocks forward in 20 ms steps."""
+        """Move the clock forward in 20 ms steps."""
         for _ in range(round(seconds / 0.02)):
-            if self.room is not None:
-                self.room.advance(0.02)
             await asyncio.sleep(0.02)
+            if self.room is not None:
+                # on the loop's clock, which the sleep moved: this settles the room's playout
+                self.room.advance(0.02)
+            # what came due at this instant runs before the transcript is read
+            for _ in range(3):
+                await asyncio.sleep(0)
 
     async def aclose(self) -> None:
         """`session.aclose()`, the room's clock moving meanwhile: a close may wait on timers."""
@@ -1308,7 +1312,7 @@ async def sc_say_cut(call: Call) -> None:
 
 async def sc_live_transcript(call: Call) -> None:
     """The room's transcript while the speech plays, not only once it ended. Sampled away from
-    word onsets: the room's sink reports its playhead a frame late (up to 50 ms)."""
+    word onsets: the core's sink reports its playhead every 20 ms, which paces the words."""
     session = await _pipeline(call)
     call.handle("say", session.say(LONG))
     elapsed = 0.0
