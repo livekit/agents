@@ -10,6 +10,7 @@ mod dtmf_close;
 mod dtmf_interrupt_has_cause;
 mod dtmf_read_back_realtime;
 mod failed_step_releases_floor;
+mod failed_synthesis_item;
 mod failed_synthesis_plays_out;
 mod filler_source_no_host;
 mod filler_source_raises;

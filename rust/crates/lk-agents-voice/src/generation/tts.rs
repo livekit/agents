@@ -3,7 +3,7 @@
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
 use super::llm::{Retried, SegEvent, extend, report_metrics, retry};
 use super::pipeline_reply::{fatal, teardown_deadline};
-use super::playout::{Next, Segment, first_frame, perform_audio_forwarding, unheard};
+use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use crate::agent_session::DriverError;
 use crate::agent_session::SessionShared;
 use crate::generation::{Attempt, TurnAccumulator};
@@ -25,9 +25,20 @@ const MAX_BUFFERED_TTS_FRAMES: usize = 256;
 
 /// `opening` is the text so far, still the item's. `lost`: the TTS failed for good; otherwise the
 /// speech was interrupted or closing before the synthesiser was asked, and no leg is opened.
+/// `synchronized`: the synchroniser's words up to where the failed synthesis played.
 pub(super) struct Lost {
     pub(super) lost: bool,
     pub(super) opening: Visible,
+    pub(super) synchronized: Option<String>,
+}
+
+/// One failed duplex stream: the error, whether audio came first, the words fed, and the
+/// synchroniser's words up to where its audio played.
+struct Failed {
+    error: ProviderError,
+    produced: bool,
+    words: Visible,
+    synchronized: Option<String>,
 }
 
 /// `perform_tts_inference`, retried: opens are retried until a frame arrives; a later failure, or a
@@ -49,10 +60,11 @@ pub(super) async fn perform_tts_inference(
     // The segment's words so far and whether its text has ended: what a retried open replays.
     let mut text = first;
     let mut input_done = false;
+    let mut synchronized = None;
     loop {
         // Never open for a speech that is over or a closing session.
         if handle.interrupted() || *shared.closing.borrow() {
-            return Err(Lost { lost: false, opening: text });
+            return Err(Lost { lost: false, opening: text, synchronized: None });
         }
         // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex open's
         // `Err` is a failed attempt, never a downgrade. What the words leg already closed is fed at
@@ -83,9 +95,10 @@ pub(super) async fn perform_tts_inference(
                 };
                 match synthesize(shared, handle, streaming, playback).await {
                     (Ok(heard), _) => return Ok(heard),
-                    (Err((error, produced, so_far)), done) => {
-                        (text, input_done) = (so_far, done);
-                        (error, produced)
+                    (Err(failed), done) => {
+                        (text, input_done, synchronized) =
+                            (failed.words, done, failed.synchronized);
+                        (failed.error, failed.produced)
                     }
                 }
             }
@@ -95,21 +108,23 @@ pub(super) async fn perform_tts_inference(
         }
         match retry(shared, handle, &mut attempt, ProviderKind::Tts, &error).await {
             Retried::Again => {}
-            Retried::Interrupted => return Err(Lost { lost: false, opening: text }),
-            Retried::GiveUp => return Err(Lost { lost: true, opening: text }),
+            Retried::Interrupted => {
+                return Err(Lost { lost: false, opening: text, synchronized: None });
+            }
+            Retried::GiveUp => return Err(Lost { lost: true, opening: text, synchronized }),
         }
     }
 }
 
 /// One duplex stream: `end_input` is always sent, or a duplex stream never yields its final frame.
-/// `Err` carries the error, whether audio came first, and the words fed; the `bool` is whether the
+/// `Err` carries what [`Failed`] says; the `bool` is whether the
 /// segment's text has ended.
 async fn synthesize(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     mut streaming: Streaming<'_, '_>,
     playback: &mut SynthesisPlayout<'_>,
-) -> (Result<Heard, (ProviderError, bool, Visible)>, bool) {
+) -> (Result<Heard, Failed>, bool) {
     let sink = streaming.sink;
     // Post-transform, like the chunked path: the journal says what the synthesiser was given.
     let text = transformed(shared, &streaming.words.raw);
@@ -142,8 +157,13 @@ async fn synthesize(
             }
             (Ok(heard), true)
         }
-        Err(DriverError::Provider(error)) => (Err((error, produced, words)), input_done),
-        Err(other) => (Err((fatal(other.to_string()), produced, words)), input_done),
+        Err(SourceFailed { error, synchronized }) => {
+            let error = match error {
+                DriverError::Provider(error) => error,
+                other => fatal(other.to_string()),
+            };
+            (Err(Failed { error, produced, words, synchronized }), input_done)
+        }
     }
 }
 
@@ -366,7 +386,7 @@ impl SynthesisPlayout<'_> {
         shared: &Arc<SessionShared>,
         handle: &SpeechHandle,
         segment: &mut Streaming<'_, '_>,
-    ) -> Result<Heard, DriverError> {
+    ) -> Result<Heard, SourceFailed> {
         let permits = Arc::new(tokio::sync::Semaphore::new(MAX_BUFFERED_TTS_FRAMES));
         let stopped = tokio::sync::Notify::new();
         let tx = &self.tx;

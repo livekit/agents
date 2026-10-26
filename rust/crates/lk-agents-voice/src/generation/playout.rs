@@ -53,6 +53,19 @@ pub(crate) fn first_frame(shared: &Arc<SessionShared>, acc: &mut TurnAccumulator
     acc.on_first_frame(Some(at), shared.time.wall_secs());
 }
 
+/// A segment whose source failed: the error, and the synchroniser's words up to where its audio
+/// played, when some did and a synchroniser reported them.
+pub(crate) struct SourceFailed {
+    pub(crate) error: DriverError,
+    pub(crate) synchronized: Option<String>,
+}
+
+impl From<DriverError> for SourceFailed {
+    fn from(error: DriverError) -> Self {
+        SourceFailed { error, synchronized: None }
+    }
+}
+
 /// `perform_audio_forwarding` for one segment. `out: None` drains and drops the frames, reporting
 /// nothing. The clean path ends with `flush`, then waits for the sink to report played out.
 pub(crate) async fn perform_audio_forwarding<S: Segment>(
@@ -60,7 +73,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
     handle: &SpeechHandle,
     out: Option<&dyn AudioOutput>,
     segment: &mut S,
-) -> Result<Heard, DriverError> {
+) -> Result<Heard, SourceFailed> {
     let Some(out) = out else {
         // Raced like the sink path's `watched`: a cut source may never end its segment.
         let complete = loop {
@@ -147,16 +160,20 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         Ended::Provider(e) => {
             // What was synthesised plays out before the caller forwards the rest as text: the
             // reference waits for the playout whether or not the TTS failed (`forward_generation`).
+            let mut synchronized = None;
             if playing.pushed > 0 {
                 playing.flush_batch();
                 match playing.watched(out.wait_for_playout()).await {
-                    Some(ev) => playing.played_out(segment, &ev),
+                    Some(ev) => {
+                        playing.played_out(segment, &ev);
+                        synchronized = ev.synchronized_transcript.map(|t| Visible::of(&t).text);
+                    }
                     None => {
                         playing.cut(segment, text).await;
                     }
                 }
             }
-            Err(e)
+            Err(SourceFailed { error: e, synchronized })
         }
         // No audio: flushing would make `wait_for_playout` answer with the previous event.
         Ended::Audio if playing.pushed == 0 => Ok(silent(text, true)),

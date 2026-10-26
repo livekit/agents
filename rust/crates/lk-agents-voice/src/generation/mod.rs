@@ -99,6 +99,8 @@ pub struct TurnAccumulator {
     first_tts_segment: Option<usize>,
     first_tts: TtsStats,
     forwarded_text: String,
+    /// A segment's synthesis failed for good: the item reads as cut short.
+    tts_failed: bool,
 }
 
 impl TurnAccumulator {
@@ -112,6 +114,7 @@ impl TurnAccumulator {
             first_tts_segment: None,
             first_tts: TtsStats::default(),
             forwarded_text: String::new(),
+            tts_failed: false,
         }
     }
 
@@ -147,6 +150,11 @@ impl TurnAccumulator {
         // Truthiness, not presence.
         self.started_speaking_at = Some(at.filter(|at| truthy(*at)).unwrap_or(now));
         true
+    }
+
+    /// `out.tts_failed`: a reply cut short by a failed TTS reads as interrupted to the LLM.
+    pub(crate) fn tts_failed(&mut self) {
+        self.tts_failed = true;
     }
 
     /// One forwarded segment's text (`segment_outputs.append(out)`).
@@ -195,7 +203,7 @@ impl TurnAccumulator {
         let assistant_message = (!self.forwarded_text.is_empty()).then(|| {
             let mut msg =
                 ChatMessage::text(message_id, Role::Assistant, &self.forwarded_text, created_at);
-            msg.interrupted = interrupted;
+            msg.interrupted = interrupted || self.tts_failed;
             msg.metrics = metrics;
             msg
         });

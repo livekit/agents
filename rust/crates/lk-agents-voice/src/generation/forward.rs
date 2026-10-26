@@ -240,11 +240,13 @@ impl Pump<'_> {
                         *idx += 1;
                         heard
                     }
-                    // The voice is gone for the rest of the step; the words are forwarded as text.
-                    // A cut speech lost nothing.
-                    Err(Lost { lost, opening }) => {
+                    // The voice is gone for the rest of the step; the words are forwarded as text,
+                    // and the item reads as cut short (`interrupted=... or out.tts_failed`). A cut
+                    // speech lost nothing.
+                    Err(Lost { lost, opening, synchronized }) => {
                         if lost {
                             self.voice = Voice::Silent;
+                            self.acc.tts_failed();
                         }
                         match aligned.as_ref().filter(|a| a.stamped) {
                             // Stamps were already forwarded: the aligned stream never falls back,
@@ -254,9 +256,11 @@ impl Pump<'_> {
                                 drain_segment_text(rx, opening, None).await;
                                 silent(words, true)
                             }
-                            // `opening` holds what the failed synthesiser was fed.
+                            // `opening` holds what the failed synthesiser was fed. The item is what
+                            // the synchroniser says was heard of it, else every word forwarded.
                             None => {
-                                silent(drain_segment_text(rx, opening, text_out).await.text, true)
+                                let words = drain_segment_text(rx, opening, text_out).await.text;
+                                silent(synchronized.unwrap_or(words), true)
                             }
                         }
                     }
@@ -266,7 +270,9 @@ impl Pump<'_> {
                 let words = drain_segment_text(&mut self.rx, first, text_out).await;
                 let mut segment = Frames { shared, acc: self.acc, rx: frames };
                 let mut heard =
-                    perform_audio_forwarding(shared, self.handle, Some(out), &mut segment).await?;
+                    perform_audio_forwarding(shared, self.handle, Some(out), &mut segment)
+                        .await
+                        .map_err(|failed| failed.error)?;
                 heard.text = words.text;
                 heard
             }
