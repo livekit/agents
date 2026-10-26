@@ -4,7 +4,7 @@ import functools
 from dataclasses import dataclass
 
 from .. import _core
-from . import _basic_sent, token_stream, tokenizer
+from . import _basic_sent, _basic_word, token_stream, tokenizer
 
 # Really naive implementation of SentenceTokenizer, WordTokenizer + hyphenate_word
 # The basic tokenizer is rule-based and only English is really tested
@@ -78,15 +78,18 @@ class WordTokenizer(tokenizer.WordTokenizer):
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         return [
             tok[0]
-            for tok in _core.split_words(
-                text, self._ignore_punctuation, self._split_character, self._retain_format
+            for tok in _basic_word.split_words(
+                text,
+                ignore_punctuation=self._ignore_punctuation,
+                split_character=self._split_character,
+                retain_format=self._retain_format,
             )
         ]
 
     def stream(self, *, language: str | None = None) -> tokenizer.WordStream:
         return token_stream.BufferedWordStream(
             tokenizer=functools.partial(
-                _core.split_words,
+                _basic_word.split_words,
                 ignore_punctuation=self._ignore_punctuation,
                 split_character=self._split_character,
                 retain_format=self._retain_format,
@@ -103,7 +106,9 @@ def hyphenate_word(word: str) -> list[str]:
 def split_words(
     text: str, *, ignore_punctuation: bool = True, split_character: bool = False
 ) -> list[tuple[str, int, int]]:
-    return _core.split_words(text, ignore_punctuation, split_character)  # type: ignore[no-any-return]
+    return _basic_word.split_words(
+        text, ignore_punctuation=ignore_punctuation, split_character=split_character
+    )
 
 
 def tokenize_paragraphs(text: str) -> list[str]:
