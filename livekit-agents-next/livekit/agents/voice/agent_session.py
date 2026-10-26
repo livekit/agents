@@ -670,17 +670,20 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def clear_user_turn(self) -> None:
         self._running.clear_user_turn()
 
-    async def commit_user_turn(
+    def commit_user_turn(
         self,
         *,
         transcript_timeout: float = 2.0,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
-    ) -> str:
-        return await self._running.commit_user_turn(  # type: ignore[no-any-return]
-            transcript_timeout=transcript_timeout,
-            stt_flush_duration=stt_flush_duration,
-            skip_reply=skip_reply,
+    ) -> asyncio.Future[str]:
+        """Commit the user turn now; the future resolves with its transcript."""
+        return asyncio.ensure_future(
+            self._running.commit_user_turn(
+                transcript_timeout=transcript_timeout,
+                stt_flush_duration=stt_flush_duration,
+                skip_reply=skip_reply,
+            )
         )
 
     async def wait_for_idle(self) -> None:
