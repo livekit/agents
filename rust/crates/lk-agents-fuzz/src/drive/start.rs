@@ -258,7 +258,6 @@ impl Run {
             utterances: BTreeMap::new(),
             mics: BTreeMap::new(),
             next_filler: 1,
-            next_task: 1,
             refs,
             setup: setup.clone(),
             record: Recording::default(),
@@ -328,10 +327,7 @@ pub(super) fn frame(
         stt: Maybe::NotGiven,
         vad: Maybe::NotGiven,
         options: SessionPatch::default(),
-        previous: PreviousActivity::Pause,
-        next: NewActivity::Start,
         call: None,
-        task: None,
     }
 }
 

@@ -290,11 +290,11 @@ class FunctionToolInfo:
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
     duplicate_scope: DuplicateScope = "name"
-    requires_approval: bool = False
+    needs_approval: bool = False
 
 
 ReadBack = Callable[..., "str | InputRequired | Awaitable[str | InputRequired]"]
-"""``requires_approval=`` as a function: the read-back the person approves. It takes the tool's
+"""``needs_approval=`` as a function: the read-back the person approves. It takes the tool's
 own parameters, ``self`` and the context included, and is called with the call's arguments.
 An ``InputRequired`` instead asks for what is missing before there is anything to approve."""
 
@@ -543,7 +543,7 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
-    requires_approval: bool | ReadBack = False,
+    needs_approval: bool | ReadBack = False,
 ) -> FunctionTool[_P, _R]: ...
 
 
@@ -556,7 +556,7 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
-    requires_approval: bool | ReadBack = False,
+    needs_approval: bool | ReadBack = False,
 ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
 
 
@@ -569,13 +569,13 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
-    requires_approval: bool | ReadBack = False,
+    needs_approval: bool | ReadBack = False,
 ) -> (
     FunctionTool[_P, _R]
     | RawFunctionTool[_P, _R]
     | Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]
 ):
-    """``requires_approval`` is plan 7.4's approval, held by the framework: a call returns
+    """``needs_approval`` is plan 7.4's approval, held by the framework: a call returns
     ``InputRequired`` with a read-back instead of running, verbatim. The person's answer is
     written as that call's output, and the body runs only for a repeat of the same call, same
     arguments, made after that answer. ``True`` builds the read-back from the description and
@@ -586,8 +586,8 @@ def function_tool(
     ) -> RawFunctionTool[_P, _R]:
         assert raw_schema is not None
 
-        if requires_approval:
-            raise ValueError("requires_approval needs a typed tool, not a raw_schema")
+        if needs_approval:
+            raise ValueError("needs_approval needs a typed tool, not a raw_schema")
         if not raw_schema.get("name"):
             raise ValueError("raw function name cannot be empty")
 
@@ -622,10 +622,10 @@ def function_tool(
             flags=flags,
             on_duplicate=on_duplicate,
             duplicate_scope=duplicate_scope,
-            requires_approval=bool(requires_approval),
+            needs_approval=bool(needs_approval),
         )
-        if requires_approval:
-            read_back = requires_approval if callable(requires_approval) else None
+        if needs_approval:
+            read_back = needs_approval if callable(needs_approval) else None
             wrapped = _wrap_with_approval(wrapped, info.description or info.name, read_back)
         return FunctionTool(wrapped, info)
 

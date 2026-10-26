@@ -176,12 +176,6 @@ pub enum SpeechStep {
     AgentStartedSpeaking {
         speech: SpeechId,
     },
-    /// A speech's tool is blocked on an inline `AgentTask`, or no longer. A missing unblock shows
-    /// only as a session gone quiet, hence the step.
-    Blocked {
-        speech: SpeechId,
-        blocked: bool,
-    },
     ItemsRecorded {
         speech: SpeechId,
         ids: Vec<String>,
@@ -580,7 +574,7 @@ pub enum HandoffStep {
     RunReleased { run: crate::events::RunId, what: crate::run_result::Owned },
     /// Nothing owned left and no output: the run re-prompted the model (`_maybe_retry_output`).
     RunRetried { run: crate::events::RunId, attempt: u32 },
-    /// `AgentTask.complete()` recorded the run's output (`_maybe_run_final_output`).
+    /// accepted output recorded the run's output (`_maybe_run_final_output`).
     RunOutput { speech: SpeechId, ok: bool },
 }
 
@@ -811,7 +805,6 @@ impl Step {
                 | SpeechStep::Authorized { speech }
                 | SpeechStep::StepSpoken { speech, .. }
                 | SpeechStep::AgentStartedSpeaking { speech }
-                | SpeechStep::Blocked { speech, .. }
                 | SpeechStep::ItemsRecorded { speech, .. }
                 | SpeechStep::IdleAskWithdrawn { speech, .. }
                 | SpeechStep::WatchdogArmed { speech, .. }

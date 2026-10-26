@@ -121,7 +121,6 @@ pub enum ToolRaiseKind {
 pub struct RawToolAnswer {
     pub kind: String,
     pub value: Option<serde_json::Value>,
-    pub agents: Vec<lk_agents_abi::HostRef>,
     pub error: Option<String>,
     pub message: Option<String>,
     /// Before the template.
@@ -133,25 +132,19 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for RawToolAnswer {
     type Error = pyo3::PyErr;
 
     fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{intern_host, item, item_or, value_from_py};
+        use crate::python::{item, item_or, value_from_py};
         use pyo3::types::PyAnyMethods as _;
         const OWNER: &str = "ToolAnswerFromPy";
         let obj = &*obj;
         let extract = |v: &pyo3::Bound<'py, pyo3::PyAny>| v.extract::<Option<String>>();
         Ok(RawToolAnswer {
             kind: item(obj, OWNER, "kind")?,
-            value: item_or(obj, OWNER, "value", |v| if v.is_none() { Ok(None) } else { value_from_py(v, "value").map(Some) }, || None)?,
-            agents: item_or(
+            value: item_or(
                 obj,
                 OWNER,
-                "agents",
-                |v| {
-                    if v.is_none() {
-                        return Ok(Vec::new());
-                    }
-                    v.try_iter()?.map(|a| Ok(intern_host(a?.unbind()))).collect()
-                },
-                Vec::new,
+                "value",
+                |v| if v.is_none() { Ok(None) } else { value_from_py(v, "value").map(Some) },
+                || None,
             )?,
             error: item_or(obj, OWNER, "error", extract, || None)?,
             message: item_or(obj, OWNER, "message", extract, || None)?,
@@ -171,6 +164,10 @@ mod tests {
         assert_eq!(ToolAnswerKind::from_wire("detached"), Some(ToolAnswerKind::Detached));
         assert_eq!(ToolRaiseKind::from_wire("stop_response"), Some(ToolRaiseKind::StopResponse));
         assert_eq!(ToolAnswerKind::from_wire("done"), None);
-        assert_eq!(ToolRaiseKind::from_wire("stop"), None, "`stop` is `ToolOutcome`'s word, not this wire's");
+        assert_eq!(
+            ToolRaiseKind::from_wire("stop"),
+            None,
+            "`stop` is `ToolOutcome`'s word, not this wire's"
+        );
     }
 }

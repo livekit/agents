@@ -247,7 +247,7 @@ impl HostSpeech {
 
     /// `_hold_interruptions`: disallow interruptions until every hold taken is released.
     ///
-    /// Counted, not a flag: an inline `AgentTask` and a filler may hold the same speech, and an
+    /// Counted, not a flag: an inline agent and a filler may hold the same speech, and an
     /// inner release must not re-arm the outer. Raises the reference's `RuntimeError` when the
     /// speech is already interrupted, without counting the attempt.
     #[host(method)]

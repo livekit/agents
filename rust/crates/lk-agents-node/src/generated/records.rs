@@ -1828,41 +1828,6 @@ impl TryFrom<WorkflowPrompts> for lk_agents_abi::voice::workflows::WorkflowPromp
     }
 }
 
-/// The five `copy()` flags `TaskGroup`'s summarisation passes: all `False`, so the summary sees the
-/// tool calls.
-#[napi(object, js_name = "TaskGroupSummaryFlags")]
-pub struct TaskGroupSummaryFlags {
-    pub exclude_instructions: bool,
-    pub exclude_handoff: bool,
-    pub exclude_config_update: bool,
-    pub exclude_empty_message: bool,
-    pub exclude_function_call: bool,
-}
-
-impl From<&lk_agents_abi::voice::workflows::TaskGroupSummaryFlags> for TaskGroupSummaryFlags {
-    fn from(v: &lk_agents_abi::voice::workflows::TaskGroupSummaryFlags) -> Self {
-        TaskGroupSummaryFlags {
-            exclude_instructions: v.exclude_instructions,
-            exclude_handoff: v.exclude_handoff,
-            exclude_config_update: v.exclude_config_update,
-            exclude_empty_message: v.exclude_empty_message,
-            exclude_function_call: v.exclude_function_call,
-        }
-    }
-}
-
-impl From<TaskGroupSummaryFlags> for lk_agents_abi::voice::workflows::TaskGroupSummaryFlags {
-    fn from(v: TaskGroupSummaryFlags) -> Self {
-        lk_agents_abi::voice::workflows::TaskGroupSummaryFlags {
-            exclude_instructions: v.exclude_instructions,
-            exclude_handoff: v.exclude_handoff,
-            exclude_config_update: v.exclude_config_update,
-            exclude_empty_message: v.exclude_empty_message,
-            exclude_function_call: v.exclude_function_call,
-        }
-    }
-}
-
 #[napi(object, js_name = "MetricsReport")]
 pub struct MetricsReport {
     pub started_speaking_at: Option<f64>,

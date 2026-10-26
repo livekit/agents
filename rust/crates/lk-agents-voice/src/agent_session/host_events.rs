@@ -12,7 +12,6 @@ pub enum HookKind {
     OnEnter,
     OnExit,
     OnUserTurnCompleted,
-    DescribeAgent,
     RenderToolReply,
     FillerSource,
     FunctionToolsExecuted,
@@ -24,7 +23,6 @@ impl HookKind {
             HookKind::OnEnter => "on_enter",
             HookKind::OnExit => "on_exit",
             HookKind::OnUserTurnCompleted => "on_user_turn_completed",
-            HookKind::DescribeAgent => "describe_agent",
             HookKind::RenderToolReply => "render_tool_reply",
             HookKind::FillerSource => "filler_source",
             HookKind::FunctionToolsExecuted => "function_tools_executed",
@@ -36,10 +34,16 @@ impl HookKind {
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum HookCall {
     /// Nothing waits on it.
-    OnEnter { id: HookId, agent: String },
+    OnEnter {
+        id: HookId,
+        agent: String,
+    },
     /// **Before** scheduling pauses, so a goodbye can still be spoken. The drain waits for it,
     /// bounded.
-    OnExit { id: HookId, agent: String },
+    OnExit {
+        id: HookId,
+        agent: String,
+    },
     /// The decided turn parks until answer or bound.
     OnUserTurnCompleted {
         id: HookId,
@@ -47,11 +51,18 @@ pub enum HookCall {
         new_transcript: String,
         transcript_confidence: f64,
     },
-    /// Answered with `HookOutcome::Described`.
-    DescribeAgent { id: HookId, agent: lk_agents_abi::HostRef, speech: SpeechId },
     /// Unanswered, the reference's defaults are used.
-    RenderToolReply { id: HookId, agent: String, call_ids: Vec<String>, at_tail: bool },
-    FillerSource { id: HookId, filler: FillerId, step: u32 },
+    RenderToolReply {
+        id: HookId,
+        agent: String,
+        call_ids: Vec<String>,
+        at_tail: bool,
+    },
+    FillerSource {
+        id: HookId,
+        filler: FillerId,
+        step: u32,
+    },
     /// `function_tools_executed`, emitted by the host; answered with `HookOutcome::FunctionToolsExecuted`.
     /// Unanswered, the event stands as issued.
     FunctionToolsExecuted {
@@ -67,7 +78,6 @@ impl HookCall {
             HookCall::OnEnter { id, .. }
             | HookCall::OnExit { id, .. }
             | HookCall::OnUserTurnCompleted { id, .. }
-            | HookCall::DescribeAgent { id, .. }
             | HookCall::RenderToolReply { id, .. }
             | HookCall::FillerSource { id, .. }
             | HookCall::FunctionToolsExecuted { id, .. } => *id,
@@ -79,7 +89,6 @@ impl HookCall {
             HookCall::OnEnter { .. } => HookKind::OnEnter,
             HookCall::OnExit { .. } => HookKind::OnExit,
             HookCall::OnUserTurnCompleted { .. } => HookKind::OnUserTurnCompleted,
-            HookCall::DescribeAgent { .. } => HookKind::DescribeAgent,
             HookCall::RenderToolReply { .. } => HookKind::RenderToolReply,
             HookCall::FillerSource { .. } => HookKind::FillerSource,
             HookCall::FunctionToolsExecuted { .. } => HookKind::FunctionToolsExecuted,
@@ -130,15 +139,15 @@ impl HookCall {
             HookCall::OnExit { agent, .. } => {
                 HostWire::HookOnExit(w::OnExitHookWire { hook, id, agent: agent.clone() })
             }
-            HookCall::OnUserTurnCompleted { turn, new_transcript, transcript_confidence, .. } => {
-                HostWire::HookOnUserTurnCompleted(w::OnUserTurnCompletedHookWire {
-                    hook,
-                    id,
-                    turn: turn.0,
-                    new_transcript: new_transcript.clone(),
-                    transcript_confidence: *transcript_confidence,
-                })
-            }
+            HookCall::OnUserTurnCompleted {
+                turn, new_transcript, transcript_confidence, ..
+            } => HostWire::HookOnUserTurnCompleted(w::OnUserTurnCompletedHookWire {
+                hook,
+                id,
+                turn: turn.0,
+                new_transcript: new_transcript.clone(),
+                transcript_confidence: *transcript_confidence,
+            }),
             HookCall::FillerSource { filler, step, .. } => {
                 HostWire::HookFillerSource(w::FillerSourceHookWire {
                     hook,
@@ -161,7 +170,12 @@ impl HookCall {
                 HostWire::HookToolsExecuted(w::ToolsExecutedHookWire {
                     hook,
                     id,
-                    function_calls: event.function_calls.iter().cloned().map(ChatItem::FunctionCall).collect(),
+                    function_calls: event
+                        .function_calls
+                        .iter()
+                        .cloned()
+                        .map(ChatItem::FunctionCall)
+                        .collect(),
                     function_call_outputs: event
                         .function_call_outputs
                         .iter()
@@ -169,14 +183,6 @@ impl HookCall {
                         .map(ChatItem::FunctionCallOutput)
                         .collect(),
                     handoff_required: event.handoff_required,
-                })
-            }
-            HookCall::DescribeAgent { agent, speech, .. } => {
-                HostWire::HookDescribeAgent(w::DescribeAgentHookWire {
-                    hook,
-                    id,
-                    speech_id: crate::speech_handle::SpeechWireId(*speech).to_string(),
-                    agent: agent.clone(),
                 })
             }
         }
@@ -192,14 +198,16 @@ impl SessionEvent {
         // `created_at` is the host's stamp (`#[binding(skip)]`): inert here.
         let host_stamp = 0.0;
         match self {
-            SessionEvent::UserInputTranscribed(t) => HostWire::UserTranscript(w::UserInputTranscribed {
-                transcript: t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default(),
-                is_final: t.is_final,
-                item_id: t.item_id.clone(),
-                speaker_id: None,
-                language: None,
-                created_at: host_stamp,
-            }),
+            SessionEvent::UserInputTranscribed(t) => {
+                HostWire::UserTranscript(w::UserInputTranscribed {
+                    transcript: t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default(),
+                    is_final: t.is_final,
+                    item_id: t.item_id.clone(),
+                    speaker_id: None,
+                    language: None,
+                    created_at: host_stamp,
+                })
+            }
             SessionEvent::StartOfSpeech(e) => HostWire::StartOfSpeech(*e),
             SessionEvent::EndOfSpeech(e) => HostWire::EndOfSpeech(*e),
             SessionEvent::SpeechCreated { speech, kind, user_initiated } => {
@@ -211,7 +219,9 @@ impl SessionEvent {
                 })
             }
             SessionEvent::Diagnostic(d) => HostWire::Diagnostic(d.wire()),
-            SessionEvent::FunctionToolsExecuted(e) => HostWire::FunctionToolsExecuted((**e).clone()),
+            SessionEvent::FunctionToolsExecuted(e) => {
+                HostWire::FunctionToolsExecuted((**e).clone())
+            }
             SessionEvent::UserTurnCompleted(e) => {
                 HostWire::UserTurnCompleted(w::UserTurnCompletedWire {
                     turn: e.turn.0,

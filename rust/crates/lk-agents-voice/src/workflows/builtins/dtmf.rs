@@ -1,12 +1,8 @@
+use crate::workflows::ToolError;
 use crate::workflows::builtins::ConfigError;
 use crate::workflows::builtins::instructions::render;
 use crate::workflows::builtins::prompts::dtmf as p;
-use crate::workflows::builtins::schema::{Param, tool};
-use crate::workflows::{Task, TaskCtx, TaskOptions, ToolError, ToolReply, args};
-use async_trait::async_trait;
-use lk_agents_abi::{ToolSpec, Ts};
-use lk_agents_voice::generation::Instructions;
-use serde_json::Value;
+use lk_agents_abi::Ts;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -73,7 +69,10 @@ pub fn dtmf_result(inputs: &[DtmfEvent]) -> GetDtmfResult {
 }
 
 /// Each symbol a key, or the first that is not one, refused by name.
-fn parse_all(symbols: &[String], refusal: impl Fn(&str) -> String) -> Result<Vec<DtmfEvent>, String> {
+fn parse_all(
+    symbols: &[String],
+    refusal: impl Fn(&str) -> String,
+) -> Result<Vec<DtmfEvent>, String> {
     symbols.iter().map(|s| DtmfEvent::parse(s).ok_or_else(|| refusal(s))).collect()
 }
 
@@ -81,7 +80,8 @@ fn parse_all(symbols: &[String], refusal: impl Fn(&str) -> String) -> Result<Vec
 /// and `A`-`D` are 12-15.
 #[lk_agents_abi::host(export(name = "dtmf_code", pid = false))]
 pub fn dtmf_code(symbol: &str) -> Result<u8, String> {
-    let event = DtmfEvent::parse(symbol).ok_or_else(|| format!("unknown DTMF symbol {symbol:?}"))?;
+    let event =
+        DtmfEvent::parse(symbol).ok_or_else(|| format!("unknown DTMF symbol {symbol:?}"))?;
     Ok(dtmf_event_to_code(event))
 }
 
@@ -184,7 +184,7 @@ impl DtmfOutcome {
     }
 }
 
-/// The event/timer half of `GetDtmfTask`. Not `Clone`: a copy would share the guard.
+/// The event/timer half of DTMF collection. Not `Clone`: a copy would share the guard.
 #[derive(Debug)]
 pub struct DtmfCollector {
     num_digits: usize,
@@ -302,118 +302,6 @@ impl DtmfCollector {
     pub fn finish_reply(&mut self) {
         self.reply_running.store(false, Ordering::SeqCst);
         self.inputs.clear();
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct GetDtmfConfig {
-    pub num_digits: usize,
-    pub ask_for_confirmation: bool,
-    /// The **per-digit** timeout, not a total budget: every digit re-arms it.
-    pub dtmf_input_timeout: Duration,
-    pub dtmf_stop_event: DtmfEvent,
-    pub extra_instructions: Option<String>,
-}
-
-impl Default for GetDtmfConfig {
-    fn default() -> Self {
-        GetDtmfConfig {
-            // Required in the reference; zero makes `GetDtmfTask::new` reject a forgotten value.
-            num_digits: 0,
-            ask_for_confirmation: false,
-            dtmf_input_timeout: Duration::from_secs_f64(4.0),
-            dtmf_stop_event: DtmfEvent::Pound,
-            extra_instructions: None,
-        }
-    }
-}
-
-/// A task to collect DTMF inputs from the user.
-///
-/// Return a string of DTMF inputs if collected successfully, otherwise None.
-pub struct GetDtmfTask {
-    instructions: Instructions,
-    ask_for_confirmation: bool,
-}
-
-impl GetDtmfTask {
-    pub fn new(cfg: GetDtmfConfig, _options: TaskOptions) -> Result<Self, ConfigError> {
-        // The event half (the collector) runs in the driver; only its validation is shared.
-        if cfg.num_digits == 0 {
-            return Err(ConfigError::NonPositiveDigits);
-        }
-
-        let mut instructions = String::from(p::BASE);
-        if cfg.ask_for_confirmation {
-            instructions.push_str(p::WITH_CONFIRMATION);
-        } else {
-            instructions.push_str(p::WITHOUT_CONFIRMATION);
-        }
-        if let Some(extra) = &cfg.extra_instructions {
-            instructions.push('\n');
-            instructions.push_str(extra);
-        }
-
-        Ok(GetDtmfTask {
-            // A plain `str`, not an `Instructions` -- this workflow has no modality variants.
-            instructions: Instructions::plain(instructions),
-            ask_for_confirmation: cfg.ask_for_confirmation,
-        })
-    }
-}
-
-#[async_trait]
-impl Task for GetDtmfTask {
-    type Output = GetDtmfResult;
-
-    fn instructions(&self) -> Instructions {
-        self.instructions.clone()
-    }
-
-    /// Exactly one tool, by the flag: both would let the model skip the confirmation.
-    fn tools(&self) -> Vec<ToolSpec> {
-        let (name, desc) = if self.ask_for_confirmation {
-            (p::CONFIRM_TOOL, p::CONFIRM_DESC)
-        } else {
-            (p::RECORD_TOOL, p::RECORD_DESC)
-        };
-        vec![tool(
-            name,
-            desc,
-            &[Param::str_enum_list("inputs", &DTMF_VALUES, "")],
-            Default::default(),
-        )]
-    }
-
-    async fn call(
-        &mut self,
-        name: &str,
-        args_json: Value,
-        ctx: &mut TaskCtx<GetDtmfResult>,
-    ) -> ToolReply {
-        let expected = if self.ask_for_confirmation { p::CONFIRM_TOOL } else { p::RECORD_TOOL };
-        if name != expected {
-            return ToolReply::unknown_tool(name);
-        }
-        let raw = match args::string_list(&args_json, name, "inputs") {
-            Ok(v) => v,
-            Err(e) => return ToolReply::Error(e),
-        };
-        let mut inputs = Vec::with_capacity(raw.len());
-        for value in &raw {
-            match DtmfEvent::parse(value) {
-                Some(e) => inputs.push(e),
-                None => {
-                    // What pydantic's enum validation produces before the body ever runs.
-                    return ToolReply::Error(ToolError::plain(format!(
-                        "invalid arguments for `{name}`: `{value}` is not a DTMF event"
-                    )));
-                }
-            }
-        }
-        // A second call is a no-op here (the reference raises).
-        ctx.complete(dtmf_result(&inputs));
-        ToolReply::Silent
     }
 }
 

@@ -13,7 +13,12 @@ use std::collections::{BTreeMap, HashMap};
 /// GetAddressResult(address: 'str')
 #[crate::class(eq, from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, module = "workflows", path = "livekit.agents.beta.workflows.address", name = "GetAddressResult")]
+#[python(
+    dataclass,
+    module = "workflows",
+    path = "livekit.agents.beta.workflows.address",
+    name = "GetAddressResult"
+)]
 #[node(interface)]
 #[binding(class, new)]
 pub struct GetAddressResult {
@@ -23,7 +28,12 @@ pub struct GetAddressResult {
 /// GetEmailResult(email_address: 'str')
 #[crate::class(eq, from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, module = "workflows", path = "livekit.agents.beta.workflows.email_address", name = "GetEmailResult")]
+#[python(
+    dataclass,
+    module = "workflows",
+    path = "livekit.agents.beta.workflows.email_address",
+    name = "GetEmailResult"
+)]
 #[node(interface)]
 #[binding(class, new)]
 pub struct GetEmailResult {
@@ -32,7 +42,12 @@ pub struct GetEmailResult {
 
 /// GetPhoneNumberResult(phone_number: 'str')
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, module = "workflows", path = "livekit.agents.beta.workflows.phone_number", name = "GetPhoneNumberResult")]
+#[python(
+    dataclass,
+    module = "workflows",
+    path = "livekit.agents.beta.workflows.phone_number",
+    name = "GetPhoneNumberResult"
+)]
 #[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
@@ -80,7 +95,13 @@ pub struct DtmfStopped {}
 /// GetNameResult(first_name: 'str | None' = None, middle_name: 'str | None' = None, last_name: 'str | None' = None)
 #[crate::class(eq, from_py_object)]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[python(dataclass, zero_defaults, module = "workflows", path = "livekit.agents.beta.workflows.name", name = "GetNameResult")]
+#[python(
+    dataclass,
+    zero_defaults,
+    module = "workflows",
+    path = "livekit.agents.beta.workflows.name",
+    name = "GetNameResult"
+)]
 #[node(interface)]
 #[binding(class, new)]
 pub struct GetNameResult {
@@ -96,7 +117,12 @@ pub struct GetNameResult {
 /// GetDOBResult(date_of_birth: 'date', time_of_birth: 'time | None' = None)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
 #[binding(fields_only)]
-#[python(dataclass, module = "workflows", path = "livekit.agents.beta.workflows.dob", name = "GetDOBResult")]
+#[python(
+    dataclass,
+    module = "workflows",
+    path = "livekit.agents.beta.workflows.dob",
+    name = "GetDOBResult"
+)]
 #[node(interface)]
 pub struct GetDOBResult {
     #[python(ty = "date", import = "datetime:date")]
@@ -155,7 +181,12 @@ impl GetDOBResult {
 
 /// GetCardNumberResult(issuer: 'str', card_number: 'str')
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, module = "workflows", path = "livekit.agents.beta.workflows.credit_card", name = "GetCardNumberResult")]
+#[python(
+    dataclass,
+    module = "workflows",
+    path = "livekit.agents.beta.workflows.credit_card",
+    name = "GetCardNumberResult"
+)]
 #[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
@@ -166,7 +197,12 @@ pub struct GetCardNumberResult {
 
 /// GetSecurityCodeResult(security_code: 'str')
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, module = "workflows", path = "livekit.agents.beta.workflows.credit_card", name = "GetSecurityCodeResult")]
+#[python(
+    dataclass,
+    module = "workflows",
+    path = "livekit.agents.beta.workflows.credit_card",
+    name = "GetSecurityCodeResult"
+)]
 #[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
@@ -177,7 +213,12 @@ pub struct GetSecurityCodeResult {
 // The field is `date`, not `expiration_date`: `assemble_credit_card_result` maps it.
 /// GetExpirationDateResult(date: 'str')
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, module = "workflows", path = "livekit.agents.beta.workflows.credit_card", name = "GetExpirationDateResult")]
+#[python(
+    dataclass,
+    module = "workflows",
+    path = "livekit.agents.beta.workflows.credit_card",
+    name = "GetExpirationDateResult"
+)]
 #[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
@@ -187,7 +228,12 @@ pub struct GetExpirationDateResult {
 
 /// GetCreditCardResult(cardholder_name: 'str', issuer: 'str', card_number: 'str', security_code: 'str', expiration_date: 'str')
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(dataclass, module = "workflows", path = "livekit.agents.beta.workflows.credit_card", name = "GetCreditCardResult")]
+#[python(
+    dataclass,
+    module = "workflows",
+    path = "livekit.agents.beta.workflows.credit_card",
+    name = "GetCreditCardResult"
+)]
 #[node(interface)]
 #[binding(class, new)]
 #[crate::class(eq, from_py_object)]
@@ -307,57 +353,6 @@ impl From<&ToolSpec> for RawFunctionDescription {
             ignore_on_enter: spec.flags.ignore_on_enter,
         }
     }
-}
-
-/// `TaskGroupStep::Run`: call the factory for `task_id`, append `out_of_scope` to its tools when
-/// there is something to regress to, then await it.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "kind", tag_value = "run")]
-pub struct TaskGroupRun {
-    pub task_id: String,
-    pub out_of_scope: Option<RawFunctionDescription>,
-}
-
-/// `TaskGroupStep::Summarize`: the stack drained and `summarize_chat_ctx` is set.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "summarize")]
-pub struct TaskGroupSummarize {}
-
-/// `TaskGroupStep::Complete`: `self.complete(TaskGroupResult(task_results=...))`.
-/// `recorded` is `(task_id, "value" | "error")` in order; an `"error"` result is an exception.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "complete")]
-pub struct TaskGroupComplete {
-    pub recorded: Vec<(String, String)>,
-}
-
-/// `TaskGroupStep::Fail`: `self.complete(e)`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[binding(emit, tag = "kind", tag_value = "fail")]
-pub struct TaskGroupFail {
-    pub error: String,
-}
-
-/// A task group's next step, as one of the four records above (tagged `kind`).
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit)]
-pub enum TaskGroupStepWire {
-    Run(TaskGroupRun),
-    Summarize(TaskGroupSummarize),
-    Complete(TaskGroupComplete),
-    Fail(TaskGroupFail),
-}
-
-/// The five `copy()` flags `TaskGroup`'s summarisation passes: all `False`, so the summary sees the
-/// tool calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit)]
-pub struct TaskGroupSummaryFlags {
-    pub exclude_instructions: bool,
-    pub exclude_handoff: bool,
-    pub exclude_config_update: bool,
-    pub exclude_empty_message: bool,
-    pub exclude_function_call: bool,
 }
 
 /// `CreateSIPParticipantRequest`'s fields as the host fills the protobuf. `sip_number` is `None`

@@ -8,18 +8,15 @@ import pytest
 
 from livekit.agents import (
     Agent,
-    AgentTask,
-    Completed,
-    Failed,
     InputRequired,
     LiveSession,
     ModelRetry,
     RunContext,
     function_tool,
+    persisted,
 )
 from livekit.agents.llm import ChatContext, FunctionToolCall, Tool
 from livekit.agents.storage import AgentDBStorage
-from livekit.agents.storage.protocol import load_state
 from livekit.agents.storage.resolve import Thread
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
@@ -135,78 +132,6 @@ async def test_agent_instructions_and_on_enter() -> None:
     )
 
 
-async def test_completed_ends_the_task_with_its_value() -> None:
-    """A task tool returning ``Completed(value)`` ends the task; the awaiting tool gets the value."""
-
-    class Capture(AgentTask[int]):
-        def __init__(self) -> None:
-            super().__init__(instructions="capture a number")
-
-        async def on_enter(self) -> None:
-            self.session.generate_reply(instructions="capture_greeting")
-
-        @function_tool
-        async def record(self, ctx: RunContext, value: int) -> Completed[int]:
-            """Record the number.
-
-            Args:
-                value: the number
-            """
-            return Completed(value)
-
-    class Decline(AgentTask[int]):
-        def __init__(self) -> None:
-            super().__init__(instructions="declined")
-
-        async def on_enter(self) -> Failed:
-            return Failed("the caller declined")
-
-    outcomes: list[object] = []
-    root = Agent(instructions="root")
-
-    @root.tool
-    async def capture(ctx: RunContext) -> str:
-        """Start the capture."""
-        outcomes.append(await Capture())
-        try:
-            await Decline()
-        except Exception as e:  # the Failed error surfaces to the awaiting tool
-            outcomes.append(e)
-        return "captured"
-
-    llm = FakeLLM(
-        fake_responses=[
-            FakeLLMResponse(
-                input="go",
-                content="",
-                ttft=0,
-                duration=0,
-                tool_calls=[FunctionToolCall(name="capture", arguments="{}", call_id="c1")],
-            ),
-            FakeLLMResponse(input="capture_greeting", content="number?", ttft=0, duration=0),
-            FakeLLMResponse(
-                input="seven",
-                content="",
-                ttft=0,
-                duration=0,
-                tool_calls=[
-                    FunctionToolCall(name="record", arguments='{"value": 7}', call_id="c2")
-                ],
-            ),
-            FakeLLMResponse(input="captured", content="thanks", ttft=0, duration=0),
-        ]
-    )
-    async with LiveSession(llm=llm) as session:
-        await session.start(root)
-        await session.run(user_input="go")
-        assert isinstance(session.current_agent, Capture)
-        await session.run(user_input="seven")
-        assert session.current_agent is root
-
-    assert outcomes[0] == 7
-    assert "the caller declined" in str(outcomes[1])
-
-
 async def test_input_required_pauses_the_turn_until_the_next_message() -> None:
     """A verbatim ``InputRequired`` speaks the question as written; the next user message is
     the call's output."""
@@ -260,6 +185,12 @@ class Patient:
 
 
 @dataclass
+class AppContext:
+    settings: Deps
+    patient: Patient = persisted(default_factory=Patient)
+
+
+@dataclass
 class Answer:
     city: str
     temperature: int
@@ -267,32 +198,6 @@ class Answer:
 
 async def test_agent_run_returns_a_typed_result() -> None:
     """``agent.run()`` loops over the model and the tools, with deps and state on the context."""
-    weather = Agent(instructions="weather", output_type=Answer, deps_type=Deps, state_type=Patient)
-
-    @weather.instructions
-    def known(ctx: RunContext[Deps, Patient]) -> str:
-        return f"Greeting: {ctx.deps.greeting}"
-
-    @weather.tool
-    async def lookup(ctx: RunContext[Deps, Patient], city: str) -> str:
-        """Look the weather up.
-
-        Args:
-            city: the city
-        """
-        ctx.state.looked_up += 1
-        assert ctx.task_id.startswith("run_")
-        return f"{city}: 21"
-
-    retries: list[str] = []
-
-    @weather.output_validator
-    def warm_enough(ctx: RunContext[Deps, Patient], output: Answer) -> Answer:
-        if output.temperature < 20:
-            retries.append("too cold")
-            raise ModelRetry("the temperature must be at least 20")
-        return output
-
     llm = RecordingLLM(
         fake_responses=[
             FakeLLMResponse(
@@ -332,14 +237,39 @@ async def test_agent_run_returns_a_typed_result() -> None:
             ),
         ]
     )
-    weather.update_options(llm=llm)
+    weather = Agent[AppContext, Answer](instructions="weather", output_type=Answer, llm=llm)
+
+    @weather.instructions
+    def known(ctx: RunContext[AppContext]) -> str:
+        return f"Greeting: {ctx.context.settings.greeting}"
+
+    @weather.tool
+    async def lookup(ctx: RunContext[AppContext], city: str) -> str:
+        """Look the weather up.
+
+        Args:
+            city: the city
+        """
+        ctx.context.patient.looked_up += 1
+        assert ctx.task_id.startswith("run_")
+        return f"{city}: 21"
+
+    retries: list[str] = []
+
+    @weather.output_validator
+    def warm_enough(ctx: RunContext[AppContext], output: Answer) -> Answer:
+        if output.temperature < 20:
+            retries.append("too cold")
+            raise ModelRetry("the temperature must be at least 20")
+        return output
 
     state = Patient()
     result = await weather.run(
-        "weather in tokyo?", deps=Deps(greeting="hello"), state=state, max_steps=5
+        "weather in tokyo?",
+        context=AppContext(settings=Deps(greeting="hello"), patient=state),
+        max_steps=5,
     )
     assert result.output == Answer(city="Tokyo", temperature=21)
-    assert result.input_required is None
     assert state.looked_up == 1
     assert retries == ["too cold"]
     assert result.usage.requests == 3 and result.usage.tool_calls == 3
@@ -364,21 +294,17 @@ async def test_agent_run_returns_a_typed_result() -> None:
         ],
     )
     second = await weather.run(
-        "and osaka?", message_history=result.all_messages(), deps=Deps(greeting="hi"), state=state
+        "and osaka?",
+        message_history=result.all_messages(),
+        context=AppContext(settings=Deps(greeting="hi"), patient=state),
     )
     assert second.output == Answer(city="Osaka", temperature=23)
     assert len(second.all_messages()) > len(second.new_messages())
 
 
 async def test_agent_run_stops_at_input_required() -> None:
-    fnol = Agent(instructions="claims")
-
-    @fnol.tool
-    async def request_photo(ctx: RunContext) -> InputRequired:
-        """Ask for a photo."""
-        return InputRequired("Could you send a photo?")
-
-    fnol.update_options(
+    fnol = Agent(
+        instructions="claims",
         llm=FakeLLM(
             fake_responses=[
                 FakeLLMResponse(
@@ -392,11 +318,17 @@ async def test_agent_run_stops_at_input_required() -> None:
                 ),
                 FakeLLMResponse(input="here it is", content="thanks", ttft=0, duration=0),
             ]
-        )
+        ),
     )
+
+    @fnol.tool
+    async def request_photo(ctx: RunContext) -> InputRequired:
+        """Ask for a photo."""
+        return InputRequired("Could you send a photo?")
+
     result = await fnol.run("my car is damaged")
-    assert result.output is None
-    assert result.input_required == "Could you send a photo?"
+    assert isinstance(result.output, InputRequired)
+    assert result.output.question == "Could you send a photo?"
     assert result.new_messages()[-1].type == "message"
     assert result.new_messages()[-1].text_content == "Could you send a photo?"
 
@@ -404,17 +336,18 @@ async def test_agent_run_stops_at_input_required() -> None:
     assert second.output == "thanks"
 
 
-async def test_live_session_state_and_deps_reach_the_run_context(
+async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     agentdb_storage: AgentDBStorage,
 ) -> None:
     seen: list[tuple[Deps, Patient, str]] = []
-    agent = Agent(instructions="x", deps_type=Deps, state_type=Patient)
+    agent = Agent[AppContext](instructions="x")
 
     @agent.tool
-    async def note(ctx: RunContext[Deps, Patient]) -> str:
+    async def note(ctx: RunContext[AppContext]) -> str:
         """Note the state."""
-        ctx.state.looked_up += 1
-        seen.append((ctx.deps, ctx.state, ctx.task_id))
+        ctx.context.patient.looked_up += 1
+        seen.append((ctx.context.settings, ctx.context.patient, ctx.task_id))
+        await ctx.live_session.store.save_context(ctx.context)
         return "noted"
 
     llm = FakeLLM(
@@ -434,9 +367,11 @@ async def test_live_session_state_and_deps_reach_the_run_context(
     storage = agentdb_storage
     sid = await new_session(storage, agent.id)
     thread = Thread(storage, sid, agent_name=agent.id)
-    async with LiveSession(llm=llm, state=state, deps=deps, thread=thread) as session:
-        assert session.state is state and session.deps is deps
+    app = AppContext(settings=deps, patient=state)
+    async with LiveSession(llm=llm, context=app, thread=thread) as session:
+        assert session.context is app
         await session.start(agent)
+        await session.store.load_context(app)
         result = await session.run(user_input="go")
         result.expect.contains_function_call(name="note")
         assert result.output == "ok"
@@ -455,7 +390,12 @@ async def test_live_session_state_and_deps_reach_the_run_context(
     db = await storage.open(sid)
     row = await db.lane_info(agent.id)
     db.close()
-    assert row is not None and load_state(row.state, Patient) == Patient(looked_up=1)
+    assert row is not None
+    from livekit.agents.storage.context_store import ContextStore
+
+    restored = AppContext(settings=deps)
+    await ContextStore(row.state).load_context(restored)
+    assert restored.patient == Patient(looked_up=1)
 
 
 def test_agent_session_alias_is_deprecated() -> None:

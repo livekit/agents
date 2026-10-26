@@ -6,9 +6,7 @@ use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle}
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::RunningToolCall;
 use crate::trace::{CoreStep, ToolStep};
-use lk_agents_abi::{
-    ChatItem, FunctionCall, FunctionCallOutput, HostRef, MetricsReport, ToolChoice, Ts,
-};
+use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, MetricsReport, ToolChoice, Ts};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -26,12 +24,6 @@ pub fn unknown_tool_message(name: &str, available: &[String]) -> String {
     format!("Unknown function: {name} - available tools: {}", available.join(", "))
 }
 
-/// The reference's `RuntimeError` for an `Agent` returned after `ctx.update()`.
-pub const HANDOFF_AFTER_UPDATE: &str = "agent handoff after a progress update is not supported";
-
-/// The replacement output for a handoff that never landed because the turn was interrupted.
-pub const INTERRUPTED_HANDOFF_OUTPUT: &str = "the agent handoff was interrupted and did not happen";
-
 pub const MISSING_TOOL_OUTPUT: &str = "the tool executor did not report a result";
 
 /// `make_function_call_output`'s text for an unexpected exception; says nothing about it.
@@ -39,9 +31,6 @@ pub const INTERNAL_ERROR_OUTPUT: &str = "An internal error occurred";
 
 /// `make_function_call_output`'s text for a return value the model cannot be told about.
 pub const INVALID_OUTPUT: &str = "the tool returned an invalid output";
-
-/// `make_tool_output`'s text when two `Agent`s came back from one call.
-pub const MULTIPLE_AGENTS_OUTPUT: &str = "the tool returned more than one agent";
 
 pub(crate) use tools::Tools;
 
@@ -477,8 +466,6 @@ pub(crate) fn pair_for(
 pub struct ToolExecution {
     pub call: FunctionCall,
     pub output: FunctionCallOutput,
-    /// The `Agent` a tool returned, opaque to the core. `Some` is a requested handoff.
-    pub agent_task: Option<HostRef>,
     /// How the run ended; a detached call is still running after its output is committed.
     pub end: ToolEnd,
     /// The first update as the tool wrote it (`ToolCallUpdated.message`), for a detached call.
@@ -501,10 +488,9 @@ pub enum ToolEnd {
 /// What the host's run of one tool came back with, before any decision; [`decide`] makes them.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolAnswer {
-    /// The tool returned `value` as JSON, with `Agent`s set aside in `agents`.
+    /// The tool returned `value` as JSON.
     Returned {
         value: Option<serde_json::Value>,
-        agents: Vec<HostRef>,
     },
     Raised(ToolRaise),
     /// A value the model can't be told about (`_is_valid_function_output`).
@@ -561,9 +547,7 @@ impl TryFrom<lk_agents_abi::llm::tool_executor::RawToolAnswer> for ToolAnswer {
             m.ok_or_else(|| format!("a `{}` answer carries a `message`", raw.kind))
         };
         Ok(match kind {
-            ToolAnswerKind::Returned => {
-                ToolAnswer::Returned { value: raw.value, agents: raw.agents }
-            }
+            ToolAnswerKind::Returned => ToolAnswer::Returned { value: raw.value },
             ToolAnswerKind::Raised => {
                 let raised = raw.error.as_deref().and_then(ToolRaiseKind::from_wire);
                 ToolAnswer::Raised(
@@ -694,11 +678,6 @@ pub enum ToolOutcome {
     /// Empty output, no reply: a `None` return or `StopResponse`.
     Silent,
     Error(String),
-    /// A handoff, with its text; a bare handoff asks for no reply.
-    Handoff {
-        agent: HostRef,
-        text: Option<String>,
-    },
     /// A progress update: answered like a reply, and the call is marked non-blocking.
     Detached {
         message: String,
@@ -721,27 +700,9 @@ pub fn render(value: &serde_json::Value) -> String {
 /// `make_function_call_output`).
 pub fn decide(answer: ToolAnswer) -> ToolOutcome {
     match answer {
-        ToolAnswer::Returned { value, mut agents } => match agents.len() {
-            0 => match value {
-                None => ToolOutcome::Silent,
-                Some(v) => ToolOutcome::Reply(render(&v)),
-            },
-            1 => {
-                let agent = agents.pop().expect("one agent");
-                // None is a bare handoff, one is that item, several stay a list.
-                let text = match value {
-                    None => None,
-                    Some(serde_json::Value::Array(items)) => match items.len() {
-                        0 => None,
-                        1 => Some(render(&items[0])),
-                        _ => Some(render(&serde_json::Value::Array(items))),
-                    },
-                    Some(other) => Some(render(&other)),
-                };
-                ToolOutcome::Handoff { agent, text }
-            }
-            // Two agents from one call: the handoff is refused entirely rather than one picked.
-            _ => ToolOutcome::Error(MULTIPLE_AGENTS_OUTPUT.to_owned()),
+        ToolAnswer::Returned { value } => match value {
+            None => ToolOutcome::Silent,
+            Some(v) => ToolOutcome::Reply(render(&v)),
         },
         ToolAnswer::Raised(ToolRaise::ToolError(message)) => ToolOutcome::Error(message),
         ToolAnswer::Raised(ToolRaise::StopResponse) => ToolOutcome::Silent,
@@ -770,14 +731,10 @@ pub fn answer(call: &FunctionCall, outcome: ToolOutcome, now: SystemTime) -> Too
     };
     let mut call = call.clone();
     let mut raw_update = None;
-    let (output, agent_task, end) = match outcome {
-        ToolOutcome::Reply(text) => (output(text, false, true), None, ToolEnd::Done),
-        ToolOutcome::Silent => (output(String::new(), false, false), None, ToolEnd::Done),
-        ToolOutcome::Error(text) => (output(text, true, true), None, ToolEnd::Error),
-        ToolOutcome::Handoff { agent, text } => {
-            let reply_required = text.is_some();
-            (output(text.unwrap_or_default(), false, reply_required), Some(agent), ToolEnd::Done)
-        }
+    let (output, end) = match outcome {
+        ToolOutcome::Reply(text) => (output(text, false, true), ToolEnd::Done),
+        ToolOutcome::Silent => (output(String::new(), false, false), ToolEnd::Done),
+        ToolOutcome::Error(text) => (output(text, true, true), ToolEnd::Error),
         ToolOutcome::Detached { message, raw } => {
             // `RunContext.update`'s marker: a non-blocking tool may wait on its own speech.
             call.extra.insert(
@@ -785,14 +742,14 @@ pub fn answer(call: &FunctionCall, outcome: ToolOutcome, now: SystemTime) -> Too
                 serde_json::Value::Bool(true),
             );
             raw_update = Some(raw);
-            (output(message, false, true), None, ToolEnd::Detached)
+            (output(message, false, true), ToolEnd::Detached)
         }
-        ToolOutcome::Cancelled => (output(String::new(), false, false), None, ToolEnd::Cancelled),
+        ToolOutcome::Cancelled => (output(String::new(), false, false), ToolEnd::Cancelled),
         ToolOutcome::Missing => {
-            (output(MISSING_TOOL_OUTPUT.to_owned(), true, true), None, ToolEnd::Error)
+            (output(MISSING_TOOL_OUTPUT.to_owned(), true, true), ToolEnd::Error)
         }
     };
-    ToolExecution { call, output, agent_task, end, raw_update }
+    ToolExecution { call, output, end, raw_update }
 }
 
 pub use lk_agents_abi::voice::events::ToolsExecutedEvent;
@@ -813,12 +770,6 @@ pub enum NextStep {
     Done,
     /// InterruptByAudioActivity-in; finished tools are still in [`StepDecision::commit`].
     Interrupted,
-    /// A tool returned an `Agent`: update and drain, then still run `follow_up` if any.
-    Handoff {
-        agent: HostRef,
-        /// `Some` when a reply is owed and the handle wasn't interrupted; `tool_choice` is `"none"`.
-        follow_up: Option<ReplyRequest>,
-    },
     Reply(ReplyRequest),
 }
 
@@ -827,8 +778,6 @@ pub enum NextStep {
 pub enum StepWarning {
     /// The step budget is spent; reported even when no reply follows.
     MaxToolStepsReached,
-    /// Two tools returned an agent: the handoff is cancelled rather than one picked.
-    MultipleAgentTasks,
 }
 
 /// `function_tools_executed` as its handlers left it, for the step waiting on them
@@ -850,8 +799,6 @@ pub struct StepDecision {
     /// Items committed on arrival, so results survive a reply that never runs. Calls, then outputs.
     pub commit: Vec<ChatItem>,
     pub warnings: Vec<StepWarning>,
-    /// The `Agent` the step hands off to, before the event's `handoff_required` is read.
-    agent_task: Option<HostRef>,
     max_steps_reached: bool,
     /// The second interruption read.
     interrupted: bool,
@@ -864,9 +811,7 @@ impl StepDecision {
     pub fn settle(mut self, event: ToolsExecutedEvent) -> StepDecision {
         self.commit = commit_of(&event.function_calls, &event.function_call_outputs);
         if self.next != NextStep::Interrupted {
-            let handoff = self.agent_task.clone().filter(|_| event.handoff_required);
             self.next = next_of(
-                handoff,
                 event.has_tool_reply() && !self.interrupted,
                 self.max_steps_reached,
                 self.previous_user_metrics.clone(),
@@ -877,27 +822,18 @@ impl StepDecision {
     }
 }
 
-/// The step after the tools: a handoff drains, which forbids tools in its reply.
 fn next_of(
-    handoff: Option<HostRef>,
     reply: bool,
     forbid_tools: bool,
     previous_user_metrics: Option<MetricsReport>,
 ) -> NextStep {
-    let follow_up = reply.then(|| ReplyRequest {
-        tool_choice: if forbid_tools || handoff.is_some() {
-            ToolChoice::Forbidden
-        } else {
-            ToolChoice::Auto
-        },
-        previous_user_metrics,
-    });
-    match handoff {
-        Some(agent) => NextStep::Handoff { agent, follow_up },
-        None => match follow_up {
-            Some(req) => NextStep::Reply(req),
-            None => NextStep::Done,
-        },
+    if reply {
+        NextStep::Reply(ReplyRequest {
+            tool_choice: if forbid_tools { ToolChoice::Forbidden } else { ToolChoice::Auto },
+            previous_user_metrics,
+        })
+    } else {
+        NextStep::Done
     }
 }
 
@@ -939,26 +875,16 @@ pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
 
     let mut calls = Vec::with_capacity(inputs.tool_output.len());
     let mut outputs = Vec::with_capacity(inputs.tool_output.len());
-    let mut agent_task: Option<HostRef> = None;
-    let mut ignore_task_switch = false;
 
     for out in inputs.tool_output {
         calls.push(out.call.clone());
         outputs.push(out.output.clone());
-
-        if agent_task.is_some() && out.agent_task.is_some() {
-            ignore_task_switch = true;
-            warnings.push(StepWarning::MultipleAgentTasks);
-        }
-        // The last value wins, `None` included.
-        agent_task = out.agent_task.clone();
     }
 
-    let handoff = if ignore_task_switch { None } else { agent_task };
     let event = ToolsExecutedEvent {
         function_calls: calls,
         function_call_outputs: outputs,
-        handoff_required: handoff.is_some(),
+        handoff_required: false,
     };
 
     // The *second* interruption read gates the reply.
@@ -967,7 +893,6 @@ pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
         tools_executed: None,
         commit: Vec::new(),
         warnings,
-        agent_task: handoff,
         max_steps_reached,
         interrupted: inputs.interrupted,
         previous_user_metrics: inputs
@@ -1000,7 +925,6 @@ fn quiet(next: NextStep) -> StepDecision {
         tools_executed: None,
         commit: Vec::new(),
         warnings: Vec::new(),
-        agent_task: None,
         max_steps_reached: false,
         interrupted: false,
         previous_user_metrics: None,
@@ -1032,10 +956,6 @@ fn interrupted(tool_output: &[ToolExecution]) -> StepDecision {
 /// and nothing asks for a reply.
 fn interrupted_tool_output(out: &ToolExecution) -> FunctionCallOutput {
     let mut fnc_call_out = out.output.clone();
-    if out.agent_task.is_some() {
-        fnc_call_out.output = INTERRUPTED_HANDOFF_OUTPUT.to_string();
-        fnc_call_out.is_error = true;
-    }
     fnc_call_out.reply_required = false;
     fnc_call_out
 }
@@ -1115,8 +1035,7 @@ impl Driver {
         // `self.scheduling_paused`: the activity that made the speech
         // drains: paused, left behind by a handoff, or a task that has its result.
         let draining = self.activity.speech_scheduler.is_paused()
-            || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent)
-            || self.activity.tasks.driving_settled();
+            || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent);
         // The step's follow-up plans against the frame once this is published.
         self.activity.tools_committed.insert((speech, step), draining);
         self.activity.set_tools_in_flight(speech, false);
@@ -1132,9 +1051,6 @@ impl Driver {
             out.trace(CoreStep::PortFailure(match w {
                 StepWarning::MaxToolStepsReached => {
                     "max_tool_steps reached: the reply is forced to tool_choice=none"
-                }
-                StepWarning::MultipleAgentTasks => {
-                    "two tools returned an agent: the handoff is cancelled entirely"
                 }
             }));
         }
@@ -1186,7 +1102,6 @@ mod host_answer_tests {
         RawToolAnswer {
             kind: kind.to_owned(),
             value: None,
-            agents: Vec::new(),
             error: error.map(str::to_owned),
             message: message.map(str::to_owned),
             raw: detached_raw.map(str::to_owned),
@@ -1200,10 +1115,7 @@ mod host_answer_tests {
         returned.value = Some(serde_json::json!({"temp": 12}));
         assert_eq!(
             ToolAnswer::try_from(returned),
-            Ok(ToolAnswer::Returned {
-                value: Some(serde_json::json!({"temp": 12})),
-                agents: Vec::new()
-            })
+            Ok(ToolAnswer::Returned { value: Some(serde_json::json!({"temp": 12})) })
         );
         assert_eq!(
             ToolAnswer::try_from(raw("raised", Some("tool_error"), Some("nope"), None)),

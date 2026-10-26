@@ -691,11 +691,6 @@ pub enum GenEvent {
         step: u32,
     },
 
-    Handoff {
-        speech: SpeechId,
-        agent: lk_agents_abi::HostRef,
-    },
-
     /// Reported **before** the step's tools run, so the loop can end the current speech per step.
     StepSpoken {
         speech: SpeechId,

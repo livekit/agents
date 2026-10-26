@@ -29,7 +29,7 @@ class ItemRow(BaseModel):
 
 
 class TaskRow(BaseModel):
-    """One A2A task of a lane: a turn or a submitted `AgentTask`. The A2A `Task` is
+    """One A2A task of a lane. The A2A `Task` is
     `id = task_id`, `contextId = the thread id`, `status = (status, data.statusMessage, updated_at)`,
     plus the fields of `data`.
     """
@@ -40,7 +40,7 @@ class TaskRow(BaseModel):
     seq: int
     """Submission order; the lane runs its runnable tasks in it."""
     name: str | None
-    """The `AgentTask` class; `None` for a turn."""
+    """An optional application task label."""
     message_id: str | None
     status: TaskState
     updated_at: int
@@ -52,9 +52,7 @@ class TaskRow(BaseModel):
 
 
 class LaneRow(BaseModel):
-    """One lane: a registered agent's state and agent stack, with its lease and its inbox
-    cursor.
-    """
+    """One lane: a registered agent's state, lease and inbox cursor."""
 
     model_config = ConfigDict(frozen=True)
     lane: str
@@ -62,8 +60,6 @@ class LaneRow(BaseModel):
     """The fencing token: a run loaded at `v` commits only `WHERE version = v`."""
     state: Any | None = None
     """The application's typed state, one snapshot per run."""
-    agent_stack: list[Ref] | None = None
-    """Who is speaking, bottom first; `None` before a run wrote it."""
     lease_holder: str | None
     lease_until: int
     """Unix seconds on agent-db's clock; `0` is released."""
@@ -106,21 +102,6 @@ own.
 
 RunOutcome = Literal["completed", "input-required", "failed", "canceled", "rejected"]
 """What `run_ended` records."""
-
-
-class Ref(BaseModel):
-    """One rebuild rule for everything durable that names code: `name` is an
-    `Agent`'s name or an `AgentTask` class name; `args` the constructor arguments, JSON-shaped,
-    `None` for a plain `Agent`. On the agent stack a task entry also carries `state`, the task's
-    own state as it waits, and `call_id`, the call of the agent below that awaits it. Stored as
-    `{"name": .., "args": .., "state": .., "call_id": ..}`.
-    """
-
-    model_config = ConfigDict(frozen=True)
-    name: str
-    args: Any | None = None
-    state: Any | None = None
-    call_id: str | None = None
 
 
 class RunSummary(BaseModel):

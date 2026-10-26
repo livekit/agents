@@ -118,7 +118,7 @@ async def read_back(ctx: RunContext[Shop, Customer], item_id: str) -> str | Inpu
     return f"Please confirm: one {item.name} for ${item.price}, under {ctx.state.name}. Yes or no?"
 
 
-@backend.tool(requires_approval=read_back)
+@backend.tool(needs_approval=read_back)
 async def place_order(ctx: RunContext[Shop, Customer], item_id: str) -> str:
     """Order an item. It reads the order back and asks the customer; their answer comes back as
     this call's output, and a yes means calling it again exactly the same way.
@@ -258,9 +258,9 @@ then the backend door's `endpoint`. Update the Dockerfile to run `python main.py
 | `class MyAgent(Agent)` with `@function_tool` methods | `my_agent = Agent(instructions=..., llm=..., deps_type=, state_type=)` at module level and `@my_agent.tool` functions |
 | `self.update_instructions(...)`, `update_tools(...)`, `update_chat_ctx(...)` | gone. Render state with `@backend.instructions`; validate arguments against data and raise `ToolError` instead of swapping tools; put tools that only make sense later inside an `AgentTask` |
 | tool schemas built per session with `enum` of valid ids | ids that never change: keep the enum, `ItemId = Annotated[str, Field(json_schema_extra={"enum": ids})]` built at import (give the domain module a synchronous loader if v1's was async), or `Literal[...]`. What changes per conversation (availability, a patient's appointments): list the valid ids in dynamic instructions and check them in the tool against `deps` |
-| raw-schema tools (`function_tool(raw_schema=...)`) | unchanged in `tools=[...]`; they cannot take `requires_approval` |
+| raw-schema tools (`function_tool(raw_schema=...)`) | unchanged in `tools=[...]`; they cannot take `needs_approval` |
 | a tool that returns `NewAgent()` or `NewAgent(), "msg"` | a tool returns a module-level `Agent` alone; the handoff is saved on the lane's stack |
-| confirm before a write (prompt rule, or `approved` flag) | `@backend.tool(requires_approval=read_back)`, see "Approval" |
+| confirm before a write (prompt rule, or `approved` flag) | `@backend.tool(needs_approval=read_back)`, see "Approval" |
 | a second LLM call inside a tool (`llm.chat(chat_ctx=...)`) | a module-level `evaluator = Agent(...)` and `await evaluator.run(prompt, usage=ctx.usage)` |
 | `class T(AgentTask[R])` with `self.complete(result)` | `@dataclass class T(AgentTask[R, TState])`, `return Completed(result)` from its tools, see "AgentTask in text" |
 | `TaskGroup` / tasks awaited in sequence | one `AgentTask` whose state tracks the steps, one tool per step, `Completed` when all are recorded |
@@ -293,7 +293,7 @@ words ("the October 15 appointment with Dr. Jekyll").
 
 ## Approval
 
-`requires_approval=` is the only way to confirm before a write. Give it to **every write that
+`needs_approval=` is the only way to confirm before a write. Give it to **every write that
 moves money or cannot be undone** (a charge, a cancel, a change with a price difference), even
 where v1 trusted the model; a model-set `bool` that chooses between outcomes of a write is the
 same hole as an `approved` flag. A read-back repeats every detail the person gave (name, email,
@@ -302,8 +302,8 @@ approval: a call returns the read-back as a verbatim question and does not run, 
 runs only when the model repeats the **same call with the same arguments** after the person
 answered. There is no `approved` parameter the model could set, so it cannot skip the ask.
 
-- `requires_approval=True` builds the read-back from the docstring and the arguments.
-- `requires_approval=read_back` takes a function with **the tool's own parameters** (the
+- `needs_approval=True` builds the read-back from the docstring and the arguments.
+- `needs_approval=read_back` takes a function with **the tool's own parameters** (the
   context, and `self` for a task method) that returns the read-back text, or an `InputRequired`
   for a detail that is still missing.
 - A read-back may `raise ToolError(...)` to refuse ("already cancelled"), or `return await
@@ -335,7 +335,7 @@ For a task method, define the read-back as a method above it in the class:
     def _read_back(self, ctx: RunContext[Shop, Customer]) -> str:
         return f"Please confirm: {self.state.size} pizza, ${self.state.total}. Yes or no?"
 
-    @function_tool(requires_approval=_read_back)
+    @function_tool(needs_approval=_read_back)
     async def place(self, ctx: RunContext[Shop, Customer]) -> Completed[str]: ...
 ```
 
@@ -501,7 +501,7 @@ async def cancellation(ctx: RunContext[Hotel, Caller]) -> str:
     return f"Please confirm: cancel {booking.code}, {booking.refund_text}. Yes or no?"
 
 
-@backend.tool(requires_approval=cancellation)
+@backend.tool(needs_approval=cancellation)
 async def cancel_booking(ctx: RunContext[Hotel, Caller]) -> str: ...
 ```
 
@@ -587,4 +587,4 @@ reply = await client.send("pepperoni")  # continues the same thread
   in text. Use guard and re-call.
 - A task with no exit tool: the person cannot leave it.
 - Confirmation in the frontend's instructions, or an `approved: bool` parameter: use
-  `requires_approval=`.
+  `needs_approval=`.

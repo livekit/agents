@@ -1,8 +1,8 @@
 # Channels
 
-A thread endpoint takes messages from every channel the same way, and the
-handler never knows which one sent them. One thread, one history, one
-state, whatever the channel of the moment. Web chat, API clients, partner
+A thread endpoint takes messages from every channel the same way, with channel metadata available to the handler. Transport policy selects
+delivery and concurrency behavior; application context retains the same
+explicit persistence contract across channels. Web chat, API clients, partner
 agents and phone calls reach the thread directly. SMS, WhatsApp and email
 use the platform's ingress and egress; see
 [planned-channels.md](planned-channels.md).
@@ -33,8 +33,8 @@ The agent's voice and text turns share one lane; see [lanes.md](lanes.md).
   chooses.
 - **A text during a call** is answered by text, on whichever worker takes
   the lane after the call's current voice turn. The call knows about it from
-  its next turn on: that turn reloads the lane's history and state before
-  the model reads them.
+  its next turn on: that turn reloads transport history; application code reloads persisted
+  context fields before using them.
 - **A call after a text** is answered from the same history: the call's
   agent sees what was said by text.
 

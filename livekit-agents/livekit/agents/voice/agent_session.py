@@ -64,7 +64,7 @@ from ..utils.deprecation import deprecate_params
 from ..utils.misc import is_given
 from . import io, room_io
 from ._utils import _set_participant_attributes
-from .agent import Agent, AgentTask
+from .agent import Agent
 from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
 from .events import (
@@ -112,6 +112,7 @@ if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
+    from ..storage.context_store import ContextStore
     from ..storage.live import LiveLane
     from ..storage.resolve import Thread
     from .transcription.text_transforms import TextTransforms
@@ -420,8 +421,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         min_consecutive_speech_delay: float = 0.0,
         expressive: bool | ExpressiveOptions = False,
         # Misc settings
-        state: Any = None,
-        deps: Any = None,
+        context: Any = None,
         thread: Thread | None = None,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
         video_sampler: NotGivenOr[_VideoSampler | None] = NOT_GIVEN,
@@ -477,13 +477,11 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can be overridden per-``Agent`` or per-``AsyncToolset``.
             mcp_servers (list[mcp.MCPServer], optional): List of MCP servers
                 providing external tools for the agent to use.
-            state: The state instance for this session, read as ``ctx.state`` by the tools
-                and mutated in place; a job may start with what the dispatch knew.
-            deps: What the tools need for this call, read as ``ctx.deps``; never saved.
+            context: Application data and services exposed through ``ctx.context``.
             thread: The call's durable thread, ``ctx.thread`` in an ``rtc_session``: the
                 agent's lane is loaded at ``start()`` and each reply committed to it. Omitted,
                 the history is kept in memory and not saved. When a text moved the lane during
-                the call, the history and state are reloaded before the next voice turn.
+                the call, the history is reloaded before the next voice turn.
             userdata (Userdata_T, optional): Arbitrary per-session user data.
             turn_handling (TurnHandlingOptions, optional): Configuration for turn handling.
             stt_context_options (STTContextOptions, optional): Conversation-aware context for the
@@ -729,8 +727,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._user_away_timer: asyncio.TimerHandle | None = None
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
-        self._deps: Any = deps
-        self._state: Any = state
+        self._context: Any = context
         self._thread = thread
         # the agent's lane on the storage, opened at start() (storage/live.py)
         self._live_lane: LiveLane | None = None
@@ -811,14 +808,16 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._userdata = value
 
     @property
-    def deps(self) -> Any:
-        """What the tools need for this call, read as ``ctx.deps``."""
-        return self._deps
+    def context(self) -> Any:
+        """Application data and services supplied for this session."""
+        return self._context
 
     @property
-    def state(self) -> Any:
-        """The session's typed state, read as ``ctx.state``."""
-        return self._state
+    def store(self) -> ContextStore:
+        """The context store for this session's managed lane."""
+        if self._live_lane is None:
+            raise RuntimeError("This session has no managed store")
+        return self._live_lane.store
 
     @property
     def thread(self) -> Thread | None:
@@ -1422,16 +1421,6 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._amd = None
 
         activity = self._activity
-        while activity and isinstance(agent_task := activity.agent, AgentTask):
-            # notify AgentTask to complete and wait it to resume the parent agent
-            agent_task.cancel()
-            await agent_task._wait_for_inactive()
-
-            if old_activity := agent_task._old_activity:
-                activity = old_activity
-            else:
-                break
-
         if activity is not None:
             if not drain:
                 try:
@@ -1922,9 +1911,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             thread.id,
             agent_name=thread.agent_name or agent.id,
             history=self._chat_ctx,
-            state=self._state,
         )
-        self._state = await self._live_lane.open()
+        await self._live_lane.open()
 
         def on_speech_created(ev: SpeechCreatedEvent) -> None:
             lane = self._live_lane

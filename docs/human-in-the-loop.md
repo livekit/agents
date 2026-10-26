@@ -1,35 +1,38 @@
 # Human in the loop
 
-The return value of a tool or a hook is the transition it makes. One object
-per state the conversation or a task can be in, and nothing else says
-"wait" or "done".
+An agent invocation returns `RunResult`: either a completed application output
+or a request for human input. Tools can request input with `InputRequired`;
+the agent's `output_type` defines its accepted final application value.
+
+Tool and handler transitions have distinct meanings. An ordinary tool's
+`Completed(value)` supplies that tool's result to the model. A handler can
+use transport transitions to answer its A2A task.
 
 ```python
 from livekit.agents import Completed, Failed, Rejected, InputRequired, Working
 
-Completed(value)                 # done: the result, and the last message when text
+Completed(value)                 # tool result, or a completed transport task
 Failed(error)                    # failed: the error text is the last message
 Rejected(reason)                 # will not run this input
 InputRequired(question)          # waiting on the person; asked in the facing agent's words
-Working(message=None)            # waiting on a system; nothing delivered
+Working(message=None)            # transport working status; no Python checkpoint
 ```
 
-On the wire these are the A2A task states `completed`, `failed`, `rejected`,
+When returned as handler transitions, these map to A2A task states `completed`, `failed`, `rejected`,
 `input-required` and `working`.
 
 ## From a conversation tool
 
 ```python
 @fnol.tool
-async def request_photo(ctx: RunContext[None, Loss]) -> InputRequired:
+async def request_photo(ctx: RunContext[LossContext]) -> InputRequired:
     """Ask the policyholder for a photo of the damage."""
     return InputRequired("Could you send a photo of the damage? A wide shot and a close-up.")
 ```
 
-The turn waits. What is stored: the function call, its output standing in
-for the wait, `waiting for the person's answer to: <question>`, and the
-question as an assistant message. The question is the turn's reply. Nothing
-stays in memory.
+The tool finishes with its question recorded as its outcome. The invocation
+returns a result with `status="input_required"` and `question`. Save the
+updated history and context, then deliver `result.question`.
 
 ## Who words it
 
@@ -42,18 +45,14 @@ The agent facing the person words what reaches them.
 | `ToolResult(text, verbatim=True)`, `Completed(value, verbatim=True)` | delivers the text as written; the model reads `delivered to the person as written: ...` and continues, unless `reply_required=False` ends the turn there | the same, and the exact text leads the answer, flagged `livekit/verbatim` |
 
 A run is another agent's when its turn's messages carry
-`livekit/kind: delegation`. An agent with no model or a code task,
-asks as written. `result.verbatim` is the part of the answer or the question
+`livekit/kind: delegation`. A handler without a model asks as written. `result.verbatim` is the part of the answer or the question
 that was exact; the door puts it on the task as `livekit/verbatim`, and the
 delegate delivers that part as written and hands the rest to its model.
-A read-back from `requires_approval` is verbatim.
+A read-back from `needs_approval` is verbatim.
 
-The person's next message, whenever it comes and on whatever worker,
-replaces that placeholder as the call's output, and the model runs on the
-history: it sees the question, the call and the answer, and continues,
-calling the next tool or asking again. The tool that asked never runs
-again. It has no continuation, which is why a conversation tool can ask and
-cannot act on the answer; the model acts on it.
+The person's next message is appended to the saved history. A new invocation
+reads that history and context. The model interprets the answer and chooses
+its next tool or question. The tool that requested input has already finished.
 
 On a call the question is spoken and the next user turn is the answer. In
 text, the turn's task ends `input-required` with the question (`livekit/mergedInto` is in
@@ -64,38 +63,36 @@ text, the turn's task ends `input-required` with the question (`livekit/mergedIn
 | carries the waiting task's id | that task continues: it gets the answer and the reply, and the row the message arrived under completes, with `livekit/mergedInto` pointing at that task |
 | carries no task id | its own task carries the reply, and the waiting task completes, with `livekit/mergedInto` pointing at the new one |
 
-What `run()` returns then: `result.input_required` is the pending question
-and `result.output` is `None`. The framework ends the task `input-required`
-with that question whatever the handler returns, so a handler returns
-`result.output` as usual.
+Check `result.status == "input_required"` and read `result.question`.
+The transport delivers that question and represents the turn as
+`input-required`. A completed result exposes the declared application value
+in `result.output`; the framework outcome stays outside `output_type`.
 
 A conversation tool that returns `Failed(error)` or `Rejected(reason)`
 records the text as an error output and the model replies to it.
-`Completed(value)` from a conversation tool is that call's output; a
-conversation turn completes when its handler returns, not by a transition.
+`Completed(value)` from a conversation tool is that call's output; an
+agent completes when its final output is accepted. The handler delivers the
+returned framework outcome to the transport.
 
 ## Approvals
 
-A tool declared with `requires_approval=` asks before it runs: the call
+A tool declared with `needs_approval=` asks before it runs: the call
 returns its read-back as a verbatim `InputRequired`, and the person's next
 message answers it. The body runs only when the model repeats the same call
 after that answer; the schema has no approval flag the model could set. See
 [tools.md](tools.md).
 
-## Conversational agent tasks
+An agent exposed with `as_tool(needs_approval=True)` asks permission before
+starting the specialist. The router retains the pending invocation and its
+arguments in routing state. The application explicitly saves that state; on
+the next request it loads it and passes the person's reply to the router.
+Approval to start the specialist does not authorize actions inside it: a
+reservation or payment tool can require its own approval. See
+[agent-tool approvals](agent-router.md#approval-before-starting-a-child).
 
-The [agent task API](agent-tasks.md) uses shared Agent
-configuration, persisted draft state, and typed final output. Every human
-wait is represented as InputRequired on both calls and text:
+## Routed conversations
 
-- Intermediate model text saves an agent-loop receiver. The next human
-  message resumes that agent without an invented tool call.
-- Tool-returned InputRequired saves the real pending call. The person's
-  reply fills its output, then the agent continues; the tool is not recalled.
-
-Neither needs a Python callback. Typed final output or an accepted output
-function result completes the execution; a conversational question does not.
-A parent receives its child's result as tool output, then its LLM resumes.
-
-
-Graph steps, code-workflow waits, and external-service wake-ups are deferred.
+[AgentRouter](agent-router.md) specifies task completion, human input, frames,
+agent-tool calls, and child completion. It retains the active frame while waiting for a person.
+The next message starts a new invocation of that frame's agent. Accepted child output fills the parent tool call and starts a fresh parent
+invocation.

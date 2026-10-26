@@ -6,7 +6,7 @@ caller's session, the conversation as a ``chat_ctx`` part; without it, the reque
 expert's ``working`` status messages as progress, the artifact text as the result.
 
 Attached to an ``Agent`` as ``tools=[A2ADelegate(url)]`` it is one tool, named and described
-from the expert's card, the same in a text run and on a call (docs/multi-agent.md).
+from the expert's card, the same in a text run and on a call (docs/agents.md#working-with-other-agents).
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ class A2ADelegate(Delegate, Toolset):
     ``contextId`` and writes its own lane of that session; outside a turn, with no session to
     name, it gets the conversation as a ``chat_ctx`` part and keeps a session of its own. Any
     other A2A server gets the request as text and nothing else, and keeps a context of its own
-    (docs/multi-agent.md). ``token`` omitted, an expert on the project's
+    (docs/agents.md#working-with-other-agents). ``token`` omitted, an expert on the project's
     own host (``LIVEKIT_URL``) gets a project token minted from ``LIVEKIT_API_KEY`` and
     ``LIVEKIT_API_SECRET``; an expert anywhere else gets none.
     """
@@ -142,11 +142,11 @@ class A2ADelegate(Delegate, Toolset):
 
         record_delegation(ctx.function_call, result)
         exact = result.verbatim
-        if result.input_required:
+        if isinstance(result.output, InputRequired):
             # the expert asked the person something: asked as it wrote it when it said so, and
             # what they say next is this tool's next request, as they said it
-            verbatim = exact is not None and exact.strip() == result.input_required.strip()
-            return InputRequired(result.input_required, tool=self._tool, verbatim=verbatim)
+            verbatim = exact is not None and exact.strip() == result.output.question.strip()
+            return InputRequired(result.output.question, tool=self._tool, verbatim=verbatim)
         answer = result.output if isinstance(result.output, str) else str(result.output or "")
         if exact and answer.startswith(exact):
             # the person gets the exact part as written; the rest is the model's to phrase
@@ -191,11 +191,10 @@ class A2ADelegate(Delegate, Toolset):
             raise DelegationFailed(text or "the delegation failed")
 
         return DelegationResult(
-            output=text,
+            output=InputRequired(text) if update.state == "input-required" else text,
             state=update.state,
             task_id=update.task_id or reply.task_id,
             context_id=update.context_id or reply.thread_id,
-            input_required=text if update.state == "input-required" else None,
             new_messages=answer_message(text),
             usage=usage,
             interrupted=update.state == "canceled",

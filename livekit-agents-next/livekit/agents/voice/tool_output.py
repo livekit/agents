@@ -6,7 +6,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from .. import llm
 from ..llm import ChatContext, utils as llm_utils
@@ -20,17 +20,12 @@ from ..llm.tool_context import (
     Transition,
     is_transition,
 )
-from ..log import logger
-
-if TYPE_CHECKING:
-    from .agent import Agent
 
 
 @dataclass
 class ToolExecutionOutput:
     fnc_call: llm.FunctionCall
     fnc_call_out: llm.FunctionCallOutput
-    agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
     transition: Transition | None = None
@@ -67,7 +62,6 @@ def _transition_output(fnc_call: llm.FunctionCall, transition: Transition) -> To
             is_error=is_error,
             reply_required=False,
         ),
-        agent_task=None,
         raw_output=transition,
         raw_exception=None,
         transition=transition,
@@ -94,8 +88,6 @@ def _json_default(value: Any) -> Any:
 def make_tool_output(
     *, fnc_call: llm.FunctionCall, output: Any, exception: BaseException | None
 ) -> ToolExecutionOutput:
-    from .agent import Agent
-
     if isinstance(output, BaseException):
         exception = output
         output = None
@@ -110,65 +102,21 @@ def make_tool_output(
         return ToolExecutionOutput(
             fnc_call=fnc_call.model_copy(),
             fnc_call_out=base_result.fnc_call_out,
-            agent_task=None,
             raw_output=output,
             raw_exception=exception,
         )
 
-    task: Agent | None = None
     fnc_out: Any = output
-    if (
-        isinstance(output, list)
-        or isinstance(output, set)
-        or isinstance(output, frozenset)
-        or isinstance(output, tuple)
-    ):
-        agent_tasks = [item for item in output if isinstance(item, Agent)]
-        other_outputs = [item for item in output if not isinstance(item, Agent)]
-        if len(agent_tasks) > 1:
-            logger.error(
-                f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
-            )
-            return ToolExecutionOutput(
-                fnc_call=fnc_call.model_copy(),
-                fnc_call_out=llm.FunctionCallOutput(
-                    name=fnc_call.name,
-                    call_id=fnc_call.call_id,
-                    output="the tool returned more than one agent",
-                    is_error=True,
-                ),
-                agent_task=None,
-                raw_output=output,
-                raw_exception=exception,
-            )
-
-        task = next(iter(agent_tasks), None)
-
-        # fmt: off
-        fnc_out = (
-            other_outputs if task is None
-            else None if not other_outputs
-            else other_outputs[0] if len(other_outputs) == 1
-            else other_outputs
-        )
-        # fmt: on
-
-    elif isinstance(fnc_out, Agent):
-        task = fnc_out
-        fnc_out = None
-
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
     if not isinstance(fnc_out, llm.ToolResult):
-        # a tool with nothing to say, such as a bare handoff, expects no reply
+        # a tool with nothing to say expects no reply
         base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),
         fnc_call_out=base_result.fnc_call_out,
-        agent_task=task,
         raw_output=output,
         raw_exception=exception,
     )

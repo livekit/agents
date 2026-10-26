@@ -7,7 +7,6 @@ use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
-use crate::workflows::{TaskHandle, TaskId};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{ChatContext, Maybe};
@@ -35,40 +34,10 @@ pub enum Command {
     /// `update_options(keyterms=..)`: replaces the user list; the effective list is pushed to the
     /// STT.
     SetStaticKeyterms(Vec<String>),
-    Task(TaskCommand),
     Recorder(RecorderCommand),
     Dtmf(DtmfCommand),
     /// Answered by `RunStarted` or `RunRefused`, settled by `RunSettled`.
     Run(Box<crate::run_result::RunSpec>),
-}
-
-/// `AgentTask.__await_impl`: the awaiter parks on its [`TaskHandle`], which resolves on `Exited`
-/// once the parent frame is back.
-#[derive(Debug, lk_agents_abi::Vocabulary)]
-pub enum TaskCommand {
-    Enter(Box<TaskEntry>),
-}
-
-pub struct TaskEntry {
-    pub handle: TaskHandle<lk_agents_abi::HostRef>,
-    /// `previous`/`next` are the driver's to set.
-    pub frame: AgentUpdate,
-    /// `None` from `on_enter`/`on_exit`.
-    pub speech: Option<SpeechId>,
-    pub preserve_function_call_history: bool,
-    /// `None`: the awaiting speech's slot, then the driving frame's.
-    pub parent: Option<String>,
-}
-
-impl std::fmt::Debug for TaskEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TaskEntry")
-            .field("task", &self.handle.id())
-            .field("agent", &self.frame.agent)
-            .field("speech", &self.speech)
-            .field("preserve_function_call_history", &self.preserve_function_call_history)
-            .finish()
-    }
 }
 
 /// Monotonic within a session.
@@ -98,7 +67,6 @@ pub enum HookOutcome {
     Returned,
     /// `StopResponse` is one of them.
     Turn(Vec<crate::agent::TurnEdit>),
-    Described(Box<AgentUpdate>),
     Rendered(String),
     Filler {
         text: Option<String>,
@@ -217,7 +185,6 @@ impl Command {
                 UpdateTools, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
             Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure),
             Command::Ivr(c) => leaf!(c; IvrCommand: Start, SeedTranscript, Close, AddTools),
-            Command::Task(c) => leaf!(c; TaskCommand: Enter),
             Command::Dtmf(c) => leaf!(c; DtmfCommand: Start, Digit, Stop),
             Command::Video(_) => "Command::Video",
             Command::Close(_) => "Command::Close",
@@ -276,12 +243,6 @@ impl From<ActivityCommand> for Command {
 impl From<TurnCommand> for Command {
     fn from(c: TurnCommand) -> Command {
         Command::Turn(c)
-    }
-}
-
-impl From<TaskCommand> for Command {
-    fn from(c: TaskCommand) -> Command {
-        Command::Task(c)
     }
 }
 
@@ -377,7 +338,7 @@ pub enum SpeechCommand {
     ReleaseUserTurn,
     /// Refused quietly on a done handle.
     SetAllowInterruptions { speech: SpeechId, allow: bool },
-    /// `AgentTask.complete(result)` from `speech`'s tool: the run ending on that speech reads it as
+    /// an accepted output from `speech`'s tool: the run ending on that speech reads it as
     /// output.
     SetRunOutput { speech: SpeechId, output: crate::run_result::RunOutput },
     /// A background tool speaks again after its first `ctx.update()`: the driver mints and commits
@@ -573,25 +534,7 @@ pub struct AgentUpdate {
     pub vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
     /// **Replaced whole** and re-resolved over the resulting legs.
     pub options: crate::agent_activity::options::SessionPatch,
-    /// `Close` runs the leaving frame's `on_exit`; `Pause` keeps it for a later resume, no hook.
-    pub previous: PreviousActivity,
-    /// `Start` runs the arriving frame's `on_enter`; `Resume` does not.
-    pub next: NewActivity,
     pub call: Option<RequestId>,
-    /// `None` is a host handoff.
-    pub task: Option<TaskId>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviousActivity {
-    Close,
-    Pause,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NewActivity {
-    Start,
-    Resume,
 }
 
 /// Checked before and after the drain. A resume while closing is not refused.
@@ -599,8 +542,6 @@ pub enum NewActivity {
 pub enum HandoffRefused {
     Closing,
     DrainRefused,
-    /// Or never answered within the bound.
-    NotDescribed,
 }
 
 /// The provider a three-state argument hands over.
@@ -615,11 +556,7 @@ impl Command {
     /// The providers it hands the core.
     pub fn resources(&self) -> Vec<ResourceId> {
         match self {
-            Command::Activity(ActivityCommand::Update(update))
-            | Command::HookDone { outcome: HookOutcome::Described(update), .. } => {
-                update.resources().collect()
-            }
-            Command::Task(TaskCommand::Enter(entry)) => entry.frame.resources().collect(),
+            Command::Activity(ActivityCommand::Update(update)) => update.resources().collect(),
             Command::Activity(ActivityCommand::SetAudioOutput(Some(out))) => vec![out.id],
             Command::Activity(ActivityCommand::SetTranscriptionOutput(Some(out))) => vec![out.id],
             Command::Activity(ActivityCommand::UpdateModels { stt, vad, llm, tts }) => [
@@ -661,10 +598,7 @@ impl AgentUpdate {
             stt: Maybe::NotGiven,
             vad: Maybe::NotGiven,
             options: Default::default(),
-            previous: PreviousActivity::Close,
-            next: NewActivity::Start,
             call: None,
-            task: None,
         }
     }
 
@@ -691,8 +625,6 @@ impl std::fmt::Debug for AgentUpdate {
             .field("stt", &self.stt)
             .field("vad", &self.vad)
             .field("options", &self.options)
-            .field("previous", &self.previous)
-            .field("next", &self.next)
             .field("call", &self.call)
             .finish()
     }

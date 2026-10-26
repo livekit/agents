@@ -379,17 +379,12 @@ mod tests {
             );
 
             let d = py
-                .eval(
-                    c"{'policy': 'interrupt', 'debounce': 0, 'wait_timeout': 1.5, 'state_default': {'n': 1}}",
-                    None,
-                    None,
-                )
+                .eval(c"{'policy': 'interrupt', 'debounce': 0, 'wait_timeout': 1.5}", None, None)
                 .unwrap();
             let o: TurnOptions = parse_request(&d, "options").unwrap();
             assert_eq!(o.policy, PolicySpec::All(Policy::Interrupt));
             assert_eq!(o.debounce, DebounceSpec::All(Duration::ZERO));
             assert_eq!(o.wait_timeout, Some(Duration::from_millis(1500)));
-            assert_eq!(o.state_default, Some(serde_json::json!({"n": 1})));
 
             let d = py
                 .eval(c"{'policy': {'sms': 'batch'}, 'debounce': {'sms': 2.0}}", None, None)

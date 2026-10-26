@@ -82,25 +82,34 @@ This is the `v2.0` branch: Agents 2.0, in beta. `docs/README.md` indexes the des
 per page. Feature documents describe the end state without implementation-status labels;
 inspect the implementation to determine what remains to change.
 
+The feature documents define the intended API. Do not preserve conflicting behavior merely
+because current code or tests rely on it. Discuss unresolved API choices before changing the
+specification; implementation cleanup must follow the agreed contracts.
+
 ### Core Concepts
 - **Fast brain / slow brain**: the pattern every example follows. A frontend agent talks to the
-  person (persona, pacing, voice) and its one tool is an `A2ADelegate` to a backend agent that
+  person (persona, pacing, voice) and its one tool is an `A2AAgent(...).as_tool()` to a backend agent that
   holds the tools, the state and the systems of record.
-- **Agent** (`voice/agent.py`): configuration (instructions, models, tools, `deps_type`,
-  `state_type`, `output_type`), built once at import and shared. `await agent.run(message,
-  message_history=, state=, deps=)` is one turn and returns a `RunResult`.
-- **RunContext[Deps, State]**: what tools and `@agent.instructions` receive: `ctx.deps` (per run,
-  never saved), `ctx.state` (saved on the thread), `ctx.thread`, `ctx.live_session`, `ctx.update()`.
-- **Transitions** (`InputRequired`, `Completed`, `Failed`, `Rejected`, `Working`): what a tool
-  returns to say what happens next; `InputRequired` waits for the person.
-- **AgentTask[Output, State]**: a multi-turn flow awaited from a tool, on a call and in text.
-- **Thread**: one durable conversation (`AT_...` id, the A2A `contextId`), with one lane per
-  agent holding its history, state, agent stack and tasks; stored in agent-db.
+- **Agent** (`voice/agent.py`): shared configuration, `Agent[Context]`, and validated
+  `output_type`. `await agent.run(message, message_history=, context=)` executes that agent.
+- **RunContext[Context]**: tools and instruction functions receive `ctx.context`,
+  `ctx.thread`, `ctx.live_session`, `ctx.store`, and `ctx.update()`.
+- **RunResult[Output]**: a discriminated result; `status="completed"` exposes the typed
+  `output`, while `status="input_required"` exposes `question`. Tools can request input
+  with `InputRequired(...)`; framework outcomes remain separate from `output_type`.
+- **AgentRouter**: optional orchestration of agents used as tools. Each child requires
+  `output_type`; accepted final output completes it and fills the parent tool call.
+  It returns an envelope with `result: RunResult` and `state: RouterState`. Application code
+  supplies and persists routing state. See `docs/agent-router.md`.
+- **Context persistence**: `persisted(...)` marks fields; `load_context` and `save_context`
+  are explicit. Runtime services remain application-supplied objects.
+- **Thread**: one conversation (`AT_...` id, the A2A `contextId`), with configured handler lanes,
+  histories and transport tasks stored in agent-db.
 - **AgentHandler / AgentServer** (`worker.py`): a module declares an agent's doors on an
   `AgentHandler(lane=)`: `rtc_session()` (a call, run on a `LiveSession`) and
   `a2a_session(endpoint=)` (an A2A text endpoint). The entrypoint's `AgentServer` serves them
   with `server.add(...)`; the examples' `main.py` adds a front desk and a back office.
-- **Approval and verbatim**: `requires_approval=` holds approval in the framework (the body runs
+- **Approval and verbatim**: `needs_approval=` holds approval in the framework (the body runs
   only on a repeat of the call after the person answered its read-back). The agent facing the
   person words questions and results unless they are `verbatim=True`.
 - **LiveSession** (`voice/agent_session.py`): the runtime a call's room attaches to: models, turn
@@ -109,13 +118,12 @@ inspect the implementation to determine what remains to change.
 ### Key Directories
 ```
 livekit-agents/livekit/agents/
-├── voice/              # Agent, LiveSession, AgentTask, room I/O, transcription
+├── voice/              # Agent, LiveSession, room I/O, transcription
 ├── a2a/                # The text door: A2A endpoint, codec, LiveKit extension, AgentClient, tokens
-├── delegation/         # Delegate, A2ADelegate (the delegate toolset), record_delegation
+├── delegation/         # Internal remote tool adapter, progress and task correlation
 ├── storage/            # AgentDBStorage, thread resolution, the call's lane (live.py)
-├── graph.py            # BaseNode, End, Graph
 ├── llm/                # Chat context, tools and toolsets, MCP, LLM and realtime engines
-├── beta/workflows/     # Prebuilt AgentTasks (email, phone, address, credit card, DOB, TaskGroup)
+├── beta/workflows/     # Domain result types, validation helpers and transfer operations
 ├── stt/, tts/          # Speech-to-text and text-to-speech, fallback and stream adapters
 ├── inference/          # Hosted model inference (LLM, STT, TTS, realtime)
 ├── ipc/                # Process pool, job processes, the ASGI app endpoint streams are served into
@@ -148,7 +156,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 2. The platform resolves the thread (the `contextId`, or `thread_id` in the dispatch metadata) or creates one.
 3. The worker loads the agent's lane from agent-db and takes its lease.
 4. The handler runs `agent.run(...)` (text) or the `LiveSession` runs the agent (call).
-5. The framework commits the lane (history, state, agent stack) and releases the lease.
+5. The framework commits history and explicitly saved context fields and releases the lease.
 
 ## Environment Variables
 - `LIVEKIT_URL`: WebSocket URL of LiveKit server

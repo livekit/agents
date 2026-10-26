@@ -1,34 +1,23 @@
-from .address import GetAddressResult, GetAddressTask
-from .credit_card import GetCreditCardResult, GetCreditCardTask
-from .dob import GetDOBResult, GetDOBTask
-from .dtmf_inputs import GetDtmfResult, GetDtmfTask
-from .email_address import GetEmailResult, GetEmailTask
-from .name import GetNameResult, GetNameTask
-from .phone_number import GetPhoneNumberResult, GetPhoneNumberTask
-from .task_group import TaskCompletedEvent, TaskGroup, TaskGroupResult
+from .address import GetAddressResult
+from .credit_card import GetCreditCardResult
+from .dob import GetDOBResult
+from .dtmf_inputs import GetDtmfResult
+from .email_address import GetEmailResult
+from .name import GetNameResult
+from .phone_number import GetPhoneNumberResult
 from .utils import WorkflowInstructions
-from .warm_transfer import TwilioConnectorWarmTransferTask, WarmTransferResult, WarmTransferTask
+from .warm_transfer import TwilioConnectorWarmTransfer, WarmTransfer, WarmTransferResult
 
 __all__ = [
-    "GetEmailTask",
     "GetEmailResult",
-    "GetAddressTask",
     "GetAddressResult",
-    "GetDtmfTask",
-    "GetDOBResult",
-    "GetDOBTask",
     "GetDtmfResult",
-    "WorkflowInstructions",
+    "GetDOBResult",
     "GetCreditCardResult",
-    "GetCreditCardTask",
-    "GetNameTask",
     "GetNameResult",
-    "GetPhoneNumberTask",
     "GetPhoneNumberResult",
-    "TaskCompletedEvent",
-    "TaskGroup",
-    "TaskGroupResult",
-    "WarmTransferTask",
-    "TwilioConnectorWarmTransferTask",
+    "WorkflowInstructions",
+    "WarmTransfer",
+    "TwilioConnectorWarmTransfer",
     "WarmTransferResult",
 ]

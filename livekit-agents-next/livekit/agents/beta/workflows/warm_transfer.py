@@ -19,7 +19,7 @@ from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice import room_io
-from ...voice.agent import Agent, AgentTask
+from ...voice.agent import Agent
 from ...voice.agent_session import LiveSession
 from ...voice.background_audio import (
     AudioConfig,
@@ -41,7 +41,7 @@ class WarmTransferResult:
     human_agent_identity: str
 
 
-class WarmTransferTask(AgentTask[WarmTransferResult]):
+class WarmTransfer:
     def __init__(
         self,
         sip_call_to: NotGivenOr[str] = NOT_GIVEN,
@@ -66,7 +66,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         extra_instructions: str = "",
         target_phone_number: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        """Initialize a WarmTransferTask to dial a human agent via SIP.
+        """Initialize a WarmTransfer to dial a human agent via SIP.
 
         Args:
             sip_call_to: The phone number or SIP URI to dial for the human agent
@@ -84,8 +84,8 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 to pause ~0.5s each before/between digits (``"wwww1234#"`` waits ~2s, useful
                 when the destination plays a greeting before accepting input).
             ringing_timeout: How long to wait, in seconds, for the human agent to answer
-                before giving up on the call. When the timeout elapses the task completes
-                with a ``ToolError`` and the caller conversation resumes.
+                before giving up on the call. Failure raises ``ToolError`` and restores
+                the caller session I/O.
             hold_audio: Audio played to the caller while they are on hold during the
                     transfer.
             extra_instructions: Extra instructions to append to the base instructions
@@ -106,10 +106,15 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             )
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
-        super().__init__(
+        self._agent = Agent(
             instructions=instructions,
             turn_detection=turn_detection,
-            tools=tools or [],
+            tools=[
+                *(tools or []),
+                self.connect_to_caller,
+                self.decline_transfer,
+                self.voicemail_detected,
+            ],
             stt=stt,
             vad=vad,
             llm=llm,
@@ -117,6 +122,8 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             allow_interruptions=allow_interruptions,
         )
 
+        self.session: LiveSession
+        self._result: asyncio.Future[WarmTransferResult] = asyncio.Future()
         self._caller_room: rtc.Room | None = None
         self._human_agent_sess: LiveSession | None = None
         self._human_agent_failed_fut: asyncio.Future[None] = asyncio.Future()
@@ -198,7 +205,22 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             prev_convo += f"{role}: {msg.text_content}\n"
         return prev_convo
 
-    async def on_enter(self) -> None:
+    async def run(self, session: LiveSession) -> WarmTransferResult:
+        """Dial and bridge a human participant during this live operation."""
+        self.session = session
+        try:
+            await self._start()
+            return await self._result
+        finally:
+            if not self._result.done():
+                self._result.cancel()
+            if self._human_agent_sess is not None:
+                self._human_agent_sess.shutdown(drain=False)
+            if self._hold_audio_handle is not None:
+                self._hold_audio_handle.stop()
+            self._set_io_enabled(True)
+
+    async def _start(self) -> None:
         job_ctx = get_job_context()
         self._caller_room = job_ctx.room
 
@@ -277,7 +299,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         job_ctx.delete_room(room_name=self._caller_room.name)
 
     def _set_result(self, result: WarmTransferResult | Exception) -> None:
-        if self.done():
+        if self._result.done():
             return
 
         if self._human_agent_sess:
@@ -289,7 +311,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             self._hold_audio_handle = None
 
         self._set_io_enabled(True)
-        self._complete(result)
+        if isinstance(result, Exception):
+            self._result.set_exception(result)
+        else:
+            self._result.set_result(result)
 
     async def _dial_human_agent(self) -> LiveSession:
         assert self._caller_room is not None
@@ -326,18 +351,8 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             tts=self.session.tts or NOT_GIVEN,
             turn_detection=self.session.turn_detection or NOT_GIVEN,
         )
-        # create a copy of this AgentTask
-        human_agent_agent = Agent(
-            instructions=self.instructions,
-            turn_detection=self.turn_detection,
-            stt=self.stt,
-            vad=self.vad,
-            llm=self.llm,
-            tts=self.tts,
-            tools=self.tools,
-            allow_interruptions=self.allow_interruptions,
-        )
-        human_agent_chat_ctx = self.chat_ctx.copy()
+        human_agent_agent = self._agent
+        human_agent_chat_ctx = self.session.history.copy()
         try:
             await room.connect(ws_url, token)
             # Resume the caller conversation if the human agent hangs up.
@@ -448,7 +463,7 @@ class _TwilioAPIError(RuntimeError):
         )
 
 
-class TwilioConnectorWarmTransferTask(WarmTransferTask):
+class TwilioConnectorWarmTransfer(WarmTransfer):
     def __init__(
         self,
         phone_number: str,
@@ -492,7 +507,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             If Twilio rejects the preserved caller ID (HTTP 400 with error 21210 or
             21212), the call is retried once from ``twilio_from_number`` without the
             token. Other failures propagate without a retry to avoid duplicate calls.
-            Other arguments have the same meaning as in ``WarmTransferTask``.
+            Other arguments have the same meaning as in ``WarmTransfer``.
         """
         self._phone_number = phone_number
         self._twilio_from_number = twilio_from_number

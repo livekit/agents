@@ -49,7 +49,7 @@ from .tool_executor import _build_executor_map
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
-    from .agent import Agent, ModelSettings
+    from .agent import ModelSettings
     from .agent_session import LiveSession
     from .transcription.text_transforms import TextTransforms
 
@@ -1156,7 +1156,6 @@ def _tool_description(tool: llm.Tool | None) -> str | None:
 class ToolExecutionOutput:
     fnc_call: llm.FunctionCall
     fnc_call_out: llm.FunctionCallOutput
-    agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
     transition: Transition | None = None
@@ -1193,7 +1192,6 @@ def _transition_output(fnc_call: llm.FunctionCall, transition: Transition) -> To
             is_error=is_error,
             reply_required=False,
         ),
-        agent_task=None,
         raw_output=transition,
         raw_exception=None,
         transition=transition,
@@ -1220,8 +1218,6 @@ def _json_default(value: Any) -> Any:
 def make_tool_output(
     *, fnc_call: llm.FunctionCall, output: Any, exception: BaseException | None
 ) -> ToolExecutionOutput:
-    from .agent import Agent
-
     if isinstance(output, BaseException):
         exception = output
         output = None
@@ -1236,65 +1232,21 @@ def make_tool_output(
         return ToolExecutionOutput(
             fnc_call=fnc_call.model_copy(),
             fnc_call_out=base_result.fnc_call_out,
-            agent_task=None,
             raw_output=output,
             raw_exception=exception,
         )
 
-    task: Agent | None = None
     fnc_out: Any = output
-    if (
-        isinstance(output, list)
-        or isinstance(output, set)
-        or isinstance(output, frozenset)
-        or isinstance(output, tuple)
-    ):
-        agent_tasks = [item for item in output if isinstance(item, Agent)]
-        other_outputs = [item for item in output if not isinstance(item, Agent)]
-        if len(agent_tasks) > 1:
-            logger.error(
-                f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
-            )
-            return ToolExecutionOutput(
-                fnc_call=fnc_call.model_copy(),
-                fnc_call_out=llm.FunctionCallOutput(
-                    name=fnc_call.name,
-                    call_id=fnc_call.call_id,
-                    output="the tool returned more than one agent",
-                    is_error=True,
-                ),
-                agent_task=None,
-                raw_output=output,
-                raw_exception=exception,
-            )
-
-        task = next(iter(agent_tasks), None)
-
-        # fmt: off
-        fnc_out = (
-            other_outputs if task is None
-            else None if not other_outputs
-            else other_outputs[0] if len(other_outputs) == 1
-            else other_outputs
-        )
-        # fmt: on
-
-    elif isinstance(fnc_out, Agent):
-        task = fnc_out
-        fnc_out = None
-
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
     if not isinstance(fnc_out, llm.ToolResult):
-        # a tool with nothing to say, such as a bare handoff, expects no reply
+        # a tool with nothing to say expects no reply
         base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),
         fnc_call_out=base_result.fnc_call_out,
-        agent_task=task,
         raw_output=output,
         raw_exception=exception,
     )
@@ -1303,13 +1255,9 @@ def make_tool_output(
 def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput:
     """The output to record for a tool that finished on an interrupted turn.
 
-    A handoff answers as a failure, since the interruption left it unapplied.
+    Interrupted tools do not request another model reply.
     """
     fnc_call_out = out.fnc_call_out
-    if out.agent_task is not None:
-        fnc_call_out.output = "the agent handoff was interrupted and did not happen"
-        fnc_call_out.is_error = True
-
     fnc_call_out.reply_required = False
     return fnc_call_out
 

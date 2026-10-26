@@ -33,13 +33,12 @@ on related capabilities. The examples show applications of these features.
 
 | Document | Feature |
 | --- | --- |
-| [agents.md](agents.md) | `Agent`: stateless definition, `run()`, `RunContext`, structured output, validators |
-| [planned-agents.md](planned-agents.md) | `run_stream`, `iter`, `toolsets=`, history processors, model-call hooks, capabilities |
+| [agents.md](agents.md) | `Agent`: definition, runs and results, context, agents as tools, local and remote delegation |
+| [planned-agents.md](planned-agents.md) | `iter`, filtered/prefixed toolsets, history processors, model-call hooks, capabilities |
 | [tools.md](tools.md) | `@agent.tool`, `@function_tool`, toolsets, MCP, approvals, errors |
 | [state-and-deps.md](state-and-deps.md) | typed context; explicit field load/save, scopes, and fresh runtime dependencies |
 | [human-in-the-loop.md](human-in-the-loop.md) | `InputRequired`, approvals, and the other transitions |
-| [agent-tasks.md](agent-tasks.md) | conversational tasks: draft state, automatic input waits, typed final output |
-| [code-workflows.md](code-workflows.md) | future graphs/workflows: requirements and extension points, no committed authoring API |
+| [agent-router.md](agent-router.md) | agents as tools, typed completion, human input, frames and histories |
 | [threads.md](threads.md) | what a thread is, how it is found, what it holds, `ctx.thread`, lifecycle |
 | [lanes.md](lanes.md) | one agent's part of a thread: history, state, the lease, run order |
 | [storage.md](storage.md) | what is saved, the backends, the unit of work |
@@ -50,12 +49,11 @@ on related capabilities. The examples show applications of these features.
 | [a2a.md](a2a.md) | the wire reference: the agent card, tasks, metadata keys, errors |
 | [a2a-live-ext.md](a2a-live-ext.md) | the LiveKit extension's specification |
 | [voice.md](voice.md) | `LiveSession`, the voice door, one thread for calls and texts |
-| [multi-agent.md](multi-agent.md) | delegation, handoff, local and remote experts |
 | [backend-api.md](backend-api.md) | the threads service, its history and tasks, thread grants, `AgentClient` |
 | [planned-backend-api.md](planned-backend-api.md) | `lk.threads`, watching a thread, the Node client |
 | [rust-core.md](rust-core.md) | the Rust core: crates, boundaries, bindings, testing, codebase rules |
-| [planned-rust-core.md](planned-rust-core.md) | the run unit of work in Rust, binding moves, CI checks, cores and the runtime (the voice core as a state machine) |
-| [examples/use-cases/](examples/use-cases/README.md) | fourteen complete agents, one idea each |
+| [planned-rust-core.md](planned-rust-core.md) | run ownership, host bindings, deterministic cores, runtime I/O, and verification |
+| [examples/use-cases/](examples/use-cases/README.md) | agent use cases, one idea each |
 
 ## Running it
 
@@ -73,10 +71,10 @@ on related capabilities. The examples show applications of these features.
 ## Words
 
 - **thread**: the conversation. It has an id the platform mints, a
-  history, a typed state, and tasks. The A2A `contextId` is its id.
+  history, explicitly saved application fields, and A2A tasks. The A2A `contextId` is its id.
 - **lane**: one agent's part of a thread. Each agent in a conversation has
-  its own history, state and tasks there, written by one run at a time.
+  its own transport history and A2A tasks there, written by one run at a time; local router frames remain separate.
 - **run**: one input to one result, tools included. A text message, a voice
-  turn. The framework loads the lane before a run and saves it after.
+  turn. The framework loads and commits transport records; application fields and routing state require explicit load/save.
 - **transition**: what a tool or a hook returns to say what happens next:
   `Completed`, `InputRequired`, `Working`, `Failed`, `Rejected`.

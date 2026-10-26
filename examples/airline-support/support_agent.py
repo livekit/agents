@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Annotated, Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 from skyline import (
@@ -11,7 +11,6 @@ from skyline import (
     CHANGE_FEE_EUR,
     LOST_BAG_CAP_EUR,
     POLICY,
-    BaggageFile,
     Booking,
     Skyline,
 )
@@ -24,10 +23,11 @@ from livekit.agents import (
     LiveSession,
     RunContext,
     RunResult,
+    ToolError,
     cli,
+    persisted,
 )
 from livekit.agents.a2a import A2ASessionContext
-from livekit.agents.graph import BaseNode, Edge, End, Graph, GraphRunContext
 from livekit.agents.storage import AgentDBStorage
 
 AUTO_PAY_LIMIT_EUR = 400  # above it a person signs the payment off
@@ -74,7 +74,7 @@ class TriageResult(BaseModel):
 
 @dataclass
 class Ticket:
-    """The graph's state, saved while it waits on the customer."""
+    """The customer's request, saved between separate agent invocations."""
 
     email: str = ""
     sender: str = ""
@@ -96,16 +96,14 @@ class Ticket:
         *,
         priority: Literal["low", "normal", "high"] = "normal",
         paid_eur: int = 0,
-    ) -> End[TriageResult]:
-        return End(
-            TriageResult(
-                action=action,
-                team=TEAM.get(self.kind) if self.kind else None,
-                priority=priority,
-                paid_eur=paid_eur,
-                reply_draft=self.draft,
-                reason=reason,
-            )
+    ) -> TriageResult:
+        return TriageResult(
+            action=action,
+            team=TEAM.get(self.kind) if self.kind else None,
+            priority=priority,
+            paid_eur=paid_eur,
+            reply_draft=self.draft,
+            reason=reason,
         )
 
     def brief(self) -> str:
@@ -125,10 +123,11 @@ LLM = "google/gemma-4-31b-it"
 T = TypeVar("T")
 
 
-async def call(agent: Agent[Any, Any, T], prompt: str) -> T:
+async def call(agent: Agent[Any, T], prompt: str) -> T:
     """An agent called as a function: a fresh conversation, a typed output."""
     output = (await agent.run(prompt)).output
-    assert output is not None  # these agents have no tools, so nothing asks for input
+    if output is None or isinstance(output, InputRequired):
+        raise ToolError("The specialist needs more information; ask the customer before retrying.")
     return output
 
 
@@ -168,83 +167,14 @@ skyline = Skyline.seeded()
 
 
 @dataclass
-class Classify(BaseNode[Ticket, None, TriageResult]):
-    email: Email
-
-    async def run(
-        self, ctx: GraphRunContext[Ticket]
-    ) -> LookUpBooking | Annotated[End[TriageResult], Edge(label="close")]:
-        ticket = ctx.state
-        ticket.sender = self.email.sender
-        ticket.email = (
-            f"From: {self.email.sender}\nSubject: {self.email.subject}\n\n{self.email.body}"
-        )
-        triage = await call(classifier, ticket.email)
-        ticket.kind = triage.kind
-        ticket.booking_ref, ticket.pir_ref = triage.booking_ref, triage.pir_ref
-        if triage.kind == "spam":
-            return ticket.end("close", "spam, or nothing to act on", priority="low")
-        return LookUpBooking()
-
-
-@dataclass
-class LookUpBooking(BaseNode[Ticket, None, TriageResult]):
-    async def run(
-        self, ctx: GraphRunContext[Ticket]
-    ) -> (
-        EU261
-        | Baggage
-        | FareRules
-        | InputRequired
-        | Annotated[End[TriageResult], Edge(label="to_human")]
-    ):
-        ticket = ctx.state
-        if ctx.reply:  # the answer to this node's question
-            said = ctx.reply.upper()
-            if found := BOOKING_REF.search(said):
-                ticket.booking_ref = found.group()
-            if found := PIR_REF.search(said):
-                ticket.pir_ref = found.group()
-
-        ref = ticket.booking_ref
-        booking = skyline.find(ref, ticket.sender) if ref else None
-        if booking is None:
-            if ref is None:
-                return ask(
-                    ticket, "What is your booking reference? It has six characters, like SKY4F2."
-                )
-            return ask(
-                ticket,
-                f"I could not find booking {ref} under {ticket.sender}. Could you "
-                "check the booking reference?",
-            )
-
-        ticket.booking = booking
-        if ticket.kind == "delay_or_cancellation":
-            return EU261(booking)
-        if ticket.kind == "baggage":
-            bag = skyline.bags.get((ticket.pir_ref or "").strip().upper())
-            if bag is None or bag.booking_ref != booking.ref:
-                return ask(
-                    ticket,
-                    "What is the reference on the report the baggage desk gave you? It looks "
-                    "like AMSSK10422.",
-                )
-            return Baggage(booking, bag)
-        return FareRules(booking, refund=ticket.kind == "refund")
-
-
-def ask(ticket: Ticket, question: str) -> InputRequired | End[TriageResult]:
-    """The customer is asked, up to MAX_ASKS times; then a person takes over."""
-    if ticket.asked >= MAX_ASKS:
-        return ticket.end("to_human", "the booking could not be identified")
-    ticket.asked += 1
-    return InputRequired(question)
+class SupportContext:
+    ticket: Ticket = persisted(default_factory=Ticket)
 
 
 def owed(ticket: Ticket, booking: Booking, due: int) -> int:
-    """What is still due once earlier payments on the booking are taken off."""
-    if paid := skyline.paid_eur(booking.ref):
+    """Remaining entitlement after payments already made for the booking."""
+    paid = skyline.paid_eur(booking.ref)
+    if paid:
         ticket.facts.append(f"EUR {paid} was already paid on this booking")
     return max(due - paid, 0)
 
@@ -253,136 +183,96 @@ def eu261_band(distance_km: int) -> int:
     return 250 if distance_km <= 1500 else 400 if distance_km <= 3500 else 600
 
 
-@dataclass
-class EU261(BaseNode[Ticket]):
-    booking: Booking
+def ask(ticket: Ticket, question: str) -> InputRequired | TriageResult:
+    if ticket.asked >= MAX_ASKS:
+        return ticket.end("to_human", "the booking could not be identified")
+    ticket.asked += 1
+    return InputRequired(question)
 
-    async def run(self, ctx: GraphRunContext[Ticket]) -> DraftReply:
+
+async def resolve_ticket(ticket: Ticket) -> TriageResult | InputRequired:
+    if ticket.kind == "spam":
+        return ticket.end("close", "spam, or nothing to act on", priority="low")
+    booking = skyline.find(ticket.booking_ref, ticket.sender) if ticket.booking_ref else None
+    if booking is None:
+        return ask(ticket, "What is your six-character booking reference, such as SKY4F2?")
+    ticket.booking = booking
+    if question := calculate_due(ticket, booking):
+        return ask(ticket, question.question)
+    for _ in range(MAX_ROUNDS):
+        prompt = ticket.brief()
+        if ticket.draft and ticket.review_notes:
+            prompt += f"\nYour last draft: {ticket.draft}\nReviewer: {ticket.review_notes[-1]}"
+        ticket.draft = await call(writer, prompt)
+        ticket.rounds += 1
+        verdict = await call(reviewer, f"{ticket.brief()}\nDraft reply: {ticket.draft}")
+        if not verdict.approved:
+            ticket.review_notes.append(verdict.objection)
+            continue
+        if ticket.amount_eur == 0:
+            return ticket.end("resolved", "nothing to pay")
+        if ticket.amount_eur > AUTO_PAY_LIMIT_EUR:
+            return ticket.end(
+                "to_human", f"EUR {ticket.amount_eur} requires human approval", priority="high"
+            )
+        reason = "; ".join(ticket.facts)
+        skyline.pay(booking.ref, ticket.amount_eur, reason)
+        return ticket.end("resolved", reason, paid_eur=ticket.amount_eur)
+    return ticket.end("to_human", "the reply failed review twice")
+
+
+def calculate_due(ticket: Ticket, booking: Booking) -> InputRequired | None:
+    ticket.facts.clear()
+    ticket.amount_eur = 0
+    if ticket.kind == "delay_or_cancellation":
         due = 0
-        for number in self.booking.flights:
+        for number in booking.flights:
             f = skyline.flights[number]
             route = f"{f.number} {f.origin}-{f.destination} ({f.distance_km} km)"
             if f.actual_arrival is None:
                 notice = f.cancellation_notice_days
                 disrupted = notice is None or notice < 14
-                ctx.state.facts.append(f"{route} was cancelled {notice} days ahead: {f.cause}")
+                ticket.facts.append(f"{route} was cancelled {notice} days ahead: {f.cause}")
             else:
                 disrupted = f.delay >= timedelta(hours=3)
                 minutes = int(f.delay.total_seconds()) // 60
-                ctx.state.facts.append(
+                ticket.facts.append(
                     f"{route} arrived {minutes // 60}h{minutes % 60:02d} late: {f.cause or 'on time'}"
                 )
             if disrupted and f.extraordinary:
-                ctx.state.facts.append(f"{f.cause} is an extraordinary circumstance: nothing due")
+                ticket.facts.append(f"{f.cause} is an extraordinary circumstance: nothing due")
             elif disrupted:
                 due = max(due, eu261_band(f.distance_km))
-        ctx.state.amount_eur = owed(ctx.state, self.booking, due)
-        return DraftReply()
-
-
-@dataclass
-class Baggage(BaseNode[Ticket]):
-    booking: Booking
-    bag: BaggageFile
-
-    async def run(self, ctx: GraphRunContext[Ticket]) -> DraftReply:
-        b = self.bag
+        ticket.amount_eur = owed(ticket, booking, due)
+    elif ticket.kind == "baggage":
+        bag = skyline.bags.get((ticket.pir_ref or "").strip().upper())
+        if bag is None or bag.booking_ref != booking.ref:
+            return InputRequired("What is the baggage report reference, such as AMSSK10422?")
+        b = bag
         if b.status == "lost":
             due = min(b.declared_value_eur, LOST_BAG_CAP_EUR)
-            ctx.state.facts.append(
-                f"bag {b.pir} is lost, declared value EUR {b.declared_value_eur}"
-            )
+            ticket.facts.append(f"bag {b.pir} is lost, declared value EUR {b.declared_value_eur}")
         else:
             due = min(b.receipts_eur, b.days_late * BAG_DAILY_ALLOWANCE_EUR)
-            ctx.state.facts.append(
-                f"bag {b.pir} is {b.status.replace('_', ' ')} after {b.days_late} days, "
-                f"receipts EUR {b.receipts_eur}"
+            ticket.facts.append(
+                f"bag {b.pir} is {b.status.replace('_', ' ')} after {b.days_late} days, receipts EUR {b.receipts_eur}"
             )
-        ctx.state.amount_eur = owed(ctx.state, self.booking, due)
-        return DraftReply()
-
-
-@dataclass
-class FareRules(BaseNode[Ticket]):
-    booking: Booking
-    refund: bool
-
-    async def run(self, ctx: GraphRunContext[Ticket]) -> DraftReply:
-        b = self.booking
-        if self.refund:
-            ctx.state.facts.append(
-                f"the {b.fare_class} fare is {'' if b.refundable else 'not '}refundable"
+        ticket.amount_eur = owed(ticket, booking, due)
+    else:
+        b = booking
+        if ticket.kind == "refund":
+            ticket.facts.append(
+                f"the {b.fare_class} fare is {('' if b.refundable else 'not ')}refundable"
             )
-            ctx.state.amount_eur = owed(ctx.state, b, b.price_eur if b.refundable else 0)
+            ticket.amount_eur = owed(ticket, b, b.price_eur if b.refundable else 0)
         else:
-            ctx.state.facts.append(
-                f"changing a {b.fare_class} fare costs EUR {CHANGE_FEE_EUR[b.fare_class]} plus any "
-                "fare difference; the customer changes it in Manage booking"
+            ticket.facts.append(
+                f"changing a {b.fare_class} fare costs EUR {CHANGE_FEE_EUR[b.fare_class]} plus any fare difference; the customer changes it in Manage booking"
             )
-        return DraftReply()
+    return None
 
 
-@dataclass
-class DraftReply(BaseNode[Ticket]):
-    objection: str | None = None
-
-    async def run(self, ctx: GraphRunContext[Ticket]) -> Review:
-        prompt = ctx.state.brief()
-        if self.objection and ctx.state.draft:
-            prompt += f"\n\nYour last draft:\n{ctx.state.draft}\n\nThe reviewer: {self.objection}"
-        draft = await call(writer, prompt)
-        ctx.state.draft = draft
-        ctx.state.rounds += 1
-        return Review(draft)
-
-
-@dataclass
-class Review(BaseNode[Ticket, None, TriageResult]):
-    draft: str
-
-    async def run(
-        self, ctx: GraphRunContext[Ticket]
-    ) -> (
-        Annotated[DraftReply, Edge(label="rejected")]
-        | Annotated[Pay, Edge(label="approved, EUR 400 at most")]
-        | Annotated[End[TriageResult], Edge(label="resolved, to_human")]
-    ):
-        ticket = ctx.state
-        verdict = await call(reviewer, f"{ticket.brief()}\n\nDraft reply:\n{self.draft}")
-        if not verdict.approved:
-            ticket.review_notes.append(verdict.objection)
-            if ticket.rounds >= MAX_ROUNDS:
-                return ticket.end("to_human", f"the reply failed review twice: {verdict.objection}")
-            return DraftReply(objection=verdict.objection)
-        if ticket.amount_eur == 0 or ticket.booking is None:
-            return ticket.end("resolved", "nothing to pay")
-        if ticket.amount_eur > AUTO_PAY_LIMIT_EUR:
-            return ticket.end(
-                "to_human",
-                f"EUR {ticket.amount_eur} is above the EUR {AUTO_PAY_LIMIT_EUR} paid without a person",
-                priority="high",
-            )
-        return Pay(ticket.booking.ref, ticket.amount_eur)
-
-
-@dataclass
-class Pay(BaseNode[Ticket, None, TriageResult]):
-    booking_ref: str
-    eur: int
-
-    async def run(
-        self, ctx: GraphRunContext[Ticket]
-    ) -> Annotated[End[TriageResult], Edge(label="resolved")]:
-        reason = "; ".join(ctx.state.facts)
-        skyline.pay(self.booking_ref, self.eur, reason)
-        return ctx.state.end("resolved", f"paid EUR {self.eur}: {reason}", paid_eur=self.eur)
-
-
-class Triage(Graph[TriageResult, Ticket]):
-    nodes = [Classify, LookUpBooking, EU261, Baggage, FareRules, DraftReply, Review, Pay]
-
-
-support = Agent(
+support = Agent[SupportContext](
     instructions=(
         "You are Skyline Air's customer care, by text: one or two plain sentences. A late or "
         "cancelled flight, a bag, a refund or a change goes to triage with what the customer "
@@ -392,6 +282,7 @@ support = Agent(
         "answer by email, and to any question about money, that the colleague will confirm "
         "it. On close, say you can only help with Skyline Air trips. A question about an "
         "answer already given is answered from it; only a new request goes to triage again. "
+        "Use continue_request with newly supplied booking or baggage references after a question. "
         "Never decide, compute or promise anything yourself."
     ),
     llm=LLM,
@@ -399,27 +290,57 @@ support = Agent(
 
 
 @support.tool
-async def triage(ctx: RunContext, email: Email) -> TriageResult:
-    """Look into the customer's request and answer it: the booking, what is due, the reply.
+async def triage(ctx: RunContext[SupportContext], email: Email) -> TriageResult | InputRequired:
+    """Start investigating a new customer request, with the original email and sender."""
+    ticket = Ticket(
+        sender=email.sender, email=f"From: {email.sender}\nSubject: {email.subject}\n\n{email.body}"
+    )
+    classification = await call(classifier, ticket.email)
+    ticket.kind = classification.kind
+    ticket.booking_ref = classification.booking_ref
+    ticket.pir_ref = classification.pir_ref
+    ctx.context.ticket = ticket
+    outcome = await resolve_ticket(ticket)
+    await ctx.store.save_context(ctx.context)
+    return outcome
 
-    Args:
-        email: the customer's request
-    """
-    return await Triage(Classify(email), state=Ticket())
+
+@support.tool
+async def continue_request(
+    ctx: RunContext[SupportContext],
+    booking_ref: str | None = None,
+    pir_ref: str | None = None,
+) -> TriageResult | InputRequired:
+    """Continue the current request using references supplied by the customer."""
+    ticket = ctx.context.ticket
+    if not ticket.email:
+        raise ToolError("Start triage with the customer email first")
+    if booking_ref is not None:
+        ticket.booking_ref = booking_ref.strip().upper()
+    if pir_ref is not None:
+        ticket.pir_ref = pir_ref.strip().upper()
+    outcome = await resolve_ticket(ticket)
+    await ctx.store.save_context(ctx.context)
+    return outcome
 
 
 server = AgentServer(storage=AgentDBStorage(), agent_name="skyline-support")
 
 
 @server.a2a_session(endpoint="triage", description="Skyline Air customer care.")
-async def text(ctx: A2ASessionContext[None]) -> RunResult[str]:
-    return await support.run(ctx.message, message_history=ctx.message_history)
+async def text(ctx: A2ASessionContext) -> RunResult[str]:
+    app = SupportContext()
+    await ctx.store.load_context(app)
+    result = await support.run(ctx.message, message_history=ctx.message_history, context=app)
+    await ctx.store.save_context(app)
+    return result
 
 
 @server.rtc_session()
 async def chat(ctx: JobContext) -> None:
-    session = LiveSession(llm=LLM, thread=ctx.thread)
+    session = LiveSession(llm=LLM, context=SupportContext(), thread=ctx.thread)
     await session.start(agent=support, room=ctx.room)
+    await session.store.load_context(session.context)
     if not session.history.items:
         await session.generate_reply(instructions="Greet the customer in one sentence.")
 

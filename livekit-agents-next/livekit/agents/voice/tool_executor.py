@@ -14,10 +14,7 @@ from .._generated.tool_executor import AsyncToolOptions, ToolHandlingOptions
 from ..llm import ToolContext
 from ..llm.tool_context import (
     ASK_IN_OWN_WORDS,
-    Completed,
-    Failed,
     InputRequired,
-    Rejected,
     StopResponse,
     Tool,
     ToolError,
@@ -26,7 +23,7 @@ from ..llm.tool_context import (
 )
 from ..llm.utils import prepare_function_arguments
 from ..log import logger
-from .agent import AgentTask, _BindingContextVar, _VoiceBinding
+from .agent import _BindingContextVar, _VoiceBinding
 from .events import RunContext
 from .tool_output import make_tool_output
 
@@ -112,12 +109,12 @@ class ToolRunner:
         first_update = ctx._first_update
         await asyncio.wait({task, first_update}, return_when=asyncio.FIRST_COMPLETED)
         if task.done():
-            return self._answer(fnc_call, task)
+            return self._answer(fnc_call, task, speech_id=speech_id)
 
         # the first ctx.update() released the step; the core reads the end as a final update
         def _final(task: asyncio.Task[Any]) -> None:
             self._session._core.tool_update(
-                fnc_call.call_id, "final", answer=self._answer(fnc_call, task)
+                fnc_call.call_id, "final", answer=self._answer(fnc_call, task, speech_id=speech_id)
             )
 
         task.add_done_callback(_final)
@@ -128,35 +125,27 @@ class ToolRunner:
         if task := self._running.get(call_id):
             task.cancel()
 
-    def _answer(self, fnc_call: Any, task: asyncio.Task[Any]) -> dict[str, Any]:
+    def _answer(self, fnc_call: Any, task: asyncio.Task[Any], *, speech_id: int) -> dict[str, Any]:
         if task.cancelled():
             return {"kind": "cancelled"}
         if (exc := task.exception()) is not None:
             return _raised(exc)
         out = make_tool_output(fnc_call=fnc_call, output=task.result(), exception=None)
         if out.transition is not None:
-            self._apply(out.transition)
+            self._apply(out.transition, speech_id=speech_id)
         if out.fnc_call_out.is_error:
             return {"kind": "raised", "error": "tool_error", "message": out.fnc_call_out.output}
         value = out.fnc_call_out.output if out.fnc_call_out.reply_required else None
-        agents = [] if out.agent_task is None else [out.agent_task]
-        return {"kind": "returned", "value": value, "agents": agents}
+        return {"kind": "returned", "value": value}
 
-    def _apply(self, transition: Transition) -> None:
-        """A transition a tool returned: the end of the ``AgentTask`` running it, or a question
-        for the person."""
-        task = self._agent if isinstance(self._agent, AgentTask) else None
-        if isinstance(transition, Completed | Failed | Rejected):
-            if task is None or task.done():
-                return
-            if isinstance(transition, Completed):
-                if transition.verbatim:
-                    self._session.say(str(transition.value))
-                task._complete(transition.value)
-            else:
-                text = transition.error if isinstance(transition, Failed) else transition.reason
-                task._complete(ToolError(text))
-        elif isinstance(transition, InputRequired):
+    def _apply(self, transition: Transition, *, speech_id: int) -> None:
+        """Deliver human-input questions requested by tools."""
+        if isinstance(transition, InputRequired):
+            self._session._core.set_run_output(
+                self._session._speech(f"speech_{speech_id}")._core,
+                value=transition,
+                error=None,
+            )
             if transition.verbatim:
                 self._session.say(transition.question)
             else:

@@ -39,6 +39,7 @@ from ..utils import shortuuid
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from ..storage.context_store import ContextStore
     from .agent_run import AgentRun
     from .agent_session import LiveSession
     from .run_result import RunUsage
@@ -72,17 +73,15 @@ __all__ = [
     "UserTurnExceededEvent",
 ]
 
-Deps_T = TypeVar("Deps_T", default=Any)
-State_T = TypeVar("State_T", default=Any)
+Context_T = TypeVar("Context_T", default=Any)
 Userdata_T = TypeVar("Userdata_T", default=Any)
 
 
-class RunContext(Generic[Deps_T, State_T]):
+class RunContext(Generic[Context_T]):
     """What a tool, an instructions function or an output validator receives.
 
-    ``RunContext[Deps, State]``: ``ctx.deps`` is what the door passed for this run and
-    ``ctx.state`` the session's typed state. On a call the context also carries the session
-    and the speech handle; in ``agent.run()`` it carries the run.
+    ``ctx.context`` is the application object supplied for this invocation. On a call
+    the wrapper also carries the session and speech handle; direct runs carry the run.
     """
 
     # private ctor
@@ -124,18 +123,18 @@ class RunContext(Generic[Deps_T, State_T]):
         return self._speech_handle
 
     @property
-    def deps(self) -> Deps_T:
-        """What the door passed for this run: ``run(deps=)`` or ``LiveSession(deps=)``."""
+    def store(self) -> ContextStore:
+        """The host's activation-scoped store for explicit field persistence."""
         if self._run is not None:
-            return self._run.deps  # type: ignore[no-any-return]
-        return self.session.deps  # type: ignore[no-any-return]
+            return self._run.store
+        return self.session.store
 
     @property
-    def state(self) -> State_T:
-        """The session's typed state, loaded; mutate it in place."""
+    def context(self) -> Context_T:
+        """The application context supplied to this invocation."""
         if self._run is not None:
-            return self._run.state  # type: ignore[no-any-return]
-        return self.session.state  # type: ignore[no-any-return]
+            return self._run.context  # type: ignore[no-any-return]
+        return self.session.context  # type: ignore[no-any-return]
 
     @property
     def usage(self) -> RunUsage:
@@ -169,11 +168,6 @@ class RunContext(Generic[Deps_T, State_T]):
         if self._function_call is None:
             raise RuntimeError("no function call: this RunContext is not running a tool")
         return self._function_call
-
-    @property
-    def userdata(self) -> Deps_T:
-        """The session's ``userdata``, the pre 2.0 name for what ``deps`` carries now."""
-        return self.session.userdata  # type: ignore[no-any-return]
 
     def disallow_interruptions(self) -> None:
         """Disable interruptions for this FunctionCall.
@@ -221,7 +215,7 @@ class RunContext(Generic[Deps_T, State_T]):
 
     @asynccontextmanager
     async def foreground(self) -> AsyncIterator[LiveSession[Any]]:
-        """Wait for idle, then hold the floor while interactive work runs (an ``AgentTask``,
+        """Wait for idle, then hold the floor while interactive work runs (
         a ``say``), so no other speech or deferred tool reply lands in between."""
         core = self.session._core
         hold = await core.wait_for_idle_and_hold(origin=self._origin)

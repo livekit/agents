@@ -362,7 +362,7 @@ class _ToolExecutor:
                 fnc_args, fnc_kwargs = prepare_function_arguments(
                     fnc=tool, json_arguments=arguments, call_ctx=run_ctx
                 )
-                granted = isinstance(tool, FunctionTool) and tool.info.requires_approval
+                granted = isinstance(tool, FunctionTool) and tool.info.needs_approval
                 if granted:
                     granted = approval_granted(run_ctx.session.history.items, run_ctx.function_call)
                 if mock is not None:
@@ -396,18 +396,6 @@ class _ToolExecutor:
 
             if output is None or isinstance(output, StopResponse):
                 return output
-
-            # the first update has already been returned to dispatch, so an Agent
-            # return now has no surface to carry an agent_task back
-            from .agent import Agent
-
-            if isinstance(output, Agent):
-                logger.error(
-                    f"tool `{fnc_name}` returned an Agent after ctx.update(); "
-                    "agent handoff after a progress update is not supported",
-                    extra={"call_id": call_id, "function": fnc_name},
-                )
-                raise RuntimeError("agent handoff after a progress update is not supported")
 
             if isinstance(output, BaseException):
                 if isinstance(output, ToolError):

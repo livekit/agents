@@ -3,7 +3,7 @@
 The errors are ``_core``'s own classes; the rows, records and the turn's context are the generated
 models of ``_generated/storage*.py``. This module holds the two things that are JSON on one side
 and Python on the other: a chat item (``ChatItem`` against its protobuf JSON) and a lane's
-state (the door's ``state_type`` against the ``state`` column).
+JSON data held in the state column. Application fields are loaded and saved explicitly.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ def dump_state(state: S, state_type: type[S]) -> JsonValue:
         field = _offending_field(state)
         raise NotSerializable(
             f"field `{field}` is not serializable: {e}; state is JSON-shaped, services belong "
-            "in deps"
+            "in unmarked runtime context fields"
         ) from e
 
     if len(json.dumps(data, separators=(",", ":")).encode()) > STATE_LIMIT:

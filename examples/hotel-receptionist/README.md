@@ -25,7 +25,7 @@ phone.
   A tool's code after the await does not run in text, so the task completes with the text the
   routing agent reads.
 - **The guest's yes before a write.** `confirm_booking` and `cancel_room_booking` are
-  `requires_approval=` with a read-back function of their own parameters: the booking from
+  `needs_approval=` with a read-back function of their own parameters: the booking from
   the task's state, the cancellation with its refund. A call returns the read-back as written
   and does not run; the guest's answer is written as the call's output on the next turn, and
   the write runs only when the model repeats the same call after it. The model cannot approve

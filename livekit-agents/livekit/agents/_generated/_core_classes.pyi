@@ -217,7 +217,6 @@ def avatar_payload(
 ) -> Any: ...
 def min_reasoning_effort(model: str) -> str | None: ...
 def workflow_prompts() -> dict[str, Any]: ...
-def task_group_summary_flags() -> dict[str, Any]: ...
 def default_aec_warmup() -> float: ...
 def plan_session_start(
     *,
@@ -534,35 +533,6 @@ class SessionOptions:
     def turn_detection_explicit(self) -> bool: ...
 
 
-class TaskHandle:
-    """A cancelled Python awaiter drops its future and wakes nothing here, so the host calls
-    [`abandon`](TaskHandle::abandon) in its `finally` for the driver to hand the parent frame back.
-    """
-
-    def __init__(self, id: str | None = None) -> None: ...
-    @property
-    def id(self) -> str: ...
-    @property
-    def done(self) -> bool: ...
-    @property
-    def phase(self) -> str: ...
-    def complete(self, result: Any) -> None: ...
-    def fail(
-        self,
-        message: str,
-        *,
-        class_name: str | None = None,
-        reason: str | None = None,
-    ) -> None: ...
-    def cancel(self, name: str | None = None) -> None: ...
-    def request_cancel(self) -> None: ...
-    def abandon(self) -> bool: ...
-    async def joined(self) -> Any: ...
-    def result(self) -> Any | None: ...
-    async def wait_for_inactive(self) -> None: ...
-    def __repr__(self) -> str: ...
-
-
 class SpeechHandle:
     def __init__(self, *, speech_id: str = ..., allow_interruptions: bool = True) -> None: ...
     @property
@@ -588,130 +558,6 @@ class SpeechHandle:
     async def wait_for_generation(self, step: int | None = None) -> None: ...
     async def wait_for_interrupted(self) -> None: ...
     async def wait_until_created(self) -> None: ...
-
-
-class Workflow:
-    @staticmethod
-    def email(
-        *,
-        instructions: Any | None = None,
-        sections: tuple[Any | None, Any | None] | None = None,
-        extra_instructions: str = ...,
-        require_confirmation: bool | None = None,
-        require_explicit_ask: bool = False,
-        tools: list[Any] | None = None,
-    ) -> Workflow: ...
-    @staticmethod
-    def address(
-        *,
-        instructions: Any | None = None,
-        sections: tuple[Any | None, Any | None] | None = None,
-        extra_instructions: str = ...,
-        require_confirmation: bool | None = None,
-        require_explicit_ask: bool = False,
-        tools: list[Any] | None = None,
-    ) -> Workflow: ...
-    @staticmethod
-    def phone_number(
-        *,
-        extra_instructions: str = ...,
-        require_confirmation: bool | None = None,
-        require_explicit_ask: bool = False,
-        tools: list[Any] | None = None,
-    ) -> Workflow: ...
-    @staticmethod
-    def name(
-        *,
-        first_name: bool = True,
-        last_name: bool = False,
-        middle_name: bool = False,
-        name_format: str | None = None,
-        verify_spelling: bool = False,
-        extra_instructions: str = ...,
-        require_confirmation: bool | None = None,
-        require_explicit_ask: bool = False,
-        tools: list[Any] | None = None,
-    ) -> Workflow: ...
-    @staticmethod
-    def dob(
-        *,
-        extra_instructions: str = ...,
-        include_time: bool = False,
-        require_confirmation: bool | None = None,
-        require_explicit_ask: bool = False,
-        utc_offset_secs: int = 0,
-        tools: list[Any] | None = None,
-    ) -> Workflow: ...
-    @staticmethod
-    def card_number(
-        *,
-        require_confirmation: bool | None = None,
-        require_explicit_ask: bool = False,
-        extra_instructions: str = ...,
-    ) -> Workflow: ...
-    @staticmethod
-    def security_code(
-        *,
-        require_confirmation: bool | None = None,
-        require_explicit_ask: bool = False,
-        extra_instructions: str = ...,
-    ) -> Workflow: ...
-    @staticmethod
-    def expiration_date(
-        *,
-        require_confirmation: bool | None = None,
-        require_explicit_ask: bool = False,
-        extra_instructions: str = ...,
-        utc_offset_secs: int = 0,
-    ) -> Workflow: ...
-    @staticmethod
-    def dtmf(
-        *,
-        num_digits: int,
-        ask_for_confirmation: bool = False,
-        dtmf_input_timeout: float = 4.0,
-        dtmf_stop_event: str = "#",
-        extra_instructions: str | None = None,
-    ) -> Workflow: ...
-    @property
-    def instructions(self) -> tuple[str, str | None, str | None]: ...
-    @property
-    def on_enter_prompt(self) -> str: ...
-    @property
-    def warnings(self) -> list[str]: ...
-    def tools(self) -> list[dict[str, Any]]: ...
-    async def call(
-        self,
-        name: str,
-        arguments: Any,
-        *,
-        turn: str,
-        modality: str = "audio",
-    ) -> WorkflowReply: ...
-
-
-class WorkflowReply:
-    @property
-    def reply(self) -> str | None: ...
-    @property
-    def error(self) -> str | None: ...
-    @property
-    def error_class(self) -> str | None: ...
-    @property
-    def error_reason(self) -> str | None: ...
-    @property
-    def completed(self) -> bool: ...
-    @property
-    def result(self) -> Any | None: ...
-    @property
-    def failure(self) -> str | None: ...
-    @property
-    def failure_class(self) -> str | None: ...
-    @property
-    def failure_reason(self) -> str | None: ...
-    @property
-    def tools(self) -> list[dict[str, Any]] | None: ...
-    def __repr__(self) -> str: ...
 
 
 class GetDtmfResult:
@@ -778,33 +624,6 @@ class LlmResponseState:
     def observe(self, chunk: Any) -> None: ...
     @property
     def retryable(self) -> bool: ...
-
-
-class TaskSchedule:
-    """`beta/workflows/task_group.py`'s scheduler as the host drives it: the loop body (factories,
-    awaits, callbacks, summarisation) stays in Python; this decides the stack order, the visited set
-    (written before the await), each outcome's arm, the `out_of_scope` tool and regress validation.
-    Result values never enter Rust. Each step comes back as its `kind`-tagged dict.
-    """
-
-    def __init__(
-        self,
-        *,
-        summarize_chat_ctx: bool = True,
-        return_exceptions: bool = False,
-    ) -> None: ...
-    def visited(self, task_id: str) -> bool: ...
-    def add(self, id: str, description: str) -> None: ...
-    def start(self) -> dict[str, Any]: ...
-    def advance(
-        self,
-        outcome: str,
-        *,
-        target_task_ids: list[str] | None = None,
-        error: str | None = None,
-    ) -> dict[str, Any]: ...
-    def summarized(self, error: str | None = None) -> dict[str, Any]: ...
-    def validate_regress(self, task_ids: list[str]) -> str | None: ...
 
 
 class SessionClock:
@@ -891,23 +710,6 @@ class LiveSession:
         stt: NotGivenOr[Any | None] = ...,
         vad: NotGivenOr[Any | None] = ...,
     ) -> None: ...
-    def hook_described(
-        self,
-        id: int,
-        *,
-        instructions: Any,
-        dynamic_instructions: Any | None = None,
-        agent: str,
-        tools: list[Any] | None = None,
-        tools_host: Any | None = None,
-        tool_runner: Any | None = None,
-        chat_ctx: list[ChatItem] | None = None,
-        llm: NotGivenOr[Any | None] = ...,
-        tts: NotGivenOr[Any | None] = ...,
-        stt: NotGivenOr[Any | None] = ...,
-        vad: NotGivenOr[Any | None] = ...,
-        turn_handling: Any | None = None,
-    ) -> None: ...
     async def update_agent(
         self,
         *,
@@ -924,27 +726,6 @@ class LiveSession:
         vad: NotGivenOr[Any | None] = ...,
         turn_handling: Any | None = None,
     ) -> bool: ...
-    def enter_task(
-        self,
-        handle: TaskHandle,
-        *,
-        instructions: Any,
-        dynamic_instructions: Any | None = None,
-        agent: str,
-        tools: list[Any] | None = None,
-        tools_host: Any | None = None,
-        tool_runner: Any | None = None,
-        chat_ctx: list[ChatItem] | None = None,
-        llm: NotGivenOr[Any | None] = ...,
-        tts: NotGivenOr[Any | None] = ...,
-        stt: NotGivenOr[Any | None] = ...,
-        vad: NotGivenOr[Any | None] = ...,
-        turn_handling: Any | None = None,
-        speech_id: int | None = None,
-        preserve_function_call_history: bool = False,
-        parent: str | None = None,
-        origin: str | None = None,
-    ) -> None: ...
     def set_audio_input(self, source: Any | None) -> None: ...
     def set_video_input(self, source: Any | None) -> None: ...
     def set_audio_output(self, sink: Any | None) -> None: ...

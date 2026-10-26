@@ -23,12 +23,11 @@ await thread.delete()
 
 items = await thread.chat_history()                       # list[ChatItem]: the thread's history
 items = await thread.chat_history(agent="eligibility")    # one agent's lane of the thread
-tasks = await thread.background_tasks()                   # the thread's background tasks
 ```
 
 `create`, `get`, `list`, `info`, `update`, `delete`, `chat_history` and
-`background_tasks` go to the threads service (`GetThreadItems`,
-`GetThreadTasks` for the last two); `send` and `submit` to the agent's
+task reads go to the threads service (`GetThreadItems`,
+`GetThreadTasks`); `send` goes to the agent's
 endpoint, which must be deployed. Inside a run, `ctx.thread` is the same
 class with more: `lane()`.
 
@@ -42,17 +41,6 @@ await lk.sip.create_sip_participant(api.CreateSIPParticipantRequest(room_name=ro
 
 The dispatch carries the thread id, and the job hands it to the call's
 `LiveSession`.
-
-## Tasks
-
-```python
-tasks = await thread.background_tasks()
-await thread.cancel(task_id)
-await thread.submit(agent="sales", task=FollowUp(lead_id=lead.id), delay=timedelta(days=2))   # no model
-```
-
-Submitting from outside comes with background tasks
-([agent-tasks.md](agent-tasks.md)).
 
 ## Webhooks
 

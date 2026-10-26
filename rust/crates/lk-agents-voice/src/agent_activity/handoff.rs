@@ -4,12 +4,11 @@
 use crate::agent::TurnEdit;
 use crate::agent_activity::drain::DrainEvent;
 use crate::agent_activity::on_exit::Exit;
-use crate::agent_activity::scheduling::{PauseCause, SpeechId};
+use crate::agent_activity::scheduling::PauseCause;
 use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::signals::{Cx, PauseResult, Signal};
 use crate::agent_session::{
-    AgentUpdate, Answer, Driver, HandoffRefused, HookCall, HookId, HookKind, NewActivity,
-    PreviousActivity, SpeechCommand,
+    AgentUpdate, Answer, Driver, HandoffRefused, HookId, HookKind, SpeechCommand,
 };
 use crate::audio_recognition::EndOfTurnInfo;
 use crate::run_result::Owned;
@@ -53,9 +52,6 @@ enum Phase {
 enum Queued {
     /// Waiting for the switch in progress.
     Ready { id: HandoffId, update: Box<AgentUpdate> },
-    /// A tool's handoff holds its place while the host describes the agent, so a host
-    /// `update_agent` meanwhile waits behind it; given up when the describe fails or times out.
-    Describing(HookId),
 }
 
 /// A turn kept for the arriving agent. `edits: None`: the arriving agent runs its own
@@ -68,10 +64,6 @@ pub(crate) struct HeldUserTurn {
 pub(crate) enum HandoffEvent {
     /// `update_agent()`: by the host, an inline task, or a tool whose agent was described.
     Asked(Box<AgentUpdate>),
-    /// A tool's handoff takes its place in the order while the host describes the agent.
-    Describing(HookId),
-    Described(HookId, Box<AgentUpdate>),
-    DescribeDropped(HookId),
     OnExitEnded(HookId),
     Paused(PauseResult),
     /// The swap landed, or a describe gave up its place: the next queued switch begins.
@@ -85,29 +77,6 @@ impl Handoff {
     pub(crate) fn handle(&mut self, ev: HandoffEvent, mut cx: Cx<'_>, out: &mut Out) {
         match ev {
             HandoffEvent::Asked(update) => self.asked(update, &mut cx, out),
-            HandoffEvent::Describing(hook) => self.queue.push_back(Queued::Describing(hook)),
-            HandoffEvent::Described(hook, update) => {
-                let Some(place) = self.place_of(hook) else {
-                    // No place held (the close emptied the queue): asked for now.
-                    return self.asked(update, &mut cx, out);
-                };
-                let id = self.mint();
-                if cx.closing && update.next == NewActivity::Start {
-                    self.queue.remove(place);
-                    return refuse(Some(id), update, HandoffRefused::Closing, out);
-                }
-                out.signal(Signal::RunOwn(Owned::Handoff(id)));
-                self.queue[place] = Queued::Ready { id, update };
-                self.start_next(&mut cx, out);
-            }
-            // The asking agent takes the held turn, and what waited behind goes ahead.
-            HandoffEvent::DescribeDropped(hook) => {
-                if let Some(place) = self.place_of(hook) {
-                    self.queue.remove(place);
-                }
-                out.signal(Signal::DeliverHeldTurn);
-                out.signal(Signal::NextHandoff);
-            }
             HandoffEvent::OnExitEnded(hook) => {
                 if let Some(InProgress { phase: phase @ Phase::Exiting { .. }, .. }) =
                     &mut self.in_progress
@@ -156,13 +125,6 @@ impl Handoff {
         matches!(self.in_progress, Some(InProgress { phase: Phase::Draining, .. }))
     }
 
-    /// The agent a host (not an inline task's) switch in progress installs.
-    pub(crate) fn host_agent(&self) -> Option<&str> {
-        (self.in_progress.as_ref())
-            .filter(|h| h.update.task.is_none())
-            .map(|h| h.update.agent.as_str())
-    }
-
     /// The switch in progress.
     pub(crate) fn in_progress(&self) -> Option<&AgentUpdate> {
         self.in_progress.as_ref().map(|h| &*h.update)
@@ -172,7 +134,6 @@ impl Handoff {
     pub(crate) fn updates(&self) -> impl Iterator<Item = &AgentUpdate> {
         let queued = self.queue.iter().filter_map(|q| match q {
             Queued::Ready { update, .. } => Some(&**update),
-            Queued::Describing(_) => None,
         });
         self.in_progress().into_iter().chain(queued)
     }
@@ -184,9 +145,8 @@ impl Handoff {
     /// Every queued switch refused as closing (a held describe just goes).
     pub(crate) fn refuse_queued(&mut self, out: &mut Out) {
         while let Some(queued) = self.queue.pop_front() {
-            if let Queued::Ready { id, update } = queued {
-                refuse(Some(id), update, HandoffRefused::Closing, out);
-            }
+            let Queued::Ready { id, update } = queued;
+            refuse(Some(id), update, HandoffRefused::Closing, out);
         }
     }
 
@@ -195,19 +155,14 @@ impl Handoff {
         HandoffId(self.next)
     }
 
-    fn place_of(&self, hook: HookId) -> Option<usize> {
-        self.queue.iter().position(|q| matches!(q, Queued::Describing(h) if *h == hook))
-    }
-
     /// Refused when closing (a resume is not), queued behind a switch in progress or a pending
     /// describe, begun otherwise.
     fn asked(&mut self, update: Box<AgentUpdate>, cx: &mut Cx<'_>, out: &mut Out) {
         let id = self.mint();
         // A task's resume completes the current transition before a queued host switch: queued
         // behind it, the task's old parent would overwrite the host's agent.
-        let resuming_task = update.task.is_some() && update.next == NewActivity::Resume;
-        let queued = self.switching() || (!self.queue.is_empty() && !resuming_task);
-        if cx.closing && update.next == NewActivity::Start {
+        let queued = self.switching() || !self.queue.is_empty();
+        if cx.closing {
             return refuse(Some(id), update, HandoffRefused::Closing, out);
         }
         // An open run owns every switch asked for while it is open.
@@ -230,14 +185,10 @@ impl Handoff {
     }
 
     /// The first phase: `on_exit` on the agent being left (`Close`), or straight to the drain
-    /// (`Pause`: an awaited `AgentTask`'s parent runs no `on_exit`).
+    /// (`Pause`: an awaited agent's parent runs no `on_exit`).
     fn start(&mut self, id: HandoffId, update: Box<AgentUpdate>, cx: &mut Cx<'_>, out: &mut Out) {
         // The parent is captured now that the entry starts (it may have changed while queued).
-        out.signal(Signal::HandoffStarted);
-        let exit = match update.previous {
-            PreviousActivity::Pause => Exit::Done,
-            PreviousActivity::Close => cx.leave.claim(),
-        };
+        let exit = cx.leave.claim();
         let phase = match exit.hook() {
             Some(hook) => Phase::Exiting { hook },
             None => Phase::Draining,
@@ -255,21 +206,6 @@ fn refuse(id: Option<HandoffId>, update: Box<AgentUpdate>, cause: HandoffRefused
 }
 
 impl Driver {
-    /// The handoff begins when the host answers; its place in the order is now.
-    pub(crate) fn request_describe(
-        &mut self,
-        now: Ts,
-        speech: SpeechId,
-        agent: lk_agents_abi::HostRef,
-        out: &mut Out,
-    ) {
-        let id = self.activity.hooks.mint();
-        let wait = self.hook_wait();
-        if self.issue_hook(now, HookCall::DescribeAgent { id, agent, speech }, Some(wait), out) {
-            self.handoff_step(HandoffEvent::Describing(id), out);
-        }
-    }
-
     /// The caller answered and the run lets go; an inline task's entry or exit tells the task.
     pub(crate) fn refuse_handoff(
         &mut self,
@@ -282,10 +218,6 @@ impl Driver {
             self.run_release(Owned::Handoff(id), out);
         }
         out.answer(update.call.take(), Answer::Handoff(Err(cause)));
-        if let Some(task) = update.task {
-            let now = self.step.now;
-            self.on_task_handoff_refused(now, task, update.next, out);
-        }
     }
 
     /// The swap: the closing re-check, the agent installed with its two records, the caller
@@ -294,40 +226,20 @@ impl Driver {
         let Some((id, mut update)) = self.activity.handoff.take_in_progress() else {
             return;
         };
-        if self.session.closing.is_some() && update.next == NewActivity::Start {
+        if self.session.closing.is_some() {
             self.replay_held_speech(now, out);
             self.refuse_handoff(Some(id), update, HandoffRefused::Closing, out);
             self.activity.handoff.refuse_queued(out);
             return;
         }
         let call = update.call.take();
-        let next = update.next;
-        let previous = update.previous;
-        let task = update.task.clone();
-        // A drain bound to an agent an inline task pauses runs that agent's `on_exit` first; one
-        // on an agent left for good is settled once it is no longer driving.
-        if previous == PreviousActivity::Pause {
-            self.drain_step(DrainEvent::Leaving(previous), out);
-        }
         self.update_agent(now, *update, out);
-        if previous == PreviousActivity::Close {
-            self.drain_step(DrainEvent::Leaving(previous), out);
-        }
-        self.activity.on_exit.swapped(previous, next);
-        self.activity.hooks.stop_describing();
+        self.drain_step(DrainEvent::Leaving, out);
+        self.activity.on_exit.swapped();
         out.answer(call, Answer::Handoff(Ok(())));
-        // The task's step precedes its `on_enter`, as `AgentUpdated` does.
-        if let Some(task) = task {
-            match next {
-                NewActivity::Start => self.on_task_frame_installed(now, task, out),
-                NewActivity::Resume => self.on_task_frame_popped(now, task, out),
-            }
-        }
         // Before `on_enter`, whose speech comes after what was asked during the switch.
         self.replay_held_speech(now, out);
-        if next == NewActivity::Start {
-            self.issue_on_enter(now, out);
-        }
+        self.issue_on_enter(now, out);
         // The run's `on_enter`, owned above, keeps the run open.
         self.run_release(Owned::Handoff(id), out);
         out.signal(Signal::DeliverHeldTurn);
@@ -340,7 +252,7 @@ impl Driver {
     /// `update_agent`) through the swap. A describe pending across a swap opens none for the
     /// arriving agent.
     pub(crate) fn in_window(&self) -> bool {
-        self.activity.handoff.switching() || self.activity.hooks.describing()
+        self.activity.handoff.switching()
     }
 
     /// The host's speech held over the drain, asked again of the agent now driving: scheduled, or
@@ -477,7 +389,6 @@ impl Driver {
             None => {
                 // The resume's carry: the task's calls leave the view first, then the host is told
                 // which of the task's items are now the parent's.
-                self.exclude_exiting_task_calls();
                 let from = self.session.chat_ctx.agent().to_owned();
                 let items = self.session.chat_ctx.set_agent(&agent, true);
                 if from != agent {

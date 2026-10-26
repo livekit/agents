@@ -71,6 +71,3 @@ def test_agent_accepts_model_strings() -> None:
 
     agent = Agent(instructions="you are a helpful assistant", llm="openai/gpt-4o")
     assert isinstance(agent.llm, inference.LLM)
-
-    agent.update_options(llm="openai/gpt-realtime")
-    assert isinstance(agent.llm, inference.RealtimeModel)

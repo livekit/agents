@@ -1,24 +1,32 @@
 # Text endpoints
 
 A text endpoint is a door into a thread over the A2A protocol. Web chats,
-API clients and partner agents all come through it, and the handler never
-knows which.
+API clients and partner agents all come through it, with channel metadata available to the handler.
 
 ## The handler
 
 ```python
-from livekit.agents import AgentServer
+from livekit.agents import AgentServer, RunResult
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.storage import AgentDBStorage
 
 server = AgentServer(storage=AgentDBStorage(), agent_name="scheduling")
 
-@server.a2a_session(endpoint="scheduling", description="Book, confirm or move an appointment.", state=Patient)
-async def text(ctx: A2ASessionContext[Patient]) -> str:
-    deps = Deps(clinic=httpx.AsyncClient(base_url=CLINIC))
-    result = await scheduler.run(ctx.message, message_history=ctx.message_history, state=ctx.state, deps=deps)
-    return result.output
+@server.a2a_session(endpoint="scheduling", description="Book, confirm or move an appointment.")
+async def text(ctx: A2ASessionContext) -> RunResult[Appointment]:
+    app = SchedulingContext(clinic=clinic_service)
+    await ctx.store.load_context(app)
+    result = await scheduler.run(
+        ctx.message, message_history=ctx.message_history, context=app
+    )
+    await ctx.store.save_context(app)
+    return result
 ```
+
+Return the full `RunResult` so the transport can map `status="input_required"`
+and `question` to A2A `input-required`, or `status="completed"` and `output`
+to a completed task artifact. The handler saves application fields explicitly
+before returning either result.
 
 Called once per turn with the agent's lane already loaded; a batched burst
 is one call. The return value is the answer; the framework commits the lane
@@ -32,8 +40,13 @@ run's result, its question when a tool asked for input. `agent.stream()` is
 ```python
 @server.a2a_session(endpoint="scheduling", description="Book, confirm or move an appointment.")
 async def text(ctx: A2ASessionContext) -> AsyncIterator[str]:
-    async for delta in scheduler.stream(ctx.message, message_history=ctx.message_history):
+    app = SchedulingContext(clinic=clinic_service)
+    await ctx.store.load_context(app)
+    async for delta in scheduler.stream(
+        ctx.message, message_history=ctx.message_history, context=app
+    ):
         yield delta
+    await ctx.store.save_context(app)
 ```
 
 A handler that awaits `agent.run()` streams too, the run forwards the
@@ -57,21 +70,20 @@ agents share one process in `examples/`. `livekit.agents.a2a_session` and
 `rtc_session` are the same decorators for a single door with no handler;
 `server.a2a_session` and `server.rtc_session` serve one in one step.
 
-The agent the handler runs is the root. After a tool hands off, the handoff
-is saved on the lane's agent stack, and `root.run(message)` runs whichever
-agent is on top of the stack, so the handler stays one line; see
-[multi-agent.md](multi-agent.md).
+The handler explicitly calls an agent or an [AgentRouter](agent-router.md).
+A direct `agent.run()` executes that agent. A routed handler loads the routing
+state, passes it to `router.run()`, and saves the returned state.
 
 | `A2ASessionContext` | What                                                                                                                 |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `message`           | the turn's user message, a `ChatMessage`: every part of every message in the batch, in order; `message.text_content` |
 | `messages`          | the individual A2A messages of the batch: `message_id`, `parts`, `metadata`, `channel`, `received_at`, `.text`, `.data` |
 | `message_history`   | the agent's history so far                                                                                           |
-| `state`             | the typed state, loaded                                                                                              |
+| `store`             | managed storage for explicit application-context load/save |
 | `thread`           | the durable thread; see [threads.md](threads.md)                                                                  |
 | `task_id`           | the A2A task this turn answers                                                                                       |
 | `tasks`             | the lane's recent tasks                                                                                              |
-| `caller_history`    | a delegating caller's conversation, when it sent one; see [multi-agent.md](multi-agent.md)                           |
+| `caller_history`    | a delegating caller's conversation, when it sent one; see [multi-agent composition](agents.md#working-with-other-agents)                           |
 | `update(text)`      | a progress message to the client while the turn runs                                                                 |
 | `stream(source)`    | forward text chunks from an async iterable as they arrive; returns the joined text                                   |
 
@@ -79,7 +91,6 @@ agent is on top of the stack, so the handler stays one line; see
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`                          | the last path segment of the endpoint's URL                                                                                              |
 | `description`                       | required: what another agent reads to decide whether to call                                                                             |
-| `state`                             | the state type, loaded per run                                                                                                           |
 | `public`                            | `True` by default: reachable without a LiveKit token. `False` admits only callers holding a project token             |
 | `auth`                              | the developer's own check: a callable taking the request and returning a truthy value to admit it                                       |
 | `inbox`, `debounce`                 | see below                                                                                                                                |
@@ -118,7 +129,7 @@ message's `livekit/channel`, or `delegation` when its `livekit/kind` is
 | `interrupt`  | the running turn stops at its next safe point, its task ends `canceled` with `livekit/interrupted: true` and `livekit/interruptionReason: "new-message"`, and the new message gets its turn. Nothing already sent is retracted; tools that ran stay in the history            | `a2a`, and any unlisted channel  |
 | `queue`      | each message waits for the running turn, then gets its own turn and its own reply, in the order the messages arrived; nothing merged, nothing cancelled                                                                                                                       | `delegation`                     |
 | `batch`      | the message is queued in the lane's inbox; after `debounce`, every queued message is answered in one turn. The reply goes on the last message's task; the earlier ones complete with no artifact and `livekit/mergedInto` pointing at it                                     | `sms`, `whatsapp`, `email`       |
-| `concurrent` | runs take no lease and may overlap; they append to the history and write no state and no agent stack. Only for endpoints with no `state`                                                                                                                                      | opt-in                           |
+| `concurrent` | runs take no lease and may overlap; they append to the history and cannot save application fields or routing state. Only for endpoints that do not write application data                                                                                                                                      | opt-in                           |
 | `reject`     | the request fails with `UnsupportedOperationError`, whose data names the running task as `runningTaskId`; no task is created. The client cancels the running task first                                                                                                      | opt-in                           |
 
 ```python
@@ -128,6 +139,8 @@ message's `livekit/channel`, or `delegation` when its `livekit/kind` is
     inbox={"a2a": "queue"},                   # overrides part of the default map
     debounce=timedelta(seconds=1),            # one value for every channel, or a map by channel
 )
+async def support(ctx: A2ASessionContext):
+    ...
 ```
 
 `inbox` is one policy for every channel or a map that
@@ -190,9 +203,9 @@ await client.cancel(task_id, thread_id=thread_id)
 
 Thin over the stock `a2a-sdk`; any A2A client works without it.
 
-[Agent tasks](agent-tasks.md) cover conversational input and child results.
-Durable execution, external wake-ups, and [code workflows](code-workflows.md)
-are deferred.
+[Routed conversations](agent-router.md) cover conversational input and child results.
+Conversation persistence stores histories and routing records between turns;
+it does not restore suspended Python execution.
 
 See `examples/use-cases/01_appointments_by_phone_and_text.py` and
 `04_a_claim_with_a_photo.py`.

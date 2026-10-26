@@ -4,8 +4,6 @@ and the model goes on from that tool's output."""
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from a2a.types import a2a_pb2 as pb
 
@@ -56,9 +54,11 @@ async def ask(ctx: RunContext, request: str) -> str | InputRequired:
     return f"booked for {request}"
 
 
-async def desk(ctx: A2ASessionContext[Any]) -> str:
+async def desk(ctx: A2ASessionContext) -> str:
     result = await front.run(ctx.message, message_history=ctx.message_history)
-    return result.input_required or str(result.output)
+    return (
+        result.output.question if isinstance(result.output, InputRequired) else str(result.output)
+    )
 
 
 async def test_the_answer_goes_to_the_tool_that_asked(agentdb_storage: AgentDBStorage) -> None:

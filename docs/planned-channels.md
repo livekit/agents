@@ -84,7 +84,7 @@ class Photo(BaseModel):
     name: str
 
 @support.tool
-async def start_return(ctx: RunContext[Deps, Return], order_id: str, reason: str, photos: list[Photo]) -> str: ...
+async def start_return(ctx: RunContext[ReturnContext], order_id: str, reason: str, photos: list[Photo]) -> str: ...
 ```
 
 Attachments out, a label or a statement as a file, are not part of the

@@ -1,4 +1,4 @@
-# The LiveKit LiveKit agents extension to A2A
+# The LiveKit agents extension to A2A
 
 **URI:** `https://livekit.io/a2a/ext/agents/v1`
 **Baseline:** A2A 1.0, JSON-RPC 2.0 over HTTP with server-sent events
@@ -58,8 +58,9 @@ A delegating client that holds a thread MUST send its thread id as the
 message's `contextId` when the expert's card lists the extension, and MUST
 NOT send it otherwise. An endpoint of the same project that receives a
 thread id of another agent works on its own lane of that thread: its own
-history and state, beside the caller's. A stock server gets no id and keeps
-a context of its own.
+history and saved application fields, beside the caller's. A stock server
+gets no caller-owned thread ID. Its returned `contextId` and task ID are
+retained and used for subsequent replies to that remote conversation.
 
 ## 4. Keys
 
@@ -221,8 +222,7 @@ so far as one `DataPart` on the message, tagged `livekit/kind: chat_ctx`:
 ```
 
 `data` is the `livekit-agents` chat context JSON: `items`, each with
-`id`, `type` (`message`, `function_call`, `function_call_output`,
-`agent_handoff`), the fields of that type, and `created_at` in seconds.
+`id`, `type` (`message`, `function_call`, `function_call_output`), the fields of that type, and `created_at` in seconds.
 The endpoint reads it as the caller's history and MUST NOT store it as its
 own; the message's text parts are the turn. The part is omitted when the
 caller shares its thread, since the endpoint then reads the caller's
@@ -254,6 +254,6 @@ Over the same endpoint, with no header: the `Task`, text progress on
 question as the status message, the terminal states, and the keys of
 section 5, which it may ignore. Nothing else.
 
-What a LiveKit caller sends to a stock server: text and `messageId`,
-nothing else. No header, no `contextId` of its own, no `livekit/` key, no
-data part.
+What a LiveKit caller sends to a stock server: text and `messageId`, with the remote service's returned `contextId` and
+pending task reference on subsequent replies. No LiveKit extension header,
+caller-owned thread ID, `livekit/` key, or data part is sent.

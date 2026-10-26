@@ -30,7 +30,6 @@ from ..llm.tool_context import (
     RawFunctionTool,
     Rejected,
     StopResponse,
-    ToolError,
     ToolFlag,
     Transition,
     Working,
@@ -61,7 +60,6 @@ from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
 from .agent import (
     Agent,
-    AgentTask,
     ModelSettings,
     _get_activity_task_info,
     _set_activity_task_info,
@@ -357,8 +355,6 @@ class AgentActivity(RecognitionHooks):
         self._realtime_user_input_answered_at: float = 0.0
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
-        # one awaited inline AgentTask may pause this activity at a time
-        self._inline_task_lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
@@ -786,40 +782,6 @@ class AgentActivity(RecognitionHooks):
 
         return use_aligned_transcript is True
 
-    async def update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
-        """Replace the tools of the ``AgentTask`` this activity runs (internal).
-
-        An ``AgentTask`` is instantiated per use, so its tool list is its own; a shared
-        ``Agent`` is configuration and does not change after import.
-        """
-        if not isinstance(self._agent, AgentTask):
-            raise RuntimeError("only the tools of an AgentTask instance can change at runtime")
-
-        old_tool_names = set(get_fnc_tool_names(self._agent._tools))
-        new_tool_names = set(get_fnc_tool_names(tools))
-        tools_added = list(new_tool_names - old_tool_names) or None
-        tools_removed = list(old_tool_names - new_tool_names) or None
-
-        tools = list({tool.id: tool for tool in tools}.values())
-        self._agent._tools = tools
-
-        # record the configuration change (skip if no visible diff)
-        if tools_added or tools_removed:
-            config_update = llm.AgentConfigUpdate(
-                tools_added=tools_added,
-                tools_removed=tools_removed,
-            )
-            config_update._tools = llm.ToolContext(tools).flatten()
-            self._chat_ctx.insert(config_update)
-            self._session._chat_ctx.insert(config_update)
-
-        if self._rt_session is not None:
-            await self._rt_session.update_tools(llm.ToolContext(self.tools).flatten())
-
-        if isinstance(self.llm, llm.LLM):
-            # for realtime LLM, we assume the server will remove unvalid tool messages
-            await self.update_chat_ctx(self._chat_ctx.copy(tools=tools))
-
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
     ) -> None:
@@ -1150,7 +1112,7 @@ class AgentActivity(RecognitionHooks):
                             self._session._unanswered_user_metrics = None
 
                 self._on_enter_task = task = self._create_speech_task(
-                    _traceable_on_enter(), name="AgentTask_on_enter"
+                    _traceable_on_enter(), name="Agent_on_enter"
                 )
                 _set_activity_task_info(task, inline_task=True)
             finally:
@@ -1458,7 +1420,7 @@ class AgentActivity(RecognitionHooks):
         async with self._lock:
             if self._on_exit_task is None:
                 self._on_exit_task = task = self._create_speech_task(
-                    _traceable_on_exit(), name="AgentTask_on_exit"
+                    _traceable_on_exit(), name="Agent_on_exit"
                 )
                 _set_activity_task_info(task, inline_task=True)
 
@@ -1504,63 +1466,6 @@ class AgentActivity(RecognitionHooks):
             # This means that even if the SpeechHandle themselves have finished,
             # we still wait for the entire execution (e.g function_tools)
             await asyncio.shield(self._scheduling_atask)
-
-    @contextlib.asynccontextmanager
-    async def _inline_task_slot(
-        self,
-        *,
-        speech_handle: SpeechHandle | None,
-        blocked_tasks: list[asyncio.Task[Any]],
-    ) -> AsyncGenerator[None, None]:
-        """Grants the floor to one awaited inline AgentTask at a time.
-
-        Pausing an activity is a single slot: concurrent handoffs would leave every switch
-        but the last overwritten, and those tasks awaiting a result nothing can produce. The
-        inline tasks of a turn's parallel tool calls queue here and take the slot in turn.
-
-        The queue is per activity, which is the thing a handoff contends for. A nested task
-        pauses the activity of the task it is nested in, so it takes that activity's slot
-        and never waits on the one its parent is holding.
-
-        Each step below is ordered against the queue, and inverting any of them hangs the
-        session in its own way, so they belong together rather than at the call site.
-        """
-        # before the queue: the tasks behind it share this speech, and a hold released
-        # between them lets one task's user turns interrupt it out from under the rest
-        if speech_handle is not None:
-            if speech_handle.interrupted:
-                raise RuntimeError("the speech that awaited the inline task is interrupted")
-
-            speech_handle._hold_interruptions()
-
-        try:
-            # before the queue: a queued task absent from the drain set makes session close
-            # wait on the slot it is still queued for
-            self._add_drain_blocked_tasks(blocked_tasks)
-
-            async with self._inline_task_lock:
-                if self._closed or self._session._closing:
-                    # reported to the model as a tool failure, the way a tool awaiting an
-                    # inline task through a session close has always been
-                    raise ToolError("the activity that awaited the inline task is closing")
-
-                if self._new_turns_blocked:
-                    raise ToolError(
-                        "An agent transition is in progress, so this tool call cannot continue. "
-                        "Wait until the transition is complete before retrying, if the tool is "
-                        "available to the new agent."
-                    )
-
-                # past the queue: a run watching a task still waiting its turn waits for
-                # the user input the task ahead of it needs
-                if (run_state := self._session._global_run_state) and not run_state.done():
-                    for task in blocked_tasks:
-                        run_state._watch_handle(task)
-
-                yield
-        finally:
-            if speech_handle is not None:
-                speech_handle._release_interruptions()
 
     def _add_drain_blocked_tasks(self, tasks: list[asyncio.Task[Any]]) -> None:
         # tasks blocked on an agent handoff are excluded from the drain wait,
@@ -1809,7 +1714,7 @@ class AgentActivity(RecognitionHooks):
         if self._rt_turn_detection_enabled and allow_interruptions is False:
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.say(), "  # noqa: E501
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
+                "disable turn_detection in the RealtimeModel and use VAD on the Agent instead"  # noqa: E501
             )
             allow_interruptions = NOT_GIVEN
 
@@ -1877,7 +1782,7 @@ class AgentActivity(RecognitionHooks):
         if self._rt_turn_detection_enabled and allow_interruptions is False:
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "  # noqa: E501
-                "disable turn_detection in the RealtimeModel and use VAD on the AgentTask/VoiceAgent instead"  # noqa: E501
+                "disable turn_detection in the RealtimeModel and use VAD on the Agent instead"  # noqa: E501
             )
             allow_interruptions = NOT_GIVEN
 
@@ -3167,37 +3072,17 @@ class AgentActivity(RecognitionHooks):
             self._user_turn_exceeded_atask = None
 
     def _apply_transition(
-        self, transition: Transition, *, fnc_call_out: llm.FunctionCallOutput | None = None
+        self,
+        transition: Transition,
+        *,
+        fnc_call_out: llm.FunctionCallOutput | None = None,
+        speech_handle: SpeechHandle | None = None,
     ) -> None:
-        """Act on the transition a tool or ``on_enter`` returned (plan 7.4), in memory.
-
-        ``Completed``, ``Failed`` and ``Rejected`` end the ``AgentTask`` this activity runs;
-        ``InputRequired`` speaks the question and holds the call for the next user message;
-        ``Working`` records its status and keeps the task where it is. ``tool=`` and
-        ``timeout=`` are not applied yet: the answer reaches the task as a turn of its model.
-        """
+        """Apply a tool outcome while preserving voice delivery and pending input."""
         agent = self._agent
-        task = agent if isinstance(agent, AgentTask) else None
-        if isinstance(transition, Completed):
-            if task is None:
-                logger.warning(
-                    "a conversation tool returned Completed; the turn completes when the tool "
-                    "returns, the value is recorded as its output",
-                    extra={"agent": agent.id},
-                )
-                if fnc_call_out is not None:
-                    fnc_call_out.reply_required = True
-            elif not task.done():
-                if transition.verbatim:
-                    self.say(str(transition.value))
-                task._complete(transition.value)
-        elif isinstance(transition, (Failed, Rejected)):
-            text = transition.error if isinstance(transition, Failed) else transition.reason
-            if task is None:
-                if fnc_call_out is not None:
-                    fnc_call_out.reply_required = True
-            elif not task.done():
-                task._complete(ToolError(text))
+        if isinstance(transition, (Completed, Failed, Rejected)):
+            if fnc_call_out is not None:
+                fnc_call_out.reply_required = True
         elif isinstance(transition, InputRequired):
             if transition.timeout is not None:
                 logger.warning(
@@ -3205,6 +3090,8 @@ class AgentActivity(RecognitionHooks):
                     extra={"agent": agent.id},
                 )
             self._pending_input = fnc_call_out
+            if speech_handle is not None:
+                speech_handle._maybe_run_final_output = transition
             if transition.verbatim:
                 if transition.tool is not None:
                     self._claim_next_turn(transition.tool.info.name)
@@ -3218,7 +3105,9 @@ class AgentActivity(RecognitionHooks):
                 )
                 if (claimed := transition.tool) is not None:
                     handle.add_done_callback(lambda _: self._claim_next_turn(claimed.info.name))
+            handle._maybe_run_final_output = transition
             if (run_state := self._session._global_run_state) is not None and not run_state.done():
+                run_state._input_outcome = transition
                 run_state._watch_handle(handle)
         elif isinstance(transition, Working):
             if transition.tool is not None or transition.timeout is not None:
@@ -3722,9 +3611,12 @@ class AgentActivity(RecognitionHooks):
             # plan 3.3.7: the reply takes its lane before the model reads the history, so a
             # text that moved the lane lands in the agent's history and this turn's first
             from ..storage.live import merge_history
+            from ..storage.protocol import VersionConflict
 
             try:
                 stored = await lane.turn_started()
+            except VersionConflict:
+                raise
             except Exception:
                 logger.exception("the voice turn could not take its lane")
                 stored = None
@@ -4258,8 +4150,6 @@ class AgentActivity(RecognitionHooks):
 
             new_calls: list[llm.FunctionCall] = []
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
-            new_agent_task: Agent | None = None
-            ignore_task_switch = False
             fnc_executed_ev = FunctionToolsExecutedEvent(
                 function_calls=[], function_call_outputs=[]
             )
@@ -4270,33 +4160,19 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
-                if new_agent_task is not None and sanitized_out.agent_task is not None:
-                    logger.error("expected to receive only one AgentTask from the tool executions")
-                    ignore_task_switch = True
-                    # TODO(long): should we mark the function call as failed to notify the LLM?
-
-                if sanitized_out.agent_task is not None:
-                    new_agent_task = sanitized_out.agent_task
-
                 if sanitized_out.transition is not None:
                     self._apply_transition(
-                        sanitized_out.transition, fnc_call_out=sanitized_out.fnc_call_out
+                        sanitized_out.transition,
+                        fnc_call_out=sanitized_out.fnc_call_out,
+                        speech_handle=speech_handle,
                     )
-
-            if new_agent_task and not ignore_task_switch:
-                fnc_executed_ev._handoff_required = True
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.scheduling_paused
-            if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
-                self._session.update_agent(new_agent_task)
-                draining = True
 
             chain_continues = (
-                fnc_executed_ev.has_tool_reply
-                or self._session._agent is not self._agent
-                or (isinstance(self._agent, AgentTask) and self._agent.done())
+                fnc_executed_ev.has_tool_reply or self._session._agent is not self._agent
             )
 
             tool_messages = new_calls + new_fnc_outputs
@@ -4310,13 +4186,7 @@ class AgentActivity(RecognitionHooks):
                 # (the next turn re-injects from the live running set)
                 _strip_running_tool_calls(chat_ctx)
 
-                # refresh conversation items added during tool execution: a tool that
-                # awaits an inline AgentTask runs a whole sub-conversation, merged into
-                # the agent's chat_ctx at handoff-return - this turn's snapshot predates
-                # it. Without the refresh, the tool response is generated blind to what
-                # was actually said inside the tool call (and re-asks captured fields).
-                # Conversational analog of the update_instructions() refresh below.
-                # tool_messages must be added first so merge() dedups them by id.
+                # Refresh conversation items added during tool execution.
                 chat_ctx.items.extend(tool_messages)
                 chat_ctx.merge(self._chat_ctx, exclude_instructions=True)
 
@@ -4344,9 +4214,7 @@ class AgentActivity(RecognitionHooks):
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
-                        # the tool reply answers whatever user turn is still unanswered: this
-                        # one if the reply only generated tools, or the last turn of a
-                        # sub-conversation an inline AgentTask ran inside the tool
+                        # The tool reply answers the outstanding user turn.
                         _previous_user_metrics=self._session._unanswered_user_metrics,
                     ),
                     speech_handle=speech_handle,
@@ -5004,8 +4872,6 @@ class AgentActivity(RecognitionHooks):
             fnc_executed_ev = FunctionToolsExecutedEvent(
                 function_calls=[], function_call_outputs=[]
             )
-            new_agent_task: Agent | None = None
-            ignore_task_switch = False
 
             for sanitized_out in tool_output.output:
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
@@ -5021,29 +4887,16 @@ class AgentActivity(RecognitionHooks):
                     [sanitized_out.fnc_call, sanitized_out.fnc_call_out]
                 )
 
-                if new_agent_task is not None and sanitized_out.agent_task is not None:
-                    logger.error(
-                        "expected to receive only one Agent from the tool executions",
-                    )
-                    ignore_task_switch = True
-
-                if sanitized_out.agent_task is not None:
-                    new_agent_task = sanitized_out.agent_task
-
                 if sanitized_out.transition is not None:
                     self._apply_transition(
-                        sanitized_out.transition, fnc_call_out=sanitized_out.fnc_call_out
+                        sanitized_out.transition,
+                        fnc_call_out=sanitized_out.fnc_call_out,
+                        speech_handle=speech_handle,
                     )
-
-            if new_agent_task and not ignore_task_switch:
-                fnc_executed_ev._handoff_required = True
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.scheduling_paused
-            if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
-                self._session.update_agent(new_agent_task)
-                draining = True
 
             if len(new_fnc_outputs) > 0:
                 # wait all speeches played before updating the tool output and generating the response

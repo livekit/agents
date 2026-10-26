@@ -1,12 +1,10 @@
 # Storage
 
-> Context persistence: design. See [application context](state-and-deps.md)
-> for field storage and scopes. The tables below describe current storage.
-
-Every thread has its own database: the history, the journal, the typed
-state and the tasks, in one place the framework loads before a run and
-commits after it. Nothing lives in the process between runs, so any worker
-can take the next message, and a crash loses at most the run in flight.
+Every thread has its own database containing transport history, the journal,
+A2A tasks, and explicitly saved application fields. The framework loads and
+commits transport records around each managed turn. Applications explicitly
+load and save persisted context and routing state. A new worker continues
+from committed records; in-memory changes are lost on a crash.
 
 ## Application records and context fields
 
@@ -78,18 +76,19 @@ The database holds one lane per agent that took part (see
 |         |                                                                                               | Owned by                                                                       |
 | ------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | history | per lane: every message, tool call and result, item by item                                    | the developer: truncating, inserting a summary, deleting an item are row edits |
-| state   | per lane: the typed object, written by a run that changed it                                   | the agent's tools                                                              |
-| agent stack | per lane: who is speaking, as an agent name or an `AgentTask` class with its arguments     | the framework                                                                  |
-| tasks   | per lane: one row per turn and per background task: status, question, result, its own history | the framework                                                                  |
+| state | explicitly saved context fields and application-owned routing state, identified by scope | application chooses load/save; framework validates and commits |
+| tasks   | per lane: one row per A2A task: status, question, result, transport history | the framework                                                                  |
 | inbox   | per lane: messages received while a turn ran, under the `batch` policy, until a turn drains them | the framework                                                               |
 | journal | per thread: every event, append-only; see [journal.md](journal.md)                            | the framework                                                                  |
 
-What is not saved: `deps`, by construction; media; and nothing from memory,
-since no frame or local variable survives a run. Documents and blobs are a
+Unmarked context values, including runtime clients, are not saved. Python
+stack frames and local variables are not restored between turns. Media bytes
+are stored separately from thread records. Documents and blobs are a
 later addition.
 
-Payloads are JSON, the same form the A2A wire carries, so the rows are
-queryable in place and a schema change is an added key. State is
+Payloads are JSON and queryable in place. Schema changes require compatibility
+validation and explicit migrations where needed; adding a key is not sufficient
+to guarantee compatibility. State is
 JSON-shaped and under 64 KiB: a field that cannot be written as JSON raises
 `NotSerializable` naming it, a larger state raises `TooLarge`.
 
@@ -108,14 +107,14 @@ insertion order, never reused, the platform's page cursor; `id` on
 | ---------------- | ---------------------------- | ------- |
 | `schema_version` | database                     | `version` |
 | `items`          | history item                 | `pos`, `id` (the item's id), `lane`, `seq`, `message_id`, `payload`: the item as `livekit.agent.ChatContext.ChatItem` protobuf JSON, which the threads service reads |
-| `tasks`          | A2A task: a turn or an `AgentTask` | `pos`, `task_id`, `lane`, `seq`, `name` (the `AgentTask` class, empty for a turn), `message_id`, `status`, `status_message`, `updated_at`, `data`, `internal` |
-| `lanes`          | lane                         | `lane`, `version`, `state`, `agent_stack`, `lease_holder`, `lease_token`, `lease_until`, `waiter`, `drained_id` (the last inbox `id` a run consumed) |
+| `tasks`          | A2A task | `pos`, `task_id`, `lane`, `seq`, `name` (an optional application task label), `message_id`, `status`, `status_message`, `updated_at`, `data`, `internal` |
+| `lanes`          | lane                         | `lane`, `version`, `state`, `lease_holder`, `lease_token`, `lease_until`, `waiter`, `drained_id` (the last inbox `id` a run consumed) |
 | `events`         | journal entry                | `id`, `ts_ms`, `lane`, `run_id`, `type`, `payload` |
 | `inbox`          | message received during a run | `id`, `lane`, `task_id`, `message_id`, `message`, `received_at` |
 
 An item's `payload` keeps what the model needs to see the conversation
 again: messages and their text, function calls with their `extra`, function
-call outputs, handoffs. It does not keep image or audio content, `group_id`,
+call outputs. It does not keep image or audio content, `group_id`,
 a tool output's `reply_required`, or the message ids an inbox batch merged
 into one user message (those are on the tasks, as `livekit/mergedInto`). A
 row in any other shape fails the load.
@@ -123,7 +122,7 @@ row in any other shape fails the load.
 A task row is the A2A `Task`: `id` is `task_id`, `contextId` the thread id,
 `status` is `status`, `status_message` and `updated_at`, and `data` holds
 the rest under the A2A names (`history`, `artifacts`, `metadata`).
-`internal` is the framework's own: the `AgentTask` arguments, the pending question
+`internal` holds framework transport metadata, including the pending question
 (`ask`), `deadline` and `parent`. A row found `working` when a new run picks
 it up belonged to a worker that died.
 
@@ -183,15 +182,16 @@ with `UpdateThread` and its `idle_ttl`.
 
 ## The unit of work
 
-A run is a unit of work: everything it reads and writes is committed
-together when it ends, or not at all.
+A managed turn is a unit of work for framework records and explicitly staged
+context writes. Independently committed application transactions and external
+effects have their own commit boundaries.
 
-- **Load.** Taking the lane's lease loads its history, state, agent stack and
+- **Load.** Taking the lane's lease loads its history, state and
   journal events in one round trip. The whole history is loaded; compaction, when a
   conversation outgrows a context window, sits in front of the run and is
   not part of storage.
-- **Commit.** Leaving the run writes the history, the state when it changed,
-  the agent stack, the events, the task rows and the usage in one write,
+- **Commit.** Leaving the run writes the history, explicitly staged context/routing writes,
+  the events, the task rows and the usage in one write,
   fenced on the version loaded and the lease token, and releases the lease.
   A run that lost its lease meanwhile gets `VersionConflict` and writes
   nothing.

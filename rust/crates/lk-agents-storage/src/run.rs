@@ -47,67 +47,6 @@ impl LanePoll {
     }
 }
 
-/// Who is speaking in the lane: `Ref` entries, pushed on a handoff, popped on `Completed`.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct AgentStack {
-    refs: Vec<Ref>,
-    dirty: bool,
-}
-
-impl AgentStack {
-    pub fn new(refs: Vec<Ref>) -> Self {
-        Self { refs, dirty: false }
-    }
-
-    pub fn push(&mut self, r: Ref) {
-        self.refs.push(r);
-        self.dirty = true;
-    }
-
-    pub fn pop(&mut self) -> Option<Ref> {
-        let r = self.refs.pop()?;
-        self.dirty = true;
-        Some(r)
-    }
-
-    pub fn replace(&mut self, refs: Vec<Ref>) {
-        self.refs = refs;
-        self.dirty = true;
-    }
-
-    pub fn clear(&mut self) {
-        if !self.refs.is_empty() {
-            self.refs.clear();
-            self.dirty = true;
-        }
-    }
-
-    pub fn current(&self) -> Option<&Ref> {
-        self.refs.last()
-    }
-
-    pub fn refs(&self) -> &[Ref] {
-        &self.refs
-    }
-
-    pub fn len(&self) -> usize {
-        self.refs.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.refs.is_empty()
-    }
-
-    /// Changed since it was loaded: the commit writes the column only then.
-    pub fn is_dirty(&self) -> bool {
-        self.dirty
-    }
-
-    pub fn to_json(&self) -> Value {
-        serde_json::to_value(&self.refs).unwrap_or_default()
-    }
-}
-
 /// What this run appends to the lane's journal.
 #[derive(Default)]
 pub struct EventLog {
@@ -360,7 +299,6 @@ impl Lane {
             history: items,
             loaded_state: state.clone(),
             state,
-            agents: AgentStack::new(lane_row.and_then(|l| l.agent_stack).unwrap_or_default()),
             events: EventLog::default(),
             tasks,
             submitted,
@@ -444,11 +382,10 @@ pub struct Run {
     pub history: Vec<ItemRow>,
     /// What was loaded, by id, in order.
     loaded: Vec<(String, ChatItem)>,
-    /// The state snapshot as loaded, `None` for a fresh lane; the host replaces it with its
-    /// default-constructed state, and the commit writes it when it differs from what was loaded.
+    /// The state snapshot as loaded, `None` for a fresh lane; the caller can replace it
+    /// explicitly, and the commit writes it when it differs from what was loaded.
     pub state: Option<Value>,
     loaded_state: Option<Value>,
-    pub agents: AgentStack,
     pub events: EventLog,
     pub tasks: Tasks,
     /// Whether the acquire's `submit` inserted its row; `Some(false)` is a retried `messageId`.
@@ -510,7 +447,6 @@ impl Run {
                 .state
                 .clone()
                 .filter(|s| exclusive && Some(s) != self.loaded_state.as_ref()),
-            agent_stack: (exclusive && self.agents.is_dirty()).then(|| self.agents.to_json()),
             drained_id: opts.drained_id.filter(|_| exclusive),
             run_ended: EventWrite::run_ended(&RunEnded {
                 outcome: self.outcome,
@@ -659,36 +595,6 @@ pub enum RunOutcome {
     Rejected,
 }
 
-/// One rebuild rule for everything durable that names code: `name` is an
-/// `Agent`'s name or an `AgentTask` class name; `args` the constructor arguments, JSON-shaped,
-/// `None` for a plain `Agent`. On the agent stack a task entry also carries `state`, the task's
-/// own state as it waits, and `call_id`, the call of the agent below that awaits it. Stored as
-/// `{"name": .., "args": .., "state": .., "call_id": ..}`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_run", config = "frozen=True")]
-pub struct Ref {
-    pub name: String,
-    #[serde(default)]
-    #[python(default = "None")]
-    pub args: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[python(default = "None")]
-    pub state: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[python(default = "None")]
-    pub call_id: Option<String>,
-}
-
-impl Ref {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), args: None, state: None, call_id: None }
-    }
-
-    pub fn with_args(name: impl Into<String>, args: Value) -> Self {
-        Self { name: name.into(), args: Some(args), state: None, call_id: None }
-    }
-}
-
 /// One run as the journal tells it: `run_started` and, when it ended, `run_ended`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Host)]
 #[python(pydantic, module = "storage_run")]
@@ -754,7 +660,7 @@ const PENDING_ASK_LIMIT: i64 = 50;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TaskPatch {
     pub message_id: Option<String>,
-    /// The `AgentTask` class name, the `name` column.
+    /// An optional application task label, the `name` column.
     pub name: Option<String>,
     /// Merged over the row's `data.metadata`; an empty map changes nothing.
     pub metadata: Option<Map<String, Value>>,
@@ -1054,23 +960,6 @@ mod tests {
         let (changed, deleted) = item_changes(&history, &loaded);
         assert!(changed.is_empty());
         assert_eq!(deleted, vec!["i1", "i2", "i3"]);
-    }
-
-    #[test]
-    fn the_agent_stack_tracks_dirtiness() {
-        let mut s = AgentStack::new(vec![Ref::new("front-desk")]);
-        assert!(!s.is_dirty());
-        assert!(s.current().is_some_and(|r| r.name == "front-desk"));
-        s.clear();
-        assert!(s.is_dirty() && s.is_empty());
-        let mut s = AgentStack::default();
-        s.clear();
-        assert!(!s.is_dirty(), "clearing an empty stack changes nothing");
-        assert_eq!(s.pop(), None);
-        assert!(!s.is_dirty());
-        s.push(Ref::with_args("Followup", json!({"n": 1})));
-        assert_eq!(s.to_json().to_string(), r#"[{"name":"Followup","args":{"n":1}}]"#);
-        assert_eq!(s.len(), 1);
     }
 
     #[test]

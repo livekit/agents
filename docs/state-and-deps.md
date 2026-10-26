@@ -10,11 +10,6 @@ validated data structure with `persisted(...)`; explicitly load its saved
 values with `load_context` and save changes with `save_context`. Ordinary
 fields remain runtime dependencies/data.
 
-This proposal covers conversation and draft persistence. A durable execution
-engine, automatic task recovery, scheduler wake-ups, and operation journals
-are deferred. Transaction and effect examples below explain persistence limits;
-they do not require a new durable runtime in this phase.
-
 ## A complete context
 
 ```python
@@ -67,7 +62,8 @@ persistence from whether an arbitrary object happens to serialize.
 | `draft` | Yes, under `draft` | Decode and validate RoomDraft before user code |
 | `customer` | No | Application supplies/loads it for each activation |
 | `hotel` | No | Application supplies a live service for each activation |
-| History, active agent, waits, approvals | Separately, by the runtime | Load the execution record |
+| Router frames, active agent, private histories | Only if router state is explicitly stored | Load the application's saved router state |
+| Thread history and approvals | Separately, by the runtime | Load the thread records |
 
 The application constructs runtime context as usual:
 
@@ -79,9 +75,8 @@ context = BookingContext(
 ```
 
 Call `save_context` to save the marked draft. Refresh customer information
-from its authoritative source for each activation. Stable principal/tenant
-and context-scope references belong in the execution envelope so reactivation
-can resolve the same authorized subject without waiting for a new HTTP request.
+from its authoritative source for each activation. Resolve the authenticated principal and context scope from the incoming
+request and saved routing references before loading application data.
 
 `RunContext[BookingContext]` is the framework wrapper. Only `ctx.context` is
 the application object; execution/thread IDs, usage, pending call, progress,
@@ -109,17 +104,67 @@ class CustomerContext:
 ```
 
 These preferences belong to the root conversation scope. BookingContext's
-draft belongs to the separate booking scope created by the explicit child
-call below. The customer's account profile remains authoritative in the
+draft belongs to a separate booking context supplied for the child frame.
+The customer's account profile remains authoritative in the
 customer service/database; conversation preferences do not silently update
 it. A child's final Booking result lets the parent update its own
 preferences.last_booking_code explicitly. State is not merged on child exit.
 
-The runtime separately saves the active agent and parent/child stack. A
-handoff updates that active-agent identity while keeping the compatible
-context scope; a child suspends its parent and uses its recorded scope.
+Router state is separate from agent application data and can be stored in its
+own marked field using the same explicit load/save API.
+The router records the active frame, its parent, and the parent tool-call ID
+that receives the child's accepted output. Each frame references
+the context scope chosen by the application.
 History, preferences, draft, and customer profile are not interchangeable
 forms of memory.
+
+A child can start with fresh or forked history. On completion, the parent can
+receive its typed result alone or the result plus visible dialogue. These
+history choices do not share or merge application context fields; context
+scopes retain their explicit ownership. See the [history policies](agent-router.md#history-passed-to-the-child).
+
+## Persisting router state
+
+An application-defined record can mark the router's serializable state for
+storage:
+
+```python
+@dataclass
+class Conversation:
+    routing: RouterState | None = persisted(default=None)
+```
+
+For each request, the runtime supplies `ctx.store` for the resolved thread.
+The application explicitly restores routing state, passes it to the router,
+and saves the returned state:
+
+```python
+conversation = Conversation()
+await ctx.store.load_context(conversation)
+await ctx.store.load_context(app)
+
+routed = await router.run(
+    ctx.message,
+    state=conversation.routing,
+    context=app,
+)
+
+conversation.routing = routed.state
+await ctx.store.save_context(app)
+await ctx.store.save_context(conversation)
+```
+
+`None` starts at the router's root agent. Existing state supplies the active
+frame and saved histories. The application constructs `app` with fresh
+customer and service objects and explicitly loads/saves its marked fields
+using the same store API and the appropriate application-data scope.
+
+The router returns an envelope: `routed.result` is the agent's `RunResult`,
+and `routed.state` is the updated `RouterState`. Save the routing state when
+`routed.result.status == "input_required"` as well as on completion. Persist related routing and draft changes in the same managed
+transaction. Returning from `router.run()` or the handler does not implicitly
+save either record. See [AgentRouter](agent-router.md#loading-and-saving-router-state)
+for the routing-state lifecycle.
 
 ## Explicit load and save on the store
 
@@ -130,7 +175,7 @@ connections, or pass thread/scope IDs for ordinary context persistence.
 Construct the application context explicitly, then load its marked fields.
 
 `customers` and `hotel_service` are application dependencies.
-`ctx.customer_id` carries the authenticated customer identity.
+`customer_id` is resolved by application authentication before constructing the context.
 
 ```python
 @server.a2a_session(endpoint="booking", description="Book a hotel room.")
@@ -138,15 +183,17 @@ async def booking(ctx: A2ASessionContext):
     store = ctx.store
 
     app = BookingContext(
-        customer=await customers.get(ctx.customer_id),
+        customer=await customers.get(customer_id),
         hotel=hotel_service,
     )
     await store.load_context(app)
 
-    result = await book_room.run(ctx.message, context=app)
+    result = await book_room.run(
+        ctx.message, message_history=ctx.message_history, context=app
+    )
 
     await store.save_context(app)
-    return result.output
+    return result
 ```
 
 load_context mutates only marked fields and returns the same typed object
@@ -167,8 +214,8 @@ Use the scoped store for both methods. Entrypoints, tools, and tests receive
 the store from their execution host. The runtime manages its connection.
 
 A store view is activation-scoped and must not be retained in persisted
-context or reused after its runtime ends. A child receiver uses the child's
-recorded scope; a handoff or shared-context child retains the existing one.
+context or reused after its runtime ends. A child frame uses its
+recorded scope; a shared-context child retains the existing one.
 Returning from the handler lets the runtime finish its commit and release
 resources.
 
@@ -186,7 +233,7 @@ For each activation:
 4. Call `await store.save_context(app)` to save the resulting application data.
 
 Save after each turn whose changes should be retained, including turns that
-return `InputRequired`. `save_context` validates and serializes all marked
+have `status="input_required"`. `save_context` validates and serializes all marked
 fields, including nested in-place mutations, and checks the loaded revision
 to reject stale writes. Unmarked fields remain in memory.
 
@@ -219,15 +266,15 @@ singleton for an Agent or a Python context class. Storage identity is:
 (thread/tenant boundary, context_scope_id, field_name)
 ```
 
-The scope ID is durable, not an object address. Framework records preserve
-which executions refer to it, including after worker restart.
+The scope ID identifies stored application data. Saved router frames retain
+their context-scope references across turns.
 
 | Operation | Context/data scope |
 | --- | --- |
 | Start a new conversation | New root scope |
-| Handoff within an execution | Keep current compatible context and scope |
-| `Call(child)` without a context override | Share current compatible context and scope |
-| `Call(child, context=new_context)` | Allocate a fresh child context scope |
+| Call an agent as a tool | Application supplies a compatible shared context or a separate child context |
+| Child frame with shared context | Share current compatible context and scope |
+| Child frame with a new context | Allocate a fresh child context scope |
 | Resume an existing execution | Restore its saved scope; never allocate a new one |
 
 A new booking job should pass a fresh BookingContext when it needs a separate
@@ -235,17 +282,14 @@ draft. Shared context is intentional for specialists working on one case.
 Identity/service references may be reused without sharing the draft:
 
 ```python
-@front_desk.tool
-async def start_booking(ctx: RunContext[CustomerContext]):
-    app = ctx.context
-    return Call(
-        book_room,
-        context=BookingContext(customer=app.customer, hotel=app.hotel),
-    )
+booking_context = BookingContext(
+    customer=app.customer,
+    hotel=app.hotel,
+)
 ```
 
-The child scope and initial values are allocated/persisted once with child
-creation; a retried parent transition must not create a second job or scope.
+The application creates a scope for the child frame and explicitly saves its
+marked fields. Later turns load that recorded scope.
 No implicit copying/merging of application objects, cross-tenant sharing, or
 reuse of a finished booking's draft. Any future explicit scope-sharing handle
 needs separate authorization; field names do not grant access to another scope.

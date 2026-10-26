@@ -9,12 +9,11 @@ use super::{
     host_toolset, llm_leg, origin_of, session_tools, stt_leg, tts_leg,
 };
 use crate::agent_activity::DriverConfig;
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::DriverBuilder;
 use crate::agent_session::commands::{
     ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId, HookId, HookOutcome,
     HostAudio, HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand,
-    TaskCommand, TaskEntry, ToolUpdate, TurnCommand,
+    ToolUpdate, TurnCommand,
 };
 use crate::agent_session::time::Timebase;
 use crate::agent_session::{Answer, CommitSuperseded};
@@ -425,21 +424,6 @@ impl SessionApi {
         self.send(ActivityCommand::UpdateModels { stt, vad, llm, tts })
     }
 
-    /// `describe_agent` answered: the frame of the `Agent` a tool returned, with the keywords
-    /// `update_agent` takes. The driver performs the handoff from here.
-    #[host(method(kw_only = "frame"))]
-    pub fn hook_described(
-        &self,
-        id: u64,
-        #[host(kwargs)] frame: UpdateAgentArgs,
-    ) -> Result<(), SessionRefused> {
-        let update = self.frame(frame);
-        self.send(Command::HookDone {
-            id: HookId(id),
-            outcome: HookOutcome::Described(Box::new(update)),
-        })
-    }
-
     /// The handoff: replace the agent, keep the session. Resolves `True` once the frame is
     /// installed (`on_enter` issued, not returned), `False` when it was refused (closing).
     ///
@@ -457,34 +441,6 @@ impl SessionApi {
         update.call = Some(call);
         self.send(ActivityCommand::Update(Box::new(update)))?;
         Ok(Reply::new(async move { matches!(rx.await, Ok(Ok(()))) }))
-    }
-
-    /// `await task` inside a tool body or a hook (`AgentTask.__await_impl`); the
-    /// awaiter parks on `handle.joined()` while the driver pauses the parent frame, runs the task's
-    /// frame, and re-installs the parent once the handle settles.
-    ///
-    /// Frame keywords are `update_agent`'s; `speech_id` is the awaiting speech (`None` from
-    /// `on_enter`/`on_exit`); `parent` is the awaiter's agent id, naming the slot the task takes.
-    #[host(method(kw_only = "frame", defaults(preserve_function_call_history = false)))]
-    pub fn enter_task(
-        &self,
-        handle: &crate::workflows::HostTaskHandle,
-        #[host(kwargs)] frame: UpdateAgentArgs,
-        speech_id: Option<u64>,
-        preserve_function_call_history: bool,
-        parent: Option<String>,
-        origin: Option<&str>,
-    ) -> Result<(), CommandRefused> {
-        let origin = origin_of(origin)?;
-        let frame = self.frame(frame);
-        let entry = TaskEntry {
-            handle: handle.clone(),
-            frame,
-            speech: speech_id.map(SpeechId),
-            preserve_function_call_history,
-            parent,
-        };
-        Ok(self.send_from(origin, TaskCommand::Enter(Box::new(entry)))?)
     }
 
     /// `session.input.audio = ..` after `start()`; `None` detaches. The reference delivers audio
@@ -602,7 +558,7 @@ impl SessionApi {
         Ok(self.push_video(image))
     }
 
-    /// `AgentTask.complete(result)` from inside `speech`'s tool: the output the run
+    /// an accepted output from inside `speech`'s tool: the output the run
     /// ending on that speech reads. `error` is the `isinstance(result, Exception)` arm.
     #[host(method(kw_only = "value"))]
     pub fn set_run_output(
@@ -991,7 +947,7 @@ impl SessionApi {
         }))
     }
 
-    /// `GetDtmfTask.on_enter`'s subscriptions, run by the driver. Answers once, with the outcome
+    /// DTMF collection start's subscriptions, run by the driver. Answers once, with the outcome
     /// (`kind`: `complete`, `incomplete` or `stopped`).
     #[host(method(
         kw_only,
@@ -1019,7 +975,7 @@ impl SessionApi {
         Ok(Reply::new(async move { rx.await.unwrap_or(DtmfOutcome::Stopped).wire() }))
     }
 
-    /// `GetDtmfTask.dtmf_reply_running()`: whether the last collection is inside its debounced
+    /// DTMF read-back activity: whether the last collection is inside its debounced
     /// reply (for the confirm arm, through the read-back speech).
     #[host(method(pid = false))]
     pub fn dtmf_reply_running(&self) -> bool {
@@ -1034,7 +990,7 @@ impl SessionApi {
     #[host(method(send = DtmfCommand::Digit { digit }))]
     pub fn dtmf_digit(&self, digit: String) -> Result<(), SessionRefused>;
 
-    /// `GetDtmfTask.on_exit`: the collection ends, an outcome still owed resolves `stopped`. A
+    /// DTMF collection stop: the collection ends, an outcome still owed resolves `stopped`. A
     /// closed loop has stopped the collection already.
     #[host(method(send = DtmfCommand::Stop))]
     pub fn dtmf_stop(&self);

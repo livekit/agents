@@ -48,8 +48,8 @@ use lk_agents_voice::{
         ActivityCommand, AgentUpdate, Answer as DriverAnswer, Close, Command, CommitSuperseded,
         DrainRefused, DtmfCommand, Event, FillerSource, HandoffRefused, HoldId, HookId,
         HookOutcome, HostAudio, HostEvent, HostRecorder, HostVideo, IdleRefused, IvrCommand,
-        NewActivity, PreviousActivity, RecorderCommand, SayText, SpeechCommand, TaskCommand,
-        TaskEntry, Timebase, ToolUpdate, TurnCommand, effects::Decision,
+        RecorderCommand, SayText, SpeechCommand, Timebase, ToolUpdate, TurnCommand,
+        effects::Decision,
     },
     amd::{
         classifier::{AmdConfig, In as AmdIn, Start as AmdStart},
@@ -69,7 +69,6 @@ use lk_agents_voice::{
         ToolStep, TurnStep,
     },
     turn::Nullable,
-    workflows::TaskHandle,
     workflows::builtins::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome},
 };
 use tokio::{
@@ -413,7 +412,6 @@ pub struct Run {
     next_filler: u64,
     /// The next inline task id to mint. Per-`Run` and not process-global, so two runs of one case
     /// journal the same `task_0001`, `task_0002`, ... -- the determinism suite reads those ids.
-    next_task: u64,
     refs: Arc<dyn RefRegistry>,
     /// The room's own event channel, and the room io machine's. The harness holds the sending
     /// end of both: a room event is something that happens to the session, so it is an input.

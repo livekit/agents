@@ -23,7 +23,6 @@ from opentelemetry import trace
 from typing_extensions import TypedDict
 
 from .. import llm
-from .._generated.storage_run import Ref
 from ..llm import function_tool, utils as llm_utils
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
@@ -159,37 +158,27 @@ class RunResult(Generic[Run_T]):
         self._run_messages: list[llm.ChatItem] | None = None
         self._run_history: list[llm.ChatItem] | None = None
         self._run_usage: RunUsage | None = None
-        self._input_required: str | None = None
+        self._input_outcome: llm.InputRequired | None = None
         self._interrupted: bool = False
         self._pending_call: llm.FunctionCall | None = None
         self._answer_tool: str | None = None  # the tool the answer is handed to, if named
         self._verbatim: str | None = None
-        self._agent_stack: list[Ref] | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
 
     @property
-    def output(self) -> Run_T | None:
-        """The run's result, typed by ``output_type``; ``None`` while ``input_required``.
-
-        For a live run it is the ``AgentTask`` result when there is one, else the last
-        assistant message's text.
-        """
+    def output(self) -> Run_T | llm.InputRequired | None:
+        """The accepted output or a request for human input."""
         if self._run_messages is not None:
             return self._run_output  # type: ignore[no-any-return]
+        if self._input_outcome is not None:
+            return self._input_outcome
         if self._final_output is not None:
             return self._final_output
-        if self._input_required is not None:
-            return None
         for event in reversed(self._recorded_items):
             if isinstance(event, ChatMessageEvent) and event.item.role == "assistant":
                 return event.item.text_content  # type: ignore[return-value]
         return None
-
-    @property
-    def input_required(self) -> str | None:
-        """The question a tool returned ``InputRequired`` with, when the turn waits on it."""
-        return self._input_required
 
     @property
     def verbatim(self) -> str | None:
@@ -359,6 +348,10 @@ class RunResult(Generic[Run_T]):
             # propagate speech handle errors (e.g. LLM or realtime failures)
             if self.__last_speech_handle._error is not None:
                 self._done_fut.set_exception(self.__last_speech_handle._error)
+                return
+
+            if self._input_outcome is not None:
+                self._done_fut.set_result(None)
                 return
 
             final_output = self.__last_speech_handle._maybe_run_final_output

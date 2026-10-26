@@ -21,7 +21,7 @@ email, by text and on the phone.
   email. Without the email it returns `InputRequired` with the question; the turn ends there,
   the frontend relays it, and the patient's answer is written as the call's output on the next
   turn, so the model calls the tool again with the email. With everything, and before writing,
-  `requires_approval=read_back` reads the appointment back as written; the booking runs only
+  `needs_approval=read_back` reads the appointment back as written; the booking runs only
   when the model repeats the same call after the patient answered, so it cannot skip the ask.
 - **The calendar as the backend's `deps`**, the same object for every turn of every
   conversation, and the system of record for what is booked. Its clock is read into the

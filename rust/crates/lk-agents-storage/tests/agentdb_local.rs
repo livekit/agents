@@ -280,7 +280,6 @@ async fn a_lane_runs_through_the_lease_the_commit_and_the_inbox() {
             ..early.clone()
         }],
         state: Some(json!({"patient": "Ann"})),
-        agent_stack: Some(json!([{"name": "front-desk", "args": null}])),
         run_ended: event("run_ended", json!({"outcome": "completed"})),
         ..Commit::default()
     };

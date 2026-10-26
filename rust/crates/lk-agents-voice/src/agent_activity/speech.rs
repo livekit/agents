@@ -253,7 +253,7 @@ impl Driver {
                 );
                 self.answer(call, Answer::Speech(h));
             }
-            // `AgentTask.complete()` from a speech's tool: recorded for the run that ends on it.
+            // accepted output from a speech's tool: recorded for the run that ends on it.
             SpeechCommand::SetRunOutput { speech, output } => {
                 let ok = matches!(output, crate::run_result::RunOutput::Value(_));
                 out.trace(HandoffStep::RunOutput { speech, ok });
@@ -774,12 +774,6 @@ impl Driver {
             GenEvent::ToolStep { speech, step } => {
                 out.trace(ToolStep::StepStarted { speech, step });
                 self.requeue_speech(now, speech, out);
-            }
-
-            GenEvent::Handoff { speech, agent } => {
-                // The swap is the driver's once the host has described the `Agent` handle, on the
-                // one host stream so it precedes this speech's `SpeechDone`.
-                self.request_describe(now, speech, agent, out);
             }
 
             GenEvent::Failed { speech, error } => {

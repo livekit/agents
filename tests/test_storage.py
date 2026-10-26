@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -15,16 +14,14 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, AgentTask, InputRequired, RunContext, _core
+from livekit.agents import Agent, InputRequired, RunContext, _core, persisted
 from livekit.agents._generated.storage_run import LaneRow, TaskRow
 from livekit.agents._generated.storage_turn import TurnOptions, TurnResult
-from livekit.agents.a2a.endpoint import A2AEndpoint
 from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
-from livekit.agents.storage import AgentDBStorage, Ref, RunRejected
+from livekit.agents.storage import AgentDBStorage, RunRejected
 from livekit.agents.storage.context import A2ASessionContext, Handler, TurnHost
-from livekit.agents.storage.protocol import dump_state
-from livekit.agents.storage.resolve import AgentRegistry, Thread, resolve_thread
+from livekit.agents.storage.resolve import Thread, resolve_thread
 
 from .agentdb_fixture import let_the_lease_lapse, new_session
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -42,6 +39,11 @@ class Patient:
     verified: int = 0
 
 
+@dataclass
+class AppContext:
+    patient: Patient = persisted(default_factory=Patient)
+
+
 def a2a(
     text: str, message_id: str, *, channel: str | None = None, task_id: str | None = None
 ) -> dict[str, Any]:
@@ -57,7 +59,7 @@ def a2a(
     return msg
 
 
-async def echo(ctx: A2ASessionContext[Any]) -> str:
+async def echo(ctx: A2ASessionContext) -> str:
     return "reply to: " + ctx.message.text_content
 
 
@@ -70,9 +72,8 @@ async def run_turn(
     lane: str,
     message: dict[str, Any],
     policy: str | None,
-    handler: Handler[Any],
+    handler: Handler,
     *,
-    state_type: type[Any] | None = None,
     debounce: timedelta | None = None,
     task_id: str | None = None,
     wait_timeout: float | None = None,
@@ -82,12 +83,10 @@ async def run_turn(
         policy=policy,
         debounce=debounce.total_seconds() if debounce is not None else None,
         wait_timeout=wait_timeout,
-        state_default=dump_state(state_type(), state_type) if state_type is not None else None,
     )
     host = TurnHost(
         handler,
         thread=Thread(storage, thread_id, agent_name=lane),
-        state_type=state_type,
     )
     core = await storage.open(thread_id)
     try:
@@ -137,13 +136,16 @@ async def test_two_workers_share_one_session(agentdb_workers: Workers) -> None:
     sid = await new_session(a, LANE)
     seen: list[list[str]] = []
 
-    async def handler(ctx: A2ASessionContext[Patient]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         seen.append([i.text_content or "" for i in ctx.message_history.items])
-        ctx.state.verified += 1
-        return f"seen {ctx.state.verified}"
+        app = AppContext()
+        await ctx.store.load_context(app)
+        app.patient.verified += 1
+        await ctx.store.save_context(app)
+        return f"seen {app.patient.verified}"
 
-    first = await run_turn(a, sid, LANE, a2a("hello", "m1"), "queue", handler, state_type=Patient)
-    second = await run_turn(b, sid, LANE, a2a("again", "m2"), "queue", handler, state_type=Patient)
+    first = await run_turn(a, sid, LANE, a2a("hello", "m1"), "queue", handler)
+    second = await run_turn(b, sid, LANE, a2a("again", "m2"), "queue", handler)
 
     assert first.output == "seen 1" and second.output == "seen 2"
     assert seen == [[], ["hello", "seen 1"]]
@@ -159,7 +161,7 @@ async def test_a_raising_handler_fails_the_task_and_keeps_the_message(
     storage = agentdb_storage
     sid = await new_session(storage, LANE)
 
-    async def boom(ctx: A2ASessionContext[Any]) -> str:
+    async def boom(ctx: A2ASessionContext) -> str:
         raise RuntimeError("boom")
 
     result = await run_turn(storage, sid, LANE, a2a("hello", "m1"), "queue", boom)
@@ -175,15 +177,8 @@ async def test_a_raising_handler_fails_the_task_and_keeps_the_message(
 async def test_the_journal_records_a_tool_call_and_its_progress(agentdb_workers: Workers) -> None:
     a, _ = agentdb_workers
     sid = await new_session(a, LANE)
-    front = Agent(instructions="front desk")
-
-    @front.tool
-    async def lookup(ctx: RunContext) -> str:
-        """Look the caller up."""
-        await ctx.update("looking")
-        return "found"
-
-    front.update_options(
+    front = Agent(
+        instructions="front desk",
         llm=FakeLLM(
             fake_responses=[
                 FakeLLMResponse(
@@ -195,10 +190,16 @@ async def test_the_journal_records_a_tool_call_and_its_progress(agentdb_workers:
                 ),
                 FakeLLMResponse(input="found", content="done", ttft=0, duration=0),
             ]
-        )
+        ),
     )
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+    @front.tool
+    async def lookup(ctx: RunContext) -> str:
+        """Look the caller up."""
+        await ctx.update("looking")
+        return "found"
+
+    async def handler(ctx: A2ASessionContext) -> str | None:
         result = await front.run(ctx.message, message_history=ctx.message_history)
         return result.output
 
@@ -227,12 +228,12 @@ async def test_the_interrupting_turn_outlives_the_lease_ttl(agentdb_workers: Wor
     entered = asyncio.Event()
     released = asyncio.Event()
 
-    async def stuck(ctx: A2ASessionContext[Any]) -> str:
+    async def stuck(ctx: A2ASessionContext) -> str:
         entered.set()
         await released.wait()
         return "never sent"
 
-    async def slow(ctx: A2ASessionContext[Any]) -> str:
+    async def slow(ctx: A2ASessionContext) -> str:
         await asyncio.sleep(LEASE_TTL + 1)
         return "late reply"
 
@@ -262,16 +263,8 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
     sid = await new_session(a, LANE)
     tool_entered = asyncio.Event()
     waiter_set = asyncio.Event()
-    front = Agent(instructions="front desk")
-
-    @front.tool
-    async def lookup(ctx: RunContext) -> str:
-        """Look the caller up."""
-        tool_entered.set()
-        await waiter_set.wait()
-        return "found"
-
-    front.update_options(
+    front = Agent(
+        instructions="front desk",
         llm=FakeLLM(
             fake_responses=[
                 FakeLLMResponse(
@@ -284,10 +277,17 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
                 FakeLLMResponse(input="found", content="never sent", ttft=0, duration=0),
                 FakeLLMResponse(input="second", content="both answered", ttft=0, duration=0),
             ]
-        )
+        ),
     )
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+    @front.tool
+    async def lookup(ctx: RunContext) -> str:
+        """Look the caller up."""
+        tool_entered.set()
+        await waiter_set.wait()
+        return "found"
+
+    async def handler(ctx: A2ASessionContext) -> str | None:
         result = await front.run(ctx.message, message_history=ctx.message_history)
         return result.output
 
@@ -332,7 +332,7 @@ async def test_inbox_batches_a_burst_into_one_reply(agentdb_workers: Workers) ->
     sid = await new_session(a, LANE)
     batches: list[list[str]] = []
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         batches.append([m.parts[0]["text"] for m in ctx.messages])
         assert ctx.message.content == [m.parts[0]["text"] for m in ctx.messages]
         return "one reply"
@@ -390,12 +390,12 @@ async def test_a_lapsed_lease_fails_the_orphan_worker_lost(agentdb_workers: Work
     never = asyncio.Event()
     batches: list[list[str]] = []
 
-    async def stuck(ctx: A2ASessionContext[Any]) -> str:
+    async def stuck(ctx: A2ASessionContext) -> str:
         entered.set()
         await never.wait()
         return "late"
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         batches.append([m.parts[0]["text"] for m in ctx.messages])
         return "answered"
 
@@ -442,7 +442,7 @@ async def test_a_resend_after_the_holder_died_fails_worker_lost(
     entered = asyncio.Event()
     never = asyncio.Event()
 
-    async def stuck(ctx: A2ASessionContext[Any]) -> str:
+    async def stuck(ctx: A2ASessionContext) -> str:
         entered.set()
         await never.wait()
         return "late"
@@ -476,14 +476,8 @@ async def test_input_required_pending_call_is_the_next_messages_output(
 ) -> None:
     storage = agentdb_storage
     sid = await new_session(storage, LANE)
-    fnol = Agent(instructions="claims")
-
-    @fnol.tool
-    async def request_photo(ctx: RunContext) -> InputRequired:
-        """Ask for a photo."""
-        return InputRequired("Could you send a photo?")
-
-    fnol.update_options(
+    fnol = Agent(
+        instructions="claims",
         llm=FakeLLM(
             fake_responses=[
                 FakeLLMResponse(
@@ -497,10 +491,15 @@ async def test_input_required_pending_call_is_the_next_messages_output(
                 ),
                 FakeLLMResponse(input="here it is", content="thanks", ttft=0, duration=0),
             ]
-        )
+        ),
     )
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+    @fnol.tool
+    async def request_photo(ctx: RunContext) -> InputRequired:
+        """Ask for a photo."""
+        return InputRequired("Could you send a photo?")
+
+    async def handler(ctx: A2ASessionContext) -> str | None:
         result = await fnol.run(ctx.message, message_history=ctx.message_history)
         return result.output
 
@@ -523,24 +522,16 @@ async def test_input_required_pending_call_is_the_next_messages_output(
     assert answered.data.metadata[MERGED_INTO_KEY] == second.task.task_id
 
 
-async def test_requires_approval_asks_then_runs_on_the_approved_call(
+async def test_needs_approval_asks_then_runs_on_the_approved_call(
     agentdb_storage: AgentDBStorage,
 ) -> None:
-    """Plan 7.4: ``requires_approval=True`` returns the ``InputRequired`` for you. The first call
+    """Plan 7.4: ``needs_approval=True`` returns the ``InputRequired`` for you. The first call
     asks yes or no and does not run; the answer is its output; the model's repeat of the same
     call after the answer runs the body. The schema has no approval flag for the model."""
     storage = agentdb_storage
     sid = await new_session(storage, LANE)
-    desk = Agent(instructions="front desk")
-    ran: list[str] = []
-
-    @desk.tool(requires_approval=True)
-    async def cancel_appointment(ctx: RunContext, date: str) -> str:
-        """Cancel the appointment on a date."""
-        ran.append(date)
-        return f"canceled {date}"
-
-    desk.update_options(
+    desk = Agent(
+        instructions="front desk",
         llm=FakeLLM(
             fake_responses=[
                 FakeLLMResponse(
@@ -561,18 +552,23 @@ async def test_requires_approval_asks_then_runs_on_the_approved_call(
                     duration=0,
                     tool_calls=[
                         FunctionToolCall(
-                            name="cancel_appointment",
-                            arguments='{"date": "monday"}',
-                            call_id="c2",
+                            name="cancel_appointment", arguments='{"date": "monday"}', call_id="c2"
                         )
                     ],
                 ),
                 FakeLLMResponse(input="canceled monday", content="done", ttft=0, duration=0),
             ]
-        )
+        ),
     )
+    ran: list[str] = []
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+    @desk.tool(needs_approval=True)
+    async def cancel_appointment(ctx: RunContext, date: str) -> str:
+        """Cancel the appointment on a date."""
+        ran.append(date)
+        return f"canceled {date}"
+
+    async def handler(ctx: A2ASessionContext) -> str | None:
         return (await desk.run(ctx.message, message_history=ctx.message_history)).output
 
     assert "approved" not in json.dumps(build_legacy_openai_schema(cancel_appointment))
@@ -596,11 +592,11 @@ async def test_concurrent_runs_append_without_a_lease(agentdb_workers: Workers) 
     sid = await new_session(a, LANE)
     gate = asyncio.Event()
 
-    async def slow(ctx: A2ASessionContext[Any]) -> str:
+    async def slow(ctx: A2ASessionContext) -> str:
         await gate.wait()
         return "slow"
 
-    async def fast(ctx: A2ASessionContext[Any]) -> str:
+    async def fast(ctx: A2ASessionContext) -> str:
         gate.set()
         return "fast"
 
@@ -611,8 +607,6 @@ async def test_concurrent_runs_append_without_a_lease(agentdb_workers: Workers) 
     assert r1.output == "slow" and second.output == "fast"
     items = await history_items(a, sid, LANE)
     assert sorted(i.text_content or "" for i in items) == ["fast", "one", "slow", "two"]
-    with pytest.raises(ValueError):
-        A2AEndpoint(echo, endpoint="x", description="x", state=Patient, inbox="concurrent")
 
 
 async def test_reject_refuses_while_a_turn_runs(agentdb_workers: Workers) -> None:
@@ -621,7 +615,7 @@ async def test_reject_refuses_while_a_turn_runs(agentdb_workers: Workers) -> Non
     entered = asyncio.Event()
     gate = asyncio.Event()
 
-    async def slow(ctx: A2ASessionContext[Any]) -> str:
+    async def slow(ctx: A2ASessionContext) -> str:
         entered.set()
         await gate.wait()
         return "slow"
@@ -649,7 +643,7 @@ async def test_a_submitted_row_exists_while_the_turn_runs(
     entered = asyncio.Event()
     gate = asyncio.Event()
 
-    async def slow(ctx: A2ASessionContext[Any]) -> str:
+    async def slow(ctx: A2ASessionContext) -> str:
         entered.set()
         await gate.wait()
         return "done"
@@ -685,7 +679,7 @@ async def test_a_lease_timeout_fails_the_early_row(agentdb_workers: Workers) -> 
     entered = asyncio.Event()
     gate = asyncio.Event()
 
-    async def slow(ctx: A2ASessionContext[Any]) -> str:
+    async def slow(ctx: A2ASessionContext) -> str:
         entered.set()
         await gate.wait()
         return "slow"
@@ -710,7 +704,7 @@ async def test_a_rejected_message_leaves_no_submitted_row(agentdb_workers: Worke
     entered = asyncio.Event()
     gate = asyncio.Event()
 
-    async def slow(ctx: A2ASessionContext[Any]) -> str:
+    async def slow(ctx: A2ASessionContext) -> str:
         entered.set()
         await gate.wait()
         return "slow"
@@ -724,39 +718,6 @@ async def test_a_rejected_message_leaves_no_submitted_row(agentdb_workers: Worke
     gate.set()
     await first
     assert [t.status for t in await tasks_of(b, sid, LANE)] == ["completed"]
-
-
-# -- refs --
-
-
-@dataclass
-class Verify(AgentTask[bool]):
-    code: int = 0
-
-    def __post_init__(self) -> None:
-        AgentTask.__init__(self, instructions="verify")
-
-
-def test_ref_rebuild_drops_what_a_deploy_renamed(caplog: pytest.LogCaptureFixture) -> None:
-    front = Agent(instructions="x", name="front")
-    registry = AgentRegistry()
-    registry.register(front)
-
-    stack = [
-        Ref(name="front"),
-        Ref(name="Verify", args={"code": 7}),
-        Ref(name="RenamedAway", args={"x": 1}),
-        Ref(name="front"),
-    ]
-    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
-        agents = registry.resolve(stack)
-    assert agents[0] is front
-    assert isinstance(agents[1], Verify) and agents[1].code == 7
-    assert len(agents) == 2, "the unknown class and everything above it are dropped"
-    assert any("cannot rebuild" in r.getMessage() for r in caplog.records)
-    speaking = registry.speaking(stack)
-    assert isinstance(speaking, Verify) and speaking.code == 7
-    assert registry.speaking([Ref(name="nobody")], default=front) is front
 
 
 # -- session resolution and the Session handle --
@@ -806,7 +767,7 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: 
 
     call_worker, text_worker = agentdb_workers
     sid = await new_session(call_worker, "desk")
-    agent = Agent(instructions="desk", name="desk", state_type=Patient)
+    agent = Agent(instructions="desk", name="desk")
     llm = FakeLLM(
         fake_responses=[
             FakeLLMResponse(input="hello", content="hi there", ttft=0, duration=0),
@@ -817,7 +778,8 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: 
     )
     state = Patient()
     thread = Thread(call_worker, sid, agent_name="desk")
-    async with LiveSession(llm=llm, state=state, thread=thread) as session:
+    app = AppContext(patient=state)
+    async with LiveSession(llm=llm, context=app, thread=thread) as session:
         await session.start(agent)
         assert session.thread is thread
         await session.run(user_input="hello")
@@ -828,8 +790,11 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: 
         assert row is not None and row.lease_until == 0, "released without draining"
 
         # a text lands between two voice turns and is answered by another worker
-        async def by_text(ctx: A2ASessionContext[Patient]) -> str:
-            ctx.state.verified = 5
+        async def by_text(ctx: A2ASessionContext) -> str:
+            text_app = AppContext()
+            await ctx.store.load_context(text_app)
+            text_app.patient.verified = 5
+            await ctx.store.save_context(text_app)
             return "texted back"
 
         await run_turn(
@@ -839,7 +804,6 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: 
             a2a("a text", "m1", channel="sms"),
             None,
             by_text,
-            state_type=Patient,
             debounce=timedelta(0),
         )
         # the next voice turn's acquire returns a newer version: the call reloads once, before
@@ -848,7 +812,8 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: 
         assert result.output == "yes, and I read your text"
         texts = [i.text_content for i in session.history.items if i.type == "message"]
         assert texts[:4] == ["hello", "hi there", "a text", "texted back"]
-        assert state.verified == 5 and session.state is state
+        await session.store.load_context(app)
+        assert app.patient.verified == 5 and session.context is app
         assert session._activity is not None
         seen = [
             i.text_content

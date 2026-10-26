@@ -62,7 +62,7 @@ pytestmark = [pytest.mark.unit]
 # ---------------------------------------------------------------------------------------------
 
 
-async def expert(ctx: A2ASessionContext[Any]) -> str:
+async def expert(ctx: A2ASessionContext) -> str:
     await ctx.update("checking the fare rules")
     if ctx.message.text_content == "say goodbye":
         return "Thanks for calling, goodbye."
@@ -296,16 +296,8 @@ async def test_a_delegate_is_a_toolset_named_from_the_card(
 
 
 def _front_desk(expert: A2ADelegate) -> Agent:
-    front = Agent(instructions="front desk")
-
-    @front.tool
-    async def coverage(ctx: RunContext) -> str:
-        """Ask the eligibility expert."""
-        await ctx.update("asking the expert")
-        # no context_id: the delegate finds the turn's session through the run hooks
-        return (await expert.run("is it covered", progress=ctx.update)).output
-
-    front.update_options(
+    front = Agent(
+        instructions="front desk",
         llm=FakeLLM(
             fake_responses=[
                 FakeLLMResponse(
@@ -319,8 +311,16 @@ def _front_desk(expert: A2ADelegate) -> Agent:
                     input="the fare is 240 USD", content="Yes, 240 USD.", ttft=0, duration=0
                 ),
             ]
-        )
+        ),
     )
+
+    @front.tool
+    async def coverage(ctx: RunContext) -> str:
+        """Ask the eligibility expert."""
+        await ctx.update("asking the expert")
+        # no context_id: the delegate finds the turn's session through the run hooks
+        return (await expert.run("is it covered", progress=ctx.update)).output
+
     return front
 
 
@@ -336,7 +336,7 @@ async def test_a_tools_update_inside_agent_run_reaches_the_door_and_the_delegate
         delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
         front = _front_desk(delegate)
 
-        async def handler(ctx: A2ASessionContext[Any]) -> str:
+        async def handler(ctx: A2ASessionContext) -> str:
             return (await front.run(ctx.message, message_history=ctx.message_history)).output
 
         clinic, _ = make_server(clinic_storage, handler)
@@ -403,9 +403,13 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
     expert = _expert_that_asks(verbatim=verbatim)
     question = "Which payer, and the member id?"
 
-    async def expert_door(ctx: A2ASessionContext[Any]) -> str:
+    async def expert_door(ctx: A2ASessionContext) -> str:
         result = await expert.run(ctx.message, message_history=ctx.message_history)
-        return result.input_required or str(result.output)
+        return (
+            result.output.question
+            if isinstance(result.output, InputRequired)
+            else str(result.output)
+        )
 
     expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
     expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(
@@ -448,9 +452,13 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
             ),
         )
 
-        async def desk(ctx: A2ASessionContext[Any]) -> str:
+        async def desk(ctx: A2ASessionContext) -> str:
             result = await front.run(ctx.message, message_history=ctx.message_history)
-            return result.input_required or str(result.output)
+            return (
+                result.output.question
+                if isinstance(result.output, InputRequired)
+                else str(result.output)
+            )
 
         clinic, _ = make_server(clinic_storage, desk)
         async with http_client(clinic) as clinic_http:
@@ -529,9 +537,13 @@ async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
         """Disclose."""
         return llm.ToolResult(disclaimer, verbatim=True)
 
-    async def expert_door(ctx: A2ASessionContext[Any]) -> str:
+    async def expert_door(ctx: A2ASessionContext) -> str:
         result = await expert.run(ctx.message, message_history=ctx.message_history)
-        return result.input_required or str(result.output)
+        return (
+            result.output.question
+            if isinstance(result.output, InputRequired)
+            else str(result.output)
+        )
 
     expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
     expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(

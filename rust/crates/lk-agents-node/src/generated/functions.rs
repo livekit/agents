@@ -131,21 +131,16 @@ pub fn recording_enabled(options: &crate::generated::objects::RecordingOptions) 
     lk_agents_abi::telemetry::report::recording_enabled(&options.inner)
 }
 
-/// The Luhn checksum, ASCII digits only (the reference's `isdigit()` admits `²`, which then crashes `int()`).
 #[napi(js_name = "luhnValid")]
 pub fn luhn_valid(card_number: String) -> bool {
     lk_agents_voice::workflows::builtins::credit_card::luhn_valid(&card_number)
 }
 
-/// The class names of the two `ToolError` subclasses, as `(declined, restart)`: the strings
-/// `WorkflowReply.error_class` carries, so a rename cannot desync the two sides.
 #[napi(js_name = "cardErrorClassNames")]
 pub fn card_error_class_names() -> (String, String) {
     { let (t0, t1,) = lk_agents_voice::workflows::builtins::credit_card::card_error_class_names(); (t0.to_string(), t1.to_string()) }
 }
 
-/// `_assemble_credit_card_result(...)`: the pure half of `GetCreditCardTask`, whose loop stays in
-/// Python because `TaskGroup` needs Python task factories.
 #[napi(js_name = "assembleCreditCard")]
 pub fn assemble_credit_card(env: Env, cardholder: crate::generated::records::GetNameResult, card_number: crate::generated::records::GetCardNumberResult, security_code: crate::generated::records::GetSecurityCodeResult, expiration_date: crate::generated::records::GetExpirationDateResult) -> napi::Result<crate::generated::records::GetCreditCardResult> {
     crate::host_error::run(&env, || {
@@ -349,13 +344,6 @@ pub fn min_reasoning_effort(model: String) -> Option<String> {
 #[napi(js_name = "workflowPrompts")]
 pub fn workflow_prompts() -> crate::generated::records::WorkflowPrompts {
     crate::generated::records::WorkflowPrompts::from(&lk_agents_voice::workflows::builtins::prompts::workflow_prompts())
-}
-
-/// The five `copy()` flags `_summarize` uses, all `false` (the opposite of the defaults) so the
-/// summary keeps the tool calls: "keep every item to allow summarization to be more action-aware".
-#[napi(js_name = "taskGroupSummaryFlags")]
-pub fn task_group_summary_flags() -> crate::generated::records::TaskGroupSummaryFlags {
-    crate::generated::records::TaskGroupSummaryFlags::from(&lk_agents_voice::workflows::builtins::task_group::SUMMARY_COPY_FLAGS)
 }
 
 /// `_DEFAULT_AEC_WARMUP_DURATION`, as a `Duration`.

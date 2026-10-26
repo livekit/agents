@@ -76,7 +76,7 @@ ENDPOINT = "desk"
 # ---------------------------------------------------------------------------------------------
 
 
-async def echo(ctx: A2ASessionContext[Any]) -> str:
+async def echo(ctx: A2ASessionContext) -> str:
     await ctx.update("looking")
     return "reply to: " + ctx.message.text_content
 
@@ -86,9 +86,9 @@ Workers = tuple[AgentDBStorage, AgentDBStorage]
 
 def make_server(
     storage: AgentDBStorage,
-    handler: Callable[[A2ASessionContext[Any]], Awaitable[Any]] = echo,
+    handler: Callable[[A2ASessionContext], Awaitable[Any]] = echo,
     **kw: Any,
-) -> tuple[AgentServer, A2AEndpoint[Any]]:
+) -> tuple[AgentServer, A2AEndpoint]:
     server = AgentServer(storage=storage, agent_name=AGENT, api_key=API_KEY, api_secret=API_SECRET)
     kw.setdefault("description", "Answers front desk questions.")
     endpoint = server.a2a_session(endpoint=ENDPOINT, **kw)(handler)
@@ -252,7 +252,7 @@ async def test_a_stock_client_without_the_header_gets_a_plain_text_agent(
 
 
 async def test_the_header_is_echoed(agentdb_storage: AgentDBStorage) -> None:
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         await ctx.update("one moment")
         return "Goodbye."
 
@@ -336,7 +336,7 @@ async def test_thin_slice_across_two_workers(agentdb_workers: Workers) -> None:
     a, b = agentdb_workers
     seen: list[list[str]] = []
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         seen.append([i.text_content or "" for i in ctx.message_history.items])
         return "seen " + str(len(ctx.message_history.items))
 
@@ -359,16 +359,8 @@ async def test_thin_slice_across_two_workers(agentdb_workers: Workers) -> None:
 
 
 def _blocking_agent(tool_entered: asyncio.Event, release: asyncio.Event) -> Agent:
-    front = Agent(instructions="front desk")
-
-    @front.tool
-    async def lookup(ctx: RunContext) -> str:
-        """Look the caller up."""
-        tool_entered.set()
-        await release.wait()
-        return "found"
-
-    front.update_options(
+    front = Agent(
+        instructions="front desk",
         llm=FakeLLM(
             fake_responses=[
                 FakeLLMResponse(
@@ -381,8 +373,16 @@ def _blocking_agent(tool_entered: asyncio.Event, release: asyncio.Event) -> Agen
                 FakeLLMResponse(input="found", content="never sent", ttft=0, duration=0),
                 FakeLLMResponse(input="second", content="both answered", ttft=0, duration=0),
             ]
-        )
+        ),
     )
+
+    @front.tool
+    async def lookup(ctx: RunContext) -> str:
+        """Look the caller up."""
+        tool_entered.set()
+        await release.wait()
+        return "found"
+
     return front
 
 
@@ -393,7 +393,7 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
     tool_entered, release = asyncio.Event(), asyncio.Event()
     front = _blocking_agent(tool_entered, release)
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+    async def handler(ctx: A2ASessionContext) -> str | None:
         return (await front.run(ctx.message, message_history=ctx.message_history)).output
 
     server_a, _ = make_server(a, handler)
@@ -441,7 +441,7 @@ async def test_inbox_sms_burst_is_one_reply_and_a_merge(agentdb_workers: Workers
     a, b = agentdb_workers
     batches: list[list[str]] = []
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         batches.append([m.parts[0]["text"] for m in ctx.messages])
         return "one reply"
 
@@ -481,7 +481,7 @@ async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
     storage = agentdb_storage
     batches: list[list[str]] = []
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         batches.append([m.parts[0]["text"] for m in ctx.messages])
         await asyncio.sleep(0.5)
         return "one reply"
@@ -545,7 +545,7 @@ async def test_resubscribe_replays_after_the_first_stream_is_dropped(
     a, b = agentdb_workers
     release = asyncio.Event()
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         await ctx.update("working on it")
         await release.wait()
         return "done"
@@ -603,7 +603,7 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
     a, b = agentdb_workers
     release = asyncio.Event()
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         await ctx.update("working on it")
         await release.wait()
         return "done"
@@ -640,7 +640,7 @@ async def test_tasks_cancel_ends_a_running_turn_at_its_checkpoint(
     entered, release = asyncio.Event(), asyncio.Event()
     front = _blocking_agent(entered, release)
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+    async def handler(ctx: A2ASessionContext) -> str | None:
         return (await front.run(ctx.message, message_history=ctx.message_history)).output
 
     server, _ = make_server(agentdb_storage, handler)
@@ -813,7 +813,7 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
 
     seen: dict[str, Any] = {}
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         seen["caller_history"] = ctx.caller_history
         seen["channel"] = ctx.messages[0].channel
         seen["parts"] = ctx.messages[0].parts
@@ -848,7 +848,7 @@ async def test_a_storage_error_mid_turn_fails_the_task_storage_unavailable(
     the client resends."""
     a, _ = agentdb_workers
 
-    async def handler(ctx: A2ASessionContext[Any]) -> str:
+    async def handler(ctx: A2ASessionContext) -> str:
         raise StorageUnavailable("the database went away")
 
     server, _ = make_server(a, handler)

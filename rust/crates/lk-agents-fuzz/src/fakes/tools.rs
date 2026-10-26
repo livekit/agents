@@ -86,15 +86,14 @@ pub(super) fn deliver(sender: oneshot::Sender<Body>, what: &Input) -> bool {
     use lk_agents_voice::tool_executor::ToolRaise;
     let Input::ToolAnswered { answer, text: AgentText(text), .. } = what else { return false };
     if let Answer::AfterIdle = answer {
-        let returned = ToolAnswer::Returned { value: None, agents: vec![] };
+        let returned = ToolAnswer::Returned { value: None };
         return sender.send(Body::AfterIdle(returned)).is_ok();
     }
     let answer = match answer {
-        Answer::Return => ToolAnswer::Returned { value: None, agents: vec![] },
-        Answer::Value => ToolAnswer::Returned {
-            value: Some(serde_json::Value::String(text.clone())),
-            agents: vec![],
-        },
+        Answer::Return => ToolAnswer::Returned { value: None },
+        Answer::Value => {
+            ToolAnswer::Returned { value: Some(serde_json::Value::String(text.clone())) }
+        }
         Answer::Error => ToolAnswer::Raised(ToolRaise::ToolError(text.clone())),
         Answer::StopResponse => ToolAnswer::Raised(ToolRaise::StopResponse),
         Answer::Cancelled => ToolAnswer::Cancelled,

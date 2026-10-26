@@ -1,27 +1,18 @@
-"""
-- An auto claim's first notice of loss over text, which needs a photo of the damage.
-- `request_photo` returns `InputRequired(question)`: the turn's task waits `input-required` with
-  the question as its reply, and the policyholder's next message, the uploaded photo's reference,
-  becomes that call's output, on any worker.
-- `open_claim` takes the `Photo` as a typed argument; the thread keeps the reference, the bytes
-  stay outside it.
-- `output_type=Claim` gives the handler a typed result.
-- The claim number is written to the `Loss` state once, so a retried call reuses it.
-"""
+"""An auto claim's first notice of loss over text, which needs a photo of the damage."""
 
 import secrets
 from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from livekit.agents import Agent, AgentServer, InputRequired, RunContext
+from livekit.agents import Agent, AgentServer, InputRequired, RunContext, RunResult, persisted
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.storage import AgentDBStorage
 
 
 @dataclass
 class Loss:
-    """State: saved with the lane after every run."""
+    """Application data retained through explicit context saves."""
 
     policy_number: str | None = None
     description: str | None = None
@@ -42,47 +33,43 @@ class Claim(BaseModel):
     next_step: str
 
 
-fnol = Agent(
-    instructions=(
-        "Take a first notice of loss on an auto policy: what happened, when, where. "
-        "Request a photo of the damage, then open the claim with it."
-    ),
+@dataclass
+class AppContext:
+    loss: Loss = persisted(default_factory=Loss)
+
+
+fnol = Agent[AppContext](
+    instructions="Take a first notice of loss on an auto policy: what happened, when, where. Request a photo of the damage, then open the claim with it.",
     llm="google/gemma-4-31b-it",
-    state_type=Loss,
     output_type=Claim,
 )
 
 
 @fnol.tool
-async def request_photo(ctx: RunContext[None, Loss]) -> InputRequired:
-    """Ask the policyholder for a photo of the damage. Its result is the photo they send."""
-    # The turn's A2A task enters input-required with this question; the pending call sits in the
-    # history with a placeholder output; the reply, whenever it comes and on whatever worker,
-    # replaces it.
+async def request_photo(ctx: RunContext[AppContext]) -> InputRequired:
+    """Ask the policyholder for a photo of the damage. The next invocation interprets the photo they send."""
     return InputRequired("Could you send a photo of the damage? A wide shot and a close-up.")
 
 
 @fnol.tool
 async def open_claim(
-    ctx: RunContext[None, Loss], policy_number: str, description: str, photo: Photo
+    ctx: RunContext[AppContext], policy_number: str, description: str, photo: Photo
 ) -> str:
-    ctx.state.policy_number = policy_number
-    ctx.state.description = description
-    if ctx.state.claim_number is None:  # idempotent: a retried call gets the same number
-        ctx.state.claim_number = f"CLM-{secrets.randbelow(10**7):07d}"
-    return f"{ctx.state.claim_number} opened with photo {photo.ref}"
+    ctx.context.loss.policy_number = policy_number
+    ctx.context.loss.description = description
+    if ctx.context.loss.claim_number is None:
+        ctx.context.loss.claim_number = f"CLM-{secrets.randbelow(10**7):07d}"
+    await ctx.store.save_context(ctx.context)
+    return f"{ctx.context.loss.claim_number} opened with photo {photo.ref}"
 
 
 server = AgentServer(storage=AgentDBStorage())
 
 
-@server.a2a_session(endpoint="claims", description="Report an auto claim.", state=Loss)
-async def claims(ctx: A2ASessionContext[Loss]) -> Claim | None:
-    result = await fnol.run(ctx.message, message_history=ctx.message_history, state=ctx.state)
-    return result.output  # None while the task is input-required; the question is the reply
-
-
-# The policyholder reports from the roadside and uploads the photo that evening, on another worker.
-# Nothing re-executes: the answer replaces the pending call's placeholder output and the model
-# continues from the history. A reply that is a question instead is still the call's output; the model
-# answers it and asks for the photo again, which opens a new pending call.
+@server.a2a_session(endpoint="claims", description="Report an auto claim.")
+async def claims(ctx: A2ASessionContext) -> RunResult[Claim]:
+    app = AppContext()
+    await ctx.store.load_context(app)
+    result = await fnol.run(ctx.message, message_history=ctx.message_history, context=app)
+    await ctx.store.save_context(app)
+    return result

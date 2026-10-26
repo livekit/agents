@@ -8,8 +8,8 @@ use crate::agent_activity::options::{
 use crate::agent_session::builder::DriverBuilder;
 use crate::agent_session::calls::Calls;
 use crate::agent_session::commands::{
-    AgentUpdate, Answer, Close, Command, HostRecorder, NewActivity, Origin, PreviousActivity,
-    RecorderCommand, RequestId, SayText, SpeechCommand,
+    AgentUpdate, Answer, Close, Command, HostRecorder, Origin, RecorderCommand, RequestId, SayText,
+    SpeechCommand,
 };
 use crate::agent_session::driver::{DriverError, PeerHandle, Rx, SessionHandle, Tx, start_ivr};
 use crate::agent_session::host_events::HostEvent;
@@ -368,7 +368,7 @@ impl SessionApi {
         models
     }
 
-    /// Shared by `update_agent`, `hook_described` and `enter_task`. A host frame change closes the
+    /// Used by `update_agent`. A host frame change closes the
     /// frame it leaves and starts the one it installs; the driver sets an inline task's pair
     /// itself.
     fn frame(&self, frame: UpdateAgentArgs) -> AgentUpdate {
@@ -400,10 +400,7 @@ impl SessionApi {
             stt,
             vad,
             options,
-            previous: PreviousActivity::Close,
-            next: NewActivity::Start,
             call: None,
-            task: None,
         }
     }
 
@@ -796,7 +793,7 @@ pub trait NodeFactory: Send + Sync {
 }
 
 /// The frame a host `Agent` describes (`AgentActivity._frame_kwargs`), as `update_agent`,
-/// `hook_described` and `enter_task` take it. Each provider is three-state: absent keeps the leg,
+/// Each provider is three-state: absent keeps the leg,
 /// `None` removes it, an object replaces it. `chat_ctx` replaces when present. The tools are one
 /// toolset, replaced together because the runner is per-agent. `turn_handling` is the agent layer.
 #[lk_agents_abi::host(kwargs)]

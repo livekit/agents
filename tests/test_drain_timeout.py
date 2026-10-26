@@ -132,10 +132,8 @@ class TestDrainTimeout:
 
         server._proc_pool = FakeProcPool()  # type: ignore[assignment]
 
-        # Suppress the _update_worker_status call which needs a websocket
-        with patch.object(server, "_update_worker_status", new_callable=AsyncMock):
-            with pytest.raises(asyncio.TimeoutError):
-                asyncio.get_event_loop().run_until_complete(server.drain())
+        with pytest.raises(asyncio.TimeoutError):
+            asyncio.get_event_loop().run_until_complete(server.drain())
 
     def test_aclose_skipped_on_non_exitcli_non_timeout_exception(self) -> None:
         """Other exceptions from drain() still propagate (only TimeoutError

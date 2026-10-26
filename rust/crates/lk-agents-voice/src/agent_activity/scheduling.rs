@@ -266,12 +266,7 @@ mod speech_scheduler {
         /// `_scheduling_task`'s pass: the owed gap expires where it is read, a parked speech
         /// no longer blocked becomes current again before the queue, and the head is authorized,
         /// armed behind the gap, or held for AMD.
-        pub(super) fn scheduling_pass(
-            &mut self,
-            now: Ts,
-            blocked: &crate::agent_activity::tasks::DrainBlocked,
-            gap_elapsed: bool,
-        ) -> SchedulingPass {
+        pub(super) fn scheduling_pass(&mut self, now: Ts, gap_elapsed: bool) -> SchedulingPass {
             let mut released = false;
             let candidate = loop {
                 let candidate = match self.step {
@@ -294,15 +289,6 @@ mod speech_scheduler {
                     // A parked speech whose tool is no longer blocked was mid-tool: it precedes the
                     // queue.
                     SchedulingStep::Idle => {
-                        let restorable = self
-                            .speeches
-                            .iter()
-                            .find(|(id, e)| e.status == Status::Parked && !blocked.contains(**id));
-                        if let Some((&parked, _)) = restorable {
-                            self.step = SchedulingStep::Current(parked);
-                            self.set_status(parked, Status::Current);
-                            return SchedulingPass { released, next: NextSpeech::Stay };
-                        }
                         let Some(speech) = self.speech_q.pop_front() else {
                             return SchedulingPass { released, next: NextSpeech::Stay };
                         };
@@ -430,47 +416,11 @@ mod speech_scheduler {
             }
         }
 
-        /// A blocked current speech is parked: it stays current while its step plays.
-        pub(super) fn park_if_blocked(
-            &mut self,
-            blocked: &crate::agent_activity::tasks::DrainBlocked,
-        ) {
-            if let SchedulingStep::Current(current) = self.step
-                && blocked.contains(current)
-                && self.entry(current).is_some_and(|e| e.status == Status::Current)
-            {
-                self.set_status(current, Status::Parked);
-            }
-        }
-
-        /// Unblocked, a parked speech is current again, or becomes current when none is.
-        pub(super) fn unpark(&mut self, speech: SpeechId) {
-            if !self.entry(speech).is_some_and(|e| e.status == Status::Parked) {
-                return;
-            }
-            match self.step {
-                SchedulingStep::Current(current) if current == speech => {
-                    self.set_status(speech, Status::Current)
-                }
-                SchedulingStep::Idle => {
-                    self.step = SchedulingStep::Current(speech);
-                    self.set_status(speech, Status::Current);
-                }
-                SchedulingStep::Current(_)
-                | SchedulingStep::Delaying { .. }
-                | SchedulingStep::AuthorizationPaused { .. } => {}
-            }
-        }
-
         /// The pause's callers, once nothing it waits on is outstanding (a blocked speech excepted
         /// once `Working`).
-        pub(super) fn settle_pause(
-            &mut self,
-            blocked: &crate::agent_activity::tasks::DrainBlocked,
-        ) -> Vec<PauseCause> {
+        pub(super) fn settle_pause(&mut self) -> Vec<PauseCause> {
             let Some(pause) = &mut self.paused else { return Vec::new() };
-            let outstanding = (self.speeches.iter())
-                .any(|(id, e)| !(blocked.contains(*id) && e.status == Status::Working));
+            let outstanding = !self.speeches.is_empty();
             if outstanding {
                 return Vec::new();
             }
@@ -855,11 +805,8 @@ impl Driver {
             return;
         }
         let gap_elapsed = self.pop_due(now, out, |t| t == Timer::ConsecutiveSpeechDelay).is_some();
-        let SchedulingPass { released, next } = self.activity.speech_scheduler.scheduling_pass(
-            now,
-            &self.activity.drain_blocked,
-            gap_elapsed,
-        );
+        let SchedulingPass { released, next } =
+            self.activity.speech_scheduler.scheduling_pass(now, gap_elapsed);
         if released {
             out.trace(SpeechStep::FloorReleased);
         }
@@ -919,13 +866,12 @@ impl Driver {
     /// an inline task excepted. Journalled with the speeches it waits for. Two pauses before the
     /// drain completes are two promises; a closing session refuses (drops) it.
     pub(crate) fn pause_scheduling(&mut self, now: Ts, cause: PauseCause, out: &mut Out) {
-        let except = self.activity.drain_blocked.speeches().collect();
+        let except = std::collections::BTreeSet::new();
         out.trace(SpeechStep::SchedulingPaused { except });
         if self.session.closing_past_edge() {
             return refuse_pause(vec![cause], CLOSING, out);
         }
         self.activity.speech_scheduler.pause(cause);
-        self.activity.speech_scheduler.park_if_blocked(&self.activity.drain_blocked);
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
         self.settle_scheduling_pause(out);
     }
@@ -959,23 +905,10 @@ impl Driver {
         }
     }
 
-    /// `_add_drain_blocked_tasks` and its release, at the first block and the last unblock. A
-    /// blocked current speech is parked: it stays current while its step plays (freeing it let the
-    /// task's speech interleave with the parent's). Unblocked, it is current again, or becomes
-    /// current when none is.
-    pub(crate) fn set_drain_blocked(&mut self, speech: SpeechId, blocked: bool, out: &mut Out) {
-        if blocked {
-            self.activity.speech_scheduler.park_if_blocked(&self.activity.drain_blocked);
-        } else {
-            self.activity.speech_scheduler.unpark(speech);
-        }
-        self.settle_scheduling_pause(out);
-    }
-
     /// Answer every pending pause once nothing it waits on is outstanding (released, tools
     /// included). A blocked speech is excepted once `Working`: the pause came from inside its tool.
     pub(super) fn settle_scheduling_pause(&mut self, out: &mut Out) {
-        for cause in self.activity.speech_scheduler.settle_pause(&self.activity.drain_blocked) {
+        for cause in self.activity.speech_scheduler.settle_pause() {
             out.signal(Signal::Paused(cause, PauseResult::Settled));
             out.trace(SpeechStep::SchedulingPauseSettled);
         }

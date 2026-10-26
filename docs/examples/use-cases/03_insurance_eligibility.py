@@ -1,9 +1,9 @@
 """
 - Northside's front desk, with an insurance eligibility expert deployed on its own.
 - The voice door is thin: the realtime model's one tool is the front desk's own text door,
-  `A2ADelegate(FRONT_DESK_URL)`, and the front desk owns the real ones.
-- The `coverage` tool delegates over A2A with `A2ADelegate(url).run(..., progress=ctx.update)`, so
-  the caller hears each portal step, and `record_delegation` notes the expert's task on the call.
+  `A2AAgent(FRONT_DESK_URL).as_tool()`, and the front desk owns the real ones.
+- The front desk exposes the eligibility endpoint through `A2AAgent(EXPERT_URL).as_tool()`.
+  Progress and task correlation are handled by the adapter.
 - The expert's card offers the Live extension, so it writes its own lane in the caller's thread,
   on its own worker. `public=False` closes its endpoint to callers without a project token; the
   delegate mints one because the expert is on the project's own host.
@@ -12,9 +12,8 @@
 
 import asyncio
 
-from livekit.agents import Agent, AgentServer, JobContext, LiveSession, RunContext
-from livekit.agents.a2a import A2ASessionContext
-from livekit.agents.delegation import A2ADelegate, record_delegation
+from livekit.agents import Agent, AgentServer, JobContext, LiveSession, RunContext, RunResult
+from livekit.agents.a2a import A2AAgent, A2ASessionContext
 from livekit.agents.storage import AgentDBStorage
 from livekit.plugins import openai
 
@@ -41,16 +40,17 @@ eligibility = Agent(
 front_desk = Agent(
     instructions="Northside Family Clinic front desk. Appointments, insurance, directions.",
     llm="google/gemma-4-31b-it",
+    tools=[A2AAgent(EXPERT_URL).as_tool()],
 )
 voice = Agent(
     instructions="You are the clinic's voice on the phone. Hand every request to the front desk.",
-    tools=[A2ADelegate(FRONT_DESK_URL)],  # one tool, ask_front_desk, described by its card
+    tools=[A2AAgent(FRONT_DESK_URL).as_tool()],  # one tool, ask_front_desk, described by its card
 )
 
 
 @eligibility.tool
 async def check_eligibility(
-    ctx: RunContext[None, None], payer: str, member_id: str, visit_type: str
+    ctx: RunContext[None], payer: str, member_id: str, visit_type: str
 ) -> str:
     if payer not in PAYERS:
         return f"unknown payer; we take {', '.join(PAYERS.values())}"
@@ -64,19 +64,6 @@ async def check_eligibility(
     return f"active; copay {b['copay']}, deductible remaining {b['deductible_left']}"
 
 
-@front_desk.tool
-async def coverage(ctx: RunContext[None, None], payer: str, member_id: str, visit_type: str) -> str:
-    """Ask the eligibility expert whether a visit is covered. Its progress reaches the caller."""
-    request = f"{payer} member {member_id}, {visit_type} visit"
-    expert = A2ADelegate(EXPERT_URL)
-    try:
-        result = await expert.run(request, progress=ctx.update)
-    finally:
-        await expert.aclose()
-    record_delegation(ctx.function_call, result)
-    return result.output
-
-
 server = AgentServer(storage=AgentDBStorage())
 
 
@@ -88,22 +75,21 @@ async def phone(ctx: JobContext) -> None:
 
 
 @server.a2a_session(endpoint="front-desk", description="Northside Family Clinic.")
-async def front_desk_text(ctx: A2ASessionContext) -> str:
+async def front_desk_text(ctx: A2ASessionContext) -> RunResult[str]:
     result = await front_desk.run(ctx.message, message_history=ctx.message_history)
-    return result.output
+    return result
 
 
 # The expert's own deployment. Shown here for the reader; in practice this is another server,
-# with the portal tooling it needs, scaled on its own, maybe owned by another team. Were it in
-# this server for real, coverage would call eligibility.run(...) directly, in-process.
+# with the portal tooling it needs, scaled on its own, maybe owned by another team. Local composition can instead use an agent tool or a direct agent run.
 @server.a2a_session(endpoint="eligibility", description="Payer eligibility checks.", public=False)
-async def eligibility_text(ctx: A2ASessionContext) -> str:
+async def eligibility_text(ctx: A2ASessionContext) -> RunResult[str]:
     result = await eligibility.run(ctx.message, message_history=ctx.message_history)
-    return result.output
+    return result
 
 
 # One brain, two doors: the call and the text line both run front_desk, one history. The
-# realtime model gets one tool, the front desk's door; the front desk gets its own tools. Its coverage tool
+# realtime model gets one tool, the front desk's door; the front desk gets its own tools. Its remote agent tool
 # delegates again, over A2A, to the expert in another deployment: another worker, its own lane in
 # the patient's thread, progress frames forwarded so the caller hears "signing in to Blue Cross".
 # "Actually it's a specialist visit" reaches the same expert. Same shape for prior authorization.

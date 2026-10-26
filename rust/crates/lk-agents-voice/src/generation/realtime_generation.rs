@@ -138,10 +138,6 @@ fn deliver_realtime(
         .filter(|item| matches!(item, ChatItem::FunctionCallOutput(_)))
         .collect();
     let ask = match decision.next {
-        NextStep::Handoff { agent, follow_up } => {
-            shared.report(GenEvent::Handoff { speech, agent });
-            follow_up.is_some()
-        }
         NextStep::Reply(_) => true,
         // The user barged in over the tool call: the answer is committed and not spoken.
         NextStep::Done | NextStep::Interrupted => false,

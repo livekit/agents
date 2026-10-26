@@ -1,7 +1,7 @@
 from typing import Any
 
 from . import io, room_io, run_result
-from .agent import Agent, AgentTask, ModelSettings
+from .agent import Agent, ModelSettings
 from .agent_session import (
     ExpressiveOptions,
     LiveSession,
@@ -48,7 +48,6 @@ __all__ = [
     "VoiceActivityVideoSampler",
     "Agent",
     "ModelSettings",
-    "AgentTask",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",

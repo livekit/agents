@@ -327,7 +327,7 @@ async def test_07_input_required_from_a_tool_then_the_answer(dentist: Dentist) -
 
 
 @pytest.mark.parametrize("answer", ["yes", "no"])
-async def test_07_requires_approval_asks_yes_or_no(dentist: Dentist, answer: str) -> None:
+async def test_07_needs_approval_asks_yes_or_no(dentist: Dentist, answer: str) -> None:
     # the approval is the slow brain's schedule_appointment; asked the way the fast brain
     # delegates, on a lane of the patient's session
     thread_id = (await dentist.send("Hello"))["contextId"]

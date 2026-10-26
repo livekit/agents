@@ -21,7 +21,6 @@ pub(crate) enum Signal {
     OnExitEnded(HookId),
     RunOwn(Owned),
     /// A switch begins: an inline task entering captures its parent now.
-    HandoffStarted,
     /// The switch's drain settled: the swap is due.
     Swap,
     RefuseHandoff {
@@ -88,7 +87,6 @@ impl Driver {
                 self.close_exit_done(now, hook, out);
             }
             Signal::RunOwn(what) => self.run_own(what, out),
-            Signal::HandoffStarted => self.capture_task_parent(),
             Signal::Swap => self.perform_handoff(now, out),
             Signal::RefuseHandoff { id, update, cause } => {
                 self.refuse_handoff(id, update, cause, out)

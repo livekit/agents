@@ -57,11 +57,9 @@ impl Runtime {
                 self.handle(Event::Wake, time.read());
                 continue;
             }
-            let settled = self.driver.settled();
             tokio::select! {
                 biased;
                 () = time.wait_until_opt(wake_at) => self.handle(Event::Wake, time.read()),
-                () = settled => self.handle(Event::Wake, time.read()),
                 Some(frame) = self.frames.recv() => self.on_frame(frame, time.read()),
                 next = self.queue.recv() => match next {
                     Some(event) => self.handle(event, time.read()),

@@ -166,9 +166,9 @@ pub(crate) async fn run_tools(
         };
         // The lifecycle event's text: nothing for a silent return, handoff or cancellation.
         let message = match execution.end {
-            ToolEnd::Done => (!execution.output.output.is_empty()
-                && execution.agent_task.is_none())
-            .then(|| execution.output.output.clone()),
+            ToolEnd::Done => {
+                (!execution.output.output.is_empty()).then(|| execution.output.output.clone())
+            }
             ToolEnd::Error => Some(execution.output.output.clone()),
             ToolEnd::Detached => execution.raw_update.clone(),
             ToolEnd::Cancelled => None,

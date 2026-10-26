@@ -11,12 +11,10 @@ use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus}
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::{ReplySource, TurnInstructions};
 use crate::tool_executor::{
-    Batch, HANDOFF_AFTER_UPDATE, RunnerRef, Running, ToolAnswer, ToolEnd, ToolOutcome, answer,
-    decide, default_reply_instructions, emit_ended, pair_for,
+    Batch, RunnerRef, Running, ToolAnswer, ToolEnd, ToolOutcome, answer, decide,
+    default_reply_instructions, emit_ended, pair_for,
 };
-use crate::trace::{
-    CoreStep, FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep,
-};
+use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
 use std::time::Duration;
 
@@ -210,14 +208,8 @@ impl Driver {
                 out.machine().append(self.session.states.on_tool_call_ended(now, closing));
                 // Silent returns voice nothing; an `Agent` or cancellation is refused.
                 let outcome = match raw {
-                    ToolAnswer::Returned { value: None, agents } if agents.is_empty() => None,
+                    ToolAnswer::Returned { value: None } => None,
                     ToolAnswer::Raised(crate::tool_executor::ToolRaise::StopResponse) => None,
-                    ToolAnswer::Returned { agents, .. } if !agents.is_empty() => {
-                        out.trace(CoreStep::PortFailure(HANDOFF_AFTER_UPDATE));
-                        let message = Some(HANDOFF_AFTER_UPDATE.to_owned());
-                        emit_ended(out, id, call_id, message, ToolEndStatus::Error);
-                        return;
-                    }
                     ToolAnswer::Cancelled => {
                         emit_ended(out, id, call_id, None, ToolEndStatus::Cancelled);
                         return;

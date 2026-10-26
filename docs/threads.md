@@ -1,6 +1,6 @@
 # Threads
 
-A thread is one conversation between a person and an agent, across
+A thread is one conversation between a person and an application, across
 channels and over time. A text today, a call tomorrow that continues it:
 one thread, one memory. It is the unit everything else is scoped to: the
 history, the state, the tasks, the A2A context.
@@ -23,11 +23,12 @@ history, the state, the tasks, the A2A context.
 | an id       | `AT_...`, minted by the platform. A client learns it as the `contextId` of the first reply and sends it from then on; the handler reads it as `ctx.thread.id`     |
 | scope       | an optional opaque identifier the application sets for the person or account the thread is about; the one dimension threads are listed by, and a grant's scope    |
 | attributes  | a small string map the application sets and reads back; a title, a preview, flags                                                                                 |
-| lanes       | one per agent that took part: that agent's history, state, agent stack and tasks; see [lanes.md](lanes.md)                                                        |
+| lanes       | one per configured handler lane: transport history, saved application data and tasks; see [lanes.md](lanes.md)                                                        |
 | the journal | the framework's append-only record of what happened, shared by every lane; see [journal.md](journal.md)                                                           |
 
-Several agents can take part in one thread: a front desk and the expert it
-delegates to, each in its own lane. A tool reads another agent's history
+Several endpoints can take part in one thread, each in its configured lane.
+Local agents coordinated by a router have separate frames within saved router
+state; those frames do not each create a transport lane. A tool reads another agent's history
 with `ctx.thread.lane(agent).history()`.
 
 ## How a thread is found
@@ -68,7 +69,8 @@ For SMS, WhatsApp and email routing, see [planned-channels.md](planned-channels.
 
 A run is one input to one result, tools included: a text message, a voice
 turn. The framework loads the agent's lane before a run and commits it
-after, so a run can execute on any worker and the next one sees everything.
+after, so a run can execute on any worker. Application fields require explicit
+load/save; returning from a handler does not save them.
 Runs of one agent in a thread execute one at a time, in the order their
 messages arrived, unless the endpoint chose otherwise; see
 [lanes.md](lanes.md) and [text-endpoints.md](text-endpoints.md).
@@ -90,14 +92,14 @@ with the same API and no persistence; see [storage.md](storage.md).
 | `update(attributes=, idle_ttl_seconds=)`       | change the attributes a listing returns, or the idle period                   |
 | `lane(agent).history()`                        | another agent's history in this thread                                        |
 | `chat_history(agent=None)`                     | this agent's history, or another agent's                                      |
-| `lane(agent).tasks(status=, limit=)`, `background_tasks(agent=None)` | a lane's tasks: every turn, or only the submitted background tasks |
+| `lane(agent).tasks(status=, limit=)` | A2A task records for the selected lane |
 | `journal(after_id=0, limit=100)`               | the journal, one page in order                                                |
 
 ## Lifecycle
 
 A thread is created on first contact, a message with no `contextId` or a
-call with no thread in its dispatch, and never by agent code. Creating it
-creates its database. It expires after its idle period, `idle_ttl`, set at
+call with no thread in its dispatch, or explicitly through the threads service.
+Creating it creates its database. It expires after its idle period, `idle_ttl`, set at
 creation or by `update(idle_ttl_seconds=)`; an update counts as activity
 and pushes the expiry. Deleting a thread deletes everything it holds.
 There is nothing to open or close.

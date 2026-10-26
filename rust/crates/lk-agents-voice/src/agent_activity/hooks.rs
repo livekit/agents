@@ -3,7 +3,6 @@
 //! `function_tools_executed` handlers), and how long each is waited on.
 
 use crate::agent::TurnEdit;
-use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::signals::Signal;
 use crate::agent_session::{Driver, HookCall, HookId, HookKind, HookOutcome, HostEvent};
@@ -26,9 +25,6 @@ pub(crate) struct Hooks {
 
 struct Pending {
     kind: HookKind,
-    /// A `DescribeAgent` asked by the driving agent. A tool's handoff blocks the agent whose tool
-    /// returned the new one, not one a handoff installs meanwhile (cleared at the swap).
-    describing: bool,
 }
 
 impl Hooks {
@@ -39,32 +35,12 @@ impl Hooks {
 
     /// The host was asked `hook`.
     pub(crate) fn wait_for(&mut self, hook: HookId, kind: HookKind) {
-        let describing = kind == HookKind::DescribeAgent;
-        self.pending.insert(hook, Pending { kind, describing });
+        self.pending.insert(hook, Pending { kind });
     }
 
     /// The callback is answered or given up on: its kind, if it was waited on.
     pub(crate) fn finish(&mut self, hook: HookId) -> Option<HookKind> {
         self.pending.remove(&hook).map(|h| h.kind)
-    }
-
-    pub(crate) fn is_pending(&self, hook: HookId) -> bool {
-        self.pending.contains_key(&hook)
-    }
-
-    /// The pending callbacks of one kind, in id order.
-    pub(crate) fn pending_of(&self, kind: HookKind) -> Vec<HookId> {
-        self.pending.iter().filter(|(_, h)| h.kind == kind).map(|(id, _)| *id).collect()
-    }
-
-    /// A tool's handoff waits for the host to describe the new agent.
-    pub(crate) fn describing(&self) -> bool {
-        self.pending.values().any(|h| h.describing)
-    }
-
-    /// The agent that asked a pending describe has left: the arriving one is not blocked by it.
-    pub(crate) fn stop_describing(&mut self) {
-        self.pending.values_mut().for_each(|h| h.describing = false);
     }
 
     /// Every callback still waited on, taken, in id order.
@@ -90,7 +66,6 @@ impl Driver {
                 (Some(agent.clone()), None, None, None)
             }
             HookCall::OnUserTurnCompleted { turn, .. } => (None, None, Some(*turn), None),
-            HookCall::DescribeAgent { speech, .. } => (None, Some(*speech), None, None),
             HookCall::RenderToolReply { at_tail, .. } => (None, None, None, Some(*at_tail)),
             HookCall::FillerSource { .. } => (None, None, None, None),
             HookCall::FunctionToolsExecuted { speech, .. } => (None, Some(*speech), None, None),
@@ -108,7 +83,7 @@ impl Driver {
         }
         // An open run owns the agent's `on_enter` and the describe a tool's handoff waits on.
         match kind {
-            HookKind::OnEnter | HookKind::DescribeAgent => self.run_own(Owned::Hook(id), out),
+            HookKind::OnEnter => self.run_own(Owned::Hook(id), out),
             HookKind::OnExit
             | HookKind::OnUserTurnCompleted
             | HookKind::RenderToolReply
@@ -163,7 +138,6 @@ impl Driver {
             HookOutcome::Failed => HookEnd::Failed,
             HookOutcome::Turn(edits) => HookEnd::Returned { edits: edits.len() },
             HookOutcome::Returned
-            | HookOutcome::Described(_)
             | HookOutcome::Rendered(_)
             | HookOutcome::Filler { .. }
             | HookOutcome::FunctionToolsExecuted { .. } => HookEnd::Returned { edits: 0 },
@@ -194,13 +168,10 @@ impl Driver {
         outcome: HookOutcome,
         out: &mut Out,
     ) {
-        use HookOutcome::{
-            Described, Failed, Filler, FunctionToolsExecuted, Rendered, Returned, Turn,
-        };
+        use HookOutcome::{Failed, Filler, FunctionToolsExecuted, Rendered, Returned, Turn};
         let fits = matches!(
             (kind, &outcome),
             (HookKind::OnExit | HookKind::OnEnter, Returned | Failed)
-                | (HookKind::DescribeAgent, Described(_) | Failed)
                 | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed)
                 | (HookKind::RenderToolReply, Rendered(_) | Returned | Failed)
                 | (HookKind::FillerSource, Filler { .. } | Returned | Failed)
@@ -216,17 +187,6 @@ impl Driver {
         match kind {
             HookKind::OnExit => out.signal(Signal::OnExitEnded(id)),
             HookKind::OnEnter => {}
-            HookKind::DescribeAgent => match outcome {
-                Described(update) => self.handoff_step(HandoffEvent::Described(id, update), out),
-                Failed
-                | Returned
-                | Turn(_)
-                | Rendered(_)
-                | Filler { .. }
-                | FunctionToolsExecuted { .. } => {
-                    self.handoff_step(HandoffEvent::DescribeDropped(id), out)
-                }
-            },
             // "error occurred during on_user_turn_completed": return, no reply.
             HookKind::OnUserTurnCompleted => {
                 let edits = match outcome {
@@ -234,7 +194,6 @@ impl Driver {
                     Failed if fits => vec![TurnEdit::StopResponse],
                     Failed
                     | Returned
-                    | Described(_)
                     | Rendered(_)
                     | Filler { .. }
                     | FunctionToolsExecuted { .. } => Vec::new(),
@@ -249,12 +208,9 @@ impl Driver {
             HookKind::RenderToolReply => {
                 let text = match outcome {
                     Rendered(text) => Some(text),
-                    Failed
-                    | Returned
-                    | Turn(_)
-                    | Described(_)
-                    | Filler { .. }
-                    | FunctionToolsExecuted { .. } => None,
+                    Failed | Returned | Turn(_) | Filler { .. } | FunctionToolsExecuted { .. } => {
+                        None
+                    }
                 };
                 self.on_tool_reply_rendered(now, id, text, out)
             }
@@ -264,11 +220,9 @@ impl Driver {
                 let answered = match outcome {
                     Filler { text, spoke } => Some((text, spoke)),
                     Failed => None,
-                    Returned
-                    | Turn(_)
-                    | Described(_)
-                    | Rendered(_)
-                    | FunctionToolsExecuted { .. } => Some((None, false)),
+                    Returned | Turn(_) | Rendered(_) | FunctionToolsExecuted { .. } => {
+                        Some((None, false))
+                    }
                 };
                 self.on_filler_source(now, id, answered, out)
             }
@@ -278,9 +232,7 @@ impl Driver {
                     FunctionToolsExecuted { reply_required, handoff_required } => {
                         Some((reply_required, handoff_required))
                     }
-                    Failed | Returned | Turn(_) | Described(_) | Rendered(_) | Filler { .. } => {
-                        None
-                    }
+                    Failed | Returned | Turn(_) | Rendered(_) | Filler { .. } => None,
                 };
                 self.on_tools_executed_handled(id, left, out)
             }

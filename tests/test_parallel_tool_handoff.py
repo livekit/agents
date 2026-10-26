@@ -31,8 +31,8 @@ class Router(Agent):
         self._save_delay = save_delay
 
     @function_tool
-    async def handoff(self, ctx: RunContext) -> Agent:
-        return Greeter()
+    async def handoff(self, ctx: RunContext) -> None:
+        self.session.update_agent(Greeter())
 
     @function_tool
     async def save_note(self, ctx: RunContext) -> str:

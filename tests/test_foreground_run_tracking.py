@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentTask, Completed, LiveSession, RunContext, function_tool
+from livekit.agents import Agent, LiveSession, RunContext, function_tool
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -70,44 +70,6 @@ class LateFloorWorker(Agent):
         await self.resume.wait()
         async with ctx.foreground():
             await asyncio.sleep(self.HOLD)
-
-
-class AskNameTask(AgentTask[None]):
-    """A task that needs a future user turn to complete."""
-
-    def __init__(self) -> None:
-        super().__init__(instructions="ask name task")
-
-    async def on_enter(self) -> None:
-        await self.session.generate_reply(instructions="ask_name")
-
-    @function_tool
-    async def record_name(self, ctx: RunContext, name: str) -> str:
-        """Called when the user provides their name."""
-        return Completed(None)
-
-
-class Surveyor(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions="surveyor agent")
-
-    @function_tool
-    async def start_survey(self, ctx: RunContext) -> None:
-        """Called when the user is ready to start the survey."""
-        async with ctx.foreground():
-            await AskNameTask()
-
-    @function_tool
-    async def ask_over_speech(self, ctx: RunContext) -> None:
-        """Called when the user wants the survey read out first."""
-        async with ctx.foreground():
-            await self.session.generate_reply(instructions="ask_via_tool")
-
-    @function_tool
-    async def collect_name(self, ctx: RunContext) -> str:
-        """Called when the name is needed."""
-        await AskNameTask()
-        return "collected"
 
 
 def _router_llm() -> FakeLLM:
@@ -253,77 +215,3 @@ async def test_stale_foreground_scope_does_not_hold_a_later_run() -> None:
         elapsed = loop.time() - started_at
 
         assert elapsed < agent.HOLD, f"the second run was held open for {elapsed:.2f}s"
-
-
-async def test_agent_task_inside_foreground_does_not_deadlock() -> None:
-    """A foregrounded AgentTask that needs another user turn must not stall the run:
-    ``run()`` has to return before that turn can arrive."""
-    llm = FakeLLM(
-        fake_responses=[
-            FakeLLMResponse(
-                input="ready",
-                content="",
-                ttft=0.1,
-                duration=0.1,
-                tool_calls=[
-                    FunctionToolCall(name="start_survey", arguments="{}", call_id="call_1")
-                ],
-            ),
-            FakeLLMResponse(input="ask_name", content="what is your name?", ttft=0.1, duration=0.1),
-            FakeLLMResponse(
-                input="Bob",
-                content="",
-                ttft=0.1,
-                duration=0.1,
-                tool_calls=[
-                    FunctionToolCall(
-                        name="record_name", arguments='{"name": "Bob"}', call_id="call_2"
-                    )
-                ],
-            ),
-        ]
-    )
-    async with LiveSession(llm=llm) as sess:
-        await sess.start(Surveyor())
-
-        await asyncio.wait_for(sess.run(user_input="ready"), timeout=5.0)
-
-        second_result = await asyncio.wait_for(sess.run(user_input="Bob"), timeout=5.0)
-        second_result.expect.contains_function_call(name="record_name")
-
-
-async def test_agent_task_under_a_foregrounded_reply_does_not_deadlock() -> None:
-    """The same circular wait one level deeper: the foreground scope holds a
-    ``generate_reply``, and a tool of that reply awaits the task.
-
-    Only the deadlock is asserted. Whether the task survives to the next turn is a
-    separate question, and it behaves the same way with or without the guard.
-    """
-    llm = FakeLLM(
-        fake_responses=[
-            FakeLLMResponse(
-                input="ready",
-                content="",
-                ttft=0.1,
-                duration=0.1,
-                tool_calls=[
-                    FunctionToolCall(name="ask_over_speech", arguments="{}", call_id="call_1")
-                ],
-            ),
-            FakeLLMResponse(
-                input="ask_via_tool",
-                content="",
-                ttft=0.1,
-                duration=0.1,
-                tool_calls=[
-                    FunctionToolCall(name="collect_name", arguments="{}", call_id="call_2")
-                ],
-            ),
-            FakeLLMResponse(input="ask_name", content="what is your name?", ttft=0.1, duration=0.1),
-            FakeLLMResponse(input="collected", content="all done", ttft=0.1, duration=0.1),
-        ]
-    )
-    async with LiveSession(llm=llm) as sess:
-        await sess.start(Surveyor())
-
-        await asyncio.wait_for(sess.run(user_input="ready"), timeout=5.0)

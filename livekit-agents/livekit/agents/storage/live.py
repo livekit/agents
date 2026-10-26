@@ -4,8 +4,8 @@ A ``LiveSession`` keeps the call's history in memory. Given a thread, ``LiveLane
 agent's lane at ``start()``, takes the lease per voice turn, from the end of the person's turn to the commit of
 the reply, and releases it without draining: a text that landed in the inbox meanwhile is
 answered by the worker waiting on it. When an acquire returns a newer version than the one last
-committed, the lane moved under the call (a text turn ran) and the session's history and state
-are reloaded once, so the call knows about the text; the reply waits on that acquire before the
+committed, the lane moved under the call (a text turn ran) and the session's history
+is reloaded once, so the call knows about the text; the reply waits on that acquire before the
 model reads the history. Storage failures are logged and never end the call.
 
 The run is ``_core``'s: ``Thread.open_run`` takes the lease and loads the lane, ``Run.commit``
@@ -16,11 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses
 from collections.abc import Awaitable, Coroutine
 from typing import TypeVar
-
-from pydantic import BaseModel
 
 from .. import utils
 from .._core import Run, Thread
@@ -28,7 +25,8 @@ from .._generated.storage_run import ItemRow
 from ..llm import ChatContext
 from ..log import logger
 from .agentdb import AgentDBStorage
-from .protocol import StorageError, dump_state, history_of, item_to_payload, load_state
+from .context_store import ContextStore
+from .protocol import StorageError, VersionConflict, history_of, item_to_payload
 
 T = TypeVar("T")
 
@@ -50,14 +48,12 @@ class LiveLane:
         *,
         agent_name: str,
         history: ChatContext,
-        state: object,
     ) -> None:
         self._storage = storage
         self._thread_id = thread_id
         self._agent_name = agent_name
         self._history = history
-        self._state = state
-        self._state_type: type[object] | None = type(state) if state is not None else None
+        self._store = ContextStore()
         self._thread: Thread | None = None
         self._version: int | None = None
         self._run: Run | None = None
@@ -65,12 +61,8 @@ class LiveLane:
         self._hold_timer: asyncio.TimerHandle | None = None
         self._closed = False
 
-    async def open(self) -> object:
-        """Loads the lane: the stored history when the session has none, the state in place.
-
-        Returns the state object the session should hold: the one it was given, updated from
-        the lane, or the lane's when it was given none.
-        """
+    async def open(self) -> None:
+        """Load history and the field snapshot used by explicit context operations."""
         self._thread = await self._storage.open(self._thread_id)
         row = await self._thread.lane_info(self._agent_name)
         self._version = row.version if row is not None else 0
@@ -78,18 +70,18 @@ class LiveLane:
         if not self._history.items:
             self._history.items = history_of(await self._thread.history(self._agent_name)).items
 
-        if row is not None and row.state is not None and self._state_type is not None:
-            loaded = load_state(row.state, self._state_type)
-            self._state = _assign_state(self._state, loaded)
+        self._store._rebase(row.state if row is not None else None)
 
-        return self._state
+    @property
+    def store(self) -> ContextStore:
+        return self._store
 
     def turn_started(self) -> Awaitable[ChatContext | None]:
         """The person's turn ended: take the lane for the reply.
 
         Awaited before the reply is generated, so the model reads a history the lane has
         settled: the result is the stored history when the lane moved under the call and the
-        session's history and state were reloaded from it, else None.
+        session's history was reloaded from it, else None.
         """
         return self._schedule(self._acquire())
 
@@ -109,6 +101,7 @@ class LiveLane:
         try:
             await self._commit()
         finally:
+            self._store.close()
             if self._thread is not None:
                 self._thread.close()
 
@@ -149,6 +142,12 @@ class LiveLane:
         if run is None:
             return None
 
+        try:
+            self._store._rebase(run.state)
+        except Exception:
+            await run.abandon("failed", "context-conflict")
+            raise
+
         moved = self._version is not None and run.version != self._version
         if moved:
             self._reload_from(run)
@@ -172,12 +171,10 @@ class LiveLane:
         return run
 
     def _reload_from(self, run: Run) -> None:
-        """The lane moved under the call (a text turn ran): take its history and state."""
+        """The lane moved under the call (a text turn ran): take its history."""
         merge_history(self._history, history_of(run.history))
-        if self._state_type is not None and run.state is not None:
-            self._state = _assign_state(self._state, load_state(run.state, self._state_type))
         logger.info(
-            "the lane moved under the call; history and state reloaded",
+            "the lane moved under the call; history reloaded",
             extra={"threadId": self._thread_id, "lane": self._agent_name, "version": run.version},
         )
 
@@ -197,14 +194,17 @@ class LiveLane:
             ItemRow(id=item.id, message_id=message_ids.get(item.id), payload=item_to_payload(item))
             for item in self._history.items
         ]
-        state = dump_state(self._state, self._state_type) if self._state_type else None
+        state = self._store._pending_state
         try:
             self._version = await run.commit(history, state)
+            self._store._acknowledge(state)
         except StorageError as e:
             logger.warning(
                 "the voice turn's commit was not written",
                 extra={"threadId": self._thread_id, "lane": self._agent_name, "error": str(e)},
             )
+            if isinstance(e, VersionConflict):
+                raise
 
     def _cancel_hold_timer(self) -> None:
         if self._hold_timer is not None:
@@ -224,29 +224,6 @@ def merge_history(history: ChatContext, stored: ChatContext, *, turns_only: bool
         missing = [item for item in missing if item.type in TURN_ITEMS]
 
     history.insert(missing)
-
-
-def _assign_state(target: object, loaded: object) -> object:
-    """Copies ``loaded`` into ``target`` in place when they share a type, else ``loaded``."""
-    if target is None or loaded is None or type(target) is not type(loaded):
-        return loaded if loaded is not None else target
-
-    if dataclasses.is_dataclass(target) and not isinstance(target, type):
-        for field in dataclasses.fields(target):
-            setattr(target, field.name, getattr(loaded, field.name))
-        return target
-
-    if isinstance(target, BaseModel):
-        for name in type(target).model_fields:
-            setattr(target, name, getattr(loaded, name))
-        return target
-
-    if isinstance(target, dict) and isinstance(loaded, dict):
-        target.clear()
-        target.update(loaded)
-        return target
-
-    return loaded
 
 
 __all__ = ["HOLD_LIMIT", "LEASE_WAIT", "TURN_ITEMS", "LiveLane", "merge_history"]

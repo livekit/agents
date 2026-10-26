@@ -11,12 +11,12 @@
 ```python
 from livekit.agents.llm import FilteredToolset, PrefixedToolset
 
-def verified_only(ctx: RunContext[Deps, Member], tool: Tool) -> bool:
-    return ctx.state.verified or tool.id == "block_card"
+def verified_only(ctx: RunContext[MemberContext], tool: Tool) -> bool:
+    return ctx.context.verified or tool.name == "block_card"
 
 member_services = Agent(
     ...,
-    toolsets=[
+    tools=[
         FilteredToolset(Cards(), verified_only),     # chosen per turn, from the state
         PrefixedToolset(rewards, "rewards_"),        # rewards_balance, rewards_redeem
     ],
@@ -25,7 +25,7 @@ member_services = Agent(
 
 | Class | What |
 |---|---|
-| `Agent(toolsets=)` | toolsets attached to the agent, next to `tools=` |
+| `Agent(tools=[...])` | tools and toolsets attached to the agent |
 | `FilteredToolset(toolset, predicate)` | the predicate runs per turn with the `RunContext` and decides which tools the model sees |
 | `PrefixedToolset(toolset, prefix)` | avoids name clashes between toolsets |
 
@@ -44,8 +44,6 @@ state allows it: the agent itself never changes.
 ## Capabilities
 
 `capabilities=[...]` on the agent attaches bundles of hooks and tools.
-`Tasks()` is the default capability that lets an agent see and steer its
-background tasks; see [agent-tasks.md](agent-tasks.md).
-`capabilities=[]` removes them.
+Each capability declares the hooks and tools it contributes.
 
 See `examples/use-cases/planned-06_card_servicing_toolsets.py`.

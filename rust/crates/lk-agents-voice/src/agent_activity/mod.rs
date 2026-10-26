@@ -13,7 +13,6 @@ pub mod realtime;
 pub mod recognition;
 pub mod scheduling;
 pub mod speech;
-pub mod tasks;
 pub mod tools;
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
@@ -77,11 +76,8 @@ pub(crate) struct AgentActivity {
     pub(crate) on_exit: crate::agent_activity::on_exit::OnExit,
     /// The host's `drain()`.
     pub(crate) drain: crate::agent_activity::drain::Drain,
-    /// `GetDtmfTask` while it runs.
+    /// DTMF collection while it runs.
     pub(crate) dtmf: crate::agent_activity::dtmf::Dtmf,
-    /// The inline `AgentTask` stack.
-    pub(crate) tasks: crate::agent_activity::tasks::Tasks,
-    pub(crate) drain_blocked: crate::agent_activity::tasks::DrainBlocked,
     /// The user turn parked on `on_user_turn_completed` (`_user_turn_completed_atask`).
     pub(crate) pending_turn: Option<crate::audio_recognition::PendingTurn>,
     /// So a preemptive generation can be keyed to the turn after it.
@@ -161,8 +157,6 @@ impl AgentActivity {
             on_exit: Default::default(),
             drain: Default::default(),
             dtmf: Default::default(),
-            tasks: Default::default(),
-            drain_blocked: Default::default(),
             pending_turn: None,
             last_turn: None,
             preemptive_turn: None,

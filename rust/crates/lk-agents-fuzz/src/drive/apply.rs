@@ -308,9 +308,7 @@ impl Run {
                     Some(AgentText(m)) => {
                         ToolUpdate::Progress { raw: m.clone(), message: m.clone() }
                     }
-                    None => ToolUpdate::Final {
-                        answer: Answered::Returned { value: None, agents: vec![] },
-                    },
+                    None => ToolUpdate::Final { answer: Answered::Returned { value: None } },
                 };
                 SpeechCommand::ToolUpdate { call_id, update }.into()
             }
@@ -350,13 +348,10 @@ impl Run {
                 TurnCommand::Configure(patch(*knob, *mode, *ms, *on, *words)).into()
             }
 
-            Input::Handoff { agent, instructions, tools, pause_previous, resume } => {
+            Input::Handoff { agent, instructions, tools } => {
                 let (call, rx) = calls.open(DriverAnswer::handoff);
                 waiting = Some(Pending::Handoff(rx));
                 let mut frame = frame(&registry, agent, &instructions.0, tools);
-                frame.previous =
-                    if *pause_previous { PreviousActivity::Pause } else { PreviousActivity::Close };
-                frame.next = if *resume { NewActivity::Resume } else { NewActivity::Start };
                 frame.call = Some(call);
                 ActivityCommand::Update(Box::new(frame)).into()
             }
@@ -492,22 +487,6 @@ impl Run {
                 DtmfInput::Digit => DtmfCommand::Digit { digit: key.digit().to_owned() }.into(),
                 DtmfInput::Stop => DtmfCommand::Stop.into(),
             },
-            Input::Task { agent, speech } => {
-                let speech = match speech.map(|r| self.speech_id(r)) {
-                    Some(None) => return false,
-                    given => given.flatten(),
-                };
-                let task_id = format!("task_{:04}", self.next_task);
-                self.next_task += 1;
-                TaskCommand::Enter(Box::new(TaskEntry {
-                    handle: TaskHandle::new(task_id.into()),
-                    frame: frame(&registry, agent, &format!("You are {agent}."), &[]),
-                    speech,
-                    preserve_function_call_history: true,
-                    parent: None,
-                }))
-                .into()
-            }
             Input::Recorder { attach } => Command::Recorder(if *attach {
                 RecorderCommand::Attach(HostRecorder(fakes::FakeRecorder::new(registry.clone())))
             } else {
@@ -887,12 +866,10 @@ impl Run {
                 return None;
             }
             let next = [wake_at, until].into_iter().flatten().min();
-            let settled = runtime.driver.settled();
             tokio::select! {
                 biased;
                 value = &mut done => return Some(value),
                 () = self.time.wait_until_opt(next) => {}
-                () = settled => {}
                 Some(frame) = runtime.frames.recv() => {
                     let now = self.time.read();
                     self.step(|runtime| runtime.on_frame(frame, now));

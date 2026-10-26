@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 284 core items bound (120 functions and consts, 78 classes, 85 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 278 core items bound (119 functions and consts, 74 classes, 84 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -25,27 +25,9 @@
 //! - `lk_agents_voice::agent_activity::options::HostOptions::new`: field `mode`: `EndpointingMode` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::agent_activity::options::HostOptions::update`: field `mode`: `EndpointingMode` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::agent_activity::options::HostOptions::resolved`: field `detector`: `lk_agents_abi::voice::session_options::DetectorKind` has no Node shape (not a declared record, enum or JSON)
-//! - `lk_agents_voice::workflows::HostTaskHandle::host_complete`: parameter `result`: not yet: a `HostRef` (a host object in the side table)
-//! - `lk_agents_voice::workflows::HostTaskHandle::host_joined`: return: not yet: a `HostRef` (a host object in the side table)
-//! - `lk_agents_voice::workflows::HostTaskHandle::host_result`: return: not yet: a `HostRef` (a host object in the side table)
-//! - `lk_agents_voice::workflows::HostTaskHandle::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::speech_handle::HostSpeech::chat_items`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::speech_handle::HostSpeech::exception`: return: `SpeechException` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::speech_handle::HostSpeech::interrupt`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::email`: parameter `instructions`: `Instructions` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::address`: parameter `instructions`: `Instructions` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::phone_number`: parameter `tools`: `ToolSpec` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::name`: parameter `tools`: `ToolSpec` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::dob`: parameter `tools`: `ToolSpec` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::card_number`: return: `Self` outside a constructor
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::security_code`: return: `Self` outside a constructor
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::expiration_date`: return: `Self` outside a constructor
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::dtmf`: return: `Self` outside a constructor
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::tools`: no core path: the IR names none (give the declaration #[node(from = "..")] or a binding target)
-//! - `lk_agents_voice::workflows::builtins::HostWorkflow::call`: return: not yet: returning an exposed class
-//! - `lk_agents_voice::workflows::builtins::WorkflowReply::result`: return: `CoreObject` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::workflows::builtins::WorkflowReply::tools`: no core path: the IR names none (give the declaration #[node(from = "..")] or a binding target)
-//! - `lk_agents_voice::workflows::builtins::WorkflowReply::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::workflows::builtins::dtmf::DtmfResult::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::workflows::builtins::dtmf::DtmfResult::from_dtmf_inputs`: return: `Self` outside a constructor
 //! - `lk_agents_voice::workflows::builtins::warm_transfer::HostWarmTransfer::new`: parameter `instructions`: `Instructions` is not a #[derive(Host)] type or a #[host(wire_enum)]
@@ -55,9 +37,6 @@
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_time_of_birth`: return: `Time` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_eq`: not yet: `__eq__` is a Python protocol method
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_repr`: not yet: `__repr__` is a Python protocol method
-//! - `lk_agents_voice::workflows::builtins::task_group::TaskGroupSchedule::host_start`: arm `Run`: no core path: the IR names none (give the declaration #[node(from = "..")] or a binding target)
-//! - `lk_agents_voice::workflows::builtins::task_group::TaskGroupSchedule::host_advance`: arm `Run`: no core path: the IR names none (give the declaration #[node(from = "..")] or a binding target)
-//! - `lk_agents_voice::workflows::builtins::task_group::TaskGroupSchedule::host_summarized`: arm `Run`: no core path: the IR names none (give the declaration #[node(from = "..")] or a binding target)
 //! - `lk_agents_voice::agent_session::Timebase::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::agent_session::FramePusher::push`: parameter `frame`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::host_new`: parameter `room`: not yet: `Arc<dyn SessionRoom>` (a host object behind a proxy)
@@ -67,9 +46,7 @@
 //! - `lk_agents_voice::agent_session::SessionApi::transcription_output`: return: not yet: `Arc<RoomTranscriptionLeg>` (a shared handle to an exposed class)
 //! - `lk_agents_voice::agent_session::SessionApi::host_attach_recorder`: parameter `recorder`: not yet: `Arc<dyn AudioRecorder>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::update_models`: parameter `llm`: not yet: `Arc<dyn Llm>` (a host object behind a proxy)
-//! - `lk_agents_voice::agent_session::SessionApi::hook_described`: parameter `frame`: not yet: `UpdateAgentArgs` is a keyword record (spread into keywords in Python; an options object in Node)
 //! - `lk_agents_voice::agent_session::SessionApi::update_agent`: parameter `frame`: not yet: `UpdateAgentArgs` is a keyword record (spread into keywords in Python; an options object in Node)
-//! - `lk_agents_voice::agent_session::SessionApi::enter_task`: parameter `frame`: not yet: `UpdateAgentArgs` is a keyword record (spread into keywords in Python; an options object in Node)
 //! - `lk_agents_voice::agent_session::SessionApi::set_audio_input`: parameter `source`: not yet: `Arc<dyn AudioInput>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::set_video_input`: parameter `source`: not yet: `Arc<dyn VideoInput>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::set_audio_output`: parameter `sink`: not yet: `Arc<dyn AudioOutput>` (a host object behind a proxy)

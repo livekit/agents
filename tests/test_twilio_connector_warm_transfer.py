@@ -12,8 +12,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents.beta.workflows import TwilioConnectorWarmTransferTask, warm_transfer
-from livekit.agents.llm import ToolError
+from livekit.agents.beta.workflows import TwilioConnectorWarmTransfer, warm_transfer
+from livekit.agents.llm import ChatContext, ToolError
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -63,8 +63,8 @@ def connector(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     return connect
 
 
-def build_task(**options: str) -> TwilioConnectorWarmTransferTask:
-    return TwilioConnectorWarmTransferTask(
+def build_task(**options: str) -> TwilioConnectorWarmTransfer:
+    return TwilioConnectorWarmTransfer(
         HUMAN_NUMBER,
         twilio_from_number=TWILIO_NUMBER,
         twilio_account_sid="AC_test_account",
@@ -77,7 +77,7 @@ def twilio_error(status: int, code: int) -> web.Response:
     return web.json_response({"code": code}, status=status)
 
 
-async def dial(task: TwilioConnectorWarmTransferTask, monkeypatch: pytest.MonkeyPatch) -> None:
+async def dial(task: TwilioConnectorWarmTransfer, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(task, "_wait_for_human_agent", AsyncMock())
     try:
         await task._originate_human_agent(
@@ -440,8 +440,10 @@ async def test_consultation_setup_releases_resources_on_failure(
     monkeypatch.setattr(warm_transfer.api, "AccessToken", Mock())
     room = Mock(connect=AsyncMock(), disconnect=AsyncMock())
     monkeypatch.setattr(warm_transfer.rtc, "Room", Mock(return_value=room))
-    parent = SimpleNamespace(vad=None, llm=None, stt=None, tts=None, turn_detection=None)
-    monkeypatch.setattr(warm_transfer.AgentTask, "session", property(lambda _: parent))
+    parent = SimpleNamespace(
+        vad=None, llm=None, stt=None, tts=None, turn_detection=None, history=ChatContext()
+    )
+    task.session = parent
     session = Mock(start=AsyncMock())
     monkeypatch.setattr(warm_transfer, "LiveSession", Mock(return_value=session))
     monkeypatch.setattr(warm_transfer, "Agent", Mock())

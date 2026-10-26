@@ -76,6 +76,7 @@ from .simulation import (
     SimulationRun,
     SimulationVerdict,
 )
+from .storage.context_store import load_context, persisted, save_context
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -90,7 +91,6 @@ from .voice import (
     AgentEvent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
-    AgentTask,
     AudioRecognition,
     CloseEvent,
     CloseReason,
@@ -191,6 +191,9 @@ def __getattr__(name: str) -> typing.Any:
 
 
 __all__ = [
+    "persisted",
+    "load_context",
+    "save_context",
     "__version__",
     "AgentHandler",
     "AgentServer",
@@ -272,7 +275,6 @@ __all__ = [
     "AgentEvent",
     "ModelSettings",
     "Agent",
-    "AgentTask",
     "AssignmentTimeoutError",
     "UnexpectedModelBehavior",
     "APIConnectionError",

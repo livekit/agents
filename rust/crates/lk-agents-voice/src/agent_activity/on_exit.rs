@@ -2,13 +2,12 @@
 //! the close leaves the agent first.
 
 use crate::agent_activity::hooks::Hooks;
-use crate::agent_session::{HookId, NewActivity, PreviousActivity};
+use crate::agent_session::HookId;
 
 /// The driving agent's exit, and the exits of agents paused under an inline task, innermost last.
 #[derive(Default)]
 pub(crate) struct OnExit {
     current: State,
-    paused: Vec<State>,
     /// Claimed and not yet asked of the host, with the agent each is for.
     claimed: Vec<(HookId, String)>,
 }
@@ -55,7 +54,7 @@ impl OnExit {
 
     /// The `on_exit` `hook` ended: every agent's exit it was is over.
     pub(crate) fn ended(&mut self, hook: HookId) {
-        for exit in std::iter::once(&mut self.current).chain(self.paused.iter_mut()) {
+        for exit in std::iter::once(&mut self.current) {
             if *exit == State::Exiting(hook) {
                 *exit = State::Exited;
             }
@@ -64,7 +63,7 @@ impl OnExit {
 
     /// The close: no exit still running is waited on.
     pub(crate) fn abandon(&mut self) {
-        for exit in std::iter::once(&mut self.current).chain(self.paused.iter_mut()) {
+        for exit in std::iter::once(&mut self.current) {
             if let State::Exiting(hook) = *exit {
                 *exit = State::Abandoned(hook);
             }
@@ -73,15 +72,8 @@ impl OnExit {
 
     /// The swap: a paused agent keeps its exit beneath the arriving one and gets it back on
     /// resume.
-    pub(crate) fn swapped(&mut self, previous: PreviousActivity, next: NewActivity) {
-        match (previous, next) {
-            (PreviousActivity::Pause, NewActivity::Start) => {
-                let paused = std::mem::take(&mut self.current);
-                self.paused.push(paused);
-            }
-            (PreviousActivity::Close, NewActivity::Start) => self.current = State::Running,
-            (_, NewActivity::Resume) => self.current = self.paused.pop().unwrap_or_default(),
-        }
+    pub(crate) fn swapped(&mut self) {
+        self.current = State::Running;
     }
 }
 

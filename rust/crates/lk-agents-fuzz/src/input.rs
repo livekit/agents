@@ -607,7 +607,7 @@ inputs! {
     /// One live option changed, alone, so a finding names the option that mattered.
     Configure { knob: Knob, mode: TurnMode, ms: Millis, on: bool, words: Count } leaf turn::Configure;
     /// A handoff to another agent, with the same fakes behind it.
-    Handoff { agent: String, instructions: AgentText, tools: Vec<String>, pause_previous: bool, resume: bool }
+    Handoff { agent: String, instructions: AgentText, tools: Vec<String> }
         opens [Answer] leaf activity::Update;
     UpdateInstructions { text: AgentText } leaf activity::UpdateInstructions;
     UpdateTools { tools: Vec<String> } leaf activity::UpdateTools;
@@ -637,7 +637,6 @@ inputs! {
     Dtmf { input: DtmfInput, key: DtmfKey, digits: Count, confirm: bool, timeout: Millis }
         opens [Answer] leaf command::Dtmf;
     /// An inline `AgentTask` entered from a tool body or a hook.
-    Task { agent: String, speech: Option<Ref<Speech>> } leaf command::Task;
     Recorder { attach: bool } leaf command::Recorder;
     Run { user_input: Option<UserText>, expects_output: bool, retries: Count } leaf command::Run;
 

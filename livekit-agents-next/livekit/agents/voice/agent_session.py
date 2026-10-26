@@ -56,6 +56,7 @@ from .speech_handle import SpeechHandle
 from .tool_executor import ToolRunner
 
 if TYPE_CHECKING:
+    from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
     from .room_io import RoomOptions
 
@@ -149,8 +150,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tts: NotGivenOr[tts.TTS | str] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         userdata: NotGivenOr[Userdata_T] = NOT_GIVEN,
-        deps: Any = None,
-        state: Any = None,
+        context: Any = None,
         thread: Thread | None = None,
         video_sampler: NotGivenOr[VoiceActivityVideoSampler | None] = NOT_GIVEN,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -162,7 +162,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             stt, vad, llm, tts: The providers, or a LiveKit Inference model string. ``vad``
                 defaults to ``inference.VAD(model="silero")``; ``vad=None`` opts out.
             tools: Tools shared by every agent of the session.
-            userdata, deps, state, thread: Read by tools through ``RunContext``.
+            userdata, context, thread: Read by tools through ``RunContext``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
             options: The session options the core resolves: ``turn_handling``,
                 ``stt_context_options``, ``tool_handling``, ``max_tool_steps``,
@@ -196,8 +196,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
-        self._deps = deps
-        self._state = state
+        self._context = context
         self._thread = thread
 
         self._core: _core.LiveSession = None  # type: ignore[assignment]
@@ -241,12 +240,19 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._userdata = value
 
     @property
-    def deps(self) -> Any:
-        return self._deps
+    def store(self) -> ContextStore:
+        """The active host's explicitly managed context store."""
+        from .agent_run import current_run_hooks
+
+        hooks = current_run_hooks()
+        if hooks is None or hooks.store is None:
+            raise RuntimeError("This session has no managed store")
+        return hooks.store
 
     @property
-    def state(self) -> Any:
-        return self._state
+    def context(self) -> Any:
+        """Application data and services supplied for this session."""
+        return self._context
 
     @property
     def thread(self) -> Thread | None:
@@ -794,13 +800,6 @@ async def _answer_hook(session: LiveSession[Any], wire: dict[str, Any]) -> None:
                 )
         elif hook == "on_user_turn_completed":
             await _turn_completed(session, wire)
-        elif hook == "describe_agent":
-            agent = wire["agent"]
-            if agent is None:
-                core.hook_failed(hook_id)
-                return
-            core.hook_described(hook_id, **await session._frame(agent))
-            session._agent = agent
         elif hook == "function_tools_executed":
             ev = FunctionToolsExecutedEvent(
                 function_calls=[from_core_item(c) for c in wire["function_calls"]],

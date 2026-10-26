@@ -1,13 +1,11 @@
-"""Approval held by the framework: which calls of a ``requires_approval`` tool may run."""
+"""Approval held by the framework: which calls of a ``needs_approval`` tool may run."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import pytest
 
-from livekit.agents import Agent, AgentTask, Completed, InputRequired, RunContext, function_tool
-from livekit.agents.llm import FunctionCall, FunctionCallOutput, FunctionToolCall
+from livekit.agents import InputRequired, function_tool
+from livekit.agents.llm import FunctionCall, FunctionCallOutput
 from livekit.agents.llm.tool_context import (
     APPROVAL_ANSWERED,
     APPROVAL_KEY,
@@ -17,8 +15,6 @@ from livekit.agents.llm.tool_context import (
     as_model_reads,
 )
 from livekit.agents.llm.utils import build_legacy_openai_schema
-
-from .fake_llm import FakeLLM, FakeLLMResponse
 
 pytestmark = pytest.mark.unit
 
@@ -94,7 +90,7 @@ def test_other_tools_do_not_count() -> None:
 async def test_the_wrapper_runs_only_when_granted() -> None:
     ran: list[str] = []
 
-    @function_tool(requires_approval=True)
+    @function_tool(needs_approval=True)
     async def cancel(date: str) -> str:
         """Cancel the appointment on a date."""
         ran.append(date)
@@ -115,7 +111,7 @@ async def test_the_wrapper_runs_only_when_granted() -> None:
 
 
 async def test_a_read_back_takes_the_tools_own_parameters() -> None:
-    @function_tool(requires_approval=lambda date, nights: f"Book {date} for {nights}? Yes or no?")
+    @function_tool(needs_approval=lambda date, nights: f"Book {date} for {nights}? Yes or no?")
     async def book(date: str, nights: int) -> str:
         """Book."""
         return "booked"
@@ -129,7 +125,7 @@ async def test_a_read_back_may_ask_for_what_is_missing_first() -> None:
     def read_back(date: str, email: str | None = None) -> str | InputRequired:
         return InputRequired("Which email?") if email is None else f"Book {date} to {email}?"
 
-    @function_tool(requires_approval=read_back)
+    @function_tool(needs_approval=read_back)
     async def book(date: str, email: str | None = None) -> str:
         """Book."""
         return "booked"
@@ -146,86 +142,9 @@ async def test_a_read_back_may_ask_for_what_is_missing_first() -> None:
     assert second.extra[APPROVAL_KEY] == "asked"
 
 
-@dataclass
-class Verify(AgentTask[str]):
-    def __post_init__(self) -> None:
-        super().__init__(instructions="verify", llm=FakeLLM(fake_responses=[]))
-
-    async def on_enter(self, ctx: RunContext) -> Completed[str]:
-        return Completed("verified; call the tool again")
-
-
-async def verify_first(ctx: RunContext) -> str:
-    return await Verify()
-
-
-async def test_a_read_back_may_await_a_task_that_verifies_first() -> None:
-    """Guard and re-call: the read-back awaits a task when a precondition is unmet; the task
-    takes the conversation, and its value is the call's output."""
-    desk = Agent(instructions="desk")
-
-    @desk.tool(requires_approval=verify_first)
-    async def cancel(ctx: RunContext) -> str:
-        """Cancel."""
-        return "canceled"
-
-    desk.update_options(
-        llm=FakeLLM(
-            fake_responses=[
-                FakeLLMResponse(
-                    input="cancel it",
-                    content="",
-                    ttft=0,
-                    duration=0,
-                    tool_calls=[FunctionToolCall(name="cancel", arguments="{}", call_id="c1")],
-                ),
-                FakeLLMResponse(
-                    input="verified; call the tool again", content="ok", ttft=0, duration=0
-                ),
-            ]
-        )
-    )
-    result = await desk.run("cancel it")
-    outputs = [i for i in result.new_messages() if i.type == "function_call_output"]
-    assert outputs[0].output == "verified; call the tool again"
-    assert result.output == "ok"
-
-
 def test_the_model_reads_an_answered_read_back_as_not_run() -> None:
     history = [asked("c1"), out("c1", "yes"), call("c2"), out("c2", f"{WAITING_PREFIX}Cancel?")]
     seen = as_model_reads(history)
     assert seen[1].output == APPROVAL_ANSWERED.format(answer="yes", name="cancel")
     assert history[1].output == "yes"  # what is stored stays the person's words
     assert seen[3].output.startswith(WAITING_PREFIX)  # not answered yet, not an approval ask
-
-
-@dataclass
-class Greet(AgentTask[str]):
-    def __post_init__(self) -> None:
-        super().__init__(
-            instructions="greet",
-            llm=FakeLLM(
-                fake_responses=[
-                    FakeLLMResponse(
-                        input="hi",
-                        content="",
-                        ttft=0,
-                        duration=0,
-                        tool_calls=[FunctionToolCall(name="finish", arguments="{}", call_id="g1")],
-                    )
-                ]
-            ),
-        )
-
-    @function_tool
-    async def finish(self, ctx: RunContext) -> Completed[str]:
-        """Done."""
-        return Completed("greeted")
-
-
-async def test_a_task_run_as_the_root_ends_the_run_with_its_value() -> None:
-    """A task run directly, as a test does, ends the run when it completes."""
-    task = Greet()
-    result = await task.run("hi")
-    assert result.output == "greeted"
-    assert task.done()

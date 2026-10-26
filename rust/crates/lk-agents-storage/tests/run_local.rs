@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use lk_agents_storage::run::{
-    CommitOptions, ItemRow, Ref, RunOptions, RunOutcome, TaskPatch, TaskState, Thread,
+    CommitOptions, ItemRow, RunOptions, RunOutcome, TaskPatch, TaskState, Thread,
 };
 mod common;
 
@@ -72,7 +72,6 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert!(!run1.closed && run1.lease().is_some());
     assert!(run1.history.is_empty());
     assert_eq!(run1.state, None);
-    assert!(run1.agents.is_empty());
     let journal = s1.events(0, 100).await.unwrap();
     assert_eq!(journal.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(), vec!["run_started"]);
     assert!(run1.lease().is_some_and(|h| !h.is_lost()));
@@ -120,7 +119,6 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     run1.history.push(message("i2", ChatRole::Assistant, "hello"));
     run1.history.push(message("sys", ChatRole::System, "be nice"));
     run1.state = Some(json!({"patient": "Ann"}));
-    run1.agents.push(Ref::with_args("Followup", json!({"n": 1})));
     run1.events.append("agent_state_changed", json!({"state": "thinking"}));
     run1.usage.requests = 1;
     run1.usage.input_tokens = 10;
@@ -133,7 +131,6 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     );
     assert_eq!(request.events[3].payload["input_tokens"], 10);
     assert_eq!(request.state, Some(json!({"patient": "Ann"})));
-    assert_eq!(request.agent_stack, Some(json!([{"name": "Followup", "args": {"n": 1}}])));
     assert_eq!(request.run_ended.payload, json!({"outcome": "completed", "reason": null}));
     let released_at = Instant::now();
     assert_eq!(run1.commit(CommitOptions::default()).await.unwrap().version, 1);
@@ -147,21 +144,17 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert_eq!(run2.history.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec!["i1", "i2"]);
     assert_eq!(run2.history[0], message("i1", ChatRole::User, "hi"));
     assert_eq!(run2.state, Some(json!({"patient": "Ann"})));
-    assert_eq!(run2.agents.current().map(|r| r.name.as_str()), Some("Followup"));
-    assert!(!run2.agents.is_dirty());
     assert_eq!(waiter(&s2).await, None, "the waiter that won cleared its own mark");
     assert!(s2.events(0, 100).await.unwrap().iter().any(|e| e.r#type == "usage"));
 
-    // An unchanged history writes no item; a popped stack and a changed state are written.
+    // An unchanged history writes no item; a changed state is written.
     assert!(run2.writes(CommitOptions::default()).items.is_empty());
     let unchanged = run2.writes(CommitOptions::default()).state;
     assert_eq!(unchanged, None, "unchanged state is not rewritten");
     run2.history.retain(|i| i.id != "i2");
-    run2.agents.pop();
     run2.state = Some(json!({"patient": "Ann", "seen": true}));
     let request = run2.writes(CommitOptions::default());
     assert_eq!(request.delete_items, vec!["i2".to_owned()]);
-    assert_eq!(request.agent_stack, Some(json!([])));
     assert_eq!(run2.commit(CommitOptions::default()).await.unwrap().version, 2);
 
     // The reads outside a run.
@@ -177,7 +170,6 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert_eq!(lane.runs(1).await.unwrap().len(), 1);
     let info = lane.info().await.unwrap().expect("a lane row");
     assert_eq!((info.version, info.drained_id, info.lease_until), (2, 0, 0));
-    assert!(info.agent_stack.is_none_or(|s| s.is_empty()));
     assert_eq!(s2.lanes().await.unwrap().len(), 1);
     assert!(s2.events(0, 100).await.unwrap().len() >= 5);
     assert!(lane.db().inbox(true).await.unwrap().is_empty());
@@ -192,7 +184,6 @@ async fn a_run_that_aborts_writes_run_ended_and_nothing_else() {
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
     run.history.push(message("i1", ChatRole::User, "hi"));
     run.state = Some(json!({"x": 1}));
-    run.agents.push(Ref::new("Other"));
     run.events.append("agent_state_changed", json!({"state": "thinking"}));
     run.tasks
         .write(
@@ -208,7 +199,6 @@ async fn a_run_that_aborts_writes_run_ended_and_nothing_else() {
     assert!(lane.tasks(None, 50).await.unwrap().is_empty());
     let info = lane.info().await.unwrap().unwrap();
     assert_eq!((info.version, info.lease_until), (0, 0), "released, not bumped");
-    assert_eq!(info.agent_stack, Some(vec![]));
     let events = s.events(0, 100).await.unwrap();
     assert_eq!(
         events.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(),
@@ -304,12 +294,10 @@ async fn concurrent_runs_take_no_lease_and_append() {
     assert!(a.lease().is_none());
     a.history.push(message("a1", ChatRole::User, "one"));
     a.state = Some(json!({"ignored": true}));
-    a.agents.push(Ref::new("Nope"));
     b.history.push(message("b1", ChatRole::User, "two"));
     let drained = CommitOptions { drained_id: Some(3), ..CommitOptions::default() };
     let request = a.writes(drained.clone());
     assert_eq!(request.state, None);
-    assert_eq!(request.agent_stack, None);
     assert_eq!(request.drained_id, None);
     assert_eq!(request.events[0].r#type, "run_started");
     assert_eq!(
@@ -327,7 +315,6 @@ async fn concurrent_runs_take_no_lease_and_append() {
     );
     let info = lane.info().await.unwrap().unwrap();
     assert_eq!((info.version, info.lease_until, info.drained_id), (1, 0, 0));
-    assert_eq!(info.agent_stack, Some(vec![]));
     let runs = lane.runs(10).await.unwrap();
     assert_eq!(runs.len(), 3);
     assert!(runs.iter().all(|r| r.outcome == Some(RunOutcome::Completed)));

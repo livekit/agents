@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentTask, Completed, LiveSession, RunContext, function_tool
+from livekit.agents import Agent, LiveSession, RunContext, function_tool
 from livekit.agents.llm import ChatMessage, FunctionToolCall
 
 from .fake_session import FakeActions, create_session, run_session
@@ -50,8 +50,8 @@ async def test_handoff_reply_reports_e2e_latency() -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return Greeter()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(Greeter())
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")
@@ -97,8 +97,8 @@ async def test_speech_before_handoff_answers_the_turn() -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return Greeter()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(Greeter())
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")
@@ -123,8 +123,9 @@ async def test_tool_reply_before_handoff_answers_the_turn() -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> tuple[Agent, str]:
-            return Greeter(), "transferring"
+        async def handoff(self, ctx: RunContext) -> str:
+            self.session.update_agent(Greeter())
+            return "transferring"
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")
@@ -158,8 +159,8 @@ async def test_say_in_on_enter_answers_the_turn() -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return SayGreeter()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(SayGreeter())
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")
@@ -192,8 +193,8 @@ async def test_concurrent_on_enter_speeches_answer_once() -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return DoubleGreeter()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(DoubleGreeter())
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")
@@ -226,8 +227,8 @@ async def test_unstored_say_in_on_enter_still_answers_the_turn() -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return QuietGreeter()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(QuietGreeter())
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")
@@ -240,56 +241,6 @@ async def test_unstored_say_in_on_enter_still_answers_the_turn() -> None:
     (reply,) = _by_role(messages, "assistant")
     assert reply.text_content == "how can I help"
     assert "e2e_latency" not in reply.metrics
-
-
-async def test_nested_handoff_in_on_enter_reports_e2e_latency() -> None:
-    """on_enter awaits an AgentTask: the task's own on_enter reply answers the user turn."""
-
-    class AskName(AgentTask[None]):
-        def __init__(self) -> None:
-            super().__init__(instructions="ask name")
-
-        async def on_enter(self) -> None:
-            self.session.generate_reply(instructions="ask_name")
-
-        @function_tool
-        async def record_name(self, ctx: RunContext, name: str) -> str:
-            """Called when the user provides their name."""
-            return Completed(None)
-
-    class Survey(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="survey")
-
-        async def on_enter(self) -> None:
-            await AskName()
-
-    class Router(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="router")
-
-        @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return Survey()
-
-    actions = FakeActions()
-    actions.add_user_speech(0.5, 2.5, "go")
-    actions.add_llm("", tool_calls=[HANDOFF_CALL])
-    actions.add_llm("what is your name?", input="ask_name")
-    actions.add_tts(1.0)
-    actions.add_user_speech(6.0, 7.0, "Bob")
-    actions.add_llm(
-        "",
-        tool_calls=[
-            FunctionToolCall(name="record_name", arguments='{"name": "Bob"}', call_id="c2")
-        ],
-    )
-
-    messages = await _messages(actions, Router())
-    go, _bob = _by_role(messages, "user")
-    (question,) = _by_role(messages, "assistant")
-    assert question.text_content == "what is your name?"
-    _assert_answers(question, go)
 
 
 async def test_task_spawned_in_on_enter_speaks_after_the_turn() -> None:
@@ -312,8 +263,8 @@ async def test_task_spawned_in_on_enter_speaks_after_the_turn() -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return LateGreeter()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(LateGreeter())
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")
@@ -346,8 +297,8 @@ async def test_new_user_turn_supersedes_the_handoff_turn() -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return LateGreeter()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(LateGreeter())
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")
@@ -365,55 +316,6 @@ async def test_new_user_turn_supersedes_the_handoff_turn() -> None:
     _assert_answers(reply, again)
     assert greeting.text_content == "hello from the greeter"
     assert "e2e_latency" not in greeting.metrics
-
-
-async def test_inline_task_in_tool_answers_each_turn() -> None:
-    """user -> tool -> await task -> task asks -> user answers -> task done -> tool reply."""
-
-    class AskEmail(AgentTask[str]):
-        def __init__(self) -> None:
-            super().__init__(instructions="ask email")
-
-        async def on_enter(self) -> None:
-            self.session.generate_reply(instructions="ask_email")
-
-        @function_tool
-        async def record_email(self, ctx: RunContext, email: str) -> None:
-            """Called when the user provides their email."""
-            return Completed(email)
-
-    class Booker(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="booker")
-
-        @function_tool
-        async def book(self, ctx: RunContext) -> str:
-            """Book a room."""
-            email = await AskEmail()
-            return f"booked for {email}"
-
-    actions = FakeActions()
-    actions.add_user_speech(0.5, 2.5, "book a room")
-    actions.add_llm("", tool_calls=[FunctionToolCall(name="book", arguments="{}", call_id="c1")])
-    actions.add_llm("what is your email?", input="ask_email")
-    actions.add_tts(1.0)
-    actions.add_user_speech(6.0, 7.0, "a@b.com")
-    actions.add_llm(
-        "",
-        tool_calls=[
-            FunctionToolCall(name="record_email", arguments='{"email": "a@b.com"}', call_id="c2")
-        ],
-    )
-    actions.add_llm("your room is booked", input="booked for a@b.com")
-    actions.add_tts(1.0)
-
-    messages = await _messages(actions, Booker(), drain_delay=4.0)
-    book, email = _by_role(messages, "user")
-    question, confirmation = _by_role(messages, "assistant")
-    assert question.text_content == "what is your email?"
-    _assert_answers(question, book)
-    assert confirmation.text_content == "your room is booked"
-    _assert_answers(confirmation, email)
 
 
 def _handoff_later(session: LiveSession, delay: float) -> None:
@@ -458,8 +360,8 @@ async def test_silent_on_enter_ends_the_turn() -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return Silent()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(Silent())
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")
@@ -470,60 +372,6 @@ async def test_silent_on_enter_ends_the_turn() -> None:
     messages = await _messages(actions, Router(), drain_delay=4.0)
     (greeting,) = _by_role(messages, "assistant")
     assert "e2e_latency" not in greeting.metrics
-
-
-async def test_reply_after_awaited_task_in_on_enter_answers_the_last_turn() -> None:
-    """on_enter awaits a task, then replies: the reply answers the turn the task left open."""
-
-    class AskName(AgentTask[str]):
-        def __init__(self) -> None:
-            super().__init__(instructions="ask name")
-
-        async def on_enter(self) -> None:
-            self.session.generate_reply(instructions="ask_name")
-
-        @function_tool
-        async def record_name(self, ctx: RunContext, name: str) -> None:
-            """Called when the user provides their name."""
-            return Completed(name)
-
-    class Survey(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="survey")
-
-        async def on_enter(self) -> None:
-            name = await AskName()
-            self.session.generate_reply(instructions=f"thank {name}")
-
-    class Router(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="router")
-
-        @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return Survey()
-
-    actions = FakeActions()
-    actions.add_user_speech(0.5, 2.5, "go")
-    actions.add_llm("", tool_calls=[HANDOFF_CALL])
-    actions.add_llm("what is your name?", input="ask_name")
-    actions.add_tts(1.0)
-    actions.add_user_speech(6.0, 7.0, "Bob")
-    actions.add_llm(
-        "",
-        tool_calls=[
-            FunctionToolCall(name="record_name", arguments='{"name": "Bob"}', call_id="c2")
-        ],
-    )
-    actions.add_llm("thanks Bob", input="thank Bob")
-    actions.add_tts(1.0)
-
-    messages = await _messages(actions, Router(), drain_delay=4.0)
-    go, bob = _by_role(messages, "user")
-    question, thanks = _by_role(messages, "assistant")
-    _assert_answers(question, go)
-    assert thanks.text_content == "thanks Bob"
-    _assert_answers(thanks, bob)
 
 
 async def test_turn_committed_during_on_enter_survives_its_end() -> None:
@@ -537,16 +385,16 @@ async def test_turn_committed_during_on_enter_survives_its_end() -> None:
             await asyncio.sleep(3.0)
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return Greeter()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(Greeter())
 
     class Router(Agent):
         def __init__(self) -> None:
             super().__init__(instructions="router")
 
         @function_tool
-        async def handoff(self, ctx: RunContext) -> Agent:
-            return Slow()
+        async def handoff(self, ctx: RunContext) -> None:
+            self.session.update_agent(Slow())
 
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "go")

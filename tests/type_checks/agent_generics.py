@@ -1,4 +1,4 @@
-"""Type checks for ``Agent[Deps, State, Output]``, run by ``scripts/check_types.py``.
+"""Type checks for ``Agent[Context, Output]``, run by ``scripts/check_types.py``.
 
 Each ``type: ignore[code]`` marks an error the type checker must report; strict mode reports an
 ignore that is no longer needed, so the file fails both when a check is lost and when a new
@@ -28,22 +28,28 @@ class Claim:
     number: str = ""
 
 
-backend = Agent(instructions="", deps_type=Calendar, state_type=Patient)
+@dataclass
+class AppContext:
+    calendar: Calendar
+    patient: Patient
+
+
+backend = Agent[AppContext](instructions="")
 fnol = Agent(instructions="", output_type=Claim)
 plain = Agent(instructions="")
 
-assert_type(backend, Agent[Calendar, Patient, Any])
-assert_type(fnol, Agent[Any, Any, Claim])
-assert_type(plain, Agent[Any, Any, Any])
+assert_type(backend, Agent[AppContext, Any])
+assert_type(fnol, Agent[Any, Claim])
+assert_type(plain, Agent[Any, Any])
 
 
 @backend.instructions
-def known(ctx: RunContext[Calendar, Patient]) -> str:
-    return ctx.state.name
+def known(ctx: RunContext[AppContext]) -> str:
+    return ctx.context.patient.name
 
 
 @backend.instructions  # type: ignore[arg-type]
-def other_context(ctx: RunContext[str, int]) -> str:
+def other_context(ctx: RunContext[str]) -> str:
     return ""
 
 
@@ -59,12 +65,12 @@ async def other_output(ctx: RunContext, output: str) -> str:
 
 async def runs(patient: Patient) -> None:
     assert_type(await fnol.run("hi"), RunResult[Claim])
-    await backend.run("hi", state=patient, deps=Calendar())
-    await backend.run("hi", state="a name")  # type: ignore[arg-type]
-    await backend.run("hi", deps=42)  # type: ignore[arg-type]
+    await backend.run("hi", context=AppContext(calendar=Calendar(), patient=patient))
+    await backend.run("hi", context="a name")  # type: ignore[arg-type]
+    await backend.run("hi", context=42)  # type: ignore[arg-type]
 
     result = await fnol.run("hi")
-    if result.output is not None:
+    if isinstance(result.output, Claim):
         _ = result.output.numbr  # type: ignore[attr-defined]
 
 

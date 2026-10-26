@@ -1,4 +1,4 @@
-//! `GetDtmfTask`: collecting the digits the caller presses on the keypad, debounced, with an
+//! DTMF collection: collecting the digits the caller presses on the keypad, debounced, with an
 //! optional read-back to confirm them.
 
 use crate::agent_activity::scheduling::SpeechId;
@@ -33,7 +33,7 @@ pub(crate) enum DtmfTaskEvent {
         call: Option<RequestId>,
     },
     Digit(String),
-    /// `GetDtmfTask` stopped, or the session closes: an owed answer is `Stopped`.
+    /// DTMF collection stopped, or the session closes: an owed answer is `Stopped`.
     Stop,
     AgentState(AgentState),
     UserState(UserState),

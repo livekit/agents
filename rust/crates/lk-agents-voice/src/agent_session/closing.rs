@@ -133,10 +133,10 @@ impl Driver {
         self.watch.publish(crate::agent_session::SystemTap::CloseRequested);
         // The keyterm pass: the request in flight is cancelled, no push after this.
         self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close, out);
-        // `GetDtmfTask.on_exit`, the first thing the close runs, stops listening: a key pressed
+        // DTMF collection stop, the first thing the close runs, stops listening: a key pressed
         // during the drain is not collected, a pending debounce never answers.
         self.dtmf_step(crate::agent_activity::dtmf::DtmfTaskEvent::Stop, out);
-        let exit = (!self.activity.tasks.any_live()).then(|| self.plan_exit(out));
+        let exit = Some(self.plan_exit(out));
         // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's,
         // and the caller is answered with the close's drain.
         let drains = self.activity.drain.take_waiters();
@@ -261,7 +261,7 @@ impl Driver {
     /// remaining frame's `on_exit`.
     pub(crate) fn close_unwind_step(&mut self, now: Ts, out: &mut Out) {
         let unwinding = matches!(self.session.close_phase(), Some(ClosePhase::Unwinding));
-        if unwinding && !self.cancel_innermost_task(now, out) {
+        if unwinding {
             let exit = self.plan_exit(out);
             self.close_on_exit(now, exit, out);
         }
@@ -336,7 +336,6 @@ impl Driver {
             // The unwind's bound: every pushed frame popped without a handoff, every awaiter
             // released, then the remaining frame's `on_exit`.
             ClosePhase::Unwinding => {
-                self.abandon_tasks(out);
                 let exit = self.plan_exit(out);
                 self.close_on_exit(now, exit, out);
                 true
@@ -434,11 +433,6 @@ impl Driver {
             // A handoff somebody awaits: refused as closing, explicitly.
             Command::Activity(ActivityCommand::Update(update)) => {
                 self.refuse_handoff(None, update, HandoffRefused::Closing, out);
-                return;
-            }
-            // An inline task somebody awaits: refused as closing, its awaiter released.
-            Command::Task(cmd) => {
-                self.refuse_task_command(cmd, out);
                 return;
             }
             // A collection that never starts: answered as stopped, as after a `Stop`.

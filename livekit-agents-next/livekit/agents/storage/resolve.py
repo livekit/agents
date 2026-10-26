@@ -1,120 +1,20 @@
-"""Thread resolution (plan 3.3.6, 4.4), ``Ref`` resolution (5.3) and the ``Thread`` handle (7.8).
-
-``resolve_thread`` asks the threads service for the A2A ``contextId``, else creates a thread.
-``AgentRegistry`` rebuilds an ``Agent`` by name and an ``AgentTask`` from its class name and
-arguments; a ``Ref`` that cannot be rebuilt drops itself and everything above it with a
-warning. ``Thread`` is ``ctx.thread``: the durable session with the verbs that reach outside
-the turn.
-"""
+"""Thread resolution and the application-facing thread handle."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
 
 from pydantic import JsonValue
 
 from .. import _core
 from .._core import Threads
 from .._generated.storage import EventRow
-from .._generated.storage_run import Ref, TaskPage, TaskRow
+from .._generated.storage_run import TaskPage, TaskRow
 from .._generated.storage_threads import ThreadInfo
 from ..llm import ChatContext
-from ..log import logger
 from .agentdb import AgentDBStorage
 from .protocol import history_of
-
-if TYPE_CHECKING:
-    from ..voice.agent import Agent, AgentTask
-
-TaskClass = type["AgentTask[Any, Any]"]  # the task's result and state types, erased here
-"""An ``AgentTask`` subclass, as the registry rebuilds one from a ``Ref``."""
-
-
-class AgentRegistry:
-    """The server's registered agents and task classes: what a ``Ref`` rebuilds.
-
-    ``AgentServer`` registers every ``Agent`` it is given and ``server.register(agent)`` adds the
-    rest; ``AgentTask`` subclasses are found by class name among ``AgentTask``'s subclasses, which
-    exist from import.
-    """
-
-    def __init__(self) -> None:
-        self._agents: dict[str, Agent] = {}
-        self._task_classes: dict[str, TaskClass] = {}
-
-    def register(self, agent: Agent | TaskClass) -> None:
-        """An ``Agent`` by its name, or an ``AgentTask`` class by its class name."""
-        if isinstance(agent, type):
-            self._task_classes[agent.__name__] = agent
-            return
-
-        name = agent.id
-        existing = self._agents.get(name)
-        if existing is not None and existing is not agent:
-            logger.warning("two agents registered under one name", extra={"agentName": name})
-        self._agents[name] = agent
-
-    def register_all(self, agents: Iterable[Agent | TaskClass]) -> None:
-        for agent in agents:
-            self.register(agent)
-
-    def include(self, other: AgentRegistry) -> None:
-        self.register_all([*other._agents.values(), *other._task_classes.values()])
-
-    def rebuild(self, ref: Ref) -> Agent | None:
-        """One ``Ref`` as an ``Agent``: by name, or its task class called with its arguments."""
-        if ref.args is None and ref.name in self._agents:
-            return self._agents[ref.name]
-
-        task_class = self._task_classes.get(ref.name) or self._find_task_class(ref.name)
-        if task_class is None:
-            return self._agents.get(ref.name)
-
-        try:
-            return task_class._rebuild(ref.args)
-        except Exception as e:
-            logger.warning(
-                "an AgentTask could not be rebuilt from its arguments",
-                extra={"taskClass": ref.name, "error": str(e)},
-            )
-            return None
-
-    def _find_task_class(self, name: str) -> TaskClass | None:
-        """The ``AgentTask`` subclass of that name, searched depth first."""
-        from ..voice.agent import AgentTask
-
-        pending = AgentTask.__subclasses__()
-        while pending:
-            candidate = pending.pop(0)
-            if candidate.__name__ == name:
-                return candidate
-            pending = candidate.__subclasses__() + pending
-
-        return None
-
-    def resolve(self, refs: Iterable[Ref]) -> list[Agent]:
-        """The stack as agents, bottom first; the first failure drops it and everything above."""
-        agents: list[Agent] = []
-
-        for ref in refs:
-            agent = self.rebuild(ref)
-            if agent is None:
-                logger.warning(
-                    "dropping an agent stack entry the server cannot rebuild, and everything "
-                    "above it; the nearest rebuildable ancestor speaks",
-                    extra={"refName": ref.name, "hasArgs": ref.args is not None},
-                )
-                break
-            agents.append(agent)
-
-        return agents
-
-    def speaking(self, refs: Iterable[Ref], default: Agent | None = None) -> Agent | None:
-        """Who speaks: the top of the rebuilt stack, else ``default``."""
-        resolved = self.resolve(refs)
-        return resolved[-1] if resolved else default
 
 
 @dataclass
@@ -252,9 +152,7 @@ class Thread:
 
 
 __all__ = [
-    "AgentRegistry",
     "ResolvedThread",
     "Thread",
-    "TaskClass",
     "resolve_thread",
 ]

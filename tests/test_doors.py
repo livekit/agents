@@ -25,7 +25,7 @@ from .test_a2a_server import (
 pytestmark = [pytest.mark.unit]
 
 
-async def echo(ctx: A2ASessionContext[Any]) -> str:
+async def echo(ctx: A2ASessionContext) -> str:
     return f"heard {ctx.message.text_content}"
 
 

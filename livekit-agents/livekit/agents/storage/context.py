@@ -11,30 +11,26 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterable, Awaitable, Callable
-from typing import Any, Generic, cast
+from typing import Any, cast
 
 from pydantic import JsonValue
-from typing_extensions import TypeVar
 
 from .._generated.storage_run import RunUsage, TaskRow
 from .._generated.storage_turn import HandlerOutput, HostEvent, Message, PendingCall, TurnContext
-from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput
+from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, InputRequired
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunResult
+from .context_store import ContextStore
 from .protocol import (
     StorageError,
-    dump_state,
     history_of,
     item_to_payload,
-    load_state,
     payload_to_item,
 )
-from .resolve import AgentRegistry, Thread
+from .resolve import Thread
 
-S = TypeVar("S", default=None)  # a door declared with no state: ``A2ASessionContext``
-
-Handler = Callable[["A2ASessionContext[S]"], "Awaitable[object] | AsyncIterable[str]"]
+Handler = Callable[["A2ASessionContext"], "Awaitable[object] | AsyncIterable[str]"]
 """The developer's handler: the context in, the answer out, either returned whole or yielded as
 it is written (an async generator), in which case the answer is the last run's result."""
 
@@ -45,11 +41,11 @@ TokenHook = Callable[[str, str], Awaitable[None]]
 """``(task_id, delta)``: one streamed token to the door's live response."""
 
 
-class A2ASessionContext(Generic[S]):
+class A2ASessionContext:
     """What an ``@server.a2a_session`` handler receives: the turn as loaded, and the ways to
     report back. ``message`` is the batch as one user message, ``messages`` each message with its
-    channel and time; ``message_history`` the lane's history, ``state`` the lane's state, which
-    the handler mutates in place; ``caller_history`` a delegating caller's conversation when it
+    channel and time; ``message_history`` the lane's history; ``store`` supports explicit
+    context persistence; ``caller_history`` a delegating caller's conversation when it
     sent one (plan 7.5)."""
 
     def __init__(
@@ -57,7 +53,6 @@ class A2ASessionContext(Generic[S]):
         turn: TurnContext,
         checkpoint: Callable[[], Awaitable[bool]],
         *,
-        state: S,
         thread: Thread,
         on_update: UpdateHook | None,
         on_token: TokenHook | None,
@@ -65,7 +60,7 @@ class A2ASessionContext(Generic[S]):
         self.message = cast(ChatMessage, payload_to_item(turn.message))
         self.messages: list[Message] = list(turn.batch)
         self.message_history: ChatContext = history_of(turn.history)
-        self.state = state
+        self.store = ContextStore(turn.state, read_only=turn.read_only)
         self.thread = thread
         self.task_id = turn.task_id
         self.tasks: list[TaskRow] = list(turn.tasks)
@@ -116,24 +111,20 @@ class A2ASessionContext(Generic[S]):
         return None
 
 
-class TurnHost(Generic[S]):
+class TurnHost:
     """What ``_core.Turn`` drives for one door: the handler, its progress and tokens to the
     door's wire hooks."""
 
     def __init__(
         self,
-        handler: Handler[S],
+        handler: Handler,
         *,
         thread: Thread,
-        state_type: type[S] | None,
-        agents: AgentRegistry | None = None,
         on_update: UpdateHook | None = None,
         on_token: TokenHook | None = None,
     ) -> None:
         self._handler = handler
         self._thread = thread
-        self._state_type = state_type
-        self._agents = agents if agents is not None else AgentRegistry()
         self._on_update = on_update
         self._on_token = on_token
 
@@ -149,7 +140,6 @@ class TurnHost(Generic[S]):
         context = A2ASessionContext(
             ctx,
             checkpoint,
-            state=self._load_state(ctx.state),
             thread=self._thread,
             on_update=self._on_update,
             on_token=self._on_token,
@@ -161,8 +151,7 @@ class TurnHost(Generic[S]):
             on_update=context.update,
             on_token=context.token,
             thread_id=self._thread.id,
-            agent_stack=ctx.agent_stack,
-            rebuild=self._agents.rebuild,
+            store=context.store,
             answer_tool=ctx.answer_tool,
             delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
         )
@@ -190,25 +179,20 @@ class TurnHost(Generic[S]):
             return HandlerOutput(error=f"{type(e).__name__}: {e}")
         finally:
             reset_run_hooks(token)
+            context.store.close()
 
         return self._output(context, output, results)
 
-    def _load_state(self, stored: JsonValue) -> S:
-        if self._state_type is None:
-            return cast(S, None)  # a door declared with no state: ``A2ASessionContext[None]``
-        return load_state(stored, self._state_type)
-
     def _output(
-        self, ctx: A2ASessionContext[S], output: object, results: list[RunResult[object]]
+        self, ctx: A2ASessionContext, output: object, results: list[RunResult[object]]
     ) -> HandlerOutput:
-        """What the turn commits: the answer, what the runs added, the state, the ask, the
-        agent stack when a run moved it."""
+        """The answer, new history, explicitly saved fields and any pending question."""
         if isinstance(output, RunResult):
             # a run returned as is answers with its question while it waits, else its output
-            output = output.input_required if output.input_required is not None else output.output
+            output = output.output
         from ..a2a.extension import VERBATIM
 
-        asked = next((r for r in reversed(results) if r.input_required is not None), None)
+        asked = next((r for r in reversed(results) if isinstance(r.output, InputRequired)), None)
         metadata = dict(ctx.metadata)
         last = results[-1] if results else None
         if last is not None and last.verbatim is not None:
@@ -220,15 +204,16 @@ class TurnHost(Generic[S]):
                 name=call.name, call_id=call.call_id, answer_tool=asked._answer_tool
             )
         return HandlerOutput(
-            output=output,
+            output=output.question if isinstance(output, InputRequired) else output,
             new_items=[item_to_payload(item) for r in results for item in r.new_messages()],
-            state=dump_state(ctx.state, self._state_type) if self._state_type is not None else None,
+            state=ctx.store._pending_state,
             usage=_usage(results),
-            input_required=asked.input_required if asked is not None else None,
+            input_required=asked.output.question
+            if asked is not None and isinstance(asked.output, InputRequired)
+            else output.question
+            if isinstance(output, InputRequired)
+            else None,
             pending_call=pending,
-            agent_stack=next(
-                (r._agent_stack for r in reversed(results) if r._agent_stack is not None), None
-            ),
             interrupted=ctx.interrupted or any(r.interrupted for r in results),
             metadata=metadata,
             events=[*_tool_events(results), *ctx.events],

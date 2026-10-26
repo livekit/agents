@@ -86,6 +86,13 @@ context, with `referenceTaskIds` if it builds on an earlier one.
 
 ## Answering a task
 
+A Python run result separates framework status from application output.
+`status="input_required"` maps to A2A `input-required`, with `result.question`
+as the status message. `status="completed"` maps to `completed`, with the
+accepted `result.output` delivered as an artifact. The application's
+`output_type` describes that accepted output. See
+[run results](agent-router.md#what-a-run-returns).
+
 A turn whose tool returned `InputRequired(question)` ends `input-required`.
 The question is the turn's reply, as the status message; no model call
 writes it. The pending call stays in the history with a placeholder output,
@@ -208,7 +215,7 @@ A refusal is an HTTP status with `{"error": "..."}`, not a JSON-RPC error:
 ## The extension
 
 A LiveKit client activates it only toward a card that offers it:
-`AgentClient`, `A2ADelegate` and a `LiveSession` delegating to an endpoint
+`AgentClient`, `A2AAgent` and a `LiveSession` delegating to an endpoint
 then send `A2A-Extensions: https://livekit.io/a2a/ext/agents/v1`
 without the developer doing anything, and the server echoes it. With it,
 a delegation is marked `livekit/kind: delegation`, and the caller's thread
@@ -226,7 +233,7 @@ what it gets:
 
 | The expert implements | What the caller sends and does |
 |---|---|
-| A2A only, over JSON-RPC with SSE | the request as text, with no `contextId` and nothing of the extension; its `working` status messages are the progress; the artifact text is the result; `failed` is a failure |
+| A2A only, over JSON-RPC with SSE | the request as text, with no caller-owned `contextId` or extension fields on the first request; later replies use the remote context/task references; its `working` status messages are the progress; the artifact text is the result; `failed` is a failure |
 | the extension, listed on its card | `livekit/kind: delegation` and the caller's thread id as `contextId`; with no thread to share, the caller's conversation as a `chat_ctx` data part |
 
 The caller never depends on a `livekit/` key coming back: with or without

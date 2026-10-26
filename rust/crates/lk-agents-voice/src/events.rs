@@ -232,7 +232,7 @@ impl RunRefusal {
 /// How a run ended (`RunResult._mark_done`), read off the last owned speech.
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum RunOutcome {
-    /// Nothing the run owned is live. `final_output` is what `AgentTask.complete()` got, if anything.
+    /// Nothing the run owned is live. `final_output` is what accepted output got, if anything.
     Completed { final_output: Option<lk_agents_abi::HostRef> },
     /// The run raises: the last speech failed, or a tool completed its task with an exception.
     Failed(RunFailure),
@@ -255,7 +255,7 @@ impl RunOutcome {
 pub enum RunFailure {
     /// The last owned speech failed; its `exception()` is the error.
     Speech,
-    /// `AgentTask.complete(exc)` from inside the last speech.
+    /// an output error from inside the last speech.
     Output(lk_agents_abi::HostRef),
 }
 

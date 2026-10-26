@@ -324,18 +324,6 @@ impl Driver {
         }
     }
 
-    /// Resolves when the host settles the watched task on its side, a settle the core reads as a
-    /// wake; pending while no task is watched.
-    pub fn settled(&self) -> impl std::future::Future<Output = ()> + 'static {
-        let handle = self.activity.tasks.watched().map(|t| t.handle().clone());
-        async move {
-            match handle {
-                Some(handle) => handle.wait_settled().await,
-                None => std::future::pending().await,
-            }
-        }
-    }
-
     /// The loop stopped. What was queued and never delivered is refused (a census is still
     /// journalled), then the session's last event goes out, then every waiter and task the loop
     /// leaves is released: nothing settles after `close`.
@@ -369,15 +357,13 @@ impl Driver {
         }
         self.execute(out);
         self.settle_waiters_at_end();
-        self.release_tasks_at_end();
         self.release_all_providers();
     }
 
     /// When the core next wants [`Event::Wake`]: its earliest deadline, or the last step's instant
     /// when a watched task is already due.
     pub fn wake_at(&self) -> Option<Ts> {
-        let task = self.task_due().map(|_| self.step.now);
-        [self.timers.next_deadline(), task].into_iter().flatten().min()
+        self.timers.next_deadline()
     }
 
     /// Whether `timer` is armed, this cycle's own arms and cancels counted.
@@ -394,16 +380,6 @@ impl Driver {
         armed
     }
 
-    /// The innermost task whose settle the loop has not seen: its handle settled, or the speech
-    /// awaiting it ended.
-    fn task_due(&self) -> Option<crate::workflows::TaskId> {
-        let live = self.activity.tasks.watched()?;
-        let speech_ended = live
-            .speech()
-            .is_some_and(|s| self.activity.speech_scheduler.handle(s).is_none_or(|h| h.done()));
-        (live.handle().done() || speech_ended).then(|| live.handle().id())
-    }
-
     /// One step: `input` at `now` (`None`: time reached [`Self::wake_at`]), then everything it
     /// made due in the same instant.
     pub(crate) fn handle(&mut self, input: Option<Input>, now: Now) {
@@ -414,8 +390,6 @@ impl Driver {
             None => {
                 if self.timers.next_deadline().is_some_and(|at| at <= now) {
                     self.on_timers(now, &mut out);
-                } else if let Some(task) = self.task_due() {
-                    self.on_task_wake(now, task, &mut out);
                 }
             }
             Some(Input::Stt(ev)) => self.on_stt(now, ev, &mut out),
@@ -547,7 +521,6 @@ impl Driver {
             }
             Command::Close(close) => self.begin_closing(now, close, out),
             Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome, out),
-            Command::Task(cmd) => self.on_task(now, cmd, out),
             Command::Run(spec) => self.on_run(now, *spec, out),
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into(), out),
             Command::HostMetrics(record) => {

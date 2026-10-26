@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use lk_agents_host_derive::Host;
 
 use crate::voice::amd::AmdPrediction;
-use crate::voice::room_io::{DeleteRoomRequested, ParticipantLinked, ParticipantUnlinked, TextInput};
+use crate::voice::room_io::{
+    DeleteRoomRequested, ParticipantLinked, ParticipantUnlinked, TextInput,
+};
 use crate::voice::session_effects::Span;
 
 // The Python `module` and `path` of every record here that names none of its own.
@@ -16,8 +18,7 @@ const _: () = ();
 // --- the two state vocabularies ------------------------------------------------------------------
 
 /// Whether the user is speaking, listening, or has gone away.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[derive(Host)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host)]
 #[python(literal, name = "UserState")]
 #[node(enum)]
 #[host(wire(msg = format!("unknown user state {s:?}")))]
@@ -31,8 +32,7 @@ pub enum UserState {
 }
 
 /// The agent's lifecycle label.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[derive(Host)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host)]
 #[python(literal, name = "AgentState")]
 #[node(enum)]
 #[host(wire(msg = format!("unknown agent state {s:?}")))]
@@ -52,12 +52,7 @@ pub enum AgentState {
 // --- the session events --------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
-    name = "UserStateChangedEvent",
-    tag = "type",
-    tag_value = "user_state_changed"
-)]
+#[python(pydantic, name = "UserStateChangedEvent", tag = "type", tag_value = "user_state_changed")]
 #[node(interface)]
 // Also read back from the remote session's `kind`-keyed dict (`remote_session.py:_send_wire`).
 #[binding(emit, extract, from_items, read_tag = "kind")]
@@ -143,12 +138,7 @@ pub struct UserTranscriptionTimeout {
 }
 
 #[derive(Debug, Clone, PartialEq, Host)]
-#[python(
-    pydantic,
-    name = "EotPredictionEvent",
-    tag = "type",
-    tag_value = "eot_prediction"
-)]
+#[python(pydantic, name = "EotPredictionEvent", tag = "type", tag_value = "eot_prediction")]
 #[node(interface)]
 // Read back by the remote session, whose proto narrows the two probabilities to `f32`.
 #[binding(emit, extract, from_items, read_tag = "kind")]
@@ -262,12 +252,7 @@ pub struct FunctionToolsExecuted {
 /// Deprecated: use session_usage_updated for usage tracking.
 /// Per-turn latency metrics are available on ChatMessage.metrics.
 #[derive(Host)]
-#[python(
-    pydantic,
-    name = "MetricsCollectedEvent",
-    tag = "type",
-    tag_value = "metrics_collected"
-)]
+#[python(pydantic, name = "MetricsCollectedEvent", tag = "type", tag_value = "metrics_collected")]
 pub struct MetricsCollected {
     #[python(ty = "AgentMetrics", import = "..metrics:AgentMetrics")]
     pub metrics: (),
@@ -290,12 +275,7 @@ pub struct SessionUsageUpdated {
 }
 
 #[derive(Host)]
-#[python(
-    pydantic,
-    name = "_TypeDiscriminator",
-    tag = "type",
-    tag_value = "unknown"
-)]
+#[python(pydantic, name = "_TypeDiscriminator", tag = "type", tag_value = "unknown")]
 pub struct TypeDiscriminator {}
 
 #[derive(Host)]
@@ -370,7 +350,10 @@ impl<'py> pyo3::IntoPyObject<'py> for &ToolCallStarted {
     type Output = pyo3::Bound<'py, pyo3::types::PyDict>;
     type Error = pyo3::PyErr;
 
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    fn into_pyobject(
+        self,
+        py: pyo3::Python<'py>,
+    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
         use pyo3::types::PyDictMethods as _;
         let d = pyo3::types::PyDict::new(py);
         d.set_item("type", ToolCallStarted::TYPE)?;
@@ -449,12 +432,7 @@ impl ToolReplyUpdated {
 
 /// The four tool-lifecycle updates, as one discriminated union.
 #[derive(Clone, Host)]
-#[python(
-    union,
-    inline,
-    discriminator = "type",
-    name = "ToolUpdate"
-)]
+#[python(union, inline, discriminator = "type", name = "ToolUpdate")]
 #[binding(emit)]
 pub enum ToolUpdate {
     Started(ToolCallStarted),
@@ -560,12 +538,7 @@ pub enum CloseReason {
 }
 
 #[derive(Host)]
-#[python(
-    pydantic,
-    name = "CloseEvent",
-    tag = "type",
-    tag_value = "close"
-)]
+#[python(pydantic, name = "CloseEvent", tag = "type", tag_value = "close")]
 pub struct Close {
     #[python(
         ty = "LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | None",
@@ -585,11 +558,7 @@ pub struct Close {
 
 /// `AgentEvent` -- everything an `AgentSession` surfaces, discriminated on `type`.
 #[derive(Host)]
-#[python(
-    union,
-    discriminator = "type",
-    name = "AgentEvent"
-)]
+#[python(union, discriminator = "type", name = "AgentEvent")]
 pub enum AgentEvent {
     UserInputTranscribed(UserInputTranscribed),
     UserTranscriptionTimeout(UserTranscriptionTimeout),
@@ -692,7 +661,14 @@ pub struct EndOfSpeechEvent {
 
 /// `conversation_item_added`'s payload, read back by the remote session (its `item` only).
 #[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, extract, from_items, read_tag = "kind", tag = "type", tag_value = "conversation_item_added")]
+#[binding(
+    emit,
+    extract,
+    from_items,
+    read_tag = "kind",
+    tag = "type",
+    tag_value = "conversation_item_added"
+)]
 pub struct ItemAddedWire {
     /// The `_core.ChatItem`; the host rebuilds its `llm.ChatMessage` with `ChatContext._from_core`.
     pub item: crate::ChatItem,
@@ -733,12 +709,21 @@ impl<'py> pyo3::IntoPyObject<'py> for &ToolsExecutedEvent {
     type Output = pyo3::Bound<'py, pyo3::types::PyDict>;
     type Error = pyo3::PyErr;
 
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    fn into_pyobject(
+        self,
+        py: pyo3::Python<'py>,
+    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
         use pyo3::types::PyDictMethods as _;
         let d = pyo3::types::PyDict::new(py);
         d.set_item("type", ToolsExecutedEvent::TYPE)?;
-        let calls: Vec<crate::ChatItem> = self.function_calls.iter().cloned().map(crate::ChatItem::FunctionCall).collect();
-        let outputs: Vec<crate::ChatItem> = self.function_call_outputs.iter().cloned().map(crate::ChatItem::FunctionCallOutput).collect();
+        let calls: Vec<crate::ChatItem> =
+            self.function_calls.iter().cloned().map(crate::ChatItem::FunctionCall).collect();
+        let outputs: Vec<crate::ChatItem> = self
+            .function_call_outputs
+            .iter()
+            .cloned()
+            .map(crate::ChatItem::FunctionCallOutput)
+            .collect();
         d.set_item("function_calls", calls)?;
         d.set_item("function_call_outputs", outputs)?;
         d.set_item("handoff_required", self.handoff_required)?;
@@ -955,18 +940,6 @@ pub struct ToolsExecutedHookWire {
     pub handoff_required: bool,
 }
 
-/// `describe_agent`: a tool returned an `Agent` the driver cannot read.
-#[derive(Debug, Clone, Host)]
-#[binding(emit, tag = "type", tag_value = "hook_call")]
-pub struct DescribeAgentHookWire {
-    pub hook: String,
-    pub id: u64,
-    /// `speech_{n}` of the speech whose tool returned the agent.
-    pub speech_id: String,
-    /// The `Agent` object, or `None` when the handle outlived its entry (answered `hook_failed`).
-    pub agent: crate::HostRef,
-}
-
 // --- the interruption detector's verdict and its wire ----------------------------------------
 
 /// `OverlappingSpeechEvent` (`inference/interruption.py:120`), the detector's only public verdict.
@@ -1081,7 +1054,6 @@ pub enum HostWire {
     HookOnUserTurnCompleted(OnUserTurnCompletedHookWire),
     HookFillerSource(FillerSourceHookWire),
     HookRenderToolReply(RenderToolReplyHookWire),
-    HookDescribeAgent(DescribeAgentHookWire),
     HookToolsExecuted(ToolsExecutedHookWire),
     ParticipantLinked(ParticipantLinked),
     ParticipantUnlinked(ParticipantUnlinked),

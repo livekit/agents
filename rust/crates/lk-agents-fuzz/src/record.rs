@@ -922,12 +922,5 @@ pub fn step_name(step: &Step) -> String {
 
 /// The hook a call names, for the projection the recording keeps.
 pub fn hook_of(call: &HookCall) -> Host {
-    Host::Hook {
-        id: call.id(),
-        kind: call.kind(),
-        speech: match call {
-            HookCall::DescribeAgent { speech, .. } => Some(speech.0),
-            _ => None,
-        },
-    }
+    Host::Hook { id: call.id(), kind: call.kind(), speech: None }
 }

@@ -34,7 +34,6 @@ from .extension import Extensions, pb, to_json
 if TYPE_CHECKING:
     from .methods import TurnOutcome
 
-S = TypeVar("S")
 T = TypeVar("T")
 
 running: set[asyncio.Task[None]] = set()
@@ -103,14 +102,14 @@ class ResponsePump(Generic[T]):
             )
 
 
-class WireHost(Generic[S]):
+class WireHost:
     """The host of a wire turn: the handler behind ``_core_handle``, acknowledged when it opens
     (the ``submitted`` row is durable by then), and the live response's frames behind the
     hooks."""
 
     def __init__(
         self,
-        host: Callable[[UpdateHook, TokenHook], TurnHost[S]],
+        host: Callable[[UpdateHook, TokenHook], TurnHost],
         pump: ResponsePump[TurnOutcome],
         *,
         task_id: str,

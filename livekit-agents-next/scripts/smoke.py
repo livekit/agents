@@ -1,7 +1,7 @@
 """Smoke run of the copy: a session over ``_core.FakeRoom`` on virtual time, with a scripted LLM,
 a scripted STT and a silent TTS written as plugins (so all three cross the core's provider views).
-It starts, says something, replies, runs a tool, runs an ``AgentTask`` the user answers by
-speaking into the room, hands off to a second agent whose ``on_enter`` speaks, and closes.
+It starts, says something, replies, runs a tool, handles speech from the room,
+explicitly switches to a second agent whose ``on_enter`` speaks, and closes.
 Then a second session on a scripted realtime model replies through the core's realtime leg.
 
     python livekit-agents-next/scripts/smoke.py
@@ -16,9 +16,7 @@ import sys
 from livekit import rtc
 from livekit.agents import (
     Agent,
-    AgentTask,
     APIConnectOptions,
-    Completed,
     LiveSession,
     RunContext,
     _core,
@@ -35,8 +33,6 @@ SAMPLE_RATE = 24000
 # (words in the user's message, the tool it calls, its arguments from the message)
 TOOL_CALLS = [
     ("weather", "get_weather", lambda text: {"city": "Paris"}),
-    ("details", "collect_name", lambda text: {}),
-    ("my name is", "record_name", lambda text: {"name": text.rsplit(" ", 1)[-1]}),
     ("billing", "to_billing", lambda text: {}),
 ]
 
@@ -132,19 +128,6 @@ class _Chunked(tts.ChunkedStream):
         output_emitter.flush()
 
 
-class NameTask(AgentTask[str]):
-    def __init__(self) -> None:
-        super().__init__(instructions="Ask for the caller's name.")
-
-    async def on_enter(self) -> None:
-        self.session.say("What is your name?")
-
-    @function_tool
-    async def record_name(self, ctx: RunContext, name: str) -> Completed[str]:
-        """Record the caller's name."""
-        return Completed(name)
-
-
 class Billing(Agent):
     def __init__(self) -> None:
         super().__init__(instructions="You handle billing.")
@@ -171,15 +154,9 @@ class FrontDesk(Agent):
         return f"sunny in {city}"
 
     @function_tool
-    async def collect_name(self, ctx: RunContext) -> str:
-        """Collect the caller's name."""
-        name = await NameTask()
-        return f"the caller is {name}"
-
-    @function_tool
-    async def to_billing(self, ctx: RunContext) -> Agent:
+    async def to_billing(self, ctx: RunContext) -> None:
         """Transfer the caller to billing."""
-        return Billing()
+        ctx.session.update_agent(Billing())
 
 
 async def settle(room: _core.FakeRoom, seconds: float) -> None:
@@ -341,13 +318,9 @@ async def main() -> int:
     session.generate_reply(user_input="what's the weather like?")
     await settle(room, 4)
 
-    print("== AgentTask, answered by speaking into the room")
-    session.generate_reply(user_input="take my details")
-    await settle(room, 3)
-    assert agent_name(session) == "NameTask", agent_name(session)
+    print("== speech from the room")
     room.speak(frames=40)
     await settle(room, 6)
-    assert agent_name(session) == "FrontDesk", agent_name(session)
 
     print("== session.run(), asserted")
     result = session.run(user_input="what's the weather like?")

@@ -459,11 +459,7 @@ fn placeholder_id(v: &mut Value, key: &str, prefix: &str) {
 async fn two_workers_share_one_session() {
     let Some((storage, database_id)) = fresh_database().await else { return };
     let a = thread(&storage, &database_id, "worker-a").await;
-    let opts = TurnOptions {
-        policy: PolicySpec::All(Policy::Queue),
-        state_default: Some(json!({"verified": 0})),
-        ..TurnOptions::default()
-    };
+    let opts = TurnOptions { policy: PolicySpec::All(Policy::Queue), ..TurnOptions::default() };
     let host = Fake::new(Behavior::Counter);
     let first = Turn::new(a.clone(), LANE, host.clone(), clock(), opts.clone())
         .run(a2a("hello", "m1", None, None), None)
@@ -841,20 +837,6 @@ async fn concurrent_runs_append_without_a_lease() {
     assert_eq!(texts, vec!["fast", "one", "slow", "two"]);
     let info = a.lane(LANE).info().await.unwrap().unwrap();
     assert_eq!(info.lease_until, 0, "no lease was taken");
-    // the concurrent policy requires a door with no state
-    let with_state = Turn::new(
-        a.clone(),
-        LANE,
-        Fake::new(Behavior::Echo),
-        clock(),
-        TurnOptions {
-            policy: PolicySpec::All(Policy::Concurrent),
-            state_default: Some(json!({"verified": 0})),
-            ..TurnOptions::default()
-        },
-    );
-    let err = with_state.run(a2a("x", "m3", None, None), None).await.expect_err("no state");
-    assert!(matches!(err, StorageError::Invalid(_)), "{err}");
     cleanup(&storage, &database_id, &[&a, &b]).await;
 }
 

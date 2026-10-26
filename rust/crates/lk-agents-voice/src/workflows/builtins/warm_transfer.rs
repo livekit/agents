@@ -1,17 +1,13 @@
+use crate::workflows::Warning;
 use crate::workflows::builtins::instructions::{
-    InstructionsArg, TemplateValue, WorkflowInstructions, render,
+    InstructionsArg, TemplateValue, WorkflowInstructions,
 };
 use crate::workflows::builtins::prompts::warm_transfer as p;
 use crate::workflows::builtins::schema::{Param, nullary, tool};
-use crate::workflows::{
-    Task, TaskCtx, TaskOptions, ToolError, ToolReply, Warning, args, update_tool_flags,
-};
-use async_trait::async_trait;
 use lk_agents_abi::voice::workflows::SipParticipantRequest;
-use lk_agents_abi::{ChatContext, ToolSpec};
+use lk_agents_abi::{ChatContext, ToolFlags, ToolSpec};
 use lk_agents_rtc::{ParticipantIdentity, SipParticipantReq};
 use lk_agents_voice::generation::Instructions;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -21,7 +17,7 @@ pub const HUMAN_AGENT_IDENTITY: &str = "human-agent-sip";
 
 pub use lk_agents_abi::voice::workflows::WarmTransferResult;
 
-/// `room.name + "-human-agent"` (`warm_transfer.WarmTransferTask._dial_human_agent`).
+/// `room.name + "-human-agent"` (`warm_transfer.WarmTransferPlan._dial_human_agent`).
 pub fn human_agent_room_name(caller_room: &str) -> String {
     format!("{caller_room}-human-agent")
 }
@@ -76,7 +72,7 @@ impl IoGate {
 
 // ------------------------------------------------------------------------------------ the SIP
 
-/// Filled into `CreateSIPParticipantRequest` (`WarmTransferTask._dial_human_agent`).
+/// Filled into `CreateSIPParticipantRequest` (`WarmTransferPlan._dial_human_agent`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SipDialConfig {
     /// `sip_call_to`. Required -- an empty one is [`WarmTransferError::NoSipCallTo`].
@@ -103,7 +99,7 @@ pub enum WarmTransferError {
     NoTrunk,
 }
 
-/// `WarmTransferTask.__init__`'s parameters.
+/// `WarmTransferPlan.__init__`'s parameters.
 #[derive(Default)]
 pub struct WarmTransferConfig {
     pub sip_call_to: Option<String>,
@@ -125,7 +121,7 @@ pub struct WarmTransferConfig {
     pub env_sip_trunk: Option<String>,
     /// `os.getenv("LIVEKIT_SIP_NUMBER", "")`, read by the driver.
     pub env_sip_number: String,
-    pub options: TaskOptions,
+    pub tools: Vec<ToolSpec>,
 }
 
 /// The trunk fallback, with three arms: "explicit sip_connection: don't override with the env var
@@ -145,14 +141,14 @@ pub fn resolve_trunk(
 
 /// The transfer's plan: its prompt and tools, the SIP request, and the io gate. The host dials,
 /// moves the participant and settles.
-pub struct WarmTransferTask {
+pub struct WarmTransferPlan {
     instructions: Instructions,
     user_tools: Vec<ToolSpec>,
     sip: SipDialConfig,
     io: IoGate,
 }
 
-impl WarmTransferTask {
+impl WarmTransferPlan {
     /// `__init__`. Returns the warnings the reference logs: the core has no logger.
     pub fn new(cfg: WarmTransferConfig) -> Result<(Self, Vec<Warning>), WarmTransferError> {
         let mut warnings = Vec::new();
@@ -210,9 +206,9 @@ impl WarmTransferTask {
         }
 
         Ok((
-            WarmTransferTask {
+            WarmTransferPlan {
                 instructions,
-                user_tools: cfg.options.tools,
+                user_tools: cfg.tools,
                 sip: SipDialConfig {
                     sip_call_to,
                     sip_trunk_id,
@@ -252,63 +248,35 @@ impl WarmTransferTask {
 
 /// All three tools are `IGNORE_ON_ENTER`: the entering turn summarises the call to the human, and
 /// connecting then would cut the summary off.
-fn tools() -> Vec<ToolSpec> {
+fn tools_for_transfer() -> Vec<ToolSpec> {
     vec![
         {
             let mut t = nullary(p::CONNECT_TOOL, p::CONNECT_DESC);
-            t.flags = update_tool_flags(true);
+            t.flags = ToolFlags { ignore_on_enter: true };
             t
         },
         tool(
             p::DECLINE_TOOL,
             p::DECLINE_DESC,
             &[Param::string("reason", p::DECLINE_ARG_REASON)],
-            update_tool_flags(true),
+            ToolFlags { ignore_on_enter: true },
         ),
         {
             let mut t = nullary(p::VOICEMAIL_TOOL, p::VOICEMAIL_DESC);
-            t.flags = update_tool_flags(true);
+            t.flags = ToolFlags { ignore_on_enter: true };
             t
         },
     ]
 }
 
-#[async_trait]
-impl Task for WarmTransferTask {
-    type Output = WarmTransferResult;
-
-    fn instructions(&self) -> Instructions {
+impl WarmTransferPlan {
+    pub fn instructions(&self) -> Instructions {
         self.instructions.clone()
     }
-
-    fn tools(&self) -> Vec<ToolSpec> {
-        let mut v = self.user_tools.clone();
-        v.extend(tools());
-        v
-    }
-
-    /// `connect_to_caller` is not dispatched here: the host performs the `move_participant`.
-    async fn call(
-        &mut self,
-        name: &str,
-        args_json: Value,
-        ctx: &mut TaskCtx<WarmTransferResult>,
-    ) -> ToolReply {
-        match name {
-            p::DECLINE_TOOL => match args::string(&args_json, name, "reason") {
-                Ok(reason) => {
-                    ctx.fail(ToolError::plain(render(p::DECLINED, &[("reason", &reason)])));
-                    ToolReply::Silent
-                }
-                Err(e) => ToolReply::Error(e),
-            },
-            p::VOICEMAIL_TOOL => {
-                ctx.fail(ToolError::plain(p::VOICEMAIL));
-                ToolReply::Silent
-            }
-            p::CONNECT_TOOL => ToolReply::error("connect_to_caller is performed by the host"),
-            other => ToolReply::unknown_tool(other),
-        }
+    pub fn tools(&self) -> Vec<ToolSpec> {
+        let mut tools = self.user_tools.clone();
+        tools.extend(tools_for_transfer());
+        tools
     }
 }
 
@@ -328,7 +296,7 @@ pub enum WarmTransferRefused {
 /// and `sip_number or None` / `dtmf or ""`.
 #[lk_agents_abi::class(name = "WarmTransferPlan", mutable)]
 pub struct HostWarmTransfer {
-    task: WarmTransferTask,
+    task: WarmTransferPlan,
     warnings: Vec<Warning>,
 }
 
@@ -342,7 +310,12 @@ fn conversation_of(items: Vec<(String, String)>) -> ChatContext {
             .enumerate()
             .map(|(i, (role, text))| {
                 let role = Role::from_literal(&role).unwrap_or(Role::Developer);
-                ChatItem::Message(ChatMessage::new(format!("history-{i}"), role, vec![ChatContent::Text(text)], std::time::UNIX_EPOCH))
+                ChatItem::Message(ChatMessage::new(
+                    format!("history-{i}"),
+                    role,
+                    vec![ChatContent::Text(text)],
+                    std::time::UNIX_EPOCH,
+                ))
             })
             .collect(),
     }
@@ -381,7 +354,7 @@ impl HostWarmTransfer {
         env_sip_number: String,
         tools: Option<Vec<ToolSpec>>,
     ) -> Result<Self, WarmTransferRefused> {
-        let (task, warnings) = WarmTransferTask::new(WarmTransferConfig {
+        let (task, warnings) = WarmTransferPlan::new(WarmTransferConfig {
             sip_call_to,
             sip_trunk_id: sip_trunk_id_given.then_some(sip_trunk_id),
             has_sip_connection,
@@ -395,14 +368,14 @@ impl HostWarmTransfer {
             target_phone_number,
             env_sip_trunk,
             env_sip_number,
-            options: TaskOptions { tools: tools.unwrap_or_default(), ..TaskOptions::default() },
+            tools: tools.unwrap_or_default(),
         })?;
         Ok(HostWarmTransfer { task, warnings })
     }
 
     #[host(getter)]
     pub fn instructions(&self) -> (String, Option<String>, Option<String>) {
-        let i = Task::instructions(&self.task);
+        let i = self.task.instructions();
         (i.common, i.audio, i.text)
     }
 
@@ -415,7 +388,7 @@ impl HostWarmTransfer {
     /// `IGNORE_ON_ENTER`.
     #[host(method)]
     pub fn tools(&self) -> Vec<lk_agents_abi::voice::workflows::RawFunctionDescription> {
-        Task::tools(&self.task).iter().map(Into::into).collect()
+        self.task.tools().iter().map(Into::into).collect()
     }
 
     /// `f"{caller_room}-human-agent"`. One place, so the dialer and the mover cannot disagree
@@ -441,7 +414,11 @@ impl HostWarmTransfer {
     /// `_set_io_enabled`'s five flags. The first `desired(False, ..)` remembers the session's io,
     /// and `desired(True, ..)` restores that rather than enabling every leg.
     #[host(method)]
-    pub fn io_enabled(&mut self, enabled: bool, current: lk_agents_abi::voice::workflows::IoEnableState) -> lk_agents_abi::voice::workflows::IoEnableState {
+    pub fn io_enabled(
+        &mut self,
+        enabled: bool,
+        current: lk_agents_abi::voice::workflows::IoEnableState,
+    ) -> lk_agents_abi::voice::workflows::IoEnableState {
         self.task.io().desired(enabled, current)
     }
 }
@@ -478,7 +455,7 @@ mod tests {
     // `sip_connection`).
     #[test]
     fn an_explicit_sip_connection_beats_the_env_trunk() {
-        let (task, _) = WarmTransferTask::new(config("+15550100", true)).unwrap();
+        let (task, _) = WarmTransferPlan::new(config("+15550100", true)).unwrap();
         let req = task.sip_request("room-human-agent");
         assert!(
             req.sip_trunk_id.is_none(),
@@ -494,7 +471,7 @@ mod tests {
     // warning not reaching the host.
     #[test]
     fn the_deprecated_number_only_fills_a_hole_and_still_warns() {
-        let (task, warnings) = WarmTransferTask::new(WarmTransferConfig {
+        let (task, warnings) = WarmTransferPlan::new(WarmTransferConfig {
             target_phone_number: Some("+15550999".to_owned()),
             ..config("+15550100", false)
         })

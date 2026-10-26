@@ -4,32 +4,17 @@ This page extends [rust-core.md](rust-core.md).
 
 ## The run unit of work in Rust
 
-The run unit of work and the turn belong to `lk-agents-storage`, not to
-Python: a Node package gets the same mechanism, and its tests are the
-crate's, run once against a real agent-db. Python and Node keep the
-developer surface and the three things only a host can do: run the handler
-(call the model, execute a tool) and report progress.
+The run unit of work and transport turn belong to `lk-agents-storage`.
+Python and Node share its lease, ordering, and commit rules. Hosts run the
+application handler, call models, execute tools, and report progress.
 
-### What moves
+### Responsibilities
 
-From `storage/run.py` and `storage/policies.py`:
-
-| Python                                                                      | Rust                                                                                                                                                           |
-| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LaneHandleImpl.run`, `_acquire`, `_open_concurrent`, `_commit`, `_abandon` | `run::Lane::open(RunOptions) -> Run`; `Run::commit`, `Run::abandon`; the renewal timer                                                                         |
-| `Run`: history, state, agent stack, events, tasks, lease, fence             | `run::Run`: the loaded rows, the write set, the fence; history items and state cross as JSON                                                                   |
-| `Tasks`: `write`, `submit`, `wait`, `pending_ask`, `by_message_id`          | `run::Tasks`                                                                                                                                                   |
-| `TurnRunner.run_turn` and the policies                                      | `turn::Turn::submit(message) -> task id`, which writes the submitted row, and `turn::Turn::run(task) -> TurnResult`: one state machine, the policy a parameter |
-| `_submit`, `_pickup`, `_fail_unrun`                                         | the same names on `turn`                                                                                                                                       |
-| `_turn`, `_finish`                                                          | the turn step; the host runs the handler inside it                                                                                                             |
-| `Message`, `channel_of`, `resolve_policy`, `resolve_debounce`               | `turn::Message` and the same functions                                                                                                                         |
-
-The turn follows the lane rules of [lanes.md](lanes.md) and
-[storage.md](storage.md): runs execute in arrival order, a waiter on an
-`interrupt` or `queue` endpoint fails `lease-timeout` after the fixed 60 s
-cap, a turn whose lease holder died
-fails `worker-lost` and is never re-run, and a failed save ends the task
-failed with `livekit/reason=storage-unavailable`.
+`lk-agents-storage` owns lane loading and commit, leases and renewal,
+revision fences, transport task records, inbox policies, and turn ordering.
+Application fields join the write set only through explicit context saves.
+Router frames are application-persisted data; storage does not select agents
+or reconstruct an execution stack.
 
 ### The host boundary
 
@@ -57,42 +42,28 @@ the door sends the `submitted` `Task`, then `run` takes it through its
 policy. There is no submitted callback.
 
 In Python, `_core.Turn(thread, lane, host, options)` takes any object with
-the three coroutine methods; `turn.submit(message)` returns the task id and
+the generated host callbacks; `turn.submit(message)` returns the task id and
 `turn.run(task)` runs it.
 
-### What stays in Python
+### Host responsibilities
 
-`protocol.py` (the types a developer reads), `agentdb.py` (the binding over
-`_core`), `live.py`, `voice/agent_run.py`, `resolve.py` (thread resolution
-is request handling), and the A2A door, which calls `_core.Turn.submit` and
-`_core.Turn.run` instead of `TurnRunner`. `rows.py` is generated.
+Python and Node expose the developer API, construct runtime application
+context, execute tools and model calls, and report progress. Rust owns the
+managed storage turn. Context loading and saving remain explicit host API
+operations against the supplied scoped store.
 
-### Order
+## Storage bindings
 
-| Step | Content |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 | The lease TTL and the renewal interval as `StorageOptions` fields (default 10 s and 3 s); the Python tests on a real agent-db |
-| 2 | `run::Lane`, `Run`, `Tasks` in Rust; `run.py` reduced to the binding |
-| 3 | `turn` in Rust with `TurnHost`, exposed as `_core.Thread`, `_core.Turn`; `policies.py` reduced to `Message` and the context type; the A2A door on `_core.Turn` |
-| 4 | The storage cases as crate tests (`run_local.rs`, `turn_local.rs`) |
-
-Each step leaves the demos running.
-
-## The storage binding through `#[host]`
-
-`lk-agents-py/src/storage.rs` and `turn.rs` are hand-written pyo3 over
-`lk-agents-storage`. They move to `#[host(..)]` declarations on the storage
-crate's own items, expanded in place like every other core crate, so
-`lk-agents-py` is back to `lib.rs` and `runtime.rs` and Node gets the same
-surface from the same declarations. Requests, results and rows cross as
-generated records, not dicts.
+Storage host records and methods are declared through `#[host(..)]` beside
+their owning Rust items. Python and Node expose the same generated records
+and binding surface. Requests and results cross as validated records.
 
 ## The layout check in CI
 
 The layout check enforces the line cap (1,250 lines per `.rs` file under
 `rust/crates`, generated output skipped), the rule that host records live
 only in `lk-agents-abi`, and the rule that a core crate's `cargo tree` holds
-no async runtime and no `lk-agents-runtime` ([Crates](#crates)). It is ported to this repository and runs in CI, beside
+no async runtime and no `lk-agents-runtime` ([Crates](#crates)). It runs in CI beside
 `lk-agents-codegen --check`, so a stale generated `.pyi`, pydantic module or
 `.d.ts` fails the build.
 
@@ -100,46 +71,38 @@ no async runtime and no `lk-agents-runtime` ([Crates](#crates)). It is ported to
 
 In CI, `docs/examples` and `examples/` are type-checked with mypy strict
 (`tsc` for Node), and `assert_type` / `expectType` tests on the generics
-(`Agent[Deps, State, Output]`, `RunContext[Deps, State]`,
-`RunResult[Output]`, `AgentTask[Output, TaskState]`).
+(`Agent[Context, Output]`, `RunContext[Context]`,
+`RunResult[Output]`, router frames).
 
 ## Cores and the runtime
 
 The rule is in [rust-core.md](rust-core.md#cores-and-the-runtime): a crate
 that decides is a core, `handle(event, now) -> effects`, and all I/O lives in
-`lk-agents-runtime`. This section is the design for the crates that do not
-follow it yet, the voice driver first.
+`lk-agents-runtime`. The voice driver, storage, worker, and inference follow this boundary.
 
-### Why
+### Event ownership
 
-A voice session is many independent sources producing events over time: the
-person through STT, VAD and end-of-turn, several models streaming, outputs
-reporting playback, the room, the developer's API calls, timers. Its bugs are
-ordering bugs. The fuzz found a refused speech that still changed the agent's
-state, microphone frames that stopped reaching the recogniser, API calls
-whose futures were dropped, and speeches marked done without the host being
-told. With state shared by concurrent tasks, every `.await` is a point where
-other code changes that state, and the interleavings are invisible in the
-code. With one owner handling one event at a time, every race is an order of
-events: explicit, enumerable and replayable.
+Each core handles one event at a time. Model streams, media, playback,
+host API calls, room changes, and timers arrive as explicit inputs. The
+runtime performs I/O from emitted effects and returns correlated result events.
+Event order is observable, reproducible, and controlled in tests.
 
 ### Crates
 
-The cores keep their names and lose every async dependency. All I/O moves
-into one crate, `lk-agents-runtime`, the way everything Python lives in
-`lk-agents-py`.
+Core crates contain deterministic decisions. Async I/O and provider adapters
+live in `lk-agents-runtime`; bindings expose the language-specific surface.
 
-| Crate                 | Holds                                                                                                                                          | From today                                                              |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `lk-agents-abi`       | the vocabulary: records, chat context, events and effects, the host-record table                                                              | `lk-agents-abi` without its provider traits, spawner and clocks          |
-| `lk-agents-voice`     | the session core and the data-plane core                                                                                                       | `lk-agents-voice` without its tasks, pumps and host API                 |
-| `lk-agents-worker`    | `WorkerState`                                                                                                                                  | `lk-agents-worker` without its transports                               |
-| `lk-agents-storage` | what decides: the schema, statements, the run's lease and fence, the turn's policy | `lk-agents-storage` without its connection and awaited scripts |
-| `lk-agents-inference` | what decides: reconnect, retry, fallback across providers | `lk-agents-inference` without its `Native*` clients, `transport.rs`, MCP and HTTP calls |
-| `lk-agents-media` | decode, encode, resampling | unchanged, but it reaches tokio through `lk-agents-abi` until abi is pure |
-| `lk-agents-runtime`   | the tokio runtime, the provider traits and streams, sockets and HTTP, the rtc proxies, the clocks, the voice host API and every core's event queue, the host bridge | all of the above it leaves, `lk-agents-rtc`, and `runtime.rs` from the bindings |
+| Crate | Responsibility |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lk-agents-abi`       | the vocabulary: records, chat context, events and effects, the host-record table                                                              |
+| `lk-agents-voice`     | the session core and the data-plane core                                                                                                       |
+| `lk-agents-worker`    | `WorkerState`                                                                                                                                  |
+| `lk-agents-storage` | what decides: the schema, statements, the run's lease and fence, the turn's policy |
+| `lk-agents-inference` | what decides: reconnect, retry, fallback across providers |
+| `lk-agents-media` | decode, encode, resampling |
+| `lk-agents-runtime`   | the tokio runtime, the provider traits and streams, sockets and HTTP, the rtc proxies, the clocks, the voice host API and every core's event queue, the host bridge |
 
-The bindings keep registration (`lib.rs`); their `runtime.rs` moves into
+The bindings keep registration (`lib.rs`); runtime support lives in
 `lk-agents-runtime` behind its `python` and `node` features, expanded in
 place like every other item. Dependencies point down, and no core depends on
 the runtime:
@@ -156,25 +119,9 @@ event queue. `lk-agents-runtime`'s own tests may use one.
 
 ### The voice core
 
-The driver has part of the shape: one loop owns the session (`Runtime::run`),
-takes one `Input` at a time with a merge rule ("a due timer fires before any
-same-instant input"), and asks every subsystem for its next deadline. Hooks
-cross as an effect and an answer (`HostEvent::Hook`, then
-`Command::HookDone`), a leg opens the same way (`ProviderCall::OpenLeg`, then
-`Input::StreamOpened`), and realtime already has `send` and `next_event`. What
-breaks the model:
-
-- the tasks the loop spawns decide on their own: the generation pipeline with
-  its tools, IVR, AMD, fillers, the transcription synchroniser, keyterms,
-  room I/O and the end-of-turn leg (about 40 spawn sites in 19 files);
-- events are not data: `Command` carries provider and output objects
-  (`Arc<dyn Stt>`, `Arc<dyn AudioOutput>`) and answers on `oneshot`
-  channels (46 sites);
-- today's `Effect` is not the boundary: `execute` performs `Decision`s,
-  branches on state and reads the clock, and `Trace::push` reads it too;
-- the host reads shared state synchronously: `SpeechHandle` is built from
-  `watch`, `Mutex` and atomics, and `publish_gate` reads flags the host
-  writes from its own thread.
+The session core owns generation planning, tool lifecycle decisions, IVR,
+AMD, fillers, transcription timing, room state, and end-of-turn decisions.
+Provider objects, sockets, outputs, and resource lifetimes belong to the runtime.
 
 **The step.** `handle(event, now) -> effects` and `wake_at() -> Option<Ts>`.
 Whoever owns the queue (the runtime, or the fuzzer in tests) calls
@@ -192,14 +139,15 @@ the core never holds the object.
 
 **Events in**, each a typed record:
 
-| Source         | Events                                                                                                         | Today                                                   |
-| -------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| the host       | every API call with its call id and raw arguments, validated by the core; hook and tool results with theirs   | `Command`, `Input::Host`, `api/host.rs`                 |
-| hearing        | VAD ticks, STT interims and finals, end-of-turn predictions, overlap verdicts, leg opened, failed or ended      | `Input::{Stt, Vad, Eot, Overlap, StreamOpened, ChannelEnded}`  |
-| models         | an LLM's tokens, tool calls, end and failure; TTS audio produced, ended, failed; realtime server events        | inside the generation tasks; `Input::Realtime`          |
-| the data plane | playout started, progressed, finished, reset; the position a cut stopped at; frames forwarded per leg          | `GenEvent::{FirstFrame, PlaybackStarted}`, sink reports |
-| the room       | participant linked, unlinked, track changes, closed                                                            | `Input::{Room, RoomIo}`                                 |
-| time           | `Wake`                                                                                                         | `Wake::Timer`                                           |
+| Source | Events |
+| -------------- | -------------------------------------------------------------------------------------------------------------- |
+| the host | every API call with its call id and raw arguments, validated by the core; hook and tool results with theirs |
+| hearing | VAD ticks, STT interims and finals, end-of-turn predictions, overlap verdicts, leg opened, failed or ended |
+| models | an LLM's tokens, tool calls, end and failure; TTS audio produced, ended, failed; realtime server events |
+| the data plane | playout started, progressed, finished, reset; the position a cut stopped at; frames forwarded per leg |
+| the room | participant linked, unlinked, track changes, closed |
+| time | `Wake` |
+
 
 **Effects out**, each a typed record:
 
@@ -252,9 +200,8 @@ the hop between them is an ordering the fuzzer chooses like any other.
 
 A core's output depends only on its events and their `now`:
 
-- no `HashMap` or `HashSet` iteration with a random hasher (IVR's loop
-  detector sums floats in `HashMap` order today, so its threshold flips with
-  the hasher); ordered maps or a fixed hasher;
+- no order-dependent `HashMap` or `HashSet` iteration with a random hasher;
+  use ordered maps or deterministic ordering for decisions;
 - no clock read, no entropy, no thread-local state, nothing shared with
   another thread;
 - the layout check rejects `RandomState`, `Instant::now`, `SystemTime::now`
@@ -271,7 +218,7 @@ hold its whole journal in memory. Work per event is proportional to what the
 event changes: a VAD tick, about 30 a second, does not rescan every subsystem.
 
 `python/loop_time.rs` (`LoopRuntime`, the executor for Python's virtual-time
-tests) becomes a runtime mode that steps the cores on the asyncio loop.
+tests) provides a runtime mode that steps the cores on the asyncio loop.
 
 ### Bindings and features
 
@@ -282,8 +229,8 @@ default features, and the `python` and `node` features of a core pull nothing
 async. `lk-agents-runtime` has a `voice` module for the voice host API and its
 handle objects, mirroring the voice core: home by subject inside the crate
 that does I/O. The rtc data types the core reads (`RoomEvent`,
-`ParticipantIdentity`, `VideoFrameRef`) move to `lk-agents-abi`; the rtc
-traits and the fake room move to `lk-agents-runtime`.
+`ParticipantIdentity`, `VideoFrameRef`) live in `lk-agents-abi`; the rtc
+traits and fake room live in `lk-agents-runtime`.
 
 Python uses the Rust driver, so `api/host.rs` and
 the handle objects are written once, against the new boundary.
@@ -304,64 +251,15 @@ is drawn per seed. Reach alone cannot show what an ordering change gains, so
 each step is also measured in distinct findings, keyed by rule and kind of
 subject, on the same seeds.
 
-### Integration order
+### Machine composition
 
-Each step keeps the fuzz gate green and lowers neither the survey's reach nor
-its distinct findings.
+Small machines own their state and implement `handle(event) -> Effects`.
+The driver routes events and concatenates effects. Machines communicate
+through typed internal signals dispatched in order until settled. The fuzzer
+reorders external events, not internal signals.
 
-Scheduler control comes first: after the boundary's resources by id, steps 1
-to 3 remove the spawned tasks, then the host view and validation finish step
-0, then steps 4 and 5. The data plane is one core per session; inference's
-fallback across providers is its own core in `lk-agents-inference`, so the
-voice core sees one model. Python switches to the Rust driver as its own
-project after step 5.
+### Event log handling
 
-Each step rewrites its area as small machines, each owning its state and
-answering `handle(event) -> Effects`; the driver only routes events and
-concatenates effects, with one effect type. Machines tell each other what
-happened through one `Signal` enum, dispatched in the order raised until none is
-left; the fuzzer reorders events, never signals. Handoff, drain and `on_exit`
-are the first; the other areas follow one per commit. Python is the behaviour reference
-through the fuzz rules, not the shape of the code; comments keep a Python name
-only where the behaviour would surprise without it.
-
-0. The boundary: `handle(event, now)` and `wake_at()` replace `Driver::run`'s
-   loop, which becomes the runtime's queue owner; resources by id, call ids on
-   every API call, answers by id instead of `oneshot`; the host view;
-   validation in the core; outward effects, with decisions run inside the step;
-   no clock read on the loop's path; ids from counters. From here the
-   fuzzer owns the queue, so partial-order sampling and bursts work over every
-   source, the still-spawned tasks' reports included.
-1. The data plane: frame forwarding, output buffering, the synchroniser, the
-   recorder tap, pre-connect audio and the realtime audio push. Outputs, inputs
-   and the recorder go by id here, not in 0: an interrupt cuts the sink and
-   reads its playhead inside the decision, so the playhead must first arrive as
-   data. Frame forwarding is done: `data_plane::AudioForwarder` owns the
-   microphone fan-out (sinks by `ResourceId` per `AudioChannel`, the 16 kHz
-   conversion, the gate's verdict, the input switch), and `Runtime` steps it
-   beside the driver (`handle(event, now)`, `on_frame(frame, now)`). The
-   driver's `ForwarderCommand`s travel through the queue as `Event::Forwarder`;
-   the forwarder answers with reports in (`Input::InputStarted`,
-   `GateSilenced`, `InputCensus`); frames come straight from the microphone's
-   reader, never through the queue.
-2. Generation with its tools: the LLM stream, sentence splitting, TTS, tool
-   runs and playout become core state driven by model events, with audio
-   demand for backpressure. Tools cannot go first: they are dispatched inside
-   the generation task, and their results decide its next step.
-3. The other spawners: IVR, AMD, fillers, keyterms, room I/O, the end-of-turn
-   leg.
-4. The crates: `lk-agents-runtime` is created with the provider traits, the
-   spawner, the clocks, the async utilities (`tts/stream_adapter`,
-   `utils/{stream,duplex,bounded_lossy,monotone}`, `turn/{detector,interruption}`,
-   `evals`, `worker/job`) and `lk-agents-rtc`; then the voice and worker I/O
-   move into it. The layout check's `cargo tree` rule turns on per core crate
-   as it becomes pure.
-5. Storage and inference: only what decides becomes a core (the run's lease
-   and fence and the turn's policy; reconnect, retry and fallback); their I/O
-   scripts move to `lk-agents-runtime` as they are. `WorkerState`'s `tick`
-   becomes `Event::Wake` and `wake_at()`.
-
-### Open questions
-
-- How long a production event log is kept and what it may contain: it holds
-  the conversation's text.
+Production event logs can contain conversation text. Retention, redaction,
+and access follow the application's data policy. Replay uses recorded input
+events and clock values without repeating external effects.

@@ -122,12 +122,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
         "rust/crates/lk-agents-voice/src/agent_activity/options.rs",
         "lk_agents_voice::agent_activity::options",
     ),
-    ("rust/crates/lk-agents-voice/src/workflows/handle.rs", "lk_agents_voice::workflows"),
     ("rust/crates/lk-agents-voice/src/speech_handle.rs", "lk_agents_voice::speech_handle"),
-    (
-        "rust/crates/lk-agents-voice/src/workflows/builtins/mod.rs",
-        "lk_agents_voice::workflows::builtins",
-    ),
     (
         "rust/crates/lk-agents-voice/src/workflows/builtins/dtmf.rs",
         "lk_agents_voice::workflows::builtins::dtmf",
@@ -143,10 +138,6 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     (
         "rust/crates/lk-agents-voice/src/workflows/builtins/prompts.rs",
         "lk_agents_voice::workflows::builtins::prompts",
-    ),
-    (
-        "rust/crates/lk-agents-voice/src/workflows/builtins/task_group.rs",
-        "lk_agents_voice::workflows::builtins::task_group",
     ),
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.

@@ -12,7 +12,7 @@ channel, what a tool did. A developer cannot edit it, which is the point.
 - **Derivations that must be trusted.** A run that started and never ended,
   the channel each request came on, the order of events across agents: all
   derived from the journal, never from the editable history. Who is
-  speaking is the lane's agent stack, written by the same commit.
+  speaking in a routed conversation is recorded in the application's router state.
 - **A record that survives compaction.** After a long conversation is
   summarized, the history is short and the journal still holds every turn.
 - **One stream for everything that watches.** The journal's events are the
@@ -41,7 +41,7 @@ One journal per thread, shared by every lane. Each event carries:
 | `run_started`             | a run began: its task id, its answer stream, the channel. A `run_started` with no `run_ended` after it is how an interrupted run is found |
 | `run_ended`               | how the run ended: `outcome` (`completed`, `input-required`, `failed`, `canceled`) and `reason`                                        |
 | `usage`                   | the run's model requests, tokens and tool calls                                                                                        |
-| `conversation_item_added` | an item entered the history: a message, a function call, a function call output, a handoff                                            |
+| `conversation_item_added` | an item entered the history: a message, a function call, a function call output                                            |
 | `tool_execution_updated`  | one call's lifecycle: started, a progress update from `ctx.update()`, ended                                                           |
 | `error`                   | a failure the runtime recorded                                                                                                        |
 
@@ -59,6 +59,6 @@ reads it.
 
 ## What is not in it
 
-Audio and images; the state object, which is a snapshot on the lane rather
-than a stream of edits; and anything the developer writes to the history by
+Audio and images; persisted application fields and routing state, which are explicit snapshots
+rather than a stream of edits; and anything the developer writes to the history by
 hand, which is why the two are separate.

@@ -4,7 +4,7 @@ use crate::agent::Source;
 use crate::agent_activity::handoff::HandoffId;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Out;
-use crate::agent_session::{Driver, HoldId, HookId, HookKind, Origin};
+use crate::agent_session::{Driver, HoldId, HookId, Origin};
 use crate::events::{RunFailure, RunId, RunOutcome, RunRefusal, SessionEvent};
 use crate::speech_handle::SpeechHandle;
 use crate::trace::HandoffStep;
@@ -25,7 +25,7 @@ pub struct RunSpec {
     pub retry_instructions: String,
 }
 
-/// What a tool handed `AgentTask.complete()` from inside a speech (`_maybe_run_final_output`).
+/// What a tool handed accepted output from inside a speech (`_maybe_run_final_output`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunOutput {
     /// `complete(result)`: the interned result object.
@@ -72,7 +72,7 @@ pub(super) enum Decided {
 pub(super) struct Runs {
     open: Option<OpenRun>,
     next: u64,
-    /// `AgentTask.complete()`'s value by the speech whose tool called it, until that speech ends.
+    /// accepted output's value by the speech whose tool called it, until that speech ends.
     outputs: BTreeMap<SpeechId, RunOutput>,
     /// A release happened since the last `decide`: the check is due.
     dirty: bool,
@@ -107,15 +107,6 @@ impl Runs {
 
     pub(super) fn owns(&self, what: Owned) -> bool {
         self.open.as_ref().is_some_and(|r| r.owned.contains(&what))
-    }
-
-    /// The foreground holds the open run owns (`session._foreground_guards` it watches).
-    pub(super) fn owned_holds(&self) -> Vec<HoldId> {
-        let Some(r) = &self.open else { return Vec::new() };
-        r.owned
-            .iter()
-            .filter_map(|o| if let Owned::Hold(h) = o { Some(*h) } else { None })
-            .collect()
     }
 
     /// Own `what`, if a run is open and it is not owned already: `Some(run)` when newly owned.
@@ -290,51 +281,6 @@ impl Driver {
             | Source::HostCtx
             | Source::UserTyped
             | Source::Remote { .. } => None,
-        }
-    }
-
-    /// An inline task's frame landed: suspend the awaiting speech, the parent's running `on_enter`
-    /// and every foreground hold, so the run settles on the task: a `foreground()` scope waiting
-    /// on the task can't end before it either.
-    pub(crate) fn run_suspend_for_task(
-        &mut self,
-        speech: Option<SpeechId>,
-        out: &mut Out,
-    ) -> Vec<Owned> {
-        let mut suspended = Vec::new();
-        if let Some(s) = speech
-            && let Some(run) = self.session.runs.release(Owned::Speech(s), None)
-        {
-            out.trace(HandoffStep::RunReleased { run, what: Owned::Speech(s) });
-            suspended.push(Owned::Speech(s));
-        }
-        for id in self.activity.hooks.pending_of(HookKind::OnEnter) {
-            if let Some(run) = self.session.runs.release(Owned::Hook(id), None) {
-                out.trace(HandoffStep::RunReleased { run, what: Owned::Hook(id) });
-                suspended.push(Owned::Hook(id));
-            }
-        }
-        for hold in self.session.runs.owned_holds() {
-            if let Some(run) = self.session.runs.release(Owned::Hold(hold), None) {
-                out.trace(HandoffStep::RunReleased { run, what: Owned::Hold(hold) });
-                suspended.push(Owned::Hold(hold));
-            }
-        }
-        suspended
-    }
-
-    /// The task is over: what was suspended is the current run's again, if still live.
-    pub(crate) fn run_resume_after_task(&mut self, suspended: Vec<Owned>, out: &mut Out) {
-        for what in suspended {
-            let live = match what {
-                Owned::Speech(s) => self.activity.speech_scheduler.contains(s),
-                Owned::Hook(h) => self.activity.hooks.is_pending(h),
-                Owned::Hold(h) => self.session.idle.live(h),
-                Owned::Handoff(_) => false,
-            };
-            if live {
-                self.run_own(what, out);
-            }
         }
     }
 

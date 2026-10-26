@@ -37,7 +37,6 @@ async def my_function_tool() -> None:
     result = await EffectCall(my_network_call)
 
     await EffectCall(asyncio.sleep(5))
-    await MyAgentTask()
 
 
 g = my_function_tool().__await__()

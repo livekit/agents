@@ -339,9 +339,9 @@ The framework is typed end to end, in Python and in Node.
 - **No `Any` in the public API.** Every public function, class and
   callback is fully typed. The generated `.pyi` and `.d.ts` are the typed
   surface of the core; the `.d.ts` carries no `any`.
-- **Generics carry types:** `Agent[Deps, State, Output]`,
-  `RunContext[Deps, State]`, `RunResult[Output]`, `AgentTask[Output, TaskState]`.
-- **Typed data at boundaries.** Persisted state, deps, output and tool
+- **Generics carry types:** `Agent[Context, Output]`,
+  `RunContext[Context]`, `RunResult[Output]`, router frames.
+- **Typed data at boundaries.** Persisted fields, output and tool
   arguments are validated types, never raw dicts in the developer surface.
 - **Typed wire.** A2A frames, grants, threads service calls and extension
   metadata are typed records generated from one declaration (proto or

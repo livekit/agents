@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import contextvars
-import dataclasses
 import inspect
 import sys
 from collections.abc import (
@@ -11,7 +9,6 @@ from collections.abc import (
     Awaitable,
     Callable,
     Coroutine,
-    Generator,
     Sequence,
 )
 from dataclasses import dataclass
@@ -22,13 +19,9 @@ from typing import (
     Literal,
     NamedTuple,
     cast,
-    get_args,
-    get_origin,
-    get_type_hints,
     overload,
 )
 
-from pydantic import TypeAdapter
 from typing_extensions import ParamSpec, TypeVar
 
 from .. import _core, inference, llm, stt, tts, vad
@@ -38,7 +31,6 @@ from ..llm import (
     DuplexModel,
     DuplexRealtimeAdapter,
     RealtimeModel,
-    ToolError,
     find_function_tools,
 )
 from ..llm.chat_context import Instructions
@@ -55,7 +47,7 @@ from ..llm.tool_context import (
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
-from .events import Deps_T, State_T, UserTurnExceededEvent
+from .events import Context_T, UserTurnExceededEvent
 from .turn import TurnHandlingOptions
 
 if TYPE_CHECKING:
@@ -133,9 +125,8 @@ class ModelSettings:
     """The tool choice to use when calling the LLM."""
 
 
-class Agent(Generic[Deps_T, State_T, Output_T]):
-    """``Agent[Deps, State, Output]``, read from ``deps_type``, ``state_type`` and
-    ``output_type``; a parameter left out is ``Any``."""
+class Agent(Generic[Context_T, Output_T]):
+    """Shared agent configuration, parameterized by application context and final output."""
 
     def __init__(
         self,
@@ -144,8 +135,6 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         name: str | None = None,
         id: str | None = None,
         tools: list[llm.Tool | llm.Toolset] | None = None,
-        deps_type: type[Deps_T] | None = None,
-        state_type: type[State_T] | None = None,
         output_type: type[Output_T] | None = None,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
@@ -177,11 +166,14 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
                 self._id = misc.camel_to_snake_case(type(self).__name__)
 
         turn_handling = (
-            _core.migrate_turn_handling(
-                min_endpointing_delay=min_endpointing_delay,
-                max_endpointing_delay=max_endpointing_delay,
-                turn_detection=turn_detection,
-                allow_interruptions=allow_interruptions,
+            cast(
+                TurnHandlingOptions,
+                _core.migrate_turn_handling(
+                    min_endpointing_delay=min_endpointing_delay,
+                    max_endpointing_delay=max_endpointing_delay,
+                    turn_detection=turn_detection,
+                    allow_interruptions=allow_interruptions,
+                ),
             )
             if not is_given(turn_handling)
             else turn_handling
@@ -191,16 +183,12 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         self._tools = [*tools, *find_function_tools(self)]
         # registered at import by the decorators below; frozen once the agent is first bound
         self._instruction_fns: list[_InstructionsFn] = []
-        self._instructions_view: _InstructionsView[Any, Any] | None = None
+        self._instructions_view: _InstructionsView[Any] | None = None
         self._on_enter_fn: _OnEnterFn | None = None
         self._output_validators: list[_OutputValidatorFn] = []
         self._frozen = False
         self._turn_detection = turn_handling.get("turn_detection", NOT_GIVEN)
 
-        # the three type parameters of Agent[Deps, State, Output]; declared for the type
-        # checker and the output parser, the values travel with the run
-        self._deps_type: type[Deps_T] | None = deps_type
-        self._state_type: type[State_T] | None = state_type
         self._output_type: type[Any] = output_type if output_type is not None else str
 
         if isinstance(stt, str):
@@ -265,7 +253,7 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         return self.id
 
     @property
-    def instructions(self) -> _InstructionsView[Deps_T, State_T]:
+    def instructions(self) -> _InstructionsView[Context_T]:
         """The static instructions, also the decorator registering dynamic ones.
 
         Reads as the ``str`` or ``Instructions`` the agent was built with. Used as
@@ -307,66 +295,6 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
         return self._interruption_detection
 
-    def update_options(
-        self,
-        *,
-        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[
-            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
-        ] = NOT_GIVEN,
-        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
-        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
-    ) -> None:
-        """Swap the STT, VAD, LLM, or TTS on this agent, or change its expressive setting.
-        Only the options passed are changed.
-
-        Useful for switching a component mid-call (e.g. a different STT language or TTS voice).
-        Strings resolve to inference models like the constructor. Pass ``None`` to disable a
-        model (overriding the session), matching ``Agent(stt=None)``. If the agent is running,
-        the swap applies to the live pipeline. ``expressive`` overrides the session value and
-        takes effect on the next reply; pass ``False`` to force it off for this agent.
-
-        The live swap applies to the activity bound in the current context, so it must be
-        called from the agent's hooks or tools; elsewhere only the stored configuration changes.
-
-        Raises:
-            RuntimeError: When swapping to or from a ``RealtimeModel`` while the agent is
-                running; use ``LiveSession.update_agent`` instead.
-        """
-        if isinstance(stt, str):
-            stt = inference.STT.from_model_string(stt)
-        if isinstance(llm, str):
-            llm = inference.llm_from_model_string(llm)
-        if isinstance(tts, str):
-            tts = inference.TTS.from_model_string(tts)
-
-        if isinstance(llm, DuplexModel):
-            llm = DuplexRealtimeAdapter(llm)
-
-        if is_given(stt):
-            self._stt = stt
-        if is_given(vad):
-            self._vad = vad
-        if is_given(llm):
-            self._llm = llm
-        if is_given(tts):
-            self._tts = tts
-        if is_given(expressive):
-            self._expressive = expressive
-        session = self._bound_session()
-        if session is not None:
-            given = {"stt": stt, "vad": vad, "llm": llm, "tts": tts}
-            session._running.update_models(**{k: v for k, v in given.items() if is_given(v)})
-
-    @property
-    def deps_type(self) -> type[Deps_T] | None:
-        return self._deps_type
-
-    @property
-    def state_type(self) -> type[State_T] | None:
-        return self._state_type
-
     @property
     def output_type(self) -> type[Output_T]:
         """What ``run()`` returns as ``result.output``: ``str`` unless declared."""
@@ -377,31 +305,27 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         message: str | llm.ChatMessage,
         *,
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
-        state: State_T | None = None,
-        deps: Deps_T | None = None,
+        context: Context_T | None = None,
         usage: RunUsage | None = None,
         max_steps: int | None = None,
     ) -> RunResult[Output_T]:
         """One turn on the given history: the model and tool loop until the answer.
 
-        Pure: a message in, a typed ``RunResult`` out, nothing kept after. The run stops at
-        an ``InputRequired`` from a tool, with ``result.input_required`` set and
-        ``result.output`` ``None``. ``stream()`` is the same turn with the reply as it is
-        written.
+        The run executes this agent using the supplied history and application context.
+        Requests for human input are returned in ``result.output``. ``stream()`` exposes
+        the same invocation with reply text delivered incrementally.
 
         Args:
             message: The user's message.
             message_history: The conversation so far; omit for a fresh one.
-            state: The session's typed state, mutated in place by the tools.
-            deps: What the tools need for this run, read as ``ctx.deps``.
+            context: Application data and dependencies, read as ``ctx.context``.
             usage: A ``RunUsage`` to add this run's usage to, for a delegated run.
             max_steps: The most model requests one turn may make.
         """
         run = self.stream(
             message,
             message_history=message_history,
-            state=state,
-            deps=deps,
+            context=context,
             usage=usage,
             max_steps=max_steps,
         )
@@ -412,11 +336,10 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         message: str | llm.ChatMessage,
         *,
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
-        state: State_T | None = None,
-        deps: Deps_T | None = None,
+        context: Context_T | None = None,
         usage: RunUsage | None = None,
         max_steps: int | None = None,
-    ) -> AgentRun[Output_T]:
+    ) -> AgentRun[Context_T, Output_T]:
         """The turn of ``run()`` as an async iterator of the reply's text, one piece as the
         model writes it; ``run.result`` is the ``RunResult`` once the loop ends::
 
@@ -427,12 +350,11 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         """
         from .agent_run import AgentRun
 
-        return AgentRun[Output_T](
+        return AgentRun[Context_T, Output_T](
             self,
             message,
             message_history=message_history,
-            state=state,
-            deps=deps,
+            context=context,
             usage=usage,
             max_steps=max_steps,
             output_type=self._output_type,
@@ -440,8 +362,8 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
 
     def output_validator(
         self,
-        f: Callable[[RunContext[Deps_T, State_T], Output_T], Output_T | Awaitable[Output_T]],
-    ) -> Callable[[RunContext[Deps_T, State_T], Output_T], Output_T | Awaitable[Output_T]]:
+        f: Callable[[RunContext[Context_T], Output_T], Output_T | Awaitable[Output_T]],
+    ) -> Callable[[RunContext[Context_T], Output_T], Output_T | Awaitable[Output_T]]:
         """Register a validator of the run's output, as a decorator.
 
         It receives the ``RunContext`` and the output, returns the value or raises
@@ -488,7 +410,7 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         flags: ToolFlag = ToolFlag.NONE,
         on_duplicate: DuplicateMode = "allow",
         duplicate_scope: DuplicateScope = "name",
-        requires_approval: bool | ReadBack = False,
+        needs_approval: bool | ReadBack = False,
     ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]: ...
 
     def tool(
@@ -502,7 +424,7 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         flags: ToolFlag = ToolFlag.NONE,
         on_duplicate: DuplicateMode = "allow",
         duplicate_scope: DuplicateScope = "name",
-        requires_approval: bool | ReadBack = False,
+        needs_approval: bool | ReadBack = False,
     ) -> Any:
         """Register a function tool on this agent, as a decorator.
 
@@ -535,7 +457,7 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
                     flags=flags,
                     on_duplicate=on_duplicate,
                     duplicate_scope=duplicate_scope,
-                    requires_approval=requires_approval,
+                    needs_approval=needs_approval,
                 )
             self._tools.append(tool)
             return tool
@@ -599,7 +521,7 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
             result = await result
         return result
 
-    async def _enter(self, ctx: RunContext[Any, Any]) -> Any:
+    async def _enter(self, ctx: RunContext[Any]) -> Any:
         """``on_enter`` as it was written: an override takes the context when it declares one,
         the decorator form takes the call's session and is nothing in text."""
         hook = type(self).on_enter
@@ -671,12 +593,18 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
             """Default implementation for `Agent.llm_node`"""
             binding = agent._get_binding_or_raise()
-            assert isinstance(binding.llm, llm.LLM), "llm_node needs an LLM (not a realtime model)"
-            async with binding.llm.chat(
+            if isinstance(binding, _VoiceBinding):
+                model = binding.session.llm
+                conn_options = binding.session.conn_options.llm_conn_options
+            else:
+                model = binding.llm
+                conn_options = binding.llm_conn_options
+            assert isinstance(model, llm.LLM), "llm_node needs an LLM (not a realtime model)"
+            async with model.chat(
                 chat_ctx=chat_ctx,
                 tools=tools,
                 tool_choice=model_settings.tool_choice,
-                conn_options=binding.llm_conn_options,
+                conn_options=conn_options,
             ) as stream:
                 async for chunk in stream:
                     yield chunk
@@ -726,13 +654,6 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
             NotGivenOr[TurnDetectionMode | None]: An optional turn detection mode for managing conversation flow.
         """  # noqa: E501
         return self._turn_detection
-
-    @turn_detection.setter
-    def turn_detection(self, value: TurnDetectionMode | None) -> None:
-        self._turn_detection = value
-
-        if (session := self._bound_session()) is not None:
-            session.update_options(turn_detection=value)
 
     @property
     def stt(self) -> NotGivenOr[stt.STT | None]:
@@ -887,217 +808,6 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
         return self._get_session_or_raise()
 
 
-TaskResult_T = TypeVar("TaskResult_T")
-TaskState_T = TypeVar("TaskState_T", default=None)
-
-
-def _task_state_type(cls: type[Any]) -> type[Any] | None:
-    """The ``State`` of ``AgentTask[Output, State]`` as the class declares it, else ``None``."""
-    for klass in cls.__mro__:
-        for base in getattr(klass, "__orig_bases__", ()):
-            if get_origin(base) is not AgentTask:
-                continue
-            args = get_args(base)
-            if len(args) < 2 or isinstance(args[1], TypeVar) or args[1] is type(None):
-                return None
-            return args[1]  # type: ignore[no-any-return]
-    return None
-
-
-class TaskAwaited(Exception):
-    """Raised by ``await task`` inside ``agent.run()``: the run pushes the task on the lane's
-    agent stack and the call stays pending until the task completes (docs/agent-tasks.md)."""
-
-    def __init__(self, task: AgentTask[Any, Any]) -> None:
-        super().__init__(f"{type(task).__name__} takes the conversation")
-        self.task = task
-
-
-class AgentTask(Agent, Generic[TaskResult_T, TaskState_T]):
-    """An agent with a job that ends with a value: ``AgentTask[Output, State]``.
-
-    Its constructor arguments are its input, ``self.state`` its own typed state, and it is
-    awaited once. On a call the task takes the conversation in memory; in text the await is a
-    handoff plus a deferred call: the task rides the lane's agent stack with its arguments and
-    state, each message is a turn of the task, and ``Completed`` becomes the pending call's
-    output. A dataclass subclass makes the arguments JSON for the stack.
-    """
-
-    def __init__(
-        self,
-        *,
-        instructions: str | Instructions = "",
-        tools: list[llm.Tool | llm.Toolset] | None = None,
-        stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | RealtimeModels | str | None] = (
-            NOT_GIVEN
-        ),
-        tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
-        preserve_function_call_history: bool = False,
-        # deprecated
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
-        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
-    ) -> None:
-        tools = tools or []
-        turn_handling = (
-            _core.migrate_turn_handling(
-                turn_detection=turn_detection,
-                allow_interruptions=allow_interruptions,
-                min_endpointing_delay=min_endpointing_delay,
-                max_endpointing_delay=max_endpointing_delay,
-            )
-            if not is_given(turn_handling)
-            else turn_handling
-        )
-        super().__init__(
-            instructions=instructions,
-            tools=tools,
-            stt=stt,
-            vad=vad,
-            llm=llm,
-            tts=tts,
-            mcp_servers=mcp_servers,
-            turn_handling=turn_handling,
-        )
-
-        self.__started = False
-        self.__fut = asyncio.Future[TaskResult_T]()
-        self._preserve_function_call_history = preserve_function_call_history
-        # the core's handle while the task runs on a call
-        self._handle: _core.TaskHandle | None = None
-
-        # the task's own state, and the call of the agent below that awaits it in text
-        state_type = _task_state_type(type(self))
-        self.state: TaskState_T = state_type() if state_type is not None else None  # type: ignore[assignment]
-        self._pending_call_id: str | None = None
-
-    def done(self) -> bool:
-        return self.__fut.done()
-
-    # -- the stack entry, in text --
-
-    def _arguments(self) -> dict[str, Any]:
-        """The constructor arguments as JSON: a dataclass subclass's fields."""
-        if not dataclasses.is_dataclass(self):
-            return {}
-        hints = get_type_hints(type(self))
-        return {
-            f.name: TypeAdapter(hints[f.name]).dump_python(getattr(self, f.name), mode="json")
-            for f in dataclasses.fields(self)
-        }
-
-    @classmethod
-    def _rebuild(cls, args: Any) -> AgentTask[Any, Any]:
-        """The task from its stack entry's arguments: a dataclass's fields, else keywords."""
-        if dataclasses.is_dataclass(cls):
-            # the arguments are JSON; the fields' types make them objects again
-            task: AgentTask[Any, Any] = TypeAdapter(cls).validate_python(args or {})
-            return task
-        return cls(**(args or {}))
-
-    async def _take(self, message: llm.ChatMessage) -> llm.Transition | None:
-        """The person's message, answered by the task itself instead of its model (a graph's
-        waiting node); ``None`` leaves it to the model."""
-        return None
-
-    def _dump_state(self) -> Any:
-        state_type = _task_state_type(type(self))
-        if state_type is None:
-            return None
-        return TypeAdapter(state_type).dump_python(self.state, mode="json")
-
-    def _restore(self, state: Any, *, call_id: str | None) -> None:
-        """The task as it waited: its state and the call it answers, from the stack entry."""
-        state_type = _task_state_type(type(self))
-        if state_type is not None and state is not None:
-            self.state = TypeAdapter(state_type).validate_python(state)
-        self._pending_call_id = call_id
-
-    async def _update_tools(self, tools: list[llm.Tool | llm.Toolset]) -> None:
-        """Replace this instance's tools (internal): live when bound, stored otherwise.
-
-        A task is instantiated per use, so its tool list is its own; a shared ``Agent`` is
-        configuration and does not change after import.
-        """
-        from .._core_view import tool_specs
-        from .tool_executor import ToolRunner
-
-        self._tools = list({tool.id: tool for tool in tools}.values())
-        if (session := self._bound_session()) is not None:
-            pool = session._pool(self)
-            session._running.update_tools(
-                tool_specs(pool), tools_host=pool, tool_runner=ToolRunner(session, self, pool)
-            )
-
-    def cancel(self) -> None:
-        if self._handle is not None:
-            self._handle.cancel(self.id)
-        if not self.__fut.done():
-            self._complete(ToolError(f"AgentTask {self.id} is cancelled"))
-
-    def _complete(self, result: TaskResult_T | Exception) -> None:
-        """End the task with its result (internal): a tool returns ``Completed(value)``."""
-        if self.__fut.done():
-            raise RuntimeError(f"{self.__class__.__name__} is already done")
-        if isinstance(result, Exception):
-            self.__fut.set_exception(result)
-            self.__fut.exception()  # silence exc not retrieved warnings
-        else:
-            self.__fut.set_result(result)
-        if self._handle is not None and not self._handle.done:
-            if isinstance(result, Exception):
-                self._handle.fail(str(result), class_name=type(result).__name__)
-            else:
-                self._handle.complete(result)
-
-    async def __await_impl(self) -> TaskResult_T:
-        if self.__started:
-            raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
-        self.__started = True
-
-        binding = _BindingContextVar.get(None)
-        if binding is not None and not isinstance(binding, _VoiceBinding):
-            # in text the run takes it from here: the call stays pending, the task is pushed on
-            # the lane's agent stack, and the value comes back on a later turn
-            raise TaskAwaited(self)
-        if binding is None:
-            raise RuntimeError(
-                f"{self.__class__.__name__} should only be awaited inside tool_functions or the "
-                "on_enter/on_exit methods of an Agent"
-            )
-
-        session = binding.session
-        self._handle = handle = _core.TaskHandle()
-        session._running.enter_task(
-            handle,
-            **await session._frame(self),
-            speech_id=binding.speech_id,
-            preserve_function_call_history=self._preserve_function_call_history,
-            parent=binding.agent.id,
-            origin=binding.origin,
-        )
-        session._agent = self
-        try:
-            await handle.joined()
-        except Exception:
-            # a failure is the one `_complete` set; a close leaves the task unsettled
-            pass
-        finally:
-            handle.abandon()
-            session._agent = binding.agent
-        if not self.__fut.done():
-            self._complete(ToolError(f"AgentTask {self.id} ended before it completed"))
-        return await self.__fut
-
-    def __await__(self) -> Generator[None, None, TaskResult_T]:
-        return self.__await_impl().__await__()
-
-
 class _InstructionsText(str):
     """``Agent.instructions`` for a ``str``: the value, callable as the decorator."""
 
@@ -1124,7 +834,7 @@ class _InstructionsObject(Instructions):
 if TYPE_CHECKING:
     _RenderedT = TypeVar("_RenderedT", bound=str | Awaitable[str])
 
-    class _InstructionsView(str, Instructions, Generic[Deps_T, State_T]):
+    class _InstructionsView(str, Instructions, Generic[Context_T]):
         """What a type checker sees: the value, read as a ``str`` or an ``Instructions``, and
         the decorator, which takes the agent's ``RunContext``. One class, since a union of
         callables is an untyped decorator to mypy."""
@@ -1133,14 +843,14 @@ if TYPE_CHECKING:
         _agent: Agent
 
         def __call__(
-            self, f: Callable[[RunContext[Deps_T, State_T]], _RenderedT]
-        ) -> Callable[[RunContext[Deps_T, State_T]], _RenderedT]: ...
+            self, f: Callable[[RunContext[Context_T]], _RenderedT]
+        ) -> Callable[[RunContext[Context_T]], _RenderedT]: ...
 
 else:
     _InstructionsView = _InstructionsText | _InstructionsObject
 
 
-def _wrap_instructions(source: str | Instructions, agent: Agent) -> _InstructionsView[Any, Any]:
+def _wrap_instructions(source: str | Instructions, agent: Agent) -> _InstructionsView[Any]:
     view: _InstructionsText | _InstructionsObject
     if isinstance(source, Instructions):
         view = _InstructionsObject(source.common, audio=source.audio, text=source.text)
@@ -1148,4 +858,4 @@ def _wrap_instructions(source: str | Instructions, agent: Agent) -> _Instruction
         view = _InstructionsText(source)
     view._source = source
     view._agent = agent
-    return cast("_InstructionsView[Any, Any]", view)
+    return cast("_InstructionsView[Any]", view)

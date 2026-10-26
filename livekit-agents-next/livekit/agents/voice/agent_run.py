@@ -1,15 +1,12 @@
 """``agent.run()``: the slow brain, one input to one result over a given history.
 
-An ``AgentRun`` is the second binding over an ``Agent``, next to the voice session:
+An ``AgentRun`` is the second binding over an ``Agent``, next to the voice ``AgentActivity``:
 it sets the same contextvar so hooks, tools and the pipeline nodes resolve the agent the same
 way, runs the model and tool loop until the answer or an ``InputRequired``, and holds nothing
 after it returns. It knows nothing about rooms, audio or where the message came from.
 
-Who speaks is the lane's agent stack (docs/lanes.md): the root the caller named while it is
-empty, else the agent on top. A handoff replaces the top; a tool that awaits an ``AgentTask``
-pushes the task with its arguments and leaves the call pending, and the task's ``Completed``
-pops it and writes the value as that call's output. The door hands the stack in through the
-run hooks and reads it back from the result.
+Each run executes only the agent explicitly supplied by the caller. Multi-agent routing
+and conversation frames belong to an explicit orchestration layer.
 """
 
 from __future__ import annotations
@@ -20,16 +17,15 @@ import inspect
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, cast
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypeVar
 
 from .. import utils
 from .._exceptions import UnexpectedModelBehavior
-from .._generated.storage_run import Ref
 from ..llm import (
     LLM,
-    AgentHandoff,
     ChatChunk,
     ChatContext,
     ChatItem,
@@ -47,30 +43,24 @@ from ..llm import (
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import (
     ASK_IN_OWN_WORDS,
-    DELIVERED,
     Completed,
-    Failed,
     InputRequired,
     ModelRetry,
-    Rejected,
     StopResponse,
     ToolError,
     ToolResult,
-    Transition,
-    Working,
     approval_granted,
     approval_scope,
     as_model_reads,
     delivered,
     function_tool,
-    is_transition,
 )
 from ..llm.utils import answer_arguments, prepare_function_arguments
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..utils import is_given
-from .agent import AgentTask, ModelSettings, TaskAwaited, _BindingContextVar
-from .events import RunContext
+from .agent import ModelSettings, _BindingContextVar
+from .events import Context_T, RunContext
 from .run_result import RunResult, RunUsage
 from .tool_output import (
     ToolExecutionOutput,
@@ -80,17 +70,14 @@ from .tool_output import (
 )
 
 if TYPE_CHECKING:
+    from ..storage.context_store import ContextStore
     from .agent import Agent
 
-Run_T = TypeVar("Run_T")
+Run_T = TypeVar("Run_T", default=Any)
 
 DEFAULT_MAX_STEPS = 12
 FINAL_RESULT_TOOL = "final_result"
 _RETRY_PROMPT = "Validation failed, fix the output and try again: {reason}"
-_FINAL_RESULT_PROMPT = (
-    f"You have not provided the final output yet. Call `{FINAL_RESULT_TOOL}` with it; "
-    "a plain text response alone is not enough."
-)
 
 
 @dataclass
@@ -104,8 +91,6 @@ class RunHooks:
     ``working`` frame on the text door, speech on a call. ``on_token`` receives the model's text
     as it arrives, so the text door shows the reply as it is written. ``thread_id`` is the session the run
     belongs to, what ``A2ADelegate`` sends as the expert's ``contextId`` (plan 7.5).
-    ``agent_stack`` is the lane's stack as loaded and ``rebuild`` makes an agent of one entry,
-    the server's registry; the run resolves them itself since only it knows the root.
     ``answer_tool`` names the tool the message is handed to before the model runs: the last
     turn's ``InputRequired(tool=)`` named it, and this message is its answer. ``delegated``
     says the turn's message came from another agent: the run does not phrase its questions,
@@ -117,8 +102,7 @@ class RunHooks:
     on_update: Callable[[str], Any] | None = None
     on_token: Callable[[str], Awaitable[None]] | None = None
     thread_id: str | None = None
-    agent_stack: Sequence[Ref] = ()
-    rebuild: Callable[[Ref], Agent | None] | None = None
+    store: ContextStore | None = None
     answer_tool: str | None = None
     delegated: bool = False
 
@@ -144,32 +128,27 @@ def reset_run_hooks(token: _HooksToken) -> None:
     _BindingContextVar.reset(token[1])
 
 
-class AgentRun(Generic[Run_T]):
+class AgentRun(Generic[Context_T, Run_T]):
     """One turn of an ``Agent`` on a history: what ``agent.run()`` awaits, and what
     ``agent.stream()`` hands out to iterate, the reply as the model writes it, one piece of text
     at a time, with ``result`` set once the loop ends."""
 
     def __init__(
         self,
-        agent: Agent,
+        agent: Agent[Context_T, Run_T],
         message: str | ChatMessage,
         *,
         message_history: ChatContext | Sequence[ChatItem] | None,
-        state: Any,
-        deps: Any,
+        context: Context_T | None,
         usage: RunUsage | None,
         max_steps: int | None,
         output_type: type[Run_T] | None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._id = utils.shortuuid("run_")
-        self._root = agent
         self._agent = agent
-        self._stack: list[Agent] = []
-        self._stack_dirty = False
         self._nested = False
-        self._deps = deps
-        self._state = state
+        self._context = cast(Context_T, context)
         self._usage = usage if usage is not None else RunUsage()
         self._max_steps = max_steps if max_steps is not None else DEFAULT_MAX_STEPS
         self._output_type: type[Any] | None = output_type
@@ -237,12 +216,15 @@ class AgentRun(Generic[Run_T]):
         return _ReadOnlyChatContext(self._chat_ctx.items)
 
     @property
-    def deps(self) -> Any:
-        return self._deps
+    def store(self) -> ContextStore:
+        hooks = current_run_hooks()
+        if hooks is None or hooks.store is None:
+            raise RuntimeError("this run has no managed context store")
+        return hooks.store
 
     @property
-    def state(self) -> Any:
-        return self._state
+    def context(self) -> Context_T:
+        return self._context
 
     @property
     def usage(self) -> RunUsage:
@@ -251,15 +233,9 @@ class AgentRun(Generic[Run_T]):
     # -- the loop --
 
     async def _run(self) -> RunResult[Run_T]:
-        # a run started inside another run's tool is a delegation: a fresh conversation the
-        # door never sees, on no stack and with no boundary (docs/multi-agent.md)
+        # Nested runs are caller-controlled delegations; only the outer run uses door hooks.
         self._nested = isinstance(_BindingContextVar.get(None), AgentRun)
         hooks = None if self._nested else _run_hooks.get()
-        if hooks is not None:
-            self._stack = self._resolve_stack(hooks)
-            if self._stack:
-                self._agent = self._stack[-1]
-
         token = _BindingContextVar.set(self)
         try:
             result = await self._run_bound()
@@ -269,93 +245,6 @@ class AgentRun(Generic[Run_T]):
         if hooks is not None and hooks.on_result is not None:
             hooks.on_result(result)
         return result
-
-    # -- the agent stack --
-
-    def _resolve_stack(self, hooks: RunHooks) -> list[Agent]:
-        """The loaded stack as agents, bottom first; an entry that cannot be rebuilt drops
-        itself and everything above it, and the nearest ancestor speaks."""
-        agents: list[Agent] = []
-        for ref in hooks.agent_stack:
-            agent: Agent | None
-            if ref.args is None and ref.name == self._root.id:
-                agent = self._root
-            else:
-                agent = hooks.rebuild(ref) if hooks.rebuild is not None else None
-            if agent is None:
-                logger.warning(
-                    "dropping an agent stack entry the server cannot rebuild, and everything "
-                    "above it",
-                    extra={"refName": ref.name, "runId": self._id},
-                )
-                self._stack_dirty = True
-                break
-            if isinstance(agent, AgentTask):
-                agent._restore(ref.state, call_id=ref.call_id)
-            agents.append(agent)
-        return agents
-
-    def _stack_refs(self) -> list[Ref] | None:
-        """The stack for the commit: when it moved, or a task on it may have changed state."""
-        if not self._stack_dirty and not any(isinstance(a, AgentTask) for a in self._stack):
-            return None
-        return [
-            Ref(
-                name=type(a).__name__,
-                args=a._arguments(),
-                state=a._dump_state(),
-                call_id=a._pending_call_id,
-            )
-            if isinstance(a, AgentTask)
-            else Ref(name=a.id)
-            for a in self._stack
-        ]
-
-    def _hand_off(self, agent: Agent, record: Callable[[ChatItem], None]) -> None:
-        """A tool returned an agent: it speaks from the next step, on the same history."""
-        record(AgentHandoff(old_agent_id=self._agent.id, new_agent_id=agent.id))
-        if self._stack and not isinstance(self._stack[-1], AgentTask):
-            self._stack[-1] = agent
-        elif agent is not self._root or self._stack:
-            self._stack.append(agent)
-        self._agent = agent
-        self._stack_dirty = True
-
-    def _pop(
-        self, result: Any, record: Callable[[ChatItem], None], *, verbatim: bool = False
-    ) -> None:
-        """The task on top ended: its value, or a ``ToolError``, is the pending call's output,
-        and the agent below speaks again from the next step. A verbatim value reached the
-        person as written; the agent below reads that it did."""
-        task = self._stack.pop()
-        assert isinstance(task, AgentTask)
-        below = self._stack[-1] if self._stack else self._root
-        call = next(
-            (
-                item
-                for item in reversed(self._chat_ctx.items)
-                if isinstance(item, FunctionCall) and item.call_id == task._pending_call_id
-            ),
-            None,
-        )
-        if call is not None:
-            record(
-                FunctionCallOutput(
-                    name=call.name,
-                    call_id=call.call_id,
-                    output=str(result)
-                    if isinstance(result, Exception)
-                    else DELIVERED.format(text=_tool_text(result))
-                    if verbatim
-                    else _tool_text(result),
-                    is_error=isinstance(result, Exception),
-                )
-            )
-        record(AgentHandoff(old_agent_id=task.id, new_agent_id=below.id))
-        if not task.done():
-            task._complete(result)
-        self._agent = below
-        self._stack_dirty = True
 
     async def _run_bound(self) -> RunResult[Run_T]:
         chat_ctx = self._chat_ctx
@@ -381,21 +270,14 @@ class AgentRun(Generic[Run_T]):
                 return text
             return "\n\n".join([*verbatim, *([text] if text else [])])
 
-        def finish(
-            output: Any, *, input_required: str | None = None, interrupted: bool = False
-        ) -> RunResult[Run_T]:
+        def finish(output: Any, *, interrupted: bool = False) -> RunResult[Run_T]:
             if verbatim and (output is None or isinstance(output, str)) and not interrupted:
-                if input_required is not None:
-                    input_required = composed(input_required)
-                else:
-                    output = composed(output)
+                output = composed(output)
             result._verbatim = "\n\n".join(verbatim) if verbatim else None
             result._run_output = output
-            result._input_required = input_required
             result._interrupted = interrupted
             result._run_messages = new_items
             result._run_history = chat_ctx.copy(exclude_instructions=True).items
-            result._agent_stack = self._stack_refs()
             result._done_fut.set_result(None)
             return result
 
@@ -408,54 +290,15 @@ class AgentRun(Generic[Run_T]):
             record(ChatMessage(role="assistant", content=[text]))
             result._pending_call = fnc_call
             result._answer_tool = q.tool.info.name if q.tool else None
-            ended = finish(None, input_required=text)
+            question = InputRequired(
+                composed(text) or text, verbatim=q.verbatim, tool=q.tool, timeout=q.timeout
+            )
+            ended = finish(question)
             if q.verbatim:
-                result._verbatim = ended.input_required  # the question is exact, as a whole
+                result._verbatim = question.question
             return ended
-
-        def finish_task_turn(text: str) -> RunResult[Run_T]:
-            # a task holds the conversation: every reply of its model waits on the person
-            return finish(None, input_required=text)
-
-        async def act(
-            transition: Transition, fnc_call: FunctionCall | None
-        ) -> RunResult[Run_T] | None:
-            """A task's transition, from a tool or ``on_enter``: the result when it ends the turn."""
-            if not self._stack and isinstance(self._agent, AgentTask):
-                # the run's root is the task itself, as in a test: nothing below takes over, so
-                # its end is the run's end, with its value or its error as the output
-                if isinstance(transition, Completed):
-                    if transition.verbatim:
-                        verbatim.append(_tool_text(transition.value))
-                    self._agent._complete(transition.value)
-                    return finish(transition.value)
-                if isinstance(transition, (Failed, Rejected)):
-                    text = transition.error if isinstance(transition, Failed) else transition.reason
-                    self._agent._complete(ToolError(text))
-                    return finish(text)
-            if isinstance(transition, Completed):
-                if transition.verbatim:
-                    verbatim.append(_tool_text(transition.value))
-                self._pop(transition.value, record, verbatim=transition.verbatim)
-            elif isinstance(transition, (Failed, Rejected)):
-                text = transition.error if isinstance(transition, Failed) else transition.reason
-                self._pop(ToolError(text), record)
-            elif isinstance(transition, InputRequired):
-                return await ask(transition, fnc_call)
-            elif isinstance(transition, Working):
-                logger.warning(
-                    "Working is not applied in text yet; the task keeps the conversation",
-                    extra={"agent": self._agent.id, "runId": self._id},
-                )
-            return None
 
         record(self._message)
-        # a task that answers the person itself, a waiting graph, does before any model
-        taken = (
-            await self._agent._take(self._message) if isinstance(self._agent, AgentTask) else None
-        )
-        if taken is not None and (ended := await act(taken, None)) is not None:
-            return ended
         # the message answers a question whose tool takes it: that call comes first, no model
         answer_tool = hooks.answer_tool if hooks is not None else None
 
@@ -464,7 +307,7 @@ class AgentRun(Generic[Run_T]):
                 # a newer message waits for the lane: stop here, what ran is kept, no reply
                 return finish(None, interrupted=True)
             agent = self._agent
-            run_ctx = RunContext[Any, Any](function_call=None, run=self)
+            run_ctx = RunContext[Context_T](function_call=None, run=self)
             update_instructions(
                 chat_ctx,
                 instructions=await agent._render_instructions(run_ctx, modality="text"),
@@ -496,18 +339,15 @@ class AgentRun(Generic[Run_T]):
                 record(ChatMessage(role="assistant", content=[text]))
 
             if not calls:
-                if isinstance(agent, AgentTask):
-                    return finish_task_turn(text)
                 if wants_tool_output:
-                    record(ChatMessage(role="user", content=[_FINAL_RESULT_PROMPT]))
-                    continue
+                    return finish(InputRequired(composed(text) or text))
                 retry = await self._validate(run_ctx, text)
                 if retry is not None:
                     record(ChatMessage(role="user", content=[retry]))
                     continue
                 return finish(text)
 
-            for i, fnc_call in enumerate(calls):
+            for fnc_call in calls:
                 self._usage.tool_calls += 1
                 record(fnc_call)
 
@@ -529,22 +369,6 @@ class AgentRun(Generic[Run_T]):
 
                 tool = tool_ctx.get_function_tool(fnc_call.name)
                 out = await self._execute(tool, fnc_call)
-                if isinstance(out, AgentTask):
-                    # the call stays pending; the task takes the conversation from here
-                    for skipped in calls[i + 1 :]:
-                        record(skipped)
-                        record(
-                            FunctionCallOutput(
-                                name=skipped.name,
-                                call_id=skipped.call_id,
-                                output=f"not run: {type(out).__name__} took the conversation",
-                                is_error=True,
-                            )
-                        )
-                    entered = await self._push(out, fnc_call, record)
-                    if is_transition(entered) and (ended := await act(entered, None)) is not None:
-                        return ended
-                    break
                 said = out.raw_output
                 if isinstance(said, ToolResult) and said.verbatim:
                     # the person gets it as written; the model reads that they did
@@ -554,21 +378,8 @@ class AgentRun(Generic[Run_T]):
                 if isinstance(said, ToolResult) and said.verbatim and not said.reply_required:
                     return finish(None)
 
-                if out.transition is not None and isinstance(agent, AgentTask):
-                    if (ended := await act(out.transition, fnc_call)) is not None:
-                        return ended
-                    if not isinstance(out.transition, Working):
-                        break  # the task ended, or it asked; the agent below speaks next
-                elif isinstance(out.transition, InputRequired):
+                if isinstance(out.transition, InputRequired):
                     return await ask(out.transition, fnc_call)
-                elif out.transition is not None:
-                    logger.warning(
-                        "a conversation tool returned a transition that only an AgentTask "
-                        "acts on; recorded as its output",
-                        extra={"function": fnc_call.name, "runId": self._id},
-                    )
-                if out.agent_task is not None:
-                    self._hand_off(out.agent_task, record)
                 if isinstance(out.raw_exception, StopResponse):
                     return finish(None)
 
@@ -582,7 +393,7 @@ class AgentRun(Generic[Run_T]):
         if self.llm is None:
             return question
         ctx = chat_ctx.copy()
-        run_ctx = RunContext[Any, Any](function_call=None, run=self)
+        run_ctx = RunContext[Context_T](function_call=None, run=self)
         update_instructions(
             ctx,
             instructions=await self._agent._render_instructions(run_ctx, modality="text"),
@@ -648,21 +459,6 @@ class AgentRun(Generic[Run_T]):
                 )
         return "".join(text_parts), calls, usage
 
-    async def _push(
-        self,
-        task: AgentTask[Any, Any],
-        fnc_call: FunctionCall,
-        record: Callable[[ChatItem], None],
-    ) -> Any:
-        """A tool awaited a task: it goes on the stack, the call it answers stays pending, and
-        its ``on_enter`` runs; what that returns is the caller's to act on."""
-        record(AgentHandoff(old_agent_id=self._agent.id, new_agent_id=task.id))
-        task._pending_call_id = fnc_call.call_id
-        self._stack.append(task)
-        self._agent = task
-        self._stack_dirty = True
-        return await task._enter(RunContext[Any, Any](function_call=fnc_call, run=self))
-
     def _answer_call(self, tool_ctx: ToolContext, name: str | None) -> FunctionCall | None:
         """The call that hands this run's message to the tool the last turn's
         ``InputRequired(tool=)`` named; ``None`` when nothing waits on it."""
@@ -684,9 +480,8 @@ class AgentRun(Generic[Run_T]):
 
     async def _execute(
         self, tool: FunctionTool | RawFunctionTool | None, fnc_call: FunctionCall
-    ) -> ToolExecutionOutput | AgentTask[Any, Any]:
-        """Run one tool with a ``RunContext`` of this run; the output is what the model reads,
-        or the ``AgentTask`` the tool awaited."""
+    ) -> ToolExecutionOutput:
+        """Run one tool with this run's context and record its output."""
         if tool is None:
             return make_tool_output(
                 fnc_call=fnc_call,
@@ -694,8 +489,8 @@ class AgentRun(Generic[Run_T]):
                 exception=ToolError(f"unknown tool `{fnc_call.name}`"),
             )
 
-        run_ctx = RunContext[Any, Any](function_call=fnc_call, run=self)
-        granted = isinstance(tool, FunctionTool) and tool.info.requires_approval
+        run_ctx = RunContext[Context_T](function_call=fnc_call, run=self)
+        granted = isinstance(tool, FunctionTool) and tool.info.needs_approval
         if granted:
             granted = approval_granted(self._chat_ctx.items, fnc_call)
         try:
@@ -706,8 +501,6 @@ class AgentRun(Generic[Run_T]):
                 output = tool(*args, **kwargs)
                 if inspect.isawaitable(output):
                     output = await output
-        except TaskAwaited as e:
-            return e.task
         except ModelRetry as e:
             return make_tool_output(fnc_call=fnc_call, output=None, exception=ToolError(e.message))
         except Exception as e:
@@ -718,12 +511,12 @@ class AgentRun(Generic[Run_T]):
                 )
             return make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
-        if isinstance(output, Completed) and not isinstance(self._agent, AgentTask):
+        if isinstance(output, Completed):
             # a conversation tool never ends a task; the value is its output
             output = ToolResult(output.value, verbatim=True) if output.verbatim else output.value
         return make_tool_output(fnc_call=fnc_call, output=output, exception=None)
 
-    async def _validate(self, run_ctx: RunContext[Any, Any], output: Any) -> str | None:
+    async def _validate(self, run_ctx: RunContext[Context_T], output: Any) -> str | None:
         """Run the agent's output validators; the retry reason when one asks for it."""
         try:
             await self._agent._validate_output(run_ctx, output)

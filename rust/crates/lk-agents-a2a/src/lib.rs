@@ -23,7 +23,7 @@ use lk_agents_storage::db::{Committed, Lease, Receive, TaskWrite};
 use lk_agents_storage::run::{
     CHANNEL_KEY, CommitOptions, INTERRUPTED_KEY, INTERRUPTION_REASON_KEY, ItemRow, KIND_KEY,
     LEASE_WAIT_TIMEOUT, Lane, LanePoll, MERGED_INTO_KEY, REASON_KEY, REASON_LEASE_TIMEOUT,
-    REASON_WORKER_LOST, Ref, Run, RunOptions, RunOutcome, RunUsage, TaskPatch, TaskRow, TaskState,
+    REASON_WORKER_LOST, Run, RunOptions, RunOutcome, RunUsage, TaskPatch, TaskRow, TaskState,
     Thread, WaitOptions, agent_message, timestamp,
 };
 use lk_agents_storage::schema::TaskData;
@@ -54,11 +54,6 @@ pub struct TurnOptions {
     #[serde(default, with = "opt_seconds")]
     #[python(ty = "float | None", default = "None")]
     pub wait_timeout: Option<Duration>,
-    /// The door's default-constructed state as JSON, for a fresh lane; `None` for a door with no
-    /// state, which the `concurrent` policy requires.
-    #[serde(default)]
-    #[python(default = "None")]
-    pub state_default: Option<Value>,
 }
 
 impl TurnOptions {
@@ -459,11 +454,6 @@ impl Turn {
         msg: &Message,
         task_id: &str,
     ) -> Result<TurnResult, StorageError> {
-        if self.opts.state_default.is_some() {
-            return Err(StorageError::Invalid(
-                "the concurrent policy requires a door with no state".into(),
-            ));
-        }
         if !self.submit(ctx, msg, task_id).await? {
             // a resent task or message id: the task it created, awaited, not a second run
             let mut existing = match ctx.lane.task(task_id).await? {
@@ -993,15 +983,16 @@ pub struct TurnContext {
     pub batch: Vec<Message>,
     /// The lane's history as loaded, plus the pending input-required answer when there was one.
     pub history: Vec<ItemRow>,
-    /// The state as loaded, or the door's default for a fresh lane; `None` for a door with none.
+    /// The state as loaded; `None` for a fresh lane.
     pub state: Option<Value>,
+    /// Context field writes require the lane's exclusive lease.
+    #[serde(default)]
+    #[python(default = "False")]
+    pub read_only: bool,
     /// The task that carries the reply.
     pub task_id: String,
     /// The lane's task rows, newest first, up to 50.
     pub tasks: Vec<TaskRow>,
-    /// Who speaks, bottom first: empty while the door's root agent does; an `AgentTask` on top
-    /// holds the conversation until it completes (docs/agent-tasks.md).
-    pub agent_stack: Vec<Ref>,
     /// A delegating caller's conversation when the message carried a `chat_ctx` data part, as the
     /// part's `data`.
     pub caller_history: Option<Value>,
@@ -1062,11 +1053,6 @@ pub struct HandlerOutput {
     #[serde(default)]
     #[python(default = "None")]
     pub pending_call: Option<PendingCall>,
-    /// The agent stack after the handler, when a run moved it or a task on it changed state;
-    /// `None` leaves the stack as loaded.
-    #[serde(default)]
-    #[python(default = "None")]
-    pub agent_stack: Option<Vec<Ref>>,
     /// The handler yielded at a checkpoint.
     #[serde(default)]
     #[python(default = "False")]
@@ -1197,9 +1183,6 @@ impl Turn {
         }
 
         let user_message = batch_to_chat_message(batch, now);
-        if run.state.is_none() {
-            run.state = self.opts.state_default.clone();
-        }
         let turn_ctx = TurnContext {
             thread_id: self.thread.id().to_owned(),
             lane: lane.name().to_owned(),
@@ -1207,9 +1190,9 @@ impl Turn {
             batch: batch.to_vec(),
             history: run.history.clone(),
             state: run.state.clone(),
+            read_only: run.lease().is_none(),
             task_id: answer_task.clone(),
             tasks: run.tasks.recent(TASKS_IN_CONTEXT).await?,
-            agent_stack: run.agents.refs().to_vec(),
             caller_history: ctx.caller_history.clone(),
             answer_tool,
         };
@@ -1219,9 +1202,6 @@ impl Turn {
         }
         if out.state.is_some() {
             run.state = out.state.clone();
-        }
-        if let Some(stack) = &out.agent_stack {
-            run.agents.replace(stack.clone());
         }
 
         // what the runs added to the history; the message itself when no run was made
@@ -1601,7 +1581,6 @@ mod tests {
         let o = TurnOptions::default();
         assert_eq!(o.wait_timeout(), LEASE_WAIT_TIMEOUT);
         assert_eq!(o.policy, PolicySpec::Default);
-        assert_eq!(o.state_default, None);
         assert_eq!(
             serde_json::to_string(&interrupted_metadata()).unwrap(),
             r#"{"livekit/interrupted":true,"livekit/interruptionReason":"new-message"}"#
@@ -1615,7 +1594,7 @@ mod tests {
     fn options_cross_as_the_models_json() {
         let o: TurnOptions = serde_json::from_str("{}").unwrap();
         assert_eq!(o, TurnOptions::default());
-        let json = r#"{"policy": {"sms": "batch"}, "debounce": 2.5, "wait_timeout": 1, "state_default": null}"#;
+        let json = r#"{"policy": {"sms": "batch"}, "debounce": 2.5, "wait_timeout": 1}"#;
         let o: TurnOptions = serde_json::from_str(json).unwrap();
         assert_eq!(
             o.policy,
@@ -1627,7 +1606,7 @@ mod tests {
         assert_eq!(back, o);
         assert_eq!(
             serde_json::to_value(TurnOptions::default()).unwrap(),
-            serde_json::json!({"policy": null, "debounce": null, "wait_timeout": null, "state_default": null})
+            serde_json::json!({"policy": null, "debounce": null, "wait_timeout": null})
         );
         let e = serde_json::from_str::<TurnOptions>(r#"{"policy": "later"}"#).unwrap_err();
         assert!(e.to_string().contains("later"), "{e}");

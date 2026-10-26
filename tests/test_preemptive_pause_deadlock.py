@@ -141,7 +141,7 @@ async def test_handoff_after_a_turn_discarded_for_uninterruptible_speech() -> No
         llm.release()
         await _wait_until(lambda: session.current_speech is None)
 
-        # awaiting an AgentTask pauses the activity and must not hang
+        # pausing the activity during an explicit update must not hang
         await asyncio.wait_for(
             session._update_activity(
                 Agent(instructions="hand off"),

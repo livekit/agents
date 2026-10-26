@@ -15,7 +15,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING
 
 from a2a.server.jsonrpc_models import (
     InvalidRequestError as RpcInvalidRequestError,
@@ -46,7 +46,7 @@ from ..storage.protocol import (
     StorageError,
     ThreadNotFound,
 )
-from ..storage.resolve import AgentRegistry, ResolvedThread, Thread, resolve_thread
+from ..storage.resolve import ResolvedThread, Thread, resolve_thread
 from ..utils import shortuuid
 from .auth import ANONYMOUS, AuthError, Credentials, Flag, Forbidden, Principal, Unauthorized
 from .codec import (
@@ -66,7 +66,6 @@ from .pump import ResponsePump, WireHost, start
 if TYPE_CHECKING:
     from .endpoint import A2AEndpoint
 
-S = TypeVar("S")
 
 JsonRpc = dict[str, JsonValue]
 """One JSON-RPC envelope, as the a2a-sdk's response helpers build it."""
@@ -117,17 +116,16 @@ class TurnOutcome:
     """The thread id."""
 
 
-class A2AService(Generic[S]):
+class A2AService:
     """The A2A methods of one endpoint."""
 
     def __init__(
         self,
-        endpoint: A2AEndpoint[S],
+        endpoint: A2AEndpoint,
         *,
         storage: AgentDBStorage,
         agent_name: Callable[[], str],
         credentials: Credentials | None,
-        agents: AgentRegistry | None = None,
         lane: Callable[[], str] | None = None,
     ) -> None:
         self._endpoint = endpoint
@@ -135,7 +133,6 @@ class A2AService(Generic[S]):
         self._agent_name = agent_name
         self._lane = lane
         self._credentials = credentials
-        self._agents = agents
         self._streams: deque[asyncio.Task[StreamInfo]] = deque()
 
     @property
@@ -380,13 +377,11 @@ class A2AService(Generic[S]):
         *,
         on_update: UpdateHook | None = None,
         on_token: TokenHook | None = None,
-    ) -> TurnHost[S]:
+    ) -> TurnHost:
         thread = Thread(self._storage, thread_id, agent_name=self.lane)
         return TurnHost(
             self._endpoint.handler,
             thread=thread,
-            state_type=self._endpoint.state_type,
-            agents=self._agents,
             on_update=on_update,
             on_token=on_token,
         )

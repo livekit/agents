@@ -1,19 +1,20 @@
-"""examples/airline-support: the triage graph's routing and payment guards on scripted models,
-and a wait on the customer across two turns."""
+"""Airline support payment guards and persisted customer follow-up on scripted models."""
 
 from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
 import pytest
 from pydantic import BaseModel
 
-from livekit.agents import Completed, InputRequired
-from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall, LLMStream, Tool
+from livekit.agents import Agent, InputRequired
+from livekit.agents.llm import ChatContext, FunctionToolCall, LLMStream, Tool
+from livekit.agents.storage.context_store import ContextStore
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
@@ -91,9 +92,18 @@ def script(
     drafts: tuple[str, ...] = (),
     verdicts: tuple[sa.Verdict, ...] = (),
 ) -> None:
-    sa.classifier.update_options(llm=Scripted(triage))
-    sa.writer.update_options(llm=Scripted(*drafts))
-    sa.reviewer.update_options(llm=Scripted(*verdicts))
+    sa.classifier = Agent(
+        instructions="classify", llm=Scripted(triage), output_type=sa.Classification
+    )
+    sa.writer = Agent(instructions="draft", llm=Scripted(*drafts), output_type=str)
+    sa.reviewer = Agent(instructions="review", llm=Scripted(*verdicts), output_type=sa.Verdict)
+
+
+async def start(email: sa.Email) -> sa.TriageResult | InputRequired:
+    app = sa.SupportContext()
+    store = ContextStore()
+    await store.load_context(app)
+    return await sa.triage(SimpleNamespace(context=app, store=store), email)
 
 
 async def test_eu261_delay_is_paid_after_an_approved_reply(skyline: Skyline) -> None:
@@ -102,7 +112,7 @@ async def test_eu261_delay_is_paid_after_an_approved_reply(skyline: Skyline) -> 
         ("EUR 250.",),
         (APPROVED,),
     )
-    out = (await sa.Triage.run(sa.Classify(DELAY), state=sa.Ticket())).output
+    out = await start(DELAY)
     assert (out.action, out.team, out.paid_eur, out.reply_draft) == (
         "resolved",
         "claims",
@@ -119,7 +129,7 @@ async def test_an_earlier_payment_is_taken_off(skyline: Skyline) -> None:
         ("Paid.",),
         (APPROVED,),
     )
-    out = (await sa.Triage.run(sa.Classify(DELAY), state=sa.Ticket())).output
+    out = await start(DELAY)
     assert (out.action, out.paid_eur) == ("resolved", 0)
     assert len(skyline.payments) == 1
 
@@ -130,7 +140,7 @@ async def test_over_the_limit_goes_to_a_person_unpaid(skyline: Skyline) -> None:
         ("EUR 600.",),
         (APPROVED,),
     )
-    out = (await sa.Triage.run(sa.Classify(LONG_HAUL), state=sa.Ticket())).output
+    out = await start(LONG_HAUL)
     assert (out.action, out.priority, out.paid_eur) == ("to_human", "high", 0)
     assert skyline.payments == []
 
@@ -144,14 +154,14 @@ async def test_a_reply_failing_review_twice_goes_to_a_person_unpaid(skyline: Sky
             sa.Verdict(approved=False, objection="not 400"),
         ),
     )
-    out = (await sa.Triage.run(sa.Classify(DELAY), state=sa.Ticket())).output
+    out = await start(DELAY)
     assert (out.action, out.paid_eur) == ("to_human", 0)
     assert skyline.payments == []
 
 
 async def test_spam_closes_without_a_reply(skyline: Skyline) -> None:
     script(sa.Classification(kind="spam"))
-    out = (await sa.Triage.run(sa.Classify(SPAM), state=sa.Ticket())).output
+    out = await start(SPAM)
     assert (out.action, out.reply_draft, out.paid_eur) == ("close", None, 0)
 
 
@@ -159,20 +169,25 @@ async def test_a_missing_booking_reference_is_asked_and_the_reply_continues(
     skyline: Skyline,
 ) -> None:
     script(sa.Classification(kind="delay_or_cancellation"), ("EUR 400.",), (APPROVED,))
-    graph = sa.Triage(sa.Classify(NO_REF), state=sa.Ticket())
-    asked = await graph.on_enter()
+    app = sa.SupportContext()
+    store = ContextStore()
+    await store.load_context(app)
+    ctx = SimpleNamespace(context=app, store=store)
+    asked = await sa.triage(ctx, NO_REF)
     assert isinstance(asked, InputRequired) and "booking reference" in asked.question
 
-    async def reply(text: str) -> object:
-        nonlocal graph  # saved and rebuilt between turns, as the agent stack does
-        saved, state = graph._arguments(), graph._dump_state()
-        assert saved == {"node": "LookUpBooking", "fields": {}}
-        graph = sa.Triage._rebuild(saved)
-        graph._restore(state, call_id="c1")
-        return await graph._take(ChatMessage(role="user", content=[text]))
+    async def reply(reference: str) -> sa.TriageResult | InputRequired:
+        nonlocal ctx
+        restored = sa.SupportContext()
+        restored_store = ContextStore(ctx.store._pending_state)
+        await restored_store.load_context(restored)
+        ctx = SimpleNamespace(context=restored, store=restored_store)
+        return await sa.continue_request(ctx, booking_ref=reference)
 
-    someone_elses = await reply("it is SKY4F2")
-    assert isinstance(someone_elses, InputRequired) and "could not find" in someone_elses.question
-    done = await reply("sorry, SKY5C1")
-    assert isinstance(done, Completed) and done.value.paid_eur == 400
+    someone_elses = await reply("SKY4F2")
+    assert (
+        isinstance(someone_elses, InputRequired) and "booking reference" in someone_elses.question
+    )
+    done = await reply("SKY5C1")
+    assert isinstance(done, sa.TriageResult) and done.paid_eur == 400
     assert [(p.booking_ref, p.eur) for p in skyline.payments] == [("SKY5C1", 400)]

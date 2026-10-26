@@ -37,7 +37,7 @@ await storage.aclose()
 | `UpdateThread` | `thread_id`, `attributes` (an empty value deletes the entry), `idle_ttl` | the thread; counts as activity |
 | `DeleteThread` | `thread_id` | nothing; its content goes with it |
 | `GetThreadItems` | `thread_id`, optional `agent`, `after`, `limit` | the history in order, one page: each item's `agent`, `seq`, `message_id` and chat item, and the `after` cursor of the next page |
-| `GetThreadTasks` | `thread_id`, optional `status` | the submitted `AgentTask`s, not the turns: `task_id`, `name` (the class), `status`, `updated_at` |
+| `GetThreadTasks` | `thread_id`, optional `status` | A2A task records: `task_id`, optional task label, `status`, `updated_at` |
 
 A thread is a `ThreadInfo`: `thread_id`, `scope`, `attributes`,
 `created_at`, `last_active`, `expires_at` (0: never), `idle_ttl_seconds`,
@@ -69,7 +69,7 @@ A thread's history and its tasks come from the threads service's
 grant with `read`; the agent serves no content routes of its own. The
 state and the journal are not readable from outside. Inside a run,
 `ctx.thread` is the durable thread: `info()`, `chat_history(agent=)`,
-`background_tasks()`, `update(attributes=)` and `lane()`
+`update(attributes=)` and `lane(...).tasks(...)`
 ([threads.md](threads.md)).
 
 ## Tokens

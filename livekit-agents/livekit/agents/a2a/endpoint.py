@@ -13,7 +13,6 @@ import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import timedelta
-from typing import Generic
 
 from a2a.server.jsonrpc_models import (
     InternalError as RpcInternalError,
@@ -30,9 +29,7 @@ from starlette.routing import Route
 
 from .._generated.storage_turn import Policy, TurnOptions
 from ..storage.agentdb import AgentDBStorage
-from ..storage.context import Handler, S
-from ..storage.protocol import dump_state
-from ..storage.resolve import AgentRegistry
+from ..storage.context import Handler
 from .auth import ANONYMOUS, AuthError, Credentials, Principal, Unauthorized
 from .extension import EXTENSIONS_HEADER, Extensions, agent_card, to_json
 from .methods import METHODS, STREAMING, A2AService, CallContext, JsonRpc
@@ -48,7 +45,6 @@ def a2a_session(
     *,
     endpoint: str,
     description: str,
-    state: type[S] | None = None,
     public: bool = True,
     auth: AuthCallable | None = None,
     inbox: Policy | Mapping[str, Policy] | None = None,
@@ -56,17 +52,16 @@ def a2a_session(
     storage: AgentDBStorage | None = None,
     version: str | None = None,
     lane: str | None = None,
-) -> Callable[[Handler[S]], A2AEndpoint[S]]:
+) -> Callable[[Handler], A2AEndpoint]:
     """The text door as a decorator with no server: the door is an object a module defines and
     ``AgentServer.add()`` serves (``server.a2a_session(...)`` does both). ``lane`` names the lane
     it writes when that is not the worker's own (docs/lanes.md)."""
 
-    def decorator(handler: Handler[S]) -> A2AEndpoint[S]:
+    def decorator(handler: Handler) -> A2AEndpoint:
         return A2AEndpoint(
             handler,
             endpoint=endpoint,
             description=description,
-            state=state,
             public=public,
             auth=auth,
             inbox=inbox,
@@ -79,17 +74,16 @@ def a2a_session(
     return decorator
 
 
-class A2AEndpoint(Generic[S]):
+class A2AEndpoint:
     """What ``@server.a2a_session`` returns: the handler, plus its name, card, visibility and a
     ``url`` resolved at runtime. Pass it wherever a delegate or a client wants an endpoint."""
 
     def __init__(
         self,
-        handler: Handler[S],
+        handler: Handler,
         *,
         endpoint: str,
         description: str,
-        state: type[S] | None = None,
         public: bool = True,
         auth: AuthCallable | None = None,
         inbox: Policy | Mapping[str, Policy] | None = None,
@@ -100,25 +94,19 @@ class A2AEndpoint(Generic[S]):
     ) -> None:
         if not endpoint or "/" in endpoint:
             raise ValueError("endpoint is one path segment, the last of the endpoint's URL")
-        policies = inbox.values() if isinstance(inbox, Mapping) else [inbox]
-        if "concurrent" in policies and state is not None:
-            raise ValueError("the concurrent policy requires a door with no state")
-
         self.handler = handler
         self.name = endpoint
         self.description = description
-        self.state_type = state
         self.public = public
         self.auth = auth
         self.turn_options = TurnOptions(
             policy=dict(inbox) if isinstance(inbox, Mapping) else inbox,
             debounce=_seconds(debounce),
-            state_default=dump_state(state(), state) if state is not None else None,
         )
         self.version = version
         self.lane = lane
         self._storage = storage
-        self._service: A2AService[S] | None = None
+        self._service: A2AService | None = None
         self._url: str | None = None
         self._url_base: Callable[[], str | None] | None = None
         self._app: Starlette | None = None
@@ -132,10 +120,9 @@ class A2AEndpoint(Generic[S]):
         agent_name: Callable[[], str] | str,
         credentials: Credentials | None,
         url_base: Callable[[], str | None] | None = None,
-        agents: AgentRegistry | None = None,
         lane: Callable[[], str] | None = None,
-    ) -> A2AService[S]:
-        """Attach the endpoint to a server's storage, agent name, credentials and registry;
+    ) -> A2AService:
+        """Attach the endpoint to a server's storage, agent name and credentials;
         ``lane`` when the door writes a lane other than the worker's."""
         chosen = self._storage or storage
         if chosen is None:
@@ -151,14 +138,13 @@ class A2AEndpoint(Generic[S]):
             storage=chosen,
             agent_name=name_fn,
             credentials=credentials,
-            agents=agents,
             lane=lane or ((lambda: own) if own else None),
         )
         self._url_base = url_base
         return self._service
 
     @property
-    def service(self) -> A2AService[S]:
+    def service(self) -> A2AService:
         if self._service is None:
             raise RuntimeError(f"endpoint {self.name!r} is not attached to a server yet")
         return self._service

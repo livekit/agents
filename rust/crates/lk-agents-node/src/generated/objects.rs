@@ -263,68 +263,6 @@ impl SessionOptions {
     }
 }
 
-/// A cancelled Python awaiter drops its future and wakes nothing here, so the host calls
-/// `abandon`(TaskHandle::abandon) in its `finally` for the driver to hand the parent frame back.
-#[napi(js_name = "TaskHandle")]
-pub struct TaskHandle {
-    pub(crate) inner: std::sync::Arc<lk_agents_voice::workflows::HostTaskHandle>,
-}
-
-#[napi]
-impl TaskHandle {
-    #[napi(constructor)]
-    pub fn new(id: Option<String>) -> Self {
-        TaskHandle { inner: std::sync::Arc::new(lk_agents_voice::workflows::HostTaskHandle::for_host(id)) }
-    }
-
-    #[napi(getter, js_name = "id")]
-    pub fn id(&self) -> String {
-        self.inner.host_id()
-    }
-
-    #[napi(getter, js_name = "done")]
-    pub fn done(&self) -> bool {
-        self.inner.host_done()
-    }
-
-    #[napi(getter, js_name = "phase")]
-    pub fn phase(&self) -> String {
-        self.inner.host_phase().to_string()
-    }
-
-    #[napi(js_name = "fail")]
-    pub fn fail(&self, env: Env, message: String, class_name: Option<String>, reason: Option<String>) -> napi::Result<()> {
-        crate::host_error::run(&env, || {
-            self.inner.host_fail(message, class_name, reason).map_err(crate::generated::errors::task_error_to_node)?;
-            Ok(())
-        })
-    }
-
-    #[napi(js_name = "cancel")]
-    pub fn cancel(&self, name: Option<String>) {
-        self.inner.host_cancel(name);
-    }
-
-    #[napi(js_name = "requestCancel")]
-    pub fn request_cancel(&self) {
-        self.inner.host_request_cancel();
-    }
-
-    #[napi(js_name = "abandon")]
-    pub fn abandon(&self) -> bool {
-        self.inner.host_abandon()
-    }
-
-    #[napi(js_name = "waitForInactive", ts_return_type = "Promise<void>")]
-    pub fn wait_for_inactive<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
-        let inner = std::sync::Arc::clone(&self.inner);
-        env.spawn_future_with_callback(async move { Ok(Ok::<_, crate::host_error::JsError>(inner.host_wait_for_inactive().await)) }, |env, out| match out {
-            Ok(out) => Ok(()),
-            Err(e) => Err(e.into_napi(env)),
-        })
-    }
-}
-
 #[napi(js_name = "SpeechHandle")]
 pub struct SpeechHandle {
     pub(crate) inner: std::sync::Arc<lk_agents_voice::speech_handle::HostSpeech>,
@@ -434,77 +372,6 @@ impl SpeechHandle {
     }
 }
 
-#[napi(js_name = "Workflow")]
-pub struct Workflow {
-    pub(crate) inner: std::sync::Arc<lk_agents_voice::workflows::builtins::HostWorkflow>,
-}
-
-#[napi]
-impl Workflow {
-    #[napi(getter, js_name = "instructions")]
-    pub fn instructions(&self) -> (String, Option<String>, Option<String>) {
-        self.inner.host_instructions()
-    }
-
-    #[napi(getter, js_name = "onEnterPrompt")]
-    pub fn on_enter_prompt(&self) -> String {
-        self.inner.on_enter_prompt()
-    }
-
-    #[napi(getter, js_name = "warnings")]
-    pub fn warnings(&self) -> Vec<String> {
-        self.inner.warnings()
-    }
-}
-
-#[napi(js_name = "WorkflowReply")]
-pub struct WorkflowReply {
-    pub(crate) inner: lk_agents_voice::workflows::builtins::WorkflowReply,
-}
-
-#[napi]
-impl WorkflowReply {
-    #[napi(getter, js_name = "reply")]
-    pub fn reply(&self) -> Option<String> {
-        self.inner.reply()
-    }
-
-    #[napi(getter, js_name = "error")]
-    pub fn error(&self) -> Option<String> {
-        self.inner.error()
-    }
-
-    #[napi(getter, js_name = "errorClass")]
-    pub fn error_class(&self) -> Option<String> {
-        self.inner.error_class()
-    }
-
-    #[napi(getter, js_name = "errorReason")]
-    pub fn error_reason(&self) -> Option<String> {
-        self.inner.error_reason()
-    }
-
-    #[napi(getter, js_name = "completed")]
-    pub fn completed(&self) -> bool {
-        self.inner.completed()
-    }
-
-    #[napi(getter, js_name = "failure")]
-    pub fn failure(&self) -> Option<String> {
-        self.inner.failure()
-    }
-
-    #[napi(getter, js_name = "failureClass")]
-    pub fn failure_class(&self) -> Option<String> {
-        self.inner.failure_class()
-    }
-
-    #[napi(getter, js_name = "failureReason")]
-    pub fn failure_reason(&self) -> Option<String> {
-        self.inner.failure_reason()
-    }
-}
-
 /// GetDtmfResult(user_input: 'str')
 #[napi(js_name = "GetDtmfResult")]
 pub struct GetDtmfResult {
@@ -608,43 +475,6 @@ impl LlmResponseState {
     #[napi(getter, js_name = "retryable")]
     pub fn retryable(&self) -> bool {
         self.inner.retryable()
-    }
-}
-
-/// `beta/workflows/task_group.py`'s scheduler as the host drives it: the loop body (factories,
-/// awaits, callbacks, summarisation) stays in Python; this decides the stack order, the visited set
-/// (written before the await), each outcome's arm, the `out_of_scope` tool and regress validation.
-/// Result values never enter Rust. Each step comes back as its `kind`-tagged dict.
-#[napi(js_name = "TaskSchedule")]
-pub struct TaskSchedule {
-    pub(crate) inner: std::sync::Mutex<lk_agents_voice::workflows::builtins::task_group::TaskGroupSchedule>,
-}
-
-#[napi]
-impl TaskSchedule {
-    #[napi(constructor)]
-    pub fn new(summarize_chat_ctx: Option<bool>, return_exceptions: Option<bool>) -> Self {
-        let summarize_chat_ctx = summarize_chat_ctx.unwrap_or(true);
-        let return_exceptions = return_exceptions.unwrap_or(false);
-        TaskSchedule { inner: std::sync::Mutex::new(lk_agents_voice::workflows::builtins::task_group::TaskGroupSchedule::new(summarize_chat_ctx, return_exceptions)) }
-    }
-
-    #[napi(js_name = "visited")]
-    pub fn visited(&self, task_id: String) -> bool {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.visited(&task_id)
-    }
-
-    #[napi(js_name = "add")]
-    pub fn add(&self, id: String, description: String) {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.host_add(id, description);
-    }
-
-    #[napi(js_name = "validateRegress")]
-    pub fn validate_regress(&self, task_ids: Vec<String>) -> Option<String> {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.host_validate_regress(task_ids)
     }
 }
 

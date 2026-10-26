@@ -783,7 +783,7 @@ def test_explicit_aec_warmup_duration_overrides_outbound_sip_default(
 def test_simulation_has_no_aec_warmup_by_default(
     explicit: NotGivenOr[float | None], expected_duration: float | None
 ) -> None:
-    session = AgentSession(vad=None, aec_warmup_duration=explicit)
+    session = LiveSession(vad=None, aec_warmup_duration=explicit)
     participant = MagicMock(spec=rtc.RemoteParticipant)
     participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
     participant.attributes = {}

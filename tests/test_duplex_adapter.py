@@ -982,10 +982,18 @@ async def test_duplex_session_reaches_the_plugin_past_the_adapter() -> None:
     from livekit.agents import Agent, LiveSession
 
     model = _FakeDuplexModel()
-    agent = Agent(instructions="")
+    ready = asyncio.Event()
+    seen = []
+
+    class InspectDuplex(Agent):
+        async def on_enter(self) -> None:
+            seen.append(self.duplex_session)
+            ready.set()
+
     async with LiveSession(llm=model, aec_warmup_duration=None) as session:
-        await session.start(agent)
-        assert agent.duplex_session is model.session_obj
+        await session.start(InspectDuplex(instructions=""))
+        await asyncio.wait_for(ready.wait(), 1)
+        assert seen == [model.session_obj]
 
 
 async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:
@@ -993,11 +1001,17 @@ async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:
 
     from .fake_realtime import FakeRealtimeModel
 
-    agent = Agent(instructions="")
+    ready = asyncio.Event()
+
+    class InspectDuplex(Agent):
+        async def on_enter(self) -> None:
+            with pytest.raises(RuntimeError, match="not running a DuplexModel"):
+                _ = self.duplex_session
+            ready.set()
+
     async with LiveSession(llm=FakeRealtimeModel(), aec_warmup_duration=None) as session:
-        await session.start(agent)
-        with pytest.raises(RuntimeError, match="not running a DuplexModel"):
-            _ = agent.duplex_session
+        await session.start(InspectDuplex(instructions=""))
+        await asyncio.wait_for(ready.wait(), 1)
 
 
 async def test_a_failed_audio_stream_reports_an_unrecoverable_error(duplex) -> None:

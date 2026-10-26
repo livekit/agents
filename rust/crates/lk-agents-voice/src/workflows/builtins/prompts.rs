@@ -539,7 +539,7 @@ Handle input as typed text. Expect users to type the expiration date in formats 
 }
 
 pub mod dtmf {
-    //! `dtmf_inputs.GetDtmfTask.__init__`, `._generate_dtmf_reply`.
+    //! DTMF reception and read-back.
 
     pub const BASE: &str = "You are a single step in a broader system, responsible solely for gathering digits input from the user. You will either receive a sequence of digits through dtmf events tagged by <dtmf_inputs>, or user will directly say the digits to you. You should be able to handle both cases. ";
 
@@ -615,17 +615,4 @@ You are talking to the human agent now, start by giving them a summary of the co
     pub const DECLINED: &str = "human agent declined to connect: {reason}";
     /// `warm_transfer.WarmTransferTask.voicemail_detected`.
     pub const VOICEMAIL: &str = "voicemail detected";
-}
-
-pub mod task_group {
-    //! `task_group.TaskGroup._build_out_of_scope_tool`. One description, assembled from three literals plus the task table.
-
-    pub const OUT_OF_SCOPE_TOOL: &str = "out_of_scope";
-
-    pub const OUT_OF_SCOPE_DESC: &str = r#"Call to regress to other tasks according to what the user requested to modify, return the corresponding task ids. For example, if the user wants to change their email and there is a task with id "email_task" with a description of "Collect the user's email", return the id ("get_email_task").If the user requests to regress to multiple tasks, such as changing their phone number and email, return both task ids in the order they were requested.The following are the IDs and their corresponding task description. {task_repr}"#;
-
-    pub const OUT_OF_SCOPE_ARG: &str = "The IDs of the tasks requested";
-
-    /// `task_group.out_of_scope`.
-    pub const INVALID_TASK_ID: &str = "unable to regress, invalid task id {task_id}";
 }

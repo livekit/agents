@@ -116,7 +116,7 @@ pub struct TaskWrite {
     pub task_id: String,
     pub status: TaskState,
     pub message_id: Option<String>,
-    /// The `AgentTask` class; `None` for a turn.
+    /// An optional application task label.
     pub name: Option<String>,
     pub data: TaskData,
     pub ask: Option<Ask>,
@@ -132,7 +132,6 @@ pub struct Commit {
     pub tasks: Vec<TaskWrite>,
     /// `None` keeps the stored snapshot.
     pub state: Option<Value>,
-    pub agent_stack: Option<Value>,
     pub drained_id: Option<i64>,
     pub run_ended: EventWrite,
     /// A task row to read back after the writes, in the same batch: the answer's record.
@@ -928,7 +927,6 @@ async fn write(
             let (lane, version, token) =
                 (lane_name, lease.inner.version, lease.inner.token.as_str());
             let state = SqlValue::opt_json(c.state.as_ref());
-            let agent_stack = SqlValue::opt_json(c.agent_stack.as_ref());
             let drained_id = c.drained_id;
             match keep {
                 true => b.add(CommitAndExtend {
@@ -936,13 +934,10 @@ async fn write(
                     version,
                     token,
                     state,
-                    agent_stack,
                     drained_id,
                     lease_secs: db.lease_ttl_secs,
                 }),
-                false => {
-                    b.add(CommitAndRelease { lane, version, token, state, agent_stack, drained_id })
-                }
+                false => b.add(CommitAndRelease { lane, version, token, state, drained_id }),
             }
         }
         None => b.add(SelectLane { lane: lane_name }),

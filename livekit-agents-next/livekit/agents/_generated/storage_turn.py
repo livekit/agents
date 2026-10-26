@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .storage_run import ItemRow, Ref, RunUsage, TaskRow
+from .storage_run import ItemRow, RunUsage, TaskRow
 
 
 class TurnOptions(BaseModel):
@@ -29,10 +29,6 @@ class TurnOptions(BaseModel):
     wait_timeout: float | None = None
     """How long a waiter polls for the lane before its task fails `lease-timeout`, in seconds;
     `None` is a minute.
-    """
-    state_default: Any | None = None
-    """The door's default-constructed state as JSON, for a fresh lane; `None` for a door with no
-    state, which the `concurrent` policy requires.
     """
 
 
@@ -76,15 +72,13 @@ class TurnContext(BaseModel):
     history: list[ItemRow]
     """The lane's history as loaded, plus the pending input-required answer when there was one."""
     state: Any | None
-    """The state as loaded, or the door's default for a fresh lane; `None` for a door with none."""
+    """The state as loaded; `None` for a fresh lane."""
+    read_only: bool = False
+    """Context field writes require the lane's exclusive lease."""
     task_id: str
     """The task that carries the reply."""
     tasks: list[TaskRow]
     """The lane's task rows, newest first, up to 50."""
-    agent_stack: list[Ref]
-    """Who speaks, bottom first: empty while the door's root agent does; an `AgentTask` on top
-    holds the conversation until it completes (docs/agent-tasks.md).
-    """
     caller_history: Any | None
     """A delegating caller's conversation when the message carried a `chat_ctx` data part, as the
     part's `data`.
@@ -133,10 +127,6 @@ class HandlerOutput(BaseModel):
     """A conversation tool's `InputRequired(question)`."""
     pending_call: PendingCall | None = None
     """The call that asked, when `input_required` is set."""
-    agent_stack: list[Ref] | None = None
-    """The agent stack after the handler, when a run moved it or a task on it changed state;
-    `None` leaves the stack as loaded.
-    """
     interrupted: bool = False
     """The handler yielded at a checkpoint."""
     metadata: dict[str, Any] = Field(default_factory=dict)

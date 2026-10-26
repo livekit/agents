@@ -266,11 +266,6 @@ async fn pipeline_reply_task_impl(
             let outcome = finished.outcome;
             return Ok(StepOutcome::Done(Finished { outcome, interrupted: true }));
         }
-        // The swap is the host's; the driver reports it, and then still runs `follow_up`.
-        NextStep::Handoff { agent, follow_up } => {
-            shared.report(GenEvent::Handoff { speech: handle.id(), agent });
-            follow_up
-        }
         NextStep::Reply(request) => Some(request),
     };
     match follow_up {

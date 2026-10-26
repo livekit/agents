@@ -103,8 +103,6 @@ fn drain_then_close() -> Case {
                 agent: "next".into(),
                 instructions: AgentText("You are next.".into()),
                 tools: Vec::new(),
-                pause_previous: false,
-                resume: false,
             },
             Input::Advance { ms: Millis(50) },
             Input::Close { drain: false },

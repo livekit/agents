@@ -105,16 +105,9 @@ def test_agent_expressive() -> None:
     agent = Agent(instructions="test", expressive=True)
     assert agent.expressive is True
 
-    agent.update_options(expressive=False)
-    assert agent.expressive is False
-
+    assert Agent(instructions="test", expressive=False).expressive is False
     opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
-    agent.update_options(expressive=opts)
-    assert agent.expressive == opts
-
-    # untouched when not given
-    agent.update_options()
-    assert agent.expressive == opts
+    assert Agent(instructions="test", expressive=opts).expressive == opts
 
 
 def test_agent_expressive_overrides_session() -> None:

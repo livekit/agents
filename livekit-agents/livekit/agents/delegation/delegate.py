@@ -39,7 +39,6 @@ class DelegationResult(RunResult[object]):
         state: str = "completed",
         task_id: str = "",
         context_id: str = "",
-        input_required: str | None = None,
         new_messages: Sequence[ChatItem] | None = None,
         usage: RunUsage | None = None,
         interrupted: bool = False,
@@ -56,7 +55,6 @@ class DelegationResult(RunResult[object]):
         self.transport = transport
         self.profile = profile
         self._run_output = output
-        self._input_required = input_required
         self._verbatim = verbatim
         self._interrupted = interrupted
         self._run_messages = list(new_messages or [])

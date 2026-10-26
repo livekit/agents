@@ -5,7 +5,7 @@ use crate::agent_activity::on_exit::Exit;
 use crate::agent_activity::scheduling::PauseCause;
 use crate::agent_session::effects::Out;
 use crate::agent_session::signals::{Cx, PauseResult, Signal};
-use crate::agent_session::{Answer, DrainRefused, HookId, PreviousActivity, RequestId};
+use crate::agent_session::{Answer, DrainRefused, HookId, RequestId};
 use crate::trace::HandoffStep;
 
 /// The driving agent's drain, and the callers whose agent was left before theirs finished.
@@ -47,7 +47,7 @@ pub(crate) enum DrainEvent {
     /// No speech is open any more.
     Quiet,
     /// The swap leaves the agent: paused under an inline task, or for good.
-    Leaving(PreviousActivity),
+    Leaving,
     /// The handoff it joined ended without a swap: its callers' drain runs on this agent.
     AgentStays,
     /// The close: a drain still waiting on its `on_exit` is refused.
@@ -99,7 +99,7 @@ impl Drain {
                     self.finish(None, out);
                 }
             }
-            DrainEvent::Leaving(previous) => self.leaving(previous, &mut cx, out),
+            DrainEvent::Leaving => self.leaving(&mut cx, out),
             DrainEvent::AgentStays => {
                 if cx.switching
                     || !matches!(self.current, Some(AgentDrain { phase: Phase::Joined, .. }))
@@ -171,22 +171,12 @@ impl Drain {
     /// Left for good (`Close`): answered `Ok` once nothing it said is open. Paused under an inline
     /// task: the paused agent's `on_exit` runs now, once, before the task's `on_enter`, as the
     /// reference does.
-    fn leaving(&mut self, previous: PreviousActivity, cx: &mut Cx<'_>, out: &mut Out) {
+    fn leaving(&mut self, cx: &mut Cx<'_>, out: &mut Out) {
         let Some(drain) = self.current.take() else { return };
         if drain.waiters.is_empty() {
             return;
         }
-        let waiting_on = match previous {
-            PreviousActivity::Close => None,
-            PreviousActivity::Pause => match cx.leave.claim() {
-                Exit::Issue(hook) => {
-                    out.trace(HandoffStep::DrainStarted { exit_hook: Some(hook) });
-                    Some(hook)
-                }
-                Exit::Wait(hook) => Some(hook),
-                Exit::Done => None,
-            },
-        };
+        let waiting_on = None;
         self.left.extend(drain.waiters.into_iter().map(|w| (waiting_on, w)));
         self.left_ready(cx.quiet, out);
     }

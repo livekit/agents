@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::conn::SqlValue;
-use crate::run::{Ref, RunOutcome, TaskState};
+use crate::run::{RunOutcome, TaskState};
 use crate::sql::{FromCell, json_cell, statement};
 
 /// One history item of a lane.
@@ -74,7 +74,7 @@ impl ItemRow {
     }
 }
 
-/// One A2A task of a lane: a turn or a submitted `AgentTask`. The A2A `Task` is
+/// One A2A task of a lane. The A2A `Task` is
 /// `id = task_id`, `contextId = the thread id`, `status = (status, data.statusMessage, updated_at)`,
 /// plus the fields of `data`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
@@ -85,7 +85,7 @@ pub struct TaskRow {
     pub lane: String,
     /// Submission order; the lane runs its runnable tasks in it.
     pub seq: i64,
-    /// The `AgentTask` class; `None` for a turn.
+    /// An optional application task label.
     pub name: Option<String>,
     pub message_id: Option<String>,
     pub status: TaskState,
@@ -144,8 +144,7 @@ pub struct Ask {
     pub answer_tool: Option<String>,
 }
 
-/// One lane: a registered agent's state and agent stack, with its lease and its inbox
-/// cursor.
+/// One lane: a registered agent's state, lease and inbox cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
 #[python(pydantic, module = "storage_run", config = "frozen=True")]
 #[table("lanes")]
@@ -157,11 +156,6 @@ pub struct LaneRow {
     #[serde(default)]
     #[python(default = "None")]
     pub state: Option<Value>,
-    /// Who is speaking, bottom first; `None` before a run wrote it.
-    #[serde(default)]
-    #[python(default = "None")]
-    #[table(json)]
-    pub agent_stack: Option<Vec<Ref>>,
     pub lease_holder: Option<String>,
     /// Unix seconds on agent-db's clock; `0` is released.
     pub lease_until: i64,
@@ -245,7 +239,7 @@ pub struct InboxRow {
     pub received_at: i64,
 }
 
-json_cell!(TaskData, Ask, ChatItem, Vec<Ref>, a2a::Message);
+json_cell!(TaskData, Ask, ChatItem, a2a::Message);
 
 impl FromCell for TaskState {
     fn from_cell(cell: &SqlValue) -> Result<Self, String> {
@@ -660,13 +654,11 @@ statement! {
         version: i64,
         token: &'a str,
         state: SqlValue,
-        agent_stack: SqlValue,
         drained_id: Option<i64>,
     } => r#"
 UPDATE lanes
 SET version = version + 1,
   state = COALESCE(jsonb(:state), state),
-  agent_stack = COALESCE(jsonb(:agent_stack), agent_stack),
   drained_id = COALESCE(:drained_id, drained_id),
   lease_until = 0, lease_token = NULL
 WHERE lane = :lane AND version = :version AND lease_token = :token
@@ -681,14 +673,12 @@ statement! {
         version: i64,
         token: &'a str,
         state: SqlValue,
-        agent_stack: SqlValue,
         drained_id: Option<i64>,
         lease_secs: i64,
     } => r#"
 UPDATE lanes
 SET version = version + 1,
   state = COALESCE(jsonb(:state), state),
-  agent_stack = COALESCE(jsonb(:agent_stack), agent_stack),
   drained_id = COALESCE(:drained_id, drained_id),
   lease_until = unixepoch() + :lease_secs
 WHERE lane = :lane AND version = :version AND lease_token = :token
@@ -729,7 +719,7 @@ WHERE id > :after_id ORDER BY id LIMIT :limit
 statement! {
     /// One lane's row.
     SelectLane<'a> { lane: &'a str } => r#"
-SELECT lane, version, json(state), json(agent_stack), lease_holder, lease_until, waiter, drained_id
+SELECT lane, version, json(state), lease_holder, lease_until, waiter, drained_id
 FROM lanes WHERE lane = :lane
 "#
 }
@@ -737,7 +727,7 @@ FROM lanes WHERE lane = :lane
 statement! {
     /// Every lane's row.
     SelectLanes {} => r#"
-SELECT lane, version, json(state), json(agent_stack), lease_holder, lease_until, waiter, drained_id
+SELECT lane, version, json(state), lease_holder, lease_until, waiter, drained_id
 FROM lanes ORDER BY lane
 "#
 }
@@ -845,7 +835,6 @@ mod tests {
             "front-desk".into(),
             SqlValue::Int(2),
             SqlValue::Null,
-            r#"[{"name": "Followup", "args": {"n": 1}}]"#.into(),
             SqlValue::Null,
             "not an int".into(),
             SqlValue::Null,
@@ -854,8 +843,8 @@ mod tests {
         assert!(
             matches!(LaneRow::from_row(&lane), Err(StorageError::Decode(m)) if m.starts_with("lease_until"))
         );
-        lane[5] = SqlValue::Int(0);
-        assert_eq!(LaneRow::from_row(&lane).unwrap().agent_stack.unwrap()[0].name, "Followup");
+        lane[4] = SqlValue::Int(0);
+        assert_eq!(LaneRow::from_row(&lane).unwrap().lease_until, 0);
     }
 
     /// Instructions and config updates are rendered per run, never stored.

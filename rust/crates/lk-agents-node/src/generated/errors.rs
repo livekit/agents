@@ -28,11 +28,6 @@ pub fn mcp_error_to_node(e: lk_agents_inference::mcp::McpError) -> JsError {
     JsError::new(kind, e.to_string())
 }
 
-/// `TaskError` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/workflows/handle.rs`).
-pub fn task_error_to_node(e: lk_agents_voice::workflows::TaskError) -> JsError {
-    JsError::new("RuntimeError", e.to_string())
-}
-
 /// `SpeechRefused` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/speech_handle.rs`).
 pub fn speech_refused_to_node(e: lk_agents_voice::speech_handle::SpeechRefused) -> JsError {
     JsError::new("RuntimeError", e.to_string())
