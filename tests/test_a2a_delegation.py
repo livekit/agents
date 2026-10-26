@@ -35,9 +35,13 @@ from livekit.agents.storage.resolve import Thread
 from .a2a_driver import (
     AGENT,
     ENDPOINT,
+    Reply,
+    ScriptedLLM,
+    call,
     http_client,
     make_server,
     no_project_env,  # noqa: F401  (autouse: the demo environment must not shape the cards)
+    output_of,
     rpc,
     sse_results,
     wire,
@@ -611,3 +615,198 @@ async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
         await delegate.aclose()
     assert result.output == f"{disclaimer}\n\nGood news, you are covered."
     assert result.verbatim == disclaimer
+
+
+# ---------------------------------------------------------------------------------------------
+# how the delegate reads what the expert sends (Flow B)
+# ---------------------------------------------------------------------------------------------
+
+Script = Callable[[TaskUpdater, RequestContext], Any]
+
+
+class _Scripted(_Reasoner):
+    """A stock server whose events after the acknowledgment are the test's own."""
+
+    def __init__(self, script: Script) -> None:
+        super().__init__()
+        self._script = script
+
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        assert context.message is not None
+        self.seen.append(context.message)
+        task_id, context_id = context.task_id or "task-1", context.context_id or "ctx-1"
+        await event_queue.enqueue_event(
+            pb.Task(
+                id=task_id,
+                context_id=context_id,
+                status=pb.TaskStatus(state=pb.TaskState.TASK_STATE_SUBMITTED),
+            )
+        )
+        await self._script(TaskUpdater(event_queue, task_id, context_id), context)
+
+
+async def run_against(script: Script, prompt: str = "balance please") -> Any:
+    async with stock_server(_Scripted(script)) as app, stock_http(app) as http:
+        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
+        try:
+            return await delegate.run(prompt, context_id="AT_caller")
+        finally:
+            await delegate.aclose()
+
+
+@pytest.mark.rule("R24", "B23")
+async def test_the_answer_is_the_artifact_that_ended_last() -> None:
+    """A partial streamed under one id, then the whole answer under another: the answer is the
+    whole one, read once."""
+
+    async def script(updater: TaskUpdater, context: RequestContext) -> None:
+        await updater.add_artifact(
+            [pb.Part(text="Your bal")], artifact_id="partial", name="answer", last_chunk=False
+        )
+        await updater.add_artifact(
+            [pb.Part(text="Your balance is forty dollars.")],
+            artifact_id="whole",
+            name="answer",
+            last_chunk=True,
+        )
+        await updater.complete()
+
+    result = await run_against(script)
+    assert result.output == "Your balance is forty dollars."
+
+
+@pytest.mark.rule("R23", "B12")
+async def test_a_verbatim_part_after_other_text_reaches_the_person_as_written() -> None:
+    """The verbatim part is a flagged part of the answer, wherever it sits: the person gets it
+    as written, and the model phrases the rest."""
+    from livekit.agents.a2a.extension import struct, widen
+
+    disclaimer = "This is not financial advice."
+
+    async def script(updater: TaskUpdater, context: RequestContext) -> None:
+        flagged = pb.Part(text=disclaimer)
+        flagged.metadata.CopyFrom(struct({widen("livekit/verbatim"): True}))
+        await updater.add_artifact(
+            [pb.Part(text="Your balance is forty dollars."), flagged],
+            artifact_id="a1",
+            name="answer",
+            last_chunk=True,
+        )
+        await updater.complete()
+
+    async with stock_server(_Scripted(script)) as app, stock_http(app) as http:
+        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
+        model = ScriptedLLM(
+            Reply(tool_calls=[call("ask", "c1", request="my balance")]),
+            Reply("You have forty dollars.", when=output_of("c1")),
+        )
+        front = Agent(instructions="front desk", tools=[delegate], llm=model)
+        result = await front.run("what is my balance?")
+        await delegate.aclose()
+
+    assert result.output == f"{disclaimer}\n\nYou have forty dollars."
+    assert result.verbatim == disclaimer
+    # the model reads that the disclaimer was delivered, and the rest to phrase
+    (tool_output,) = [i for i in model.requests[-1].items if i.type == "function_call_output"]
+    assert disclaimer in tool_output.output and "forty dollars" in tool_output.output
+
+
+@pytest.mark.rule("R25")
+async def test_an_expert_never_answers_with_its_progress(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    """An expert task that ends with no text answers that it had none, not its last progress."""
+
+    async def silent(ctx: A2ASessionContext[Any]) -> str:
+        await ctx.update("checking the schedule")
+        return ""
+
+    progress: list[str] = []
+    result = await expert(silent).run("book a cleaning", progress=progress.append)
+    assert progress == ["checking the schedule"]
+    assert result.state == "completed"
+    assert result.output and "checking the schedule" not in str(result.output)
+
+
+@pytest.mark.rule("R20", "B7")
+async def test_a_stock_experts_context_is_kept_per_caller_thread() -> None:
+    """Two caller threads on one delegate to a stock server: each keeps a context of its own,
+    and a thread's next request goes back to its own."""
+    plain = _Reasoner()
+    async with stock_server(plain) as app, stock_http(app) as http:
+        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
+        await delegate.run("balance please", context_id="AT_first")
+        await delegate.run("balance please", context_id="AT_second")
+        await delegate.run("balance again", context_id="AT_first")
+        await delegate.aclose()
+
+    first, second, again = (m.context_id for m in plain.seen)
+    assert second != first
+    assert again == first
+
+
+STREAMED = ("SendStreamingMessage", "message/stream", "SubscribeToTask", "tasks/resubscribe")
+
+
+class _Dropping(httpx.AsyncBaseTransport):
+    """An expert's door whose first ``drops`` answer streams, the first one or a resubscribe,
+    break after their first frame."""
+
+    def __init__(self, app: Any, drops: int) -> None:
+        self._inner = httpx.ASGITransport(app=app)
+        self.drops = drops
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._inner.handle_async_request(request)
+        method = json.loads(request.content).get("method", "") if request.content else ""
+        if method not in STREAMED or self.drops <= 0:
+            return response
+        self.drops -= 1
+        body = await response.aread()
+        head = body[: body.index(b"\n\n") + 2]
+
+        async def broken() -> AsyncIterator[bytes]:
+            yield head
+            raise httpx.ReadError("the stream dropped", request=request)
+
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            stream=_Stream(broken()),
+            request=request,
+        )
+
+
+class _Stream(httpx.AsyncByteStream):
+    def __init__(self, chunks: AsyncIterator[bytes]) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._chunks:
+            yield chunk
+
+
+@pytest.mark.rule("R27", "B6")
+@pytest.mark.parametrize("drops", [1, 3])
+async def test_a_dropped_answer_stream_is_read_again_and_the_answer_arrives(
+    agentdb_storage: AgentDBStorage, drops: int
+) -> None:
+    """The expert's answer stream breaks after the acknowledgment, up to three times: the
+    delegate reads the task again, the answer arrives, and its progress is reported once."""
+    server = AgentServer(storage=agentdb_storage, agent_name="expert")
+    server.a2a_session(endpoint="expert", description="Answers fares.")(fare_expert)
+    transport = _Dropping(server.http.app, drops=drops)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://experts.test", timeout=30.0
+    ) as http:
+        delegate = A2ADelegate("http://experts.test/expert", httpx_client=http)
+        progress: list[str] = []
+        thread_id = (await agentdb_storage.threads.create_thread()).thread_id
+        result = await delegate.run(
+            "what is the fare", progress=progress.append, context_id=thread_id
+        )
+        await delegate.aclose()
+
+    assert transport.drops == 0
+    assert result.output == "the fare is 240 USD" and result.state == "completed"
+    assert progress == ["checking the fare rules"]
