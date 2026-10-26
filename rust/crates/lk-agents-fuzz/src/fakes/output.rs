@@ -614,7 +614,9 @@ impl FakeAvatarWorker {
                     match item {
                         Received::Frame(frame) => {
                             playback.audio_received();
-                            playback.audio_played(frame.duration());
+                            if playback.audio_played(frame.duration()) {
+                                reader.notify_playback_started();
+                            }
                             None
                         }
                         Received::SegmentEnd => playback.segment_ended(),

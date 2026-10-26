@@ -77,6 +77,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         video_sampler: false,
         background_audio: false,
         avatar: false,
+        avatar_reports_start: false,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
@@ -84,5 +85,6 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.video_sampler = setup.video && rng.bool();
     setup.background_audio = setup.room_legs.is_some() && rng.bool();
     setup.avatar = setup.room_legs.is_some() && rng.u8(0..100) < 30;
+    setup.avatar_reports_start = setup.avatar && rng.bool();
     setup
 }

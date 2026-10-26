@@ -201,6 +201,8 @@ pub struct Setup {
     /// what an avatar plugin sets as `session.output.audio`) and it reports each segment played.
     /// Only with the room's legs.
     pub avatar: bool,
+    /// The avatar reports when each segment starts playing (`wait_playback_start=True`).
+    pub avatar_reports_start: bool,
 }
 
 /// The room's legs, and whether the person's app sends the audio it buffered before the agent
@@ -292,6 +294,7 @@ impl Default for Setup {
             video_sampler: false,
             background_audio: false,
             avatar: false,
+            avatar_reports_start: false,
         }
     }
 }

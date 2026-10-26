@@ -140,7 +140,7 @@ impl Run {
                             // look rather than in milliseconds, and a timer firing first would
                             // hand that late report to the next segment.
                             None,
-                            false,
+                            setup.avatar_reports_start,
                             time.clock(),
                             tasks.clone(),
                         );
