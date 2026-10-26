@@ -123,17 +123,13 @@ class _Vad:
         self._obj = obj
 
     def _core_label(self) -> str:
-        return f"{type(self._obj).__module__}.{type(self._obj).__name__}"
+        return self._obj._label
 
     def _core_capabilities(self) -> vad.VADCapabilities:
         return self._obj.capabilities
 
     def _core_id(self) -> dict[str, str]:
-        return {
-            "label": self._core_label(),
-            "model": self._obj.model,
-            "provider": self._obj.provider,
-        }
+        return {"label": self._obj._label, "model": self._obj.model, "provider": self._obj.provider}
 
     def _core_prewarm(self) -> None:
         pass
@@ -144,22 +140,28 @@ class _Vad:
 
 
 class _InputStream:
-    """A plugin stream as the core drives it: ``_core_push`` in, ``__anext__`` out."""
+    """A plugin stream as the core drives it: ``_core_push`` in, ``__anext__`` out. The core's
+    end of input may arrive after it closed the stream, and a plugin stream raises on that."""
 
     def __init__(self, stream: Any, push: Any) -> None:
         self._stream = stream
         self._core_push = push
+        self._ended = False
 
     def flush(self) -> None:
-        self._stream.flush()
+        if not self._ended:
+            self._stream.flush()
 
     def end_input(self) -> None:
-        self._stream.end_input()
+        if not self._ended:
+            self._ended = True
+            self._stream.end_input()
 
     async def __anext__(self) -> Any:
         return await self._stream.__anext__()
 
     async def aclose(self) -> None:
+        self._ended = True
         await self._stream.aclose()
 
 
