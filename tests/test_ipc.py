@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import psutil
 import pytest
@@ -750,6 +750,172 @@ async def test_thread_executor_updates_active_job_metric(monkeypatch: pytest.Mon
         await asyncio.wait_for(proc.aclose(), timeout=30.0)
 
     assert calls == ["started", "ended"], "job_ended must be called when the job ends"
+
+
+@pytest.mark.no_concurrent  # monkeypatches the process-global telemetry functions
+async def test_thread_executor_metric_settles_once_when_runner_exits_during_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A failed dispatch must not decrement a job that the runner exit already settled.
+
+    The runner can exit while launch_job() is still sending the StartJobRequest. _main_task
+    then observes the join and decrements the gauge; when the pending send finally reports the
+    closed channel, launch_job()'s error path must not decrement it a second time (that pushed
+    the gauge negative and offset the counts of other jobs).
+    """
+    from livekit.agents.ipc import channel as ipc_channel
+    from livekit.agents.telemetry import metrics as telemetry_metrics
+
+    calls: list[str] = []
+    gauge = {"value": 0}
+
+    def _job_started() -> None:
+        calls.append("started")
+        gauge["value"] += 1
+
+    def _job_ended() -> None:
+        calls.append("ended")
+        gauge["value"] -= 1
+
+    monkeypatch.setattr(telemetry_metrics, "job_started", _job_started)
+    monkeypatch.setattr(telemetry_metrics, "job_ended", _job_ended)
+
+    real_asend_message = ipc_channel.asend_message
+
+    proc, _ = _create_thread_proc(close_timeout=10.0)
+    await proc.start()
+    await proc.initialize()
+
+    async def _send_after_runner_exit(pch: Any, msg: Any) -> None:
+        if isinstance(msg, ipc.proto.StartJobRequest):
+            # pause the failing send until the join callback has run and _main_task has
+            # settled the gauge, then report the channel as closed
+            await asyncio.wait_for(proc.aclose(), timeout=30.0)
+            assert gauge["value"] == 0, "the runner exit must have settled the gauge"
+            raise duplex_unix.DuplexClosed()
+        await real_asend_message(pch, msg)
+
+    monkeypatch.setattr(ipc_channel, "asend_message", _send_after_runner_exit)
+
+    with pytest.raises(duplex_unix.DuplexClosed):
+        await proc.launch_job(_generate_fake_job())
+
+    assert calls == ["started", "ended"], "the failed send must not settle the gauge again"
+    assert gauge["value"] == 0, f"the active-job gauge went negative: {calls}"
+    assert proc.running_job is None, "the failed dispatch must clear the assignment"
+
+
+@pytest.mark.no_concurrent  # monkeypatches the process-global telemetry functions
+async def test_thread_executor_failed_dispatch_settles_metric_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A failed dispatch rolls the increment back once; the later runner exit is a no-op."""
+    from livekit.agents.ipc import channel as ipc_channel
+    from livekit.agents.telemetry import metrics as telemetry_metrics
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(telemetry_metrics, "job_started", lambda: calls.append("started"))
+    monkeypatch.setattr(telemetry_metrics, "job_ended", lambda: calls.append("ended"))
+
+    real_asend_message = ipc_channel.asend_message
+
+    async def _failing_send(pch: Any, msg: Any) -> None:
+        if isinstance(msg, ipc.proto.StartJobRequest):
+            raise duplex_unix.DuplexClosed()
+        await real_asend_message(pch, msg)
+
+    monkeypatch.setattr(ipc_channel, "asend_message", _failing_send)
+
+    proc, _ = _create_thread_proc(close_timeout=10.0)
+    await proc.start()
+    await proc.initialize()
+    with pytest.raises(duplex_unix.DuplexClosed):
+        await proc.launch_job(_generate_fake_job())
+
+    assert calls == ["started", "ended"], "the failed dispatch must roll the increment back"
+    assert proc.running_job is None
+
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert calls == ["started", "ended"], "the runner exit must not settle the dispatch again"
+
+
+@pytest.mark.no_concurrent  # monkeypatches the process-global telemetry functions
+async def test_thread_executor_cancelled_dispatch_settles_metric_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Cancelling launch_job() mid-send must leave the gauge consistent.
+
+    The channel buffers the whole StartJobRequest before its only suspension point, so a
+    cancelled dispatch may still start the job. It must not be rolled back as unstarted, and
+    it must be settled exactly once when the runner exits.
+    """
+    from livekit.agents.ipc import channel as ipc_channel
+    from livekit.agents.telemetry import metrics as telemetry_metrics
+
+    calls: list[str] = []
+    gauge = {"value": 0}
+
+    def _job_started() -> None:
+        calls.append("started")
+        gauge["value"] += 1
+
+    def _job_ended() -> None:
+        calls.append("ended")
+        gauge["value"] -= 1
+
+    monkeypatch.setattr(telemetry_metrics, "job_started", _job_started)
+    monkeypatch.setattr(telemetry_metrics, "job_ended", _job_ended)
+
+    real_asend_message = ipc_channel.asend_message
+    dispatch_in_flight = asyncio.Event()
+
+    async def _send_and_park(pch: Any, msg: Any) -> None:
+        if not isinstance(msg, ipc.proto.StartJobRequest):
+            await real_asend_message(pch, msg)
+            return
+
+        await real_asend_message(pch, msg)
+        dispatch_in_flight.set()
+        await asyncio.Event().wait()  # park in the drain; the test cancels here
+
+    monkeypatch.setattr(ipc_channel, "asend_message", _send_and_park)
+
+    release_entrypoint = threading.Event()
+
+    async def _blocked_entrypoint(job_ctx: JobContext) -> None:
+        start_args: _StartArgs = job_ctx.proc.user_arguments
+        with start_args.entrypoint_counter.get_lock():
+            start_args.entrypoint_counter.value += 1
+
+        await asyncio.get_running_loop().run_in_executor(None, release_entrypoint.wait)
+        job_ctx.shutdown("test released the entrypoint")
+
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0, job_entrypoint_fnc=_blocked_entrypoint
+    )
+    await proc.start()
+    await proc.initialize()
+    try:
+        launch_task = asyncio.create_task(proc.launch_job(_generate_fake_job()))
+        await asyncio.wait_for(dispatch_in_flight.wait(), timeout=10.0)
+        launch_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await launch_task
+
+        # the request reached the runner before the cancellation, so the job is live and
+        # must stay counted until it ends
+        await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+        assert gauge["value"] == 1, "a delivered dispatch must not be rolled back"
+        assert proc.running_job is not None
+        release_entrypoint.set()
+    finally:
+        release_entrypoint.set()
+        await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert calls == ["started", "ended"], "the job must settle the gauge exactly once"
+    assert gauge["value"] == 0
 
 
 def test_log_queue_drains_before_stop():
