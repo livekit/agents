@@ -10,7 +10,6 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiError;
 use serde_json::Value;
 
-use crate::realtime::dialect::is_fatal_error;
 use crate::realtime::wire::{self, Incoming, TranscriptionCompleted};
 use lk_agents_abi::llm::realtime::{
     AudioDelta, Event, GenerateReplyFailed, GenerationCreated, GenerationDone, GenerationStatus,
@@ -43,7 +42,7 @@ impl RealtimeMachine {
             }
 
             Incoming::SpeechStopped => Step::event(Event::InputSpeechStopped(InputSpeechStopped {
-                user_transcription_enabled: self.opts.transcription_model.is_some(),
+                user_transcription_enabled: self.opts.transcription.is_some(),
             })),
 
             Incoming::ResponseCreated { response_id, client_event_id } => {
@@ -334,10 +333,19 @@ impl RealtimeMachine {
     }
 
     fn on_output_item_done(&mut self, item: Value) -> Step {
+        let ty = item.get("type").and_then(Value::as_str).unwrap_or("");
+        // `conversation.item.added` carries a function call before its arguments are generated;
+        // the mirror needs the completed ones, since a reconnection replays it.
+        if ty == "function_call"
+            && let (Some(id), Some(arguments)) =
+                (item.get("id").and_then(Value::as_str), item.get("arguments").and_then(Value::as_str))
+            && let Some(ChatItem::FunctionCall(call)) = self.remote.get_mut(id)
+        {
+            call.arguments = arguments.to_owned();
+        }
         if !matches!(self.generation, Generation::Active { .. }) {
             return Step::default();
         }
-        let ty = item.get("type").and_then(Value::as_str).unwrap_or("");
         if ty == "function_call" {
             let name = item.get("name").and_then(Value::as_str).unwrap_or("");
             // xAI emits `function_call` items for its own server-side tools; they have no local
@@ -427,23 +435,25 @@ impl RealtimeMachine {
         if done.status == GenerationStatus::Failed {
             // "failures are largely undocumented by openai, so we assume optimistically
             // recoverable unless the code is a known-fatal one".
-            let fatal = is_fatal_error(done.error_code.as_deref(), done.error_type.as_deref());
+            let fatal = self.dialect.is_fatal(done.error_code.as_deref(), done.error_type.as_deref());
             let message = format!(
                 "{} response failed with error type: {}",
                 self.dialect.provider_label,
                 done.error_type.as_deref().unwrap_or("unknown")
             );
             if fatal {
-                step.fatal = Some(ApiError::new(message.clone()).with_retryable(false));
+                // Raised in the reference: the driver reports it once, as unrecoverable.
+                step.fatal = Some(ApiError::new(message).with_retryable(false));
+            } else {
+                step.events.push(Event::Error(self.error(now, message, true)));
             }
-            step.events.push(Event::Error(self.error(now, message, !fatal)));
         }
         step
     }
 
     fn on_error(&mut self, now: Ts, err: crate::realtime::wire::ServerError) -> Step {
         let mut step = Step::default();
-        let fatal = is_fatal_error(err.code.as_deref(), err.type_.as_deref());
+        let fatal = self.dialect.is_fatal(err.code.as_deref(), err.type_.as_deref());
 
         if let Some(event_id) = &err.event_id {
             // A rejected item event gets no `deleted`/`added` reply; settle it here or
@@ -483,9 +493,11 @@ impl RealtimeMachine {
 
         let message = format!("{} returned an error", self.dialect.provider_label);
         if fatal {
-            step.fatal = Some(ApiError::new(message.clone()).with_retryable(false));
+            // Raised in the reference: the driver reports it once, as unrecoverable.
+            step.fatal = Some(ApiError::new(message).with_retryable(false));
+        } else {
+            step.events.push(Event::Error(self.error(now, message, true)));
         }
-        step.events.push(Event::Error(self.error(now, message, !fatal)));
         step
     }
 }

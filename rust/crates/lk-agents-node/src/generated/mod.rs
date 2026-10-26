@@ -117,7 +117,6 @@
 //! - `lk_agents_inference::vad::NativeVad::stream_for_host`: return: `VadSinkHandle` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_inference::tts::NativeTts::update_options`: parameter `extra`: `ExtraKwargs` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_inference::tts::NativeTts::stream_for_host`: return: not yet: a stream half returned as a stream class
-//! - `lk_agents_inference::realtime::NativeRealtime::for_host`: parameter `dialect`: not yet: `Dialect` is an open string (#[host(string)])
 //! - `lk_agents_voice::room_io::_input::ParticipantVideoInput::reading`: return: not yet: `TrackSid` is an open string (#[host(string)])
 //! - `lk_agents_voice::room_io::_input::ParticipantVideoInput::next_host_frame`: return: `MediaRef` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::transcription::synchronizer::TranscriptSynchronizer::for_host`: parameter `next_in_chain_audio`: not yet: `Arc<dyn AudioOutput>` (a host object behind a proxy)

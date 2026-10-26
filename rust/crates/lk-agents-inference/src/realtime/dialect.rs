@@ -139,6 +139,8 @@ pub struct Dialect {
     /// `say()` is xAI's `force_message`, answered with no `metadata.client_event_id` (hence the
     /// FIFO tag queue in [`crate::realtime::machine`]). Off: `say()` is refused.
     pub force_message_say: bool,
+    /// Codes terminal on this provider beyond [`FATAL_ERROR_CODES`].
+    pub extra_fatal_codes: &'static [&'static str],
 }
 
 /// `livekit-plugins-openai/realtime`, the protocol everything else here is a delta on.
@@ -171,6 +173,19 @@ pub const OPENAI: Dialect = Dialect {
     repair_empty_delete_item_id: false,
     anchor_root_at_tail: false,
     force_message_say: false,
+    extra_fatal_codes: &[],
+};
+
+/// LiveKit Inference: the OpenAI protocol through the gateway, which refuses a session it cannot
+/// route with one of three codes no retry fixes.
+pub const INFERENCE: Dialect = Dialect {
+    provider_label: "LiveKit Inference Realtime",
+    extra_fatal_codes: &[
+        "unsupported_transcription_model",
+        "unsupported_audio_transport",
+        "unsupported_audio_format",
+    ],
+    ..OPENAI
 };
 
 /// `livekit-plugins-xai/realtime`, as a value.
@@ -213,6 +228,7 @@ pub const XAI: Dialect = Dialect {
     repair_empty_delete_item_id: true,
     anchor_root_at_tail: true,
     force_message_say: true,
+    extra_fatal_codes: &[],
 };
 
 /// A dialect name this build does not speak; the message lists the ones it does.
@@ -221,7 +237,7 @@ pub struct UnknownDialect(pub String);
 
 impl std::fmt::Display for UnknownDialect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown realtime dialect {:?}; this port speaks \"openai\" and \"xai\"", self.0)
+        write!(f, "unknown realtime dialect {:?}; this port speaks \"openai\", \"xai\" and \"inference\"", self.0)
     }
 }
 
@@ -230,7 +246,11 @@ impl std::error::Error for UnknownDialect {}
 /// `"openai"` or `"xai"`.
 impl std::fmt::Display for Dialect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.provider_label == XAI.provider_label { "xai" } else { "openai" })
+        f.write_str(match self.provider_label {
+            l if l == XAI.provider_label => "xai",
+            l if l == INFERENCE.provider_label => "inference",
+            _ => "openai",
+        })
     }
 }
 
@@ -241,12 +261,26 @@ impl std::str::FromStr for Dialect {
         match name {
             "openai" => Ok(OPENAI),
             "xai" => Ok(XAI),
+            "inference" => Ok(INFERENCE),
             other => Err(UnknownDialect(other.to_owned())),
         }
     }
 }
 
 impl Dialect {
+    /// `_is_fatal_error`, with this provider's own terminal codes.
+    pub fn is_fatal(&self, code: Option<&str>, type_: Option<&str>) -> bool {
+        is_fatal_error(code, type_)
+            || code.or(type_).is_some_and(|c| self.extra_fatal_codes.contains(&c))
+    }
+
+    /// The dialect a `base_url` speaks: xAI's host is xAI's protocol, anything else OpenAI's.
+    pub fn for_base_url(base_url: &str) -> Dialect {
+        let host = base_url.split_once("://").map_or(base_url, |(_, r)| r);
+        let host = host.split(['/', '?']).next().unwrap_or(host);
+        if host == "api.x.ai" { XAI } else { OPENAI }
+    }
+
     /// The map already holds only what was given (pydantic's `model_fields_set`).
     pub fn rewrite_session(&self, session: &mut Map<String, Value>) {
         for (path, dest) in self.promote {

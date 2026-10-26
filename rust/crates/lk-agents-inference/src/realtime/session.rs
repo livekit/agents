@@ -1,35 +1,116 @@
 //! The driver: the only file in this crate that awaits anything; no decision is made here.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use lk_agents_abi::{Spawner, SpawnerExt};
-use lk_agents_abi::{Clock, Elapsed};
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::provider_format::ImageResolver;
-use lk_agents_inference::transport::{
-    TransportError, WsMessage, WsTransport, connect_error, to_ws_url,
-};
-use lk_agents_abi::ChatContext;
+use lk_agents_abi::{ApiConnectOptions, ChatContext};
+use lk_agents_abi::{Clock, Elapsed};
+use lk_agents_abi::{Spawner, SpawnerExt};
+use lk_agents_inference::transport::{TransportError, WsMessage, WsTransport};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::realtime::dialect::Dialect;
+use crate::headers::BoundIdentity;
+use crate::realtime::dialect::{Dialect, TurnDetection};
+use crate::realtime::wire::{self, Azure, IdGen, RandomIds, WireShape};
 // The trait a native model is taken as (`as_dyn`), named in the binding's registration.
 #[cfg(feature = "python")]
 use lk_agents_abi::Realtime;
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
-use crate::realtime::machine::{Command, RealtimeMachine, SessionOptions, Step};
-use crate::realtime::wire::{self, IdGen, RandomIds};
+use crate::realtime::machine::{Command, OptionsPatch, RealtimeMachine, SessionOptions, Step};
 
-/// `DEFAULT_API_CONNECT_OPTIONS.timeout`.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How a connection authenticates.
+pub enum Auth {
+    /// OpenAI and xAI: `Authorization: Bearer <api_key>`.
+    Bearer(String),
+    /// Azure: `api-key`, and an Entra token as the bearer.
+    Azure { api_key: Option<String>, entra_token: Option<String> },
+    /// LiveKit Inference: a fresh gateway JWT per connection, the job's identification headers,
+    /// and the provider the gateway routes to.
+    Inference {
+        api_key: String,
+        api_secret: String,
+        provider: Option<String>,
+        inference_class: Option<String>,
+        identity: BoundIdentity,
+    },
+}
+
+/// Where and how a session connects.
+pub struct Connect {
+    pub base_url: String,
+    pub azure: Option<Azure>,
+    pub auth: Auth,
+    pub conn: ApiConnectOptions,
+}
+
+impl Connect {
+    pub fn openai(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
+        Connect {
+            base_url: base_url.into(),
+            azure: None,
+            auth: Auth::Bearer(api_key.into()),
+            conn: ApiConnectOptions::default(),
+        }
+    }
+
+    pub fn shape(&self) -> WireShape {
+        WireShape {
+            azure: self.azure.is_some(),
+            azure_legacy: self.azure.as_ref().is_some_and(|a| a.api_version.is_some()),
+            drop_model: matches!(self.auth, Auth::Inference { .. }),
+        }
+    }
+
+    /// `_create_ws_url_and_headers`.
+    fn headers(&self) -> Result<Vec<(String, String)>, ApiError> {
+        let ua = ("User-Agent".to_owned(), "LiveKit Agents".to_owned());
+        Ok(match &self.auth {
+            Auth::Bearer(key) => vec![ua, ("Authorization".to_owned(), format!("Bearer {key}"))],
+            Auth::Azure { api_key, entra_token } => {
+                let mut h = vec![ua];
+                if let Some(token) = entra_token {
+                    h.push(("Authorization".to_owned(), format!("Bearer {token}")));
+                }
+                if let Some(key) = api_key {
+                    h.push(("api-key".to_owned(), key.clone()));
+                }
+                h
+            }
+            Auth::Inference { api_key, api_secret, provider, inference_class, identity } => {
+                // `get_inference_headers()` as the host bound it; unbound, the job-less half.
+                let mut h = identity.for_connection().unwrap_or_else(|| {
+                    let mut h = crate::headers::Headers::new();
+                    h.set("User-Agent", crate::headers::user_agent(env!("CARGO_PKG_VERSION")));
+                    if let Some(class) = inference_class {
+                        h.set(crate::HEADER_INFERENCE_PRIORITY, class.clone());
+                    }
+                    h
+                });
+                let token = crate::token::create_access_token(
+                    api_key,
+                    api_secret,
+                    crate::token::DEFAULT_TTL_SECS,
+                    crate::token::now_unix(),
+                )
+                .map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
+                h.set("Authorization", format!("Bearer {token}"));
+                if let Some(p) = provider {
+                    h.set(crate::HEADER_INFERENCE_PROVIDER, p.clone());
+                }
+                h.into_vec()
+            }
+        })
+    }
+}
 
 /// `RealtimeModel`; its sessions are already running when `session()` returns, as in the reference.
 pub struct NativeRealtime {
     dialect: Dialect,
-    opts: SessionOptions,
-    api_key: String,
-    base_url: String,
+    /// The model's options: what each new session starts from, and what `update_options` edits.
+    opts: std::sync::Mutex<SessionOptions>,
+    connect: Arc<Connect>,
     transport: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
@@ -38,6 +119,10 @@ pub struct NativeRealtime {
     /// Whether the caller passed a turn-detection configuration; `can_disable_turn_detection`
     /// reports intent (see [`Dialect::capabilities`]).
     turn_detection_given: bool,
+    /// The host class's `label`, stamped on errors and metrics; `None` names the dialect.
+    label: Option<String>,
+    /// `self._sessions`: the live sessions an `update_options` reaches.
+    sessions: std::sync::Mutex<Vec<Weak<mpsc::UnboundedSender<Cmd>>>>,
 }
 
 impl NativeRealtime {
@@ -50,24 +135,36 @@ impl NativeRealtime {
         images: Arc<dyn ImageResolver + Send + Sync>,
     ) -> Self {
         let opts = SessionOptions::from_dialect(&dialect, false);
-        let base_url = dialect.default_base_url.to_owned();
+        let connect = Connect::openai(api_key, dialect.default_base_url);
         NativeRealtime {
             dialect,
-            opts,
-            api_key: api_key.into(),
-            base_url,
+            opts: std::sync::Mutex::new(opts),
+            connect: Arc::new(connect),
             transport,
             spawner,
             clock,
             images,
             ids: Arc::new(RandomIds),
             turn_detection_given: false,
+            label: None,
+            sessions: std::sync::Mutex::new(Vec::new()),
         }
     }
 
-    pub fn with_options(mut self, opts: SessionOptions) -> Self {
-        self.opts = opts;
-        self.turn_detection_given = true;
+    /// `turn_detection_given` is `is_given(turn_detection)` before a default was applied.
+    pub fn with_options(mut self, opts: SessionOptions, turn_detection_given: bool) -> Self {
+        self.opts = std::sync::Mutex::new(opts);
+        self.turn_detection_given = turn_detection_given;
+        self
+    }
+
+    pub fn with_connect(mut self, connect: Connect) -> Self {
+        self.connect = Arc::new(connect);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
         self
     }
 
@@ -75,102 +172,116 @@ impl NativeRealtime {
         self.ids = ids;
         self
     }
+
+    fn options(&self) -> std::sync::MutexGuard<'_, SessionOptions> {
+        self.opts.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `get_inference_headers()` of the job the model now serves; every later connection carries
+    /// them, with a fresh session id. A no-op off the gateway.
+    pub fn bind_identification(&self, headers: crate::headers::Headers) {
+        if let Auth::Inference { identity, .. } = &self.connect.auth {
+            identity.bind(headers);
+        }
+    }
+
+    /// `RealtimeModel.update_options`: the model keeps the values for its next sessions, and every
+    /// live session diffs them against its own. `transcription` and `noise_reduction` are always
+    /// handed on, as the reference does.
+    pub fn update_options(&self, mut patch: OptionsPatch) {
+        let (transcription, noise_reduction) = {
+            let mut opts = self.options();
+            opts.apply(&patch);
+            warn_on_half_disabled_turn_taking(&patch.turn_detection);
+            (opts.transcription.clone(), opts.noise_reduction.clone())
+        };
+        patch.transcription = lk_agents_abi::Maybe::Given(transcription);
+        patch.noise_reduction = lk_agents_abi::Maybe::Given(noise_reduction);
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        sessions.retain(|s| match s.upgrade() {
+            Some(tx) => tx.send(Cmd::Options(patch.clone())).is_ok(),
+            None => false,
+        });
+    }
+}
+
+/// `_warn_on_half_disabled_turn_taking`: the client takes the turns but the server still cuts its
+/// own response on speech.
+pub fn warn_on_half_disabled_turn_taking(td: &lk_agents_abi::Maybe<Option<TurnDetection>>) {
+    if let lk_agents_abi::Maybe::Given(Some(td)) = td {
+        let v = td.to_json();
+        if v.get("create_response") == Some(&serde_json::Value::Bool(false))
+            && v.get("interrupt_response") != Some(&serde_json::Value::Bool(false))
+        {
+            log::warn!(
+                "create_response=False hands turn taking to the client, but the server still \
+                 cancels its response on user speech, pass interrupt_response=False as well"
+            );
+        }
+    }
+}
+
+/// What a session's pump is told: the core's commands, and the model's option changes.
+pub(crate) enum Cmd {
+    Core(Command),
+    Options(OptionsPatch),
 }
 
 /// `_core.NativeRealtimeModel`: a realtime model whose connection, reconnect and conversation
-/// mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `AgentSession`
-/// recognises it by identity, and nothing per-turn crosses.
-#[lk_agents_abi::host(object(name = "NativeRealtimeModel", cell = "arc", pid = false, as_dyn(Realtime = as_realtime)))]
+/// mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `LiveSession`
+/// takes it as its realtime model, and nothing per-turn crosses. The keyword constructor,
+/// `update_options` and `bind_identification` are `realtime::python`'s.
+#[lk_agents_abi::host(object(
+    name = "NativeRealtimeModel",
+    cell = "arc",
+    rust_name = PyNativeRealtimeModel,
+    pid = false,
+    as_dyn(Realtime = as_realtime),
+    stub = "def __init__(self, **kwargs: Any) -> None: ...",
+    stub = "def update_options(self, **kwargs: Any) -> None: ...",
+    stub = "def bind_identification(self, headers: list[tuple[str, str]]) -> None: ..."
+))]
 impl NativeRealtime {
-    /// The keyword constructor: the dialect's defaults, then the caller's overrides -- a dialect's
-    /// default model and voice are a pair, and mixing them with OpenAI's is a 400 on the first
-    /// turn. `dialect` is `"openai"` or `"xai"`.
-    #[allow(clippy::too_many_arguments)]
-    #[host(new(
-        pid = true,
-        kw_only = "base_url",
-        defaults(speed = 1.0, audio_output = true, turn_detection = true)
-    ))]
-    pub fn for_host(
-        dialect: Dialect,
-        api_key: String,
-        base_url: Option<String>,
-        model: Option<String>,
-        voice: Option<String>,
-        instructions: Option<String>,
-        speed: f64,
-        audio_output: bool,
-        turn_detection: bool,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Self {
-        let mut opts = SessionOptions::from_dialect(&dialect, !turn_detection);
-        if let Some(model) = model {
-            opts.model = model;
-        }
-        if let Some(voice) = voice {
-            opts.voice = voice;
-        }
-        opts.instructions = instructions;
-        opts.speed = speed;
-        opts.audio_output = audio_output;
-        let mut native = NativeRealtime::new(
-            dialect,
-            api_key,
-            Arc::new(crate::native::TungsteniteTransport),
-            spawner,
-            // The wall clock, not a session's `Timebase`: a model outlives any one session and
-            // `max_session_duration` is measured against real time.
-            Arc::new(lk_agents_abi::RealClock::default()),
-            // Empty: images reaching a realtime session are already serialised by the host, and
-            // resolving again would encode the same frame twice.
-            Arc::new(lk_agents_abi::llm::provider_format::PreResolved::from_pairs(Vec::<(String, lk_agents_abi::llm::provider_format::SerializedImage)>::new())),
-        );
-        if let Some(url) = base_url {
-            native.base_url = url;
-        }
-        // Called unconditionally: `with_options` also records that the caller had an opinion on
-        // turn detection, which `can_disable_turn_detection` reports.
-        native.with_options(opts)
-    }
-
     /// The model as the session's realtime provider (a native model is not proxied).
     pub fn as_realtime(self: &Arc<Self>) -> Arc<dyn lk_agents_abi::Realtime> {
         Arc::clone(self) as Arc<dyn lk_agents_abi::Realtime>
     }
 
-    /// `provider`: `urlparse(base_url).netloc`. `"api.x.ai"` for the xAI default.
+    /// `provider`: `urlparse(base_url).netloc`.
     #[host(getter)]
-    pub fn provider(&self) -> &str {
-        let s = self.base_url.split_once("://").map_or(self.base_url.as_str(), |(_, r)| r);
-        s.split(['/', '?']).next().unwrap_or(s)
+    pub fn provider(&self) -> String {
+        let url = &self.connect.base_url;
+        let s = url.split_once("://").map_or(url.as_str(), |(_, r)| r);
+        s.split(['/', '?']).next().unwrap_or(s).to_owned()
     }
 
     #[host(getter)]
-    pub fn model(&self) -> &str {
-        &self.opts.model
+    pub fn model(&self) -> String {
+        self.options().model.clone()
     }
 
     /// `RealtimeModel.label`.
     #[host(getter)]
     pub fn label(&self) -> String {
-        format!("lk_agents_realtime.{}", self.dialect.provider_label)
+        self.label.clone().unwrap_or_else(|| format!("lk_agents_realtime.{}", self.dialect.provider_label))
     }
 
     /// `RealtimeCapabilities`, as a dict.
     #[host(method)]
     pub fn capabilities(&self) -> RealtimeCapabilities {
+        let opts = self.options();
         self.dialect.capabilities(
-            self.opts.turn_detection.as_ref(),
+            opts.turn_detection.as_ref(),
             self.turn_detection_given,
-            self.opts.audio_output,
-            self.opts.transcription_model.is_some(),
+            opts.audio_output,
+            opts.transcription.is_some(),
         )
     }
 
     /// `session(turn_detection_disabled=...)`. Applied to the session's copy of the options; the
     /// model stays reusable.
     pub async fn session(&self, turn_detection_disabled: bool) -> SessionHandle {
-        let mut opts = self.opts.clone();
+        let mut opts = self.options().clone();
         if turn_detection_disabled && self.dialect.supports_turn_detection_disabled {
             opts.turn_detection = None;
         }
@@ -178,38 +289,42 @@ impl NativeRealtime {
             opts.turn_detection.as_ref(),
             self.turn_detection_given,
             opts.audio_output,
-            opts.transcription_model.is_some(),
+            opts.transcription.is_some(),
         );
-        let url = wire::process_base_url(&to_ws_url(&self.base_url), &opts.model);
+        let azure = self.connect.azure.as_ref();
+        let url = wire::process_base_url(&self.connect.base_url, &opts.model, azure);
+        let label = self.label();
         let machine = RealtimeMachine::new(
             self.dialect.clone(),
             opts,
             caps,
             self.ids.clone(),
             self.images.clone(),
-        );
+        )
+        .with_label(label.clone());
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
-        let shared = Arc::new(Shared { machine: Mutex::new(machine), caps });
+        let shared = Arc::new(Shared { machine: Mutex::new(machine), caps: std::sync::Mutex::new(caps) });
+        let commands = Arc::new(cmd_tx);
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::downgrade(&commands));
 
         let pump = Pump {
             shared: shared.clone(),
             url,
-            headers: vec![
-                ("User-Agent".to_owned(), "LiveKit Agents".to_owned()),
-                ("Authorization".to_owned(), format!("Bearer {}", self.api_key)),
-            ],
+            connect: self.connect.clone(),
+            shape: self.connect.shape(),
             transport: self.transport.clone(),
             clock: self.clock.clone(),
             provider_label: self.dialect.provider_label,
+            label,
             events: ev_tx,
         };
         let abort = self.spawner.spawn_unboxed(pump.run(cmd_rx));
 
         SessionHandle {
             shared,
-            commands: cmd_tx,
+            commands,
             events: Mutex::new(ev_rx),
             abort,
             ids: self.ids.clone(),
@@ -219,14 +334,15 @@ impl NativeRealtime {
 
 struct Shared {
     machine: Mutex<RealtimeMachine>,
-    caps: RealtimeCapabilities,
+    /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
+    caps: std::sync::Mutex<RealtimeCapabilities>,
 }
 
 /// A live session. Cheap to clone the way the swapper needs (`Arc<SessionHandle>`), and every
 /// mutating method takes `&self`.
 pub struct SessionHandle {
     shared: Arc<Shared>,
-    commands: mpsc::UnboundedSender<Command>,
+    commands: Arc<mpsc::UnboundedSender<Cmd>>,
     /// One consumer is the contract.
     events: Mutex<mpsc::UnboundedReceiver<Event>>,
     abort: lk_agents_abi::AbortHandle,
@@ -235,7 +351,7 @@ pub struct SessionHandle {
 
 impl SessionHandle {
     pub fn capabilities(&self) -> RealtimeCapabilities {
-        self.shared.caps
+        *self.shared.caps.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The *mirror*: what the server believes.
@@ -245,7 +361,12 @@ impl SessionHandle {
 
     /// Never blocks and never fails loudly (`send_event` suppresses `ChanClosed`).
     pub fn send(&self, cmd: Command) {
-        let _ = self.commands.send(cmd);
+        let _ = self.commands.send(Cmd::Core(cmd));
+    }
+
+    /// `RealtimeSession.update_options`.
+    pub fn update_options(&self, patch: OptionsPatch) {
+        let _ = self.commands.send(Cmd::Options(patch));
     }
 
     pub fn push_audio(&self, frame: lk_agents_abi::AudioFrame) {
@@ -269,7 +390,7 @@ impl SessionHandle {
 
     pub async fn aclose(&self) {
         // Dropping the command sender ends the pump through the machine's `close()`.
-        let _ = self.commands.send(Command::Interrupt(lk_agents_abi::llm::realtime::Interrupt { response_id: None }));
+        self.send(Command::Interrupt(lk_agents_abi::llm::realtime::Interrupt { response_id: None }));
         self.abort.abort();
     }
 }
@@ -277,77 +398,117 @@ impl SessionHandle {
 struct Pump {
     shared: Arc<Shared>,
     url: String,
-    headers: Vec<(String, String)>,
+    connect: Arc<Connect>,
+    shape: WireShape,
     transport: Arc<dyn WsTransport>,
     clock: Arc<dyn Clock>,
     provider_label: &'static str,
+    label: String,
     events: mpsc::UnboundedSender<Event>,
 }
 
 impl Pump {
-    /// `_main_task`: connect, run, and reconnect until a fatal error or a close.
-    async fn run(self, mut commands: mpsc::UnboundedReceiver<Command>) {
+    /// `_main_task`: connect, run, and reconnect, retrying a failed connection on the connect
+    /// options' budget, until a terminal error or a close.
+    async fn run(self, mut commands: mpsc::UnboundedReceiver<Cmd>) {
+        let max_retries = self.connect.conn.max_retry;
+        let mut num_retries: u32 = 0;
         let mut reconnecting = false;
         loop {
-            let t0 = self.clock.now();
-            // The handshake, bounded on the session clock.
-            let connect = self.transport.connect(&self.url, self.headers.clone());
-            let conn = match lk_agents_abi::timeout(&*self.clock, CONNECT_TIMEOUT, connect).await {
-                Ok(conn) => conn,
-                Err(Elapsed) => Err(TransportError::Timeout),
-            };
-            let (sender, receiver) = match conn {
-                Ok(pair) => pair,
-                Err(e) => {
-                    self.emit_error(connect_error(self.provider_label, e), false).await;
-                    return;
+            let err = match self.connect_and_run(&mut commands, reconnecting, &mut num_retries).await {
+                Ok(Outcome::Closed) => return,
+                Ok(Outcome::Recycle) => {
+                    reconnecting = true;
+                    continue;
                 }
+                Err(err) => err,
             };
-            let _ = self.events.send(Event::ConnectionAcquired {
-                acquire_time: self.clock.now().saturating_duration_since(t0),
-            });
-
-            let step = {
-                let mut m = self.shared.machine.lock().await;
-                let now = self.clock.now();
-                if reconnecting { m.reconnect(now) } else { m.open(now) }
-            };
-            if !self.dispatch(step, sender.as_ref()).await {
+            if max_retries == 0 || !err.retryable || num_retries == max_retries {
+                let err = if err.retryable && num_retries == max_retries && max_retries > 0 {
+                    ApiError::connection(Some(format!(
+                        "{} connection failed after {num_retries} attempts",
+                        self.provider_label
+                    )))
+                } else {
+                    err
+                };
+                self.emit_error(err, false);
+                self.close().await;
                 return;
             }
-
-            match self.run_ws(&mut commands, sender.clone(), receiver).await {
-                Outcome::Recycle => {
-                    reconnecting = true;
-                    sender.close().await;
-                }
-                Outcome::Closed => {
-                    sender.close().await;
-                    let step = {
-                        let mut m = self.shared.machine.lock().await;
-                        let now = self.clock.now();
-                        m.close(now)
-                    };
-                    for ev in step.events {
-                        let _ = self.events.send(ev);
-                    }
-                    return;
-                }
-                Outcome::Fatal(err) => {
-                    sender.close().await;
-                    self.emit_error(err, false).await;
-                    return;
-                }
-            }
+            self.emit_error(err, true);
+            let interval = self.connect.conn.interval_for_retry(num_retries);
+            log::warn!(
+                "{} connection failed, retrying in {interval}s (attempt {num_retries}, max {max_retries})",
+                self.provider_label
+            );
+            let at = self.clock.now().saturating_add(Duration::from_secs_f64(interval));
+            self.clock.wait_until(at).await;
+            num_retries += 1;
+            reconnecting = true;
         }
+    }
+
+    /// One connection: open, replay on a reconnect, run until it ends. `Err` is the attempt's
+    /// failure, retryable or not.
+    async fn connect_and_run(
+        &self,
+        commands: &mut mpsc::UnboundedReceiver<Cmd>,
+        reconnecting: bool,
+        num_retries: &mut u32,
+    ) -> Result<Outcome, ApiError> {
+        let t0 = self.clock.now();
+        let headers = self.connect.headers()?;
+        // The handshake, bounded on the session clock.
+        let timeout = Duration::from_secs_f64(self.connect.conn.timeout.max(0.0));
+        let connect = self.transport.connect(&self.url, headers);
+        let (sender, receiver) = match lk_agents_abi::timeout(&*self.clock, timeout, connect).await {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(TransportError::Status { status, message, .. })) => {
+                return Err(ApiError::from_http(&message, status, None));
+            }
+            Ok(Err(_)) => {
+                return Err(ApiError::connection(Some(format!(
+                    "{} client connection error",
+                    self.provider_label
+                ))));
+            }
+            Err(Elapsed) => {
+                return Err(ApiError::connection(Some(format!(
+                    "{} connection timed out",
+                    self.provider_label
+                ))));
+            }
+        };
+        let _ = self.events.send(Event::ConnectionAcquired {
+            acquire_time: self.clock.now().saturating_duration_since(t0),
+        });
+
+        let step = {
+            let mut m = self.shared.machine.lock().await;
+            let now = self.clock.now();
+            if reconnecting { m.reconnect(now) } else { m.open(now) }
+        };
+        if !self.dispatch(step, sender.as_ref()).await {
+            sender.close().await;
+            return Err(self.lost());
+        }
+        if reconnecting {
+            *num_retries = 0;
+            log::debug!("reconnected to {}", self.provider_label);
+        }
+
+        let outcome = self.run_ws(commands, sender.clone(), receiver).await;
+        sender.close().await;
+        outcome
     }
 
     async fn run_ws(
         &self,
-        commands: &mut mpsc::UnboundedReceiver<Command>,
+        commands: &mut mpsc::UnboundedReceiver<Cmd>,
         sender: Arc<dyn lk_agents_inference::transport::WsSender>,
         mut receiver: Box<dyn lk_agents_inference::transport::WsReceiver>,
-    ) -> Outcome {
+    ) -> Result<Outcome, ApiError> {
         loop {
             // The machine owns every deadline; the driver only asks how long to sleep.
             let deadline = self.shared.machine.lock().await.next_deadline();
@@ -357,25 +518,34 @@ impl Pump {
                 biased;
                 msg = receiver.recv() => match msg {
                     Ok(WsMessage::Text(text)) => {
-                        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+                        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
                             continue;
                         };
+                        self.shape.inbound(&mut value);
                         let incoming = wire::decode(&value);
                         let mut m = self.shared.machine.lock().await;
                         m.incoming(self.clock.now(), incoming)
                     }
-                    // "this will trigger a reconnection"
-                    Ok(WsMessage::Closed) => return Outcome::Recycle,
+                    Ok(WsMessage::Closed) => return Err(self.lost()),
                     Ok(WsMessage::Other) => continue,
                     Err(TransportError::Timeout) => continue,
-                    Err(e) => return Outcome::Fatal(connect_error(self.provider_label, e)),
+                    Err(_) => return Err(self.lost()),
                 },
                 cmd = commands.recv() => match cmd {
-                    Some(cmd) => {
+                    Some(Cmd::Core(cmd)) => {
                         let mut m = self.shared.machine.lock().await;
                         m.command(self.clock.now(), cmd)
                     }
-                    None => return Outcome::Closed,
+                    Some(Cmd::Options(patch)) => {
+                        let mut m = self.shared.machine.lock().await;
+                        let step = m.update_options(patch);
+                        *self.shared.caps.lock().unwrap_or_else(|e| e.into_inner()) = m.capabilities();
+                        step
+                    }
+                    None => {
+                        self.close().await;
+                        return Ok(Outcome::Closed);
+                    }
                 },
                 () = async { match sleep { Some(s) => s.await, None => std::future::pending().await } } => {
                     let mut m = self.shared.machine.lock().await;
@@ -383,18 +553,38 @@ impl Pump {
                 }
             };
 
-            if let Some(err) = &step.fatal {
-                let err = err.clone();
+            if let Some(err) = step.fatal.clone() {
                 self.dispatch(step, sender.as_ref()).await;
-                return Outcome::Fatal(err);
+                return Err(err);
             }
             let recycle = step.recycle;
             if !self.dispatch(step, sender.as_ref()).await {
-                return Outcome::Recycle;
+                return Err(self.lost());
             }
             if recycle {
-                return Outcome::Recycle;
+                log::debug!("recycling the {} connection", self.provider_label);
+                return Ok(Outcome::Recycle);
             }
+        }
+    }
+
+    /// "connection closed unexpectedly": retryable, so the session reconnects.
+    fn lost(&self) -> ApiError {
+        ApiError::connection(Some(format!(
+            "{} connection closed unexpectedly",
+            self.provider_label
+        )))
+    }
+
+    /// The session loop is over: close any in-progress generation and fail pending replies.
+    async fn close(&self) {
+        let step = {
+            let mut m = self.shared.machine.lock().await;
+            let now = self.clock.now();
+            m.close(now)
+        };
+        for ev in step.events {
+            let _ = self.events.send(ev);
         }
     }
 
@@ -404,7 +594,8 @@ impl Pump {
         step: Step,
         sender: &dyn lk_agents_inference::transport::WsSender,
     ) -> bool {
-        for frame in step.frames {
+        for mut frame in step.frames {
+            self.shape.outbound(&mut frame);
             if sender.send_text(frame.to_string()).await.is_err() {
                 return false;
             }
@@ -415,10 +606,10 @@ impl Pump {
         true
     }
 
-    async fn emit_error(&self, err: ApiError, recoverable: bool) {
+    fn emit_error(&self, err: ApiError, recoverable: bool) {
         let _ = self.events.send(Event::Error(lk_agents_abi::llm::realtime::RealtimeModelError {
             timestamp: self.clock.now(),
-            label: format!("lk_agents_realtime.{}", self.provider_label),
+            label: self.label.clone(),
             message: err.message,
             recoverable,
             req_id: None,
@@ -430,7 +621,6 @@ impl Pump {
 enum Outcome {
     Recycle,
     Closed,
-    Fatal(ApiError),
 }
 
 // =============================================================================================

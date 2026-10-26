@@ -1675,23 +1675,11 @@ class InferenceTts:
 
 class NativeRealtimeModel:
     """`_core.NativeRealtimeModel`: a realtime model whose connection, reconnect and conversation
-    mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `AgentSession`
-    recognises it by identity, and nothing per-turn crosses.
+    mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `LiveSession`
+    takes it as its realtime model, and nothing per-turn crosses. The keyword constructor,
+    `update_options` and `bind_identification` are `realtime::python`'s.
     """
 
-    def __init__(
-        self,
-        dialect: str,
-        api_key: str,
-        *,
-        base_url: str | None = None,
-        model: str | None = None,
-        voice: str | None = None,
-        instructions: str | None = None,
-        speed: float = 1.0,
-        audio_output: bool = True,
-        turn_detection: bool = True,
-    ) -> None: ...
     @property
     def provider(self) -> str: ...
     @property
@@ -1699,6 +1687,9 @@ class NativeRealtimeModel:
     @property
     def label(self) -> str: ...
     def capabilities(self) -> dict[str, Any]: ...
+    def __init__(self, **kwargs: Any) -> None: ...
+    def update_options(self, **kwargs: Any) -> None: ...
+    def bind_identification(self, headers: list[tuple[str, str]]) -> None: ...
 
 
 class ConnectionPoolState:

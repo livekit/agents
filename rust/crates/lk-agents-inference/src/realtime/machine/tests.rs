@@ -563,10 +563,11 @@ fn the_socket_is_recycled_between_turns_and_never_during_one() {
     assert_eq!(xai.next_deadline(), None, "xAI never recycles");
 }
 
-// Catches: a reconnect leaving pending replies hanging, or not rebuilding the mirror from
-// scratch.
+// Catches: a reconnect dropping a reply asked for just before the connection went (a tool's
+// result, say) instead of asking for it again after the replayed conversation, or not rebuilding
+// the mirror from scratch.
 #[test]
-fn a_reconnect_replays_the_conversation_and_fails_what_the_old_socket_owed() {
+fn a_reconnect_replays_the_conversation_and_asks_again_for_the_pending_reply() {
     let mut m = machine(OPENAI);
     m.open(at(0));
     recv(&mut m, at(0), item_added(None, "a", "first"));
@@ -576,15 +577,24 @@ fn a_reconnect_replays_the_conversation_and_fails_what_the_old_socket_owed() {
     let step = m.reconnect(at(2));
     assert_eq!(
         types(&step.frames),
-        ["session.update", "conversation.item.create", "conversation.item.create"],
+        ["session.update", "conversation.item.create", "conversation.item.create", "response.create"],
     );
     assert_eq!(step.frames[1]["previous_item_id"], json!("root"));
     assert_eq!(step.frames[2]["previous_item_id"], json!("a"));
-    assert!(step.events.contains(&Event::GenerateReplyFailed (GenerateReplyFailed {
-        req_id: "response_create_2".into(),
-        error: RealtimeError::new("pending response discarded due to session reconnection"),
-    })));
+    assert_eq!(step.frames[3]["event_id"], json!("response_create_2"));
+    assert!(
+        !step.events.iter().any(|e| matches!(e, Event::GenerateReplyFailed(_))),
+        "the reply is still owed: {:?}",
+        step.events
+    );
     assert_eq!(step.events.last(), Some(&Event::SessionReconnected(lk_agents_abi::llm::realtime::SessionReconnected {})));
+    // a fresh 10 s from the reconnection
+    assert_eq!(m.next_deadline(), Some(at(12)));
+    let step = recv(&mut m, at(3), response_created("resp_2", Some("response_create_2")));
+    assert!(step.events.contains(&Event::GenerationCreated(GenerationCreated {
+        response_id: "resp_2".into(),
+        req_id: Some("response_create_2".into()),
+    })));
 
     // The mirror stays empty until the new server acks the creates: it is what the server
     // believes, and optimistic repopulation would hide a rejected create.
@@ -608,7 +618,8 @@ fn a_fatal_error_code_stops_the_reconnect_loop() {
         }}),
     );
     assert!(step.fatal.is_some(), "the driver must not reconnect");
-    assert!(matches!(&step.events[0], Event::Error(e) if !e.recoverable));
+    // raised, as the reference does: the driver reports it once, as unrecoverable
+    assert!(!step.events.iter().any(|e| matches!(e, Event::Error(_))), "{:?}", step.events);
 
     // an ordinary server error is recoverable and does NOT stop the loop
     let mut m = machine(OPENAI);
@@ -647,6 +658,87 @@ fn a_commit_needs_strictly_more_than_one_hundred_milliseconds() {
     );
     // and the counter resets, so the next commit needs its own 100 ms
     assert!(m.command(at(0), Command::CommitAudio(lk_agents_abi::llm::realtime::CommitAudio {})).frames.is_empty());
+}
+
+// Catches: room audio (48 kHz) reaching the socket unconverted, a pitch shift the provider
+// cannot detect. The reference resamples every frame that is not 24 kHz mono.
+#[test]
+fn room_rate_audio_is_resampled_to_twenty_four_kilohertz() {
+    let mut m = machine(OPENAI);
+    m.open(at(0));
+    let room = |ms: usize| lk_agents_abi::AudioFrame {
+        data: vec![0u8; 48 * ms * 2].into(),
+        sample_rate: 48_000,
+        num_channels: 1,
+        samples_per_channel: (48 * ms) as u32,
+    };
+    // 300 ms at 48 kHz is 300 ms at 24 kHz: two whole 100 ms chunks out (soxr holds a little)
+    let mut appended = 0;
+    for _ in 0..3 {
+        appended += m.command(at(0), Command::PushAudio(PushAudio { frame: room(100) })).frames.len();
+    }
+    assert_eq!(appended, 2, "unconverted, 300 ms at 48 kHz is six 100 ms chunks");
+}
+
+// Catches: the mirror keeping a function call's empty arguments from `conversation.item.added`;
+// a reconnection replays the mirror, and the call would come back with no arguments.
+#[test]
+fn a_finished_function_call_completes_its_arguments_in_the_mirror() {
+    let mut m = machine(OPENAI);
+    m.open(at(0));
+    recv(&mut m, at(0), json!({"type": "conversation.item.added", "previous_item_id": null,
+        "item": {"id": "fc", "type": "function_call", "call_id": "c1", "name": "f", "arguments": ""}}));
+    recv(&mut m, at(1), json!({"type": "response.output_item.done",
+        "item": {"id": "fc", "type": "function_call", "call_id": "c1", "name": "f", "arguments": "{\"x\": 1}"}}));
+    match &m.chat_ctx().items[0] {
+        ChatItem::FunctionCall(call) => assert_eq!(call.arguments, "{\"x\": 1}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+// Catches: options the reference sends left off the session (tracing as an explicit null, a
+// transcription language, noise reduction), and truncation/reasoning sent when not set.
+#[test]
+fn the_session_carries_every_option_as_the_reference_sends_it() {
+    let mut opts = SessionOptions::from_dialect(&OPENAI, false);
+    opts.transcription = Some(json!({"model": "gpt-4o-transcribe", "language": "fr"}));
+    opts.noise_reduction = Some(json!({"type": "near_field"}));
+    opts.reasoning = Some(json!({"effort": "low"}));
+    let caps = OPENAI.capabilities(opts.turn_detection.as_ref(), false, true, true);
+    let mut m = RealtimeMachine::new(
+        OPENAI,
+        opts,
+        caps,
+        Arc::new(crate::realtime::wire::SeqIds::default()),
+        Arc::new(lk_agents_inference::testkit::NoImages),
+    );
+    let s = &m.open(at(0)).frames[0]["session"];
+    assert_eq!(s["tracing"], Value::Null);
+    assert_eq!(s["audio"]["input"]["transcription"]["language"], json!("fr"));
+    assert_eq!(s["audio"]["input"]["noise_reduction"], json!({"type": "near_field"}));
+    assert_eq!(s["reasoning"], json!({"effort": "low"}));
+    assert!(s.get("truncation").is_none());
+    assert_eq!(s["max_output_tokens"], json!("inf"));
+}
+
+// Catches: turning transcription off at runtime without the capability following it, or an
+// update that changed nothing still going on the wire.
+#[test]
+fn update_options_moves_the_capabilities_and_skips_a_no_op() {
+    let mut m = machine(OPENAI);
+    m.open(at(0));
+    assert!(m.update_options(OptionsPatch { voice: Maybe::Given("marin".into()), ..Default::default() }).frames.is_empty());
+    let step = m.update_options(OptionsPatch {
+        transcription: Maybe::Given(None),
+        turn_detection: Maybe::Given(None),
+        ..Default::default()
+    });
+    assert_eq!(
+        step.frames[0]["session"]["audio"]["input"],
+        json!({"turn_detection": null, "transcription": null})
+    );
+    let caps = m.capabilities();
+    assert!(!caps.user_transcription && !caps.turn_detection && !caps.auto_turn_reply_generation);
 }
 
 // Catches: overwriting a turn's speech onset when xAI re-announces it.

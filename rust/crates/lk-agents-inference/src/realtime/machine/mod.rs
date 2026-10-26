@@ -8,7 +8,7 @@ use std::time::Duration;
 pub(crate) use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::provider_format::ImageResolver;
-use lk_agents_abi::{AudioByteStream, Ts};
+use lk_agents_abi::{AudioByteStream, Maybe, Ts};
 use lk_agents_abi::{ChatContext, ChatItem, compute_chat_ctx_diff};
 use lk_agents_abi::{ToolChoice, ToolSpec};
 use serde_json::{Map, Value, json};
@@ -16,6 +16,7 @@ use serde_json::{Map, Value, json};
 use crate::realtime::dialect::{
     DEFAULT_MAX_OUTPUT_TOKENS, Dialect, NUM_CHANNELS, SAMPLE_RATE, TurnDetection,
 };
+use lk_agents_media::{FrameResampler, OnChange, Quality};
 use crate::realtime::remote::RemoteChatContext;
 use crate::realtime::wire::{self, IdGen, SessionPatch, TranscriptionCompleted};
 use lk_agents_abi::llm::realtime::{
@@ -71,7 +72,11 @@ pub struct RealtimeMachine {
     response_spoke: bool,
 
     bstream: AudioByteStream,
+    /// `_resample_audio`: built for the first frame that is not 24 kHz mono.
+    resampler: FrameResampler,
     pushed: Duration,
+    /// The `response.create` of every pending reply, sent again by a reconnection.
+    reply_frames: HashMap<String, Value>,
 
     session_deadline: Option<Ts>,
     closing: bool,
@@ -107,10 +112,18 @@ impl RealtimeMachine {
             response_spoke: false,
             // 100 ms chunks: `samples_per_channel=None` is the reference's `SAMPLE_RATE // 10`.
             bstream: AudioByteStream::new(SAMPLE_RATE, NUM_CHANNELS, None, false),
+            resampler: FrameResampler::new(SAMPLE_RATE, Quality::Medium, OnChange::Discard),
             pushed: Duration::ZERO,
+            reply_frames: HashMap::new(),
             session_deadline: None,
             closing: false,
         }
+    }
+
+    /// The host model's `label`, on every error this session reports.
+    pub fn with_label(mut self, label: String) -> Self {
+        self.label = label;
+        self
     }
 
     pub fn capabilities(&self) -> RealtimeCapabilities {
@@ -149,19 +162,39 @@ impl RealtimeMachine {
         self.remote = RemoteChatContext::new();
         let (frames, _) = self.chat_ctx_events(&replay);
         step.frames.extend(frames);
-
-        // Replies in flight belong to the dead connection; fail them rather than let the caller
-        // wait out its 10 s timeout.
-        for req_id in std::mem::take(&mut self.pending_replies).into_keys() {
-            step.events.push(Event::GenerateReplyFailed (GenerateReplyFailed {
-                req_id,
-                error: RealtimeError::new("pending response discarded due to session reconnection"),
-            }));
+        // The replay holds only confirmed items: an item event the lost connection never
+        // confirmed goes again after it, and its confirmation settles the update.
+        if let Some(update) = &self.ctx_update {
+            step.frames.extend(
+                update.frames.iter().filter(|(id, _)| update.by_event_id.contains_key(id)).map(|(_, f)| f.clone()),
+            );
         }
+
         self.discarded.clear();
         self.say_tags.clear();
         self.stale_say.clear();
         step.merge(self.close_generation());
+        // A reply asked for and not yet created is asked for again, now that the conversation it
+        // answers is back; a `say()` (no `response.create` to resend) is failed.
+        let mut pending: Vec<String> = self.pending_replies.keys().cloned().collect();
+        pending.sort();
+        for req_id in pending {
+            match self.reply_frames.get(&req_id) {
+                Some(frame) => {
+                    self.pending_replies.insert(req_id, now.saturating_add(GENERATE_REPLY_TIMEOUT));
+                    step.frames.push(frame.clone());
+                }
+                None => {
+                    self.pending_replies.remove(&req_id);
+                    step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed {
+                        req_id,
+                        error: RealtimeError::new(
+                            "pending response discarded due to session reconnection",
+                        ),
+                    }));
+                }
+            }
+        }
         step.events.push(Event::SessionReconnected(lk_agents_abi::llm::realtime::SessionReconnected {}));
         step
     }
@@ -296,12 +329,17 @@ impl RealtimeMachine {
 
             Command::PushAudio(lk_agents_abi::llm::realtime::PushAudio { frame }) => {
                 let mut step = Step::default();
-                // No resampling here: the host owns `rtc.AudioResampler` (§1.11). The driver
-                // hands over 24 kHz mono.
-                for f in self.bstream.push(&frame.data) {
-                    step.frames.push(wire::input_audio_buffer_append(&f.data));
-                    self.pushed +=
-                        Duration::from_secs_f64(f.samples_per_channel as f64 / SAMPLE_RATE as f64);
+                let frames = match self.resampler.push(&frame) {
+                    Ok(frames) => frames,
+                    Err(e) => return Step::event(Event::Error(self.error(now, e.to_string(), true))),
+                };
+                for frame in frames {
+                    for f in self.bstream.push(&frame.data) {
+                        step.frames.push(wire::input_audio_buffer_append(&f.data));
+                        self.pushed += Duration::from_secs_f64(
+                            f.samples_per_channel as f64 / SAMPLE_RATE as f64,
+                        );
+                    }
                 }
                 step
             }
@@ -338,14 +376,17 @@ impl RealtimeMachine {
                     (Some(base), Some(extra)) => Some(format!("{base}\n{extra}")),
                     (_, other) => other,
                 };
-                Step::frame(wire::response_create(
+                let frame = wire::response_create(
                     &req_id,
                     merged.as_deref(),
                     // Without `per_response_tool_choice` the server would apply it session-wide.
                     tool_choice
                         .filter(|_| self.caps.per_response_tool_choice)
                         .map(|tc| wire::tool_choice(Some(&tc))),
-                ))
+                );
+                self.reply_frames.retain(|id, _| self.pending_replies.contains_key(id));
+                self.reply_frames.insert(req_id, frame.clone());
+                Step::frame(frame)
             }
 
             Command::CancelReply(lk_agents_abi::llm::realtime::CancelReply { req_id }) => {
@@ -436,11 +477,14 @@ impl RealtimeMachine {
             json!([if self.opts.audio_output { "audio" } else { "text" }]),
         );
         p.audio_in.insert("format".into(), wire::audio_format());
-        // Explicit null (see `wire`); "off" is the reference's default.
-        p.audio_in.insert("noise_reduction".into(), Value::Null);
+        // Explicit nulls (see `wire`): "off" is said, not left to the server's default.
+        p.audio_in.insert(
+            "noise_reduction".into(),
+            self.opts.noise_reduction.clone().unwrap_or(Value::Null),
+        );
         p.audio_in.insert(
             "transcription".into(),
-            self.opts.transcription_model.as_ref().map_or(Value::Null, |m| json!({"model": m})),
+            self.opts.transcription.clone().unwrap_or(Value::Null),
         );
         p.audio_in.insert(
             "turn_detection".into(),
@@ -449,15 +493,98 @@ impl RealtimeMachine {
         p.audio_out.insert("format".into(), wire::audio_format());
         p.audio_out.insert("speed".into(), json!(self.opts.speed));
         p.audio_out.insert("voice".into(), json!(self.opts.voice));
-        p.top.insert("max_output_tokens".into(), json!(DEFAULT_MAX_OUTPUT_TOKENS));
+        p.top.insert("max_output_tokens".into(), self.opts.max_output_tokens.clone());
         p.top.insert("tool_choice".into(), wire::tool_choice(self.opts.tool_choice.as_ref()));
+        p.top.insert("tracing".into(), self.opts.tracing.clone().unwrap_or(Value::Null));
 
         let mut session = p.into_session();
         if let Some(i) = &self.opts.instructions {
             session.insert("instructions".into(), json!(i));
         }
+        if let Some(t) = &self.opts.truncation {
+            session.insert("truncation".into(), t.clone());
+        }
+        if let Some(r) = &self.opts.reasoning {
+            session.insert("reasoning".into(), r.clone());
+        }
         self.dialect.rewrite_session(&mut session);
         wire::session_update(&self.ids.short("session_update_"), session)
+    }
+
+    /// `RealtimeSession.update_options`: what changed goes out as one `options_update_`
+    /// `session.update`, the audio halves together; the derived capabilities follow.
+    pub fn update_options(&mut self, p: OptionsPatch) -> Step {
+        let mut patch = SessionPatch::default();
+        if let Maybe::Given(tc) = p.tool_choice {
+            let (current, next) =
+                (wire::tool_choice(self.opts.tool_choice.as_ref()), wire::tool_choice(tc.as_ref()));
+            self.opts.tool_choice = tc;
+            if current != next {
+                patch.top.insert("tool_choice".into(), next);
+            }
+        }
+        if let Maybe::Given(v) = p.max_output_tokens {
+            if self.opts.max_output_tokens != v {
+                patch.top.insert("max_output_tokens".into(), v.clone());
+            }
+            self.opts.max_output_tokens = v;
+        }
+        for (key, given, slot) in [
+            ("tracing", p.tracing, &mut self.opts.tracing),
+            ("truncation", p.truncation, &mut self.opts.truncation),
+            // `None` clears it server-side
+            ("reasoning", p.reasoning, &mut self.opts.reasoning),
+        ] {
+            if let Maybe::Given(v) = given {
+                if *slot != v {
+                    patch.top.insert(key.into(), v.clone().unwrap_or(Value::Null));
+                }
+                *slot = v;
+            }
+        }
+        if let Maybe::Given(v) = p.voice {
+            if self.opts.voice != v {
+                patch.audio_out.insert("voice".into(), json!(v));
+            }
+            self.opts.voice = v;
+        }
+        if let Maybe::Given(td) = p.turn_detection {
+            if self.opts.turn_detection != td {
+                patch.audio_in.insert(
+                    "turn_detection".into(),
+                    td.as_ref().map_or(Value::Null, TurnDetection::to_json),
+                );
+            }
+            let server = TurnDetection::server_turn_taking(td.as_ref());
+            self.caps.turn_detection = server;
+            self.caps.auto_turn_reply_generation = server;
+            self.opts.turn_detection = td;
+        }
+        if let Maybe::Given(v) = p.transcription {
+            if self.opts.transcription != v {
+                patch.audio_in.insert("transcription".into(), v.clone().unwrap_or(Value::Null));
+            }
+            self.caps.user_transcription = v.is_some();
+            self.opts.transcription = v;
+        }
+        if let Maybe::Given(v) = p.noise_reduction {
+            if self.opts.noise_reduction != v {
+                patch.audio_in.insert("noise_reduction".into(), v.clone().unwrap_or(Value::Null));
+            }
+            self.opts.noise_reduction = v;
+        }
+        if let Maybe::Given(v) = p.speed {
+            if self.opts.speed != v {
+                patch.audio_out.insert("speed".into(), json!(v));
+            }
+            self.opts.speed = v;
+        }
+        if patch.top.is_empty() && patch.audio_in.is_empty() && patch.audio_out.is_empty() {
+            return Step::default();
+        }
+        let mut session = patch.into_session();
+        self.dialect.rewrite_session(&mut session);
+        Step::frame(wire::session_update(&self.ids.short("options_update_"), session))
     }
 
     /// `_create_tools_update_event`.
@@ -514,12 +641,15 @@ impl RealtimeMachine {
             awaiting_create: HashSet::new(),
             awaiting_delete: HashSet::new(),
             by_event_id: HashMap::new(),
+            frames: Vec::new(),
             rejected: Vec::new(),
         };
 
         let delete = |frames: &mut Vec<Value>, update: &mut CtxUpdate, id: &str| {
             let event_id = self.ids.short("chat_ctx_delete_");
-            frames.push(wire::conversation_item_delete(&event_id, id));
+            let frame = wire::conversation_item_delete(&event_id, id);
+            frames.push(frame.clone());
+            update.frames.push((event_id.clone(), frame));
             update.awaiting_delete.insert(id.to_owned());
             update.by_event_id.insert(event_id, (true, id.to_owned()));
         };
@@ -533,12 +663,14 @@ impl RealtimeMachine {
                 let Some(item) = filtered.get_by_id(id) else { return };
                 let Ok(wire_item) = wire::to_wire_item(item, self.images.as_ref()) else { return };
                 let event_id = self.ids.short("chat_ctx_create_");
-                frames.push(wire::conversation_item_create(
+                let frame = wire::conversation_item_create(
                     &event_id,
                     wire_item,
                     // `"root"` when there is no predecessor -- a literal, not an omitted key.
                     Some(prev.as_deref().unwrap_or("root")),
-                ));
+                );
+                frames.push(frame.clone());
+                update.frames.push((event_id.clone(), frame));
                 update.awaiting_create.insert(id.to_owned());
                 update.by_event_id.insert(event_id, (false, id.to_owned()));
             };
@@ -729,10 +861,21 @@ pub struct SessionOptions {
     pub instructions: Option<String>,
     pub tool_choice: Option<ToolChoice>,
     pub turn_detection: Option<TurnDetection>,
-    /// `None` means transcription is off, which also makes `capabilities.user_transcription` false.
-    pub transcription_model: Option<String>,
+    /// The `AudioTranscription` object as given. `None` is off (`null` on the wire), which also
+    /// makes `capabilities.user_transcription` false.
+    pub transcription: Option<Value>,
+    /// The `NoiseReduction` object; `None` is off.
+    pub noise_reduction: Option<Value>,
     pub audio_output: bool,
     pub speed: f64,
+    /// `max_response_output_tokens`: `"inf"`, a count, or `null`.
+    pub max_output_tokens: Value,
+    /// Always on the wire, `null` when `None`.
+    pub tracing: Option<Value>,
+    /// On the wire only when set.
+    pub truncation: Option<Value>,
+    /// On the wire only when set.
+    pub reasoning: Option<Value>,
     pub max_session_duration: Option<Duration>,
 }
 
@@ -746,13 +889,68 @@ impl SessionOptions {
             instructions: None,
             tool_choice: None,
             turn_detection: if disable { None } else { d.default_turn_detection.clone() },
-            transcription_model: d.default_transcription_model.map(str::to_owned),
+            transcription: d.default_transcription_model.map(|m| json!({"model": m})),
+            noise_reduction: None,
             // `"audio" in modalities`, and the dialect may not let the caller choose.
             audio_output: d.forced_modalities.is_none_or(|m| m.contains(&"audio")),
             speed: 1.0,
+            max_output_tokens: json!(DEFAULT_MAX_OUTPUT_TOKENS),
+            tracing: None,
+            truncation: None,
+            reasoning: None,
             max_session_duration: d.default_max_session_duration,
         }
     }
+
+    /// The model's half of `update_options`: the values are taken, the sessions are told.
+    pub fn apply(&mut self, p: &OptionsPatch) {
+        if let Maybe::Given(v) = &p.tool_choice {
+            self.tool_choice = v.clone();
+        }
+        if let Maybe::Given(v) = &p.voice {
+            self.voice = v.clone();
+        }
+        if let Maybe::Given(v) = &p.turn_detection {
+            self.turn_detection = v.clone();
+        }
+        if let Maybe::Given(v) = &p.max_output_tokens {
+            self.max_output_tokens = v.clone();
+        }
+        if let Maybe::Given(v) = &p.transcription {
+            self.transcription = v.clone();
+        }
+        if let Maybe::Given(v) = &p.noise_reduction {
+            self.noise_reduction = v.clone();
+        }
+        if let Maybe::Given(v) = p.speed {
+            self.speed = v;
+        }
+        if let Maybe::Given(v) = &p.tracing {
+            self.tracing = v.clone();
+        }
+        if let Maybe::Given(v) = &p.truncation {
+            self.truncation = v.clone();
+        }
+        if let Maybe::Given(v) = &p.reasoning {
+            self.reasoning = v.clone();
+        }
+    }
+}
+
+/// `update_options(..)`'s keywords; each `Given` is compared against the session's own value and
+/// only a change goes on the wire.
+#[derive(Clone, Default)]
+pub struct OptionsPatch {
+    pub tool_choice: Maybe<Option<ToolChoice>>,
+    pub voice: Maybe<String>,
+    pub turn_detection: Maybe<Option<TurnDetection>>,
+    pub max_output_tokens: Maybe<Value>,
+    pub transcription: Maybe<Option<Value>>,
+    pub noise_reduction: Maybe<Option<Value>>,
+    pub speed: Maybe<f64>,
+    pub tracing: Maybe<Option<Value>>,
+    pub truncation: Maybe<Option<Value>>,
+    pub reasoning: Maybe<Option<Value>>,
 }
 
 #[derive(Debug, Default)]
@@ -786,6 +984,8 @@ struct CtxUpdate {
     /// `_chat_ctx_event_futures`, keyed by client `event_id`: an update sends a delete and a
     /// create under the same item id, so only the event id says which one a rejection answers.
     by_event_id: HashMap<String, (bool, String)>,
+    /// Every frame of the update, by `event_id`: a reconnection sends the unconfirmed ones again.
+    frames: Vec<(String, Value)>,
     rejected: Vec<String>,
 }
 

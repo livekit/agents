@@ -3,7 +3,7 @@
 //!
 //! Explicit nulls are load-bearing: the reference dumps with `exclude_unset=True`, so a `None`
 //! passed to the constructor is on the wire as `null` ("turn it off"), while an absent key means
-//! "leave it". Azure (a third dialect) is not ported.
+//! "leave it". Azure and LiveKit Inference reshape frames on the socket ([`WireShape`]).
 
 use base64::Engine as _;
 use lk_agents_abi::llm::provider_format::ImageResolver;
@@ -13,10 +13,19 @@ use std::time::SystemTime;
 
 use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
 
-/// `process_base_url`, non-Azure branch: `http(s)` -> `ws(s)` as a prefix swap; `/realtime`
-/// appended only to an empty or recognised base path (xAI's `/v1/realtime` is untouched); `model`
-/// added as a query parameter unless present.
-pub fn process_base_url(url: &str, model: &str) -> String {
+/// Azure's deployment and API version, for the URL and the session format.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Azure {
+    pub deployment: Option<String>,
+    /// Set: the legacy API (`api-version` query, flat beta session, beta event names).
+    pub api_version: Option<String>,
+}
+
+/// `process_base_url`: `http(s)` -> `ws(s)` as a prefix swap; `/realtime` appended only to an empty
+/// or recognised base path (xAI's `/v1/realtime` is untouched). Not Azure: `model` is added as a
+/// query parameter unless present. Azure: `api-version` and `deployment` (legacy) or the deployment
+/// as `model` (GA).
+pub fn process_base_url(url: &str, model: &str, azure: Option<&Azure>) -> String {
     let url = if let Some(rest) = url.strip_prefix("https://") {
         format!("wss://{rest}")
     } else if let Some(rest) = url.strip_prefix("http://") {
@@ -40,19 +49,169 @@ pub fn process_base_url(url: &str, model: &str) -> String {
     };
 
     let stripped = path.trim_end_matches('/');
-    let path = if path.is_empty() || matches!(stripped, "" | "/v1" | "/openai" | "/openai/v1") {
-        format!("{stripped}/realtime")
-    } else {
-        path.to_owned()
+    let path = match azure {
+        Some(az) => match stripped {
+            // the GA Azure API is `/v1/realtime`; the legacy one `/realtime`
+            "" | "/openai" => {
+                format!("{stripped}{}", if az.api_version.is_none() { "/v1/realtime" } else { "/realtime" })
+            }
+            "/openai/v1" => "/openai/v1/realtime".to_owned(),
+            _ => path.to_owned(),
+        },
+        None if path.is_empty() || matches!(stripped, "" | "/v1" | "/openai" | "/openai/v1") => {
+            format!("{stripped}/realtime")
+        }
+        None => path.to_owned(),
     };
 
-    let has_model =
-        query.is_some_and(|q| q.split('&').any(|kv| kv == "model" || kv.starts_with("model=")));
-    match (query, has_model) {
-        (Some(q), false) => format!("{authority}{path}?{q}&model={model}"),
-        (Some(q), true) => format!("{authority}{path}?{q}"),
-        (None, _) => format!("{authority}{path}?model={model}"),
+    let mut params: Vec<(String, String)> = query
+        .into_iter()
+        .flat_map(|q| q.split('&'))
+        .filter(|kv| !kv.is_empty())
+        .map(|kv| match kv.split_once('=') {
+            Some((k, v)) => (k.to_owned(), v.to_owned()),
+            None => (kv.to_owned(), String::new()),
+        })
+        .collect();
+    let has = |params: &[(String, String)], k: &str| params.iter().any(|(p, _)| p == k);
+    match azure {
+        Some(az) => {
+            params.retain(|(k, _)| k != "api-version");
+            match (&az.api_version, &az.deployment) {
+                (Some(version), deployment) => {
+                    params.push(("api-version".into(), version.clone()));
+                    if let Some(d) = deployment {
+                        params.retain(|(k, _)| k != "deployment");
+                        params.push(("deployment".into(), d.clone()));
+                    }
+                }
+                (None, Some(d)) if !has(&params, "model") => params.push(("model".into(), d.clone())),
+                (None, _) => {}
+            }
+        }
+        None if !has(&params, "model") => params.push(("model".into(), model.to_owned())),
+        None => {}
     }
+    let query: Vec<String> = params
+        .into_iter()
+        .map(|(k, v)| if v.is_empty() { k } else { format!("{k}={v}") })
+        .collect();
+    if query.is_empty() {
+        format!("{authority}{path}")
+    } else {
+        format!("{authority}{path}?{}", query.join("&"))
+    }
+}
+
+/// What a deployment changes about the frames on the socket, applied by the driver to every frame
+/// in each direction.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WireShape {
+    /// Azure: the beta event names come in, and are read as the GA ones.
+    pub azure: bool,
+    /// Legacy Azure (`api_version`): the session goes out flat, assistant text as `text`.
+    pub azure_legacy: bool,
+    /// LiveKit Inference picks the model from the URL; `session.model` is dropped.
+    pub drop_model: bool,
+}
+
+/// `_AZURE_EVENT_MAPPING`.
+const AZURE_EVENT_MAPPING: &[(&str, &str)] = &[
+    ("response.text.delta", "response.output_text.delta"),
+    ("response.text.done", "response.output_text.done"),
+    ("response.audio_transcript.delta", "response.output_audio_transcript.delta"),
+    ("response.audio_transcript.done", "response.output_audio_transcript.done"),
+    ("response.audio.delta", "response.output_audio.delta"),
+    ("response.audio.done", "response.output_audio.done"),
+    ("conversation.item.created", "conversation.item.added"),
+];
+
+impl WireShape {
+    /// A frame about to be sent.
+    pub fn outbound(&self, frame: &mut Value) {
+        if frame.get("type").and_then(Value::as_str) == Some("session.update")
+            && let Some(Value::Object(session)) = frame.get_mut("session")
+        {
+            if self.drop_model {
+                session.remove("model");
+            }
+            if self.azure_legacy {
+                *session = azure_session(std::mem::take(session));
+            }
+        }
+        // `_normalize_azure_client_event`: legacy Azure names assistant content `text`.
+        if self.azure_legacy
+            && let Some(Value::Array(parts)) = frame.get_mut("item").and_then(|i| i.get_mut("content"))
+        {
+            for part in parts {
+                if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                    part["type"] = json!("text");
+                }
+            }
+        }
+    }
+
+    /// A frame just received.
+    pub fn inbound(&self, frame: &mut Value) {
+        if !self.azure {
+            return;
+        }
+        let ty = frame.get("type").and_then(Value::as_str).unwrap_or("");
+        if let Some((_, ga)) = AZURE_EVENT_MAPPING.iter().find(|(beta, _)| *beta == ty) {
+            frame["type"] = json!(ga);
+        }
+    }
+}
+
+/// `_oai_session_to_azure`: the GA session flattened to the legacy one; a `null` field is not
+/// carried, and neither are `type` and `truncation`.
+pub fn azure_session(session: Map<String, Value>) -> Map<String, Value> {
+    let given = |v: Option<&Value>| v.filter(|v| !v.is_null()).cloned();
+    let mut out = Map::new();
+    if let Some(Value::Array(modalities)) = session.get("output_modalities") {
+        // Azure wants `["audio", "text"]` when audio is on; `["audio"]` alone is refused.
+        let audio = modalities.iter().any(|m| m == "audio");
+        out.insert(
+            "modalities".into(),
+            if audio { json!(["audio", "text"]) } else { Value::Array(modalities.clone()) },
+        );
+        out.insert("input_audio_format".into(), json!("pcm16"));
+        out.insert("output_audio_format".into(), json!("pcm16"));
+    }
+    if let Some(audio) = session.get("audio") {
+        if let Some(input) = audio.get("input") {
+            for (from, to) in [
+                ("noise_reduction", "input_audio_noise_reduction"),
+                ("transcription", "input_audio_transcription"),
+                ("turn_detection", "turn_detection"),
+            ] {
+                if let Some(v) = given(input.get(from)) {
+                    out.insert(to.into(), v);
+                }
+            }
+        }
+        if let Some(output) = audio.get("output") {
+            for key in ["voice", "speed"] {
+                if let Some(v) = given(output.get(key)) {
+                    out.insert(key.into(), v);
+                }
+            }
+        }
+    }
+    for (from, to) in [
+        ("model", "model"),
+        ("instructions", "instructions"),
+        ("tools", "tools"),
+        ("tool_choice", "tool_choice"),
+        ("max_output_tokens", "max_response_output_tokens"),
+        ("tracing", "tracing"),
+        ("reasoning", "reasoning"),
+    ] {
+        if let Some(v) = given(session.get(from)) {
+            out.insert(to.into(), v);
+        }
+    }
+    out
 }
 
 /// Where `utils.shortuuid(prefix)` comes from; a port so wire tests can predict `event_id`s.
@@ -670,8 +829,42 @@ mod tests {
             ("https://gw/v1?next=http://x", "wss://gw/v1/realtime?next=http://x&model=m"),
             ("wss://gw/v1?model=pinned", "wss://gw/v1/realtime?model=pinned"),
         ] {
-            assert_eq!(process_base_url(base, "m"), want);
+            assert_eq!(process_base_url(base, "m", None), want);
         }
+    }
+
+    // Catches: an Azure URL built the OpenAI way: GA Azure takes `/openai/v1/realtime` and the
+    // deployment as `model`, legacy Azure `/openai/realtime` with `api-version` and `deployment`
+    // (a stale `api-version` in the endpoint is replaced).
+    #[test]
+    fn azure_urls_follow_the_api_version() {
+        let ga = Azure { deployment: Some("dep".into()), api_version: None };
+        let legacy = Azure { deployment: Some("dep".into()), api_version: Some("2024-10-01".into()) };
+        assert_eq!(
+            process_base_url("https://r.azure.com/openai", "m", Some(&ga)),
+            "wss://r.azure.com/openai/v1/realtime?model=dep"
+        );
+        assert_eq!(
+            process_base_url("https://r.azure.com/openai/v1", "m", Some(&ga)),
+            "wss://r.azure.com/openai/v1/realtime?model=dep"
+        );
+        assert_eq!(
+            process_base_url("https://r.azure.com/openai?api-version=old", "m", Some(&legacy)),
+            "wss://r.azure.com/openai/realtime?api-version=2024-10-01&deployment=dep"
+        );
+    }
+
+    // Catches: legacy Azure handed GA content types, or GA Azure's beta event names unmapped.
+    #[test]
+    fn the_wire_shape_rewrites_both_directions() {
+        let shape = WireShape { azure: true, azure_legacy: true, drop_model: false };
+        let mut out = json!({"type": "conversation.item.create",
+            "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "x"}]}});
+        shape.outbound(&mut out);
+        assert_eq!(out["item"]["content"][0]["type"], json!("text"));
+        let mut inc = json!({"type": "response.audio.delta"});
+        shape.inbound(&mut inc);
+        assert_eq!(inc["type"], json!("response.output_audio.delta"));
     }
 
     // Catches: dropping explicit nulls from session.update (a patch could not clear a setting).

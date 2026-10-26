@@ -21,8 +21,10 @@ use std::time::Duration;
 use lk_agents_abi::TokioSpawner;
 use lk_agents_abi::RealClock;
 use lk_agents_inference::testkit::{FakeWs, NoImages, text};
+use lk_agents_abi::Maybe;
 use lk_agents_inference::realtime::{
-    AudioDelta, Event, GenerationCreated, NativeRealtime, OPENAI, SeqIds, XAI,
+    AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, NativeRealtime, OPENAI,
+    OptionsPatch, SeqIds, XAI,
 };
 use serde_json::json;
 
@@ -214,14 +216,46 @@ fn base64_of(bytes: &[u8]) -> String {
 
 // Catches: the realtime handshake with no bound, or bounded on tokio's clock, which the session's
 // virtual clock never moves -- so a gateway that accepts the socket and never finishes the
-// handshake was a session that never produced an event. On the session clock it is the provider's
-// `APITimeoutError("... connection timed out.")`, reported as a non-recoverable error event, which
-// is what the reference's `_main_task` raises out of `ws_connect`.
+// handshake was a session that never produced an event. On the session clock it is the reference's
+// `APIConnectionError("... connection timed out")`; with no retry budget it is final.
 #[tokio::test]
 async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on_the_session_clock()
 {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::hanging());
+    let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
+    connect.conn.max_retry = 0;
+    let realtime = NativeRealtime::new(
+        OPENAI,
+        "sk-test",
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    )
+    .with_connect(connect)
+    .with_ids(Arc::new(SeqIds::default()));
+    let session = realtime.session(false).await;
+
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
+    match next_event(&session).await {
+        Event::Error(err) => {
+            assert!(err.message.contains("connection timed out"), "{}", err.message);
+            assert!(!err.recoverable, "no retry budget: there is nothing to resume");
+        }
+        other => panic!("expected the connection timeout, got {other:?}"),
+    }
+    assert!(ws.sent().is_empty(), "nothing was sent on a socket that never opened");
+}
+
+// Catches: a dropped connection ending the session, or reconnecting without telling the caller
+// or without replaying the session. The reference's `_main_task` reports the drop as a recoverable
+// error, waits its first retry interval and reconnects, sending the session again.
+#[tokio::test]
+async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    // the first socket closes at once (the script is empty and not kept open)
+    let ws = Arc::new(FakeWs::new(vec![]));
     let realtime = NativeRealtime::new(
         OPENAI,
         "sk-test",
@@ -233,13 +267,127 @@ async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on
     .with_ids(Arc::new(SeqIds::default()));
     let session = realtime.session(false).await;
 
-    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
-    match next_event(&session).await {
-        Event::Error(err) => {
-            assert!(err.message.contains("connection timed out"), "{}", err.message);
-            assert!(!err.recoverable, "the socket never opened; there is nothing to resume");
+    loop {
+        match next_event(&session).await {
+            Event::ConnectionAcquired { .. } => continue,
+            Event::Error(err) => {
+                assert!(err.message.contains("closed unexpectedly"), "{}", err.message);
+                assert!(err.recoverable);
+                break;
+            }
+            other => panic!("expected the drop, got {other:?}"),
         }
-        other => panic!("expected the connection timeout, got {other:?}"),
     }
-    assert!(ws.sent().is_empty(), "nothing was sent on a socket that never opened");
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_millis(100)).await;
+    tokio::time::timeout(BOUND, async {
+        while ws.connect_count() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the session reconnected");
+    let sent = frames(&ws, 2).await;
+    assert_eq!(sent[1]["type"], json!("session.update"), "the reconnection replays the session");
+    session.aclose().await;
+}
+
+// Catches: Azure's legacy API reached with the OpenAI URL, auth or session shape. Legacy Azure
+// takes `api-version` and `deployment` in the query, an `api-key` header, and the flat beta
+// session; its beta event names must read as the GA ones.
+#[tokio::test]
+async fn legacy_azure_gets_its_url_header_and_flat_session() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let connect = Connect {
+        base_url: "https://res.openai.azure.com/openai".into(),
+        azure: Some(Azure { deployment: Some("gpt-rt".into()), api_version: Some("2024-10-01-preview".into()) }),
+        auth: Auth::Azure { api_key: Some("az-key".into()), entra_token: None },
+        conn: Default::default(),
+    };
+    let session = model(ws.clone(), OPENAI).with_connect(connect).session(false).await;
+
+    let sent = frames(&ws, 1).await;
+    let s = &sent[0]["session"];
+    assert_eq!(s["modalities"], json!(["audio", "text"]));
+    assert_eq!(s["input_audio_format"], json!("pcm16"));
+    assert_eq!(s["voice"], json!("marin"));
+    assert_eq!(s["max_response_output_tokens"], json!("inf"));
+    assert!(s.get("audio").is_none() && s.get("type").is_none(), "{s}");
+    assert!(s.get("tracing").is_none(), "a null tracing is not carried");
+
+    let (url, headers) = ws.last_connect().unwrap();
+    assert_eq!(
+        url,
+        "wss://res.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-rt"
+    );
+    assert!(headers.contains(&("api-key".to_owned(), "az-key".to_owned())));
+    assert!(!headers.iter().any(|(k, _)| k == "Authorization"));
+
+    // a beta event name reads as the GA one
+    ws.feed(text(json!({"type": "conversation.item.created", "previous_item_id": null,
+        "item": {"id": "i1", "type": "message", "role": "user",
+                 "content": [{"type": "input_text", "text": "hi"}]}})));
+    loop {
+        if let Event::RemoteItemAdded(added) = next_event(&session).await {
+            assert_eq!(added.item.id(), "i1");
+            break;
+        }
+    }
+    session.aclose().await;
+}
+
+// Catches: LiveKit Inference reached with a static key instead of a gateway JWT, without the
+// provider it routes to, or with `session.model` (the gateway picks the model from the URL).
+#[tokio::test]
+async fn livekit_inference_signs_each_connection_and_drops_the_session_model() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let connect = Connect {
+        base_url: "https://agent-gateway.livekit.cloud/v1".into(),
+        azure: None,
+        auth: Auth::Inference {
+            api_key: "APIkey".into(),
+            api_secret: "secret".into(),
+            provider: Some("openai".into()),
+            inference_class: None,
+            identity: Default::default(),
+        },
+        conn: Default::default(),
+    };
+    let realtime = model(ws.clone(), INFERENCE).with_connect(connect);
+    let session = realtime.session(false).await;
+
+    let sent = frames(&ws, 1).await;
+    assert!(sent[0]["session"].get("model").is_none(), "{}", sent[0]);
+    let (url, headers) = ws.last_connect().unwrap();
+    assert_eq!(url, "wss://agent-gateway.livekit.cloud/v1/realtime?model=gpt-realtime");
+    let auth = headers.iter().find(|(k, _)| k == "Authorization").expect("a bearer").1.clone();
+    assert!(auth.starts_with("Bearer ey"), "a JWT, not the key: {auth}");
+    assert!(headers.contains(&("X-LiveKit-Inference-Provider".to_owned(), "openai".to_owned())));
+    session.aclose().await;
+}
+
+// Catches: `update_options` reaching the model but not its live sessions, or sending what did not
+// change. The reference diffs each option against the session's own and sends one
+// `options_update_` session.update with only the changes, the audio halves together.
+#[tokio::test]
+async fn update_options_sends_only_what_changed_to_the_live_session() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let realtime = model(ws.clone(), OPENAI);
+    let session = realtime.session(false).await;
+    frames(&ws, 1).await;
+
+    realtime.update_options(OptionsPatch {
+        voice: Maybe::Given("cedar".into()),
+        speed: Maybe::Given(1.0),
+        ..Default::default()
+    });
+    let sent = frames(&ws, 2).await;
+    assert_eq!(sent[1]["type"], json!("session.update"));
+    assert!(sent[1]["event_id"].as_str().unwrap().starts_with("options_update_"));
+    assert_eq!(
+        sent[1]["session"],
+        json!({"type": "realtime", "audio": {"input": {}, "output": {"voice": "cedar"}}}),
+        "speed did not change, transcription and noise reduction are the model's own"
+    );
+    assert_eq!(realtime.model(), "gpt-realtime");
+    session.aclose().await;
 }

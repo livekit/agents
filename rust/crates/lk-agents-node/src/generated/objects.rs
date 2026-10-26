@@ -2152,8 +2152,9 @@ impl InferenceTts {
 }
 
 /// `_core.NativeRealtimeModel`: a realtime model whose connection, reconnect and conversation
-/// mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `AgentSession`
-/// recognises it by identity, and nothing per-turn crosses.
+/// mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `LiveSession`
+/// takes it as its realtime model, and nothing per-turn crosses. The keyword constructor,
+/// `update_options` and `bind_identification` are `realtime::python`'s.
 #[napi(js_name = "NativeRealtimeModel")]
 pub struct NativeRealtimeModel {
     pub(crate) inner: std::sync::Arc<lk_agents_inference::realtime::NativeRealtime>,
@@ -2163,12 +2164,12 @@ pub struct NativeRealtimeModel {
 impl NativeRealtimeModel {
     #[napi(getter, js_name = "provider")]
     pub fn provider(&self) -> String {
-        self.inner.provider().to_string()
+        self.inner.provider()
     }
 
     #[napi(getter, js_name = "model")]
     pub fn model(&self) -> String {
-        self.inner.model().to_string()
+        self.inner.model()
     }
 
     #[napi(getter, js_name = "label")]
