@@ -96,7 +96,6 @@ impl Check {
 /// `session_settles` is the release phase's own verdict, not a rule.
 pub const KNOWN_FINDINGS: &[&str] = &[
     "forwarded_while_enabled",
-    "speech_settles",
     "tool_lifecycle",
 ];
 

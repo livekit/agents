@@ -1018,7 +1018,9 @@ impl Driver {
     }
 
     /// `wait_for_idle`: nothing is speaking, queued, winding down or deciding a turn, and no user
-    /// turn is claimed.
+    /// turn is claimed. A turn held for the agent a handoff brings in does not count: the reference
+    /// has no such turn (it drops it), and the drain it waits on may itself wait on idle, through
+    /// a tool of the speech being drained.
     pub(crate) fn is_idle(&self) -> bool {
         use crate::audio_recognition::Phase;
         let activity = &self.activity;
@@ -1048,7 +1050,6 @@ impl Driver {
             && !winding_down
             && !deciding
             && activity.pending_turn.is_none()
-            && activity.handoff.held_user_turn.is_none()
             && self.session.states.user_turn_claims() == 0
     }
 
