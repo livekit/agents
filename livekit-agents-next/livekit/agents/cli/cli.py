@@ -7,6 +7,7 @@ import threading
 from types import FrameType
 from typing import Any
 
+from ..job import JobExecutorType
 from ..log import logger
 from ..telemetry import loop_monitor
 from ..worker import AgentServer, WorkerOptions
@@ -214,6 +215,50 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
             except Exception:
                 pass
             loop.close()
+
+
+def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
+    """``python myagent.py console --connect-addr``: one call over the ``lk`` CLI's socket, run
+    as a fake job in this process."""
+    from ..voice.console import ConsoleCall
+
+    setup_logging("DEBUG", devmode=True, console=True)
+    ConsoleCall.addr, ConsoleCall.record = connect_addr, record
+    server._job_executor_type = JobExecutorType.THREAD
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    @server.once("worker_started")
+    def _start_call() -> None:
+        asyncio.run_coroutine_threadsafe(
+            server.simulate_job("console-room", agent_identity="console", fake_job=True), loop
+        )
+
+    exit_triggered = False
+
+    def _handle_exit(sig: int, frame: FrameType | None) -> None:
+        nonlocal exit_triggered
+        if exit_triggered:
+            os._exit(1)
+        exit_triggered = True
+        asyncio.run_coroutine_threadsafe(server.aclose(), loop)
+
+    for sig in HANDLED_SIGNALS:
+        signal.signal(sig, _handle_exit)
+
+    try:
+        loop.run_until_complete(server.run(devmode=True, unregistered=True))
+    finally:
+        for sig in HANDLED_SIGNALS:
+            signal.signal(sig, lambda *_: os._exit(1))
+        tasks = asyncio.all_tasks(loop)
+        for task in tasks:
+            task.cancel()
+        loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
 
 
 def run_app(server: AgentServer | WorkerOptions) -> None:

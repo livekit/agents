@@ -25,7 +25,7 @@ async-trait.workspace = true
 log.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "test-util"] }
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "test-util", "net", "io-util"] }
 # `src/remote/` (`voice/remote_session.py`, moved here from `lk-agents-worker` on 2026-09-09 -- it
 # drives *a session* from out of process and has nothing to do with the worker loop): the
 # `livekit.agent` package's `AgentSessionEvent`/`SessionRequest`, its prost, and the well-known

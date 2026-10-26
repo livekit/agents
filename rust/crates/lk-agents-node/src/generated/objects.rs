@@ -1465,6 +1465,17 @@ impl RemoteSessionClient {
     }
 }
 
+/// The `lk agent console` socket: pass it as the session's audio input and output and as a
+/// `RemoteSessionHost`'s transport and console.
+#[napi(js_name = "ConsoleIo")]
+pub struct ConsoleIo {
+    pub(crate) inner: std::sync::Arc<lk_agents_voice::remote_session::console::ConsoleIo>,
+}
+
+#[napi]
+impl ConsoleIo {
+}
+
 /// `TTS.Markup`, keyed by `_provider_key()`. An unknown key is the no-dialect markup.
 #[napi(js_name = "Markup")]
 pub struct Markup {

@@ -1256,6 +1256,14 @@ class RemoteSessionClient:
     async def wait_for_ready(self, timeout: float, retry_interval: float) -> None: ...
 
 
+class ConsoleIo:
+    """The `lk agent console` socket: pass it as the session's audio input and output and as a
+    `RemoteSessionHost`'s transport and console.
+    """
+
+    def __init__(self, addr: str) -> None: ...
+
+
 class Markup:
     """`TTS.Markup`, keyed by `_provider_key()`. An unknown key is the no-dialect markup."""
 

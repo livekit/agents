@@ -33,6 +33,7 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from ..utils.misc import is_given
 from . import io
 from .agent import Agent, _BindingContextVar, _VoiceBinding
+from .console import ConsoleCall
 from .events import (
     AgentEvent,
     AgentState,
@@ -201,6 +202,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._thread = thread
 
         self._core: _core.LiveSession = None  # type: ignore[assignment]
+        self._console: ConsoleCall | None = None
         self._agent: Agent | None = None
         # every agent the core may name, by the id it was installed under
         self._agents: dict[str, Agent] = {}
@@ -338,7 +340,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         one) with ``agent`` driving."""
         if self._core is not None:
             return
-        if not is_given(room):
+        self._console = ConsoleCall.claim(self)
+        if self._console is not None:
+            room = _core.OfflineRoom("console")
+        elif not is_given(room):
             job_ctx = get_job_context(required=False)
             room = job_ctx.room if job_ctx is not None else _core.OfflineRoom("console")
         if chat_ctx is not None:
@@ -363,9 +368,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             llm=None if realtime else model,
             realtime_host=realtime,
             tts=frame.get("tts", self._tts),
-            host_audio_input=self._input.audio,
+            host_audio_input=self._console.io if self._console else self._input.audio,
             host_video_input=self._input.video,
-            host_audio_output=self._output.audio,
+            host_audio_output=self._console.io if self._console else self._output.audio,
             host_transcription_output=self._output.transcription,
             on_event=self,
             options=self._options,
@@ -385,6 +390,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent = agent
         self._started_at = time.time()
         await self._core.start(capture_run=capture_run)
+        if self._console is not None:
+            await self._console.start()
 
     async def aclose(self) -> None:
         await self._close(drain=False)
@@ -400,6 +407,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
         await self._core.aclose(reason=CloseReason.USER_INITIATED.value, drain=drain)
         await self._core.close_io()
+        if (console := self._console) is not None:
+            self._console = None
+            await console.aclose()
         for task in list(self._tasks):
             task.cancel()
         await asyncio.gather(*(t.aclose() for t in self._tools if isinstance(t, llm.Toolset)))
@@ -592,6 +602,8 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _core_event(self, wire: dict[str, Any]) -> None:
         kind = wire["type"]
+        if self._console is not None:
+            self._console.forward(wire)
         if kind in IGNORED_EVENTS:
             return
         if (public := PUBLIC_EVENTS.get(kind)) is not None:

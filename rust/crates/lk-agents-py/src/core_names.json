@@ -16,6 +16,7 @@
   "ChatItem",
   "ChatRequest",
   "ConnectionPoolState",
+  "ConsoleIo",
   "CoreAudioSink",
   "CoreTextOutput",
   "CpuMonitor",
