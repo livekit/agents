@@ -1,6 +1,7 @@
 //! `inference/tts.py` -- the gateway TTS, WebSocket + JSON (§1.4). `synthesize()` is the duplex
 //! path with one push and the input closed, as in the reference, so [`NativeTts::stream`] always
-//! returns `Some`. The reference's connection pool is not ported: a socket opens per synthesis.
+//! returns `Some`. A synthesis takes a configured socket from the client's pool and gives it back
+//! once the gateway said `done`, as the reference's `ConnectionPool` does.
 //! Text is normalised, split into sentences and converted to the provider's markup here, as
 //! `inference/tts.py`'s `SynthesizeStream` does.
 
@@ -15,9 +16,11 @@ use crate::abi::{
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
 use crate::transport::{
-    WsMessage, WsSender, WsTransport, connect_error, next_terminal, open_ws, stream_closed,
-    to_ws_url, within,
+    WsMessage, WsReceiver, WsSender, WsTransport, connect_error, next_terminal, open_ws,
+    stream_closed, to_ws_url, within,
 };
+use lk_agents_abi::utils::connection_pool::ConnectionPool;
+use std::collections::HashMap;
 use crate::vad::machine::mono;
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -82,6 +85,59 @@ pub struct NativeTts {
     spawner: Arc<dyn Spawner>,
     /// Bound into, not rebuilt, so `update_options` state survives a session binding its own.
     clock: Arc<lk_agents_abi::BoundClock>,
+    connections: Arc<Mutex<Connections>>,
+}
+
+/// One configured gateway socket, and the session id it was opened under.
+struct Connection {
+    sender: Arc<dyn WsSender>,
+    receiver: Box<dyn WsReceiver>,
+    session_id: Option<String>,
+}
+
+/// `utils.ConnectionPool(max_session_duration=300, mark_refreshed_on_get=True)`.
+struct Connections {
+    pool: ConnectionPool,
+    idle: HashMap<u64, Connection>,
+    next_id: u64,
+}
+
+impl Default for Connections {
+    fn default() -> Self {
+        Connections { pool: ConnectionPool::new(Some(300.0), true), idle: HashMap::new(), next_id: 0 }
+    }
+}
+
+impl Connections {
+    /// An idle socket young enough to reuse, and the expired ones to close.
+    fn take(&mut self, now: f64) -> (Option<(u64, Connection)>, Vec<Connection>) {
+        let reused = self.pool.get(now).and_then(|id| self.idle.remove(&id).map(|c| (id, c)));
+        let mut expired = Vec::new();
+        while let Some(id) = self.pool.next_closing() {
+            expired.extend(self.idle.remove(&id));
+        }
+        (reused, expired)
+    }
+
+    fn opened(&mut self, now: f64) -> u64 {
+        self.next_id += 1;
+        self.pool.connected(self.next_id, now);
+        self.next_id
+    }
+
+    fn give_back(&mut self, id: u64, connection: Connection) {
+        self.idle.insert(id, connection);
+        self.pool.put(id);
+    }
+
+    fn forget(&mut self, id: u64) {
+        self.pool.remove(id);
+        while self.pool.next_closing().is_some() {}
+    }
+}
+
+fn pool_secs(clock: &dyn Clock) -> f64 {
+    clock.now().as_nanos() as f64 / 1e9
 }
 
 /// `inference.TTS`'s constructor keywords, in the host's order.
@@ -118,7 +174,34 @@ impl NativeTts {
             ws,
             spawner,
             clock: lk_agents_abi::BoundClock::new(),
+            connections: Arc::default(),
         }
+    }
+
+    /// `prewarm()`: a configured socket waits in the pool for the first synthesis.
+    pub fn prewarm_identified(&self, identification: Option<Headers>) {
+        let opts = self.opts.lock().unwrap().clone();
+        let identification = identification.or_else(|| self.identity.for_connection());
+        let Ok(headers) =
+            gateway_headers(identification.as_ref(), None, None, &opts.api_key, &opts.api_secret)
+        else {
+            return;
+        };
+        let session_id = headers.get(HEADER_SESSION_ID).map(str::to_owned);
+        let (ws, clock, connections) =
+            (self.ws.clone(), self.clock.clone() as Arc<dyn Clock>, self.connections.clone());
+        let url = format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model);
+        let timeout = Duration::from_secs_f64(opts.conn_options.timeout.max(0.0));
+        let create_frame = wire::session_create(&opts);
+        self.spawner.spawn_unboxed(async move {
+            let opened =
+                open_ws(ws.as_ref(), &url, headers.into_vec(), &*clock, timeout, WHAT, &create_frame);
+            if let Ok((sender, receiver)) = opened.await {
+                let mut connections = connections.lock().unwrap();
+                let id = connections.opened(pool_secs(&*clock));
+                connections.give_back(id, Connection { sender, receiver, session_id });
+            }
+        });
     }
 
     pub fn with_clock(self, clock: Arc<dyn Clock>) -> Self {
@@ -240,9 +323,11 @@ impl NativeTts {
 
         let headers =
             gateway_headers(identification, None, None, &opts.api_key, &opts.api_secret)?;
-        let connection_session_id = headers.get(HEADER_SESSION_ID).map(str::to_owned);
+        let session_id = headers.get(HEADER_SESSION_ID).map(str::to_owned);
 
         let pump = Pump {
+            connections: self.connections.clone(),
+            session_id,
             ws: self.ws.clone(),
             url: format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model),
             headers: headers.into_vec(),
@@ -252,13 +337,6 @@ impl NativeTts {
             sample_rate: opts.sample_rate,
             opts,
             provider,
-            // `create_inference_request_id(connection.session_id, "tts")`: no session id yields a
-            // bare shortuuid.
-            request_id: create_inference_request_id(
-                connection_session_id.as_deref(),
-                RequestKind::Tts,
-                "",
-            ),
             expressive,
             text_rx,
             audio_tx,
@@ -319,6 +397,10 @@ impl Tts for NativeTts {
 
     fn set_expressive(&self, on: bool) {
         NativeTts::set_expressive(self, on);
+    }
+
+    fn prewarm(&self) {
+        self.prewarm_identified(None);
     }
 
     /// `synthesize(text)` = `_synthesize_with_stream(text)`: the gateway has no one-shot endpoint.
@@ -417,6 +499,9 @@ impl StreamSource<SynthesizedAudio> for TtsSourceHandle {
 // ---------------------------------------------------------------------------------------------
 
 struct Pump {
+    connections: Arc<Mutex<Connections>>,
+    /// Of a socket this synthesis opens; a reused one keeps its own.
+    session_id: Option<String>,
     ws: Arc<dyn WsTransport>,
     url: String,
     headers: Vec<(String, String)>,
@@ -427,7 +512,6 @@ struct Pump {
     create_frame: serde_json::Value,
     opts: TtsOptions,
     provider: String,
-    request_id: String,
     sample_rate: u32,
     /// Bracket cues are dropped from the alignment: the provider aligned the converted text.
     expressive: bool,
@@ -438,6 +522,8 @@ struct Pump {
 impl Pump {
     async fn run(self) {
         let Pump {
+            connections,
+            session_id,
             ws,
             url,
             headers,
@@ -446,21 +532,38 @@ impl Pump {
             create_frame,
             opts,
             provider,
-            request_id,
             sample_rate,
             expressive,
             text_rx,
             audio_tx,
         } = self;
 
-        let opened = open_ws(ws.as_ref(), &url, headers, &*clock, timeout, WHAT, &create_frame);
-        let (sender, mut receiver) = match opened.await {
-            Ok(pair) => pair,
-            Err(err) => {
-                let _ = audio_tx.send(Err(err));
-                return;
+        let (reused, expired) = connections.lock().unwrap().take(pool_secs(&*clock));
+        for connection in expired {
+            connection.sender.close().await;
+        }
+        let (id, mut connection) = match reused {
+            Some(reused) => reused,
+            None => {
+                let opened =
+                    open_ws(ws.as_ref(), &url, headers, &*clock, timeout, WHAT, &create_frame);
+                match opened.await {
+                    Ok((sender, receiver)) => {
+                        let id = connections.lock().unwrap().opened(pool_secs(&*clock));
+                        (id, Connection { sender, receiver, session_id })
+                    }
+                    Err(err) => {
+                        let _ = audio_tx.send(Err(err));
+                        return;
+                    }
+                }
             }
         };
+        // `create_inference_request_id(connection.session_id, "tts")`: no session id yields a
+        // bare shortuuid.
+        let request_id =
+            create_inference_request_id(connection.session_id.as_deref(), RequestKind::Tts, "");
+        let sender = connection.sender.clone();
 
         // `input_sent_event`: nothing is read back until the session is configured and text (or
         // the flush) is on the wire.
@@ -468,7 +571,7 @@ impl Pump {
 
         let send = Self::send_loop(sender.clone(), text_rx, &opts, input_sent_tx);
         let recv = Self::recv_loop(
-            receiver.as_mut(),
+            connection.receiver.as_mut(),
             &audio_tx,
             RecvCtx {
                 provider: &provider,
@@ -482,13 +585,20 @@ impl Pump {
         );
 
         let outcome = tokio::select! {
-            r = send => r,
+            r = send => r.map(|()| false),
             r = recv => r,
         };
-        if let Err(err) = outcome {
-            let _ = audio_tx.send(Err(err));
+        match outcome {
+            // The gateway said `done`: the socket is configured and free for the next synthesis.
+            Ok(true) => connections.lock().unwrap().give_back(id, connection),
+            outcome => {
+                if let Err(err) = outcome {
+                    let _ = audio_tx.send(Err(err));
+                }
+                connections.lock().unwrap().forget(id);
+                sender.close().await;
+            }
         }
-        sender.close().await;
     }
 
     /// `_sentence_stream_task` over host-split sentences: each push is one `input_transcript`,
@@ -530,7 +640,7 @@ impl Pump {
         receiver: &mut dyn crate::transport::WsReceiver,
         audio_tx: &mpsc::UnboundedSender<Result<SynthesizedAudio, ApiError>>,
         ctx: RecvCtx<'_>,
-    ) -> Result<(), ApiError> {
+    ) -> Result<bool, ApiError> {
         let RecvCtx {
             provider,
             request_id,
@@ -594,7 +704,7 @@ impl Pump {
                                 )
                             };
                             if audio_tx.send(Ok(out)).is_err() {
-                                return Ok(());
+                                return Ok(false);
                             }
                         }
                         wire::Incoming::OutputAlignment { tokens, .. } => {
@@ -620,7 +730,7 @@ impl Pump {
                                 )
                             };
                             let _ = audio_tx.send(Ok(out));
-                            return Ok(());
+                            return Ok(true);
                         }
                         wire::Incoming::Error { raw } => {
                             // `APIError(f"...: {msg.data}")` -- the whole frame; the detail is in
@@ -732,6 +842,27 @@ mod tests {
         assert_eq!(sent[1]["type"], json!("input_transcript"));
         assert_eq!(sent[1]["transcript"], json!("Hello there. "));
         assert_eq!(sent[2]["type"], json!("session.flush"));
+    }
+
+    // Catches: a socket opened, configured and closed per synthesis, which put the gateway's
+    // handshake and `session.create` before every reply's first audio. The reference's
+    // `ConnectionPool` hands a finished synthesis's socket to the next one.
+    #[tokio::test]
+    async fn a_second_synthesis_reuses_the_socket_the_first_finished_on() {
+        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+        let tts = tts(ws.clone());
+        for _ in 0..2 {
+            ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
+            ws.feed(text(json!({"type": "done"})));
+            let mut source = tts.synthesize("Hello there.").await.unwrap();
+            while source.next().await.unwrap().is_some() {}
+            for _ in 0..16 {
+                tokio::task::yield_now().await;
+            }
+        }
+        assert_eq!(ws.connect_count(), 1, "one socket");
+        let creates = ws.sent_json().iter().filter(|f| f["type"] == json!("session.create")).count();
+        assert_eq!(creates, 1, "configured once: {:?}", ws.sent_json());
     }
 
     /// Yield until `ws` has recorded `n` frames (or give up), for send-side ordering tests.

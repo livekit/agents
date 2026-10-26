@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use lk_agents_abi::python::{Ambient, check_pid};
-use lk_agents_abi::{SpawnerExt as _, StreamSink as _, StreamSource as _};
 use pyo3::prelude::*;
 
 use super::{InferenceTts, NativeTts, TtsClientConfig, TtsOptions};
@@ -49,14 +48,7 @@ impl InferenceTts {
     #[pyo3(signature = (*, headers = None))]
     fn prewarm(&self, headers: Option<Vec<(String, String)>>) -> PyResult<()> {
         check_pid()?;
-        let inner = Arc::clone(&self.inner);
-        <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient().spawn_unboxed(async move {
-            // Opening and dropping a stream is the cheapest way to force the handshake.
-            if let Ok((sink, source)) = inner.stream_identified(headers.map(|pairs| pairs.into_iter().collect())) {
-                sink.end_input();
-                Box::new(source).close(lk_agents_abi::python::NATIVE_CLOSE_DEADLINE).await;
-            }
-        });
+        self.inner.prewarm_identified(headers.map(|pairs| pairs.into_iter().collect()));
         Ok(())
     }
 }
