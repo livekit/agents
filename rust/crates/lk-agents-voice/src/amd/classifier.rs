@@ -1,6 +1,6 @@
 use lk_agents_abi::Ts;
 use lk_agents_abi::Vocabulary;
-pub use lk_agents_abi::voice::amd::{AMD_PROMPT, AmdCategory, AmdPrediction, AmdReason};
+pub use lk_agents_abi::voice::amd::{AmdCategory, AmdPrediction, AmdReason};
 use std::time::Duration;
 
 /// Above this, the greeting is long enough to be worth an LLM call.

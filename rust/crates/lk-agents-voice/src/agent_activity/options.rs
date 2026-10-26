@@ -12,11 +12,10 @@ use lk_agents_abi::Maybe;
 use lk_agents_abi::Vocabulary;
 pub use lk_agents_abi::voice::session_options::{
     DeprecatedTurnKwargs, Expressive, DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides,
-    HostValue, InterruptionGateVerdict, InterruptionKwargs, InterruptionMode, LegSet,
-    PreemptiveKwargs, RecordingOptions, RecordingOverrides, ResolvedEndpointing,
-    ResolvedInterruption, ResolvedPreemptiveGeneration, ResolvedSessionOptions,
-    ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet, TurnDetection,
-    TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs, UserTurnLimitKwargs,
+    HostValue, InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions,
+    RecordingOverrides, ResolvedEndpointing, ResolvedInterruption, ResolvedPreemptiveGeneration,
+    ResolvedSessionOptions, ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet,
+    TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs,
 };
 use std::time::Duration;
 

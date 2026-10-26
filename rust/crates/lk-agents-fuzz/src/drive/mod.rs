@@ -45,13 +45,13 @@ use lk_agents_rtc::{FakeRoom, ParticipantKind};
 use lk_agents_abi::TokioSpawner;
 use lk_agents_voice::background_audio::BackgroundAudioPlayer;
 use lk_agents_voice::remote_session::driver::HostRuntime as RemoteSessionHost;
+use lk_agents_abi::worker::remote_session::WireEvent;
 use lk_agents_voice::remote_session::{
-    WireEvent, proto,
+    proto,
     proto::agent_session_message::{Message, console_io},
 };
 use lk_agents_voice::room_io::types::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::{
-    Runtime,
     agent_activity::options::{
         Deployment, HostOptions, InterruptionGate, InterruptionGateInputs, RealtimeGate,
         SessionPatch, SttGate, TurnDetection, resolve_interruption_detector,
@@ -63,6 +63,7 @@ use lk_agents_voice::{
         UpdateAgentArgs, api::NodeFactory, effects::Decision,
     },
     events::SessionEvent,
+    runtime::Runtime,
     filler_scheduler::FillerId,
     generation::Instructions,
     speech_handle::{HostSpeech, SpeechHandle},

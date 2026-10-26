@@ -309,21 +309,6 @@ impl SessionChatCtx {
         }
     }
 
-    /// An inline task hands back with `exclude_function_call`: its calls and outputs leave every
-    /// agent view and stay in history. Returns how many were demoted.
-    pub fn exclude_task_calls(&mut self, task_agent: &str) -> usize {
-        let mut n = 0;
-        for c in &mut self.items {
-            if c.agent == task_agent
-                && c.visibility.model()
-                && matches!(c.item, ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_))
-            {
-                c.visibility = Visibility::History;
-                n += 1;
-            }
-        }
-        n
-    }
 
     /// `Agent.chat_ctx`: the driving agent's view.
     pub fn agent_chat_ctx(&self) -> ChatContext {

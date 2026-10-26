@@ -3,18 +3,13 @@ pub mod driver;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::HostError;
-pub use lk_agents_abi::metrics::usage::AgentSessionUsage;
-use lk_agents_abi::metrics::usage::ModelUsage;
-pub use lk_agents_abi::voice::amd::AmdCategory;
-pub use lk_agents_abi::voice::events::AgentState;
-pub use lk_agents_abi::worker::remote_session::{
-    AmdPredictionWire, DebugMessageWire, ErrorWire, FunctionCallOutputRef, FunctionCallRef,
-    FunctionToolsExecutedWire, FunctionToolsStartedWire, OverlappingSpeechWire,
-    SessionUsageUpdatedWire, ToolCallStartedWire, ToolExecutionUpdatedWire, ToolUpdateWire,
-    WireEvent,
+use lk_agents_abi::metrics::usage::{AgentSessionUsage, ModelUsage};
+use lk_agents_abi::voice::amd::AmdCategory;
+use lk_agents_abi::voice::events::AgentState;
+use lk_agents_abi::worker::remote_session::{
+    FunctionCallRef, ToolExecutionUpdatedWire, ToolUpdateWire, WireEvent,
 };
-use lk_agents_abi::{ChatContent, ChatMessage, Extra, MetricsReport, Role};
-pub use lk_agents_abi::{ChatItem, WebSocketSink, WebSocketStream};
+use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Extra, MetricsReport, Role};
 use prost::Message as _;
 use std::collections::HashMap;
 use std::sync::Arc;

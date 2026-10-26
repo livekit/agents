@@ -31,17 +31,17 @@ pub(crate) mod signals;
 pub mod time;
 
 // The paths the activity files, the fuzz harness and the napi binding name the session's items by.
-pub use crate::filler_scheduler::FillerId;
+
 pub(crate) use agent_user_state::AgentUserState;
 pub use api::*;
 pub use builder::*;
-pub use calls::Calls;
+
 pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use driver::*;
 pub use host_events::*;
 pub(crate) use idle::{IdleHolds, IdleWaiter};
-pub use lk_agents_abi::voice::session_effects::{Span, SpanEnded, SpanStarted, StartPlan};
+pub use lk_agents_abi::voice::session_effects::{Span, SpanEnded, SpanStarted};
 pub use time::*;
 
 /// `_DEFAULT_AEC_WARMUP_DURATION`, as a `Duration`.
@@ -480,15 +480,6 @@ impl AgentOutput {
         self.transcription_enabled.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Audio plays: a sink, switched on.
-    pub fn plays_audio(&self) -> bool {
-        self.audio().is_some() && self.audio_enabled()
-    }
-
-    /// Transcription shows: a sink, switched on.
-    pub fn shows_transcription(&self) -> bool {
-        self.transcription().is_some() && self.transcription_enabled()
-    }
 
     /// Whether it changed.
     pub fn set_audio_enabled(&self, enabled: bool) -> bool {

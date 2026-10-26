@@ -594,22 +594,6 @@ impl AgentUpdate {
         .flatten()
     }
 
-    pub fn frame(agent: impl Into<String>, instructions: Instructions) -> Self {
-        AgentUpdate {
-            agent: agent.into(),
-            instructions,
-            dynamic_instructions: None,
-            toolset: crate::tool_executor::Toolset::default(),
-            chat_ctx: None,
-            llm: Maybe::NotGiven,
-            tts: Maybe::NotGiven,
-            stt: Maybe::NotGiven,
-            vad: Maybe::NotGiven,
-            options: Default::default(),
-            expressive: None,
-            call: None,
-        }
-    }
 
     pub(crate) fn reopens(&self) -> &'static str {
         match (self.stt.is_given(), self.vad.is_given()) {

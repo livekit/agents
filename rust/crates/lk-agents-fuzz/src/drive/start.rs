@@ -419,7 +419,7 @@ impl SessionEvents for WireSink {
 /// `ConsoleCall.forward` and `_tools_executed`: the events the CLI renders, in its shapes.
 fn console_event(wire: &lk_agents_abi::voice::events::HostWire) -> Option<WireEvent> {
     use lk_agents_abi::voice::events::{HostWire as W, ToolUpdate};
-    use lk_agents_voice::remote_session::{
+    use lk_agents_abi::worker::remote_session::{
         ErrorWire, FunctionCallOutputRef, FunctionCallRef, FunctionToolsExecutedWire,
         ToolCallStartedWire, ToolExecutionUpdatedWire, ToolUpdateWire,
     };

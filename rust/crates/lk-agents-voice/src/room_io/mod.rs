@@ -14,4 +14,4 @@ pub mod rooms;
 
 pub mod link;
 
-pub use types::{ParticipantIdentity, ParticipantKind, TrackPublishOptions, TrackSource};
+

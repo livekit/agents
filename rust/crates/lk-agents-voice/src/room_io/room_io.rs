@@ -211,9 +211,6 @@ impl RoomIo {
         self.agent_tr.clone().map(|a| a as Arc<dyn TextOutput>)
     }
 
-    pub fn agent_transcription(&self) -> Option<Arc<ParticipantTranscriptionOutput>> {
-        self.agent_tr.clone()
-    }
 
     /// `NOT_GIVEN` means yes if there is an audio output (`has_external_audio_output`).
     pub fn wants_transcript_sync(&self, has_external_audio_output: bool) -> bool {

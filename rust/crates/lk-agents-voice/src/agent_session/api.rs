@@ -79,7 +79,7 @@ pub struct Probe {
     /// Every host event, typed, as the drain takes it and before the host sees its wire form.
     pub host_event: HostEventProbe,
     /// The session's cores after the opening cycle, for a queue owner other than `Runtime::run`.
-    pub runtime: tokio::sync::oneshot::Sender<crate::Runtime>,
+    pub runtime: tokio::sync::oneshot::Sender<crate::runtime::Runtime>,
 }
 
 #[cfg(feature = "dst")]
@@ -1010,8 +1010,6 @@ pub enum SessionBuildError {
     #[error(transparent)]
     #[host(delegate)]
     Node(lk_agents_abi::errors::HostError),
-    #[error("{0}")]
-    Assembly(String),
 }
 
 /// `start()`'s awaited half failed.

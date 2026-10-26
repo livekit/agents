@@ -8,6 +8,23 @@ use crate::speech_handle::SpeechHandle;
 use lk_agents_abi::voice::events::CloseReason;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+fn agent_update(agent: &str, instructions: Instructions) -> AgentUpdate {
+    AgentUpdate {
+        agent: agent.to_owned(),
+        instructions,
+        dynamic_instructions: None,
+        toolset: crate::tool_executor::Toolset::default(),
+        chat_ctx: None,
+        llm: Maybe::NotGiven,
+        tts: Maybe::NotGiven,
+        stt: Maybe::NotGiven,
+        vad: Maybe::NotGiven,
+        options: Default::default(),
+        expressive: None,
+        call: None,
+    }
+}
+
 /// A fake room on a virtual clock, and the same room as a session's.
 fn fake_room(name: &str) -> (Arc<lk_agents_rtc::FakeRoom>, FixedRoom) {
     let (rtc, clock) = lk_agents_rtc::FakeRtc::with_virtual_clock();
@@ -177,7 +194,7 @@ async fn settle() {
 async fn a_drain_during_a_handoff_joins_it_and_is_answered_at_the_swap() {
     let (api, mut exits) = session_holding_exits().await;
     let (call, swap) = api.call(Answer::handoff).expect("the loop runs");
-    let mut update = AgentUpdate::frame("next", Instructions::plain("You are next."));
+    let mut update = agent_update("next", Instructions::plain("You are next."));
     update.call = Some(call);
     api.send(ActivityCommand::Update(Box::new(update))).expect("the loop runs");
     let exit = exits.recv().await.expect("the handoff issues the frame's on_exit");
@@ -251,7 +268,7 @@ async fn handoff_draining(
     let (words, _) = say_from(api, Origin::Host);
     settle().await;
     let (call, swap) = api.call(Answer::handoff).expect("the loop runs");
-    let mut update = AgentUpdate::frame("next", Instructions::plain("You are next."));
+    let mut update = agent_update("next", Instructions::plain("You are next."));
     update.call = Some(call);
     api.send(ActivityCommand::Update(Box::new(update))).expect("the loop runs");
     let exit = exits.recv().await.expect("the handoff issues the frame's on_exit");

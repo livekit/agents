@@ -497,16 +497,6 @@ impl ParticipantTranscriptionOutput {
         }
     }
 
-    pub fn start(self: &Arc<Self>, room: &dyn RtcRoom, spawner: &dyn Spawner) {
-        let mut events = room.events();
-        let this = self.clone();
-        let handle = spawner.spawn_unboxed(async move {
-            while let Some(ev) = events.recv().await {
-                this.handle_event(&ev).await;
-            }
-        });
-        self.tasks.lock().unwrap().push(handle);
-    }
 
     /// Waits for the close, since an open writer holds a server-side stream.
     pub async fn aclose(&self) {
