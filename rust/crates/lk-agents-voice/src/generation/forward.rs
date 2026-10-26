@@ -327,7 +327,7 @@ impl<'a> TextLeg<'a> {
     }
 
     /// Errors are dropped: a text stream that will not open must not silence the agent.
-    async fn capture(&self, delta: &str) {
+    pub(super) async fn capture(&self, delta: &str) {
         if !delta.is_empty() {
             self.forward(SynthesisEvent::Text(delta.to_owned())).await;
         }
@@ -380,7 +380,7 @@ pub(super) async fn capture(text_out: Option<&TextLeg<'_>>, delta: &str) {
 
 /// The text half of the first-frame fan-out, only with no audio output (with a TTS it would
 /// report `speaking` too early). Idempotent.
-fn first_text_started_speaking(
+pub(super) fn first_text_started_speaking(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     acc: &mut TurnAccumulator,

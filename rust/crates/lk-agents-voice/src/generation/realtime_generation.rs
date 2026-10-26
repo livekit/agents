@@ -3,6 +3,7 @@
 
 use crate::agent_activity::realtime::{RealtimeWake, realtime_state};
 use crate::agent_session::{DriverError, SessionShared, Tx};
+use crate::generation::forward::{TextLeg, first_text_started_speaking};
 use crate::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
 use crate::generation::playout::{Next, Segment, first_frame, perform_audio_forwarding};
 use crate::generation::tools::{ToolStep, run_tools};
@@ -11,7 +12,7 @@ use crate::io::RealtimeAudioNode;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{NextStep, StepDecision};
 use lk_agents_abi::llm::realtime::Event;
-use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker};
+use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, TextOutput};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, ChatItem, llm::realtime as rt};
 use std::sync::Arc;
@@ -50,6 +51,9 @@ pub(crate) async fn realtime_generation_task(
     // Locked for the step by the one task that ever reads it; the channel outlives the step.
     let mut rx = events.lock().await;
     let audio_out = shared.output.audio();
+    // `text_output`, read once for the step as the reference does: each message's words go down it.
+    let text_out = shared.output.transcription_enabled().then(|| shared.output.transcription());
+    let text_out = text_out.flatten();
     // `realtime_audio_output_node`: frames go to the node, which emits into the sink itself.
     let node = shared.realtime_audio.clone();
     let node_out =
@@ -72,6 +76,9 @@ pub(crate) async fn realtime_generation_task(
         tools: &mut tools,
         response_id: None,
         received: false,
+        text_out: text_out.as_deref(),
+        speaks_text: out.is_none(),
+        leg: None,
     };
     // `Generation::next` never fails; a failure would be a bug in this file.
     let played = perform_audio_forwarding(shared, handle, out, &mut generation).await;
@@ -165,6 +172,20 @@ struct Generation<'a> {
     response_id: Option<String>,
     /// An empty round means released or interrupted.
     received: bool,
+    /// The transcription output, and whether the words are what starts the agent speaking (no
+    /// audio output).
+    text_out: Option<&'a dyn TextOutput>,
+    speaks_text: bool,
+    /// The open message's transcript leg, flushed at its `MessageDone`.
+    leg: Option<TextLeg<'a>>,
+}
+
+impl Generation<'_> {
+    fn end_message(&mut self) {
+        if let Some(leg) = self.leg.take() {
+            leg.flush();
+        }
+    }
 }
 
 impl Segment for Generation<'_> {
@@ -175,7 +196,10 @@ impl Segment for Generation<'_> {
     async fn next(&mut self) -> Result<Next, DriverError> {
         loop {
             // The channel closed: the session ended, or the loop released this speech.
-            let Some(ev) = self.events.recv().await else { return Ok(Next::End) };
+            let Some(ev) = self.events.recv().await else {
+                self.end_message();
+                return Ok(Next::End);
+            };
             self.received = true;
             if self.response_id.is_none()
                 && let Some(id) = realtime_state::response_id_of(&ev)
@@ -189,18 +213,32 @@ impl Segment for Generation<'_> {
             }
             match ev {
                 Event::MessageStarted(_) => {
+                    self.end_message();
                     self.current = Some(self.segments.len());
                     self.segments.push(String::new());
+                    let speech = self.handle.id();
+                    self.leg = Some(TextLeg::new(self.text_out, None, self.shared, speech));
                 }
                 Event::TextDelta(rt::TextDelta { delta, .. }) => {
-                    if let Some(seg) = self.current.and_then(|idx| self.segments.get_mut(idx)) {
-                        seg.push_str(&delta);
+                    let Some(seg) = self.current.and_then(|idx| self.segments.get_mut(idx)) else {
+                        continue;
+                    };
+                    seg.push_str(&delta);
+                    if self.handle.interrupted() {
+                        continue;
+                    }
+                    if let Some(leg) = &self.leg {
+                        leg.capture(&delta).await;
+                    }
+                    if self.speaks_text && self.text_out.is_some() && !delta.is_empty() {
+                        first_text_started_speaking(self.shared, self.handle, self.acc);
                     }
                 }
                 Event::AudioDelta(rt::AudioDelta { frame, .. }) => return Ok(Next::Frame(frame)),
                 // A boundary, so `wait_for_playout` can finish this message while the next arrives.
                 Event::MessageDone(_) => {
                     self.current = None;
+                    self.end_message();
                     return Ok(Next::Boundary);
                 }
                 Event::FunctionCall(ready) => {
@@ -210,7 +248,10 @@ impl Segment for Generation<'_> {
                     call.created_at = self.shared.time.wall();
                     self.tools.dispatch(self.shared, self.handle, self.ctx, call);
                 }
-                Event::GenerationDone(_) => return Ok(Next::End),
+                Event::GenerationDone(_) => {
+                    self.end_message();
+                    return Ok(Next::End);
+                }
                 // The loop routes only a generation's own events here; the rest are the loop's.
                 _ => {}
             }
