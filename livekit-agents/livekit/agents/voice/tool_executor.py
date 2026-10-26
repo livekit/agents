@@ -445,6 +445,11 @@ class _ToolExecutor:
             # one terminal entry per call; deferred entries use the _final id
             from .agent import Agent
 
+            # dispatch hands the raw return value to make_tool_output, which unwraps
+            # ToolResult itself. Keep it around: sanitizing the already-unwrapped output
+            # would treat a `ToolResult(("a", "b"))` payload as a bare container and
+            # report `['a', 'b']` instead of the recorded `('a', 'b')`.
+            raw_output = output
             if isinstance(output, ToolResult):
                 output = output.output
 
@@ -459,7 +464,7 @@ class _ToolExecutor:
             else:
                 # derive the text from the same sanitizer dispatch uses, so container
                 # outputs such as `(agent, ToolResult(...))` don't leak a Python repr
-                out = run_ctx._make_update_output(output)
+                out = run_ctx._make_update_output(raw_output)
                 status, message = "done", out.fnc_call_out.output or None
 
             entry_id = call_id + "_final" if run_ctx._updates else call_id
