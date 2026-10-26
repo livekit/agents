@@ -109,6 +109,7 @@ class ProcSupervisor:
         ping_interval: float,
         ping_timeout: float,
         high_ping_threshold: float,
+        killable: bool = True,
     ) -> None: ...
     def initialize(self) -> Awaitable[float | None]:
         """Seconds until the InitializeResponse; ``None`` on timeout (the process was killed)."""

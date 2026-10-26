@@ -97,9 +97,10 @@ class _ProcClient:
         await asend_message(self._acch, msg)
 
     async def _monitor_task(self) -> None:
-        # the core closes the channel when the parent goes quiet past ping_timeout (+10 s)
+        # the core closes the channel when the parent goes quiet past ping_timeout (+10 s); a
+        # job thread's parent sets no ping_timeout
         health_timeout = None
-        if self._init_req.ping_interval > 0:
+        if self._init_req.ping_interval > 0 and self._init_req.ping_timeout > 0:
             health_timeout = self._init_req.ping_timeout + 10
         self._acch = _core.IpcClient(self._mp_cch.detach(), health_timeout)
         try:

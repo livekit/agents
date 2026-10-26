@@ -86,6 +86,10 @@ class SupervisedProc(ABC):
     # the core's supervision of the process (initialize, pings, memory, shutdown, kill),
     # created once the process is spawned
     _pch: _core.ProcSupervisor
+    # a process; the thread executor's runner can't be killed, nor is it in the metrics
+    _killable = True
+    _metered = True
+    _runner = "process"
 
     def __init__(
         self,
@@ -227,6 +231,7 @@ class SupervisedProc(ABC):
                 ping_interval=self._opts.ping_interval,
                 ping_timeout=self._opts.ping_timeout,
                 high_ping_threshold=self._opts.high_ping_threshold,
+                killable=self._killable,
             )
             self._join_fut = asyncio.Future[None]()
 
@@ -272,10 +277,11 @@ class SupervisedProc(ABC):
                 raise asyncio.TimeoutError()
 
             self._initialize_fut.set_result(None)
-            metrics.proc_initialized(time_elapsed=elapsed_time)
+            if self._metered:
+                metrics.proc_initialized(time_elapsed=elapsed_time)
         except asyncio.TimeoutError:
             self._initialize_fut.set_exception(
-                asyncio.TimeoutError("process initialization timed out")
+                asyncio.TimeoutError(f"{self._runner} initialization timed out")
             )
             raise
         except Exception as e:

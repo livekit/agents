@@ -133,9 +133,9 @@ class ProcJobExecutor(SupervisedProc):
         try:
             await super()._supervise_task()
         finally:
-            if self._running_job:
+            if self._running_job and self._metered:
                 metrics.job_ended()
-                self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
+            self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
 
     async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
         if self._inference_executor is None:
@@ -168,7 +168,8 @@ class ProcJobExecutor(SupervisedProc):
         if not self._initialize_fut.done():
             raise RuntimeError("process not initialized")
 
-        metrics.job_started()
+        if self._metered:
+            metrics.job_started()
         self._job_status = JobStatus.RUNNING
         self._running_job = info
 
@@ -179,7 +180,8 @@ class ProcJobExecutor(SupervisedProc):
         except Exception:
             self._running_job = None
             self._job_status = None
-            metrics.job_ended()
+            if self._metered:
+                metrics.job_ended()
             raise
 
     def logging_extra(self) -> dict[str, Any]:

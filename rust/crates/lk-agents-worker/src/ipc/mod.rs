@@ -435,6 +435,17 @@ pub struct SupervisorOptions {
     pub ping_interval: f64,
     pub ping_timeout: f64,
     pub high_ping_threshold: f64,
+    /// A process can be killed; a job thread (`ThreadJobExecutor`) cannot: its late
+    /// initialization, ack or exit is logged and waited for instead, and `kill` asks it to shut
+    /// down.
+    pub killable: bool,
+}
+
+impl SupervisorOptions {
+    /// What the logs call the supervised runner.
+    fn runner(&self) -> &'static str {
+        if self.killable { "process" } else { "job runner" }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -524,7 +535,7 @@ impl<H: ProcHost> ProcSupervisor<H> {
     /// timed out: the process was then killed. Returns how long the process took.
     pub async fn initialize(&self) -> Result<Option<Duration>, InitError> {
         let inner = &self.inner;
-        inner.host.log(Level::Info, "initializing process", Vec::new());
+        inner.host.log(Level::Info, &format!("initializing {}", inner.opts.runner()), Vec::new());
         let start = Instant::now();
         let frame = {
             let mut reader = inner.reader.lock().await;
@@ -533,7 +544,9 @@ impl<H: ProcHost> ProcSupervisor<H> {
         };
         let frame = match frame {
             Err(_) => {
-                inner.dump_and_kill().await;
+                if inner.opts.killable {
+                    inner.dump_and_kill().await;
+                }
                 return Ok(None);
             }
             Ok(Err(_)) => return Err(InitError::Closed),
@@ -549,7 +562,8 @@ impl<H: ProcHost> ProcSupervisor<H> {
         }
         let elapsed = start.elapsed();
         let elapsed_time = ExtraValue::Float(round(elapsed.as_secs_f64(), 2));
-        inner.host.log(Level::Info, "process initialized", vec![("elapsed_time", elapsed_time)]);
+        let msg = format!("{} initialized", inner.opts.runner());
+        inner.host.log(Level::Info, &msg, vec![("elapsed_time", elapsed_time)]);
         Ok(Some(elapsed))
     }
 
@@ -566,7 +580,10 @@ impl<H: ProcHost> ProcSupervisor<H> {
             watch::channel(Instant::now() + secs(inner.opts.ping_timeout));
         tasks.push(tokio::spawn(read_loop(inner.clone(), deadline)));
         tasks.push(tokio::spawn(ping_loop(inner.clone())));
-        tasks.push(tokio::spawn(pong_timeout(inner.clone(), deadline_rx)));
+        // a job thread has no pong deadline (`ping_timeout` 0): it is only reported late
+        if inner.opts.ping_timeout > 0.0 {
+            tasks.push(tokio::spawn(pong_timeout(inner.clone(), deadline_rx)));
+        }
         if inner.opts.memory_limit_mb > 0.0 || inner.opts.memory_warn_mb > 0.0 {
             tasks.push(tokio::spawn(memory_loop(inner.clone())));
         }
@@ -580,23 +597,35 @@ impl<H: ProcHost> ProcSupervisor<H> {
         let _ = inner.writer.send(&IpcMessage::shutdown_request().encode()).await;
 
         let close_timeout = secs(inner.opts.close_timeout);
+        let killable = inner.opts.killable;
         if tokio::time::timeout(close_timeout, inner.shutdown_ack.wait()).await.is_err() {
-            let msg = "process did not ack shutdown in time, killing process";
-            inner.host.log(Level::Error, msg, Vec::new());
-            inner.dump_and_kill().await;
+            if killable {
+                let msg = "process did not ack shutdown in time, killing process";
+                inner.host.log(Level::Error, msg, Vec::new());
+                inner.dump_and_kill().await;
+            } else {
+                inner.host.log(Level::Error, "job did not ack shutdown in time", Vec::new());
+            }
         }
         inner.shutting_down.wait().await;
         if tokio::time::timeout(close_timeout, inner.exited.wait()).await.is_err() {
-            inner.host.log(
-                Level::Error,
-                "process did not exit in time, killing process",
-                Vec::new(),
-            );
-            inner.dump_and_kill().await;
+            if killable {
+                let msg = "process did not exit in time, killing process";
+                inner.host.log(Level::Error, msg, Vec::new());
+                inner.dump_and_kill().await;
+            } else {
+                let msg = "job shutdown is taking too much time..";
+                inner.host.log(Level::Error, msg, Vec::new());
+                inner.exited.wait().await;
+            }
         }
     }
 
+    /// The kill sequence; a runner that cannot be killed is asked to shut down instead.
     pub async fn kill(&self) {
+        if !self.inner.opts.killable {
+            return self.shutdown().await;
+        }
         self.inner.closing.store(true, Ordering::SeqCst);
         self.inner.dump_and_kill().await;
     }
@@ -726,7 +755,9 @@ async fn read_loop<H: ProcHost>(inner: Arc<Inner<H>>, pong_deadline: watch::Send
                 let delay = time_ms() - *timestamp as i64;
                 if delay as f64 > inner.opts.high_ping_threshold * 1000.0 {
                     let extra = vec![("delay", ExtraValue::Int(delay))];
-                    inner.host.log(Level::Warning, "process is unresponsive", extra);
+                    let msg =
+                        if inner.opts.killable { "process is unresponsive" } else { "job executor is unresponsive" };
+                    inner.host.log(Level::Warning, msg, extra);
                 }
                 // no receiver once the timeout fired: a late pong does not revive it
                 let _ = pong_deadline.send(Instant::now() + ping_timeout);
@@ -735,7 +766,11 @@ async fn read_loop<H: ProcHost>(inner: Arc<Inner<H>>, pong_deadline: watch::Send
             SHUTTING_DOWN => inner.shutting_down.set(),
             EXITING => {
                 let extra = vec![("reason", ExtraValue::Str(msg.get_str("reason").to_owned()))];
-                inner.host.log(Level::Info, "process exiting", extra);
+                if inner.opts.killable {
+                    inner.host.log(Level::Info, "process exiting", extra);
+                } else {
+                    inner.host.log(Level::Debug, "job exiting", extra);
+                }
             }
             _ => {}
         }

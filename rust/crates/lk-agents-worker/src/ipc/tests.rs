@@ -218,6 +218,7 @@ fn opts() -> SupervisorOptions {
         ping_interval: 2.5,
         ping_timeout: 90.0,
         high_ping_threshold: 0.5,
+        killable: true,
     }
 }
 
@@ -395,6 +396,25 @@ async fn shutdown_kills_a_process_that_does_not_ack() {
     assert!(messages.contains(&"process did not ack shutdown in time, killing process".into()));
     assert!(!messages.iter().any(|m| m.starts_with("process exited with non-zero")));
     assert!(!messages.contains(&"process did not exit in time, killing process".into()));
+}
+
+// Catches: a job thread killed (it cannot be) or given up on when its ack and exit are late; it is
+// reported and waited for, as `ThreadJobExecutor.aclose` does.
+#[tokio::test(start_paused = true)]
+async fn a_job_thread_that_does_not_ack_is_waited_for_not_killed() {
+    let (sup, host, _child) = setup(SupervisorOptions { killable: false, ping_timeout: 0.0, ..opts() });
+    sup.supervise();
+    let close = tokio::spawn({
+        let sup = sup.clone();
+        async move { sup.kill().await }
+    });
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    assert!(host.messages().contains(&"job did not ack shutdown in time".into()));
+    assert!(!close.is_finished(), "a thread that has not exited is waited for");
+    sup.exited(Some(0)).await;
+    close.await.unwrap();
+    assert_eq!(host.kills.load(Ordering::SeqCst), 0);
+    assert!(!host.messages().iter().any(|m| m.contains("unresponsive, killing")));
 }
 
 // Catches: the read loop's end leaving a close waiting for an ack that cannot arrive (#5929).

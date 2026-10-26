@@ -212,7 +212,7 @@ impl PyProcSupervisor {
     #[new]
     #[pyo3(signature = (
         fd, host, *, pid, process_kind, initialize_timeout, close_timeout, memory_warn_mb,
-        memory_limit_mb, ping_interval, ping_timeout, high_ping_threshold,
+        memory_limit_mb, ping_interval, ping_timeout, high_ping_threshold, killable = true,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -227,6 +227,7 @@ impl PyProcSupervisor {
         ping_interval: f64,
         ping_timeout: f64,
         high_ping_threshold: f64,
+        killable: bool,
     ) -> PyResult<Self> {
         check_pid()?;
         let _rt = pyo3_async_runtimes::tokio::get_runtime().enter();
@@ -240,6 +241,7 @@ impl PyProcSupervisor {
             ping_interval,
             ping_timeout,
             high_ping_threshold,
+            killable,
         };
         Ok(Self(ProcSupervisor::new(socket(fd)?, PyProcHost(Mutex::new(Some(host))), opts)))
     }

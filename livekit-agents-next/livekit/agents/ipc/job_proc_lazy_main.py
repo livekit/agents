@@ -590,7 +590,6 @@ class ThreadStartArgs:
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     session_end_timeout: float
-    join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
     simulation_end_fnc: Callable[[Any], Any] | None = None
@@ -600,21 +599,18 @@ def thread_main(
     args: ThreadStartArgs,
 ) -> None:
     """main function for the job process when using the ThreadedJobRunner"""
-    try:
-        from .proc_client import _ProcClient
+    from .proc_client import _ProcClient
 
-        job_proc = _JobProc(
-            args.initialize_process_fnc,
-            args.job_entrypoint_fnc,
-            args.session_end_fnc,
-            session_end_timeout=args.session_end_timeout,
-            executor_type=JobExecutorType.THREAD,
-            user_arguments=args.user_arguments,
-            simulation_end_fnc=args.simulation_end_fnc,
-        )
+    job_proc = _JobProc(
+        args.initialize_process_fnc,
+        args.job_entrypoint_fnc,
+        args.session_end_fnc,
+        session_end_timeout=args.session_end_timeout,
+        executor_type=JobExecutorType.THREAD,
+        user_arguments=args.user_arguments,
+        simulation_end_fnc=args.simulation_end_fnc,
+    )
 
-        client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
-        client.initialize()
-        client.run()
-    finally:
-        args.join_fnc()
+    client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
+    client.initialize()
+    client.run()
