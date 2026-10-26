@@ -1,8 +1,10 @@
-# Zappi's Pizzeria: ten calls in, and ten calls to a customer whose delivery is on its way.
+# Zappi's Pizzeria: fourteen calls in, and ten calls to a customer whose delivery is on its way.
 #
 # Calls in start with an empty order. Prices come from src/zappis.json: tax is 9% of the food,
 # delivery is $4.99, and an order under $15 has a $2.99 small-order fee. The Buffalo Cauliflower
-# is sold out. Order numbers start at 215.
+# is sold out. A large pizza is 14 inches, 8 slices. Wing sauces are hot, mild, BBQ, garlic
+# parmesan, lemon pepper, Thai chili peanut, or plain; there's no honey garlic or honey mustard.
+# Order numbers start at 215.
 #
 # Calls out are about order #214: a large pepperoni, a dozen bone-in wings with hot sauce, and a
 # large Sprite, going to 300 De Haro St with Marco, about five minutes away, $49.65 due at the
@@ -252,6 +254,104 @@ scenarios:
         placed: true
         cart: ["1 large Cheese, half mushrooms, other half pepperoni", "1 large Lemonade"]
         total: "26.14"
+
+  - id: SCN_DwWdFPgMxqva
+    label: Asks how big the large pizza is
+    instructions: |
+      PERSONA: Alex Chen, ordering for three roommates, not sure one pizza is enough.
+      OPENING LINE: "Hi, quick question first: how big is your large pizza? How many slices?"
+      FACTS (give each only when asked):
+      - Name: Alex Chen. Phone: 415-555-0131.
+      DO, IN ORDER:
+      1. Once you've heard the size, say: "Okay, one large pepperoni then."
+      2. Decline anything else. It's for pickup.
+      3. Agree to the read-back and say goodbye once you have your order number.
+    agent_expectations: >
+      Answers the size question from the menu: the large is 14 inches with 8 slices. Saying it
+      doesn't know the size is a fail. Places one large pepperoni for pickup at $21.79.
+    tags: { feature: menu_knowledge, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        fulfillment: pickup
+        cart: ["1 large Pepperoni"]
+        total: "21.79"
+
+  - id: SCN_BPbQY4e8nwnu
+    label: Wants a wing sauce that isn't on the menu
+    instructions: |
+      PERSONA: Morgan Davis, a regular who's particular about wings.
+      OPENING LINE: "Hi, can I get a medium cheese pizza and a dozen honey garlic wings?"
+      FACTS (give each only when asked):
+      - Bone-in wings, if asked which.
+      - Name: Morgan Davis. Phone: 415-555-0156.
+      DO, IN ORDER:
+      1. When you hear there's no honey garlic, ask which sauces they have, and pick lemon pepper.
+      2. Decline anything else. It's for pickup.
+      3. If the read-back has any sauce on the wings other than lemon pepper, correct it. Otherwise
+         agree, and say goodbye once you have your order number.
+    agent_expectations: >
+      Says there's no honey garlic sauce and lets the caller choose from the sauces it has. Putting
+      a sauce on the wings that the caller didn't choose, even for now, is a fail, and so is leaving
+      the wings off. Places a medium cheese pizza and a dozen bone-in wings with lemon pepper sauce
+      for pickup at $34.86.
+    tags: { feature: off_menu, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        fulfillment: pickup
+        cart: ["1 medium Cheese", "1 dozen Bone-in Wings, lemon pepper sauce"]
+        total: "34.86"
+
+  - id: SCN_3fP6wg5jYfK9
+    label: Says "forget it" when the sauce isn't on the menu
+    instructions: |
+      PERSONA: Riley Brooks, on a short lunch break and impatient.
+      OPENING LINE: "A large Hawaiian and a dozen honey mustard wings."
+      FACTS (give each only when asked):
+      - Name: Riley Brooks. Phone: 415-555-0177.
+      DO, IN ORDER:
+      1. When you hear there's no honey mustard, say only: "Ugh, forget it then."
+      2. If asked what you mean, you still want the pizza, just not the wings.
+      3. Decline anything else. It's for pickup.
+      4. If the read-back still has wings, say you don't want the wings. Otherwise agree, and say
+         goodbye once you have your order number.
+    agent_expectations: >
+      Doesn't treat "forget it" as cancelling the whole order: it takes the wings off, or asks
+      whether they mean the wings or the whole order, and keeps the pizza. Telling the caller the
+      order is cancelled or that there's nothing to cancel, dropping the pizza, or ending the call
+      before the order is placed is a fail. Places the large Hawaiian alone for pickup at $22.88.
+    tags: { feature: off_menu, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        fulfillment: pickup
+        cart: ["1 large Hawaiian"]
+        not_in_cart: [wings, boneless]
+        total: "22.88"
+
+  - id: SCN_dPaEkYJ9sjSN
+    label: Wants wings with no sauce
+    instructions: |
+      PERSONA: Taylor Nguyen, grabbing a light lunch, doesn't like sauce on anything.
+      OPENING LINE: "Hi, could I get a half dozen boneless wings with no sauce on them, and a Caesar salad?"
+      FACTS (give each only when asked):
+      - Name: Taylor Nguyen. Phone: 415-555-0145.
+      DO, IN ORDER:
+      1. If asked to pick a sauce, say again you want them plain, with no sauce.
+      2. Decline anything else. It's for pickup.
+      3. Agree to the read-back if the wings are plain, and say goodbye once you have your order
+         number.
+    agent_expectations: >
+      Puts the boneless wings on plain, with no sauce, and never adds a sauce the caller didn't ask
+      for. Places a half dozen plain boneless wings and a Caesar salad for pickup at $19.05.
+    tags: { feature: off_menu, direction: inbound }
+    userdata:
+      expected:
+        placed: true
+        fulfillment: pickup
+        cart: ["1 half dozen Boneless Wings, plain", "1 Caesar Salad"]
+        total: "19.05"
 
   # ---- calls out, about order #214 ----
 

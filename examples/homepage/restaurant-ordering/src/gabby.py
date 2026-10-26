@@ -1,9 +1,9 @@
 """Gabby at Zappi's Pizzeria: taking orders on the phone, and calling a customer whose delivery is
 already on its way when something in it ran out.
 
-Tools return facts and the next step; how to say things lives in the instructions, once. Placing
-or cancelling an order is read back first and done only after the caller has heard the read-back
-in full and answered it (conversation.py)."""
+Tools return facts and the next step; how to say things lives in the instructions, once. Placing,
+cancelling, or dropping an order is read back first and done only after the caller has heard the
+read-back in full and answered it (conversation.py)."""
 
 from __future__ import annotations
 
@@ -19,9 +19,12 @@ from pydantic import BaseModel, Field
 
 from conversation import answered, caller_spoke_last, heard
 from pizzeria import (
+    CRUST,
+    DRINK_SIZES,
     HOURS,
     MENU,
     NEIGHBORHOOD,
+    PIZZA_SIZES,
     RESTAURANT,
     SAUCES,
     SOLD_OUT_TODAY,
@@ -67,7 +70,12 @@ class OrderItem(BaseModel):
     toppings: list[ToppingId] = Field(
         [], description="Extra toppings on a whole pizza."
     )
-    sauce: SauceId | None = Field(None, description="Required for wings.")
+    sauce: SauceId | None = Field(
+        None,
+        description="Wings only, and only a sauce the caller chose from ours. If they haven't "
+        "chosen, or asked for one we don't have, leave it out: the wings still go on, and "
+        "you ask.",
+    )
     without: list[Ingredient] = Field(
         [], description='What to leave off a pizza ("no olives"), from its ingredients.'
     )
@@ -125,7 +133,8 @@ class Gabby(Agent):
     def _read_back_status(self) -> dict[str, str]:
         """After a change to something already read back: get the new read-back first."""
         r = self._review
-        if r is None or r.revision == self._pos.revision:
+        # a change after reading back what dropping the order takes off means they kept it
+        if r is None or r.action == "drop" or r.revision == self._pos.revision:
             return {}
         tool = {"place": "place_order", "cancel": "cancel_order"}[r.action]
         return {
@@ -162,13 +171,7 @@ class Gabby(Agent):
         """Cancel the whole order. Call it the moment they ask, before you ask them anything:
         the first call returns what to confirm with them. Call it again once they agree."""
         if self._pos.order is None:
-            self._must_tell(ctx, "that nothing was placed, so nothing is due")
-            return _facts(
-                cancelled=False,
-                placed=False,
-                next="Nothing was placed, so there's nothing to cancel and nothing is due. "
-                "Tell them.",
-            )
+            return await self._drop_unplaced(ctx)
         if self._answered_review(ctx, "cancel"):
             with _pos_rules():
                 order = await self._pos.cancel()
@@ -188,6 +191,40 @@ class Gabby(Agent):
             next="It isn't cancelled yet. Ask them now, using this, whether to cancel the "
             "whole order, and wait for their answer. Call cancel_order again only once they "
             "agree.",
+        )
+
+    async def _drop_unplaced(self, ctx: RunContext) -> str:
+        """Cancelling before anything's placed: there's nothing to cancel, but what they've
+        ordered so far comes off only once they've agreed to drop all of it."""
+        if not self._pos.lines:
+            self._must_tell(ctx, "that nothing was placed, so nothing is due")
+            return _facts(
+                cancelled=False,
+                placed=False,
+                next="Nothing was placed, so there's nothing to cancel and nothing is due. "
+                "Tell them.",
+            )
+        if self._answered_review(ctx, "drop"):
+            with _pos_rules():
+                await self._pos.drop()
+            self._must_tell(ctx, "that the order is dropped and nothing is due")
+            return _facts(
+                dropped=True,
+                due=money(self._pos.due_now()),
+                next="Tell them it's dropped and nothing is due. If they've already said "
+                "goodbye, say goodbye and end_call in this same reply; otherwise ask if "
+                "there's anything else.",
+            )
+        with _pos_rules():
+            read_back = self._pos.drop_read_back()
+        self._read_back(ctx, "drop")
+        return _facts(
+            dropped=False,
+            readBack=read_back,
+            next="Nothing's placed yet, and nothing comes off until they agree. If they might "
+            "mean one item, or something about one item, ask which. Otherwise ask them now, "
+            "using this, whether to drop the whole order, and wait for their answer. Call "
+            "cancel_order again only once they agree to drop all of it.",
         )
 
     @function_tool
@@ -293,7 +330,11 @@ class TakeOrder(Gabby):
                 second_half=second_half,
             )
         return _facts(
-            updated=line.facts() if changed else None,
+            **(
+                {"updated": line.facts()}
+                if changed
+                else {"nothingChanged": f"{line.id} is already {line.describe()}."}
+            ),
             **self._pos.cart_facts(),
             **self._read_back_status(),
         )
@@ -409,6 +450,14 @@ class TakeOrder(Gabby):
             "total with what it includes) and wait for their answer. Call place_order again "
             "only once they agree.",
         )
+
+    def _unfinished(self) -> str | None:
+        if self._pos.order is None and self._pos.lines:
+            return (
+                "their order isn't placed. Ask whether to place it; if they want none of it, "
+                "cancel_order."
+            )
+        return None
 
 
 class DeliveryUpdate(Gabby):
@@ -547,12 +596,17 @@ def _menu() -> str:
             f"{size_words(s)} {money(p)}".strip() for s, p in m.prices.items()
         )
         made_with = f"; {', '.join(m.ingredients)}" if m.ingredients else ""
+        details = f"; {m.details}" if m.details else ""
         sold_out = " (sold out today)" if m.id in SOLD_OUT_TODAY else ""
-        lines.append(f"- {m.id}: {m.name} {m.category}, {prices}{made_with}{sold_out}")
+        lines.append(
+            f"- {m.id}: {m.name} {m.category}, {prices}{made_with}{details}{sold_out}"
+        )
     return "\n".join(lines)
 
 
 def _order_instructions() -> str:
+    pizza_sizes = "; ".join(f"{size}, {about}" for size, about in PIZZA_SIZES.items())
+    drink_sizes = ", ".join(f"{size} {about}" for size, about in DRINK_SIZES.items())
     toppings = ", ".join(t.name for t in TOPPINGS.values())
     sauces = ", ".join(s.name for s in SAUCES.values())
     return f"""\
@@ -563,10 +617,12 @@ We're open {HOURS} Anything else about the restaurant that isn't here, like the 
 
 The menu (ids are for your tools):
 {_menu()}
+Pizza sizes: {pizza_sizes}. Crust: {CRUST}. Drink sizes: {drink_sizes}.
 Extra toppings on a pizza, $2 each, $1 on half: {toppings}. Wing sauces: {sauces}.
 
 Take the order the way they give it:
 - Put what they order on the order right away with add_items, everything they just named in one call, and ask only for what's missing, like a size or a wing sauce. A size they gave for one item is never another item's size.
+- Never choose for them. For something we don't have, like a sauce, a crust, or a topping, say so and offer what we do have. Wings go on without a sauce until they pick one of ours, and "no sauce" is plain.
 - An item they name again that's already on the order is the same item, not another one. A change is to one line: update_item or remove_item.
 - Half-and-half is one pizza, a cheese pizza unless they name another, with first_half and second_half. "No olives" goes in without, at the same price.
 - Allergies: check_allergen for each one, then say which items the menu lists it in.

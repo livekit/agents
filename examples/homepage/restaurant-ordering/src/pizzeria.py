@@ -21,6 +21,9 @@ DATA = json.loads((Path(__file__).parent / "zappis.json").read_text())
 RESTAURANT: str = DATA["restaurant"]
 NEIGHBORHOOD: str = DATA["neighborhood"]
 HOURS: str = DATA["hours"]
+PIZZA_SIZES: dict[str, str] = DATA["pizzaSizes"]
+CRUST: str = DATA["crust"]
+DRINK_SIZES: dict[str, str] = DATA["drinkSizes"]
 TAX_RATE = Decimal(DATA["taxRate"])
 DELIVERY_FEE = Decimal(DATA["deliveryFee"])
 SMALL_ORDER_FEE = Decimal(DATA["smallOrderFee"])
@@ -66,6 +69,7 @@ class MenuItem:
     prices: dict[str, Decimal]  # by size; one-size items have the single size ""
     ingredients: tuple[str, ...]
     allergens: frozenset[str]
+    details: str  # what a caller might ask about it: "6 to an order"
 
     @property
     def sizes(self) -> list[str]:
@@ -93,11 +97,13 @@ MENU: dict[str, MenuItem] = {
         else {"": Decimal(m["price"])},
         ingredients=tuple(m.get("ingredients", ())),
         allergens=frozenset(m["allergens"]),
+        details=m.get("details", ""),
     )
     for m in DATA["menu"]
 }
 TOPPINGS: dict[str, Option] = {t["id"]: _option(t) for t in DATA["toppings"]}
 SAUCES: dict[str, Option] = {s["id"]: _option(s) for s in DATA["sauces"]}
+PLAIN = "plain"  # the wings' choice of no sauce at all
 SOLD_OUT_TODAY = frozenset(m["id"] for m in DATA["menu"] if m.get("soldOut"))
 
 
@@ -168,8 +174,22 @@ class Line:
         return f"{size_words(self.size)} {self.item.name}".strip()
 
     @property
+    def needs(self) -> str | None:
+        """What the caller hasn't chosen yet: wings stay on the order until they pick a sauce,
+        so nothing they asked for drops off while it's sorted out."""
+        if self.item.category == "wings" and self.sauce is None:
+            return "sauce"
+        return None
+
+    @property
     def modifiers(self) -> list[str]:
-        mods = [f"{self.sauce.name} sauce"] if self.sauce else []
+        mods = []
+        if self.sauce:
+            mods.append(
+                self.sauce.name
+                if self.sauce.id == PLAIN
+                else f"{self.sauce.name} sauce"
+            )
         mods += [f"add {t.name}" for t in self.toppings]
         if any(self.halves):
             # which half is which doesn't matter
@@ -191,6 +211,7 @@ class Line:
             "item": self.label,
             "with": self.modifiers,
             "price": money(self.total),
+            **({"needs": self.needs} if self.needs else {}),
         }
 
 
@@ -348,6 +369,13 @@ class Pizzeria:
                 line = self._build(self._peek_line_id(), **spec)
             except PizzeriaError as e:
                 problems.append(str(e))
+                continue
+            if waiting := self._waiting_on_sauce(line):
+                problems.append(
+                    f"{waiting.id}, the {waiting.label}, is waiting on its sauce. If this is that "
+                    f"sauce, update_item {waiting.id} with it; only if they want another order "
+                    f"besides {waiting.id}, add this once {waiting.id} has its sauce."
+                )
                 continue
             if same := self._matching(line, among=(*self.lines, *added)):
                 problems.append(
@@ -550,6 +578,23 @@ class Pizzeria:
         )
         return order
 
+    def drop_read_back(self) -> dict[str, Any]:
+        """What dropping an order that hasn't been placed takes off: all of it."""
+        self._taking_order()
+        if not self.lines:
+            raise PizzeriaError("Nothing's on the order, so there's nothing to drop.")
+        return {
+            "drop": [ln.describe() for ln in self.lines],
+            "placed": False,
+            "due": money(Decimal("0")),
+        }
+
+    async def drop(self) -> None:
+        """Takes everything off an order that hasn't been placed, its tip included."""
+        self._taking_order()
+        self.lines, self.tip = [], Decimal("0")
+        await self._changed()
+
     # ---- the order out for delivery ----
 
     def ran_out_line(self) -> Line:
@@ -740,11 +785,23 @@ class Pizzeria:
             return "Pay the driver at the door, cash or card"
         return None
 
+    def still_to_ask(self) -> list[str]:
+        """What the caller still has to choose, line by line, before it can be read back."""
+        return [
+            f"Which sauce on {ln.id}, the {ln.label}: "
+            f"{_or_list(s.name for s in SAUCES.values())}. They choose; if they'd rather not "
+            f"have them, remove_item {ln.id}."
+            for ln in self.lines
+            if ln.needs == "sauce"
+        ]
+
     def cart_facts(self) -> dict[str, Any]:
         quote = self.quote()
+        asks = self.still_to_ask()
         return {
             "order": [ln.facts() for ln in self.lines],
             **({"subtotal": money(quote.subtotal)} if quote else {}),
+            **({"stillToAsk": asks} if asks else {}),
         }
 
     async def publish_all(self) -> None:
@@ -798,10 +855,6 @@ class Pizzeria:
             raise PizzeriaError(
                 f"Only pizzas take toppings or changes, not the {item.name}."
             )
-        if item.category == "wings" and not sauce:
-            raise PizzeriaError(
-                f"Ask which sauce for the {item.name}: {_or_list(s.name for s in SAUCES.values())}."
-            )
         if sauce and item.category != "wings":
             raise PizzeriaError(f"The {item.name} doesn't take a sauce choice.")
         whole = tuple(dict.fromkeys(TOPPINGS[t] for t in toppings or ()))
@@ -837,6 +890,21 @@ class Pizzeria:
     def _matching(self, line: Line, among: Iterable[Line]) -> Line | None:
         return next(
             (ln for ln in among if ln.configuration == line.configuration), None
+        )
+
+    def _waiting_on_sauce(self, line: Line) -> Line | None:
+        """Wings already on the order without a sauce, which this line names one for. Only lines
+        from before: two orders of wings asked for at once are two orders."""
+        if line.sauce is None:
+            return None
+        return next(
+            (
+                ln
+                for ln in self.lines
+                if ln.needs == "sauce"
+                and (ln.item.id, ln.size) == (line.item.id, line.size)
+            ),
+            None,
         )
 
     def _line(self, line_id: str) -> Line:
@@ -875,6 +943,8 @@ class Pizzeria:
         self._taking_order()
         if not self.lines:
             raise PizzeriaError("Nothing's on the order yet.")
+        if asks := self.still_to_ask():
+            raise PizzeriaError(" ".join(asks))
         if self.fulfillment.mode is None:
             raise PizzeriaError(
                 "Pickup or delivery isn't set: set_pickup or set_delivery if they've said, or "
@@ -1010,6 +1080,7 @@ def _line_json(line: Line, was: Line | None, sold_out: set[str]) -> dict[str, An
         "size": pieces.get(line.size or "", size_words(line.size)) or None,
         "quantity": line.quantity,
         "modifiers": line.modifiers,
+        "needs": line.needs,
         "total": float(line.total),
         "out": line.item.id in sold_out,
         "was": _capitalized(was.label) if was and swapped else None,

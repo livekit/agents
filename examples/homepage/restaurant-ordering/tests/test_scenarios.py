@@ -1,5 +1,5 @@
 """The scenario file against the grader: every expected key is one it checks, every outbound call
-is marked outbound, and there are ten of each."""
+is marked outbound, and there are fourteen calls in and ten out."""
 
 from pathlib import Path
 
@@ -29,11 +29,11 @@ KEYS = {
 }
 
 
-def test_ten_calls_each_way_with_stable_ids_and_known_keys():
+def test_fourteen_calls_in_and_ten_out_with_stable_ids_and_known_keys():
     scenarios = SCENARIOS["scenarios"]
     directions = [s["tags"]["direction"] for s in scenarios]
-    assert directions.count("inbound") == 10 and directions.count("outbound") == 10
-    assert len({s["id"] for s in scenarios}) == 20
+    assert directions.count("inbound") == 14 and directions.count("outbound") == 10
+    assert len({s["id"] for s in scenarios}) == 24
     for s in scenarios:
         userdata = s["userdata"]
         assert set(userdata["expected"]) <= KEYS, s["label"]

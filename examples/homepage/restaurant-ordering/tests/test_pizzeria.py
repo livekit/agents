@@ -94,6 +94,20 @@ async def test_the_smoke_order_comes_to_its_read_back_total():
             {},
             "26.14",
         ),
+        ([item("pepperoni", "large")], "pickup", {}, "21.79"),
+        (
+            [item("cheese", "medium"), item("wings", "dozen", sauce="lemon_pepper")],
+            "pickup",
+            {},
+            "34.86",
+        ),
+        ([item("hawaiian", "large")], "pickup", {}, "22.88"),
+        (
+            [item("boneless", "half_dozen", sauce="plain"), item("caesar")],
+            "pickup",
+            {},
+            "19.05",
+        ),
     ],
 )
 async def test_scenario_totals(items, mode, fulfillment, expected):
@@ -124,13 +138,12 @@ async def test_what_cant_go_on_comes_back_with_what_to_ask_and_the_rest_goes_on(
             item("veggie", "large", without=["ham"]),
         ]
     )
-    assert [ln.label for ln in added] == ["large Pepperoni"]
+    assert [ln.label for ln in added] == ["large Pepperoni", "dozen Bone-in Wings"]
     assert any("Ask which size Coke" in p for p in problems)
-    assert any("Ask which sauce" in p for p in problems)
     assert any("sold out" in p and "Mozzarella Sticks" in p for p in problems)
     assert any("Only pizzas" in p for p in problems)
     assert any("doesn't come with ham" in p for p in problems)
-    assert [ln.id for ln in pos.lines] == ["L1"]
+    assert [ln.id for ln in pos.lines] == ["L1", "L2"]
 
 
 async def test_saying_an_item_again_never_adds_it_twice():
@@ -139,6 +152,69 @@ async def test_saying_an_item_again_never_adds_it_twice():
     added, problems = await pos.add_items([item("pepperoni", "large", 2)])
     assert not added and "already on the order as L1" in problems[0]
     assert [ln.quantity for ln in pos.lines] == [2]
+
+
+async def test_wings_without_a_sauce_go_on_and_wait_for_the_callers_pick():
+    sent = []
+
+    async def publish(parts):
+        sent.append(parts)
+
+    pos = Pizzeria(publish)
+    _, problems = await pos.add_items(
+        [item("pepperoni", "large"), item("wings", "dozen")]
+    )
+    assert not problems
+    await pos.set_fulfillment("pickup")
+    await pos.set_contact(**SAM)
+    assert pos.cart_facts()["order"][1]["needs"] == "sauce"
+    assert sent[-1]["cart"]["lines"][1]["needs"] == "sauce"
+    with pytest.raises(PizzeriaError, match="Which sauce on L2"):
+        pos.order_read_back()
+    await pos.update_item("L2", sauce="lemon_pepper")
+    assert "stillToAsk" not in pos.cart_facts()
+    assert pos.order_read_back()["items"] == [
+        "1 large Pepperoni",
+        "1 dozen Bone-in Wings, lemon pepper sauce",
+    ]
+
+
+async def test_naming_the_sauce_again_is_for_the_waiting_wings_not_another_order():
+    pos = Pizzeria()
+    await pos.add_items([item("wings", "dozen")])
+    added, problems = await pos.add_items([item("wings", "dozen", sauce="hot")])
+    assert not added and "update_item L1" in problems[0]
+    added, _ = await pos.add_items([item("boneless", "dozen", sauce="hot")])
+    assert [ln.label for ln in added] == ["dozen Boneless Wings"]
+    # two orders asked for at once are two orders, even while one waits on its sauce
+    both = Pizzeria()
+    added, problems = await both.add_items(
+        [item("wings", "dozen"), item("wings", "dozen", sauce="hot")]
+    )
+    assert len(added) == 2 and not problems
+
+
+async def test_plain_wings_have_no_sauce_on_them():
+    pos = await order(item("boneless", "half_dozen", sauce="plain"))
+    assert pos.order_read_back()["items"] == ["1 half dozen Boneless Wings, plain"]
+
+
+async def test_an_order_thats_not_placed_is_dropped_whole_and_only_before_its_placed():
+    pos = await order(item("margherita", "medium"), item("coke", "large"))
+    await pos.set_tip(dollars=3)
+    assert pos.drop_read_back() == {
+        "drop": ["1 medium Margherita", "1 large Coke"],
+        "placed": False,
+        "due": "$0.00",
+    }
+    await pos.drop()
+    assert pos.lines == [] and pos.tip == 0 and pos.quote() is None
+    with pytest.raises(PizzeriaError, match="nothing to drop"):
+        pos.drop_read_back()
+    placed = await order(item("margherita", "medium"))
+    await placed.place()
+    with pytest.raises(PizzeriaError, match="already sent"):
+        placed.drop_read_back()
 
 
 async def test_an_update_changes_only_what_it_names():

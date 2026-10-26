@@ -185,18 +185,84 @@ async def test_cancelling_the_delivery_waits_for_their_yes(judge):
     assert pos.order.cancelled and pos.due_now() == 0
 
 
-async def test_cancelling_before_anything_is_placed_says_so(judge):
+async def test_dropping_an_order_thats_not_placed_waits_for_their_yes(judge):
     pos = Pizzeria()
     async with AgentSession(llm=judge) as session:
         await session.start(TakeOrder(pos))
-        await session.run(user_input="Can I get a medium margherita for pickup?")
-        result = await session.run(user_input="Actually, never mind, cancel that.")
+        await session.run(
+            user_input="Can I get a medium margherita and a large Coke for pickup?"
+        )
+        result = await session.run(
+            user_input="Actually, never mind, cancel the whole thing."
+        )
+        result.expect.contains_function_call(name="cancel_order")
+        assert len(pos.lines) == 2
         await (
             result.expect[-1]
             .is_message(role="assistant")
-            .judge(judge, intent="Tells them the order was never placed.")
+            .judge(judge, intent="Asks them to confirm dropping the whole order.")
         )
-    assert pos.order is None
+        await session.run(user_input="Yes, drop it.")
+    assert pos.order is None and pos.lines == []
+
+
+async def test_how_big_the_large_is_comes_from_the_menu(judge):
+    async with AgentSession(llm=judge) as session:
+        await session.start(TakeOrder(Pizzeria()))
+        result = await session.run(user_input="How big is the large pizza?")
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(judge, intent="Says the large pizza is fourteen inches.")
+        )
+
+
+async def test_wings_with_a_sauce_we_dont_have_wait_for_the_callers_pick(judge):
+    pos = Pizzeria()
+    async with AgentSession(llm=judge) as session:
+        await session.start(TakeOrder(pos))
+        result = await session.run(
+            user_input="Can I get a large pepperoni and a dozen wings with honey garlic "
+            "sauce?"
+        )
+        assert sorted(ln.describe() for ln in pos.lines) == [
+            "1 dozen Bone-in Wings",
+            "1 large Pepperoni",
+        ]
+        await (
+            result.expect[-1]
+            .is_message(role="assistant")
+            .judge(
+                judge,
+                intent="Says there's no honey garlic and asks which of its sauces they'd "
+                "like, without choosing one for them.",
+            )
+        )
+        await session.run(user_input="Lemon pepper, then.")
+    assert sorted(ln.describe() for ln in pos.lines) == [
+        "1 dozen Bone-in Wings, lemon pepper sauce",
+        "1 large Pepperoni",
+    ]
+
+
+async def test_forget_it_after_a_missing_sauce_doesnt_end_the_call(judge):
+    pos = Pizzeria()
+    async with AgentSession(llm=judge) as session:
+        await session.start(TakeOrder(pos))
+        await session.run(
+            user_input="Large pepperoni and a dozen bone-in wings with honey mustard. "
+            "That's it, for pickup."
+        )
+        result = await session.run(user_input="Ugh, okay, forget it then.")
+        hung_up = [
+            e.item
+            for e in result.events
+            if e.item.type == "function_call_output"
+            and e.item.name == "end_call"
+            and not e.item.is_error
+        ]
+        assert not hung_up
+    assert "1 large Pepperoni" in [ln.describe() for ln in pos.lines]
 
 
 async def test_a_number_given_in_one_breath_is_saved_as_said(judge):
