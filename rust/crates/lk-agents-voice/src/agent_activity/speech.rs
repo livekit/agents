@@ -498,7 +498,7 @@ impl Driver {
             end_of_utterance_delay: secs(info.metrics.end_of_turn_delay),
             transcription_delay: secs(info.metrics.transcription_delay),
             on_user_turn_completed_delay: secs(info.metrics.on_user_turn_completed_delay),
-            speech_id: speech.map(|s| crate::speech_handle::SpeechWireId(s).to_string()),
+            speech_id: speech.map(|s| s.to_string()),
             metadata,
         };
         out.machine().emit(SessionEvent::MetricsCollected {

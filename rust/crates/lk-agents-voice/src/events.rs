@@ -325,7 +325,7 @@ impl ToolLifecycle {
                 w::ToolUpdate::Reply(w::ToolReplyUpdated {
                     update_ids: update_ids.clone(),
                     status: status.as_str().to_owned(),
-                    speech_id: crate::speech_handle::SpeechWireId(*speech).to_string(),
+                    speech_id: speech.to_string(),
                 })
             }
         }

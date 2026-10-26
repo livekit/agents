@@ -1,6 +1,4 @@
-use crate::agent_session::{
-    IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand,
-};
+use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand};
 use crate::amd::classifier::{
     Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out,
     TranscriptSource, Verdict,

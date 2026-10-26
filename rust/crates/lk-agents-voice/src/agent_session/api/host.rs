@@ -860,9 +860,8 @@ impl SessionApi {
             return Err(invalid(FillerError::NegativeInterval));
         }
         let speech = speech_id
-            .parse::<crate::speech_handle::SpeechWireId>()
-            .map_err(|e| CommandRefused::Invalid(e.to_string()))?
-            .0;
+            .parse::<crate::agent_activity::scheduling::SpeechId>()
+            .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
         let source = match text {
             Some(text) => FillerSource::Text(text),
             None => FillerSource::Host(source),

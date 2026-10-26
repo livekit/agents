@@ -10,7 +10,7 @@ use std::task::{Context, Poll, Waker};
 use lk_agents_abi::voice::session_options::UpdateKwargs;
 use lk_agents_rtc::{ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_voice::agent_session::{CommitSuperseded, DrainRefused, HostMetricsRecord};
-use lk_agents_voice::speech_handle::SpeechWireId;
+
 use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
 
 use super::start::{
@@ -380,7 +380,7 @@ impl Run {
                 };
                 api.filler_start(
                     call_id,
-                    &SpeechWireId(speech).to_string(),
+                    &speech.to_string(),
                     secs(*delay),
                     interval.map(secs),
                     None,

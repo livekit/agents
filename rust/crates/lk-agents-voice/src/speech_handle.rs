@@ -345,13 +345,10 @@ impl HostSpeech {
     }
 }
 
-/// A [`SpeechId`] on the wire: `speech_{n}`. `Display` mints it and `FromStr` reads it back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SpeechWireId(pub SpeechId);
-
-impl std::fmt::Display for SpeechWireId {
+/// A [`SpeechId`] on the wire, `speech_{n}`: `Display` mints it and `FromStr` reads it back.
+impl std::fmt::Display for SpeechId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "speech_{}", self.0.0)
+        write!(f, "speech_{}", self.0)
     }
 }
 
@@ -367,13 +364,13 @@ impl std::fmt::Display for NotASpeechId {
 
 impl std::error::Error for NotASpeechId {}
 
-impl std::str::FromStr for SpeechWireId {
+impl std::str::FromStr for SpeechId {
     type Err = NotASpeechId;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         s.strip_prefix("speech_")
             .and_then(|n| n.parse::<u64>().ok())
-            .map(|n| SpeechWireId(SpeechId(n)))
+            .map(SpeechId)
             .ok_or_else(|| NotASpeechId(s.to_owned()))
     }
 }
@@ -386,11 +383,11 @@ mod wire_id_tests {
     // never fires.
     #[test]
     fn a_wire_id_round_trips_and_a_foreign_one_is_named() {
-        let id = SpeechWireId(SpeechId(42));
+        let id = SpeechId(42);
         assert_eq!(id.to_string(), "speech_42");
-        assert_eq!("speech_42".parse::<SpeechWireId>(), Ok(id));
+        assert_eq!("speech_42".parse::<SpeechId>(), Ok(id));
         for bad in ["42", "speech_", "speech_x1", "speech_ab12cd"] {
-            let err = bad.parse::<SpeechWireId>().unwrap_err();
+            let err = bad.parse::<SpeechId>().unwrap_err();
             assert_eq!(err.to_string(), format!("not a driver speech id: {bad:?}"));
         }
     }
@@ -490,7 +487,7 @@ impl SpeechHandle {
     pub fn new(id: SpeechId, allow_interruptions: bool) -> Self {
         SpeechHandle {
             id,
-            speech_id: SpeechWireId(id).to_string().into(),
+            speech_id: id.to_string().into(),
             scheduled: Monotone::new(false),
             interrupted: watch::Sender::new(Interruption::None),
             done: Monotone::new(false),

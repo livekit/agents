@@ -200,9 +200,9 @@ impl HookCall {
 impl SessionEvent {
     pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, api: &Tx<Command>) -> HostWire {
         use crate::events::{RunFailure, RunOutcome};
-        use crate::speech_handle::{HostSpeech, SpeechWireId};
+        use crate::speech_handle::HostSpeech;
         use lk_agents_abi::voice::events as w;
-        let speech_id = |id: SpeechId| SpeechWireId(id).to_string();
+        let speech_id = |id: SpeechId| id.to_string();
         // `created_at` is the host's stamp (`#[binding(skip)]`): inert here.
         let host_stamp = 0.0;
         match self {

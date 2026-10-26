@@ -710,4 +710,3 @@ pub enum DriverError {
 pub fn start_ivr(peer: &PeerHandle, ivr_detection: bool) {
     crate::ivr::IvrSystem::spawn(peer.clone(), ivr_detection);
 }
-
