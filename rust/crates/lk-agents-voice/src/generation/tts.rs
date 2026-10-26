@@ -335,11 +335,13 @@ impl TtsGenerationData {
         chunk: &SynthesizedAudio,
     ) {
         if !self.produced() {
-            // The turn's, from `synthesis_started_at`; the record's is the request's.
-            let turn = shared.time.wall_secs() - self.synthesis_started_at;
+            // The turn's, from when the provider was first sent text; without that stamp, from
+            // the first input, which also counts the text buffering. The record's is the
+            // request's.
+            let anchor = chunk.started_time.unwrap_or(self.synthesis_started_at);
             let stats = crate::generation::TtsStats {
-                ttfb: Some(turn),
-                synthesis_started_at: Some(self.synthesis_started_at),
+                ttfb: Some(shared.time.wall_secs() - anchor),
+                synthesis_started_at: chunk.started_time,
             };
             acc.record_tts(self.segment, stats);
         }

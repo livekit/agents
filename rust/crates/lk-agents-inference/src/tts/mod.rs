@@ -566,10 +566,10 @@ impl Pump {
         let sender = connection.sender.clone();
 
         // `input_sent_event`: nothing is read back until the session is configured and text (or
-        // the flush) is on the wire.
-        let (input_sent_tx, input_sent_rx) = tokio::sync::watch::channel(false);
+        // the flush) is on the wire. It carries `_mark_started()`'s instant, the frames' anchor.
+        let (input_sent_tx, input_sent_rx) = tokio::sync::watch::channel(None);
 
-        let send = Self::send_loop(sender.clone(), text_rx, &opts, input_sent_tx);
+        let send = Self::send_loop(sender.clone(), text_rx, &opts, &*clock, input_sent_tx);
         let recv = Self::recv_loop(
             connection.receiver.as_mut(),
             &audio_tx,
@@ -607,8 +607,13 @@ impl Pump {
         sender: Arc<dyn WsSender>,
         mut text_rx: mpsc::UnboundedReceiver<TextCmd>,
         opts: &TtsOptions,
-        input_sent: tokio::sync::watch::Sender<bool>,
+        clock: &dyn Clock,
+        input_sent: tokio::sync::watch::Sender<Option<f64>>,
     ) -> Result<(), ApiError> {
+        let mark_started = || {
+            let now = clock.wall().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+            input_sent.send_if_modified(|at| at.is_none() && at.replace(now).is_none());
+        };
         loop {
             match text_rx.recv().await {
                 Some(TextCmd::Push(sentence)) => {
@@ -617,7 +622,7 @@ impl Pump {
                         .send_text(frame.to_string())
                         .await
                         .map_err(|e| ApiError::connection(Some(e.to_string())))?;
-                    let _ = input_sent.send(true);
+                    mark_started();
                 }
                 // The `_FlushSentinel` only flushes the host's tokenizer; nothing goes on the wire.
                 Some(TextCmd::Flush) => {}
@@ -631,7 +636,7 @@ impl Pump {
             .await
             .map_err(|e| ApiError::connection(Some(e.to_string())))?;
         // "needed in case empty input is sent" -- the flush itself releases the receive half.
-        let _ = input_sent.send(true);
+        mark_started();
         std::future::pending::<()>().await;
         Ok(())
     }
@@ -650,7 +655,8 @@ impl Pump {
             clock,
             first_message_timeout,
         } = ctx;
-        let _ = input_sent.wait_for(|sent| *sent).await;
+        let _ = input_sent.wait_for(Option::is_some).await;
+        let started_time = *input_sent.borrow();
         // Only the first read after text is on the wire is bounded; see `Pump::timeout`.
         let mut awaiting_first = true;
         let mut segment_id: Option<String> = None;
@@ -698,6 +704,7 @@ impl Pump {
                             let out = SynthesizedAudio {
                                 timed_transcript: std::mem::take(&mut pending_transcript),
                                 segment_id: segment_id.clone().unwrap_or_default(),
+                                started_time,
                                 ..SynthesizedAudio::new(
                                     mono(data, sample_rate),
                                     request_id.clone(),
@@ -752,7 +759,7 @@ struct RecvCtx<'a> {
     request_id: String,
     sample_rate: u32,
     expressive: bool,
-    input_sent: tokio::sync::watch::Receiver<bool>,
+    input_sent: tokio::sync::watch::Receiver<Option<f64>>,
     clock: &'a dyn Clock,
     first_message_timeout: Duration,
 }
@@ -863,6 +870,26 @@ mod tests {
         assert_eq!(ws.connect_count(), 1, "one socket");
         let creates = ws.sent_json().iter().filter(|f| f["type"] == json!("session.create")).count();
         assert_eq!(creates, 1, "configured once: {:?}", ws.sent_json());
+    }
+
+    // Catches: frames without `USERDATA_TTS_STARTED_TIME`, so the session measured TTFB from the
+    // first token it pushed, sentence buffering included, and had no time to first sentence.
+    // `_mark_started()` stamps the first sentence sent.
+    #[tokio::test]
+    async fn frames_carry_the_instant_the_first_sentence_went_out() {
+        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+        let tts = tts(ws.clone()).with_clock(clock.clone());
+        let (sink, mut source) = tts.stream().await.unwrap();
+        sink.push("Hello there, this is".to_owned()).unwrap();
+        clock.advance(Duration::from_millis(300));
+        let sent_at = clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+        sink.push(" the first sentence. And".to_owned()).unwrap();
+        until_sent(&ws, 2).await;
+        ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
+        let frame = source.next().await.unwrap().unwrap();
+        let started = frame.started_time.expect("the frame carries the stamp");
+        assert!((started - sent_at).abs() < 1e-3, "{started} != {sent_at}");
     }
 
     /// Yield until `ws` has recorded `n` frames (or give up), for send-side ordering tests.

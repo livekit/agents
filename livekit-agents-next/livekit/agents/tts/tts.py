@@ -44,7 +44,9 @@ class SynthesizedAudio:
 
     @property
     def _core_started_time(self) -> float | None:
-        return self.frame.userdata.get(USERDATA_TTS_STARTED_TIME)  # type: ignore[no-any-return]
+        # a perf_counter() stamp, as wall-clock seconds for the core
+        started: float | None = self.frame.userdata.get(USERDATA_TTS_STARTED_TIME)
+        return None if started is None else time.time() - (time.perf_counter() - started)
 
     @property
     def _core_timed_transcript(self) -> list[TimedString]:

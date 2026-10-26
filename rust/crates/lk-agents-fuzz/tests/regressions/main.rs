@@ -54,6 +54,7 @@ mod switch_at_receipt;
 mod switch_races_frames;
 mod tool_started_then_interrupted;
 mod transcript_path_reopened;
+mod tts_first_byte_anchor;
 mod tts_text_transforms;
 mod twin_requests_attributed;
 mod unheard_reply_not_committed;

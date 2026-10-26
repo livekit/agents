@@ -39,7 +39,8 @@ pub struct SynthesizedAudio {
     pub segment_id: String,
     /// Streaming only, `""` otherwise.
     pub delta_text: String,
-    /// `USERDATA_TTS_STARTED_TIME`: `perf_counter()` when the text was first sent to the provider.
+    /// `USERDATA_TTS_STARTED_TIME`: when the text was first sent to the provider, in wall-clock
+    /// seconds (a host's `perf_counter()` stamp is converted where it is read).
     /// `None` when absent (`generation.py:426` branches on it); `0.0` is legitimate.
     /// Read off `_core_started_time`, the host class's view of the frame's `userdata`.
     pub started_time: Option<f64>,

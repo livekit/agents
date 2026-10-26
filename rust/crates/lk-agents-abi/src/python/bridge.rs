@@ -322,10 +322,17 @@ impl<T: Send> crate::StreamSource<T> for HostSource<T> {
     }
 
     /// `SynthesizeStream._started_time`, which is `0` until `_mark_started()`; a stream without the
-    /// attribute (not a synthesis stream) has none.
+    /// attribute (not a synthesis stream) has none. A `perf_counter()` stamp, read as wall-clock
+    /// seconds.
     fn started_time(&self) -> Option<f64> {
-        let read = self.handle.read("_started_time", |v| v.extract::<f64>());
-        read.ok().filter(|t| *t != 0.0)
+        let read = self.handle.read("_started_time", |v| {
+            let started = v.extract::<f64>()?;
+            let time = v.py().import("time")?;
+            let wall: f64 = time.call_method0("time")?.extract()?;
+            let perf: f64 = time.call_method0("perf_counter")?.extract()?;
+            Ok((started, wall - (perf - started)))
+        });
+        read.ok().filter(|(started, _)| *started != 0.0).map(|(_, wall)| wall)
     }
 }
 
