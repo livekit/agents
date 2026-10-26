@@ -14,10 +14,10 @@ from .._generated.inference_stt import (
     DeepgramFluxOptions,
     DeepgramModels,
     DeepgramOptions,
-    ElevenlabsModels,
-    ElevenlabsOptions,
     FallbackModel,
     FallbackModelType,
+    GoogleModels,
+    GoogleOptions,
     InworldModels,
     InworldOptions,
     SpeechmaticsModels,
@@ -53,8 +53,8 @@ __all__ = [
     "DeepgramOptions",
     "DeepgramFluxModels",
     "DeepgramFluxOptions",
-    "ElevenlabsModels",
-    "ElevenlabsOptions",
+    "GoogleModels",
+    "GoogleOptions",
     "InworldModels",
     "InworldOptions",
     "SpeechmaticsModels",
@@ -99,7 +99,7 @@ class STT(stt.STT):
             http_session: Unused; the core owns the connection.
             extra_kwargs: Provider options passed through to the gateway.
             fallback: Fallback models, names or ``FallbackModel`` entries, run by the gateway.
-            conn_options: The connection timeout the gateway client uses.
+            conn_options: The connection timeout, and the retries the gateway runs server-side.
             vad: A VAD whose end of speech finalizes the transcript (Speechmatics only).
         """
         if isinstance(model, str):
@@ -170,6 +170,7 @@ class STT(stt.STT):
             extra_kwargs=self._extra | self._keyterm_extra(),
             fallback=self._fallback or None,
             timeout=self._conn.timeout,
+            max_retry=self._conn.max_retry,
             vad=self._vad,
             headers=list(get_inference_headers().items()),
         )
@@ -283,7 +284,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             while (ev := await native.recv()) is not None:
                 self._event_ch.send_nowait(
-                    stt.SpeechEvent._from_core(ev, offset=self.start_time_offset)
+                    stt.stt._speech_event_from_core(ev, offset=self.start_time_offset)
                 )
         finally:
             self._native = None

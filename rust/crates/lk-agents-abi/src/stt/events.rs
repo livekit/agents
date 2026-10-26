@@ -134,7 +134,26 @@ pub struct RecognitionUsage {
 
 // `stt/stt.py:114`: one struct for all six kinds, as in the reference.
 #[derive(Debug, Clone, PartialEq, Host)]
-#[python(dataclass, zero_defaults, module = "stt", path = "livekit.agents.stt.stt", name = "SpeechEvent")]
+#[python(
+    dataclass,
+    zero_defaults,
+    module = "stt",
+    path = "livekit.agents.stt.stt",
+    name = "SpeechEvent",
+    // Wall-clock times the host stamps; the core has no wall clock.
+    host_field(
+        name = "created_at",
+        ty = "float",
+        default_factory = "time.time",
+        doc = "Wall-clock time when this event was created."
+    ),
+    host_field(
+        name = "speech_end_time",
+        ty = "float | None",
+        default = "None",
+        doc = "Wall-clock time when the recognized speech ended, when known."
+    )
+)]
 #[node(interface)]
 #[binding(emit, extract)]
 pub struct SpeechEvent {

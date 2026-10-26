@@ -12,7 +12,14 @@ from .. import _core, utils
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..vad import VAD, VADEventType
-from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
+from .stt import (
+    STT,
+    RecognizeStream,
+    SpeechEvent,
+    SpeechEventType,
+    STTCapabilities,
+    _speech_event_from_core,
+)
 
 if TYPE_CHECKING:
     from ..llm.chat_context import MetricsMetadata
@@ -129,7 +136,7 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
     ) -> SpeechEvent:
         frames = buffer if isinstance(buffer, list) else [buffer]
         event = await self._native.recognize(frames, language if language else None)
-        return SpeechEvent._from_core(event)
+        return _speech_event_from_core(event)
 
     async def recognize(
         self,
@@ -179,7 +186,7 @@ class FallbackRecognizeStream(RecognizeStream):
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
-                self._event_ch.send_nowait(SpeechEvent._from_core(ev))
+                self._event_ch.send_nowait(_speech_event_from_core(ev))
         finally:
             await utils.aio.cancel_and_wait(push)
             await native.aclose()

@@ -37,12 +37,13 @@ pub mod gateway {
             "assemblyai/universal-streaming-multilingual",
             "assemblyai/u3-rt-pro",
             "assemblyai/universal-3-5-pro",
+            "assemblyai/universal-3-6-pro",
         ];
-        pub const ELEVENLABS_MODELS: &[&str] = &["elevenlabs/scribe_v2_realtime"];
         pub const XAI_MODELS: &[&str] = &["xai/stt-1"];
         pub const SPEECHMATICS_MODELS: &[&str] =
-            &["speechmatics/enhanced", "speechmatics/standard"];
+            &["speechmatics/enhanced", "speechmatics/standard", "speechmatics/linden-1"];
         pub const INWORLD_MODELS: &[&str] = &["inworld/inworld-stt-1"];
+        pub const GOOGLE_MODELS: &[&str] = &["google/gemini-3.5-transcribe-live"];
 
         pub struct CartesiaOptions {
             pub min_volume: Option<f64>, // ink-whisper only; default: not specified
@@ -122,17 +123,6 @@ pub mod gateway {
             pub mode: Option<Value>, // accuracy/latency preset (u3-rt-pro)
         }
 
-        pub struct ElevenlabsOptions {
-            #[python(ty = "Literal[\"manual\", \"vad\"]")]
-            pub commit_strategy: Option<Value>,
-            pub include_timestamps: Option<bool>,
-            pub vad_silence_threshold_secs: Option<f64>,
-            pub vad_threshold: Option<f64>,
-            pub min_speech_duration_ms: Option<i64>,
-            pub min_silence_duration_ms: Option<i64>,
-            pub language_code: Option<String>,
-        }
-
         pub struct SpeechmaticsOptions {
             pub domain: Option<String>,           // e.g. "finance"
             pub output_locale: Option<String>,    // BCP-47 locale for output formatting
@@ -171,6 +161,14 @@ pub mod gateway {
             pub vad_threshold: Option<f64>, // range 0.0-1.0, default 0.5
         }
 
+        pub struct GoogleOptions {
+            // Mirrors the Live API's AudioTranscriptionConfig. Omit language_codes, or pass an
+            // empty list, to let the model detect the language itself.
+            // https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
+            pub language_codes: Option<Vec<String>>, // BCP-47 codes, e.g. ["en-US", "es-ES"]
+            pub custom_vocabulary: Option<Vec<String>>, // up to 1000 terms that bias recognition
+        }
+
         #[host(name = "STTLanguages")]
         pub const STT_LANGUAGES: &[&str] =
             &["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"];
@@ -178,7 +176,7 @@ pub mod gateway {
         pub const FALLBACK_MODEL_TYPE: &[&str] = &[];
         #[host(
             name = "STTModels",
-            union = "DeepgramModels, DeepgramFluxModels, CartesiaModels, AssemblyAIModels, ElevenlabsModels, XaiModels, SpeechmaticsModels, InworldModels"
+            union = "DeepgramModels, DeepgramFluxModels, CartesiaModels, AssemblyAIModels, XaiModels, SpeechmaticsModels, InworldModels, GoogleModels"
         )] // automatically select a provider based on the language
         pub const STT_MODELS: &[&str] = &["auto"];
         #[host(name = "STTEncoding")]
@@ -200,15 +198,6 @@ pub mod gateway {
             "cartesia/sonic-latest",
         ];
         pub const DEEPGRAM_MODELS: &[&str] = &["deepgram", "deepgram/aura", "deepgram/aura-2"];
-        pub const ELEVENLABS_MODELS: &[&str] = &[
-            "elevenlabs",
-            "elevenlabs/eleven_flash_v2",
-            "elevenlabs/eleven_flash_v2_5",
-            "elevenlabs/eleven_turbo_v2",
-            "elevenlabs/eleven_turbo_v2_5",
-            "elevenlabs/eleven_multilingual_v2",
-            "elevenlabs/eleven_v3",
-        ];
         pub const RIME_MODELS: &[&str] = &[
             "rime",
             "rime/coda",
@@ -234,7 +223,7 @@ pub mod gateway {
         ];
         #[host(
             name = "TTSModels",
-            union = "CartesiaModels, DeepgramModels, ElevenlabsModels, RimeModels, InworldModels, XaiModels, FishAudioModels"
+            union = "CartesiaModels, DeepgramModels, RimeModels, InworldModels, XaiModels, FishAudioModels"
         )]
         pub const TTS_MODELS: &[&str] = &[];
         #[host(union = "FallbackModel, str")]
@@ -254,24 +243,6 @@ pub mod gateway {
 
         pub struct DeepgramOptions {
             pub mip_opt_out: Option<bool>, // default: False
-        }
-
-        pub struct ElevenlabsOptions {
-            pub inactivity_timeout: Option<i64>, // default: 60, range 5-180
-            #[python(ty = "Literal[\"auto\", \"off\", \"on\"]")]
-            pub apply_text_normalization: Option<Value>, // default: "auto"
-            pub auto_mode: Option<bool>,
-            pub enable_logging: Option<bool>,
-            pub enable_ssml_parsing: Option<bool>,
-            pub sync_alignment: Option<bool>,
-            pub language_code: Option<String>,
-            pub stability: Option<f64>,        // range 0-1
-            pub similarity_boost: Option<f64>, // range 0-1
-            pub style: Option<f64>,            // range 0-1
-            pub speed: Option<f64>,            // range 0.25-4
-            pub use_speaker_boost: Option<bool>,
-            pub chunk_length_schedule: Option<Vec<f64>>,
-            pub preferred_alignment: Option<String>,
         }
 
         /// Rime-specific WebSocket JSON query parameters.
@@ -350,6 +321,9 @@ pub mod gateway {
             "openai/gpt-5.4-mini",
             "openai/gpt-5.4-nano",
             "openai/gpt-5.5",
+            "openai/gpt-5.6-luna",
+            "openai/gpt-5.6-sol",
+            "openai/gpt-5.6-terra",
             "openai/chat-latest",
             "openai/gpt-oss-120b",
         ];

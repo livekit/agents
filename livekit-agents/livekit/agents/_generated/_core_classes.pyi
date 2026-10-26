@@ -215,6 +215,13 @@ def avatar_payload(
     avatar_id: str | None,
     options: dict[str, Any],
 ) -> Any: ...
+def llm_unsupported_params(
+    model: str,
+    *,
+    has_tools: bool = False,
+    reasoning_effort: str | None = None,
+    reasoning: str | None = None,
+) -> list[str]: ...
 def min_reasoning_effort(model: str) -> str | None: ...
 def workflow_prompts() -> dict[str, Any]: ...
 def task_group_summary_flags() -> dict[str, Any]: ...
@@ -313,6 +320,12 @@ def to_provider_format(
     inject_trailing_user_message: bool = False,
     thought_signatures: dict[str, list[int]] | None = None,
 ) -> tuple[list[Any], Any]: ...
+def convert_mid_conversation_instructions(
+    items: list[ChatItem],
+    *,
+    role: str,
+    template: str,
+) -> list[tuple[int, ChatItem | None]]: ...
 def to_fnc_ctx(
     format: str,
     tools: list[Any],
@@ -401,6 +414,12 @@ def split_words(
     text: str,
     ignore_punctuation: bool = True,
     split_character: bool = False,
+    retain_format: bool = False,
+) -> list[tuple[str, int, int]]: ...
+def basic_split_sentences(
+    text: str,
+    min_sentence_len: int = 20,
+    *,
     retain_format: bool = False,
 ) -> list[tuple[str, int, int]]: ...
 def default_load_window() -> int: ...
@@ -1202,6 +1221,9 @@ class AudioByteStream:
         samples_per_channel: int | None = None,
         progressive: bool = False,
     ) -> None: ...
+    @property
+    def buffered_duration(self) -> float: ...
+    def reset_progressive(self) -> None: ...
     def clear(self) -> None: ...
     def push(self, data: bytes | memoryview) -> list[rtc.AudioFrame]: ...
     def write(self, data: bytes | memoryview) -> list[rtc.AudioFrame]: ...
@@ -1800,6 +1822,7 @@ class FallbackLlm:
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
         retry_on_chunk_sent: bool = False,
+        sticky: bool = False,
         on_availability: Any | None = None,
     ) -> None: ...
     @property

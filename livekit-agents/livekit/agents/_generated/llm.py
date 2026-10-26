@@ -27,6 +27,12 @@ class CompletionUsage(BaseModel):
     """The number of tokens used to create the cache."""
     cache_read_tokens: int = 0
     """The number of tokens read from the cache."""
+    reasoning_tokens: int = 0
+    """The number of completion tokens spent on hidden reasoning.
+    Already counted in ``completion_tokens``; do not add it to totals. Only reported by
+    providers that break reasoning out separately (e.g. OpenAI-compatible responses
+    carrying ``completion_tokens_details.reasoning_tokens``), 0 everywhere else.
+    """
     total_tokens: int
     """The total number of tokens used (completion + prompt tokens)."""
     service_tier: str | None = None

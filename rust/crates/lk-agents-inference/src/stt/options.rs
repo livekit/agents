@@ -20,7 +20,7 @@ const WORD_ALIGNED_MODELS: &[&str] = &[
     "assemblyai/universal-streaming-multilingual",
     "assemblyai/u3-rt-pro",
     "assemblyai/universal-3-5-pro",
-    "elevenlabs/scribe_v2_realtime",
+    "assemblyai/universal-3-6-pro",
     "xai/stt-1",
     "speechmatics/enhanced",
     "speechmatics/standard",
@@ -28,7 +28,10 @@ const WORD_ALIGNED_MODELS: &[&str] = &[
 
 /// Models that natively carry `agent_context` (the AssemblyAI U3 Pro family).
 const ASSEMBLYAI_CARRYOVER_MODELS: &[&str] =
-    &["assemblyai/u3-rt-pro", "assemblyai/universal-3-5-pro"];
+    &["assemblyai/u3-rt-pro", "assemblyai/universal-3-5-pro", "assemblyai/universal-3-6-pro"];
+
+/// Speechmatics' model that detects turns server-side: no client VAD, no keyterm prompting.
+const SPEECHMATICS_SERVER_TURNS: &str = "speechmatics/linden-1";
 
 const DIARIZATION_EXTRA_KEYS: &[&str] = &[
     "diarize",        // Deepgram, xAI
@@ -89,6 +92,9 @@ pub fn keyterms_extra_for_model(
     let empty = Map::new();
     let extra = extra_kwargs.unwrap_or(&empty);
 
+    if model == SPEECHMATICS_SERVER_TURNS {
+        return None;
+    }
     if model.starts_with("speechmatics/") {
         // Keep existing entries as-is (they may carry `sounds_like` etc.) and append new terms.
         let existing: Vec<Value> =
@@ -196,7 +202,8 @@ pub enum VadResolution {
 
 #[lk_agents_abi::host(export(name = "stt_resolve_vad_for_model", kw_only = "has_vad", defaults(has_vad = false)))]
 pub fn resolve_vad_for_model(model: Option<&str>, has_vad: bool) -> VadResolution {
-    let is_speechmatics = model.is_some_and(|m| m.starts_with("speechmatics/"));
+    let is_speechmatics =
+        model.is_some_and(|m| m.starts_with("speechmatics/") && m != SPEECHMATICS_SERVER_TURNS);
     if has_vad && !is_speechmatics {
         return VadResolution::DropAndWarn;
     }
@@ -241,6 +248,7 @@ mod tests {
     fn only_the_assemblyai_u3_pro_family_carries_agent_context() {
         assert!(supports_agent_context_carryover(Some("assemblyai/u3-rt-pro")));
         assert!(supports_agent_context_carryover(Some("assemblyai/universal-3-5-pro")));
+        assert!(supports_agent_context_carryover(Some("assemblyai/universal-3-6-pro")));
         assert!(!supports_agent_context_carryover(Some("assemblyai/universal-streaming")));
         assert!(!supports_agent_context_carryover(Some("deepgram/nova-3")));
         assert!(!supports_agent_context_carryover(None));
@@ -252,6 +260,8 @@ mod tests {
     #[test]
     fn auto_and_unknown_models_are_not_word_aligned() {
         assert!(aligned_transcript_for_model(Some("deepgram/nova-3")));
+        assert!(aligned_transcript_for_model(Some("assemblyai/universal-3-6-pro")));
+        assert!(!aligned_transcript_for_model(Some("speechmatics/linden-1")));
         assert!(!aligned_transcript_for_model(Some("auto")));
         assert!(!aligned_transcript_for_model(Some("inworld/inworld-stt-1")));
         assert!(!aligned_transcript_for_model(None));
@@ -327,6 +337,9 @@ mod tests {
             keyterms_extra_for_model(Some("cartesia/ink-whisper"), None, &["x".into()]).is_none()
         );
         assert!(keyterms_extra_for_model(None, None, &[]).is_none());
+        assert!(
+            keyterms_extra_for_model(Some("speechmatics/linden-1"), None, &["x".into()]).is_none()
+        );
         assert!(keyterms_extra_for_model(Some("assemblyai/u3-rt-pro"), None, &[]).is_some());
     }
 
@@ -353,6 +366,12 @@ mod tests {
         );
         assert_eq!(resolve_vad_for_model(Some("deepgram/nova-3"), false), VadResolution::None);
         assert_eq!(resolve_vad_for_model(None, false), VadResolution::None);
+        // linden-1 detects turns server-side.
+        assert_eq!(resolve_vad_for_model(Some("speechmatics/linden-1"), false), VadResolution::None);
+        assert_eq!(
+            resolve_vad_for_model(Some("speechmatics/linden-1"), true),
+            VadResolution::DropAndWarn
+        );
     }
 
     // Catches: keeping the `:language` suffix on a fallback entry.

@@ -98,6 +98,8 @@ pub struct TtsClientConfig {
     pub fallback: Option<crate::extra::Fallbacks<FallbackModel>>,
     #[host(kwarg(default = 10.0))]
     pub timeout: f64,
+    #[host(kwarg(default = 3))]
+    pub max_retry: u32,
 }
 
 impl NativeTts {

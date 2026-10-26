@@ -34,6 +34,9 @@ class UsageSummary:
     tts_characters_count: int = 0
     tts_audio_duration: float = 0.0
     stt_audio_duration: float = 0.0
+    stt_input_tokens: int = 0
+    stt_output_tokens: int = 0
+    stt_input_audio_tokens: int = 0
 
     @property
     def llm_input_tokens(self) -> int:

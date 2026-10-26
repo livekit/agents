@@ -57,7 +57,6 @@ dependencies = [
     # Direct HTTP clients (inference, MCP) use httpx2, matching the OpenAI 3 / MCP 2 SDKs.
     "httpx2>=2.12,<3",
     "aiofiles>=24",
-    "json-repair==0.63.5",
     "pyyaml>=6.0.3",
     # Required by the deprecated rich CLI (`cli.run_app`); drop when it is removed.
     "typer>=0.15.1",

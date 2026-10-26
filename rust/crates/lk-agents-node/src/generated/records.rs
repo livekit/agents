@@ -435,7 +435,7 @@ impl From<SttFallbackModel> for lk_agents_abi::inference::fallback::SttFallbackM
 /// Inference Fallback Adapter: configuration for a fallback TTS model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 #[napi(object, js_name = "TtsFallbackModel")]
 pub struct TtsFallbackModel {
-    /// Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/coda").
+    /// Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda").
     #[napi(ts_type = "string")]
     pub model: String,
     /// Voice to use for the model.
@@ -1006,52 +1006,6 @@ impl From<AssemblyaiOptions> for lk_agents_abi::inference::gateway::stt::Assembl
     }
 }
 
-#[napi(object, js_name = "SttElevenlabsOptions")]
-pub struct SttElevenlabsOptions {
-    #[napi(ts_type = "'manual' | 'vad'")]
-    pub commit_strategy: Option<serde_json::Value>,
-    #[napi(ts_type = "boolean")]
-    pub include_timestamps: Option<bool>,
-    #[napi(ts_type = "number")]
-    pub vad_silence_threshold_secs: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub vad_threshold: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub min_speech_duration_ms: Option<i64>,
-    #[napi(ts_type = "number")]
-    pub min_silence_duration_ms: Option<i64>,
-    #[napi(ts_type = "string")]
-    pub language_code: Option<String>,
-}
-
-impl From<&lk_agents_abi::inference::gateway::stt::ElevenlabsOptions> for SttElevenlabsOptions {
-    fn from(v: &lk_agents_abi::inference::gateway::stt::ElevenlabsOptions) -> Self {
-        SttElevenlabsOptions {
-            commit_strategy: v.commit_strategy.as_ref().map(|v| v.clone()),
-            include_timestamps: v.include_timestamps,
-            vad_silence_threshold_secs: v.vad_silence_threshold_secs,
-            vad_threshold: v.vad_threshold,
-            min_speech_duration_ms: v.min_speech_duration_ms,
-            min_silence_duration_ms: v.min_silence_duration_ms,
-            language_code: v.language_code.as_ref().map(|v| v.to_string()),
-        }
-    }
-}
-
-impl From<SttElevenlabsOptions> for lk_agents_abi::inference::gateway::stt::ElevenlabsOptions {
-    fn from(v: SttElevenlabsOptions) -> Self {
-        lk_agents_abi::inference::gateway::stt::ElevenlabsOptions {
-            commit_strategy: v.commit_strategy,
-            include_timestamps: v.include_timestamps,
-            vad_silence_threshold_secs: v.vad_silence_threshold_secs,
-            vad_threshold: v.vad_threshold,
-            min_speech_duration_ms: v.min_speech_duration_ms,
-            min_silence_duration_ms: v.min_silence_duration_ms,
-            language_code: v.language_code,
-        }
-    }
-}
-
 #[napi(object, js_name = "SpeechmaticsOptions")]
 pub struct SpeechmaticsOptions {
     #[napi(ts_type = "string")]
@@ -1218,6 +1172,32 @@ impl From<SttInworldOptions> for lk_agents_abi::inference::gateway::stt::Inworld
     }
 }
 
+#[napi(object, js_name = "GoogleOptions")]
+pub struct GoogleOptions {
+    #[napi(ts_type = "string[]")]
+    pub language_codes: Option<Vec<String>>,
+    #[napi(ts_type = "string[]")]
+    pub custom_vocabulary: Option<Vec<String>>,
+}
+
+impl From<&lk_agents_abi::inference::gateway::stt::GoogleOptions> for GoogleOptions {
+    fn from(v: &lk_agents_abi::inference::gateway::stt::GoogleOptions) -> Self {
+        GoogleOptions {
+            language_codes: v.language_codes.as_ref().map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<_>>()),
+            custom_vocabulary: v.custom_vocabulary.as_ref().map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<_>>()),
+        }
+    }
+}
+
+impl From<GoogleOptions> for lk_agents_abi::inference::gateway::stt::GoogleOptions {
+    fn from(v: GoogleOptions) -> Self {
+        lk_agents_abi::inference::gateway::stt::GoogleOptions {
+            language_codes: v.language_codes,
+            custom_vocabulary: v.custom_vocabulary,
+        }
+    }
+}
+
 #[napi(object, js_name = "TtsCartesiaOptions")]
 pub struct TtsCartesiaOptions {
     #[napi(ts_type = "string")]
@@ -1286,80 +1266,6 @@ impl From<TtsDeepgramOptions> for lk_agents_abi::inference::gateway::tts::Deepgr
     fn from(v: TtsDeepgramOptions) -> Self {
         lk_agents_abi::inference::gateway::tts::DeepgramOptions {
             mip_opt_out: v.mip_opt_out,
-        }
-    }
-}
-
-#[napi(object, js_name = "TtsElevenlabsOptions")]
-pub struct TtsElevenlabsOptions {
-    #[napi(ts_type = "number")]
-    pub inactivity_timeout: Option<i64>,
-    #[napi(ts_type = "'auto' | 'off' | 'on'")]
-    pub apply_text_normalization: Option<serde_json::Value>,
-    #[napi(ts_type = "boolean")]
-    pub auto_mode: Option<bool>,
-    #[napi(ts_type = "boolean")]
-    pub enable_logging: Option<bool>,
-    #[napi(ts_type = "boolean")]
-    pub enable_ssml_parsing: Option<bool>,
-    #[napi(ts_type = "boolean")]
-    pub sync_alignment: Option<bool>,
-    #[napi(ts_type = "string")]
-    pub language_code: Option<String>,
-    #[napi(ts_type = "number")]
-    pub stability: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub similarity_boost: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub style: Option<f64>,
-    #[napi(ts_type = "number")]
-    pub speed: Option<f64>,
-    #[napi(ts_type = "boolean")]
-    pub use_speaker_boost: Option<bool>,
-    #[napi(ts_type = "number[]")]
-    pub chunk_length_schedule: Option<Vec<f64>>,
-    #[napi(ts_type = "string")]
-    pub preferred_alignment: Option<String>,
-}
-
-impl From<&lk_agents_abi::inference::gateway::tts::ElevenlabsOptions> for TtsElevenlabsOptions {
-    fn from(v: &lk_agents_abi::inference::gateway::tts::ElevenlabsOptions) -> Self {
-        TtsElevenlabsOptions {
-            inactivity_timeout: v.inactivity_timeout,
-            apply_text_normalization: v.apply_text_normalization.as_ref().map(|v| v.clone()),
-            auto_mode: v.auto_mode,
-            enable_logging: v.enable_logging,
-            enable_ssml_parsing: v.enable_ssml_parsing,
-            sync_alignment: v.sync_alignment,
-            language_code: v.language_code.as_ref().map(|v| v.to_string()),
-            stability: v.stability,
-            similarity_boost: v.similarity_boost,
-            style: v.style,
-            speed: v.speed,
-            use_speaker_boost: v.use_speaker_boost,
-            chunk_length_schedule: v.chunk_length_schedule.as_ref().map(|v| v.iter().map(|v| *v).collect::<Vec<_>>()),
-            preferred_alignment: v.preferred_alignment.as_ref().map(|v| v.to_string()),
-        }
-    }
-}
-
-impl From<TtsElevenlabsOptions> for lk_agents_abi::inference::gateway::tts::ElevenlabsOptions {
-    fn from(v: TtsElevenlabsOptions) -> Self {
-        lk_agents_abi::inference::gateway::tts::ElevenlabsOptions {
-            inactivity_timeout: v.inactivity_timeout,
-            apply_text_normalization: v.apply_text_normalization,
-            auto_mode: v.auto_mode,
-            enable_logging: v.enable_logging,
-            enable_ssml_parsing: v.enable_ssml_parsing,
-            sync_alignment: v.sync_alignment,
-            language_code: v.language_code,
-            stability: v.stability,
-            similarity_boost: v.similarity_boost,
-            style: v.style,
-            speed: v.speed,
-            use_speaker_boost: v.use_speaker_boost,
-            chunk_length_schedule: v.chunk_length_schedule,
-            preferred_alignment: v.preferred_alignment,
         }
     }
 }
@@ -2392,6 +2298,9 @@ pub struct UsageSummary {
     pub tts_characters_count: i64,
     pub tts_audio_duration: f64,
     pub stt_audio_duration: f64,
+    pub stt_input_tokens: i64,
+    pub stt_output_tokens: i64,
+    pub stt_input_audio_tokens: i64,
 }
 
 impl From<&lk_agents_abi::metrics::usage_collector::records::UsageSummary> for UsageSummary {
@@ -2412,6 +2321,9 @@ impl From<&lk_agents_abi::metrics::usage_collector::records::UsageSummary> for U
             tts_characters_count: i64::try_from(v.tts_characters_count).unwrap_or(i64::MAX),
             tts_audio_duration: v.tts_audio_duration,
             stt_audio_duration: v.stt_audio_duration,
+            stt_input_tokens: i64::try_from(v.stt_input_tokens).unwrap_or(i64::MAX),
+            stt_output_tokens: i64::try_from(v.stt_output_tokens).unwrap_or(i64::MAX),
+            stt_input_audio_tokens: i64::try_from(v.stt_input_audio_tokens).unwrap_or(i64::MAX),
         }
     }
 }
@@ -2436,6 +2348,9 @@ impl TryFrom<UsageSummary> for lk_agents_abi::metrics::usage_collector::records:
             tts_characters_count: <u64>::try_from(v.tts_characters_count).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("UsageSummary.tts_characters_count: {e}")))?,
             tts_audio_duration: v.tts_audio_duration,
             stt_audio_duration: v.stt_audio_duration,
+            stt_input_tokens: <u64>::try_from(v.stt_input_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("UsageSummary.stt_input_tokens: {e}")))?,
+            stt_output_tokens: <u64>::try_from(v.stt_output_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("UsageSummary.stt_output_tokens: {e}")))?,
+            stt_input_audio_tokens: <u64>::try_from(v.stt_input_audio_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("UsageSummary.stt_input_audio_tokens: {e}")))?,
         })
     }
 }
@@ -2496,6 +2411,8 @@ pub struct LlmMetrics {
     pub prompt_cached_tokens: u32,
     /// The number of tokens used to write to the prompt cache (e.g. Anthropic cache writes).
     pub cache_creation_tokens: u32,
+    /// The number of completion tokens spent on hidden reasoning.
+    pub reasoning_tokens: u32,
     pub total_tokens: u32,
     pub tokens_per_second: f64,
     pub speech_id: Option<String>,
@@ -2516,6 +2433,7 @@ impl From<&lk_agents_abi::metrics::base::LlmMetrics> for LlmMetrics {
             prompt_tokens: v.prompt_tokens,
             prompt_cached_tokens: v.prompt_cached_tokens,
             cache_creation_tokens: v.cache_creation_tokens,
+            reasoning_tokens: v.reasoning_tokens,
             total_tokens: v.total_tokens,
             tokens_per_second: v.tokens_per_second,
             speech_id: v.speech_id.as_ref().map(|v| v.to_string()),
@@ -2539,6 +2457,7 @@ impl TryFrom<LlmMetrics> for lk_agents_abi::metrics::base::LlmMetrics {
             prompt_tokens: v.prompt_tokens,
             prompt_cached_tokens: v.prompt_cached_tokens,
             cache_creation_tokens: v.cache_creation_tokens,
+            reasoning_tokens: v.reasoning_tokens,
             total_tokens: v.total_tokens,
             tokens_per_second: v.tokens_per_second,
             speech_id: v.speech_id,
@@ -3040,6 +2959,11 @@ pub struct CompletionUsage {
     pub cache_creation_tokens: u32,
     /// The number of tokens read from the cache.
     pub cache_read_tokens: u32,
+    /// The number of completion tokens spent on hidden reasoning.
+    /// Already counted in ``completion_tokens``; do not add it to totals. Only reported by
+    /// providers that break reasoning out separately (e.g. OpenAI-compatible responses
+    /// carrying ``completion_tokens_details.reasoning_tokens``), 0 everywhere else.
+    pub reasoning_tokens: u32,
     /// The total number of tokens used (completion + prompt tokens).
     pub total_tokens: u32,
     /// The service tier used for processing the request (e.g. 'default', 'priority', 'flex').
@@ -3055,6 +2979,7 @@ impl From<&lk_agents_abi::CompletionUsage> for CompletionUsage {
             prompt_cached_tokens: v.prompt_cached_tokens,
             cache_creation_tokens: v.cache_creation_tokens,
             cache_read_tokens: v.cache_read_tokens,
+            reasoning_tokens: v.reasoning_tokens,
             total_tokens: v.total_tokens,
             service_tier: v.service_tier.as_ref().map(|v| v.to_string()),
         }
@@ -3069,6 +2994,7 @@ impl From<CompletionUsage> for lk_agents_abi::CompletionUsage {
             prompt_cached_tokens: v.prompt_cached_tokens,
             cache_creation_tokens: v.cache_creation_tokens,
             cache_read_tokens: v.cache_read_tokens,
+            reasoning_tokens: v.reasoning_tokens,
             total_tokens: v.total_tokens,
             service_tier: v.service_tier,
         }
@@ -3341,6 +3267,8 @@ pub struct LlmModelUsage {
     pub output_audio_tokens: i64,
     /// Output text tokens.
     pub output_text_tokens: i64,
+    /// Output tokens spent on hidden reasoning. Already counted in ``output_tokens``.
+    pub output_reasoning_tokens: i64,
     /// Total session connection duration in seconds (for session-based billing like xAI).
     pub session_duration: f64,
 }
@@ -3363,6 +3291,7 @@ impl From<&lk_agents_abi::metrics::usage::records::LlmModelUsage> for LlmModelUs
             output_tokens: i64::try_from(v.output_tokens).unwrap_or(i64::MAX),
             output_audio_tokens: i64::try_from(v.output_audio_tokens).unwrap_or(i64::MAX),
             output_text_tokens: i64::try_from(v.output_text_tokens).unwrap_or(i64::MAX),
+            output_reasoning_tokens: i64::try_from(v.output_reasoning_tokens).unwrap_or(i64::MAX),
             session_duration: v.session_duration,
         }
     }
@@ -3387,6 +3316,7 @@ impl TryFrom<LlmModelUsage> for lk_agents_abi::metrics::usage::records::LlmModel
             output_tokens: <u64>::try_from(v.output_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("LlmModelUsage.output_tokens: {e}")))?,
             output_audio_tokens: <u64>::try_from(v.output_audio_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("LlmModelUsage.output_audio_tokens: {e}")))?,
             output_text_tokens: <u64>::try_from(v.output_text_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("LlmModelUsage.output_text_tokens: {e}")))?,
+            output_reasoning_tokens: <u64>::try_from(v.output_reasoning_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("LlmModelUsage.output_reasoning_tokens: {e}")))?,
             session_duration: v.session_duration,
         })
     }
@@ -3449,8 +3379,10 @@ pub struct SttModelUsage {
     pub provider: String,
     /// The model name (e.g., 'nova-2', 'best').
     pub model: String,
-    /// Input audio tokens (for token-based STT billing).
+    /// Total input tokens, including both audio and text (for token-based STT billing).
     pub input_tokens: i64,
+    /// Audio input tokens, a subset of input_tokens when reported by the provider.
+    pub input_audio_tokens: i64,
     /// Output text tokens (for token-based STT billing).
     pub output_tokens: i64,
     /// Duration of processed audio in seconds.
@@ -3464,6 +3396,7 @@ impl From<&lk_agents_abi::metrics::usage::records::SttModelUsage> for SttModelUs
             provider: v.provider.to_string(),
             model: v.model.to_string(),
             input_tokens: i64::try_from(v.input_tokens).unwrap_or(i64::MAX),
+            input_audio_tokens: i64::try_from(v.input_audio_tokens).unwrap_or(i64::MAX),
             output_tokens: i64::try_from(v.output_tokens).unwrap_or(i64::MAX),
             audio_duration: v.audio_duration,
         }
@@ -3478,6 +3411,7 @@ impl TryFrom<SttModelUsage> for lk_agents_abi::metrics::usage::records::SttModel
             provider: v.provider,
             model: v.model,
             input_tokens: <u64>::try_from(v.input_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("SttModelUsage.input_tokens: {e}")))?,
+            input_audio_tokens: <u64>::try_from(v.input_audio_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("SttModelUsage.input_audio_tokens: {e}")))?,
             output_tokens: <u64>::try_from(v.output_tokens).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("SttModelUsage.output_tokens: {e}")))?,
             audio_duration: v.audio_duration,
         })

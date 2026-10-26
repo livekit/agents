@@ -144,6 +144,12 @@ pub struct LlmMetrics {
     /// Not all providers report this. ``prompt_cached_tokens`` covers cache reads.
     #[python(default = "0")]
     pub cache_creation_tokens: u32,
+    /// The number of completion tokens spent on hidden reasoning.
+    ///
+    /// Already counted in ``completion_tokens``; do not add it to totals. Not all providers
+    /// break reasoning out separately, and it is 0 when they don't.
+    #[python(default = "0")]
+    pub reasoning_tokens: u32,
     pub total_tokens: u32,
     pub tokens_per_second: f64,
     #[python(default = "None")]
@@ -163,7 +169,8 @@ impl LlmMetrics {
     name = "STTMetrics",
     base = "_BaseMetrics",
     tag = "type",
-    tag_const = TYPE
+    tag_const = TYPE,
+    validator = "_default_total_tokens"
 )]
 #[binding(emit, extract)]
 pub struct SttMetrics {
@@ -172,16 +179,24 @@ pub struct SttMetrics {
     pub timestamp: f64,
     /// The request duration in seconds, 0.0 if the STT is streaming.
     pub duration: f64,
-    /// The duration of the pushed audio in seconds.
+    /// The duration of the pushed audio in seconds, or 0.0 when unknown.
     pub audio_duration: f64,
-    /// Input audio tokens (for token-based billing).
-    #[python(default = "0")]
-    pub input_tokens: u32,
-    /// Output text tokens (for token-based billing).
-    #[python(default = "0")]
-    pub output_tokens: u32,
     /// Whether the STT is streaming (e.g using websocket).
     pub streamed: bool,
+    /// Total input tokens, including both audio and text (for token-based billing).
+    #[python(default = "0")]
+    pub input_tokens: u32,
+    /// Total output tokens (for token-based billing).
+    #[python(default = "0")]
+    pub output_tokens: u32,
+    /// Sum of input and output tokens.
+    ///
+    /// Defaults to ``input_tokens + output_tokens`` when omitted.
+    #[python(default = "0")]
+    pub total_tokens: u32,
+    /// Audio input tokens, a subset of input_tokens when reported by the provider.
+    #[python(default = "0")]
+    pub input_audio_tokens: u32,
     /// Time in seconds to acquire the connection. (WebSocket only)
     #[python(default = "0.0")]
     pub acquire_time: f64,

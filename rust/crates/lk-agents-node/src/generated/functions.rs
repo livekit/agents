@@ -338,6 +338,14 @@ pub fn avatar_payload(fields: serde_json::Map<String, serde_json::Value>, avatar
     lk_agents_abi::voice::host_policy::avatar_payload(fields, avatar_id.as_deref(), options)
 }
 
+/// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort` is
+/// the request's `reasoning_effort` and `reasoning` the effort of its Responses `reasoning`.
+#[napi(js_name = "llmUnsupportedParams")]
+pub fn llm_unsupported_params(model: String, has_tools: Option<bool>, reasoning_effort: Option<String>, reasoning: Option<String>) -> Vec<String> {
+    let has_tools = has_tools.unwrap_or(false);
+    lk_agents_inference::llm::models::unsupported_params(&model, has_tools, reasoning_effort.as_deref(), reasoning.as_deref()).into_iter().map(|v| v.to_string()).collect::<Vec<_>>()
+}
+
 /// The lowest reasoning effort the model supports, or `None` if it has no such control.
 #[napi(js_name = "minReasoningEffort")]
 pub fn min_reasoning_effort(model: String) -> Option<String> {
@@ -804,6 +812,17 @@ pub fn split_words(text: String, ignore_punctuation: Option<bool>, split_charact
     let split_character = split_character.unwrap_or(false);
     let retain_format = retain_format.unwrap_or(false);
     lk_agents_abi::tokenize::split_words_of(&text, ignore_punctuation, split_character, retain_format).into_iter().map(|v| { let (t0, t1, t2,) = v; (t0, i64::try_from(t1).unwrap_or(i64::MAX), i64::try_from(t2).unwrap_or(i64::MAX)) }).collect::<Vec<_>>()
+}
+
+/// Sentences of more than `min_sentence_len` characters (shorter ones join the next), each with
+/// its span in the text.
+#[napi(js_name = "basicSplitSentences")]
+pub fn basic_split_sentences(env: Env, text: String, min_sentence_len: Option<i64>, retain_format: Option<bool>) -> napi::Result<Vec<(String, i64, i64)>> {
+    crate::host_error::run(&env, || {
+        let min_sentence_len = match min_sentence_len { Some(v) => <usize>::try_from(v).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("min_sentence_len: {e}")))?, None => 20 };
+        let retain_format = retain_format.unwrap_or(false);
+        Ok(lk_agents_abi::tokenize::basic_split_sentences(&text, min_sentence_len, retain_format).into_iter().map(|v| { let (t0, t1, t2,) = v; (t0, i64::try_from(t1).unwrap_or(i64::MAX), i64::try_from(t2).unwrap_or(i64::MAX)) }).collect::<Vec<_>>())
+    })
 }
 
 /// Five samples at the load-update interval cover 2.5 seconds.

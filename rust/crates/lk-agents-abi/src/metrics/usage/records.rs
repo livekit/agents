@@ -60,6 +60,8 @@ pub struct LlmModelUsage {
     pub output_audio_tokens: u64,
     /// Output text tokens.
     pub output_text_tokens: u64,
+    /// Output tokens spent on hidden reasoning. Already counted in ``output_tokens``.
+    pub output_reasoning_tokens: u64,
     /// Total session connection duration in seconds (for session-based billing like xAI).
     pub session_duration: f64,
 }
@@ -116,8 +118,10 @@ pub struct SttModelUsage {
     pub provider: String,
     /// The model name (e.g., 'nova-2', 'best').
     pub model: String,
-    /// Input audio tokens (for token-based STT billing).
+    /// Total input tokens, including both audio and text (for token-based STT billing).
     pub input_tokens: u64,
+    /// Audio input tokens, a subset of input_tokens when reported by the provider.
+    pub input_audio_tokens: u64,
     /// Output text tokens (for token-based STT billing).
     pub output_tokens: u64,
     /// Duration of processed audio in seconds.

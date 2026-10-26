@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -65,15 +64,7 @@ def to_chat_ctx(
     from ..._core_view import to_core_items
     from ..chat_context import ImageContent
     from ..utils import serialize_image
-    from .utils import convert_mid_conversation_instructions
 
-    if format in _DATA:
-        # the dialects that hoist the system preamble keep later instructions where they are
-        chat_ctx = convert_mid_conversation_instructions(chat_ctx)
-    if format in ("anthropic", "google", "aws"):
-        # these send arguments as a JSON object: stored ones are repaired, else emptied
-        chat_ctx = chat_ctx.copy()
-        chat_ctx.items = [_object_arguments(item) for item in chat_ctx.items]
     images = {
         content.id: serialize_image(content)
         for item in chat_ctx.items
@@ -89,28 +80,8 @@ def to_chat_ctx(
         inject_trailing_user_message=inject_trailing_user_message,
         thought_signatures=thought_signatures,
     )
-    if format == "mistralai" and inject_dummy_user_message and messages:
-        if messages[-1].get("role") == "assistant":
-            messages.append({"type": "message.input", "role": "user", "content": "(empty)"})
     cls = _DATA.get(format)
     return messages, cls(**data) if cls is not None else None
-
-
-def _object_arguments(item: Any) -> Any:
-    from ...log import logger
-    from ..utils import parse_function_arguments
-
-    if item.type != "function_call":
-        return item
-    try:
-        arguments = parse_function_arguments(item.arguments) if item.arguments else {}
-    except ValueError:
-        logger.warning(
-            "could not parse stored tool call arguments as a JSON object, using empty arguments",
-            extra={"call_id": item.call_id, "tool_name": item.name},
-        )
-        arguments = {}
-    return item.model_copy(update={"arguments": json.dumps(arguments)})
 
 
 def to_fnc_ctx(
@@ -135,16 +106,6 @@ def to_fnc_ctx(
                 specs.append(["strict", build_strict_openai_schema(tool)])
                 continue
             fnc = build_legacy_openai_schema(tool, internally_tagged=format != "openai")
-            if format == "google":
-                # Gemini takes the schema as written, or simplified where it rejects that (Live)
-                params = fnc["parameters"] if fnc["parameters"].get("properties") else None
-                if not use_parameters_json_schema:
-                    from livekit.plugins.google.utils import _GeminiJsonSchema
-
-                    params = _GeminiJsonSchema(params or {}).simplify() or None
-                raw = {"description": fnc["description"], "parameters": params}
-                specs.append(["raw", raw, fnc["name"]])
-                continue
             specs.append(["legacy", fnc])
         elif responses and provider_tool_type and isinstance(tool, provider_tool_type):
             if hasattr(tool, "to_dict"):

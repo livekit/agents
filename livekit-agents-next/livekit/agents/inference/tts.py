@@ -10,8 +10,6 @@ from .._generated.inference_tts import (
     CartesiaOptions,
     DeepgramModels,
     DeepgramOptions,
-    ElevenlabsModels,
-    ElevenlabsOptions,
     FallbackModel,
     FallbackModelType,
     FishAudioModels,
@@ -42,8 +40,6 @@ __all__ = [
     "CartesiaOptions",
     "DeepgramModels",
     "DeepgramOptions",
-    "ElevenlabsModels",
-    "ElevenlabsOptions",
     "FishAudioModels",
     "FishAudioOptions",
     "InworldModels",
@@ -90,7 +86,7 @@ class TTS(tts.TTS):
             http_session: Unused; the core owns the connection.
             extra_kwargs: Provider options passed through to the gateway.
             fallback: Fallback models, names or ``FallbackModel`` entries, run by the gateway.
-            conn_options: The connection timeout the gateway client uses.
+            conn_options: The connection timeout, and the retries the gateway runs server-side.
         """
         model, parsed_voice = _core.tts_parse_model_string(model)
         if parsed_voice and not is_given(voice):
@@ -148,6 +144,7 @@ class TTS(tts.TTS):
             extra_kwargs=self._extra,
             fallback=self._fallback or None,
             timeout=self._conn.timeout,
+            max_retry=self._conn.max_retry,
         )
 
     def update_options(

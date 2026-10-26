@@ -57,7 +57,7 @@ pub struct SttFallbackModel {
 #[node(interface)]
 #[binding(emit)]
 pub struct TtsFallbackModel {
-    /// Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/coda").
+    /// Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda").
     pub model: String,
     /// Voice to use for the model.
     //

@@ -42,9 +42,10 @@ pub fn to_provider_format(
             let f = google::to_chat_ctx(&ctx, &images, inject_dummy_user_message, thought_signatures.as_ref());
             finish(f.map_err(e)?, |d| hoisted(&d.system_messages))
         }
-        "mistralai" => finish(mistralai::to_conversations_ctx(&ctx, &images).map_err(e)?, |d| {
-            json!({ "instructions": d.instructions })
-        }),
+        "mistralai" => {
+            let f = mistralai::to_conversations_ctx(&ctx, &images, inject_dummy_user_message);
+            finish(f.map_err(e)?, |d| json!({ "instructions": d.instructions }))
+        }
         _ => {
             return Err(format!(
                 "unknown provider format {format:?}: expected one of 'openai', 'openai.responses', \
@@ -52,6 +53,26 @@ pub fn to_provider_format(
             ));
         }
     })
+}
+
+/// `convert_mid_conversation_instructions(chat_ctx, role=, template=)` as `(index, rewritten)`: the
+/// input item each output item comes from, and the message replacing it when it was rewritten, so
+/// the host keeps its own objects for the rest.
+#[crate::host(export(kw_only = "role"))]
+pub fn convert_mid_conversation_instructions(
+    items: Vec<ChatItem>,
+    role: crate::Role,
+    template: &str,
+) -> Vec<(usize, Option<ChatItem>)> {
+    let ctx = ChatContext::new(items);
+    let index = |found: &dyn Fn(&ChatItem) -> bool| ctx.items.iter().position(found).unwrap_or_default();
+    super::convert_mid_conversation_instructions(&ctx, role, template)
+        .into_iter()
+        .map(|item| match item {
+            std::borrow::Cow::Borrowed(kept) => (index(&|i| std::ptr::eq(i, kept)), None),
+            std::borrow::Cow::Owned(new) => (index(&|i| i.id() == new.id()), Some(new)),
+        })
+        .collect()
 }
 
 fn finish<D>(f: Formatted<D>, data: impl FnOnce(&D) -> Value) -> (Vec<Value>, Value) {
@@ -122,6 +143,25 @@ fn tool_schema(tool: Value) -> Result<ToolSchema, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: a dropped instruction shifting the indices the host maps back to its own items.
+    #[test]
+    fn converted_items_point_back_at_the_items_they_come_from() {
+        use super::super::testkit::msg;
+        use crate::Role;
+        let items = vec![
+            msg("s0", Role::System, &["p"]),
+            msg("s1", Role::System, &[""]),
+            msg("u", Role::User, &["hi"]),
+            msg("s2", Role::Developer, &["mid"]),
+        ];
+        let plan = convert_mid_conversation_instructions(items, Role::User, "<{content}>");
+        let indices: Vec<usize> = plan.iter().map(|(i, _)| *i).collect();
+        assert_eq!(indices, [0, 2, 3]);
+        assert!(plan[0].1.is_none() && plan[1].1.is_none());
+        let rewritten = plan[2].1.as_ref().and_then(ChatItem::as_message).unwrap();
+        assert_eq!((rewritten.role, rewritten.raw_text_content().as_deref()), (Role::User, Some("<mid>")));
+    }
 
     // Catches: an unknown tool kind or `tool_behavior` defaulting instead of refusing.
     #[test]

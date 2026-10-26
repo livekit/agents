@@ -102,7 +102,7 @@ impl InterruptionDetector {
         // `Authorization`: the crate mints that.
         let headers = headers.map_or_else(|| ConnectionConfig::default().headers, header_provider);
         let config = ConnectionConfig {
-            conn_options: conn_options(timeout),
+            conn_options: conn_options(timeout, 0),
             headers,
             token_ttl_secs,
             ..ConnectionConfig::default()

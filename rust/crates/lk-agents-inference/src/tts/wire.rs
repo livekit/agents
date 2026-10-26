@@ -36,7 +36,6 @@ pub fn has_aligned_transcript(model: &str, extra_kwargs: &Map<String, Value>) ->
     match provider {
         // `bool(extra_kwargs.get("add_timestamps"))` -- `false`, `0` and `""` are all "no".
         "cartesia" => truthy(extra_kwargs.get("add_timestamps")),
-        "elevenlabs" => truthy(extra_kwargs.get("sync_alignment")),
         "inworld" => matches!(
             extra_kwargs.get("timestamp_type").and_then(Value::as_str),
             Some("WORD") | Some("CHARACTER")
@@ -253,14 +252,11 @@ mod tests {
     fn an_empty_container_is_a_falsy_alignment_flag() {
         let mut extra = Map::new();
         for empty in [json!({}), json!([]), json!(0), json!("")] {
-            extra.insert("sync_alignment".into(), empty.clone());
-            assert!(
-                !has_aligned_transcript("elevenlabs/eleven_flash_v2", &extra),
-                "{empty} must be falsy"
-            );
+            extra.insert("add_timestamps".into(), empty.clone());
+            assert!(!has_aligned_transcript("cartesia/sonic-3", &extra), "{empty} must be falsy");
         }
-        extra.insert("sync_alignment".into(), json!({"a": 1}));
-        assert!(has_aligned_transcript("elevenlabs/eleven_flash_v2", &extra));
+        extra.insert("add_timestamps".into(), json!({"a": 1}));
+        assert!(has_aligned_transcript("cartesia/sonic-3", &extra));
     }
 
     // Catches: normalising the fallback extra to `null` like STT.
@@ -269,15 +265,15 @@ mod tests {
         let opts = TtsOptions {
             model: "cartesia/sonic-3".into(),
             fallback: vec![FallbackModel {
-                model: "elevenlabs/eleven_flash_v2".into(),
-                voice: "rachel".into(),
+                model: "inworld/inworld-tts-1".into(),
+                voice: "ashley".into(),
                 extra_kwargs: None,
             }],
             ..Default::default()
         };
         assert_eq!(
             session_create(&opts)["fallback"],
-            json!({"models": [{"model": "elevenlabs/eleven_flash_v2", "voice": "rachel", "extra": {}}]})
+            json!({"models": [{"model": "inworld/inworld-tts-1", "voice": "ashley", "extra": {}}]})
         );
     }
 
@@ -289,8 +285,8 @@ mod tests {
         assert!(!has_aligned_transcript("cartesia/sonic-3", &extra));
         extra.insert("add_timestamps".into(), json!(true));
         assert!(has_aligned_transcript("cartesia/sonic-3", &extra));
-        // ...and the flag is per provider: the same key means nothing to ElevenLabs.
-        assert!(!has_aligned_transcript("elevenlabs/eleven_flash_v2", &extra));
+        // ...and the flag is per provider: the same key means nothing to Rime.
+        assert!(!has_aligned_transcript("rime/mistv3", &extra));
 
         let mut extra = Map::new();
         extra.insert("timestamp_type".into(), json!("TIMESTAMP_TYPE_UNSPECIFIED"));
@@ -303,7 +299,7 @@ mod tests {
     #[test]
     fn an_empty_words_list_falls_through_to_character_alignment() {
         let frame = r#"{"type":"output_alignment","words":[],"chars":[{"char":"h","start":0.0,"end":0.1}]}"#;
-        let Some(Incoming::OutputAlignment { tokens, .. }) = decode(frame, "elevenlabs") else {
+        let Some(Incoming::OutputAlignment { tokens, .. }) = decode(frame, "inworld") else {
             panic!("not an alignment")
         };
         assert_eq!(tokens.len(), 1);
@@ -319,7 +315,7 @@ mod tests {
             panic!()
         };
         assert_eq!(tokens[0].text, "hello ");
-        let Some(Incoming::OutputAlignment { tokens, .. }) = decode(frame, "elevenlabs") else {
+        let Some(Incoming::OutputAlignment { tokens, .. }) = decode(frame, "inworld") else {
             panic!()
         };
         assert_eq!(tokens[0].text, "hello");

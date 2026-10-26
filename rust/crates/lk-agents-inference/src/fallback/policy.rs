@@ -40,6 +40,9 @@ pub struct ChainPolicy {
     /// Replaces `conn_options.retry_interval`; `None` keeps the caller's.
     pub retry_interval: Option<f64>,
     pub after_output: AfterOutput,
+    /// LLM only: keep the entry that last served until it fails, even once a preferred one
+    /// recovers; on failure the rest are tried in order (`llm/fallback_adapter.py:96-105`).
+    pub sticky: bool,
 }
 
 impl ChainPolicy {
@@ -51,6 +54,7 @@ impl ChainPolicy {
             attempt_timeout: Some(5.0),
             retry_interval: Some(0.5),
             after_output: AfterOutput::Abort,
+            sticky: false,
         }
     }
 
@@ -62,6 +66,7 @@ impl ChainPolicy {
             attempt_timeout: Some(10.0),
             retry_interval: Some(5.0),
             after_output: AfterOutput::Retry,
+            sticky: false,
         }
     }
 
@@ -73,6 +78,7 @@ impl ChainPolicy {
             attempt_timeout: None,
             retry_interval: None,
             after_output: AfterOutput::Stop,
+            sticky: false,
         }
     }
 

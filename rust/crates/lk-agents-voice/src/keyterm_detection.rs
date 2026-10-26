@@ -256,6 +256,7 @@ pub(super) async fn detection_pass(
             prompt_tokens: u.prompt_tokens,
             prompt_cached_tokens: u.prompt_cached_tokens,
             cache_creation_tokens: u.cache_creation_tokens,
+            reasoning_tokens: u.reasoning_tokens,
             total_tokens: u.total_tokens,
             tokens_per_second: if duration > 0.0 && u.completion_tokens > 0 {
                 f64::from(u.completion_tokens) / duration

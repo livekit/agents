@@ -24,7 +24,7 @@ class FallbackModel(TypedDict):
     """
 
     model: str
-    """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/coda")."""
+    """Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda")."""
     voice: str
     """Voice to use for the model."""
     extra_kwargs: NotRequired[dict[str, Any]]
@@ -44,17 +44,6 @@ CartesiaModels = Literal[
 
 
 DeepgramModels = Literal["deepgram", "deepgram/aura", "deepgram/aura-2"]
-
-
-ElevenlabsModels = Literal[
-    "elevenlabs",
-    "elevenlabs/eleven_flash_v2",
-    "elevenlabs/eleven_flash_v2_5",
-    "elevenlabs/eleven_turbo_v2",
-    "elevenlabs/eleven_turbo_v2_5",
-    "elevenlabs/eleven_multilingual_v2",
-    "elevenlabs/eleven_v3",
-]
 
 
 RimeModels = Literal["rime", "rime/coda", "rime/mistv2", "rime/mistv3", "rime/mist"]
@@ -82,7 +71,6 @@ FishAudioModels = Literal[
 TTSModels = (
     CartesiaModels
     | DeepgramModels
-    | ElevenlabsModels
     | RimeModels
     | InworldModels
     | XaiModels
@@ -106,23 +94,6 @@ class CartesiaOptions(TypedDict, total=False):
 
 class DeepgramOptions(TypedDict, total=False):
     mip_opt_out: bool
-
-
-class ElevenlabsOptions(TypedDict, total=False):
-    inactivity_timeout: int
-    apply_text_normalization: Literal["auto", "off", "on"]
-    auto_mode: bool
-    enable_logging: bool
-    enable_ssml_parsing: bool
-    sync_alignment: bool
-    language_code: str
-    stability: float
-    similarity_boost: float
-    style: float
-    speed: float
-    use_speaker_boost: bool
-    chunk_length_schedule: list[float]
-    preferred_alignment: str
 
 
 class RimeOptions(TypedDict, total=False):
@@ -181,7 +152,6 @@ TTSEncoding = Literal["pcm_s16le"]
 FallbackModel.__module__ = "livekit.agents.inference.tts"
 CartesiaOptions.__module__ = "livekit.agents.inference.tts"
 DeepgramOptions.__module__ = "livekit.agents.inference.tts"
-ElevenlabsOptions.__module__ = "livekit.agents.inference.tts"
 RimeOptions.__module__ = "livekit.agents.inference.tts"
 InworldOptions.__module__ = "livekit.agents.inference.tts"
 XaiOptions.__module__ = "livekit.agents.inference.tts"

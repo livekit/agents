@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 285 core items bound (120 functions and consts, 79 classes, 85 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 286 core items bound (122 functions and consts, 79 classes, 84 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -14,6 +14,7 @@
 //! - `lk_agents_abi::tts::markup::steering_instructions_of`: field `nonverbal_sounds`: `NonverbalSounds` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_abi::compute_chat_ctx_diff_of`: parameter `old`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::llm::provider_format::host::to_provider_format`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
+//! - `lk_agents_abi::llm::provider_format::host::convert_mid_conversation_instructions`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::tokenize::search::keyword_search`: parameter `docs`: Slice(Declared { name: "Document", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::adapter_stream`: parameter `provider`: not yet: `Arc<dyn Tts>` (a host object behind a proxy)
 //! - `lk_agents_abi::stt::stream_adapter::capabilities`: field `aligned_transcript`: `AlignedTranscript` has no Node shape (not a declared record, enum or JSON)

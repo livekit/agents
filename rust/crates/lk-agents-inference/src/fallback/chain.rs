@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -98,6 +98,9 @@ impl ChainObserver for IgnoreEvents {
 #[derive(Debug)]
 struct Status {
     available: bool,
+    /// The attempt that last selected it, 0 once it failed: under `sticky` the available entry
+    /// with the highest goes first.
+    selection_id: u64,
     recovery: [Option<Probe>; 2],
 }
 
@@ -129,6 +132,8 @@ pub struct FallbackChain<B: Backend> {
     observer: Arc<dyn ChainObserver>,
     /// `_active_instance`, labelling metrics & traces. Starts at 0.
     active: AtomicUsize,
+    /// `_attempt_id`, numbering every attempt.
+    attempts: AtomicU64,
     /// `tts/fallback_adapter.py:102,155-159`. Set before the cancel sweep so an in-flight stream
     /// cannot start a probe nothing will cancel.
     closed: AtomicBool,
@@ -149,7 +154,7 @@ impl<B: Backend> FallbackChain<B> {
         }
         let labels = entries.iter().map(|b| b.label()).collect();
         let status: Vec<Status> =
-            entries.iter().map(|_| Status { available: true, recovery: [None, None] }).collect();
+            entries.iter().map(|_| Status { available: true, selection_id: 0, recovery: [None, None] }).collect();
         Ok(FallbackChain {
             entries,
             labels,
@@ -159,6 +164,7 @@ impl<B: Backend> FallbackChain<B> {
             spawner,
             observer,
             active: AtomicUsize::new(0),
+            attempts: AtomicU64::new(0),
             closed: AtomicBool::new(false),
             stop: watch::channel(false).0,
         })
@@ -194,6 +200,27 @@ impl<B: Backend> FallbackChain<B> {
         self.status.lock().expect("chain status").get(index).is_some_and(|s| s.available)
     }
 
+    /// The order entries are tried in: as given, or under `sticky` the most recently selected
+    /// available one first.
+    fn order(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.entries.len()).collect();
+        if self.policy.sticky {
+            let s = self.status.lock().expect("chain status");
+            let key = |i: usize| if s[i].available { s[i].selection_id } else { 0 };
+            // The first of equals, as Python's `max`.
+            let selected = order.iter().copied().fold(0, |best, i| if key(i) > key(best) { i } else { best });
+            order.remove(selected);
+            order.insert(0, selected);
+        }
+        order
+    }
+
+    fn select(&self, index: usize, selection_id: u64) {
+        if let Some(st) = self.status.lock().expect("chain status").get_mut(index) {
+            st.selection_id = selection_id;
+        }
+    }
+
     pub async fn run<S, T, F>(
         &self,
         req: &B::Req,
@@ -221,8 +248,10 @@ impl<B: Backend> FallbackChain<B> {
 
         let mut last_error: Option<ProviderError> = None;
 
-        for index in 0..self.entries.len() {
+        for index in self.order() {
             if self.is_available(index) || all_failed {
+                let attempt_id = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+                self.select(index, attempt_id);
                 let backend = &self.entries[index];
                 let outcome = match backend.open(req, &attempt_conn).await {
                     Ok(session) => attempt(index, backend.as_ref(), session, state).await,
@@ -233,9 +262,18 @@ impl<B: Backend> FallbackChain<B> {
                 match outcome {
                     Attempt::Served(value) => {
                         self.mark_serving(index);
+                        // Restores this selection after concurrent failures without outranking
+                        // a newer one that has not failed.
+                        if let Some(st) = self.status.lock().expect("chain status").get_mut(index) {
+                            st.selection_id = st.selection_id.max(attempt_id);
+                        }
+                        if self.policy.sticky {
+                            self.set_available(index, true);
+                        }
                         return Ok(ChainOutcome::Served(value));
                     }
                     Attempt::Failed { error, produced_output } => {
+                        self.select(index, 0);
                         self.set_available(index, false);
                         // The previous member's error is dropped; for a host exception that
                         // releases its side-table key (RAII).
