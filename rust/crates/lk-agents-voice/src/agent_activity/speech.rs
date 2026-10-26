@@ -880,9 +880,9 @@ impl Driver {
         out.trace(SpeechStep::StepSpoken { speech, step, interrupted });
         // The step's edge is spent: the next step's first frame is a new one.
         self.activity.spoke.remove(&speech);
-        if let Some(msg) = item {
-            let item = ChatItem::Message(*msg);
-            let source = match self.activity.speech_scheduler.kind(speech) {
+        let kind = self.activity.speech_scheduler.kind(speech);
+        let mut item = item.map(|msg| {
+            let source = match kind {
                 Some(SpeechKind::Say) => Source::Say { speech },
                 Some(
                     SpeechKind::TurnReply
@@ -892,11 +892,13 @@ impl Driver {
                 )
                 | None => Source::Reply { speech, step },
             };
-            if self.activity.speech_scheduler.add_to_chat_ctx(speech) {
-                self.commit_item(item, source, Visibility::Both, out);
-            } else if let Some(h) = self.activity.speech_scheduler.handle(speech) {
-                h.item_added(&item);
-            }
+            (ChatItem::Message(*msg), source)
+        });
+        // The reference's realtime generation moves the agent's state before it adds the
+        // messages; the pipeline adds its message first.
+        let realtime = kind == Some(SpeechKind::Realtime);
+        if !realtime {
+            self.commit_spoken(speech, item.take(), out);
         }
         self.activity.speech_scheduler.spoken(speech, now);
         // A blocked current speech's step ending is what a pause from inside its tool waits on.
@@ -913,6 +915,17 @@ impl Driver {
             self.session.config.effective.turn.interruption.detection_enabled,
         );
         self.apply_end_of_speech(now, eos, out);
+        self.commit_spoken(speech, item, out);
+    }
+
+    /// A step's words: into the record, or only told to the handle under `add_to_chat_ctx=False`.
+    fn commit_spoken(&mut self, speech: SpeechId, item: Option<(ChatItem, Source)>, out: &mut Out) {
+        let Some((item, source)) = item else { return };
+        if self.activity.speech_scheduler.add_to_chat_ctx(speech) {
+            self.commit_item(item, source, Visibility::Both, out);
+        } else if let Some(h) = self.activity.speech_scheduler.handle(speech) {
+            h.item_added(&item);
+        }
     }
 
     fn apply_end_of_speech(&mut self, now: Ts, eos: EndOfSpeech, out: &mut Out) {
