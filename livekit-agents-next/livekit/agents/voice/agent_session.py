@@ -51,6 +51,7 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
+from .run_result import RunOutputOptions, RunResult
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolRunner
 
@@ -69,6 +70,7 @@ __all__ = [
 ]
 
 Userdata_T = TypeVar("Userdata_T", default=Any)
+Run_T = TypeVar("Run_T")
 
 # the hook running in this context, for `generate_reply(on_enter=)`
 _hook_name: contextvars.ContextVar[str] = contextvars.ContextVar("lk_hook_name")
@@ -203,6 +205,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # every agent the core may name, by the id it was installed under
         self._agents: dict[str, Agent] = {}
         self._speeches: dict[str, SpeechHandle] = {}
+        # runs asked for and not yet started (the core starts them in order), and running ones
+        self._pending_runs: list[RunResult[Any]] = []
+        self._runs: dict[int, RunResult[Any]] = {}
         self._fillers: dict[int, Callable[[int], Any] | None] = {}
         self._next_filler = 0
         self._chat_ctx = ChatContext.empty()
@@ -400,6 +405,30 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     # --- commands ------------------------------------------------------------------------
 
+    def run(
+        self,
+        *,
+        user_input: str,
+        output_type: type[Run_T] | None = None,
+        output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
+    ) -> RunResult[Run_T]:
+        """Reply to ``user_input`` and record what the reply did, for assertions."""
+        result = RunResult[Run_T](
+            user_input=user_input,
+            output_type=output_type,
+            output_options=output_options,
+            session=self,
+        )
+        self._running.run(
+            user_input=user_input,
+            expects_output=output_type is not None,
+            max_retries=result._output_retries,
+            retry_instructions=result._output_retry_instructions,
+            origin=_origin(),
+        )
+        self._pending_runs.append(result)
+        return result
+
     def say(
         self,
         text: str | AsyncIterable[str],
@@ -576,8 +605,37 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_item_added(self, wire: dict[str, Any]) -> None:
         item = from_core_item(wire["item"])
         self._chat_ctx.insert(item)
+        if (run := self._runs.get(wire["run"])) is not None:
+            if item.type == "agent_handoff":
+                run._agent_handoff(
+                    item=item,
+                    old_agent=self._agents.get(item.old_agent_id or ""),
+                    new_agent=self._agents[item.new_agent_id],
+                )
+            else:
+                run._item_added(item)
         if item.type == "message":
             self.emit("conversation_item_added", ConversationItemAddedEvent(item=item))
+
+    def _on_run_started(self, wire: dict[str, Any]) -> None:
+        self._runs[wire["run"]] = self._pending_runs.pop(0)
+
+    def _on_run_item(self, wire: dict[str, Any]) -> None:
+        if (run := self._runs.get(wire["run"])) is not None:
+            run._item_added(from_core_item(wire["item"]))
+
+    def _on_run_refused(self, wire: dict[str, Any]) -> None:
+        run = self._pending_runs.pop(0)
+        run._settle(output=None, error=RuntimeError(f"run refused: {wire['cause']}"))
+
+    def _on_run_settled(self, wire: dict[str, Any]) -> None:
+        run = self._runs.pop(wire["run"])
+        error = wire["error"]
+        if wire["outcome"] == "failed" and error is None and wire["speech_handle"] is not None:
+            error = wire["speech_handle"].exception()
+        if wire["outcome"] == "closed":
+            error = RuntimeError("the session closed before the run settled")
+        run._settle(output=wire["final_output"], error=error)
 
     def _on_agent_state(self, wire: dict[str, Any]) -> None:
         self._agent_state = wire["new_state"]
@@ -761,6 +819,10 @@ _HANDLERS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], None]] = {
     "speech_created": LiveSession._on_speech_created,
     "speech_done": LiveSession._on_speech_done,
     "conversation_item_added": LiveSession._on_item_added,
+    "run_started": LiveSession._on_run_started,
+    "run_item_added": LiveSession._on_run_item,
+    "run_refused": LiveSession._on_run_refused,
+    "run_settled": LiveSession._on_run_settled,
     "agent_state_changed": LiveSession._on_agent_state,
     "user_state_changed": LiveSession._on_user_state,
     "user_input_transcribed": LiveSession._on_transcript,

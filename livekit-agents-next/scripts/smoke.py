@@ -237,6 +237,16 @@ async def main() -> int:
     await settle(room, 6)
     assert agent_name(session) == "FrontDesk", agent_name(session)
 
+    print("== session.run(), asserted")
+    result = session.run(user_input="what's the weather like?")
+    await settle(room, 4)
+    assert result.done(), "the run did not settle"
+    result.expect.next_event().is_function_call(name="get_weather")
+    result.expect.next_event().is_function_call_output(output="sunny in Paris")
+    result.expect.next_event().is_message(role="assistant")
+    result.expect.no_more_events()
+    print(f"run events: {[type(e).__name__ for e in result.events]}")
+
     print("== handoff")
     session.generate_reply(user_input="put me through to billing")
     await settle(room, 4)

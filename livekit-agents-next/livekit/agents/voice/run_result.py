@@ -28,7 +28,6 @@ from ..llm import function_tool, utils as llm_utils
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..metrics import AgentSessionUsage
@@ -136,8 +135,6 @@ class RunResult(Generic[Run_T]):
         output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
         session: LiveSession | None = None,
     ) -> None:
-        self._handles: set[SpeechHandle | asyncio.Future[Any]] = set()
-
         if not is_given(output_options):
             output_options = RunOutputOptions()
         elif output_options is None:
@@ -165,8 +162,6 @@ class RunResult(Generic[Run_T]):
         self._answer_tool: str | None = None  # the tool the answer is handed to, if named
         self._verbatim: str | None = None
         self._agent_stack: list[Ref] | None = None
-
-        self.__last_speech_handle: SpeechHandle | None = None
 
     @property
     def output(self) -> Run_T | None:
@@ -321,90 +316,24 @@ class RunResult(Generic[Run_T]):
             index = self._find_insertion_index(created_at=event.item.created_at)
             self._recorded_items.insert(index, event)
 
-    def _watch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> None:
+    def _settle(self, *, output: Any, error: BaseException | None) -> None:
+        """The core settled the run: ``output`` is what a tool completed it with, if any."""
         if self._done_fut.done():
             return
+        if error is not None:
+            self._done_fut.set_exception(error)
+        elif self._output_type and not isinstance(output, self._output_type):
+            from .._exceptions import UnexpectedModelBehavior
 
-        self._handles.add(handle)
-
-        if isinstance(handle, SpeechHandle):
-            handle._add_item_added_callback(self._item_added)
-
-        handle.add_done_callback(self._mark_done_if_needed)
-
-    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
-        if handle not in self._handles:
-            return False
-
-        self._handles.discard(handle)
-        handle.remove_done_callback(self._mark_done_if_needed)
-
-        if isinstance(handle, SpeechHandle):
-            handle._remove_item_added_callback(self._item_added)
-        return True
-
-    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Future[Any] | None) -> None:
-        if isinstance(handle, SpeechHandle):
-            self.__last_speech_handle = handle
-
-        if all(handle.done() for handle in self._handles):
-            self._mark_done()
-
-    def _mark_done(self) -> None:
-        with contextlib.suppress(asyncio.InvalidStateError):
-            if self.__last_speech_handle is None:
-                self._done_fut.set_result(None)
-                return
-
-            # propagate speech handle errors (e.g. LLM or realtime failures)
-            if self.__last_speech_handle._error is not None:
-                self._done_fut.set_exception(self.__last_speech_handle._error)
-                return
-
-            final_output = self.__last_speech_handle._maybe_run_final_output
-            if not isinstance(final_output, BaseException):
-                if self._output_type and not isinstance(final_output, self._output_type):
-                    # only the no-output case is retryable: a completed task is
-                    # one-shot, so a wrong type cannot change on a retry
-                    if final_output is None and self._maybe_retry_output():
-                        return
-                    from .._exceptions import UnexpectedModelBehavior
-
-                    self._done_fut.set_exception(
-                        UnexpectedModelBehavior(
-                            f"Expected output of type {self._output_type.__name__}, "
-                            f"got {type(final_output).__name__}"
-                        )
-                    )
-                else:
-                    self._final_output = final_output
-                    self._done_fut.set_result(None)
-            else:
-                self._done_fut.set_exception(final_output)
-
-    def _maybe_retry_output(self) -> bool:
-        """Re-prompt the model when the run ended without the expected output
-        type. Returns True when a retry was scheduled."""
-        if self._output_retries <= 0 or self._session is None:
-            return False
-        self._output_retries -= 1
-
-        from ..log import logger
-
-        try:
-            # generate_reply attaches the new handle to this run state (it is
-            # still the session's active run); instructions inject as a
-            # per-turn system message instead of a fake user message.
-            self._session.generate_reply(instructions=self._output_retry_instructions)
-        except Exception:
-            # an unhandled exception here would leave the run future
-            # unresolved; fall through to UnexpectedModelBehavior instead
-            return False
-        logger.warning(
-            "run ended without the expected output type, retrying",
-            extra={"output_type": self._output_type.__name__ if self._output_type else None},
-        )
-        return True
+            self._done_fut.set_exception(
+                UnexpectedModelBehavior(
+                    f"Expected output of type {self._output_type.__name__}, "
+                    f"got {type(output).__name__}"
+                )
+            )
+        else:
+            self._final_output = output
+            self._done_fut.set_result(None)
 
     def _find_insertion_index(self, *, created_at: float) -> int:
         """
