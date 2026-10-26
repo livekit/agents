@@ -23,9 +23,12 @@ impl Rule for NoPrematureCompletion {
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let host = r.host_view();
+        let (attached, enabled) =
+            (r.inputs_view().audio_output(), r.inputs_view().audio_output_enabled());
         for call in host.api_calls() {
             let Some((_, Answer::Speech(id))) = call.returned() else { continue };
-            let Input::Say { input: SayInput::TextStream | SayInput::Audio, .. } = call.input()
+            let Input::Say { input: input @ (SayInput::TextStream | SayInput::Audio), .. } =
+                call.input()
             else {
                 continue;
             };
@@ -33,6 +36,13 @@ impl Rule for NoPrematureCompletion {
             let Some(stream) = call.stream() else { continue };
             let speech = host.speech(*id);
             if !speech.is_known() {
+                continue;
+            }
+            // `say(audio=)` with no audio path when it is authorized speaks its text alone and
+            // leaves the frames unread, as the reference's `_tts_task` does with no audio output.
+            let authorized = r.internal_view().speech(*id).authorized_at();
+            let silent = |at| !(attached.on_at(at) && enabled.on_at(at));
+            if *input == SayInput::Audio && authorized.is_some_and(silent) {
                 continue;
             }
 

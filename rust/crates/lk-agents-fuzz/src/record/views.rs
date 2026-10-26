@@ -152,6 +152,17 @@ impl<'a> InputsView<'a> {
         })
     }
 
+    /// The audio output leg's enable, which holds whichever output is attached.
+    pub fn audio_output_enabled(&self) -> Switch {
+        self.switch(|input| match input {
+            Input::SetIoEnabled {
+                leg: lk_agents_voice::agent_session::IoKind::AudioOutput,
+                enabled,
+            } => Some(*enabled),
+            _ => None,
+        })
+    }
+
     fn switch(&self, toggle: impl Fn(&Input) -> Option<bool>) -> Switch {
         Switch {
             changes: self
