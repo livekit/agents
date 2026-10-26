@@ -317,6 +317,8 @@ async def test_an_idle_model_still_ends_its_segment() -> None:
     # a provider that never reports where its speech ends
     model = _FakeTranslationModel()
     session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    # and never sends the transcript its segment would wait for
+    session._text_wait_timeout = 0.05
     played: list[float] = []
     audio_out.on("playback_finished", lambda ev: played.append(ev.playback_position))
 
@@ -1364,6 +1366,7 @@ async def test_an_unstamped_retarget_before_any_audio_keeps_the_text_waiting_for
 
         # "hola"'s audio comes and its segment ends; only then does the label change
         model.sessions[0].speak()
+        model.sessions[0].emit("output_transcript", OutputTranscript(text="", is_final=True))
         await _wait_for(lambda: labels.languages == ["fr"])
         assert counts.flushes == 1
     finally:
@@ -1524,3 +1527,54 @@ async def test_paced_translation_text_survives_a_late_transcript_final() -> None
     finally:
         await session.aclose()
         await synchronizer.aclose()
+
+
+async def test_a_quiet_segment_waits_for_text_that_trails_its_audio() -> None:
+    from livekit.agents.voice.transcription.synchronizer import TranscriptSynchronizer
+
+    model = _FakeTranslationModel()
+    audio_sink, text_sink = FakeAudioOutput(), FakeTextOutput()
+    synchronizer = TranscriptSynchronizer(
+        next_in_chain_audio=audio_sink, next_in_chain_text=text_sink
+    )
+    session = TranslationSession(model=model, output_segment_timeout=0.05)
+    session.input.audio = FakeAudioInput()
+    session.output.audio = synchronizer.audio_output
+    session.output.transcription = synchronizer.text_output
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        model_session.speak(_frame(duration=0.1, sample_rate=24000))
+        # the speech goes quiet before any of its transcript arrives
+        await asyncio.sleep(0.15)
+        model_session.emit("output_transcript", OutputTranscript(text="hola", is_final=False))
+        await asyncio.sleep(0.05)
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+
+        await _wait_for(lambda: "".join(text_sink._messages).strip() == "hola", timeout=3)
+        # the next translation starts a segment of its own, rather than taking "hola" in
+        model_session.speak(_frame(duration=0.1, sample_rate=24000))
+        model_session.emit("output_transcript", OutputTranscript(text="adiós", is_final=True))
+        await _wait_for(lambda: text_sink._messages[-1:] == ["adiós"], timeout=3)
+    finally:
+        await session.aclose()
+        await synchronizer.aclose()
+
+
+async def test_speech_resuming_while_waiting_for_text_carries_the_segment_on() -> None:
+    model = _FakeTranslationModel()
+    session, _, audio_out, _ = _session(model, output_segment_timeout=0.05)
+    counts = _Counts(audio_out)
+    await session.start()
+    try:
+        model_session = model.sessions[0]
+        model_session.emit("output_transcript", OutputTranscript(text="hola", is_final=False))
+        model_session.speak()
+        await asyncio.sleep(0.1)
+        # quiet, but its text is still going, so the segment holds
+        assert counts.flushes == 0
+        model_session.speak()
+        model_session.emit("output_transcript", OutputTranscript(text="", is_final=True))
+        await _wait_for(lambda: counts.flushes == 1)
+    finally:
+        await session.aclose()

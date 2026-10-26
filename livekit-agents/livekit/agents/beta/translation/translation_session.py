@@ -46,6 +46,10 @@ EventTypes = Literal[
 # a provider that never reports where its speech ends still has to end a playout segment,
 # or the translation plays on with nothing ever marking it finished
 DEFAULT_OUTPUT_SEGMENT_TIMEOUT = 0.5
+# how long a segment whose speech has gone quiet waits for its transcript to end with it. A
+# provider's transcript can trail its audio, and the synchronizer only releases text paired
+# with an audio segment, so ending the audio first strands the text
+TEXT_WAIT_TIMEOUT = 3.0
 
 
 # marks, in the transcript stream, where the audio segment the text belongs to ended
@@ -130,6 +134,9 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._output_transcript_text = ""
         self._output_transcript_atask: asyncio.Task[None] | None = None
         self._segment_timer: asyncio.TimerHandle | None = None
+        # set while a quiet segment waits for its transcript to go final before it ends
+        self._awaiting_text = False
+        self._text_wait_timeout = TEXT_WAIT_TIMEOUT
         self._segment_tasks: set[asyncio.Task[None]] = set()
         # serialises capturing a frame against ending a segment, so a tail the resampler
         # holds cannot be flushed out from under a frame being captured
@@ -147,6 +154,8 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # whether translation text has arrived since the last segment ended, which the
         # synchronizer holds for audio still to come
         self._segment_has_text = False
+        # whether that text is still going: some has arrived, and its final has not
+        self._text_open = False
         # a label to apply once the open segment ends: requested while it held text waiting for
         # audio that has not come, which is still in the old language
         self._relabel_at_segment_end: str | None = None
@@ -471,8 +480,16 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_output_transcript(self, ev: OutputTranscript) -> None:
         if ev.text:
             self._segment_has_text = True
+            self._text_open = True
+        if ev.is_final:
+            self._text_open = False
         if self._output_transcript_ch is not None:
             self._output_transcript_ch.send_nowait(ev)
+
+        if ev.is_final and self._awaiting_text:
+            # the quiet segment was only waiting for this; it ends behind it
+            self._cancel_segment_timer()
+            self._close_output_segment_soon()
 
         # the model sends pieces; the event carries all of it, so a final is never empty
         self._output_transcript_text += ev.text
@@ -586,6 +603,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         had_audio, self._segment_has_audio = self._segment_has_audio, False
         self._segment_has_text = False
+        self._text_open = False
         if had_audio and self._output_transcript_ch is not None:
             # the text segment ends with its audio, behind the text already sent
             self._output_transcript_ch.send_nowait(_END_OF_SEGMENT)
@@ -602,14 +620,42 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """
         self._cancel_segment_timer()
         self._segment_timer = self._loop.call_later(
-            self._output_segment_timeout, self._close_output_segment_soon
+            self._output_segment_timeout, self._on_output_silence
         )
 
     def _cancel_segment_timer(self) -> None:
-        """Disarm the silence timer, leaving the current segment open."""
+        """Disarm the silence timer, or the wait for text, leaving the current segment open."""
+        self._awaiting_text = False
         if self._segment_timer is not None:
             self._segment_timer.cancel()
             self._segment_timer = None
+
+    def _on_output_silence(self) -> None:
+        """End the segment the model went quiet in, once its transcript has ended too.
+
+        Text still arriving, or not arrived yet, belongs to this segment's audio; ended now,
+        the segment would leave it to the next one, or to none. So it waits for the final,
+        up to ``TEXT_WAIT_TIMEOUT``, and speech resuming meanwhile carries the segment on.
+        """
+        self._segment_timer = None
+        if self._waits_for_text() and (self._text_open or not self._segment_has_text):
+            self._awaiting_text = True
+            self._segment_timer = self._loop.call_later(
+                self._text_wait_timeout, self._close_output_segment_soon
+            )
+            return
+
+        self._close_output_segment_soon()
+
+    def _waits_for_text(self) -> bool:
+        """Whether a segment's end waits on its transcript: the model sends one, and it is
+        published paired with the audio."""
+        return (
+            self._model.capabilities.output_transcription
+            and self._text_follows_audio()
+            and self.output.transcription is not None
+            and self.output.transcription_enabled
+        )
 
     async def _close_segment_and_relabel(self, language: str) -> None:
         """End the open segment, then label the translation with ``language``.
@@ -637,6 +683,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """Forget what the open segment held, and any label deferred until it ends."""
         self._segment_has_audio = False
         self._segment_has_text = False
+        self._text_open = False
         self._relabel_at_segment_end = None
 
     def _close_output_segment_soon(self) -> None:
@@ -645,6 +692,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         The work runs as a task, tracked so closing the session can wait on it.
         """
         self._segment_timer = None
+        self._awaiting_text = False
         task = asyncio.create_task(self._close_output_segment())
         self._segment_tasks.add(task)
         task.add_done_callback(self._segment_tasks.discard)

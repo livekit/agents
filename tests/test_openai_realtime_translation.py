@@ -367,3 +367,40 @@ async def test_a_retarget_relabels_only_once_the_server_applies_it(
         ]
     finally:
         await session.aclose()
+
+
+async def test_a_transcript_stopped_mid_sentence_waits_for_its_punctuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(transcript_segment_timeout=0.05).session()
+    heard: list[InputTranscript] = []
+    session.on("input_transcript", heard.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": "where is the restroom"})
+        # the question mark trails the words by more than one quiet period
+        await asyncio.sleep(0.08)
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": "?"})
+        await _wait_for(lambda: any(t.is_final for t in heard))
+
+        finals = [t.text for t in heard if t.is_final]
+        assert finals == ["where is the restroom?"]
+    finally:
+        await session.aclose()
+
+
+async def test_a_finished_sentence_ends_after_one_quiet_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conns = _connect_hook(monkeypatch)
+    session = _model(transcript_segment_timeout=0.05).session()
+    heard: list[InputTranscript] = []
+    session.on("input_transcript", heard.append)
+    try:
+        await _wait_for(lambda: bool(conns))
+        conns[0].emit({"type": "session.input_transcript.delta", "delta": "Hello there."})
+        await asyncio.sleep(0.08)
+        assert [t.text for t in heard if t.is_final] == ["Hello there."]
+    finally:
+        await session.aclose()
