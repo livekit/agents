@@ -333,6 +333,103 @@ async def realtime_fallback() -> None:
     print(f"availability {changes}, played_bytes={room.played_bytes()}")
 
 
+def _square(level: float, ms: int = 100) -> rtc.AudioFrame:
+    """A frame whose RMS is ``level``: a duplex model's output, its own silence included."""
+    n = SAMPLE_RATE * ms // 1000
+    amp = int(level * 32767)
+    data = b"".join(
+        (amp if i % 2 == 0 else -amp).to_bytes(2, "little", signed=True) for i in range(n)
+    )
+    return rtc.AudioFrame(data, SAMPLE_RATE, 1, n)
+
+
+class ScriptedDuplex(llm.DuplexModel):
+    """A duplex model that answers each ask with one utterance and its transcript."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            capabilities=llm.DuplexCapabilities(
+                user_transcription=False, auto_tool_reply_generation=False
+            )
+        )
+        self.sessions: list[_DuplexScript] = []
+
+    def session(self) -> llm.DuplexSession:
+        self.sessions.append(_DuplexScript(self))
+        return self.sessions[-1]
+
+    async def aclose(self) -> None:
+        pass
+
+
+class _DuplexScript(llm.DuplexSession):
+    def __init__(self, model: ScriptedDuplex) -> None:
+        super().__init__(model)
+        self.audio: asyncio.Queue[llm.DuplexAudioFrame] = asyncio.Queue()
+        self.configured_with: list[object] = []
+
+    @property
+    def audio_stream(self) -> AsyncIterator[llm.DuplexAudioFrame]:
+        async def _frames() -> AsyncIterator[llm.DuplexAudioFrame]:
+            while True:
+                yield await self.audio.get()
+
+        return _frames()
+
+    @property
+    def tools(self) -> llm.ToolContext:
+        return llm.ToolContext.empty()
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        pass
+
+    async def _update_instructions(self, instructions: str) -> None:
+        self.configured_with.append(instructions)
+
+    async def _append_items(self, items: list[llm.ChatItem]) -> None:
+        pass
+
+    async def _update_tools(self, tools: list[llm.Tool]) -> None:
+        pass
+
+    def _update_options(self, **_: object) -> None:
+        pass
+
+    def _generate_reply(self, **_: object) -> None:
+        for level, count in ((0.001, 20), (0.3, 3)):
+            for _ in range(count):
+                self.audio.put_nowait(llm.DuplexAudioFrame(_square(level)))
+        self.emit(
+            "transcript_delta",
+            llm.DuplexOutputTranscriptDelta(
+                text="Hello from the duplex model.", start_ms=2000, end_ms=2300
+            ),
+        )
+        for _ in range(8):
+            self.audio.put_nowait(llm.DuplexAudioFrame(_square(0.001)))
+
+
+async def duplex() -> None:
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    model = ScriptedDuplex()
+    session = LiveSession(llm=llm.DuplexRealtimeAdapter(model), vad=None)
+    session.on(
+        "conversation_item_added",
+        lambda ev: print(f"conversation_item {ev.item.role}: {ev.item.text_content!r}"),
+    )
+    await session.start(Agent(instructions="You are duplex.", name="duplex"), room=room)
+    await settle(room, 0.2)
+    handle = session.generate_reply()
+    await settle(room, 4)
+    assert handle.done(), "the duplex reply did not finish"
+    script = model.sessions[0]
+    assert script._configured.is_set(), "the configuration never reached the model as one unit"
+    assert script.configured_with == ["You are duplex."], script.configured_with
+    await session.aclose()
+    print(f"played_bytes={room.played_bytes()}")
+
+
 async def _openai_server(ws: web.WebSocketResponse, sessions: list[dict[str, Any]]) -> None:
     """The OpenAI Realtime protocol's happy path: items are acked, a reply is one spoken message."""
     tail: str | None = None
@@ -647,6 +744,9 @@ async def main() -> int:
 
     print("== realtime")
     await realtime()
+
+    print("== duplex")
+    await duplex()
 
     print("== realtime fallback")
     await realtime_fallback()

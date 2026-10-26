@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
@@ -239,7 +240,187 @@ def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool |
         return model._core_native()
     if isinstance(model, RealtimeModelFallbackAdapter):
         return model._core_native([realtime_model(m, tools) for m in model._models])
+    if isinstance(model, llm.DuplexRealtimeAdapter):
+        return _core.DuplexRealtimeModel(Duplex(model, tools), audio_timeout=model._audio_timeout)
     return Realtime(model, tools)
+
+
+def _forward_session_events(session: Any, put: Callable[[dict[str, Any]], None]) -> None:
+    """A realtime or duplex session's caller events, reconnects and errors, as kind-tagged dicts."""
+    session.on("input_speech_started", lambda _: put({"kind": "input_speech_started"}))
+    session.on(
+        "input_speech_stopped",
+        lambda ev: put(
+            {
+                "kind": "input_speech_stopped",
+                "user_transcription_enabled": ev.user_transcription_enabled,
+            }
+        ),
+    )
+    session.on(
+        "input_audio_transcription_completed",
+        lambda ev: put(
+            {
+                "kind": "input_transcription",
+                "item_id": ev.item_id,
+                "transcript": ev.transcript,
+                "is_final": ev.is_final,
+                "confidence": ev.confidence,
+                "turn_started_at": ev.turn_started_at,
+            }
+        ),
+    )
+    session.on("session_reconnected", lambda _: put({"kind": "session_reconnected"}))
+    session.on("metrics_collected", lambda ev: put({"kind": "metrics", "metrics": ev}))
+    session.on(
+        "error",
+        lambda ev: put(
+            {
+                "kind": "error",
+                "label": ev.label,
+                "message": str(ev.error),
+                "recoverable": ev.recoverable,
+                "timestamp": ev.timestamp,
+            }
+        ),
+    )
+
+
+class Duplex:
+    """A ``DuplexRealtimeAdapter``'s model as the core's duplex host: the core gates and segments
+    the output; ``tools`` names the tool objects the core refers to by name."""
+
+    def __init__(
+        self, adapter: llm.DuplexRealtimeAdapter, tools: Callable[[], Sequence[Tool | Toolset]]
+    ) -> None:
+        self._adapter = adapter
+        self._tools = tools
+
+    def _core_label(self) -> str:
+        return self._adapter.duplex_model.label
+
+    def _core_capabilities(self) -> dict[str, Any]:
+        return dataclasses.asdict(self._adapter.duplex_model.capabilities)
+
+    async def _core_session(self) -> tuple[_DuplexSession, Any]:
+        """A new plugin session, and the gate the adapter or the model declares."""
+        model = self._adapter.duplex_model
+        gate = self._adapter._gate() if self._adapter._gate else model.audio_gate()
+        return _DuplexSession(model.session(), self._tools), gate
+
+
+class _DuplexSession:
+    """A plugin's ``DuplexSession`` flattened: commands in, one ``kind``-tagged event out at a
+    time, its output audio among them."""
+
+    def __init__(
+        self, session: llm.DuplexSession, tools: Callable[[], Sequence[Tool | Toolset]]
+    ) -> None:
+        self._session = session
+        self._tools = tools
+        self._events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        put = self._events.put_nowait
+        _forward_session_events(session, put)
+        session.on(
+            "transcript_delta",
+            lambda ev: put(
+                {
+                    "kind": "transcript_delta",
+                    "text": ev.text,
+                    "start_ms": ev.start_ms,
+                    "end_ms": ev.end_ms,
+                }
+            ),
+        )
+        session.on(
+            "function_call", lambda call: put({"kind": "function_call", "call": to_core_item(call)})
+        )
+        # updates apply in order: what each one reads is current when it runs
+        self._updating: asyncio.Future[Any] | None = None
+        self._audio = asyncio.ensure_future(self._pump_audio())
+
+    async def _pump_audio(self) -> None:
+        error = None
+        try:
+            async for f in self._session.audio_stream:
+                self._events.put_nowait(
+                    {"kind": "output_audio", "frame": f.frame, "start_ms": f.start_ms}
+                )
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+        self._events.put_nowait({"kind": "output_ended", "error": error})
+
+    def _then(self, apply: Callable[[], Awaitable[Any]]) -> None:
+        previous = self._updating
+
+        async def _run() -> None:
+            if previous is not None:
+                await asyncio.wait([previous])
+            await apply()
+
+        self._updating = asyncio.ensure_future(_run())
+
+    async def _configure(self, cmd: dict[str, Any]) -> None:
+        items = cmd["items"]
+        try:
+            await self._session._update_session(
+                instructions=cmd["instructions"] or NOT_GIVEN,
+                chat_ctx=NOT_GIVEN
+                if items is None
+                else llm.ChatContext([from_core_item(i) for i in items]),
+                tools=offered_tools(self._tools(), cmd["names"]),
+            )
+        except Exception as e:
+            # a session that cannot carry its configuration is unusable
+            self._events.put_nowait(
+                {
+                    "kind": "error",
+                    "label": self._session.duplex_model.label,
+                    "message": str(e),
+                    "recoverable": False,
+                    "timestamp": time.time(),
+                }
+            )
+            await self._session.aclose()
+
+    def _core_send(self, cmd: dict[str, Any]) -> None:
+        session, kind = self._session, cmd["kind"]
+        if kind == "push_audio":
+            session.push_audio(cmd["frame"])
+        elif kind == "configure":
+            self._then(lambda: self._configure(cmd))
+        elif kind == "update_instructions":
+            self._then(lambda: session._update_instructions(cmd["instructions"]))
+        elif kind == "append_items":
+            items = [from_core_item(i) for i in cmd["items"]]
+            self._then(lambda: session._append_items(items))
+        elif kind == "update_tools":
+            tools = offered_tools(self._tools(), cmd["names"])
+            self._then(lambda: session._update_tools(tools))
+        elif kind == "generate_reply":
+            choice = cmd["tool_choice"]
+            try:
+                session._generate_reply(
+                    instructions=cmd["instructions"] or NOT_GIVEN,
+                    tool_choice=NOT_GIVEN if choice is None else choice,
+                )
+            except llm.RealtimeError as e:
+                self._events.put_nowait(
+                    {
+                        "kind": "generate_reply_failed",
+                        "req_id": cmd["req_id"],
+                        "message": str(e),
+                        "code": getattr(e, "code", None),
+                    }
+                )
+
+    async def _core_next_event(self) -> dict[str, Any] | None:
+        return await self._events.get()
+
+    async def _core_aclose(self) -> None:
+        self._audio.cancel()
+        await self._session.aclose()
+        self._events.put_nowait(None)
 
 
 class Realtime:
@@ -278,29 +459,7 @@ class _RealtimeSession:
         self._updating: asyncio.Task[Any] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         put = self._events.put_nowait
-        session.on("input_speech_started", lambda _: put({"kind": "input_speech_started"}))
-        session.on(
-            "input_speech_stopped",
-            lambda ev: put(
-                {
-                    "kind": "input_speech_stopped",
-                    "user_transcription_enabled": ev.user_transcription_enabled,
-                }
-            ),
-        )
-        session.on(
-            "input_audio_transcription_completed",
-            lambda ev: put(
-                {
-                    "kind": "input_transcription",
-                    "item_id": ev.item_id,
-                    "transcript": ev.transcript,
-                    "is_final": ev.is_final,
-                    "confidence": ev.confidence,
-                    "turn_started_at": ev.turn_started_at,
-                }
-            ),
-        )
+        _forward_session_events(session, put)
         session.on(
             "generation_created",
             lambda ev: None if ev.user_initiated else self._spawn(self._generation(ev, None)),
@@ -312,20 +471,6 @@ class _RealtimeSession:
                     "kind": "remote_item_added",
                     "previous_item_id": ev.previous_item_id,
                     "item": to_core_item(ev.item),
-                }
-            ),
-        )
-        session.on("session_reconnected", lambda _: put({"kind": "session_reconnected"}))
-        session.on("metrics_collected", lambda ev: put({"kind": "metrics", "metrics": ev}))
-        session.on(
-            "error",
-            lambda ev: put(
-                {
-                    "kind": "error",
-                    "label": ev.label,
-                    "message": str(ev.error),
-                    "recoverable": ev.recoverable,
-                    "timestamp": ev.timestamp,
                 }
             ),
         )

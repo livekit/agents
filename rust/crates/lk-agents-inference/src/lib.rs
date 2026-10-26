@@ -12,6 +12,9 @@ pub mod ids;
 pub mod eot;
 pub mod interruption;
 
+// A full-duplex speech model run as the session's realtime model.
+pub mod duplex;
+
 // A fallback adapter is a provider assembled from other providers, over any `Arc<dyn Llm>`.
 pub mod fallback;
 
