@@ -51,7 +51,7 @@ pub(crate) struct AgentActivity {
     /// `_paused_speech` and the false-interruption timer.
     pub(crate) paused_speech: PausedSpeech,
     /// The agent each speech was created under: late tool items belong to it.
-    speech_agents: BTreeMap<SpeechId, String>,
+    pub(crate) speech_agents: BTreeMap<SpeechId, String>,
     pub(crate) finished: BTreeSet<SpeechId>,
     /// Per tool step: whether the activity that made the speech drains, so the step's reply
     /// offers no tools.
@@ -61,7 +61,7 @@ pub(crate) struct AgentActivity {
     /// The step's first frame transitions, once. Cleared when the step is spoken.
     pub(crate) spoke: BTreeSet<SpeechId>,
     /// `_current_speech` as last announced (`FloorChanged`); compared at the end of every cycle.
-    announced_current_speech: Option<SpeechId>,
+    pub(crate) announced_current_speech: Option<SpeechId>,
     /// `interrupt()`s waiting for their speeches' release.
     pub(crate) interrupt_waiters: Vec<crate::agent_activity::false_interruption::InterruptWaiter>,
     /// How long a hook whose answer is needed is waited on; `None` when no host runs hooks.
@@ -97,84 +97,12 @@ pub(crate) struct AgentActivity {
     /// The model's turn detection was switched off at the open.
     pub(crate) realtime_turn_detection_disabled: bool,
     /// Before the model's refinement, so a live change is one that moved this.
-    realtime_resolved_mode: crate::audio_recognition::TurnDetectionMode,
-    /// The `turn_detection` the options last said, so a live change is one that moved it.
-    realtime_requested_detection: crate::agent_activity::options::TurnDetection,
-}
-
-/// What the builder hands the activity: the opening agent, its machines, and the realtime session
-/// it opened.
-pub(crate) struct ActivityParts {
-    pub(crate) agent: String,
-    pub(crate) instructions: crate::generation::Instructions,
-    pub(crate) dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
-    pub(crate) toolset: crate::tool_executor::Toolset,
-    pub(crate) audio_recognition: AudioRecognition,
-    pub(crate) speech_scheduler: SpeechScheduler,
-    pub(crate) paused_speech: PausedSpeech,
-    pub(crate) hook_bound: Option<Duration>,
-    pub(crate) rt_session: Option<lk_agents_abi::resources::RealtimeRef>,
-    pub(crate) realtime_caps: lk_agents_abi::llm::realtime::RealtimeCapabilities,
-    pub(crate) realtime_turn_detection_disabled: bool,
     pub(crate) realtime_resolved_mode: crate::audio_recognition::TurnDetectionMode,
+    /// The `turn_detection` the options last said, so a live change is one that moved it.
     pub(crate) realtime_requested_detection: crate::agent_activity::options::TurnDetection,
 }
 
 impl AgentActivity {
-    pub(crate) fn new(parts: ActivityParts) -> Self {
-        let ActivityParts {
-            agent,
-            instructions,
-            dynamic_instructions,
-            toolset,
-            audio_recognition,
-            speech_scheduler,
-            paused_speech,
-            hook_bound,
-            rt_session,
-            realtime_caps,
-            realtime_turn_detection_disabled,
-            realtime_resolved_mode,
-            realtime_requested_detection,
-        } = parts;
-        AgentActivity {
-            agent,
-            instructions,
-            dynamic_instructions,
-            toolset: Arc::new(toolset),
-            tools: Default::default(),
-            audio_recognition,
-            speech_scheduler,
-            paused_speech,
-            speech_agents: BTreeMap::new(),
-            finished: BTreeSet::new(),
-            tools_committed: BTreeMap::new(),
-            tools_in_flight: BTreeSet::new(),
-            spoke: BTreeSet::new(),
-            announced_current_speech: None,
-            interrupt_waiters: Vec::new(),
-            hook_bound,
-            hooks: Default::default(),
-            handoff: Default::default(),
-            on_exit: Default::default(),
-            drain: Default::default(),
-            dtmf: Default::default(),
-            pending_turn: None,
-            last_turn: None,
-            live_speech_at_final: false,
-            preemptive_turn: None,
-            preemptive_record_version: 0,
-            rt_session,
-            realtime_state: crate::agent_activity::realtime::RealtimeSessionState::new(
-                realtime_caps,
-            ),
-            realtime_players: BTreeMap::new(),
-            realtime_turn_detection_disabled,
-            realtime_resolved_mode,
-            realtime_requested_detection,
-        }
-    }
-
     /// A handoff lands: the new agent, prompt and tools. The previous agent's id.
     pub(crate) fn set_agent(
         &mut self,

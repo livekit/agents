@@ -4,7 +4,7 @@
 use super::driver::*;
 use crate::agent_activity::false_interruption::PausedSpeech;
 use crate::agent_activity::scheduling::SpeechScheduler;
-use crate::agent_activity::{ActivityParts, DriverConfig, PIPELINE_SAMPLE_RATE};
+use crate::agent_activity::{AgentActivity, DriverConfig, PIPELINE_SAMPLE_RATE};
 use crate::agent_session::LiveSession;
 use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{Command, Origin};
@@ -363,21 +363,42 @@ impl DriverBuilder {
 
         let resolved_mode = realtime_resolved.unwrap_or(session.config.effective.turn.owner);
         audio_recognition.set_detectors(eot, self.interruption);
-        let activity = crate::agent_activity::AgentActivity::new(ActivityParts {
+        let activity = AgentActivity {
             agent: self.agent,
             instructions: self.instructions,
             dynamic_instructions: self.dynamic_instructions,
-            toolset: self.toolset,
+            toolset: Arc::new(self.toolset),
+            tools: Default::default(),
             audio_recognition,
             speech_scheduler,
             paused_speech,
+            speech_agents: Default::default(),
+            finished: Default::default(),
+            tools_committed: Default::default(),
+            tools_in_flight: Default::default(),
+            spoke: Default::default(),
+            announced_current_speech: None,
+            interrupt_waiters: Vec::new(),
             hook_bound: self.hook_bound,
+            hooks: Default::default(),
+            handoff: Default::default(),
+            on_exit: Default::default(),
+            drain: Default::default(),
+            dtmf: Default::default(),
+            pending_turn: None,
+            last_turn: None,
+            live_speech_at_final: false,
+            preemptive_turn: None,
+            preemptive_record_version: 0,
             rt_session: realtime_session.map(|s| self.resources.register_realtime(s)),
-            realtime_caps: realtime_caps.unwrap_or_default(),
+            realtime_state: crate::agent_activity::realtime::RealtimeSessionState::new(
+                realtime_caps.unwrap_or_default(),
+            ),
+            realtime_players: Default::default(),
             realtime_turn_detection_disabled: realtime_disabled.unwrap_or(false),
             realtime_resolved_mode: resolved_mode,
             realtime_requested_detection: session.config.effective.turn.detection,
-        });
+        };
         let input = crate::io::AgentInput::new(
             sinks,
             legs_tx.clone(),
