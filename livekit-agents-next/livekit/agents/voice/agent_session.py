@@ -38,6 +38,7 @@ from ..llm import ChatContext, RealtimeModel, StopResponse
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage
+from ..telemetry import otel_metrics
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -797,6 +798,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_metrics(self, wire: dict[str, Any]) -> None:
+        otel_metrics.collect_usage(wire["metrics"])
         self.emit("metrics_collected", MetricsCollectedEvent(metrics=wire["metrics"]))
 
     def _on_error(self, wire: dict[str, Any]) -> None:

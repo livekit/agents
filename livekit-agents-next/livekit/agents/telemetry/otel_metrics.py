@@ -46,6 +46,22 @@ def flush_turn_metrics(chat_ctx: ChatContext) -> None:
             _histogram(name).record(value, attributes={**job, **attrs})
 
 
+@functools.cache
+def _counter(name: str) -> Any:
+    # the durations count seconds; the token and request counters have no unit
+    return _meter.create_counter(name, unit="s" if name.endswith("_duration") else "")
+
+
+def collect_usage(metrics: Any) -> None:
+    """Record the usage counters (and connection timing) one metrics event carries."""
+    job = _job_attrs()
+    for name, kind, value, attrs in _core.otel_usage_records(metrics):
+        if kind == "counter":
+            _counter(name).add(value, attributes={**job, **attrs})
+        else:
+            _histogram(name).record(value, attributes={**job, **attrs})
+
+
 def record_event_loop_blocked(duration: float, *, severity: str) -> None:
     attrs = _job_attrs()
     attrs["severity"] = severity
