@@ -139,6 +139,27 @@ impl NativeLlm {
         Ok(Box::new(NativeLlmStream::pending(prepared)))
     }
 
+    /// `prewarm()`, the reference's `models.list()`: the first request finds a connection open.
+    /// Failures are ignored.
+    pub fn prewarm(&self) -> impl Future<Output = ()> + Send + 'static {
+        let opts = &self.opts;
+        let request =
+            gateway_headers(self.identification.as_ref(), None, None, &opts.api_key, &opts.api_secret)
+                .ok()
+                .map(|headers| HttpRequest {
+                    url: format!("{}/models", opts.base_url.trim_end_matches('/')),
+                    headers: headers.into_vec(),
+                    body: Vec::new(),
+                });
+        let (http, clock) = (self.http.clone(), self.clock.clone());
+        let timeout = Duration::from_secs_f64(self.conn_options.timeout.max(0.0));
+        async move {
+            if let Some(request) = request {
+                let _ = within(&*clock, timeout, http.get(request)).await;
+            }
+        }
+    }
+
     fn prepare(
         &self,
         chat_ctx: &ChatContext,

@@ -81,6 +81,12 @@ impl HttpTransport for FakeHttp {
             body: Box::new(ScriptedLines { events, hang_at_end: self.hang_at_end }),
         })
     }
+
+    /// Recorded with the posts; the script is left for them.
+    async fn get(&self, req: HttpRequest) -> Result<(), TransportError> {
+        self.seen.lock().unwrap().push(req);
+        Ok(())
+    }
 }
 
 struct ScriptedLines {

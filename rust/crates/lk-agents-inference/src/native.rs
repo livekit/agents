@@ -60,6 +60,17 @@ impl HttpTransport for ReqwestTransport {
 
         Ok(HttpStream { status, headers, body: Box::new(SseStream::new(response)) })
     }
+
+    async fn get(&self, req: HttpRequest) -> Result<(), TransportError> {
+        let mut builder = self.client.get(&req.url);
+        for (name, value) in &req.headers {
+            builder = builder.header(name, value);
+        }
+        let response = builder.send().await.map_err(classify_reqwest)?;
+        // Read to the end: an HTTP/1.1 connection returns to the pool only then.
+        response.bytes().await.map_err(classify_reqwest)?;
+        Ok(())
+    }
 }
 
 impl Default for ReqwestTransport {

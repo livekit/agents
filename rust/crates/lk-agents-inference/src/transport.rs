@@ -135,6 +135,10 @@ pub trait LineStream: Send {
 #[async_trait]
 pub trait HttpTransport: Send + Sync {
     async fn post_stream(&self, req: HttpRequest) -> Result<HttpStream, TransportError>;
+
+    /// A GET whose body is read and dropped, whatever its status: it leaves a connection in the
+    /// pool (`prewarm()`). `body` is ignored.
+    async fn get(&self, req: HttpRequest) -> Result<(), TransportError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

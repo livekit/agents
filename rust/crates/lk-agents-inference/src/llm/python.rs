@@ -47,18 +47,25 @@ pub struct GatewayLlm {
     /// `RealClock` until a session binds its own.
     pub(crate) clock: Arc<lk_agents_abi::BoundClock>,
     identity: BoundIdentity,
+    /// Runs `prewarm()`'s request.
+    spawner: Arc<dyn lk_agents_abi::Spawner>,
 }
 
 impl InferenceLlm {
     pub(crate) fn build(_py: Python<'_>, cfg: LlmClientConfig) -> PyResult<Self> {
-        let llm = Self::from_parts(cfg.into(), transport()?);
+        let spawner = <Arc<dyn lk_agents_abi::Spawner> as lk_agents_abi::python::Ambient>::ambient();
+        let llm = Self::from_parts(cfg.into(), transport()?, spawner);
         // The ambient clock until a session binds its own: on a loop on virtual time, a request
         // times out in that loop's seconds.
         llm.inner.clock.bind(<Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient());
         Ok(llm)
     }
 
-    pub(crate) fn from_parts(opts: LlmOptions, http: Arc<dyn crate::transport::HttpTransport>) -> Self {
+    pub(crate) fn from_parts(
+        opts: LlmOptions,
+        http: Arc<dyn crate::transport::HttpTransport>,
+        spawner: Arc<dyn lk_agents_abi::Spawner>,
+    ) -> Self {
         // An empty resolver: the host already serialized every image onto the item.
         let images = Arc::new(lk_agents_abi::llm::provider_format::PreResolved::from_pairs(Vec::<(
             String,
@@ -70,6 +77,7 @@ impl InferenceLlm {
             http,
             clock: lk_agents_abi::BoundClock::new(),
             identity: BoundIdentity::default(),
+            spawner,
         };
         InferenceLlm { inner: Arc::new(inner) }
     }
@@ -101,6 +109,13 @@ impl Llm for GatewayLlm {
 
     fn model(&self) -> String {
         self.opts.lock().unwrap_or_else(|p| p.into_inner()).model.clone()
+    }
+
+    /// `prewarm()`, in the background on the shared client: the session calls it at start.
+    fn prewarm(&self) {
+        let timeout = lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS.timeout;
+        let warm = self.client(timeout, self.identity.for_connection()).prewarm();
+        lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.spawner, warm);
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
@@ -290,17 +305,37 @@ mod tests {
         f.poll(&mut cx)
     }
 
+    fn spawner() -> Arc<dyn lk_agents_abi::Spawner> {
+        Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()))
+    }
+
+    // Catches: the session's `prewarm()` left as the trait's no-op, so a call's first reply pays
+    // DNS, TCP and TLS inside its time to first token.
+    #[tokio::test]
+    async fn prewarm_opens_a_gateway_connection_in_the_background() {
+        use lk_agents_abi::Llm as _;
+        let http = Arc::new(FakeHttp::new(Vec::new()));
+        let llm = InferenceLlm::from_parts(opts(), http.clone(), spawner());
+        llm.inner.prewarm();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        let req = http.last_request().expect("prewarm made a request");
+        assert_eq!(req.url, "https://gw/v1/models");
+        assert!(req.headers.iter().any(|(k, v)| k == "Authorization" && v.starts_with("Bearer ")));
+    }
+
     // Catches: the binding's `NativeLlm` staying on `RealClock`, `bind_clock` not reaching the
     // per-call client built after it, or an unbound LLM reacting to a clock it was never handed.
     #[tokio::test]
     async fn a_client_times_out_on_the_session_clock_once_bound_to_it() {
         use lk_agents_abi::Llm as _;
         let clock = Arc::new(VirtualClock::new());
-        let unbound = InferenceLlm::from_parts(opts(), Arc::new(FakeHttp::hanging()));
+        let unbound = InferenceLlm::from_parts(opts(), Arc::new(FakeHttp::hanging()), spawner());
         let mut idle = unbound.client(10.0, None).chat(&ChatRequest::default()).await.expect("opens");
         let mut idle = Box::pin(idle.next());
         let http = Arc::new(FakeHttp::hanging());
-        let llm = InferenceLlm::from_parts(opts(), http.clone());
+        let llm = InferenceLlm::from_parts(opts(), http.clone(), spawner());
         llm.inner.clock.bind(Arc::clone(&clock) as Arc<dyn lk_agents_abi::Clock>);
 
         let mut stream = llm.client(10.0, None).chat(&ChatRequest::default()).await.expect("opens");
