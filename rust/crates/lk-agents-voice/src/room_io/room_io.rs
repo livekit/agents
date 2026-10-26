@@ -99,6 +99,8 @@ pub struct RoomIo {
     tasks: Mutex<Vec<AbortHandle>>,
     /// The in-flight `set_attributes`, cancelled before the next as in the reference.
     state_task: Mutex<Option<AbortHandle>>,
+    /// The agent's last state, written again once the room connects.
+    agent_state: Mutex<Option<String>>,
     chat_registered: Mutex<bool>,
 }
 
@@ -178,6 +180,7 @@ impl RoomIo {
             events_rx: Mutex::new(Some(events_rx)),
             tasks: Mutex::new(Vec::new()),
             state_task: Mutex::new(None),
+            agent_state: Mutex::new(None),
             chat_registered: Mutex::new(false),
         })
     }
@@ -238,6 +241,13 @@ impl RoomIo {
         let handle = self.spawner.spawn_unboxed(async move {
             while let Some(ev) = events.recv().await {
                 this.handle_event(&ev).await;
+                // A state the agent took before the room connected was not written: write it now.
+                if let RoomEvent::ConnectionStateChanged { state: ConnectionState::Connected } = ev {
+                    let last = this.agent_state.lock().unwrap().clone();
+                    if let Some(state) = last {
+                        this.on_agent_state_changed(&state);
+                    }
+                }
             }
         });
         self.tasks.lock().unwrap().push(handle);
@@ -410,6 +420,7 @@ impl RoomIo {
     pub fn on_agent_state_changed(self: &Arc<Self>, state: &str) {
         let room = self.room.clone();
         let state = state.to_owned();
+        *self.agent_state.lock().unwrap() = Some(state.clone());
         let handle = self.spawner.spawn_unboxed(async move {
             if !room.connection_state().is_connected() {
                 return;
