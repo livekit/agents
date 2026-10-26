@@ -18,7 +18,6 @@ import asyncio
 import contextvars
 import functools
 import inspect
-import json
 import logging
 import multiprocessing as mp
 import os
@@ -251,13 +250,7 @@ class JobContext:
 
         self._tempdir = tempfile.TemporaryDirectory()
 
-        from .cli import AgentsConsole
-
-        c = AgentsConsole.get_instance()
-        if c.enabled:
-            self._session_directory = c.session_directory
-        else:
-            self._session_directory = Path(self._tempdir.name)
+        self._session_directory = Path(self._tempdir.name)
 
         self._connected = False
         self._lock = asyncio.Lock()
@@ -334,33 +327,12 @@ class JobContext:
                 otlp_handler.emit(record)
 
     async def _on_session_end(self) -> None:
-        from .cli import AgentsConsole
-
         if not (session := self._primary_agent_session):
             return
 
         otel_metrics.flush_turn_metrics(session.history)
 
-        c = AgentsConsole.get_instance()
-
         report = self.make_session_report(session)
-
-        # console recording, dump data to a local file
-        if c.enabled and c.record:
-            try:
-                report_json = json.dumps(report.to_dict(), indent=2)
-
-                import aiofiles
-                import aiofiles.os
-
-                await aiofiles.os.makedirs(self._session_directory, exist_ok=True)
-                async with aiofiles.open(
-                    self._session_directory / "session_report.json", mode="w"
-                ) as f:
-                    await f.write(report_json)
-
-            except Exception:
-                logger.exception("failed to save session report")
 
         has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = _observability_url(self._info.url)

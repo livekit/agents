@@ -57,11 +57,9 @@ def _download_files() -> int:
 
 def _dispatch(server: AgentServer, args: argparse.Namespace) -> None:
     from .cli import proto
-    from .cli.cli import _run_tcp_console, _run_worker
+    from .cli.cli import _run_worker
 
-    if args.command == "console":
-        _run_tcp_console(server=server, connect_addr=args.connect_addr, record=args.record)
-    elif args.command == "start":
+    if args.command == "start":
         _run_worker(
             server=server,
             args=proto.CliArgs(
@@ -94,7 +92,7 @@ def _discover_server(entrypoint: str | None) -> AgentServer:
     return getattr(mod, import_data.app_name)  # type: ignore[no-any-return]
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m livekit.agents",
         description="LiveKit Agents utilities.",
@@ -120,13 +118,11 @@ def main(argv: list[str] | None = None) -> int:
     # set by `lk simulate`: disables the worker load limit so simulation runs
     # can saturate the agent
     start_p.add_argument("--simulation", action="store_true", default=False)
+    return parser
 
-    console_p = sub.add_parser("console")
-    console_p.add_argument("entrypoint", nargs="?")
-    console_p.add_argument("--connect-addr", required=True)
-    console_p.add_argument("--record", action="store_true", default=False)
 
-    args = parser.parse_args(argv)
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
 
     if args.command == "download-files":
         logging.basicConfig(level=logging.INFO, format="%(message)s")

@@ -1,6 +1,6 @@
-from .cli import AgentsConsole, run_app
+from .cli import run_app
 
-__all__ = ["run_app", "AgentsConsole"]
+__all__ = ["run_app"]
 
 # Cleanup docs of unexported modules
 _module = dir()
