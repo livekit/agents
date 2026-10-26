@@ -25,6 +25,7 @@ pub(crate) const LOG: &str = "livekit.agents";
 
 pub mod auth;
 mod config;
+pub mod endpoint;
 pub mod hw;
 mod load;
 #[cfg(test)]

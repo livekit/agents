@@ -147,6 +147,338 @@ impl PyEndpointStream {
     }
 }
 
+// --------------------------------------------------------------------- EndpointServer
+
+use crate::endpoint::{self, AppError, AsgiApp, Conn as AsgiConn, Received, RequestInfo, Scope, Sent, StreamIo};
+use lk_agents_abi::python::{CancellingHandle, HostBridge};
+use pyo3::types::PyBytes;
+
+/// `_core.EndpointStream` as the exchange reads and writes it.
+struct NativeStream {
+    reader: Half<EndpointReader>,
+    writer: Half<EndpointWriter>,
+}
+
+#[async_trait]
+impl StreamIo for NativeStream {
+    async fn read(&self, max: usize) -> Result<Vec<u8>, String> {
+        let mut guard = self.reader.lock().await;
+        let reader = guard.as_mut().ok_or("endpoint stream is closed")?;
+        let mut buf = vec![0u8; max.clamp(1, MAX_READ)];
+        match reader.read(&mut buf).await.map_err(|e| e.to_string())? {
+            Some(n) => {
+                buf.truncate(n);
+                Ok(buf)
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    async fn write(&self, data: &[u8]) -> Result<(), String> {
+        let mut guard = self.writer.lock().await;
+        let writer = guard.as_mut().ok_or("endpoint stream is closed")?;
+        writer.write_all(data).await.map_err(|e| e.to_string())
+    }
+
+    async fn finish(&self) {
+        if let Some(w) = self.writer.lock().await.as_mut() {
+            let _ = w.finish();
+        }
+    }
+
+    async fn reset(&self, code: HttpStreamResetCode) {
+        if let Some(w) = self.writer.lock().await.as_mut() {
+            w.reset(code);
+        }
+        self.stop(code).await;
+    }
+
+    async fn stop(&self, code: HttpStreamResetCode) {
+        if let Some(r) = self.reader.lock().await.as_mut() {
+            r.stop(code);
+        }
+    }
+}
+
+/// Any object with `EndpointStream`'s five methods (a test's fake): the awaitables are awaited
+/// and the plain calls made on its loop, in order.
+struct HostStream(CancellingHandle);
+
+impl HostStream {
+    fn soon(&self, method: &'static str, code: Option<i32>) {
+        let scheduled = Python::attach(|py| -> PyResult<()> {
+            let f = self.0.object().bind(py).getattr(method)?;
+            let event_loop = self.0.task_locals().event_loop(py);
+            match code {
+                Some(c) => event_loop.call_method1("call_soon_threadsafe", (f, c))?,
+                None => event_loop.call_method1("call_soon_threadsafe", (f,))?,
+            };
+            Ok(())
+        });
+        if let Err(e) = scheduled {
+            Python::attach(|py| e.print(py));
+        }
+    }
+}
+
+#[async_trait]
+impl StreamIo for HostStream {
+    async fn read(&self, max: usize) -> Result<Vec<u8>, String> {
+        let v = self.0.await_call(|s| s.call_method1("read", (max,))).await.map_err(|e| e.to_string())?;
+        Python::attach(|py| v.extract::<Vec<u8>>(py)).map_err(|e| e.to_string())
+    }
+
+    async fn write(&self, data: &[u8]) -> Result<(), String> {
+        let data = data.to_vec();
+        self.0
+            .await_call(move |s| s.call_method1("write", (PyBytes::new(s.py(), &data),)))
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    async fn finish(&self) {
+        self.soon("finish", None);
+    }
+
+    async fn reset(&self, code: HttpStreamResetCode) {
+        self.soon("reset", Some(code as i32));
+    }
+
+    async fn stop(&self, code: HttpStreamResetCode) {
+        self.soon("stop", Some(code as i32));
+    }
+}
+
+/// The ASGI application, called on its loop; `request` is `request.state.lk_request`.
+struct PyApp {
+    app: CancellingHandle,
+    request: Py<PyAny>,
+}
+
+fn headers_py<'py>(py: Python<'py>, headers: &endpoint::Headers) -> PyResult<Bound<'py, PyList>> {
+    PyList::new(py, headers.iter().map(|(k, v)| (PyBytes::new(py, k), PyBytes::new(py, v))))
+}
+
+fn scope_py<'py>(py: Python<'py>, scope: &Scope, request: &Py<PyAny>) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    let asgi = PyDict::new(py);
+    asgi.set_item("version", "3.0")?;
+    asgi.set_item("spec_version", "2.3")?;
+    d.set_item("type", scope.kind)?;
+    d.set_item("asgi", asgi)?;
+    d.set_item("http_version", "1.1")?;
+    if scope.kind == "http" {
+        d.set_item("method", &scope.method)?;
+    }
+    d.set_item("scheme", &scope.scheme)?;
+    d.set_item("path", &scope.path)?;
+    d.set_item("raw_path", PyBytes::new(py, &scope.raw_path))?;
+    d.set_item("query_string", PyBytes::new(py, &scope.query_string))?;
+    d.set_item("root_path", "")?;
+    d.set_item("headers", headers_py(py, &scope.headers)?)?;
+    d.set_item("client", scope.client.clone())?;
+    d.set_item("server", py.None())?;
+    if scope.kind == "websocket" {
+        d.set_item("subprotocols", scope.subprotocols.clone())?;
+    }
+    let state = PyDict::new(py);
+    state.set_item("lk_request", request.bind(py))?;
+    d.set_item("state", state)?;
+    Ok(d)
+}
+
+fn received_py(py: Python<'_>, msg: Received) -> PyResult<Bound<'_, PyDict>> {
+    let d = PyDict::new(py);
+    match msg {
+        Received::Request { body, more_body } => {
+            d.set_item("type", "http.request")?;
+            d.set_item("body", PyBytes::new(py, &body))?;
+            d.set_item("more_body", more_body)?;
+        }
+        Received::Disconnect => d.set_item("type", "http.disconnect")?,
+        Received::WsConnect => d.set_item("type", "websocket.connect")?,
+        Received::WsText(t) => {
+            d.set_item("type", "websocket.receive")?;
+            d.set_item("text", t)?;
+        }
+        Received::WsBytes(b) => {
+            d.set_item("type", "websocket.receive")?;
+            d.set_item("bytes", PyBytes::new(py, &b))?;
+        }
+        Received::WsDisconnect { code } => {
+            d.set_item("type", "websocket.disconnect")?;
+            d.set_item("code", code)?;
+        }
+    }
+    Ok(d)
+}
+
+/// `bytes(x)`: ASGI headers and bodies may be any bytes-like object.
+fn bytes_of(v: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    v.py().import("builtins")?.getattr("bytes")?.call1((v,))?.extract()
+}
+
+fn sent_from_py(m: &Bound<'_, PyAny>) -> PyResult<Sent> {
+    let get = |k: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
+        let v = m.call_method1("get", (k,))?;
+        Ok((!v.is_none()).then_some(v))
+    };
+    let headers = || -> PyResult<endpoint::Headers> {
+        let Some(h) = get("headers")? else { return Ok(Vec::new()) };
+        h.try_iter()?
+            .map(|kv| {
+                let (k, v): (Bound<'_, PyAny>, Bound<'_, PyAny>) = kv?.extract()?;
+                Ok((bytes_of(&k)?, bytes_of(&v)?))
+            })
+            .collect()
+    };
+    let body = || -> PyResult<Vec<u8>> { get("body")?.map_or(Ok(Vec::new()), |b| bytes_of(&b)) };
+    let more_body = || -> PyResult<bool> { get("more_body")?.map_or(Ok(false), |b| b.is_truthy()) };
+    let kind: String = m.get_item("type")?.extract()?;
+    Ok(match kind.as_str() {
+        "http.response.start" => {
+            Sent::ResponseStart { status: m.get_item("status")?.extract()?, headers: headers()? }
+        }
+        "http.response.body" => Sent::ResponseBody { body: body()?, more_body: more_body()? },
+        "http.response.trailers" => Sent::ResponseTrailers,
+        "websocket.accept" => Sent::WsAccept {
+            subprotocol: get("subprotocol")?.map(|s| s.extract()).transpose()?,
+            headers: headers()?,
+        },
+        "websocket.send" => match get("bytes")? {
+            Some(b) => Sent::WsBytes(bytes_of(&b)?),
+            None => Sent::WsText(get("text")?.map_or(Ok(String::new()), |t| t.extract())?),
+        },
+        "websocket.close" => Sent::WsClose {
+            code: get("code")?.map_or(Ok(1000), |c| c.extract())?,
+            reason: get("reason")?.map_or(Ok(String::new()), |r| r.extract())?,
+        },
+        "websocket.http.response.start" => Sent::WsHttpResponseStart {
+            status: m.get_item("status")?.extract()?,
+            headers: headers()?,
+        },
+        "websocket.http.response.body" => {
+            Sent::WsHttpResponseBody { body: body()?, more_body: more_body()? }
+        }
+        _ => Sent::Unknown(kind),
+    })
+}
+
+/// The ASGI `receive` callable.
+#[pyclass(frozen)]
+struct AsgiReceive(AsgiConn);
+
+#[pymethods]
+impl AsgiReceive {
+    fn __call__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let conn = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let msg = conn.receive().await;
+            Python::attach(|py| received_py(py, msg).map(Bound::unbind))
+        })
+    }
+}
+
+/// The ASGI `send` callable.
+#[pyclass(frozen)]
+struct AsgiSend(AsgiConn);
+
+#[pymethods]
+impl AsgiSend {
+    fn __call__<'py>(&self, py: Python<'py>, message: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let msg = sent_from_py(message)?;
+        let conn = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            conn.send(msg).await.map_err(PyRuntimeError::new_err)
+        })
+    }
+}
+
+#[async_trait]
+impl AsgiApp for PyApp {
+    async fn call(&self, scope: Scope, conn: AsgiConn) -> Result<(), AppError> {
+        let request = Python::attach(|py| self.request.clone_ref(py));
+        self.app
+            .await_call(move |app| {
+                let scope = scope_py(app.py(), &scope, &request)?;
+                app.call1((scope, AsgiReceive(conn.clone()), AsgiSend(conn)))
+            })
+            .await
+            .map(|_| ())
+            .map_err(|e| {
+                Python::attach(|py| AppError {
+                    summary: format!(
+                        "{}: {}",
+                        e.get_type(py).qualname().map(|n| n.to_string()).unwrap_or_default(),
+                        e.value(py)
+                    ),
+                    traceback: e.traceback(py).and_then(|tb| tb.format().ok()).unwrap_or_default(),
+                })
+            })
+    }
+}
+
+/// `AgentHttp`'s server half: each `open("endpoint", ..)` stream served with the ASGI app
+/// (`endpoint.rs`), and the open WebSockets it drains.
+#[pyclass(name = "EndpointServer", module = "livekit.agents._core")]
+#[derive(Default)]
+pub struct PyEndpointServer {
+    websockets: Arc<endpoint::Registry>,
+}
+
+#[pymethods]
+impl PyEndpointServer {
+    #[new]
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Serve `stream` (an `EndpointStream` after its preamble) with `app` to completion;
+    /// `request` is the `EndpointRequest` the handler sees as `request.state.lk_request`.
+    fn serve<'py>(
+        &self,
+        py: Python<'py>,
+        stream: &Bound<'py, PyAny>,
+        app: Py<PyAny>,
+        request: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        check_pid()?;
+        let info = RequestInfo {
+            request_id: request.getattr("request_id")?.extract()?,
+            route: request.getattr("route")?.extract()?,
+            scheme: request.getattr("scheme")?.extract()?,
+            client_addr: request.getattr("client_addr")?.extract()?,
+            timeout_ms: request.getattr("timeout_ms")?.extract::<i64>()?.max(0) as u64,
+        };
+        let io: Arc<dyn StreamIo> = match stream.cast::<PyEndpointStream>() {
+            Ok(s) => {
+                let s = s.borrow();
+                Arc::new(NativeStream { reader: s.reader.clone(), writer: s.writer.clone() })
+            }
+            Err(_) => Arc::new(HostStream(CancellingHandle::new(py, stream.clone().unbind())?)),
+        };
+        let app = PyApp { app: CancellingHandle::new(py, app)?, request: request.clone().unbind() };
+        let registry = self.websockets.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            endpoint::serve(io, info, &app, &registry).await;
+            Ok(())
+        })
+    }
+
+    /// A close frame to every open WebSocket, so clients reconnect to another worker.
+    #[pyo3(signature = (code = 1001, reason = "worker draining".to_owned()))]
+    fn close_websockets<'py>(&self, py: Python<'py>, code: u16, reason: String) -> PyResult<Bound<'py, PyAny>> {
+        let registry = self.websockets.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            registry.close_all(code, &reason).await;
+            Ok(())
+        })
+    }
+}
+
+lk_agents_abi::register_host!(class PyEndpointServer);
+
 // --------------------------------------------------------------------- the host
 
 struct PyWorkerHost {

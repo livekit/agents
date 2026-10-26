@@ -62,11 +62,8 @@ dependencies = [
     "click~=8.1",
     "sounddevice>=0.5",
     "watchfiles>=1.0",
-    # `AgentServer.http`: the ASGI app and the two codecs the endpoint bridge drives it with
-    # (`http.py`). Pure Python, all three.
+    # `AgentServer.http`: the ASGI app the core's endpoint server drives (`http.py`).
     "starlette>=0.40",
-    "h11>=0.14",
-    "wsproto>=1.2",
     # the text door, its client and the delegate speak A2A
     "a2a-sdk>=1.1.2,<2",
 ]

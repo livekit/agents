@@ -1543,6 +1543,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures-util",
+ "httparse",
  "livekit-protocol",
  "livekit-token",
  "lk-agents-abi",
