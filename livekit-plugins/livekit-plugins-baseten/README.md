@@ -20,7 +20,7 @@ The STT plugin connects to Baseten's [Whisper Streaming](https://docs.baseten.co
 
 ### Recommended model
 
-[Whisper Large V3 Turbo](https://www.baseten.co/library/whisper/) (streaming deployment)
+[Whisper Large V3 Turbo](https://www.baseten.co/library/whisper-large-turbo/) (real-time deployment)
 
 ### Endpoint URL formats
 
