@@ -38,6 +38,13 @@ impl Rule for ForwardedWhileEnabled {
         // them, and when it was first pushed: what a late delivery may be.
         let mut next_chunk: BTreeMap<u32, u16> = BTreeMap::new();
         let mut pushed_enabled: BTreeMap<(u32, u16), Observed> = BTreeMap::new();
+        // When each microphone was replaced or detached: its frames go with it.
+        let mic_closed: BTreeMap<u32, Observed> = r
+            .closed()
+            .iter()
+            .filter(|(_, kind, _)| *kind == Kind::Mic)
+            .map(|(at, _, nth)| (*nth, *at))
+            .collect();
         for sent in inputs.accepted() {
             let Input::MicFrames { mic, chunks: Count(chunks) } = &sent.input else { continue };
             let counter = next_chunk.entry(mic.nth).or_default();
@@ -50,7 +57,9 @@ impl Rule for ForwardedWhileEnabled {
                     continue;
                 }
                 pushed_enabled.entry((mic.nth, chunk)).or_insert(sent.at);
-                expect_reached(&inputs, &inference, &gate_closed, check, (mic.nth, chunk), sent.at);
+                let replaced = mic_closed.get(&mic.nth).copied();
+                let frame = (mic.nth, chunk);
+                expect_reached(&inputs, &inference, &gate_closed, replaced, check, frame, sent.at);
             }
         }
 
@@ -84,6 +93,7 @@ fn expect_reached(
     inputs: &InputsView,
     inference: &InferenceView,
     gate_closed: &[Window],
+    replaced: Option<Observed>,
     check: &mut Check,
     (mic, chunk): (u32, u16),
     pushed: Observed,
@@ -92,8 +102,10 @@ fn expect_reached(
     // moved the frame and nothing can be said about where it went.
     let Some(turn) = inputs.driver_turn_after(pushed) else { return };
     let end = turn.ended.unwrap_or(Observed::END);
-    // A disable landing in the same turn races the pump for the frame; either outcome is right.
-    if inputs.audio_input().off_within(pushed, end) {
+    // A disable landing in the same turn races the pump for the frame, and so does replacing the
+    // microphone it was pushed to (the reference cancels the old stream's reader with whatever it
+    // had not read); either outcome is right.
+    if inputs.audio_input().off_within(pushed, end) || replaced.is_some_and(|at| at <= end) {
         return;
     }
     for kind in LISTENERS {
