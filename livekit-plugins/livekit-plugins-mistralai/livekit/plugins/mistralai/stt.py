@@ -34,10 +34,33 @@ from mistralai.client.models import (
     TranscriptionStreamLanguage,
     TranscriptionStreamTextDelta,
 )
+from mistralai.extra.exceptions import RealtimeTranscriptionException
 from mistralai.extra.realtime import RealtimeConnection, RealtimeTranscription
 
 from .log import logger
 from .models import STTModels
+
+
+def _handshake_status_error(e: RealtimeTranscriptionException) -> APIStatusError | None:
+    """Map a websocket handshake rejection (e.g. HTTP 401/403/404) to an APIStatusError.
+
+    The SDK wraps `websockets.exceptions.InvalidStatus` in a generic exception, which would
+    otherwise be treated as a retryable connection error.
+    """
+    response = getattr(e.__cause__, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if not isinstance(status_code, int):
+        return None
+
+    headers = getattr(response, "headers", None)
+    body = getattr(response, "body", None)
+    return APIStatusError(
+        str(e),
+        status_code=status_code,
+        request_id=headers.get("x-request-id") if headers is not None else None,
+        body=body.decode(errors="replace") if isinstance(body, bytes) else body,
+        retryable=status_code != 429,
+    )
 
 
 def _is_realtime(model: str) -> bool:
@@ -242,6 +265,7 @@ class STT(stt.STT):
                 status_code=e.status_code,
                 request_id=e.headers.get("x-request-id"),
                 body=e.body,
+                retryable=e.status_code != 429,
             ) from e
         except Exception as e:
             raise APIConnectionError() from e
@@ -415,8 +439,13 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
             elif isinstance(event, RealtimeTranscriptionError):
+                # a retry would restart the session, so report it like the LLM does: not retryable
                 raise APIStatusError(
-                    message=str(event.error.message), status_code=event.error.code, body=event.error
+                    message=str(event.error.message),
+                    status_code=event.error.code,
+                    request_id=self._request_id or None,
+                    body=event.error,
+                    retryable=False,
                 )
 
     @utils.log_exceptions(logger=logger)
@@ -467,6 +496,11 @@ class SpeechStream(stt.RecognizeStream):
                 status_code=e.status_code,
                 request_id=e.headers.get("x-request-id"),
                 body=e.body,
+                retryable=e.status_code != 429,
             ) from e
+        except RealtimeTranscriptionException as e:
+            if (status_error := _handshake_status_error(e)) is not None:
+                raise status_error from e
+            raise APIConnectionError() from e
         except Exception as e:
             raise APIConnectionError() from e
