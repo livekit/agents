@@ -65,6 +65,7 @@ from ..llm.tool_context import (
     delivered,
     function_tool,
     is_transition,
+    relays_answer,
 )
 from ..llm.utils import answer_arguments, prepare_function_arguments
 from ..log import logger
@@ -111,10 +112,10 @@ class RunHooks:
     ``agent_stack`` is the lane's stack as loaded and ``rebuild`` makes an agent of one entry,
     the server's registry; the run resolves them itself since only it knows the root.
     ``answer_tool`` names the tool the message is handed to before the model runs: the last
-    turn's ``InputRequired(tool=)`` named it, and this message is its answer. ``delegated``
-    says the turn's message came from another agent: the run does not phrase its questions,
-    the agent facing the person does. ``lane`` is the door's lane of the thread, what
-    ``A2ADelegate`` names as the caller's.
+    turn's question came from a call of it that relays answers, a delegate's, and this message
+    is its answer. ``delegated`` says the turn's message came from another agent: the run does
+    not phrase its questions, the agent facing the person does. ``lane`` is the door's lane of
+    the thread, what ``A2ADelegate`` names as the caller's.
     """
 
     boundary: Callable[[], Awaitable[bool]] | None = None
@@ -416,16 +417,19 @@ class AgentRun(Generic[Run_T]):
             result._done_fut.set_result(None)
             return result
 
-        async def ask(q: InputRequired, fnc_call: FunctionCall | None) -> RunResult[Run_T]:
+        async def ask(
+            q: InputRequired, fnc_call: FunctionCall | None, relays: bool = False
+        ) -> RunResult[Run_T]:
             """The turn waits on the person: the question as written when verbatim or when
-            another agent asked, else in the agent's own words."""
+            another agent asked, else in the agent's own words. ``relays`` says the call's tool
+            takes the answer itself, as a delegate's does."""
             text = q.question
             if not q.verbatim and facing_person:
                 text = await self._phrase(chat_ctx, text)
             record_said()
             record(ChatMessage(role="assistant", content=[text]))
             result._pending_call = fnc_call
-            result._answer_tool = q.tool.info.name if q.tool else None
+            result._answer_tool = fnc_call.name if relays and fnc_call is not None else None
             return finish(None, input_required=text, verbatim=q.verbatim)
 
         def finish_task_turn(text: str) -> RunResult[Run_T]:
@@ -621,7 +625,8 @@ class AgentRun(Generic[Run_T]):
                     if not isinstance(out.transition, Working):
                         break  # the task ended, or it asked; the agent below speaks next
                 elif isinstance(out.transition, InputRequired):
-                    return await ask(out.transition, fnc_call)
+                    tool = tool_ctx.get_function_tool(fnc_call.name)
+                    return await ask(out.transition, fnc_call, relays_answer(tool))
                 elif out.transition is not None:
                     logger.warning(
                         "a conversation tool returned a transition that only an AgentTask "
@@ -745,9 +750,9 @@ class AgentRun(Generic[Run_T]):
         return await task._enter(RunContext[Any, Any](function_call=fnc_call, run=self))
 
     def _answer_call(self, tool_ctx: ToolContext, name: str | None) -> FunctionCall | None:
-        """The call that hands this run's message to the tool the last turn's
-        ``InputRequired(tool=)`` named, marked with the call it answers (``ANSWERS_KEY``);
-        ``None`` when nothing waits on it."""
+        """The call that hands this run's message to the tool whose call asked the last turn's
+        question and relays answers, marked with the call it answers (``ANSWERS_KEY``); ``None``
+        when nothing waits on it."""
         if name is None:
             return None
         tool = tool_ctx.get_function_tool(name)

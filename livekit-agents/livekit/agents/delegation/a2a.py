@@ -150,10 +150,12 @@ class A2ADelegate(Delegate, Toolset):
             # the run logs a failed setup and keeps the tools as they are: offer this one first
             if self._tool is None:
                 label = self._tool_name or self.id
-                self._tool = function_tool(
-                    self._ask,
-                    name=self._tool_name or "ask",
-                    description=f"{label}\n\n{UNREAD}\n\n{ASK}",
+                self._tool = _relaying(
+                    function_tool(
+                        self._ask,
+                        name=self._tool_name or "ask",
+                        description=f"{label}\n\n{UNREAD}\n\n{ASK}",
+                    )
                 )
                 self._unread = True
             raise
@@ -167,8 +169,8 @@ class A2ADelegate(Delegate, Toolset):
         self._id = card.name if card is not None else self.id
         about = card.description.strip() if card is not None and card.description else ""
         description = f"{about}\n\n{ASK}" if about else ASK
-        self._tool = function_tool(
-            self._ask, name=self._tool_name or "ask", description=description
+        self._tool = _relaying(
+            function_tool(self._ask, name=self._tool_name or "ask", description=description)
         )
         if self._unread:
             self._unread = False
@@ -209,7 +211,7 @@ class A2ADelegate(Delegate, Toolset):
             # the expert asked the person something: asked as it wrote it when it said so, and
             # what they say next continues its task, as they said it
             verbatim = result.verbatim is not None
-            return InputRequired(result.input_required, tool=self._tool, verbatim=verbatim)
+            return InputRequired(result.input_required, verbatim=verbatim)
         if result.verbatim is not None:
             # the person gets the answer as written, and the model does not word it
             return ToolResult(result.verbatim, verbatim=True, reply_required=False)
@@ -393,6 +395,13 @@ class A2ADelegate(Delegate, Toolset):
         from ..a2a.auth import Credentials
 
         return Credentials(api_key, api_secret).project_token(identity="delegate")
+
+
+def _relaying(tool: FunctionTool) -> FunctionTool:
+    """The delegate's tool: the person's answer to the expert's question comes back to it as
+    said, and the expert's own model reads it."""
+    tool._relays_answer = True  # type: ignore[attr-defined]
+    return tool
 
 
 def _asking_call(ctx: RunContext) -> str | None:

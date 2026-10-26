@@ -658,7 +658,7 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
 
 
 def answer_arguments(fnc: FunctionTool | RawFunctionTool, answer: str) -> dict[str, Any] | None:
-    """The arguments that hand ``answer`` to ``fnc`` as an ``InputRequired(tool=)`` names it:
+    """The arguments that hand ``answer`` to ``fnc``, a tool that relays its question's answer:
     the tool's first string parameter. ``None`` for a tool without one: the model reads the
     answer and calls the tool itself."""
     if is_raw_function_tool(fnc):

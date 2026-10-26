@@ -26,6 +26,11 @@ async def request_photo(ctx: RunContext[None, Loss]) -> InputRequired:
     return InputRequired("Could you send a photo of the damage? A wide shot and a close-up.")
 ```
 
+Use it only for an input the tool needs to go on: an email, a yes or no on
+a read-back, a card number. A conversational question, such as "would you
+like one of these slots?", is a plain reply: the task completes, and the
+next message is a new task.
+
 The turn waits. What is stored: the function call, its output,
 `waiting for the person's answer to: <question>`, and the question as an
 assistant message. The question is the turn's reply. Nothing stays in

@@ -127,10 +127,8 @@ arguments, as a dataclass, and restores `self.state`. `Completed(value)`
 pops the task and writes the value as the pending call's output, and the
 agent below continues its turn from there, phrasing the result; `Failed`
 writes a `ToolError`. `InputRequired` from a task's tool waits exactly as it
-does from a conversation tool, and `InputRequired(question, tool=)` hands the
-person's answer to that tool of the task as its first string parameter, with
-no model turn in between; a tool with no string parameter gets the answer as
-a turn of the task's model, which calls it ([tools.md](tools.md)). See
+does from a conversation tool: the person's answer is a turn of the task's
+model ([tools.md](tools.md)). See
 [lanes.md](lanes.md) for the stack.
 
 A task class must be importable by the server that gets the next message:

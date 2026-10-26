@@ -14,7 +14,7 @@ These use the approved design; a code gap, where one remains, is in `../../TODO.
 |---|---|---|---|
 | `01_appointments_by_phone_and_text.py` | healthcare | book, confirm or move an appointment, by phone and by text | `Agent.run(message, message_history=, state=, deps=)`, `state_type=` and `deps_type=`, `@agent.instructions`, the handler returns the answer |
 | `03_insurance_eligibility.py` | healthcare | one brain behind the phone and the text line; a slow expert on its own deployment | a thin voice agent whose one tool is `A2ADelegate(url)` in `tools=`; `A2ADelegate(url).run(..., progress=ctx.update)` from a tool, `record_delegation`; `public=False` |
-| `04_a_claim_with_a_photo.py` | insurance | a first notice of loss needs a photo, maybe tonight | a tool returns `InputRequired(question)`: the turn waits, the next message becomes the call's output; `output_type=` |
+| `04_a_claim_with_a_photo.py` | insurance | a first notice of loss needs a photo, maybe tonight | a tool returns `InputRequired(question)`: the turn waits, and the next message is the answer the model reads; `output_type=` |
 | `07_hospital_main_line.py` | healthcare | billing, scheduling and nurse triage behind one number | delegation in a tool, handoff saved on the lane's agent stack, the voice door delegating to the same brain |
 | `10_mortgage_prequalification.py` | financial | a runtime list of questions answered over days | `AgentTask` awaited from a tool in text: a handoff plus a deferred call; answers kept in the state |
 | `15_renewal_email_graph.py` | insurance | a renewal email drafted and reviewed until compliant | a graph: `BaseNode`, `End`, `Graph`, edges as return annotations, `mermaid_code()`; stateless, inside one turn |
@@ -116,8 +116,8 @@ the A2A wire, the agent card, streams, expiry, timers.
 ## Human in the loop
 
 The return value of a tool or a hook is the A2A state it moves its task to. From a conversation
-tool, `InputRequired(question)`: the turn waits and the next message becomes the call's output
-(04, 06). From an `AgentTask`, out of `on_enter` or one of its tools, `InputRequired(question,
+tool, `InputRequired(question)`: the turn waits and the next message is the answer, which the
+model reads (04, 06). From an `AgentTask`, out of `on_enter` or one of its tools, `InputRequired(question,
 tool=self.x, timeout=)`: the question is delivered word for word, the task waits
 `input-required`, and `tool=` names the task's tool that takes the answer; a form or a system
 posts its arguments by task id and the tool is called directly, free text goes to the tool's

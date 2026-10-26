@@ -37,6 +37,7 @@ from ..llm.tool_context import (
     Working,
     get_fnc_tool_names,
     is_transition,
+    relays_answer,
 )
 from ..llm.utils import answer_arguments
 from ..log import logger
@@ -499,8 +500,8 @@ class AgentActivity(RecognitionHooks):
         # the call an InputRequired left waiting: the next user message is its output.
         # TODO(agents-2.0): held in memory until the turn's task row carries it (plan 7.4)
         self._pending_input: llm.FunctionCallOutput | None = None
-        # an InputRequired(tool=): the next reply is forced to call the tool, and the first
-        # call of it carries what the person said
+        # a question of a tool that relays answers: the next reply is forced to call the tool,
+        # and the first call of it carries what the person said
         self._forced_tool: str | None = None
         self._answering: str | None = None
         # a spoken turn whose transcript has not arrived: a realtime model may answer it first
@@ -2453,7 +2454,7 @@ class AgentActivity(RecognitionHooks):
         return None
 
     def _claim_next_turn(self, tool_name: str) -> None:
-        """``InputRequired(tool=)``: the person's next turn is a call of this tool. A realtime
+        """A relayed question: the person's next turn is a call of this tool. A realtime
         model making its own responses is told now; a reply this activity makes is told when
         the turn comes."""
         self._forced_tool = self._answering = tool_name
@@ -2479,7 +2480,7 @@ class AgentActivity(RecognitionHooks):
     async def _answer_arguments(
         self, tool: FunctionTool | RawFunctionTool, raw_arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        """The arguments of a call that answers an ``InputRequired(tool=)``: what the person
+        """The arguments of a call that answers a relayed question: what the person
         said, as they said it, in place of the model's; the model's for any other call."""
         if tool.info.name != self._answering:
             return raw_arguments
@@ -3230,8 +3231,8 @@ class AgentActivity(RecognitionHooks):
 
         ``Completed``, ``Failed`` and ``Rejected`` end the ``AgentTask`` this activity runs;
         ``InputRequired`` speaks the question and holds the call for the next user message;
-        ``Working`` records its status and keeps the task where it is. ``tool=`` and
-        ``timeout=`` are not applied yet: the answer reaches the task as a turn of its model.
+        ``Working`` records its status and keeps the task where it is. ``Working(tool=,
+        timeout=)`` is not applied yet: the answer reaches the task as a turn of its model.
         """
         agent = self._agent
         task = agent if isinstance(agent, AgentTask) else None
@@ -3256,15 +3257,15 @@ class AgentActivity(RecognitionHooks):
             elif not task.done():
                 task._complete(ToolError(text))
         elif isinstance(transition, InputRequired):
-            if transition.timeout is not None:
-                logger.warning(
-                    "InputRequired(timeout=) is not applied in memory",
-                    extra={"agent": agent.id},
-                )
             self._pending_input = fnc_call_out
+            # a delegate's question: what the person says next goes back through its tool
+            claimed = None
+            if fnc_call_out is not None:
+                tool = llm.ToolContext(self.tools).get_function_tool(fnc_call_out.name)
+                claimed = fnc_call_out.name if relays_answer(tool) else None
             if transition.verbatim:
-                if transition.tool is not None:
-                    self._claim_next_turn(transition.tool.info.name)
+                if claimed is not None:
+                    self._claim_next_turn(claimed)
                 handle = self._say_exactly(transition.question)
             else:
                 # the model asks in its own words, with no tool to call; the answer's turn is
@@ -3273,8 +3274,9 @@ class AgentActivity(RecognitionHooks):
                     instructions=ASK_IN_OWN_WORDS.format(question=transition.question),
                     tool_choice="none",
                 )
-                if (claimed := transition.tool) is not None:
-                    handle.add_done_callback(lambda _: self._claim_next_turn(claimed.info.name))
+                if claimed is not None:
+                    relay = claimed
+                    handle.add_done_callback(lambda _: self._claim_next_turn(relay))
             if (run_state := self._session._global_run_state) is not None and not run_state.done():
                 run_state._watch_handle(handle)
         elif isinstance(transition, Working):

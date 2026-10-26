@@ -137,9 +137,9 @@ An expert that needs the person's answer ends its task `input-required`:
 the question is the delegation's output. The person's answer continues that
 task: the delegate sends it with the task's `taskId`, and the expert's own
 model reads it, answer or not. The delegate's tool returns the question as
-`InputRequired(question, tool=)` naming itself, so the front
-desk asks it in its own words, or as written when the expert flagged it
-`livekit/verbatim`, and what the person says next is sent to the expert as the
+an `InputRequired`, so the front desk asks it in its own words, or as
+written when the expert flagged it `livekit/verbatim`, and the tool relays
+the answer: what the person says next is sent to the expert as the
 tool's next request, as they said it, with no model turn in between: on a
 call the framework runs the tool on the turn's transcript, in text on the
 next message, on whichever worker gets it ([tools.md](tools.md)). A

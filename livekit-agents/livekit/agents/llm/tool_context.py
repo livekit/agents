@@ -229,17 +229,17 @@ class Rejected:
 
 @dataclass(frozen=True)
 class InputRequired:
-    """The turn or task waits on the person for an answer to ``question``.
+    """The turn or task waits on the person for an answer to ``question``, with no timeout.
 
+    Only for an input a tool needs to go on: an email, a yes or no on a read-back, a card
+    number. A conversational question is a plain reply, and the next message is a new request.
     The agent facing the person asks it in its own words, or exactly as written with
-    ``verbatim=True``. The answer continues the waiting task as the person's next message;
-    from a conversation tool the call keeps the question as its output. ``tool`` names the tool
-    that takes the answer and ``timeout`` schedules ``on_timeout``.
+    ``verbatim=True``. The answer continues the waiting task as the person's next message, and
+    the task's model reads it; from a conversation tool the call keeps the question as its
+    output.
     """
 
     question: str
-    tool: FunctionTool | RawFunctionTool | None = None
-    timeout: timedelta | None = None
     verbatim: bool = False
 
 
@@ -390,6 +390,13 @@ APPROVAL_ANSWERED = (
 )
 """What the model reads as the output of a call that asked for approval, once answered: the
 answer alone reads like a call that ran."""
+
+
+def relays_answer(tool: Any) -> bool:
+    """Whether ``tool`` hands the person's answer to its question on to whoever asked, whose own
+    model reads it, as a delegate does: the answer goes to the tool as said, with no model step.
+    Private to the delegate; any other question's answer goes to the task's model."""
+    return bool(getattr(tool, "_relays_answer", False))
 
 
 def _answered_read_backs(items: Sequence[Any]) -> dict[str, str]:

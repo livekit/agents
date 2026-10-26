@@ -359,7 +359,7 @@ class _ToolExecutor:
             try:
                 arguments = raw_arguments
                 if (activity := self._owning_activity) is not None:
-                    # a call that answers an InputRequired(tool=) carries the person's words,
+                    # a call that answers a relayed question carries the person's words,
                     # and the history shows the call as it ran
                     arguments = await activity._answer_arguments(tool, raw_arguments)
                     if arguments is not raw_arguments:
