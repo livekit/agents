@@ -51,6 +51,18 @@ impl Rule for ForwardedWhileEnabled {
             .filter(|(_, kind, _)| *kind == Kind::Mic)
             .map(|(at, _, nth)| (*nth, *at))
             .collect();
+        // When the recogniser or the detector was swapped for a new stream.
+        let reopened: Vec<(Observed, Kind)> = r
+            .journal_where(|step| match step {
+                Step::Input(InputStep::ModelsUpdated { stt_reopened, vad_reopened, .. }) => {
+                    Some((*stt_reopened, *vad_reopened))
+                }
+                _ => None,
+            })
+            .flat_map(|(at, (stt, vad))| {
+                [(stt, Kind::Stt), (vad, Kind::Vad)].into_iter().filter(|(on, _)| *on).map(move |(_, k)| (at, k))
+            })
+            .collect();
         // The close's edge detaches the microphone and takes the frame census in the same breath:
         // what had not reached a stream by the census never will, whichever microphone it is on.
         let detached = r
@@ -78,7 +90,16 @@ impl Rule for ForwardedWhileEnabled {
                 pushed_enabled.entry((mic.nth, chunk)).or_insert(sent.at);
                 let replaced = mic_closed.get(&mic.nth).copied().into_iter().chain(detached).min();
                 let frame = (mic.nth, chunk);
-                expect_reached(&inputs, &inference, &gate_closed, replaced, check, frame, sent.at);
+                expect_reached(
+                    &inputs,
+                    &inference,
+                    &gate_closed,
+                    &reopened,
+                    replaced,
+                    check,
+                    frame,
+                    sent.at,
+                );
             }
         }
 
@@ -129,6 +150,7 @@ fn expect_reached(
     inputs: &InputsView,
     inference: &InferenceView,
     gate_closed: &[Window],
+    reopened: &[(Observed, Kind)],
     replaced: Option<Observed>,
     check: &mut Check,
     (mic, chunk): (u32, u16),
@@ -151,6 +173,10 @@ fn expect_reached(
         // The gate feeds STT silence instead of the room while it is closed; a frame whose turn
         // touched a closed window may rightly have been replaced.
         if kind == Kind::Stt && gate_closed.iter().any(|window| window.overlaps(pushed, end)) {
+            continue;
+        }
+        // A provider swapped while the frame was on its way may hear it on either stream.
+        if reopened.iter().any(|(at, leg)| *leg == kind && pushed < *at && *at <= end) {
             continue;
         }
         for stream in inference.streams(kind) {

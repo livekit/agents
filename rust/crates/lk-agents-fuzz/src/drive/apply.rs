@@ -920,7 +920,17 @@ impl Run {
         let Some(resource) = self.record.resource(Kind::Speech, nth) else { return false };
         let Id::Speech(speech) = resource.id() else { return false };
         let Some(handle) = self.handles.get(&speech.0).cloned() else { return false };
-        self.drive(Some(self.budget()), async move { handle.wait_for_done().await }).await.is_some()
+        let Some(api) = self.api.api().ok() else { return false };
+        let host = Arc::new(HostSpeech::from_core(handle, api));
+        // `await handle`, then what a program reads off the handle it awaited.
+        let waited = host.clone();
+        let done = self.drive(Some(self.budget()), async move { waited.wait_for_playout().await });
+        if done.await.is_none() {
+            return false;
+        }
+        let _ = (host.id(), host.num_steps(), host.chat_items(), host.scheduled());
+        let _ = (host.interrupted(), host.allow_interruptions(), host.exception());
+        true
     }
 
     /// Before a close nothing obliges the session to exit, so that wait is an ordinary one. Once a
