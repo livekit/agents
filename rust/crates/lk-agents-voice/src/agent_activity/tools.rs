@@ -357,14 +357,11 @@ impl Driver {
         self.activity.tools.claim.take().map(|c| c.tool)
     }
 
-    /// `say(text)` from inside the driver: on a realtime session the model's, else a pipeline
-    /// say. `None` when nothing was scheduled (no voice to speak it).
+    /// `say(text)` from inside the driver: the realtime model's when it says and there is no
+    /// TTS, else a pipeline say. `None` when nothing was scheduled (no voice to speak it).
     pub(crate) fn say_text(&mut self, now: Ts, text: String, out: &mut Out) -> Option<SpeechId> {
-        let realtime = self.activity.rt_session.is_some();
-        if self.session.tts.is_none()
-            && self.session.outputs.plays_audio()
-            && !(realtime && self.activity.realtime_state.says())
-        {
+        let realtime = self.realtime_says();
+        if self.session.tts.is_none() && self.session.outputs.plays_audio() && !realtime {
             out.trace(crate::trace::SpeechStep::SayRefused {
                 why: crate::agent_activity::speech::SAY_WITHOUT_TTS_REFUSED,
             });
