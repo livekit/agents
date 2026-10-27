@@ -153,10 +153,12 @@ that lost its connection resumes from any offset with `tasks/resubscribe`.
 - `tasks/cancel` on a running turn ends it `canceled`; the turn yields at its
   next boundary and a running tool finishes.
 - A tool's `InputRequired` ends the turn `input-required` with the question
-  as the reply. The next message in the thread answers it; see
+  as the reply. A message with that task's `taskId`, or the person's next
+  message with none, continues the task; see
   [human-in-the-loop.md](human-in-the-loop.md).
 - A message with the `taskId` of a terminal task fails with
-  `UnsupportedOperationError`: a follow-up is a new task.
+  `UnsupportedOperationError`, unless it is a resend: a follow-up is a new
+  task.
 
 The LiveKit extension, `https://livekit.io/a2a/ext/agents/v1`, adds
 typed chat items and these metadata keys, written `livekit/<name>` for

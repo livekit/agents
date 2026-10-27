@@ -24,6 +24,7 @@ from pydantic import JsonValue
 
 from ..llm.chat_context import ChatContext, ChatItem, FunctionCall
 from ..llm.tool_context import (
+    ANSWERS_KEY,
     FunctionTool,
     InputRequired,
     Tool,
@@ -40,6 +41,7 @@ from ..voice.run_result import RunUsage
 from .delegate import (
     CONTEXT_ID_KEY,
     ENDPOINT_KEY,
+    TASK_ID_KEY,
     Delegate,
     DelegationFailed,
     DelegationResult,
@@ -185,7 +187,8 @@ class A2ADelegate(Delegate, Toolset):
         else:
             assert ctx._run is not None
             history = ctx._run.chat_ctx
-        if session is not None and self._announce:
+        asked = _asking_call(ctx)
+        if session is not None and self._announce and asked is None:
             await ctx.update(DISPATCHED)
         try:
             result = await self.run(
@@ -196,6 +199,7 @@ class A2ADelegate(Delegate, Toolset):
                 message_history=history,
                 usage=ctx.usage,
                 caller_lane=session.thread.agent_name if session and session.thread else None,
+                task_id=asked,
             )
         except DelegationFailed as e:
             raise ToolError(str(e) or "the delegation failed") from e
@@ -203,7 +207,7 @@ class A2ADelegate(Delegate, Toolset):
         record_delegation(ctx.function_call, result)
         if result.input_required:
             # the expert asked the person something: asked as it wrote it when it said so, and
-            # what they say next is this tool's next request, as they said it
+            # what they say next continues its task, as they said it
             verbatim = result.verbatim is not None
             return InputRequired(result.input_required, tool=self._tool, verbatim=verbatim)
         if result.verbatim is not None:
@@ -232,16 +236,20 @@ class A2ADelegate(Delegate, Toolset):
         message_history: ChatContext | Sequence[ChatItem] | None = None,
         usage: RunUsage | None = None,
         caller_lane: str | None = None,
+        task_id: str | None = None,
     ) -> DelegationResult:
-        """One request; ``caller_lane`` is the caller's lane of ``context_id``, which an expert
-        of this project may read. Inside a turn both default to the turn's. ``say`` takes the
-        expert's exact text, ``progress`` when it is not given; ``DelegationFailed`` when the
+        """One request, or with ``task_id`` the answer to the question that expert task asked,
+        which continues it; ``caller_lane`` is the caller's lane of ``context_id``, which an
+        expert of this project may read. Inside a turn both default to the turn's. ``say`` takes
+        the expert's exact text, ``progress`` when it is not given; ``DelegationFailed`` when the
         expert failed the task or never took it."""
         if context_id is None and (hooks := current_run_hooks()) is not None:
             context_id, caller_lane = hooks.thread_id, hooks.lane
         try:
             client = await self._connect()
-            reply = await self._send(client, prompt, context_id, message_history, caller_lane)
+            reply = await self._send(
+                client, prompt, context_id, message_history, caller_lane, task_id
+            )
         except A2AError as e:
             # unreachable, or refused: the caller's model hears why
             raise DelegationFailed(f"the expert did not take the request: {e}") from e
@@ -288,10 +296,11 @@ class A2ADelegate(Delegate, Toolset):
         context_id: str | None,
         message_history: ChatContext | Sequence[ChatItem] | None,
         caller_lane: str | None,
+        task_id: str | None,
     ) -> Reply:
         """The request as the card allows: the caller's session and lane, the delegation tag
         and, with no session to name, the conversation, all only when the expert offers the
-        extension."""
+        extension. An answer goes to the task that asked, alone."""
         from ..a2a.extension import CALLER_LANE, KIND, KIND_DELEGATION
 
         offers = client.offers_extension
@@ -320,8 +329,13 @@ class A2ADelegate(Delegate, Toolset):
         return await client.send(
             prompt,
             thread_id=shared or own,
+            task_id=task_id,
             metadata=metadata if offers else None,
-            chat_ctx=_conversation(message_history) if offers and shared is None else None,
+            chat_ctx=(
+                _conversation(message_history)
+                if offers and shared is None and task_id is None
+                else None
+            ),
         )
 
     def _cancel_in_background(self, task_id: str, context_id: str) -> None:
@@ -379,6 +393,19 @@ class A2ADelegate(Delegate, Toolset):
         from ..a2a.auth import Credentials
 
         return Credentials(api_key, api_secret).project_token(identity="delegate")
+
+
+def _asking_call(ctx: RunContext) -> str | None:
+    """The expert's task whose question this call answers, when the framework made the call
+    with the person's answer: the task the asking call reached."""
+    asked_by = ctx.function_call.extra.get(ANSWERS_KEY)
+    if not asked_by or ctx._run is None:
+        return None
+    for item in reversed(ctx._run.chat_ctx.items):
+        if isinstance(item, FunctionCall) and item.call_id == asked_by:
+            task_id = item.extra.get(TASK_ID_KEY)
+            return task_id if isinstance(task_id, str) and task_id else None
+    return None
 
 
 def _conversation(

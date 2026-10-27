@@ -256,9 +256,6 @@ async def test_a_delegation_with_no_task_id_is_a_new_task(door: Callable[..., Do
 
 
 @pytest.mark.rule("R35")
-@pytest.mark.xfail(
-    strict=True, reason="R35: the door sends the frames of a new task under the running task's id"
-)
 async def test_a_task_id_of_a_running_task_is_a_new_task(door: Callable[..., Door]) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -313,7 +310,6 @@ async def test_a_task_id_of_an_ended_task_is_refused_but_a_resend_is_answered(
 
 
 @pytest.mark.rule("R35")
-@pytest.mark.xfail(strict=True, reason="R35: the door continues a task of another lane")
 async def test_a_task_id_of_another_lane_is_not_found(
     door: Callable[..., Door], experts: Callable[..., Expert]
 ) -> None:
@@ -447,7 +443,6 @@ async def test_a_non_answer_goes_to_the_experts_model_in_the_same_task(
 
 
 @pytest.mark.rule("B30")
-@pytest.mark.xfail(strict=True, reason="B30: the question is read from the streamed text")
 async def test_an_experts_question_after_streamed_text_is_its_status_message(
     door: Callable[..., Door], experts: Callable[..., Expert]
 ) -> None:

@@ -60,7 +60,7 @@ from .codec import (
     task_to_pb,
     to_stream_response,
 )
-from .extension import CALLER_LANE, REASON, Extensions, pb, to_json
+from .extension import CALLER_LANE, KIND, KIND_DELEGATION, REASON, Extensions, pb, to_json
 from .pump import ResponsePump, WireHost, start
 
 if TYPE_CHECKING:
@@ -343,10 +343,9 @@ class A2AService(Generic[S]):
                 data={"lane": self.lane},
             )
         opening = asyncio.ensure_future(self._storage.open(thread_id))
+        stream = self._next_stream()
         try:
-            continued, created = await asyncio.gather(
-                self._continued(thread_id, message), self._next_stream()
-            )
+            continued, created = await asyncio.gather(self._continued(thread_id, message), stream)
             db = await opening
         except BaseException:
             # a request that fails before its turn leaves no connection open behind it
@@ -357,27 +356,32 @@ class A2AService(Generic[S]):
             opening.cancel()
             opening.add_done_callback(close)
             raise
-        stream_id = created.stream_id
-        pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, stream_id)
+        own_id: str | None = created.stream_id
+        if continued:
+            # the task answers on its own stream, which stayed open while it waited
+            self._streams.appendleft(stream)
+            message, own_id = {**message, "taskId": continued}, None
+        task_id = continued or created.stream_id
+        pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, task_id)
         wire = WireHost(
             lambda on_update, on_token: self._host(
                 thread_id, on_update=on_update, on_token=on_token
             ),
             pump,
-            task_id=continued or stream_id,
+            task_id=task_id,
             context_id=thread_id,
             exts=exts,
         )
 
         async def produce() -> None:
             try:
-                outcome = await self._run(thread_id, message, wire, stream_id, db)
+                outcome = await self._run(thread_id, message, wire, own_id, db)
             except Exception as e:
                 await pump.fail(e)
                 return
 
             wire.finish(outcome)
-            await pump.finish(outcome)
+            await pump.finish(outcome, close=outcome.result.task.status in TERMINAL_TASK_STATES)
 
         start(produce())
         return pump
@@ -418,21 +422,32 @@ class A2AService(Generic[S]):
         return TurnOutcome(result=result, context_id=thread_id)
 
     async def _continued(self, thread_id: str, message: StoredMessage) -> str | None:
-        """The task a message with a ``taskId`` continues, when it is still open (plan 5.5):
-        the id its frames go out under."""
-        continued = str(message.get("taskId") or "")
-        if not continued:
-            return None
+        """The task waiting on a question that this message continues (plan 5.5): the one its
+        ``taskId`` names, or, for the person's message with none, the question in front of
+        them. A ``taskId`` of a running task is a new task; of an ended one, refused unless the
+        message is resent; of another lane, not found."""
+        tasks = await Thread(self._storage, thread_id, agent_name=self.lane).tasks()
+        named = str(message.get("taskId") or "")
+        if not named:
+            if metadata_from_wire(message.get("metadata")).get(KIND) == KIND_DELEGATION:
+                return None  # another agent names the task it continues
+            waiting = [r.id for r in tasks if r.status == "input-required"]
+            return waiting[-1] if waiting else None
 
-        found = await self._find_task(thread_id, continued)
+        found = next((r for r in tasks if r.id == named), None)
         if found is None:
-            raise TaskNotFoundError(message=f"task {continued} is not in session {thread_id}")
-        if found.status in TERMINAL_TASK_STATES:
+            raise TaskNotFoundError(message=f"task {named} is not in session {thread_id}")
+        resent = any(
+            isinstance(m, dict) and m.get("messageId") == message.get("messageId")
+            for m in found.data.history
+        )
+        if found.status in TERMINAL_TASK_STATES and not resent:
             raise UnsupportedOperationError(
-                message=f"task {continued} is {found.status}; a follow-up is a new task",
-                data={"taskId": continued, "status": found.status},
+                message=f"task {named} is {found.status}; a follow-up is a new task",
+                data={"taskId": named, "status": found.status},
             )
-        return continued
+        # a resend is answered by the turn with what the task holds
+        return named if found.status == "input-required" and not resent else None
 
     def _unknown_session(self, message: StoredMessage, call: CallContext) -> tuple[TaskRecord, str]:
         """Plan 5.12: an id the threads service does not know fails the task ``thread-not-found``."""

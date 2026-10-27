@@ -232,9 +232,9 @@ class InputRequired:
     """The turn or task waits on the person for an answer to ``question``.
 
     The agent facing the person asks it in its own words, or exactly as written with
-    ``verbatim=True``. From a conversation tool the next message is written as this call's
-    output. ``tool`` names the tool that takes the answer and ``timeout`` schedules
-    ``on_timeout``.
+    ``verbatim=True``. The answer continues the waiting task as the person's next message;
+    from a conversation tool the call keeps the question as its output. ``tool`` names the tool
+    that takes the answer and ``timeout`` schedules ``on_timeout``.
     """
 
     question: str
@@ -350,6 +350,10 @@ class _ApprovalScope:
     asked: bool = False
 
 
+ANSWERS_KEY = "lk.answers"
+"""``FunctionCall.extra`` of a call the framework made with the person's answer: the call whose
+question it answers."""
+
 APPROVAL_KEY = "lk.approval"
 """``FunctionCall.extra`` key on a call of a tool that requires approval: ``asked`` when it
 returned the read-back, ``granted`` when it ran on the person's answer."""
@@ -388,40 +392,54 @@ APPROVAL_ANSWERED = (
 answer alone reads like a call that ran."""
 
 
+def _answered_read_backs(items: Sequence[Any]) -> dict[str, str]:
+    """The read-backs the person answered, by call id: ``asked`` calls and the text of the
+    person's message after them."""
+    from .chat_context import ChatMessage, FunctionCall
+
+    answered: dict[str, str] = {}
+    waiting: list[str] = []
+    for item in items:
+        if isinstance(item, FunctionCall) and item.extra.get(APPROVAL_KEY) == "asked":
+            waiting.append(item.call_id)
+        elif isinstance(item, ChatMessage) and item.role == "user":
+            answered.update(dict.fromkeys(waiting, item.text_content or ""))
+            waiting.clear()
+    return answered
+
+
 def as_model_reads(items: Sequence[Any]) -> list[Any]:
     """The history as the model reads it: an answered read-back's output says the call has not
-    run, and how to run it. What is stored stays the person's words."""
+    run, the person's answer, and how to run it. What is stored stays the question."""
     from .chat_context import FunctionCall, FunctionCallOutput
 
-    asked = {
-        i.call_id: i.name
-        for i in items
-        if isinstance(i, FunctionCall) and i.extra.get(APPROVAL_KEY) == "asked"
-    }
+    answered = _answered_read_backs(items)
+    names = {i.call_id: i.name for i in items if isinstance(i, FunctionCall)}
     out: list[Any] = []
     for item in items:
         if (
             isinstance(item, FunctionCallOutput)
-            and item.call_id in asked
-            and not str(item.output).startswith(WAITING_PREFIX)
+            and item.call_id in answered
+            and str(item.output).startswith(WAITING_PREFIX)
         ):
-            text = APPROVAL_ANSWERED.format(answer=str(item.output), name=asked[item.call_id])
+            text = APPROVAL_ANSWERED.format(answer=answered[item.call_id], name=names[item.call_id])
             item = item.model_copy(update={"output": text})
         out.append(item)
     return out
 
 
 WAITING_PREFIX = "waiting for the person's answer to: "
-"""How a call's output reads while it waits on the person; the answer replaces it."""
+"""The output of a call that asked the person: its question. The answer is the person's next
+message, never this output."""
 
 
 def approval_granted(items: Sequence[Any], call: Any) -> bool:
     """Whether ``call`` repeats the latest read-back of its tool, with the same arguments,
     after the person answered it, and no earlier repeat used that answer.
 
-    A reading of the history by the calls' ``APPROVAL_KEY`` marks: a call that asked something
-    else, such as a missing detail, is neither a read-back nor a run."""
-    from .chat_context import FunctionCall, FunctionCallOutput
+    A reading of the history by the calls' ``APPROVAL_KEY`` marks and the person's messages: a
+    call that asked something else, such as a missing detail, is neither a read-back nor a run."""
+    from .chat_context import FunctionCall
 
     def key(c: FunctionCall) -> str:
         try:
@@ -429,7 +447,7 @@ def approval_granted(items: Sequence[Any], call: Any) -> bool:
         except ValueError:
             return c.arguments or ""
 
-    outputs = {i.call_id: i for i in items if isinstance(i, FunctionCallOutput)}
+    answered = _answered_read_backs(items)
     asked: str | None = None  # the arguments of the latest answered, unused read-back
     for item in items:
         if not isinstance(item, FunctionCall) or item.name != call.name:
@@ -440,9 +458,7 @@ def approval_granted(items: Sequence[Any], call: Any) -> bool:
         if mark == "granted" and key(item) == asked:
             asked = None  # this repeat ran on the answer
         elif mark == "asked":
-            out = outputs.get(item.call_id)
-            answered = out is not None and not str(out.output).startswith(WAITING_PREFIX)
-            asked = key(item) if answered else None
+            asked = key(item) if item.call_id in answered else None
     return asked is not None and key(call) == asked
 
 
@@ -587,7 +603,7 @@ def function_tool(
 ):
     """``requires_approval`` is plan 7.4's approval, held by the framework: a call returns
     ``InputRequired`` with a read-back instead of running, verbatim. The person's answer is
-    written as that call's output, and the body runs only for a repeat of the same call, same
+    their next message, and the body runs only for a repeat of the same call, same
     arguments, made after that answer. ``True`` builds the read-back from the description and
     the arguments; a ``ReadBack`` function writes it. Typed tools only."""
 

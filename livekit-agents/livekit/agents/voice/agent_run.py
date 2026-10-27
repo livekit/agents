@@ -46,6 +46,7 @@ from ..llm import (
 )
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import (
+    ANSWERS_KEY,
     ASK_IN_OWN_WORDS,
     DELIVERED,
     Completed,
@@ -745,7 +746,8 @@ class AgentRun(Generic[Run_T]):
 
     def _answer_call(self, tool_ctx: ToolContext, name: str | None) -> FunctionCall | None:
         """The call that hands this run's message to the tool the last turn's
-        ``InputRequired(tool=)`` named; ``None`` when nothing waits on it."""
+        ``InputRequired(tool=)`` named, marked with the call it answers (``ANSWERS_KEY``);
+        ``None`` when nothing waits on it."""
         if name is None:
             return None
         tool = tool_ctx.get_function_tool(name)
@@ -758,8 +760,20 @@ class AgentRun(Generic[Run_T]):
         arguments = answer_arguments(tool, self._message.text_content or "")
         if arguments is None:
             return None  # no string parameter: the model reads the answer
+        # the call that asked is the tool's latest: the turn ended on it
+        asked = next(
+            (
+                item.call_id
+                for item in reversed(self._chat_ctx.items)
+                if isinstance(item, FunctionCall) and item.name == name
+            ),
+            None,
+        )
         return FunctionCall(
-            name=name, arguments=json.dumps(arguments), call_id=utils.shortuuid("call_")
+            name=name,
+            arguments=json.dumps(arguments),
+            call_id=utils.shortuuid("call_"),
+            extra={ANSWERS_KEY: asked} if asked else {},
         )
 
     async def _execute(

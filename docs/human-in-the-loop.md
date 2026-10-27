@@ -26,10 +26,10 @@ async def request_photo(ctx: RunContext[None, Loss]) -> InputRequired:
     return InputRequired("Could you send a photo of the damage? A wide shot and a close-up.")
 ```
 
-The turn waits. What is stored: the function call, its output standing in
-for the wait, `waiting for the person's answer to: <question>`, and the
-question as an assistant message. The question is the turn's reply. Nothing
-stays in memory.
+The turn waits. What is stored: the function call, its output,
+`waiting for the person's answer to: <question>`, and the question as an
+assistant message. The question is the turn's reply. Nothing stays in
+memory.
 
 ## Who words it
 
@@ -47,21 +47,23 @@ asks as written. `result.verbatim` is the answer or the question when it is
 exact, which the door flags and the delegate gives as written.
 A read-back from `requires_approval` is verbatim.
 
-The person's next message, whenever it comes and on whatever worker,
-replaces that placeholder as the call's output, and the model runs on the
-history: it sees the question, the call and the answer, and continues,
-calling the next tool or asking again. The tool that asked never runs
+The person's next message, whenever it comes and on whatever worker, is the
+answer: one user message, and the call keeps its question as its output.
+The model runs on the history: it sees the call, the question and the
+answer, and continues, calling the next tool, or explaining and asking
+again when the message did not answer. The tool that asked never runs
 again. It has no continuation, which is why a conversation tool can ask and
 cannot act on the answer; the model acts on it.
 
 On a call the question is spoken and the next user turn is the answer. In
-text, the turn's task ends `input-required` with the question (`livekit/mergedInto` is in
-[a2a-live-ext.md](a2a-live-ext.md)):
+text, the turn's task ends `input-required` with the question:
 
 | The next message | What happens |
 |---|---|
-| carries the waiting task's id | that task continues: it gets the answer and the reply, and the row the message arrived under completes, with `livekit/mergedInto` pointing at that task |
-| carries no task id | its own task carries the reply, and the waiting task completes, with `livekit/mergedInto` pointing at the new one |
+| carries the waiting task's id | that task continues: the same task, no row of its own, the message added to its history; a resend of it runs nothing |
+| carries no task id, from the person | the door sends it to the question in front of them, the oldest open one of the lane, which it continues |
+| carries no task id, tagged `livekit/kind: delegation` | a new task: another agent names the task it continues |
+| carries the id of a running task | a new task |
 
 What `run()` returns then: `result.input_required` is the pending question
 and `result.output` is `None`. The framework ends the task `input-required`
