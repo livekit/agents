@@ -151,10 +151,10 @@ impl CoreTextOutput {
     }
 }
 
-/// `Agent.realtime_audio_output_node`: the realtime model's audio, on its way to the speaker.
-///
-/// One invocation per generation (a node's per-turn state must not carry over); frames are
-/// pushed with `call_soon_threadsafe`, not a round trip.
+/// `Agent.realtime_audio_output_node`: one realtime generation's audio, on its way to the speaker
+/// through the leg the node was opened over (a node per generation, so its state never carries
+/// over and it plays into the output of its own step). Frames are pushed with
+/// `call_soon_threadsafe`, not a round trip.
 #[lk_agents_abi::host(proxy(name = HostRealtimeAudioNode))]
 #[async_trait::async_trait]
 pub trait RealtimeAudioNode: Send + Sync {
@@ -162,7 +162,11 @@ pub trait RealtimeAudioNode: Send + Sync {
     #[host(soon = "push")]
     async fn push(&self, frame: &lk_agents_abi::AudioFrame);
 
-    /// The generation is over; the next `push` starts a fresh invocation.
+    /// Interrupted: what the node still yields is dropped (the leg below was cleared).
+    #[host(soon = "clear")]
+    fn clear(&self);
+
+    /// The generation is over: no more frames come in.
     #[host(soon = "end")]
     fn end(&self);
 }

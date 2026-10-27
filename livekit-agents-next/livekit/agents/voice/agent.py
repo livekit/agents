@@ -47,7 +47,7 @@ from ..llm.tool_context import (
     ToolFlag,
     function_tool,
 )
-from ..types import NOT_GIVEN, APIConnectOptions, FlushSentinel, NotGivenOr
+from ..types import NOT_GIVEN, APIConnectOptions, FlushSentinel, NotGivenOr, TimedString
 from ..utils import is_given, misc
 from .events import Context_T, UserTurnExceededEvent
 from .turn import TurnHandlingOptions
@@ -586,6 +586,29 @@ class Agent(Generic[Context_T, Output_T]):
         """
         return Agent.default.tts_node(self, text, model_settings)
 
+    def transcription_node(
+        self, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
+    ) -> (
+        AsyncIterable[str | TimedString]
+        | Coroutine[Any, Any, AsyncIterable[str | TimedString]]
+        | Coroutine[Any, Any, None]
+    ):
+        """One spoken segment's transcript on its way to the transcription output.
+
+        Override it to clean up formatting, fix punctuation or rewrite the text the user reads.
+        """
+        return Agent.default.transcription_node(self, text, model_settings)
+
+    def realtime_audio_output_node(
+        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+    ) -> (
+        AsyncIterable[rtc.AudioFrame]
+        | Coroutine[Any, Any, AsyncIterable[rtc.AudioFrame]]
+        | Coroutine[Any, Any, None]
+    ):
+        """One generation's audio from the realtime model, before it is played out."""
+        return Agent.default.realtime_audio_output_node(self, audio, model_settings)
+
     class default:
         @staticmethod
         def stt_node(
@@ -609,6 +632,22 @@ class Agent(Generic[Context_T, Output_T]):
                 raise RuntimeError("tts_node called but no TTS is available")
             conn_options = binding.session.conn_options.tts_conn_options
             return _core.tts_node(binding.tts, text, conn_options=conn_options)
+
+        @staticmethod
+        async def transcription_node(
+            agent: Agent, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
+        ) -> AsyncGenerator[str | TimedString, None]:
+            """Default implementation for `Agent.transcription_node`"""
+            async for delta in text:
+                yield delta
+
+        @staticmethod
+        async def realtime_audio_output_node(
+            agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+        ) -> AsyncGenerator[rtc.AudioFrame, None]:
+            """Default implementation for `Agent.realtime_audio_output_node`"""
+            async for frame in audio:
+                yield frame
 
         @staticmethod
         async def llm_node(

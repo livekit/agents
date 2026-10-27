@@ -97,9 +97,9 @@ impl Ambient for std::sync::Arc<dyn lk_agents_abi::Clock> {
     }
 }
 
-impl Ambient for lk_agents_abi::LoopClock {
+impl Ambient for lk_agents_abi::utils::clock::LoopClock {
     fn ambient() -> Self {
-        lk_agents_abi::LoopClock(None)
+        lk_agents_abi::utils::clock::LoopClock(None)
     }
 }
 

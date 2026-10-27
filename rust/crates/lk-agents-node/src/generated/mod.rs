@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 277 core items bound (119 functions and consts, 74 classes, 83 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 278 core items bound (119 functions and consts, 75 classes, 83 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -54,7 +54,7 @@
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_time_of_birth`: return: `Time` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_eq`: not yet: `__eq__` is a Python protocol method
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_repr`: not yet: `__repr__` is a Python protocol method
-//! - `lk_agents_abi::SessionClock::host_repr`: not yet: `__repr__` is a Python protocol method
+//! - `lk_agents_abi::utils::clock::SessionClock::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::agent_session::SessionApi::host_new`: parameter `room`: not yet: `Arc<dyn SessionRoom>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::session_clock`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::agent_session::SessionApi::audio_input`: return: not yet: `Arc<ParticipantAudioInput>` (a shared handle to an exposed class)
@@ -105,6 +105,8 @@
 //! - `lk_agents_abi::tokenize::search::Bm25::search`: parameter `docs`: Slice(Declared { name: "Document", by_ref: false }) borrows inside a container
 //! - `lk_agents_voice::io::CoreAudioSink::capture_frame`: parameter `frame`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::avatar::DataStreamAudioOutput::for_host`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
+//! - `lk_agents_voice::avatar::DataStreamAudioReceiver::for_host`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
+//! - `lk_agents_voice::avatar::DataStreamAudioReceiver::recv`: return: `AvatarFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::avatar_runner::AvatarRunner::new`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
 //! - `lk_agents_rtc::RoomEventBus`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::RpcHandler`: `lk_agents_rtc` is not linked by lk-agents-node
@@ -175,6 +177,7 @@
 //! - `lk_agents_abi::voice::io::AudioOutput`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::voice::io::TextOutput`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::io::TextNode`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::avatar::ClearBufferListener`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::avatar_runner::AvatarAudioReceiver`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::avatar_runner::AvatarVideoGenerator`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::avatar_runner::AvatarMedia`: not yet: a bare proxy (every method calls `_core_<method>`)

@@ -57,7 +57,7 @@ impl ScriptedRoom {
     pub fn new(
         name: String,
         sample_rate: u32,
-        #[host(ambient)] loop_clock: lk_agents_abi::LoopClock,
+        #[host(ambient)] loop_clock: lk_agents_abi::utils::clock::LoopClock,
     ) -> Result<Self, RoomRefused> {
         if sample_rate == 0 || !sample_rate.is_multiple_of(1_000) {
             return Err(RoomRefused::SampleRate);
@@ -94,8 +94,8 @@ impl ScriptedRoom {
 
     /// The room's virtual clock as the handle a provider's `_bind_session_clock` takes.
     #[host(getter)]
-    pub fn session_clock(&self) -> lk_agents_abi::SessionClock {
-        lk_agents_abi::SessionClock(self.time.clock())
+    pub fn session_clock(&self) -> lk_agents_abi::utils::clock::SessionClock {
+        lk_agents_abi::utils::clock::SessionClock(self.time.clock())
     }
 
     #[host(getter)]

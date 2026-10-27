@@ -69,6 +69,8 @@ base64.workspace = true
 # `utils::dates`: `datetime.date`/`time` validation, `strftime` and the civil calendar. Already in
 # the build graph (pbjson-types, rmcp); no `clock`, the wall clock is `Clock::wall()`.
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+# `VideoFrame.data`: a frame's buffer shared, not copied, as it moves through the core.
+bytes = "1"
 
 [features]
 # The Python runtime (`lk_agents_abi::python`): the registration table, the fork guard, the error

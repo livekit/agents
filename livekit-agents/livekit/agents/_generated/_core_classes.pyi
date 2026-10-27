@@ -1333,6 +1333,23 @@ class DataStreamAudioOutput:
     def sample_rate(self) -> int | None: ...
 
 
+class DataStreamAudioReceiver:
+    def __init__(
+        self,
+        room: Any,
+        *,
+        sender_identity: str | None = None,
+        frame_size_ms: int = 100,
+        rpc_max_retries: int = 3,
+        on_clear_buffer: Any | None = None,
+    ) -> None: ...
+    async def start(self) -> None: ...
+    def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None: ...
+    def notify_playback_started(self) -> None: ...
+    async def recv(self) -> Any: ...
+    def aclose(self) -> None: ...
+
+
 class AvatarRunner:
     def __init__(
         self,

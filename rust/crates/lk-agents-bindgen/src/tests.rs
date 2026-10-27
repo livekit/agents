@@ -536,3 +536,54 @@ fn a_body_is_written_by_send_or_by_hand_never_both_nor_neither() {
     assert!(err(quote! { impl S { #[host(method(send = C::X))] pub fn f(&self) -> bool; } }).contains("returns nothing"));
     assert!(err(quote! { impl S { #[host(method(send = C::X))] pub fn f() -> Result<(), E>; } }).contains("takes `&self`"));
 }
+
+fn record(item: proc_macro2::TokenStream) -> syn::Result<String> {
+    crate::record(&syn::parse2(item).unwrap()).map(text)
+}
+
+// Catches: an untagged union trying its arms out of order, a `none` arm taking anything but None,
+// a class arm not testing the instance, the last member's error lost when nothing fits, and a
+// `rest` arm anywhere but last (it would shadow every arm after it).
+#[test]
+fn an_untagged_union_takes_the_first_arm_the_value_fits() {
+    let out = record(quote! {
+        #[binding(extract, emit, untagged)]
+        enum Reply { #[binding(none)] Declined, Text(String), #[binding(class = "m.End")] End, #[binding(rest)] Spoke }
+    })
+    .unwrap();
+    let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s}: {out}"));
+    let (none, text, end, rest) =
+        (at("is_none"), at("extract :: < String >"), at("getattr (\"End\")"), at("Ok (Reply :: Spoke)"));
+    assert!(none < text && text < end && end < rest, "{out}");
+    assert!(out.contains("import (\"m\")"), "{out}");
+    assert!(out.contains("last . unwrap_or_else"), "{out}");
+    let err = record(quote! { #[binding(extract, untagged)] enum R { #[binding(rest)] Any, Text(String) } })
+        .unwrap_err();
+    assert!(err.to_string().contains("last arm"), "{err}");
+}
+
+// Catches: a declared exception not created on `_core`, not registered, or not raised as itself;
+// a dotted class (a host's own) taken for one `_core` declares.
+#[test]
+fn a_declared_error_is_a_core_exception_class_of_its_base() {
+    let item: syn::Item = syn::parse2(quote! { pub enum IdleRefused { Closing } }).unwrap();
+    let out = text(crate::error(quote!(error(kind = "SessionClosing", declare = "RuntimeError")), &item).unwrap());
+    assert!(out.contains("create_exception ! (_core , SessionClosing , :: pyo3 :: exceptions :: PyRuntimeError"), "{out}");
+    assert!(out.contains("SessionClosing :: new_err"), "{out}");
+    assert!(out.contains("m . add (\"SessionClosing\""), "{out}");
+    assert!(crate::error(quote!(error(kind = "a.B", declare = "RuntimeError")), &item).is_err());
+}
+
+// Catches: a native-only trait proxying a host object, a `through` trait trying its adapter before
+// the native, or a declaration that says neither what to refuse nor what to go through.
+#[test]
+fn a_native_trait_takes_its_native_first_then_refuses_or_goes_through_its_adapter() {
+    let tr: syn::ItemTrait = syn::parse2(quote! { pub trait Room: Send { fn rtc(&self); } }).unwrap();
+    let out = text(crate::native(quote!(native(through(HostRoom = Hosted::new))), &tr).unwrap());
+    let native = out.find("native :: < dyn Room >").unwrap_or_else(|| panic!("{out}"));
+    let through = out.find("Hosted :: new (< dyn HostRoom as").unwrap_or_else(|| panic!("{out}"));
+    assert!(native < through, "{out}");
+    let out = text(crate::native(quote!(native(refused = "only native")), &tr).unwrap());
+    assert!(out.contains("PyTypeError :: new_err (\"only native\")"), "{out}");
+    assert!(crate::native(quote!(native), &tr).is_err());
+}

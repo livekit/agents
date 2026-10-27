@@ -7,7 +7,6 @@ use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::{Effect, Effects, Out, ProviderCall, Timer};
 use crate::audio::LaunchGate;
 use crate::generation::GenEvent;
-use crate::io::RealtimeAudioNode;
 use lk_agents_abi::resources::{AudioOutputRef, ResourceId, TextOutputRef};
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::io::{AudioOutput, AudioOutputCapabilities, TextOutput};
@@ -385,8 +384,8 @@ pub struct SessionShared {
     pub launch: LaunchGate,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
     pub tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
-    /// A push/emit pair because the node may hold frames back or emit several for one.
-    pub realtime_audio: Option<Arc<dyn RealtimeAudioNode>>,
+    /// `realtime_audio_output_node`: a node per generation, over that step's audio output.
+    pub realtime_audio: Option<Arc<dyn crate::agent_session::api::NodeFactory>>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
     /// receives. Unbounded: a task must never block on the loop draining it.
     pub queue: crate::agent_session::Tx,

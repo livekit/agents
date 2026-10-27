@@ -130,6 +130,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         tts: rng.bool(),
         stt: rng.bool(),
         llm_text: None,
+        transcription: false,
+        realtime_audio: false,
     });
     // The recorded recogniser the transcripts follow, drawn last too.
     setup.stt_model = rng.usize(0..crate::corpus::STT_MODELS.len());
@@ -156,5 +158,10 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     // drawn last, so every other part of a seed's setup stays what it was
     setup.avatar_fps = if rng.bool() { 25 } else { 40 };
     setup.avatar_latency_ms = rng.u64(1..1000 / setup.avatar_fps);
+    // The session's transcription node, drawn last too. Its realtime audio node is not drawn yet:
+    // what the node yields after the core flushed the segment lands in a segment of its own.
+    if let Some(nodes) = setup.nodes.as_mut() {
+        nodes.transcription = rng.bool();
+    }
     setup
 }

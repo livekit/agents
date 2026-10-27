@@ -503,7 +503,7 @@ class Turn:
         ``reject``, ``asyncio.CancelledError`` when the handler was cancelled, the storage
         errors otherwise."""
 
-# --- the voice nodes (lk-agents-voice agent_session/nodes/python.rs) -----------------------------
+# --- the voice nodes (lk-agents-py nodes.rs) -----------------------------------------------------
 
 class ItemStream:
     def __aiter__(self) -> ItemStream: ...

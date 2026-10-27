@@ -131,7 +131,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     // declared in when they were one file.
     ("rust/crates/lk-agents-voice/src/agent_session/mod.rs", "lk_agents_voice::agent_session"),
     ("rust/crates/lk-agents-voice/src/agent_session/commands.rs", "lk_agents_voice::agent_session"),
-    ("rust/crates/lk-agents-abi/src/utils/clock.rs", "lk_agents_abi"),
+    ("rust/crates/lk-agents-abi/src/utils/clock.rs", "lk_agents_abi::utils::clock"),
     ("rust/crates/lk-agents-voice/src/agent_session/api.rs", "lk_agents_voice::agent_session"),
     ("rust/crates/lk-agents-voice/src/agent_session/api/host.rs", "lk_agents_voice::agent_session"),
     ("rust/crates/lk-agents-abi/src/telemetry/gen_ai.rs", "lk_agents_abi::gen_ai"),

@@ -25,6 +25,10 @@ pub mod host_realtime_audio_node {
             let _ = self.bridge.soon("push", vec![crate::bridge::JsArg::new(crate::providers::host::audio_frame_to_js(frame))]);
         }
 
+        fn clear(&self) {
+            let _ = self.bridge.soon("clear", vec![]);
+        }
+
         fn end(&self) {
             let _ = self.bridge.soon("end", vec![]);
         }

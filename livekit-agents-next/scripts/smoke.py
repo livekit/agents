@@ -676,6 +676,19 @@ class Redacting(Agent):
             yield ev
 
 
+class Captioned(Agent):
+    """Rewrites what the caller reads of each spoken segment."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="You caption.", name="captioned")
+
+    async def transcription_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterator[str]:
+        async for delta in text:
+            yield delta.replace("Twenty", "TWENTY")
+
+
 async def node_session(agent: Agent, act: Callable[[VoiceSession, _core.FakeRoom], Any]) -> int:
     """Run ``act`` on a session started on ``agent``; the bytes the room played."""
     room = _core.FakeRoom(sample_rate=48000)
@@ -716,6 +729,18 @@ async def nodes() -> None:
     twice = await node_session(Repeated(2), say)
     print(f"played_bytes once={once} twice={twice}")
     assert twice == 2 * once, (once, twice)
+
+    print("== transcription_node")
+    captions: list[str] = []
+
+    async def caption(session: VoiceSession, room: _core.FakeRoom) -> None:
+        await say(session, room)
+        captions.extend(text for _, text in room.text_streams())
+
+    await node_session(Captioned(), caption)
+    print(f"captions {captions}")
+    assert any("TWENTY" in c for c in captions), captions
+    assert not any("Twenty" in c for c in captions), captions
 
     print("== stt_node")
     heard: list[str] = []

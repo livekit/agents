@@ -66,7 +66,8 @@ pub struct DriverBuilder {
     pub video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     pub recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
     pub audio_out: Option<Arc<dyn AudioOutput>>,
-    pub realtime_audio_node: Option<Arc<dyn crate::io::RealtimeAudioNode>>,
+    /// `realtime_audio_output_node`, opened per realtime generation over that step's output.
+    pub realtime_audio_node: Option<Arc<dyn crate::agent_session::api::NodeFactory>>,
     pub text_out: Option<Arc<dyn TextOutput>>,
     pub room_events: Option<Rx<RoomEvent>>,
     pub room_io_events: Option<Rx<crate::room_io::RoomIoEvent>>,

@@ -308,7 +308,7 @@ out = (loop, context, [context.run(f) for f in (stream, one, nothing)])
                         .with_context(context.bind(py).clone());
                     let convert: crate::python::Convert<String> =
                         Box::new(|o| o.extract::<String>().map_err(Into::into));
-                    let mut source = crate::python::NodeSource::new(
+                    let mut source = crate::python::HostSource::returned(
                         node,
                         locals,
                         convert,
@@ -346,7 +346,7 @@ out = (loop, context, [context.run(f) for f in (stream, one, nothing)])
                 let convert: crate::python::Convert<String> =
                     Box::new(|o| o.extract::<String>().map_err(Into::into));
                 let clock = std::sync::Arc::new(crate::RealClock::new());
-                crate::python::NodeSource::new(py.None(), locals, convert, clock)
+                crate::python::HostSource::returned(py.None(), locals, convert, clock)
             };
             assert!(source().take_call_metrics(false).is_none());
             let calls = crate::python::NodeCalls::default();

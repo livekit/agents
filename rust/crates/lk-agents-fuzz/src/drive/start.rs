@@ -172,8 +172,8 @@ impl Run {
                 Some(tool_specs(&setup.tools)),
                 None,
                 Some(fakes::FakeTools::new(registry.clone()) as Arc<dyn HostToolRunner>),
-                None,
-                None,
+                session_node(setup, |on| on.transcription),
+                session_node(setup, |on| on.realtime_audio),
                 llm_node,
                 tts_node,
                 stt_node,
@@ -569,6 +569,12 @@ pub(super) fn nodes(
         })
     };
     (node(on.llm, llm.is_some()), node(on.tts, tts.is_some()), node(on.stt, stt.is_some()))
+}
+
+/// A node the first agent overrides that the session builds once, over its text or audio leg.
+fn session_node(setup: &Setup, wanted: fn(&NodeSetup) -> bool) -> Option<Arc<dyn NodeFactory>> {
+    let on = setup.nodes.filter(wanted)?;
+    Some(fakes::FakeNodes::new(None, None, None, on.llm_text) as Arc<dyn NodeFactory>)
 }
 
 /// A handoff's frame: the agent's tools and, when its agents override nodes, every leg a node

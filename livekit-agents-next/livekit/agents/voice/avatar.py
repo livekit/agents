@@ -283,8 +283,11 @@ class DataStreamAudioReceiver(AudioReceiver):
             sender_identity=sender_identity,
             frame_size_ms=frame_size_ms or 100,
             rpc_max_retries=rpc_max_retries,
-            on_clear_buffer=lambda: self.emit("clear_buffer"),
+            on_clear_buffer=self,
         )
+
+    def _core_clear_buffer(self) -> None:
+        self.emit("clear_buffer")
 
     async def start(self) -> None:
         await self._native.start()
@@ -299,11 +302,10 @@ class DataStreamAudioReceiver(AudioReceiver):
         return self
 
     async def __anext__(self) -> rtc.AudioFrame | AudioSegmentEnd:
-        frame = await self._native.recv()
-        return AudioSegmentEnd() if frame is None else frame
+        return await self._native.recv()  # type: ignore[no-any-return]
 
     async def aclose(self) -> None:
-        await self._native.aclose()
+        self._native.aclose()
 
 
 class QueueAudioOutput(

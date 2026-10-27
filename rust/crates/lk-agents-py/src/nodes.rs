@@ -1,24 +1,30 @@
-//! The Python nodes: an agent's `llm_node`, `tts_node` and `stt_node` called in the agent's binding
+//! The Python face of an agent's nodes, over the one host-iterable bridge
+//! (`lk_agents_abi::python::{HostSource, ItemStream}`): an agent's `llm_node`, `tts_node`,
+//! `stt_node`, `transcription_node` and `realtime_audio_output_node` called in the agent's binding
 //! (`_core.AgentNodes`), and the default `tts_node` / `stt_node` (`_core.tts_node`,
-//! `_core.stt_node`). The core feeds the input and drains the output; Python only calls the node.
+//! `_core.stt_node`). The voice core sees a `NodeFactory` and Rust streams of records; this side
+//! feeds the node its input, drains its output, and calls nothing but the node.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::python::{
-    Ambient, Convert, HostHandle, HostProxy, ItemSink, ItemStream, NodeCallState, NodeCalls, NodeSource,
-    captured, check_pid, item_stream, pyo3_async_runtimes,
+    Ambient, Convert, HostHandle, HostProxy, HostSource, ItemSink, ItemStream, NodeCallState,
+    NodeCalls, captured, check_pid, item_stream, pyo3_async_runtimes,
 };
 use lk_agents_abi::{
-    AudioFrame, ChatRequest, ChoiceDelta, LlmChunk, LlmStream, Role, SpeechEvent, Stt, SttSink,
-    SttSource, SynthesizedAudio, Tts, TtsSink, TtsSource,
+    AudioFrame, ChatRequest, ChoiceDelta, LlmChunk, LlmStream, Role, SpawnerExt as _, SpeechEvent,
+    StreamSink as _, StreamSource as _, Stt, SttSink, SttSource, SynthesizedAudio, TimedString,
+    Tts, TtsSink, TtsSource,
 };
+use lk_agents_voice::agent_session::api::NodeFactory;
+use lk_agents_voice::io::{CoreAudioSink, CoreTextOutput, RealtimeAudioNode, TextNode};
 use pyo3::IntoPyObjectExt as _;
 use pyo3::prelude::*;
 
-use crate::agent_session::api::NodeFactory;
+const LOG: &str = "livekit.agents";
 
 /// The numbers in a node's chunk and request ids; nothing reads them but a trace.
 static NODE_IDS: AtomicU64 = AtomicU64::new(0);
@@ -42,9 +48,12 @@ fn node_calls_var(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
     Ok(var.bind(py))
 }
 
-/// `_core.AgentNodes(context, host)`: `host.llm(req)`, `host.tts(text)` and `host.stt(audio)` call
-/// the agent's own nodes; each request runs in a copy of `context`, which holds the agent's
-/// binding, so the node's code sees its session as hooks and tools do.
+// ----------------------------------------------------------------------------- an agent's nodes
+
+/// `_core.AgentNodes(context, host)`: `host.llm(req)`, `host.tts(text)`, `host.stt(audio)`,
+/// `host.transcription(text)` and `host.realtime_audio(audio)` call the agent's own nodes; each
+/// call runs in a copy of `context`, which holds the agent's binding, so the node's code sees its
+/// session as hooks and tools do.
 #[pyclass(frozen, name = "AgentNodes", module = "livekit.agents._core")]
 pub struct PyAgentNodes {
     inner: Arc<AgentNodes>,
@@ -70,7 +79,8 @@ impl PyAgentNodes {
         check_pid()?;
         let locals = pyo3_async_runtimes::TaskLocals::with_running_loop(py)?;
         let clock = <Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient();
-        Ok(PyAgentNodes { inner: Arc::new(AgentNodes { context, host, locals, clock }) })
+        let spawner = <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient();
+        Ok(PyAgentNodes { inner: Arc::new(AgentNodes { context, host, locals, clock, spawner }) })
     }
 }
 
@@ -80,9 +90,22 @@ struct AgentNodes {
     /// The session's loop, which every node call runs on.
     locals: pyo3_async_runtimes::TaskLocals,
     clock: Arc<dyn lk_agents_abi::Clock>,
+    /// Runs a transcription or audio node's drain, which outlives the push that opened it.
+    spawner: Arc<dyn lk_agents_abi::Spawner>,
 }
 
 impl AgentNodes {
+    /// The same nodes, for a drain that outlives the call that opened it.
+    fn share(&self) -> AgentNodes {
+        Python::attach(|py| AgentNodes {
+            context: self.context.clone_ref(py),
+            host: self.host.clone_ref(py),
+            locals: self.locals.clone(),
+            clock: Arc::clone(&self.clock),
+            spawner: Arc::clone(&self.spawner),
+        })
+    }
+
     /// `host.<node>(arg)` in a fresh copy of the binding's context, on the loop; its output is
     /// drained in that same copy.
     async fn call<T: Send + 'static>(
@@ -90,7 +113,7 @@ impl AgentNodes {
         node: &'static str,
         arg: impl FnOnce(Python<'_>) -> PyResult<Py<PyAny>> + Send + 'static,
         convert: Convert<T>,
-    ) -> Result<Box<NodeSource<T>>, ProviderError> {
+    ) -> Result<HostSource<T>, ProviderError> {
         let (context, host) =
             Python::attach(|py| (self.context.clone_ref(py), self.host.clone_ref(py)));
         let on_loop = Python::attach(|py| HostHandle::from_parts(py.None(), self.locals.clone()));
@@ -108,11 +131,11 @@ impl AgentNodes {
             })
             .await?;
         let locals = Python::attach(|py| self.locals.clone().with_context(context.into_bound(py)));
-        let source = NodeSource::new(out, locals, convert, Arc::clone(&self.clock));
-        Ok(Box::new(match calls {
+        let source = HostSource::returned(out, locals, convert, Arc::clone(&self.clock));
+        Ok(match calls {
             Some(calls) => source.with_calls(calls),
             None => source,
-        }))
+        })
     }
 
     /// A node with input: the core's half of its `ItemStream`, and the node's output.
@@ -121,47 +144,206 @@ impl AgentNodes {
         node: &'static str,
         to_py: fn(Python<'_>, &I) -> PyResult<Py<PyAny>>,
         convert: Convert<T>,
-    ) -> Result<(Box<dyn lk_agents_abi::StreamSink<I>>, Box<NodeSource<T>>), ProviderError> {
+    ) -> Result<(ItemSink<I>, HostSource<T>), ProviderError> {
         let (sink, input) = Python::attach(|py| item_stream(py, to_py)).map_err(captured)?;
         let source = self.call(node, move |_| Ok(input.into_any()), convert).await?;
-        Ok((Box::new(sink), source))
+        Ok((sink, source))
+    }
+
+    /// One invocation of a node that reads a stream and emits into the leg below: `deliver` takes
+    /// each item it yields until the leg refuses one, `done` runs once it has ended.
+    fn open<I, T, D, F>(
+        &self,
+        node: &'static str,
+        to_py: fn(Python<'_>, &I) -> PyResult<Py<PyAny>>,
+        convert: Convert<T>,
+        deliver: D,
+        done: impl FnOnce() + Send + 'static,
+    ) -> Option<ItemSink<I>>
+    where
+        I: Send + Sync + 'static,
+        T: Send + 'static,
+        D: Fn(T) -> F + Send + 'static,
+        F: std::future::Future<Output = bool> + Send,
+    {
+        let (sink, input) = match Python::attach(|py| item_stream(py, to_py)) {
+            Ok(halves) => halves,
+            Err(e) => {
+                lk_agents_abi::python::log::error!(target: LOG, node = node, error = e.to_string().as_str(); "failed to open a node");
+                return None;
+            }
+        };
+        let nodes = self.share();
+        self.spawner.spawn_unboxed(async move {
+            match nodes.call(node, move |_| Ok(input.into_any()), convert).await {
+                Ok(mut out) => {
+                    loop {
+                        let item = match out.next().await {
+                            Ok(Some(item)) => item,
+                            Ok(None) => break,
+                            Err(e) => {
+                                lk_agents_abi::python::log::error!(target: LOG, node = node, error = e.to_string().as_str(); "error in a node");
+                                break;
+                            }
+                        };
+                        if !deliver(item).await {
+                            break;
+                        }
+                    }
+                    let deadline = nodes.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+                    Box::new(out).close(deadline).await;
+                }
+                Err(e) => lk_agents_abi::python::log::error!(target: LOG, node = node, error = e.to_string().as_str(); "error in a node"),
+            }
+            done();
+        });
+        Some(sink)
     }
 }
 
 #[async_trait]
 impl NodeFactory for AgentNodes {
-    fn text_node(
-        &self,
-        _below: crate::io::CoreTextOutput,
-    ) -> Result<Arc<dyn crate::io::TextNode>, HostError> {
-        Err(HostError::new("an agent's llm, tts and stt nodes are not a transcription node"))
+    fn text_node(&self, below: CoreTextOutput) -> Result<Arc<dyn TextNode>, HostError> {
+        let node = TranscriptionNode { nodes: self.share(), below: Arc::new(below), segment: Mutex::new(None) };
+        Ok(Arc::new(node))
     }
 
-    fn audio_node(
-        &self,
-        _below: crate::io::CoreAudioSink,
-    ) -> Result<Arc<dyn crate::io::RealtimeAudioNode>, HostError> {
-        Err(HostError::new("an agent's llm, tts and stt nodes are not a realtime audio node"))
+    fn audio_node(&self, below: CoreAudioSink) -> Result<Arc<dyn RealtimeAudioNode>, HostError> {
+        let cut = Arc::new(AtomicBool::new(false));
+        let node = AudioOutputNode { nodes: self.share(), below: Arc::new(below), generation: Mutex::new(None), cut };
+        Ok(Arc::new(node))
     }
 
     async fn llm_node(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
         let req = req.clone();
-        Ok(self.call("llm", move |py| req.into_py_any(py), Box::new(llm_chunk)).await?)
+        Ok(Box::new(self.call("llm", move |py| req.into_py_any(py), Box::new(llm_chunk)).await?))
     }
 
     async fn tts_node(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
         let request_id = node_id("tts_node_");
         let convert: Convert<SynthesizedAudio> = Box::new(move |frame| synthesized(frame, &request_id));
         let (sink, source) = self.duplex("tts", |py, text: &String| text.into_py_any(py), convert).await?;
-        Ok((sink, source))
+        Ok((Box::new(sink), Box::new(source)))
     }
 
     async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError> {
         let convert: Convert<SpeechEvent> = Box::new(|ev| ev.extract::<SpeechEvent>().map_err(Into::into));
         let (sink, source) = self.duplex("stt", |py, frame: &AudioFrame| frame.into_py_any(py), convert).await?;
-        Ok((sink, source))
+        Ok((Box::new(sink), Box::new(source)))
     }
 }
+
+/// `Agent.transcription_node`: one invocation per segment, opened by its first text and ended by
+/// its flush. What the node yields goes down the leg below, flushed once the node has ended.
+struct TranscriptionNode {
+    nodes: AgentNodes,
+    below: Arc<CoreTextOutput>,
+    /// The open segment's input, while the node reads it.
+    segment: Mutex<Option<ItemSink<TimedString>>>,
+}
+
+impl TranscriptionNode {
+    fn push(&self, text: TimedString) {
+        let mut segment = self.segment.lock().unwrap_or_else(|p| p.into_inner());
+        if segment.is_none() {
+            let (below, flushed) = (Arc::clone(&self.below), Arc::clone(&self.below));
+            *segment = self.nodes.open(
+                "transcription",
+                timed_to_py,
+                Box::new(|t| t.extract::<TimedString>().map_err(Into::into)),
+                move |t: TimedString| {
+                    let below = Arc::clone(&below);
+                    async move {
+                        let timed = t.start_time.is_some() || t.end_time.is_some();
+                        let sent = if timed {
+                            below.capture_timed(t.text, t.start_time, t.end_time).await
+                        } else {
+                            below.capture_text(t.text).await
+                        };
+                        sent.is_ok()
+                    }
+                },
+                move || flushed.flush(),
+            );
+        }
+        if let Some(sink) = segment.as_ref() {
+            sink.send(&text);
+        }
+    }
+}
+
+impl TextNode for TranscriptionNode {
+    fn capture_text(&self, text: &str) {
+        self.push(TimedString::new(text));
+    }
+
+    fn capture_timed(&self, text: &TimedString) {
+        self.push(text.clone());
+    }
+
+    /// A segment the node never saw a word of ends at once.
+    fn flush(&self) {
+        match self.segment.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            Some(sink) => sink.end_input(),
+            None => self.below.flush(),
+        }
+    }
+}
+
+/// A transcript delta as the node reads it: a `str`, or a `TimedString` when it carries timing.
+fn timed_to_py(py: Python<'_>, text: &TimedString) -> PyResult<Py<PyAny>> {
+    if text.start_time.is_none() && text.end_time.is_none() {
+        return text.text.as_str().into_py_any(py);
+    }
+    text.into_py_any(py)
+}
+
+/// `Agent.realtime_audio_output_node`: one invocation, opened by the generation's first frame and
+/// fed until the generation ends (`end`); what it yields goes to the leg below, whose segment
+/// boundaries the core sets. Once cut (`clear`) nothing it yields goes down.
+struct AudioOutputNode {
+    nodes: AgentNodes,
+    below: Arc<CoreAudioSink>,
+    /// The open invocation's input, while the node reads it.
+    generation: Mutex<Option<ItemSink<AudioFrame>>>,
+    cut: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl RealtimeAudioNode for AudioOutputNode {
+    async fn push(&self, frame: &AudioFrame) {
+        let mut generation = self.generation.lock().unwrap_or_else(|p| p.into_inner());
+        if generation.is_none() {
+            let (below, cut) = (Arc::clone(&self.below), Arc::clone(&self.cut));
+            *generation = self.nodes.open(
+                "realtime_audio",
+                |py, f: &AudioFrame| f.into_py_any(py),
+                Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)),
+                move |frame: AudioFrame| {
+                    let (below, cut) = (Arc::clone(&below), Arc::clone(&cut));
+                    async move { !cut.load(Ordering::SeqCst) && below.capture_frame(frame).await.is_ok() }
+                },
+                || {},
+            );
+        }
+        if let Some(sink) = generation.as_ref() {
+            sink.send(frame);
+        }
+    }
+
+    fn clear(&self) {
+        self.cut.store(true, Ordering::SeqCst);
+        self.end();
+    }
+
+    fn end(&self) {
+        if let Some(sink) = self.generation.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            sink.end_input();
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------- what nodes yield
 
 /// What an `llm_node` yields: a `str` the node answered itself (spoken, not a model call), a
 /// `FlushSentinel` (the spoken segment ends here), or a model's `ChatChunk`.
@@ -212,6 +394,8 @@ fn speech_event(py: Python<'_>, ev: &SpeechEvent) -> PyResult<Py<PyAny>> {
     Ok(convert.call1((ev.clone().into_pyobject(py)?,))?.unbind())
 }
 
+// ----------------------------------------------------------------------------- the default nodes
+
 fn conn_options(options: &Bound<'_, PyAny>) -> PyResult<lk_agents_abi::ApiConnectOptions> {
     Ok(lk_agents_abi::ApiConnectOptions {
         max_retry: options.getattr("max_retry")?.extract()?,
@@ -226,22 +410,21 @@ fn caller_input<T: Send + 'static>(
     py: Python<'_>,
     input: Py<PyAny>,
     convert: Convert<T>,
-) -> PyResult<NodeSource<T>> {
+) -> PyResult<HostSource<T>> {
     let locals = pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?;
     let clock = <Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient();
-    Ok(NodeSource::new(input, locals, convert, clock))
+    Ok(HostSource::returned(input, locals, convert, clock))
 }
 
 /// The provider's stream fed from `input` and drained into `output`, until either side stops.
 /// Its calls are read through `calls` by the node's reader.
 async fn pump<I: Send + 'static, O: Send + 'static>(
     opened: Result<(Box<dyn lk_agents_abi::StreamSink<I>>, Box<dyn lk_agents_abi::StreamSource<O>>), ProviderError>,
-    mut input: NodeSource<I>,
+    mut input: HostSource<I>,
     output: ItemSink<O>,
     clock: Arc<dyn lk_agents_abi::Clock>,
     calls: Option<NodeCalls>,
 ) {
-    use lk_agents_abi::StreamSource as _;
     let (sink, mut source) = match opened {
         Ok(halves) => halves,
         Err(e) => return output.fail(e),
@@ -316,7 +499,7 @@ fn tts_node(
     let calls = node_calls_var(py)?.call_method1("get", (py.None(),))?;
     let calls = calls.cast::<NodeCallsCell>().ok().map(|cell| Arc::clone(&cell.get().0));
     let spawner = <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient();
-    lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
+    spawner.spawn_unboxed(async move {
         pump(tts.stream().await, input, output, clock, calls).await;
     });
     Ok(frames)
@@ -343,7 +526,7 @@ fn stt_node(
     let input = caller_input(py, audio, Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)))?;
     let (output, events) = item_stream(py, speech_event)?;
     let spawner = <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient();
-    lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
+    spawner.spawn_unboxed(async move {
         let label = stt.label();
         let opened = stt.stream(None, None).await.unwrap_or_else(|| {
             Err(lk_agents_abi::errors::ApiError::new(format!(

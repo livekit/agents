@@ -328,7 +328,7 @@ pub fn proxy(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<TokenStream>
     // A `clock` proxy says which clock it is on.
     let on_clock = p.clock.then(|| {
         quote! {
-            impl<B: #rt::HostBridge> ::lk_agents_abi::HostClock for #name<B> {
+            impl<B: #rt::HostBridge> ::lk_agents_abi::utils::clock::HostClock for #name<B> {
                 fn host_clock(&self) -> #clock_ty { ::std::clone::Clone::clone(&self.clock) }
             }
         }

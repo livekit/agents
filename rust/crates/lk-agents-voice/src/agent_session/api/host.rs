@@ -269,16 +269,9 @@ impl SessionApi {
             legs => legs,
         };
 
-        // `realtime_audio_output_node`, over the synchroniser's node or the room's output; with no
-        // audio leg it has nothing to play into. What a factory raises comes back as itself.
-        let realtime_audio_node = match (realtime_audio_output_node, &audio_out) {
-            (Some(factory), Some(next)) => Some(
-                factory
-                    .audio_node(crate::io::CoreAudioSink::new(Arc::clone(next)))
-                    .map_err(SessionBuildError::Node)?,
-            ),
-            _ => None,
-        };
+        // `realtime_audio_output_node`, opened per generation over the audio output it plays into;
+        // with no audio leg it has nothing to play into.
+        let realtime_audio_node = realtime_audio_output_node.filter(|_| audio_out.is_some());
 
         // `Agent.transcription_node`, above the synchroniser (the node rewrites, the synchroniser
         // paces). With no leg below it is dropped: `text_output=False` is legitimate.
@@ -507,8 +500,8 @@ impl SessionApi {
 
     /// The session's clock, as the handle a provider's `_bind_session_clock` takes.
     #[host(getter)]
-    pub fn session_clock(&self) -> lk_agents_abi::SessionClock {
-        lk_agents_abi::SessionClock(self.time.clock())
+    pub fn session_clock(&self) -> lk_agents_abi::utils::clock::SessionClock {
+        lk_agents_abi::utils::clock::SessionClock(self.time.clock())
     }
 
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh

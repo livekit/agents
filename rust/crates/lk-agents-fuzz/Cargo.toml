@@ -20,6 +20,8 @@ lk-agents-abi = { path = "../lk-agents-abi" }
 # fake's signature names. Both already come in through lk-agents-voice.
 lk-agents-media = { path = "../lk-agents-media" }
 lk-agents-rtc = { path = "../lk-agents-rtc" }
+# The avatar fake's video frames hold their tag as shared bytes.
+bytes = "1"
 # The realtime fake runs the production native session (its wire machine, reconnects and all)
 # over a socket whose far end is the simulated OpenAI Realtime server.
 lk-agents-inference = { path = "../lk-agents-inference", default-features = false, features = ["testkit"] }

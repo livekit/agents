@@ -252,7 +252,7 @@ pub enum PreConnect {
     Malformed,
 }
 
-/// Which of the three nodes the agents override.
+/// Which nodes the agents override.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NodeSetup {
     pub llm: bool,
@@ -260,6 +260,10 @@ pub struct NodeSetup {
     pub stt: bool,
     /// The `llm_node` answers this text itself (a node returning a `str`), never calling the model.
     pub llm_text: Option<&'static str>,
+    /// The first agent overrides `transcription_node` and `realtime_audio_output_node` (each as
+    /// the default does), which the session builds once over its text and audio legs.
+    pub transcription: bool,
+    pub realtime_audio: bool,
 }
 
 /// Keyterm detection as `KeytermDetectionOptions` sets it up, and whether the session's

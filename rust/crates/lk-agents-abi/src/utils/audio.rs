@@ -44,7 +44,9 @@ impl<'py> pyo3::IntoPyObject<'py> for AudioFrame {
     }
 }
 
-/// `data` from any buffer: `bytes` as is, anything else (a `memoryview`) through `.tobytes()`.
+/// `data` from any buffer: `bytes` as is, anything else (a `memoryview`) through `.tobytes()`. The
+/// scalars are read first, so an object that is not an audio frame (a video frame tried as one)
+/// fails before its buffer is copied.
 #[cfg(feature = "python")]
 impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioFrame {
     type Error = pyo3::PyErr;
@@ -54,6 +56,9 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioFrame {
         use pyo3::types::{PyAnyMethods as _, PyBytesMethods as _};
         const OWNER: &str = "AudioFrameFromPy";
         let obj = &*obj;
+        let sample_rate = attr(obj, OWNER, "sample_rate")?;
+        let num_channels = attr(obj, OWNER, "num_channels")?;
+        let samples_per_channel = attr(obj, OWNER, "samples_per_channel")?;
         Ok(AudioFrame {
             data: attr_with(obj, OWNER, "data", |v| {
                 if let Ok(b) = v.cast::<pyo3::types::PyBytes>() {
@@ -61,9 +66,9 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioFrame {
                 }
                 Ok(Arc::from(v.call_method0("tobytes")?.cast::<pyo3::types::PyBytes>()?.as_bytes()))
             })?,
-            sample_rate: attr(obj, OWNER, "sample_rate")?,
-            num_channels: attr(obj, OWNER, "num_channels")?,
-            samples_per_channel: attr(obj, OWNER, "samples_per_channel")?,
+            sample_rate,
+            num_channels,
+            samples_per_channel,
         })
     }
 }

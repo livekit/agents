@@ -6,7 +6,7 @@ use std::time::Duration;
 
 /// A clock plus the only legal way to wait on it. Cheap to clone; `FakeRtc` shares the same
 /// [`Clock`] so its playout model and the driver's timers cannot drift. The host sees it as a
-/// [`SessionClock`](lk_agents_abi::SessionClock).
+/// [`SessionClock`](lk_agents_abi::utils::clock::SessionClock).
 #[derive(Clone)]
 pub struct Timebase {
     clock: Arc<dyn Clock>,

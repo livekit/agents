@@ -10,7 +10,7 @@ use lk_agents_voice::events::SessionEvent;
 // opens none).
 #[test]
 fn a_node_answering_text_itself_is_not_metered() {
-    let nodes = NodeSetup { llm: true, tts: false, stt: false, llm_text: Some("A fixed line.") };
+    let nodes = NodeSetup { llm: true, tts: false, stt: false, llm_text: Some("A fixed line."), transcription: false, realtime_audio: false };
     let setup = Setup { tts: false, nodes: Some(nodes), ..Setup::default() };
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },

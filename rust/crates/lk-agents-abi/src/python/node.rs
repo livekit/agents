@@ -1,7 +1,8 @@
-//! What a node crosses (`Agent.llm_node`, `tts_node`, `stt_node` and the default nodes): a host
-//! async iterable drained by the core ([`NodeSource`]), awaited in the context it was opened in so
-//! the node sees its agent's binding, and a core channel read by the host as an async iterator
-//! ([`ItemStream`], fed through [`ItemSink`]).
+//! The one bridge between host iterables and the core's streams, both ways: a host async iterable,
+//! awaitable or value drained by the core ([`HostSource`]: a node's output, a callable's answer, a
+//! provider's stream), awaited in the context it was opened in so a node sees its agent's binding;
+//! and a core channel read by the host as an async iterator ([`ItemStream`], fed through
+//! [`ItemSink`]).
 
 use std::sync::{Arc, Mutex};
 
@@ -9,7 +10,9 @@ use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 use tokio::sync::mpsc;
 
-use super::{AsyncMutex, CancellingHandle, HostBridge as _, captured, provider_error_to_py};
+use super::{
+    AsyncMutex, CancellingHandle, HostBridge as _, HostHandle, capture, captured, provider_error_to_py,
+};
 use crate::errors::ProviderError;
 
 type Item = Result<Py<PyAny>, ProviderError>;
@@ -123,6 +126,8 @@ enum State {
     /// `None`.
     Returned(Py<PyAny>),
     Iterating(Py<PyAny>),
+    /// Read to its end, kept for its `_started_time` and its teardown.
+    Ended(Py<PyAny>),
     /// An `ItemStream` handed on as it is (a node passing its input to a default node): read
     /// from the core's channel directly.
     Channel(Arc<AsyncMutex<Option<mpsc::UnboundedReceiver<Item>>>>),
@@ -144,25 +149,66 @@ pub enum NodeCallState {
 
 pub type NodeCalls = Arc<Mutex<NodeCallState>>;
 
-/// A node's output as the core drains it, as the reference's node task does: an awaitable is
-/// awaited first, an async iterable is read to its end, a single value is the one item, `None` is
-/// none. Every await runs in `locals`' context and is cancelled if the core stops waiting.
-pub struct NodeSource<T> {
+/// The one host-iterable bridge: what a host callable returned (a node's output, a callable's
+/// answer) or a host stream (a provider's), drained by the core as a [`crate::StreamSource`], as
+/// the reference's node task drains it: an awaitable is awaited first, an async iterable is read
+/// to its end, a single value is the one item, `None` is none. Every await runs in `locals`'
+/// context.
+pub struct HostSource<T> {
     state: State,
     locals: pyo3_async_runtimes::TaskLocals,
+    /// A returned value's awaits are cancelled when the core stops waiting; a host stream's are
+    /// left to its own `aclose`, its only teardown.
+    cancel: bool,
     convert: Convert<T>,
     clock: Arc<dyn crate::Clock>,
     calls: Option<NodeCalls>,
 }
 
-impl<T> NodeSource<T> {
-    pub fn new(
+/// The awaits of one host object: cancelled with their Rust waiter, or not.
+enum Handle {
+    Cancelling(CancellingHandle),
+    Host(HostHandle),
+}
+
+impl Handle {
+    async fn anext(&self) -> PyResult<Option<Py<PyAny>>> {
+        match self {
+            Handle::Cancelling(h) => h.anext().await,
+            Handle::Host(h) => h.anext().await,
+        }
+    }
+
+    async fn awaited(&self) -> PyResult<Py<PyAny>> {
+        match self {
+            Handle::Cancelling(h) => h.await_call(|o| Ok(o.clone())).await,
+            Handle::Host(h) => h.await_call(|o| Ok(o.clone())).await,
+        }
+    }
+
+    async fn aclose(&self) {
+        match self {
+            Handle::Cancelling(h) => h.aclose().await,
+            Handle::Host(h) => h.aclose().await,
+        }
+    }
+}
+
+impl<T> HostSource<T> {
+    /// What a host callable returned, in `locals`' context.
+    pub fn returned(
         returned: Py<PyAny>,
         locals: pyo3_async_runtimes::TaskLocals,
         convert: Convert<T>,
         clock: Arc<dyn crate::Clock>,
     ) -> Self {
-        NodeSource { state: State::Returned(returned), locals, convert, clock, calls: None }
+        HostSource { state: State::Returned(returned), locals, cancel: true, convert, clock, calls: None }
+    }
+
+    /// A host stream already iterating (`__anext__` on `handle`'s object).
+    pub fn iterating(handle: HostHandle, convert: Convert<T>, clock: Arc<dyn crate::Clock>) -> Self {
+        let (obj, locals) = Python::attach(|py| (handle.object().clone_ref(py), handle.locals().clone()));
+        HostSource { state: State::Iterating(obj), locals, cancel: false, convert, clock, calls: None }
     }
 
     /// The calls the default nodes it runs make, reported in place of its own output.
@@ -171,8 +217,19 @@ impl<T> NodeSource<T> {
         self
     }
 
-    fn handle(&self, obj: &Py<PyAny>) -> CancellingHandle {
-        Python::attach(|py| CancellingHandle::from_parts(obj.clone_ref(py), self.locals.clone()))
+    fn handle(&self, obj: &Py<PyAny>) -> Handle {
+        Python::attach(|py| {
+            let (obj, locals) = (obj.clone_ref(py), self.locals.clone());
+            if self.cancel {
+                Handle::Cancelling(CancellingHandle::from_parts(obj, locals))
+            } else {
+                Handle::Host(HostHandle::from_parts(obj, locals))
+            }
+        })
+    }
+
+    fn convert(&self, item: Py<PyAny>) -> Result<Option<T>, ProviderError> {
+        Python::attach(|py| (self.convert)(item.bind(py)).map(Some).map_err(|e| capture(py, &e)))
     }
 }
 
@@ -191,7 +248,7 @@ where
         let locals = pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?;
         let clock = <Arc<dyn crate::Clock> as super::Ambient>::ambient();
         let convert: Convert<T> = Box::new(|i| i.extract::<T>().map_err(Into::into));
-        Ok(Box::new(NodeSource::new(obj.to_owned().unbind(), locals, convert, clock)))
+        Ok(Box::new(HostSource::returned(obj.to_owned().unbind(), locals, convert, clock)))
     }
 }
 
@@ -204,8 +261,9 @@ enum Look {
 }
 
 #[async_trait::async_trait]
-impl<T: Send> crate::StreamSource<T> for NodeSource<T> {
-    /// A cancelled await is the end, as a cancelled host stream is.
+impl<T: Send> crate::StreamSource<T> for HostSource<T> {
+    /// `StopAsyncIteration` and a cancelled await are the end (an end leaves no side-table entry);
+    /// every other exception is captured, so the original can be re-raised.
     async fn next(&mut self) -> Result<Option<T>, ProviderError> {
         loop {
             match std::mem::replace(&mut self.state, State::Done) {
@@ -217,17 +275,34 @@ impl<T: Send> crate::StreamSource<T> for NodeSource<T> {
                     };
                     let Some(item) = next else { return Ok(None) };
                     self.state = State::Channel(rx);
-                    let item = item?;
-                    return Python::attach(|py| (self.convert)(item.bind(py)).map(Some))
-                        .map_err(captured);
+                    return self.convert(item?);
                 }
+                State::Ended(iter) => {
+                    self.state = State::Ended(iter);
+                    return Ok(None);
+                }
+                // Kept in place across the await: a read dropped mid-await still leaves the
+                // iterator to `close`.
                 State::Iterating(iter) => {
-                    let Some(item) = self.handle(&iter).anext().await.map_err(captured)? else {
-                        return Ok(None);
-                    };
+                    let handle = self.handle(&iter);
                     self.state = State::Iterating(iter);
-                    return Python::attach(|py| (self.convert)(item.bind(py)).map(Some))
-                        .map_err(captured);
+                    let next = handle.anext().await;
+                    let ended = |s: &mut Self| {
+                        if let State::Iterating(iter) = std::mem::replace(&mut s.state, State::Done) {
+                            s.state = State::Ended(iter);
+                        }
+                    };
+                    return match next {
+                        Ok(Some(item)) => self.convert(item),
+                        Ok(None) => {
+                            ended(self);
+                            Ok(None)
+                        }
+                        Err(e) => {
+                            ended(self);
+                            Err(captured(e))
+                        }
+                    };
                 }
                 State::Returned(out) => {
                     let look = Python::attach(|py| -> PyResult<Look> {
@@ -249,22 +324,16 @@ impl<T: Send> crate::StreamSource<T> for NodeSource<T> {
                         Look::Nothing => return Ok(None),
                         Look::Channel(rx) => self.state = State::Channel(rx),
                         Look::Iterate(iter) => self.state = State::Iterating(iter),
-                        Look::One(item) => {
-                            return Python::attach(|py| (self.convert)(item.bind(py)).map(Some))
-                                .map_err(captured);
-                        }
-                        Look::Await => {
-                            let awaited = self.handle(&out).await_call(|o| Ok(o.clone())).await;
-                            match awaited {
-                                Ok(value) => self.state = State::Returned(value),
-                                Err(e) => {
-                                    let cancelled = Python::attach(|py| {
-                                        e.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py)
-                                    });
-                                    return if cancelled { Ok(None) } else { Err(captured(e)) };
-                                }
+                        Look::One(item) => return self.convert(item),
+                        Look::Await => match self.handle(&out).awaited().await {
+                            Ok(value) => self.state = State::Returned(value),
+                            Err(e) => {
+                                let cancelled = Python::attach(|py| {
+                                    e.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py)
+                                });
+                                return if cancelled { Ok(None) } else { Err(captured(e)) };
                             }
-                        }
+                        },
                     }
                 }
             }
@@ -285,11 +354,32 @@ impl<T: Send> crate::StreamSource<T> for NodeSource<T> {
         }
     }
 
-    /// An iterator is closed (`aclose()`) in its context, bounded; a coroutine never awaited is
-    /// closed so it is not reported as never awaited.
+    /// `SynthesizeStream._started_time`, which is `0` until `_mark_started()`; an iterator without
+    /// the attribute (not a synthesis stream) has none. A `perf_counter()` stamp, read as
+    /// wall-clock seconds.
+    fn started_time(&self) -> Option<f64> {
+        let (State::Iterating(iter) | State::Ended(iter)) = &self.state else { return None };
+        let read = Python::attach(|py| -> PyResult<(f64, f64)> {
+            let started = iter.bind(py).getattr("_started_time")?.extract::<f64>()?;
+            let time = py.import("time")?;
+            let wall: f64 = time.call_method0("time")?.extract()?;
+            let perf: f64 = time.call_method0("perf_counter")?.extract()?;
+            Ok((started, wall - (perf - started)))
+        });
+        read.ok().filter(|(started, _)| *started != 0.0).map(|(_, wall)| wall)
+    }
+
+    /// An iterator is closed (`aclose()`) in its context, bounded (past `deadline` it is
+    /// abandoned, not cancelled); a coroutine never awaited is closed so it is not reported as
+    /// never awaited.
     async fn close(self: Box<Self>, deadline: crate::Ts) -> crate::Closed {
         match &self.state {
+            // A host stream is closed even once read to its end: `aclose` is its teardown.
             State::Iterating(iter) => {
+                let handle = self.handle(iter);
+                crate::Closed::bounded(&*self.clock, deadline, handle.aclose()).await
+            }
+            State::Ended(iter) if !self.cancel => {
                 let handle = self.handle(iter);
                 crate::Closed::bounded(&*self.clock, deadline, handle.aclose()).await
             }
@@ -302,7 +392,7 @@ impl<T: Send> crate::StreamSource<T> for NodeSource<T> {
                 });
                 crate::Closed::Clean
             }
-            State::Channel(_) | State::Done => crate::Closed::Clean,
+            State::Ended(_) | State::Channel(_) | State::Done => crate::Closed::Clean,
         }
     }
 }

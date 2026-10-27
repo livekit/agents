@@ -134,6 +134,17 @@ pub fn io_error_to_node(e: lk_agents_abi::voice::io::IoError) -> JsError {
     JsError::new("RuntimeError", e.to_string())
 }
 
+/// `ReceiverEnd` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/avatar.rs`).
+#[allow(unreachable_patterns)]
+pub fn receiver_end_to_node(e: lk_agents_voice::avatar::ReceiverEnd) -> JsError {
+    let kind = match &e {
+        lk_agents_voice::avatar::ReceiverEnd::Closed => "StopAsyncIteration",
+        lk_agents_voice::avatar::ReceiverEnd::BadStream(..) => "ValueError",
+        _ => "RuntimeError",
+    };
+    JsError::new(kind, e.to_string())
+}
+
 /// `RunnerError` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/avatar_runner.rs`).
 #[allow(unreachable_patterns)]
 pub fn runner_error_to_node(e: lk_agents_voice::avatar_runner::RunnerError) -> JsError {

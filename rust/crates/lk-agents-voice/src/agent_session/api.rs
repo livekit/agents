@@ -1000,7 +1000,7 @@ pub trait SessionRoom: Send + Sync {
 /// A host `rtc.Room`, seen through `_core_rtc.Room`, whose `_core_rtc` wraps it, on the caller's
 /// clock (else the ambient one: the wall clock, or the running loop's on virtual time).
 #[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io.Room", clock))]
-pub trait HostRoom: lk_agents_abi::HostClock + Send + Sync {
+pub trait HostRoom: lk_agents_abi::utils::clock::HostClock + Send + Sync {
     /// The room, as the seam sees it.
     fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom>;
 }
@@ -1026,14 +1026,14 @@ impl SessionRoom for HostedRoom {
 }
 
 /// The session's clock scopes the host objects converted after the room.
-impl lk_agents_abi::HostClock for dyn SessionRoom {
+impl lk_agents_abi::utils::clock::HostClock for dyn SessionRoom {
     fn host_clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
         self.timebase().clock()
     }
 }
 
 /// The session's clock scopes the host providers its commands take.
-impl lk_agents_abi::HostClock for SessionApi {
+impl lk_agents_abi::utils::clock::HostClock for SessionApi {
     fn host_clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
         self.time().clock()
     }

@@ -412,20 +412,30 @@ impl AudioOutput for DataStreamAudioOutput {
 
 // ----------------------------------------------------------------------------- the avatar's side
 
-/// What the avatar worker reads: audio, and where each segment ends.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Received {
-    Frame(AudioFrame),
-    SegmentEnd,
-}
+/// What the avatar worker reads: audio ([`AvatarFrame::Audio`]), and where each segment ends
+/// ([`AvatarFrame::SegmentEnd`]).
+pub type Received = lk_agents_abi::utils::video::AvatarFrame;
 
-/// Why reading stopped: closed by us, or failed (the reference re-raises it from iteration).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why reading stopped: closed by us (the end of iteration), or failed (the reference re-raises it
+/// from iteration).
+#[lk_agents_abi::host(error(kind = "RuntimeError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReceiverEnd {
+    #[host(kind = "StopAsyncIteration")]
+    #[error("the receiver is closed")]
     Closed,
     /// A stream without `sample_rate`/`num_channels`: the reference's `ValueError`.
+    #[host(kind = "ValueError")]
+    #[error("{0}")]
     BadStream(String),
+    #[error("{0}")]
     Failed(String),
+}
+
+/// The `clear_buffer` event the receiver emits when the agent clears (`AudioReceiver.emit`).
+#[lk_agents_abi::host(proxy)]
+pub trait ClearBufferListener: Send + Sync {
+    fn clear_buffer(&self);
 }
 
 /// `STREAM_IDLE_TIMEOUT`: with no chunk or trailer for this long, the last segment's trailer is
@@ -566,7 +576,7 @@ impl RxInner {
                             break;
                         }
                         for f in bstream.push(&data) {
-                            self.push(Received::Frame(frame(f)));
+                            self.push(Received::Audio(frame(f)));
                         }
                     }
                     Some(None) => break,
@@ -589,7 +599,7 @@ impl RxInner {
             }
             if !self.cleared.load(Ordering::Acquire) {
                 for f in bstream.flush() {
-                    self.push(Received::Frame(frame(f)));
+                    self.push(Received::Audio(frame(f)));
                 }
             }
             self.reading.store(false, Ordering::Release);
@@ -659,7 +669,25 @@ impl Drop for DataStreamAudioReceiver {
     }
 }
 
+#[lk_agents_abi::host(object(name = "DataStreamAudioReceiver", cell = "arc"))]
 impl DataStreamAudioReceiver {
+    /// `room` is the avatar's `rtc.Room`; `on_clear_buffer` hears the agent clear.
+    #[host(new(kw_only = "sender_identity", defaults(frame_size_ms = 100, rpc_max_retries = 3)))]
+    pub fn for_host(
+        room: Arc<dyn RtcRoom>,
+        sender_identity: Option<String>,
+        frame_size_ms: u32,
+        rpc_max_retries: u32,
+        on_clear_buffer: Option<Arc<dyn ClearBufferListener>>,
+        #[host(ambient)] clock: Arc<dyn Clock>,
+        #[host(ambient)] spawner: Arc<dyn Spawner>,
+    ) -> Self {
+        let on_clear = on_clear_buffer
+            .map(|l| Arc::new(move || l.clear_buffer()) as Arc<dyn Fn() + Send + Sync>);
+        let frame_size_ms = frame_size_ms.max(1);
+        DataStreamAudioReceiver::new(room, sender_identity, frame_size_ms, rpc_max_retries, on_clear, clock, spawner)
+    }
+
     /// `sender_identity` `None` follows the first agent participant; `on_clear` is the
     /// `clear_buffer` event the avatar runner listens to.
     pub fn new(
@@ -698,6 +726,7 @@ impl DataStreamAudioReceiver {
     }
 
     /// `start()`: wait for the agent, then serve its streams and the clear RPC.
+    #[host(method)]
     pub async fn start(&self) -> std::result::Result<(), ReceiverEnd> {
         let inner = &self.inner;
         let mut events = inner.room.events();
@@ -785,15 +814,18 @@ impl DataStreamAudioReceiver {
         Ok(())
     }
 
+    #[host(method)]
     pub fn notify_playback_finished(&self, playback_position: f64, interrupted: bool) {
         let _ = self.inner.rpc.send(RpcEvent::Finished { playback_position, interrupted });
     }
 
+    #[host(method)]
     pub fn notify_playback_started(&self) {
         let _ = self.inner.rpc.send(RpcEvent::Started);
     }
 
     /// The next frame or segment end; the end once closed or failed.
+    #[host(method)]
     pub async fn recv(&self) -> std::result::Result<Received, ReceiverEnd> {
         loop {
             let wake = self.inner.out_ready.notified();
@@ -812,6 +844,7 @@ impl DataStreamAudioReceiver {
         }
     }
 
+    #[host(method)]
     pub fn aclose(&self) {
         self.inner.end(ReceiverEnd::Closed);
         for t in self.tasks.lock().unwrap_or_else(|p| p.into_inner()).drain(..) {
@@ -846,105 +879,6 @@ pub async fn wait_avatar_join(
     let video = Some(vec![lk_agents_rtc::TRACK_KIND_VIDEO]);
     lk_agents_rtc::wait_for_track_publication(room, Some(identity), video, true, false).await?;
     Ok((started, unix_secs(clock.wall())))
-}
-
-// ----------------------------------------------------------------------------- the receiver's binding
-
-#[cfg(feature = "python")]
-mod python {
-    use std::sync::Arc;
-
-    use lk_agents_abi::python::{HostProxy, check_pid};
-    use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyValueError};
-    use pyo3::prelude::*;
-
-    use super::{DataStreamAudioReceiver, Received, ReceiverEnd};
-
-    fn end_to_py(end: ReceiverEnd) -> PyErr {
-        match end {
-            ReceiverEnd::Closed => PyStopAsyncIteration::new_err(()),
-            ReceiverEnd::BadStream(e) => PyValueError::new_err(e),
-            ReceiverEnd::Failed(e) => PyRuntimeError::new_err(e),
-        }
-    }
-
-    /// `_core.DataStreamAudioReceiver`: the engine of `DataStreamAudioReceiver`.
-    #[pyclass(frozen, name = "DataStreamAudioReceiver", module = "livekit.agents._core")]
-    pub struct PyDataStreamAudioReceiver {
-        inner: Arc<DataStreamAudioReceiver>,
-    }
-
-    lk_agents_abi::register_host!(class PyDataStreamAudioReceiver);
-
-    #[pymethods]
-    impl PyDataStreamAudioReceiver {
-        /// `room` is the avatar's `rtc.Room`; `on_clear_buffer()` is called when the agent clears.
-        #[new]
-        #[pyo3(signature = (room, *, sender_identity = None, frame_size_ms = 100, rpc_max_retries = 3, on_clear_buffer = None))]
-        fn new(
-            room: &Bound<'_, PyAny>,
-            sender_identity: Option<String>,
-            frame_size_ms: u32,
-            rpc_max_retries: u32,
-            on_clear_buffer: Option<Py<PyAny>>,
-        ) -> PyResult<Self> {
-            check_pid()?;
-            let room = <dyn lk_agents_rtc::RtcRoom as HostProxy>::from_host(room, None)?;
-            let on_clear = on_clear_buffer.map(|cb| {
-                Arc::new(move || {
-                    Python::attach(|py| {
-                        if let Err(e) = cb.call0(py) {
-                            e.print(py);
-                        }
-                    })
-                }) as Arc<dyn Fn() + Send + Sync>
-            });
-            let clock = <Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient();
-            let spawner = <Arc<dyn lk_agents_abi::Spawner> as lk_agents_abi::python::Ambient>::ambient();
-            Ok(PyDataStreamAudioReceiver {
-                inner: Arc::new(DataStreamAudioReceiver::new(
-                    room,
-                    sender_identity,
-                    frame_size_ms.max(1),
-                    rpc_max_retries,
-                    on_clear,
-                    clock,
-                    spawner,
-                )),
-            })
-        }
-
-        fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-            let inner = Arc::clone(&self.inner);
-            lk_agents_abi::python::future_into_py(py, async move { inner.start().await.map_err(end_to_py) })
-        }
-
-        /// The next `rtc.AudioFrame`, or `None` at a segment's end; raises `StopAsyncIteration`
-        /// once closed, or what made it fail.
-        fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-            let inner = Arc::clone(&self.inner);
-            lk_agents_abi::python::future_into_py(py, async move {
-                match inner.recv().await {
-                    Ok(Received::Frame(f)) => Ok(Some(f)),
-                    Ok(Received::SegmentEnd) => Ok(None),
-                    Err(end) => Err(end_to_py(end)),
-                }
-            })
-        }
-
-        fn notify_playback_finished(&self, playback_position: f64, interrupted: bool) {
-            self.inner.notify_playback_finished(playback_position, interrupted);
-        }
-
-        fn notify_playback_started(&self) {
-            self.inner.notify_playback_started();
-        }
-
-        fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-            self.inner.aclose();
-            lk_agents_abi::python::future_into_py(py, async { Ok(()) })
-        }
-    }
 }
 
 #[cfg(test)]

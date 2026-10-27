@@ -37,13 +37,7 @@ pub(crate) async fn realtime_generation_task(
         _ = handle.wait_for_authorization() => true,
     };
     if !authorized {
-        // Interrupted while parked. A node that never got a first step's frames is ended here.
-        if handle.num_steps() == 0
-            && let Some(node) = &shared.realtime_audio
-        {
-            node.end();
-        }
-        // Nothing of it was heard: what the server already said of it is deleted.
+        // Interrupted while parked. Nothing of it was heard: what the server already said of it is deleted.
         let mut unheard = Vec::new();
         while let Ok(ev) = events.lock().await.try_recv() {
             if let Event::MessageStarted(m) = ev {
@@ -70,8 +64,17 @@ pub(crate) async fn realtime_generation_task(
     // `text_output`, read once for the step as the reference does: each message's words go down it.
     let text_out = shared.transcription_enabled().then(|| shared.transcription_output());
     let text_out = text_out.flatten();
-    // `realtime_audio_output_node`: frames go to the node, which emits into the sink itself.
-    let node = shared.realtime_audio.clone();
+    // `realtime_audio_output_node`: frames go to a node opened for this step over its output,
+    // which emits into that output itself. A node that fails to open plays nothing of the step.
+    let node = shared.realtime_audio.as_ref().zip(audio_out.as_ref()).and_then(|(nodes, out)| {
+        nodes
+            .audio_node(crate::io::CoreAudioSink::new(Arc::clone(out)))
+            .inspect_err(|e| {
+                log::error!(target: "livekit.agents", error = e.to_string().as_str();
+                    "failed to open the realtime_audio_output_node");
+            })
+            .ok()
+    });
     let node_out =
         node.as_deref().zip(audio_out.as_deref()).map(|(node, out)| NodeOutput { node, out });
     let out: Option<&dyn AudioOutput> = match &node_out {
@@ -540,7 +543,8 @@ impl Segment for Generation<'_> {
     }
 }
 
-/// The node in front of the session's sink; boundaries and interruption still reach `out` directly.
+/// The node in front of the step's sink: a segment's boundary reaches `out` directly, an
+/// interruption cuts both.
 pub(crate) struct NodeOutput<'a> {
     pub(crate) node: &'a dyn RealtimeAudioNode,
     pub(crate) out: &'a dyn AudioOutput,
@@ -569,12 +573,14 @@ impl AudioOutput for NodeOutput<'_> {
         Ok(())
     }
 
+    /// The tracker is `out`'s, and `AudioOutputExt::flush` on this node already moved it.
     fn flush_segment(&self) {
-        // The tracker is `out`'s, and `AudioOutputExt::flush` on this node already moved it.
         self.out.flush_segment();
     }
 
+    /// What the node still holds is cut with what `out` holds.
     fn clear_buffer(&self) {
+        self.node.clear();
         self.out.clear_buffer();
     }
 

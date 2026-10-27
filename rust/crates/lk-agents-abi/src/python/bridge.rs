@@ -135,11 +135,11 @@ thread_local! {
     static CLOCK_SCOPE: std::cell::RefCell<Vec<std::sync::Arc<dyn crate::Clock>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-pub use crate::HostClock;
+pub use crate::utils::clock::HostClock;
 
-impl Ambient for crate::LoopClock {
+impl Ambient for crate::utils::clock::LoopClock {
     fn ambient() -> Self {
-        crate::LoopClock(Python::try_attach(super::LoopRuntime::current).flatten().map(|rt| rt.clock()))
+        crate::utils::clock::LoopClock(Python::try_attach(super::LoopRuntime::current).flatten().map(|rt| rt.clock()))
     }
 }
 
@@ -296,55 +296,6 @@ impl HostBridge for HostHandle {
             let view = py.import("livekit.agents._core_view")?.getattr("duck")?.call1((obj, class))?;
             Ok(self.child(view.unbind()))
         })
-    }
-}
-
-/// The drain half of a host stream. The converter is a `fn` pointer, which keeps this `Send`.
-pub struct HostSource<T> {
-    handle: HostHandle,
-    convert: fn(&Bound<'_, PyAny>) -> PyResult<T>,
-    /// `close`'s `deadline` is on this clock; any other would make the bound real seconds in a
-    /// virtual-clock test.
-    clock: std::sync::Arc<dyn crate::Clock>,
-}
-
-impl<T> HostSource<T> {
-    pub fn new(
-        handle: HostHandle,
-        convert: fn(&Bound<'_, PyAny>) -> PyResult<T>,
-        clock: std::sync::Arc<dyn crate::Clock>,
-    ) -> Self {
-        HostSource { handle, convert, clock }
-    }
-}
-
-#[async_trait::async_trait]
-impl<T: Send> crate::StreamSource<T> for HostSource<T> {
-    /// `StopAsyncIteration` and `CancelledError` are not captured (an end must leave no side-table
-    /// entry); every other exception is, so the original can be re-raised.
-    async fn next(&mut self) -> Result<Option<T>, ProviderError> {
-        let item = self.handle.anext().await.map_err(captured)?;
-        let convert = self.convert;
-        Python::attach(|py| item.map(|o| convert(o.bind(py))).transpose().map_err(|e| capture(py, &e)))
-    }
-
-    /// Past `deadline` the coroutine is abandoned, not cancelled.
-    async fn close(self: Box<Self>, deadline: crate::Ts) -> crate::Closed {
-        crate::Closed::bounded(&*self.clock, deadline, self.handle.aclose()).await
-    }
-
-    /// `SynthesizeStream._started_time`, which is `0` until `_mark_started()`; a stream without the
-    /// attribute (not a synthesis stream) has none. A `perf_counter()` stamp, read as wall-clock
-    /// seconds.
-    fn started_time(&self) -> Option<f64> {
-        let read = self.handle.read("_started_time", |v| {
-            let started = v.extract::<f64>()?;
-            let time = v.py().import("time")?;
-            let wall: f64 = time.call_method0("time")?.extract()?;
-            let perf: f64 = time.call_method0("perf_counter")?.extract()?;
-            Ok((started, wall - (perf - started)))
-        });
-        read.ok().filter(|(started, _)| *started != 0.0).map(|(_, wall)| wall)
     }
 }
 
@@ -642,7 +593,7 @@ where
     for<'a, 'py> <T as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
 {
     fn from_proxy(_obj: &Bound<'_, PyAny>, handle: HostHandle, clock: Option<std::sync::Arc<dyn crate::Clock>>) -> PyResult<Self> {
-        Ok(Box::new(HostSource::new(handle, |i| i.extract::<T>().map_err(Into::into), clock_or_ambient(clock))))
+        Ok(Box::new(super::HostSource::iterating(handle, Box::new(|i| i.extract::<T>().map_err(Into::into)), clock_or_ambient(clock))))
     }
 }
 
@@ -726,7 +677,7 @@ pub fn bind_host_provider(py: Python<'_>, obj: &Bound<'_, PyAny>, clock: &std::s
     if !obj.hasattr("_bind_session_clock")? {
         return Ok(());
     }
-    let handle = Bound::new(py, crate::SessionClock(std::sync::Arc::clone(clock)))?;
+    let handle = Bound::new(py, crate::utils::clock::SessionClock(std::sync::Arc::clone(clock)))?;
     obj.call_method1("_bind_session_clock", (handle,))?;
     Ok(())
 }

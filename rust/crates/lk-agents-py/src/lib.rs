@@ -16,7 +16,7 @@ use pyo3::prelude::*;
 extern crate lk_agents_inference as _;
 extern crate lk_agents_media as _;
 extern crate lk_agents_rtc as _;
-extern crate lk_agents_voice as _;
+
 extern crate lk_agents_worker as _;
 
 /// `init(role)` and the registration table.
@@ -24,6 +24,8 @@ pub mod loop_monitor;
 pub mod runtime;
 /// `Storage`, `ThreadDb`, `Lease`, `Streams`, `StreamReader`, `Registry` and the storage errors.
 pub mod storage;
+/// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over `lk-agents-voice`'s `NodeFactory`.
+pub mod nodes;
 /// `Thread`, `Turn` and `Boundary`: the run and the turn of `lk-agents-storage` over a Python host.
 pub mod turn;
 

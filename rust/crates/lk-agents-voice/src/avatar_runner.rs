@@ -4,35 +4,24 @@
 //! reported back.
 //!
 //! [`RunnerCore`] makes every decision as a state machine: `handle(event, now) -> effects`, no
-//! timers of its own. The frames are the host's ([`MediaRef`]): the core decides where each one
-//! goes, never what is in it. The I/O layer below it ([`AvatarIo::perform`] and the
-//! [`AvatarRunner`] queue owner) runs each [`IoOp`] against the host proxies and answers it with
-//! an [`Event`]; it decides nothing.
+//! timers of its own. The frames are plain records ([`AvatarFrame`], [`MediaFrame`]): the core
+//! decides where each one goes, never what is in it. The I/O layer below it ([`AvatarIo::perform`]
+//! and the [`AvatarRunner`] queue owner) runs each [`IoOp`] against the host proxies and answers it
+//! with an [`Event`]; it decides nothing.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{Clock, MediaRef, Spawner, SpawnerExt, TaskSet, Ts};
+pub use lk_agents_abi::utils::video::{AvatarFrame, MediaFrame};
+use lk_agents_abi::{Clock, Spawner, SpawnerExt, TaskSet, Ts};
 use lk_agents_rtc::{RoomEvent, RtcRoom};
 use tokio::sync::{mpsc, oneshot};
 
 const LOG: &str = "livekit.agents";
 
 // ----------------------------------------------------------------------------- the host's side
-
-/// What an avatar's audio receiver or video generator yields. The frames are the host's
-/// (`rtc.AudioFrame`, `rtc.VideoFrame`): the runner never reads one.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AvatarFrame {
-    /// An audio frame, and how long it plays.
-    Audio { frame: MediaRef, duration: f64 },
-    /// A video frame, or anything else that is neither audio nor a segment end.
-    Video(MediaRef),
-    /// `AudioSegmentEnd`.
-    SegmentEnd,
-}
 
 /// `AudioReceiver`: the agent's audio as the avatar worker receives it, and where its playback is
 /// reported. A host `AudioReceiver` carries this surface (`voice/avatar.py`).
@@ -58,7 +47,7 @@ pub trait AvatarAudioReceiver: Send + Sync {
 #[async_trait]
 pub trait AvatarVideoGenerator: Send + Sync {
     /// An audio frame, or `None` for `AudioSegmentEnd`.
-    async fn push_audio(&self, frame: Option<MediaRef>) -> Result<(), ProviderError>;
+    async fn push_audio(&self, frame: Option<MediaFrame>) -> Result<(), ProviderError>;
     async fn clear_buffer(&self) -> Result<(), ProviderError>;
     /// Begin iterating (`__aiter__`).
     async fn open_frames(&self) -> Result<(), ProviderError>;
@@ -74,7 +63,7 @@ pub trait AvatarMedia: Send + Sync {
     /// Publish the audio track, wait for its subscription, then publish the video track.
     async fn publish(&self) -> Result<(), ProviderError>;
     /// One frame into the synchronizer, which paces it out.
-    async fn push(&self, frame: MediaRef) -> Result<(), ProviderError>;
+    async fn push(&self, frame: MediaFrame) -> Result<(), ProviderError>;
     async fn aclose(&self) -> Result<(), ProviderError>;
 }
 
@@ -142,11 +131,11 @@ pub enum Event {
 pub enum IoOp {
     OpenAudio,
     NextAudio,
-    PushAudio(Option<MediaRef>),
+    PushAudio(Option<MediaFrame>),
     OpenFrames,
     NextFrame,
     Publish,
-    Push(MediaRef),
+    Push(MediaFrame),
     ReportStarted,
     ReportFinished { position: f64, interrupted: bool },
     ClearGenerator { clear: u64 },
@@ -208,7 +197,7 @@ pub struct RunnerCore {
     read: Pump,
     forward: Pump,
     /// The frame the forward loop holds while the tracks publish, and its duration if audio.
-    held: Option<(MediaRef, Option<f64>)>,
+    held: Option<(MediaFrame, Option<f64>)>,
     /// The audio frame being pushed, and its duration: reported once the push returns.
     pushing: Option<f64>,
     /// `_playback_position`, `_audio_playing`.
@@ -309,11 +298,11 @@ impl RunnerCore {
             Event::Audio(result) if !self.cut() => match result {
                 Ok(Some(item)) => {
                     let frame = match item {
-                        AvatarFrame::Audio { frame, .. } => {
+                        AvatarFrame::Audio(frame) => {
                             self.playing = true;
-                            Some(frame)
+                            Some(MediaFrame::Audio(frame))
                         }
-                        AvatarFrame::Video(frame) => Some(frame),
+                        AvatarFrame::Video(frame) => Some(MediaFrame::Video(frame)),
                         AvatarFrame::SegmentEnd => None,
                     };
                     out.push(Effect::Io(IoOp::PushAudio(frame)));
@@ -338,10 +327,13 @@ impl RunnerCore {
                     }
                     out.push(Effect::Io(IoOp::NextFrame));
                 }
-                Ok(Some(AvatarFrame::Audio { frame, duration })) => {
-                    self.forward(frame, Some(duration), &mut out)
+                Ok(Some(AvatarFrame::Audio(frame))) => {
+                    let duration = frame.duration();
+                    self.forward(MediaFrame::Audio(frame), Some(duration), &mut out)
                 }
-                Ok(Some(AvatarFrame::Video(frame))) => self.forward(frame, None, &mut out),
+                Ok(Some(AvatarFrame::Video(frame))) => {
+                    self.forward(MediaFrame::Video(frame), None, &mut out)
+                }
                 Ok(None) => self.loop_ended(false, Ok(()), &mut out),
                 Err(e) => self.loop_ended(false, Err(e), &mut out),
             },
@@ -464,7 +456,7 @@ impl RunnerCore {
     }
 
     /// A generated frame: publish the tracks first if they are not up.
-    fn forward(&mut self, frame: MediaRef, duration: Option<f64>, out: &mut Vec<Effect>) {
+    fn forward(&mut self, frame: MediaFrame, duration: Option<f64>, out: &mut Vec<Effect>) {
         if self.publish == Publish::Done {
             self.push(frame, duration, out);
             return;
@@ -476,7 +468,7 @@ impl RunnerCore {
         }
     }
 
-    fn push(&mut self, frame: MediaRef, duration: Option<f64>, out: &mut Vec<Effect>) {
+    fn push(&mut self, frame: MediaFrame, duration: Option<f64>, out: &mut Vec<Effect>) {
         self.forward = Pump::Busy;
         self.pushing = duration;
         out.push(Effect::Io(IoOp::Push(frame)));
@@ -710,33 +702,6 @@ impl AvatarRunner {
     #[host(method)]
     pub async fn aclose(&self) -> Result<(), RunnerError> {
         self.call(|call| Event::Close { call }).await
-    }
-}
-
-#[cfg(feature = "python")]
-mod python {
-    use pyo3::prelude::*;
-
-    use super::AvatarFrame;
-
-    /// What the receiver and the generator yield: an `AudioSegmentEnd`, an `rtc.AudioFrame`, or
-    /// anything else, which goes on as video (`_forward_video`'s `isinstance` tests).
-    impl<'a, 'py> FromPyObject<'a, 'py> for AvatarFrame {
-        type Error = PyErr;
-
-        fn extract(obj: pyo3::Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            let py = obj.py();
-            let end = py.import("livekit.agents.voice.avatar")?.getattr("AudioSegmentEnd")?;
-            if obj.is_instance(&end)? {
-                return Ok(AvatarFrame::SegmentEnd);
-            }
-            let frame = obj.extract::<lk_agents_abi::MediaRef>()?;
-            if obj.is_instance(&py.import("livekit.rtc")?.getattr("AudioFrame")?)? {
-                let duration = obj.getattr("duration")?.extract::<f64>()?;
-                return Ok(AvatarFrame::Audio { frame, duration });
-            }
-            Ok(AvatarFrame::Video(frame))
-        }
     }
 }
 

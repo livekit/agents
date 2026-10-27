@@ -216,8 +216,9 @@ fn kinds(items: &[Received]) -> Vec<String> {
     items
         .iter()
         .map(|i| match i {
-            Received::Frame(f) => format!("frame {}", f.samples_per_channel),
+            Received::Audio(f) => format!("frame {}", f.samples_per_channel),
             Received::SegmentEnd => "end".to_owned(),
+            Received::Video(_) => "video".to_owned(),
         })
         .collect()
 }

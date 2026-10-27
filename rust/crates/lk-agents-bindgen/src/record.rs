@@ -106,7 +106,8 @@ enum Body {
 }
 
 /// An arm of an untagged union: a member read by its own `FromPyObject`, `None`
-/// (`#[binding(none)]`), or anything left (`#[binding(rest)]`, the last arm).
+/// (`#[binding(none)]`), an instance of a host class (`#[binding(class = "module.Class")]`), or
+/// anything left (`#[binding(rest)]`, the last arm).
 struct Arm {
     ident: syn::Ident,
     fits: Fits,
@@ -115,6 +116,7 @@ struct Arm {
 enum Fits {
     Member(syn::Type),
     None,
+    Class { module: String, name: String },
     Rest,
 }
 
@@ -275,11 +277,16 @@ fn arms(e: &syn::DataEnum) -> syn::Result<Vec<Arm>> {
     let mut arms = Vec::new();
     for (i, v) in e.variants.iter().enumerate() {
         let vb = Metas::named(&v.attrs, "binding")?;
-        vb.only(&format!("#[binding] on {}", v.ident), &["none", "rest"])?;
+        vb.only(&format!("#[binding] on {}", v.ident), &["none", "rest", "class"])?;
         let last = i + 1 == e.variants.len();
+        let class = vb.text("class")?.and_then(|c| c.rsplit_once('.')).map(|(m, n)| (m.to_owned(), n.to_owned()));
         let fits = match &v.fields {
             syn::Fields::Unnamed(u) if u.unnamed.len() == 1 => Fits::Member(u.unnamed[0].ty.clone()),
             syn::Fields::Unit if vb.flag("none") => Fits::None,
+            syn::Fields::Unit if class.is_some() => {
+                let (module, name) = class.expect("checked");
+                Fits::Class { module, name }
+            }
             syn::Fields::Unit if vb.flag("rest") && last => Fits::Rest,
             syn::Fields::Unit if vb.flag("rest") => {
                 return Err(syn::Error::new_spanned(&v.ident, "`rest` takes what no arm before it fits: it is the last arm"));
@@ -287,7 +294,7 @@ fn arms(e: &syn::DataEnum) -> syn::Result<Vec<Arm>> {
             _ => {
                 return Err(syn::Error::new_spanned(
                     &v.ident,
-                    "an untagged arm carries one member, or is a unit marked #[binding(none)] or #[binding(rest)]",
+                    "an untagged arm carries one member, or is a unit marked #[binding(none)], #[binding(class = \"module.Class\")] or #[binding(rest)]",
                 ));
             }
         };
@@ -981,6 +988,9 @@ fn emit_untagged(r: &Record, arms: &[Arm]) -> TokenStream {
         match &a.fits {
             Fits::Member(_) => quote!(#ident::#ai(x) => ::pyo3::IntoPyObject::into_pyobject(x, py)?.into_any()),
             Fits::None | Fits::Rest => quote!(#ident::#ai => py.None().into_bound(py)),
+            Fits::Class { module, name } => {
+                quote!(#ident::#ai => py.import(#module)?.getattr(#name)?.call0()?)
+            }
         }
     });
     quote! {
@@ -1018,6 +1028,11 @@ fn extract_untagged(r: &Record, arms: &[Arm]) -> TokenStream {
             },
             Fits::None => quote! {
                 if obj.is_none() {
+                    return ::std::result::Result::Ok(#ident::#ai);
+                }
+            },
+            Fits::Class { module, name } => quote! {
+                if obj.is_instance(&obj.py().import(#module)?.getattr(#name)?)? {
                     return ::std::result::Result::Ok(#ident::#ai);
                 }
             },

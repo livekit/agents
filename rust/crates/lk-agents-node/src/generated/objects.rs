@@ -613,7 +613,7 @@ impl LlmResponseState {
 
 #[napi(js_name = "SessionClock")]
 pub struct SessionClock {
-    pub(crate) inner: lk_agents_abi::SessionClock,
+    pub(crate) inner: lk_agents_abi::utils::clock::SessionClock,
 }
 
 #[napi]
@@ -1533,6 +1533,38 @@ impl DataStreamAudioOutput {
     #[napi(getter, js_name = "sampleRate")]
     pub fn sample_rate(&self) -> Option<u32> {
         self.inner.sample_rate_for_host()
+    }
+}
+
+#[napi(js_name = "DataStreamAudioReceiver")]
+pub struct DataStreamAudioReceiver {
+    pub(crate) inner: std::sync::Arc<lk_agents_voice::avatar::DataStreamAudioReceiver>,
+}
+
+#[napi]
+impl DataStreamAudioReceiver {
+    #[napi(js_name = "start", ts_return_type = "Promise<void>")]
+    pub fn start<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+        let inner = std::sync::Arc::clone(&self.inner);
+        env.spawn_future_with_callback(async move { Ok(inner.start().await.map_err(crate::generated::errors::receiver_end_to_node)) }, |env, out| match out {
+            Ok(out) => Ok(()),
+            Err(e) => Err(e.into_napi(env)),
+        })
+    }
+
+    #[napi(js_name = "notifyPlaybackFinished")]
+    pub fn notify_playback_finished(&self, playback_position: f64, interrupted: bool) {
+        self.inner.notify_playback_finished(playback_position, interrupted);
+    }
+
+    #[napi(js_name = "notifyPlaybackStarted")]
+    pub fn notify_playback_started(&self) {
+        self.inner.notify_playback_started();
+    }
+
+    #[napi(js_name = "aclose")]
+    pub fn aclose(&self) {
+        self.inner.aclose();
     }
 }
 

@@ -9,8 +9,8 @@
 //! - the synchronizer plays audio back to back and blocks a push past its queue, and shows video
 //!   on the frame clock from a queue of `fps * queue` frames, as `rtc.AVSynchronizer` does.
 //!
-//! Frames are the host's: each is an entry in this worker's frame table, which a `MediaRef`
-//! releases when dropped, so a frame the runner keeps is an entry left at the close.
+//! Each frame carries its entry in this worker's frame table as its bytes, and the table watches
+//! the buffer, so a frame the runner keeps is an entry left at the close.
 //!
 //! The two rooms are relayed in the order the agent sent things over its data channel: a segment's
 //! chunks as they are written, a `lk.clear_buffer` between them, as a real room delivers them.
@@ -23,9 +23,10 @@ use std::{
 
 use async_trait::async_trait;
 use lk_agents_abi::{
-    Clock, MediaRef, RefRegistry, Ts,
+    AudioFrame, Clock, Ts,
     errors::{ApiError, ProviderError},
 };
+use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
 use lk_agents_rtc::{FakeRoom, ParticipantKind, Sent, StreamInfo};
 use lk_agents_voice::{
     avatar::{DataStreamAudioReceiver, RPC_CLEAR_BUFFER, Received, ReceiverEnd},
@@ -64,37 +65,48 @@ enum Entry {
     Generated { label: AvatarFrameLabel, ms: u64 },
 }
 
-/// The host's side table, for this worker's frames: an entry lives while a `MediaRef` holds it.
+/// This worker's frames: each frame's bytes are its id, and an entry lives while a frame still
+/// holds those bytes.
 #[derive(Default)]
 struct Frames {
-    entries: Mutex<(u64, HashMap<u64, Entry>)>,
-}
-
-impl RefRegistry for Frames {
-    fn release(&self, id: u64) {
-        self.entries.lock().unwrap().1.remove(&id);
-    }
+    entries: Mutex<(u64, HashMap<u64, (Entry, Weak<[u8]>)>)>,
 }
 
 impl Frames {
-    fn add(self: &Arc<Self>, entry: Entry) -> MediaRef {
-        let id = {
-            let mut entries = self.entries.lock().unwrap();
-            entries.0 += 1;
-            let id = entries.0;
-            entries.1.insert(id, entry);
-            id
-        };
-        let registry: Arc<dyn RefRegistry> = self.clone();
-        MediaRef::new(id, &registry)
+    /// The bytes of a new frame that stands for `entry`.
+    fn tag(&self, entry: Entry) -> Arc<[u8]> {
+        let mut entries = self.entries.lock().unwrap();
+        entries.0 += 1;
+        let id = entries.0;
+        let data: Arc<[u8]> = Arc::from(id.to_le_bytes().as_slice());
+        entries.1.insert(id, (entry, Arc::downgrade(&data)));
+        data
     }
 
-    fn get(&self, frame: &MediaRef) -> Option<Entry> {
-        self.entries.lock().unwrap().1.get(&frame.id()).copied()
+    /// Audio standing for `entry`: `samples` at `rate` (what it plays for), its bytes the tag.
+    fn audio(&self, entry: Entry, samples: u32, rate: u32) -> AudioFrame {
+        AudioFrame::new(self.tag(entry), rate, 1, samples)
+    }
+
+    fn video(&self, entry: Entry) -> VideoFrame {
+        let data = bytes::Bytes::from_owner(self.tag(entry));
+        VideoFrame { width: 1, height: 1, buffer_type: 0, data }
+    }
+
+    fn get(&self, data: &[u8]) -> Option<Entry> {
+        let id = u64::from_le_bytes(data.get(..8)?.try_into().ok()?);
+        self.entries.lock().unwrap().1.get(&id).map(|(entry, _)| *entry)
+    }
+
+    fn of(&self, frame: &MediaFrame) -> Option<Entry> {
+        match frame {
+            MediaFrame::Audio(f) => self.get(&f.data),
+            MediaFrame::Video(f) => self.get(&f.data),
+        }
     }
 
     fn left(&self) -> usize {
-        self.entries.lock().unwrap().1.len()
+        self.entries.lock().unwrap().1.values().filter(|(_, data)| data.strong_count() > 0).count()
     }
 }
 
@@ -137,7 +149,7 @@ impl AvatarAudioReceiver for Receiver {
 
     async fn next_audio(&self) -> Result<Option<AvatarFrame>, ProviderError> {
         match self.rx.recv().await {
-            Ok(Received::Frame(frame)) => {
+            Ok(Received::Audio(frame)) => {
                 let segment = {
                     let mut segment = self.segment.lock().unwrap();
                     segment.1 = true;
@@ -150,16 +162,18 @@ impl AvatarAudioReceiver for Receiver {
                     samples: frame.samples_per_channel,
                     rate: frame.sample_rate,
                 };
-                Ok(Some(AvatarFrame::Audio {
-                    frame: self.frames.add(entry),
-                    duration: frame.duration(),
-                }))
+                Ok(Some(AvatarFrame::Audio(self.frames.audio(
+                    entry,
+                    frame.samples_per_channel,
+                    frame.sample_rate,
+                ))))
             }
             Ok(Received::SegmentEnd) => {
                 record(&self.log, &self.stamps, AvatarStep::ReceivedEnd);
                 self.next_segment();
                 Ok(Some(AvatarFrame::SegmentEnd))
             }
+            Ok(Received::Video(_)) => Err(ProviderError::Local(ApiError::new("video from the receiver"))),
             Err(ReceiverEnd::Closed) => Ok(None),
             Err(e) => Err(ProviderError::Local(ApiError::new(format!("{e:?}")))),
         }
@@ -200,7 +214,7 @@ enum Buffered {
 struct GenState {
     buffer: VecDeque<Buffered>,
     /// What the last tick generated and the runner has not taken yet.
-    ready: VecDeque<(Option<MediaRef>, Option<AvatarFrameLabel>, Option<u64>, Option<u32>)>,
+    ready: VecDeque<(Option<AvatarFrame>, Option<AvatarFrameLabel>, Option<u32>)>,
     next_tick_ms: Option<u64>,
     tick: u64,
     /// The segment of the last audio pushed: what a segment end ends.
@@ -226,7 +240,7 @@ impl Generator {
     fn tick(
         &self,
         state: &mut GenState,
-    ) -> Vec<(Option<MediaRef>, Option<AvatarFrameLabel>, Option<u64>, Option<u32>)> {
+    ) -> Vec<(Option<AvatarFrame>, Option<AvatarFrameLabel>, Option<u32>)> {
         let tick = state.tick;
         state.tick += 1;
         let (mut taken, mut rate, mut segment, mut from) = (0u32, 0u32, None, None::<Observed>);
@@ -253,26 +267,19 @@ impl Generator {
         }
         let mut out = Vec::new();
         let video = AvatarFrameLabel { video: true, tick, segment, from };
-        out.push((
-            Some(self.frames.add(Entry::Generated { label: video, ms: 0 })),
-            Some(video),
-            None,
-            None,
-        ));
+        let frame = self.frames.video(Entry::Generated { label: video, ms: 0 });
+        out.push((Some(AvatarFrame::Video(frame)), Some(video), None));
         if taken > 0 {
             let audio = AvatarFrameLabel { video: false, ..video };
             let ms = u64::from(taken) * 1000 / u64::from(rate.max(1));
-            out.push((
-                Some(self.frames.add(Entry::Generated { label: audio, ms })),
-                Some(audio),
-                Some(ms),
-                None,
-            ));
+            // at 1 kHz, a sample per millisecond: the frame plays `ms`
+            let frame = self.frames.audio(Entry::Generated { label: audio, ms }, ms as u32, 1000);
+            out.push((Some(AvatarFrame::Audio(frame)), Some(audio), None));
         }
         if matches!(state.buffer.front(), Some(Buffered::End)) {
             state.buffer.pop_front();
             if let Some(segment) = state.last_segment {
-                out.push((None, None, None, Some(segment)));
+                out.push((None, None, Some(segment)));
             }
         }
         out
@@ -298,9 +305,9 @@ impl Generator {
 
 #[async_trait]
 impl AvatarVideoGenerator for Generator {
-    async fn push_audio(&self, frame: Option<MediaRef>) -> Result<(), ProviderError> {
+    async fn push_audio(&self, frame: Option<MediaFrame>) -> Result<(), ProviderError> {
         let mut state = self.state.lock().unwrap();
-        match frame.as_ref().and_then(|f| self.frames.get(f)) {
+        match frame.as_ref().and_then(|f| self.frames.of(f)) {
             Some(Entry::Received { segment, from, samples, rate }) => {
                 state.last_segment = Some(segment);
                 state.buffer.push_back(Buffered::Audio { segment, from, samples, rate });
@@ -328,17 +335,12 @@ impl AvatarVideoGenerator for Generator {
                 if state.closed {
                     state.pulls_after_close += 1;
                 }
-                if let Some((frame, label, ms, end)) = state.ready.pop_front() {
+                if let Some((frame, label, end)) = state.ready.pop_front() {
                     drop(state);
                     return Ok(Some(match (frame, label) {
                         (Some(frame), Some(label)) => {
                             record(&self.log, &self.stamps, AvatarStep::Generated(label));
-                            match ms {
-                                Some(ms) => {
-                                    AvatarFrame::Audio { frame, duration: ms as f64 / 1000.0 }
-                                }
-                                None => AvatarFrame::Video(frame),
-                            }
+                            frame
                         }
                         _ => {
                             let segment = end.unwrap_or_default();
@@ -391,9 +393,9 @@ impl AvatarMedia for Synchronizer {
         Ok(())
     }
 
-    async fn push(&self, frame: MediaRef) -> Result<(), ProviderError> {
+    async fn push(&self, frame: MediaFrame) -> Result<(), ProviderError> {
         let at = self.stamps.next();
-        let Some(Entry::Generated { label, ms }) = self.frames.get(&frame) else {
+        let Some(Entry::Generated { label, ms }) = self.frames.of(&frame) else {
             return Ok(());
         };
         // When the push returns (a full queue holds it) and when the frame plays, decided now:

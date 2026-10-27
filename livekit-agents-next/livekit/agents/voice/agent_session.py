@@ -54,6 +54,7 @@ from ..types import (
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
+    TimedString,
 )
 from ..utils.misc import is_dev_mode, is_given, is_hosted
 from . import io
@@ -467,6 +468,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
             keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
             **{node: frame[node] for node in _NODES if node in frame},
+            # built once, over the session's text and audio legs
+            **self._nodes(agent, ("transcription_node", "realtime_audio_output_node")),
             remote_session=SessionPort(self) if hosting else None,
             console=console,
             # the core connects the job's room beside its opening
@@ -737,10 +740,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 frame[leg] = _bindings.core_leg(value)
         return {**frame, **self._nodes(agent)}
 
-    def _nodes(self, agent: Agent) -> dict[str, Any]:
-        """The nodes ``agent`` overrides, as the core opens them over each provider, each call in
-        the agent's binding."""
-        overridden = [n for n in _NODES if getattr(type(agent), n) is not getattr(Agent, n)]
+    def _nodes(
+        self, agent: Agent, names: tuple[str, ...] = ("llm_node", "tts_node", "stt_node")
+    ) -> dict[str, Any]:
+        """The nodes among ``names`` that ``agent`` overrides, as the core opens them, each call
+        in the agent's binding."""
+        overridden = [n for n in names if getattr(type(agent), n) is not getattr(Agent, n)]
         if not overridden:
             return {}
         context = contextvars.copy_context()
@@ -1148,9 +1153,9 @@ _NODES = ("llm_node", "tts_node", "stt_node")
 
 
 class _AgentNodes:
-    """An agent's overridden ``llm_node``, ``tts_node`` and ``stt_node`` as the core calls them
-    (``_core.AgentNodes``), in the agent's binding: one completion, one spoken segment, one
-    recognition stream. The core feeds what they read and drains what they return."""
+    """An agent's overridden nodes as the core calls them (``_core.AgentNodes``), in the agent's
+    binding: one completion, one spoken segment, one recognition stream, one segment's transcript,
+    one realtime generation's audio. The core feeds what they read and drains what they return."""
 
     def __init__(self, agent: Agent) -> None:
         self._agent = agent
@@ -1166,6 +1171,12 @@ class _AgentNodes:
 
     def stt(self, audio: AsyncIterable[rtc.AudioFrame]) -> Any:
         return self._agent.stt_node(audio, ModelSettings())
+
+    def transcription(self, text: AsyncIterable[str | TimedString]) -> Any:
+        return self._agent.transcription_node(text, ModelSettings())
+
+    def realtime_audio(self, audio: AsyncIterable[rtc.AudioFrame]) -> Any:
+        return self._agent.realtime_audio_output_node(audio, ModelSettings())
 
 
 _HANDLERS: dict[str, Callable[[VoiceSession[Any], dict[str, Any]], None]] = {
