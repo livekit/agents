@@ -95,6 +95,7 @@ table! { RealtimeEvents:
     event::ChatCtxUpdated => Covered("conversation.item.added / deleted answering an update");
     event::Disconnected => Skipped("a host session's; the native session reconnects and reports a lost connection as Error");
     event::SessionReconnected => Covered("a connection the session opened again");
+    event::SessionSwapped => Skipped("the fallback adapter's; the fakes run one native session");
     event::Metrics => Covered("response.done usage, transcription usage");
     event::ConnectionAcquired => Covered("a connection opened");
     event::Error => Covered("error, a failed connection");

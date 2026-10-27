@@ -77,14 +77,14 @@ pub fn merge_capabilities(
 // The adapter's session: `_FallbackRealtimeSession`
 // ---------------------------------------------------------------------------------------------
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::fallback::AvailabilityChanged;
 use lk_agents_abi::llm::realtime::{
-    Event, GenerateReply, GenerationDone, GenerationStatus, HostRealtime, HostRealtimeModel,
-    MessageDone, MessageModalities, Modalities, RealtimeModelError, SessionReconnected, TokenUsage,
+    Event, GenerationDone, GenerationStatus, HostRealtime, HostRealtimeModel, MessageDone,
+    MessageModalities, Modalities, RealtimeModelError, TokenUsage,
 };
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 
@@ -131,8 +131,9 @@ impl RealtimeChild {
 }
 
 /// `RealtimeModelFallbackAdapter`: falls back between realtime models (or restarts one),
-/// preserving the conversation. A swap is reported as `SessionReconnected`, so the session replays
-/// its frame onto the new model; a reply cut by the swap is asked for again.
+/// preserving the conversation. A swap is reported as `SessionSwapped`: the driver cuts what was
+/// playing, gives the new model its frame (instructions, the conversation the caller heard,
+/// tools), and asks again for a reply the swap cut (`_swap`).
 pub struct RealtimeFallbackModel {
     children: Vec<RealtimeChild>,
     caps: RealtimeCapabilities,
@@ -217,11 +218,10 @@ impl Realtime for RealtimeFallbackModel {
                 active: first,
                 policy: RealtimePolicy::new(self.children.len(), std::time::Duration::from_secs_f64(self.cooldown.max(0.0))),
                 swapping: false,
-                queued: Vec::new(),
+                fresh: false,
+                held: Vec::new(),
                 events: VecDeque::new(),
                 generation: None,
-                own: HashSet::new(),
-                regenerate: false,
                 closed: false,
             }),
             restart_tx,
@@ -243,16 +243,15 @@ struct OpenGeneration {
 struct SessionState {
     active: Arc<dyn RealtimeSession>,
     policy: RealtimePolicy,
-    /// Audio and video are dropped during a swap: replaying them would lag the model.
+    /// The old session is closing and the new one opening: everything sent names the old one, or
+    /// is superseded by the frame the driver gives the new one, and is dropped (audio would lag).
     swapping: bool,
-    /// Other commands sent during a swap, for the new session.
-    queued: Vec<RealtimeCommand>,
+    /// The new session waits for its frame, which ends with the tools: the requests asked
+    /// meanwhile are held until then, so none reaches a model without its conversation.
+    fresh: bool,
+    held: Vec<RealtimeCommand>,
     events: VecDeque<Event>,
     generation: Option<OpenGeneration>,
-    /// The replies this adapter asked for itself: the session sees them as the server's.
-    own: HashSet<String>,
-    /// Ask for a reply once the session has replayed its frame onto the new model.
-    regenerate: bool,
     closed: bool,
 }
 
@@ -290,8 +289,8 @@ impl FallbackSession {
     }
 
     /// The generation a dead session leaves open, closed as the child would on its close.
-    fn close_generation(&self, st: &mut SessionState) -> bool {
-        let Some(g) = st.generation.take() else { return false };
+    fn close_generation(&self, st: &mut SessionState) {
+        let Some(g) = st.generation.take() else { return };
         let modalities = if self.caps.audio_output { Modalities::AudioAndText } else { Modalities::TextOnly };
         let response_id = Some(g.response_id.clone());
         for (message_id, settled) in g.messages {
@@ -309,17 +308,18 @@ impl FallbackSession {
             status: GenerationStatus::Cancelled,
             usage: TokenUsage::default(),
         }));
-        true
     }
 
     /// `_swap`: close the active child, bring up `target` (cascading to the next available model
     /// on failure), hand it what was sent meanwhile, and report the reconnect.
     async fn swap(&self, mut target: usize) {
-        let (old, was_generating) = {
+        let old = {
             let mut st = self.lock();
             st.swapping = true;
-            let was = self.close_generation(&mut st);
-            (Arc::clone(&st.active), was)
+            st.fresh = true;
+            st.held.clear();
+            self.close_generation(&mut st);
+            Arc::clone(&st.active)
         };
         old.aclose().await;
         let opened = loop {
@@ -346,14 +346,10 @@ impl FallbackSession {
         st.swapping = false;
         match opened {
             Ok(session) => {
-                for cmd in std::mem::take(&mut st.queued) {
-                    session.send(cmd);
-                }
                 st.active = session;
                 st.policy.set_active_index(target);
                 self.model_active.store(target, std::sync::atomic::Ordering::Relaxed);
-                st.events.push_back(Event::SessionReconnected(SessionReconnected {}));
-                st.regenerate = was_generating && self.regenerate_on_swap;
+                st.events.push_back(Event::SessionSwapped { regenerate: self.regenerate_on_swap });
             }
             // Every model failed to start: escalate so the session closes.
             Err(e) => {
@@ -369,22 +365,18 @@ impl FallbackSession {
         }
     }
 
-    /// Track the generation in flight, and present this adapter's own replies as the server's.
-    fn observe(&self, st: &mut SessionState, ev: Event) -> Option<Event> {
+    /// Track the generation in flight, so a swap can close it.
+    fn observe(&self, st: &mut SessionState, ev: Event) -> Event {
         match ev {
-            Event::GenerationCreated(mut g) => {
+            Event::GenerationCreated(g) => {
                 st.generation = Some(OpenGeneration { response_id: g.response_id.clone(), messages: Vec::new() });
-                if g.req_id.as_ref().is_some_and(|id| st.own.remove(id)) {
-                    g.req_id = None;
-                }
-                Some(Event::GenerationCreated(g))
+                Event::GenerationCreated(g)
             }
-            Event::GenerateReplyFailed(f) if st.own.remove(&f.req_id) => None,
             Event::MessageStarted(m) => {
                 if let Some(g) = st.generation.as_mut() {
                     g.messages.push((m.message_id.clone(), false));
                 }
-                Some(Event::MessageStarted(m))
+                Event::MessageStarted(m)
             }
             Event::MessageModalities(m) => {
                 if let Some(g) = st.generation.as_mut()
@@ -392,19 +384,19 @@ impl FallbackSession {
                 {
                     entry.1 = true;
                 }
-                Some(Event::MessageModalities(m))
+                Event::MessageModalities(m)
             }
             Event::MessageDone(m) => {
                 if let Some(g) = st.generation.as_mut() {
                     g.messages.retain(|(id, _)| *id != m.message_id);
                 }
-                Some(Event::MessageDone(m))
+                Event::MessageDone(m)
             }
             Event::GenerationDone(d) => {
                 st.generation = None;
-                Some(Event::GenerationDone(d))
+                Event::GenerationDone(d)
             }
-            other => Some(other),
+            other => other,
         }
     }
 }
@@ -421,25 +413,28 @@ impl RealtimeSession for FallbackSession {
         if st.closed {
             return;
         }
-        if st.swapping {
-            match cmd {
-                RealtimeCommand::PushAudio(_) | RealtimeCommand::PushItem(_) => {}
-                // Dropped: the swap replays the conversation afterwards. Answered, so the
-                // session does not wait out its timeout.
-                RealtimeCommand::UpdateChatCtx(c) => {
-                    st.events.push_back(Event::ChatCtxUpdated { req_id: c.req_id, rejected: vec![] });
-                }
-                other => st.queued.push(other),
-            }
-            return;
+        if !st.swapping && !st.fresh {
+            return st.active.send(cmd);
         }
-        let replayed_tools = matches!(cmd, RealtimeCommand::UpdateTools(_));
-        st.active.send(cmd);
-        // The replay ends with the tools: re-issue the reply the swap cut.
-        if replayed_tools && std::mem::take(&mut st.regenerate) {
-            let req_id = crate::ids::shortuuid("response_create_");
-            st.own.insert(req_id.clone());
-            st.active.send(RealtimeCommand::GenerateReply(GenerateReply { req_id, instructions: None, tool_choice: None }));
+        match cmd {
+            // The frame, onto the new session; the tools end it, and what was held goes after.
+            RealtimeCommand::UpdateInstructions(_) | RealtimeCommand::UpdateChatCtx(_)
+                if !st.swapping =>
+            {
+                st.active.send(cmd)
+            }
+            RealtimeCommand::UpdateTools(_) if !st.swapping => {
+                st.active.send(cmd);
+                st.fresh = false;
+                for held in std::mem::take(&mut st.held) {
+                    st.active.send(held);
+                }
+            }
+            RealtimeCommand::GenerateReply(_) | RealtimeCommand::Say(_) => st.held.push(cmd),
+            RealtimeCommand::CancelReply(c) => st.held.retain(|h| h.req_id() != Some(&c.req_id)),
+            // The old session's (an interrupt, a truncation, its audio), or superseded by the
+            // frame (a pushed item is in the conversation the driver gives).
+            _ => {}
         }
     }
 
@@ -484,11 +479,7 @@ impl RealtimeSession for FallbackSession {
                         None => return Some(Event::Error(e)),
                     }
                 }
-                Some(ev) => {
-                    if let Some(ev) = self.observe(&mut self.lock(), ev) {
-                        return Some(ev);
-                    }
-                }
+                Some(ev) => return Some(self.observe(&mut self.lock(), ev)),
             }
         }
     }
@@ -725,8 +716,8 @@ mod fallback_session_tests {
     }
 
     // Catches: a fatal child error passed on as fatal while a fallback exists, the dead child's
-    // open generation left open, no reconnect for the session to replay onto, or the cut reply
-    // not asked for again after the replay (and surfacing as an answer to an unknown request).
+    // open generation left open, a swap reported as a reconnect (the driver then gives the new
+    // model nothing), or a request reaching the new model before its frame.
     #[tokio::test]
     async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_again() {
         let primary = scripted(vec![
@@ -772,27 +763,24 @@ mod fallback_session_tests {
                 "MessageModalities",
                 "MessageDone",
                 "GenerationDone",
-                "SessionReconnected"
+                "SessionSwapped"
             ]
         );
         assert!(primary.closed.load(std::sync::atomic::Ordering::Acquire));
         assert_eq!(*changes.lock().unwrap(), [(0, false)]);
         assert_eq!(model.active_index(), 1);
 
-        // The session replays its frame; the tools end it, and the reply goes again.
+        // A reply asked before the driver gave the frame waits for it; the tools end the frame.
+        let ask = |id: &str| {
+            RealtimeCommand::GenerateReply(lk_agents_abi::GenerateReply { req_id: id.into(), instructions: None, tool_choice: None })
+        };
+        session.send(ask("early"));
+        session.send(RealtimeCommand::Interrupt(lk_agents_abi::llm::realtime::Interrupt { response_id: Some("r1".into()) }));
+        assert!(backup.sent.lock().unwrap().is_empty(), "nothing reaches the new model before its frame");
         session.send(RealtimeCommand::UpdateInstructions(lk_agents_abi::UpdateInstructions { instructions: "hi".into() }));
         session.send(RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools { tools: vec![] }));
+        session.send(ask("late"));
         let sent = backup.sent.lock().unwrap().clone();
-        assert_eq!(sent[..2], ["UpdateInstructions".to_owned(), "UpdateTools".to_owned()]);
-        let req_id = sent[2].strip_prefix("generate_reply:").expect("the reply is asked for again").to_owned();
-
-        backup.events.lock().unwrap().push_back(Event::GenerationCreated(GenerationCreated {
-            response_id: "r2".into(),
-            req_id: Some(req_id),
-        }));
-        match session.next_event().await.unwrap() {
-            Event::GenerationCreated(g) => assert_eq!(g.req_id, None, "the session sees the server's reply"),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(sent, ["UpdateInstructions", "UpdateTools", "generate_reply:early", "generate_reply:late"]);
     }
 }

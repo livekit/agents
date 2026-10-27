@@ -394,6 +394,13 @@ pub enum Event {
     },
 
     SessionReconnected(SessionReconnected),
+    /// A new session replaced the one that failed or was restarted (the fallback adapter's
+    /// swap): it holds no instructions, conversation or tools until the driver gives it its frame,
+    /// and takes no request before. `regenerate`: ask again for a reply the swap cut.
+    #[binding(skip)]
+    SessionSwapped {
+        regenerate: bool,
+    },
     /// The host session's `metrics_collected`, and the native session's measurements.
     Metrics(RealtimeMetrics),
     /// `metrics_collected` with zero usage: `_report_connection_acquired`.

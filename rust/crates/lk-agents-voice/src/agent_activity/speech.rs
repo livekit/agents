@@ -1027,6 +1027,8 @@ impl Driver {
         self.activity.finished.insert(speech);
         self.publish_activity();
         self.speech_finished(now, speech, out);
+        // A realtime session swapped meanwhile gets its frame once what it cut is released.
+        self.realtime_replay(now, Some(speech), out);
     }
 
     /// `_update_agent_state(next)`: the one door for agent-state writes, reading the audio-output

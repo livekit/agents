@@ -17,6 +17,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::realtime::{
     Event, PushAudio, RealtimeCapabilities, RealtimeCommand, RealtimeError, RealtimeSession,
 };
+use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
     AudioFrame, ChatMessage, Role, Spawner, StreamSink, ToolChoice, Ts,
     llm::realtime as rt,
@@ -25,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use realtime_state::{Pending, Reuse, Route, bare_reply, response_id_of};
+use realtime_state::{Pending, Reuse, Route, Swap, bare_reply, response_id_of};
 pub use realtime_state::{RealtimeSessionState, Request, RequestKey, Settled};
 
 /// The realtime requests' state, behind its methods.
@@ -48,6 +49,9 @@ pub(crate) mod realtime_state {
         open: Vec<Open>,
         /// Every generation this session closed; their late deltas are dropped silently.
         closed: BTreeSet<String>,
+        /// A new session took over (`SessionSwapped`): it gets its frame once the speeches the
+        /// swap cut are released, so the conversation it is given holds what the caller heard.
+        pub(super) swap: Option<Swap>,
         /// Tools ran on a self-replying model: its next server-initiated generation is the
         /// follow-up, awaited under the timer keyed here.
         pub(super) auto_follow_up: Option<(Reuse, RequestKey)>,
@@ -76,6 +80,14 @@ pub(crate) mod realtime_state {
         pub fn new(caps: RealtimeCapabilities) -> Self {
             RealtimeSessionState { caps, ..RealtimeSessionState::default() }
         }
+    }
+
+    /// A swap's frame, owed to the new session.
+    pub(super) struct Swap {
+        /// The speeches the swap cut that are not released yet.
+        pub(super) waiting: BTreeSet<SpeechId>,
+        /// Ask again for the reply the swap cut.
+        pub(super) regenerate: bool,
     }
 
     /// The timer set cannot key on a `String`.
@@ -615,6 +627,7 @@ impl Driver {
             // itself (`_reconnect`); replaying them again from here re-created every item the
             // replay had just restored, which the server refuses (`item_create_duplicate_item_id`).
             Event::SessionReconnected(_) => {}
+            Event::SessionSwapped { regenerate } => self.on_session_swapped(now, regenerate, out),
             Event::Error(err) => self.on_realtime_error(now, err, out),
         }
     }
@@ -1094,6 +1107,43 @@ impl Driver {
         }
         if close {
             self.close_on_realtime_failure(now, out);
+        }
+    }
+
+    /// `_swap`: a new session holds nothing. What plays is cut (`interrupt(force=True)`), so what
+    /// the caller heard is committed; the new session is given the frame once those speeches are
+    /// released, and a reply in progress is asked for again.
+    fn on_session_swapped(&mut self, now: Ts, regenerate: bool, out: &mut Out) {
+        if self.activity.realtime_state.closing || self.activity.realtime_state.ended() {
+            return;
+        }
+        let state = self.session.states.agent_state();
+        let busy = matches!(state, AgentState::Speaking | AgentState::Thinking);
+        let cut = self.interrupt_all(now, true, InterruptCause::Host, out).unwrap_or_default();
+        let waiting = cut.into_iter().filter(|s| self.activity.speech_scheduler.contains(*s)).collect();
+        self.activity.realtime_state.swap = Some(Swap { waiting, regenerate: regenerate && busy });
+        self.realtime_replay(now, None, out);
+    }
+
+    /// The swap's frame goes to the new session once the last speech it cut (`released`) is
+    /// released.
+    pub(crate) fn realtime_replay(&mut self, now: Ts, released: Option<SpeechId>, out: &mut Out) {
+        let t = &mut self.activity.realtime_state;
+        let Some(swap) = t.swap.as_mut() else { return };
+        if let Some(speech) = released {
+            swap.waiting.remove(&speech);
+        }
+        if !swap.waiting.is_empty() {
+            return;
+        }
+        let regenerate = t.swap.take().is_some_and(|s| s.regenerate);
+        if t.closing || t.ended() {
+            return;
+        }
+        self.push_activity(Some(self.session.chat_ctx.for_realtime()), out);
+        if regenerate {
+            let request = Request::GenerateReply { instructions: None, tool_choice: None, read_back: false };
+            self.realtime_request(now, request, None, None, out);
         }
     }
 
