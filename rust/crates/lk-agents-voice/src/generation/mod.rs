@@ -781,10 +781,8 @@ pub enum GenEvent {
         speech: SpeechId,
         /// `Source::{ToolCall, ToolOutput}` carry it.
         step: u32,
-        commit: Vec<lk_agents_abi::ChatItem>,
-        executed: Option<Box<crate::tool_executor::ToolsExecutedEvent>>,
-        warnings: Vec<crate::tool_executor::StepWarning>,
-        /// With `executed`: the step waits here for the event's handlers (a host round trip).
+        tools: crate::tool_executor::StepTools,
+        /// With `tools.executed`: the step waits here for the event's handlers (a host round trip).
         verdict: Option<tokio::sync::oneshot::Sender<crate::tool_executor::ToolsVerdict>>,
     },
 

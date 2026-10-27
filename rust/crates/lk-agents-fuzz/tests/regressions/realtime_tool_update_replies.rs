@@ -50,9 +50,13 @@ fn a_detached_realtime_tool_is_answered_on_the_socket() {
         Input::PlayoutFinished { segment: Ref::new(2) },
         Input::Advance { ms: Millis(100) },
         // News from the background, then its end, once the agent is idle.
-        Input::ToolUpdate { tool: Ref::new(0), progress: Some(AgentText("It shipped.".into())) },
+        Input::ToolUpdate {
+            tool: Ref::new(0),
+            progress: Some(AgentText("It shipped.".into())),
+            end: ToolAnswer::Return,
+        },
         Input::Advance { ms: Millis(100) },
-        Input::ToolUpdate { tool: Ref::new(0), progress: None },
+        Input::ToolUpdate { tool: Ref::new(0), progress: None, end: ToolAnswer::Return },
         Input::Advance { ms: Millis(1_000) },
     ];
     let run = simulate(async {

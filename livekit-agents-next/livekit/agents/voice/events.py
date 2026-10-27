@@ -288,7 +288,8 @@ class RunContext(Generic[Context_T]):
         if not self._first_update.done():
             self._first_update.set_result((rendered, raw))
             return
-        self.session._core.tool_update(fnc_call.call_id, "progress", message=rendered, raw=raw)
+        update = {"kind": "update", "text": rendered, "raw": raw}
+        self.session._core.tool_update(fnc_call.call_id, update)
 
 
 EventTypes = Literal[

@@ -291,6 +291,7 @@ impl DriverBuilder {
             keyterms: tokio::sync::watch::channel(None).0,
             scheduling: tokio::sync::watch::channel(Default::default()).0,
             journal: self.journal.clone(),
+            approvals: Default::default(),
         })
     }
 

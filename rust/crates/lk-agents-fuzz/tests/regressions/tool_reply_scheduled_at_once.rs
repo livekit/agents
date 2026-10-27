@@ -43,11 +43,19 @@ fn a_second_tool_update_reply_is_authorized_at_once() {
         Input::PlayoutFinished { segment: Ref::new(1) },
         Input::Advance { ms: Millis(1_000) },
         // The first news, with the agent idle: its reply plays.
-        Input::ToolUpdate { tool: Ref::new(0), progress: Some(AgentText("Found it.".into())) },
+        Input::ToolUpdate {
+            tool: Ref::new(0),
+            progress: Some(AgentText("Found it.".into())),
+            end: ToolAnswer::Return,
+        },
         Input::Advance { ms: Millis(3_000) },
         Input::PlayoutStarted { segment: Ref::new(2) },
         // The second news lands while that reply plays, and waits for it to end.
-        Input::ToolUpdate { tool: Ref::new(0), progress: Some(AgentText("It shipped.".into())) },
+        Input::ToolUpdate {
+            tool: Ref::new(0),
+            progress: Some(AgentText("It shipped.".into())),
+            end: ToolAnswer::Return,
+        },
         Input::Advance { ms: Millis(100) },
         Input::PlayoutFinished { segment: Ref::new(2) },
         Input::Advance { ms: Millis(20_000) },

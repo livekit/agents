@@ -389,9 +389,20 @@ pub enum FillerSource {
 pub enum ToolUpdate {
     /// `raw` as written; `message` rendered by the host.
     Progress { message: String, raw: String },
-    /// Decided like a blocking tool's, except an `Agent` is refused and a silent return voices
-    /// nothing.
-    Final { answer: crate::tool_executor::ToolAnswer },
+    /// Decided like a blocking tool's, except a silent return voices nothing.
+    Final { report: crate::tool_executor::ToolReport },
+}
+
+impl From<crate::tool_executor::ToolReport> for ToolUpdate {
+    /// A later `ctx.update()` is progress; any other outcome is the tool's end.
+    fn from(report: crate::tool_executor::ToolReport) -> Self {
+        match report.outcome {
+            crate::tool_executor::ToolOutcome::Update { message, raw } => {
+                ToolUpdate::Progress { message, raw }
+            }
+            _ => ToolUpdate::Final { report },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

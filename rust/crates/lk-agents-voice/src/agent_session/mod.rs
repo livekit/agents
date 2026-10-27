@@ -408,6 +408,9 @@ pub struct SessionShared {
     pub keyterms: tokio::sync::watch::Sender<Option<Vec<String>>>,
     /// A task's steps reach the loop's journal only when one is observed.
     pub journal: crate::trace::Journal,
+    /// The approval record: calls marked `lk.approval` (committed, or granted and not yet
+    /// committed) and their outputs, every agent's (`tool_executor::grant`).
+    pub approvals: std::sync::Mutex<Vec<lk_agents_abi::ChatItem>>,
 }
 
 impl SessionShared {

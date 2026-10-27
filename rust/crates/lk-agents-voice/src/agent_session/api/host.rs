@@ -999,32 +999,15 @@ impl SessionApi {
         Ok(self.send(ActivityCommand::SetIoEnabled { leg, enabled })?)
     }
 
-    /// `RunContext.update()` after the first, or a detached tool's return. `kind` is `"progress"`
-    /// or `"final"`.
-    #[host(method(kw_only = "message"))]
+    /// `RunContext.update()` after the first (an `update` outcome), or a detached tool's end
+    /// (any other).
+    #[host(method)]
     pub fn tool_update(
         &self,
         call_id: String,
-        kind: &str,
-        message: Option<String>,
-        raw: Option<String>,
-        answer: Option<crate::tool_executor::ToolAnswer>,
+        report: crate::tool_executor::ToolReport,
     ) -> Result<(), CommandRefused> {
-        let missing = |what: &str| CommandRefused::Invalid(what.to_owned());
-        let update = match kind {
-            "progress" => ToolUpdate::Progress {
-                message: message.ok_or_else(|| missing("a progress update carries `message`"))?,
-                raw: raw.ok_or_else(|| missing("a progress update carries `raw`"))?,
-            },
-            "final" => ToolUpdate::Final {
-                answer: answer.ok_or_else(|| missing("a final update carries `answer`"))?,
-            },
-            other => {
-                return Err(CommandRefused::Invalid(format!(
-                    "tool_update kind must be \"progress\" or \"final\", got {other:?}"
-                )));
-            }
-        };
+        let update = ToolUpdate::from(report);
         let origin = Origin::Tool { call_id: call_id.clone() };
         Ok(self.send_from(origin, SpeechCommand::ToolUpdate { call_id, update })?)
     }

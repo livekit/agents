@@ -1336,7 +1336,8 @@ impl Talk {
                 if self.run.tool_detached(tool) {
                     // A detached tool speaks again through the host, and ends on a final update.
                     let progress = self.draw::<Option<AgentText>>();
-                    rows.push(Input::ToolUpdate { tool: Ref::new(tool), progress });
+                    let end = self.draw::<ToolAnswer>();
+                    rows.push(Input::ToolUpdate { tool: Ref::new(tool), progress, end });
                     continue;
                 }
                 if self.rng.u8(0..100) < self.host.fillers {

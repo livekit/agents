@@ -550,12 +550,46 @@ impl Driver {
             .speech()
             .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))
             .unwrap_or_else(|| self.activity.agent.clone());
+        let mut item = item;
+        {
+            let record =
+                self.shared.approvals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            crate::tool_executor::mark_granted(&record, &mut item);
+        }
         let commit = self.session.chat_ctx.commit(item, source, visibility, &agent);
         self.perform_commit(commit, out);
     }
 
+    fn note_approval(&self, item: &ChatItem) {
+        let mut record =
+            self.shared.approvals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::tool_executor::note_approval(&mut record, item);
+    }
+
+    /// An item on the record changed in place (an answered `InputRequired`'s output): the host
+    /// is told again, under the item's own id, source and agent.
+    pub(crate) fn replace_item(&mut self, item: ChatItem, out: &mut Out) {
+        let Some(entry) = self.session.chat_ctx.entry(item.id()) else { return };
+        let (source, visibility, agent) =
+            (entry.source.clone(), entry.visibility, entry.agent.clone());
+        let (entry, _) = self.session.chat_ctx.commit(item, source, visibility, &agent);
+        self.note_approval(&entry.item);
+        if entry.visibility.history() {
+            let run = self.run_of_item(&entry.source);
+            out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
+                item: Box::new(entry.item),
+                agent: entry.agent,
+                source: entry.source,
+                visibility: entry.visibility,
+                run,
+            });
+        }
+        self.publish_activity();
+    }
+
     /// The speech is told, the host learns of a new item, the activity is republished.
     fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome), out: &mut Out) {
+        self.note_approval(&entry.item);
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
             entry.source.speech().filter(|_| !matches!(entry.source, Source::ToolCall { .. }));
@@ -565,6 +599,12 @@ impl Driver {
         match outcome {
             // An item only in the agent's view is the model's: the host's history never sees it.
             CommitOutcome::Added if entry.visibility.history() => {
+                // The person's message answers the call an `InputRequired` left open.
+                if let ChatItem::Message(m) = &entry.item
+                    && m.role == lk_agents_abi::Role::User
+                {
+                    self.answer_pending_input(&m.text_content().unwrap_or_default(), out);
+                }
                 let run = self.run_of_item(&entry.source);
                 out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
                     item: Box::new(entry.item),

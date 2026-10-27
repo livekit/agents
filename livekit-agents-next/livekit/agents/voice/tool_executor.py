@@ -1,5 +1,5 @@
-"""The session's tool runner: the core decides which call runs and what its output means; this
-runs the Python function and reports what it did, as the marshal's dict the core reads."""
+"""The session's tool runner: the core decides which call runs and what its outcome means; this
+runs the Python function and classifies what it returned or raised (``llm.utils.tool_outcome``)."""
 
 from __future__ import annotations
 
@@ -12,23 +12,15 @@ from typing_extensions import TypedDict
 from .. import _core
 from .._generated.tool_executor import AsyncToolOptions, ToolHandlingOptions
 from ..llm import ToolContext
-from ..llm.tool_context import (
-    ASK_IN_OWN_WORDS,
-    InputRequired,
-    StopResponse,
-    Tool,
-    ToolError,
-    Toolset,
-    Transition,
-)
-from ..llm.utils import prepare_function_arguments
+from ..llm.tool_context import FunctionTool, Tool, Toolset, _approval_scope, _ApprovalScope
+from ..llm.utils import prepare_function_arguments, tool_outcome
 from ..log import logger
 from .agent import _BindingContextVar, _VoiceBinding
 from .events import RunContext
 from .speech_handle import SpeechHandle
-from .tool_output import make_tool_output
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import FunctionCall
     from .agent import Agent
     from .agent_session import VoiceSession
 
@@ -76,7 +68,7 @@ class ToolRunner:
         self._running: dict[str, asyncio.Task[Any]] = {}
 
     async def _core_run(
-        self, call: dict[str, Any], speech: _core.SpeechHandle, step: int
+        self, call: dict[str, Any], speech: _core.SpeechHandle, granted: bool
     ) -> dict[str, Any]:
         from .._core_view import from_core_item
 
@@ -88,7 +80,7 @@ class ToolRunner:
         ).get_function_tool(fnc_call.name)
         if tool is None:
             names = list(self._tools.function_tools)
-            return _raised(ToolError(_core.unknown_tool_message(fnc_call.name, names)))
+            return {"kind": "tool_error", "text": _core.unknown_tool_message(fnc_call.name, names)}
 
         handle = SpeechHandle._of(speech)
         ctx = RunContext(function_call=fnc_call, session=self._session, speech_handle=handle)
@@ -97,67 +89,63 @@ class ToolRunner:
                 fnc=tool, json_arguments=fnc_call.arguments, call_ctx=ctx, fnc_call=fnc_call
             )
         except Exception as e:
-            return _raised(e)
+            return _outcome(fnc_call, None, e)
 
         binding = _VoiceBinding(self._session, self._agent, origin=f"tool:{fnc_call.call_id}")
+        # a tool that requires approval runs only on the core's grant, else asks its read-back
+        approval = _ApprovalScope(granted=granted) if _needs_approval(tool) else None
         token = _BindingContextVar.set(binding)
+        scope_token = _approval_scope.set(approval)
         try:
             task = asyncio.create_task(tool(*args, **kwargs), name=f"tool_{fnc_call.name}")
         finally:
+            _approval_scope.reset(scope_token)
             _BindingContextVar.reset(token)
         self._running[fnc_call.call_id] = task
         task.add_done_callback(lambda _: self._running.pop(fnc_call.call_id, None))
         first_update = ctx._first_update
         await asyncio.wait({task, first_update}, return_when=asyncio.FIRST_COMPLETED)
         if task.done():
-            return self._answer(fnc_call, task, handle)
+            return _ended(fnc_call, task, approval)
 
         # the first ctx.update() released the step; the core reads the end as a final update
         def _final(task: asyncio.Task[Any]) -> None:
-            self._session._core.tool_update(
-                fnc_call.call_id, "final", answer=self._answer(fnc_call, task, handle)
-            )
+            self._session._core.tool_update(fnc_call.call_id, _ended(fnc_call, task, approval))
 
         task.add_done_callback(_final)
         message, raw = first_update.result()
-        return {"kind": "detached", "message": message, "raw": raw}
+        return {"kind": "update", "text": message, "raw": raw}
 
     def _core_cancel(self, call_id: str) -> None:
         if task := self._running.get(call_id):
             task.cancel()
 
-    def _answer(
-        self, fnc_call: Any, task: asyncio.Task[Any], handle: SpeechHandle
-    ) -> dict[str, Any]:
-        if task.cancelled():
-            return {"kind": "cancelled"}
-        if (exc := task.exception()) is not None:
-            return _raised(exc)
-        out = make_tool_output(fnc_call=fnc_call, output=task.result(), exception=None)
-        if out.transition is not None:
-            self._apply(out.transition, handle)
-        if out.fnc_call_out.is_error:
-            return {"kind": "raised", "error": "tool_error", "message": out.fnc_call_out.output}
-        value = out.fnc_call_out.output if out.fnc_call_out.reply_required else None
-        return {"kind": "returned", "value": value}
 
-    def _apply(self, transition: Transition, handle: SpeechHandle) -> None:
-        """Deliver human-input questions requested by tools."""
-        if isinstance(transition, InputRequired):
-            self._session._core.set_run_output(handle._core, value=transition, error=None)
-            if transition.verbatim:
-                self._session.say(transition.question)
-            else:
-                self._session.generate_reply(
-                    instructions=ASK_IN_OWN_WORDS.format(question=transition.question),
-                    tool_choice="none",
-                )
+def _needs_approval(tool: Tool) -> bool:
+    return isinstance(tool, FunctionTool) and tool.info.needs_approval
 
 
-def _raised(exc: BaseException) -> dict[str, Any]:
-    if isinstance(exc, ToolError):
-        return {"kind": "raised", "error": "tool_error", "message": exc.message}
-    if isinstance(exc, StopResponse):
-        return {"kind": "raised", "error": "stop_response"}
-    logger.error("exception occurred while executing a tool", exc_info=exc)
-    return {"kind": "raised", "error": "internal"}
+def _ended(
+    fnc_call: FunctionCall, task: asyncio.Task[Any], approval: _ApprovalScope | None
+) -> dict[str, Any]:
+    if task.cancelled():
+        outcome: dict[str, Any] = {"kind": "cancelled"}
+    elif (exc := task.exception()) is not None:
+        outcome = _outcome(fnc_call, None, exc)
+    else:
+        outcome = _outcome(fnc_call, task.result(), None)
+    if approval is not None and (approval.granted or approval.asked):
+        outcome["approval"] = "granted" if approval.granted else "asked"
+    return outcome
+
+
+def _outcome(fnc_call: FunctionCall, output: Any, exc: BaseException | None) -> dict[str, Any]:
+    outcome = tool_outcome(output, exc)
+    if outcome["kind"] == "internal":
+        logger.error("exception occurred while executing a tool", exc_info=exc)
+    elif outcome["kind"] == "invalid":
+        logger.error(
+            f"AI function `{fnc_call.name}` returned an invalid output",
+            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
+        )
+    return outcome

@@ -12,11 +12,11 @@ use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle,
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::{ReplySource, TurnInstructions};
 use crate::tool_executor::{
-    Batch, FillerRun, Pending, Rendering, Reply, Running, ToolAnswer, ToolEnd,
-    ToolOutcome, answer, decide, default_reply_instructions, emit_ended, pair_for,
+    Batch, Delivery, FillerRun, Pending, Rendering, Reply, Running, ToolEnd, ToolExecution,
+    ToolOutcome, answer, default_reply_instructions, emit_ended, pair_for,
 };
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
-use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
+use lk_agents_abi::{ChatItem, FunctionCall, Ts};
 use std::time::Duration;
 
 /// `_FillerScheduler`'s log when its `say` raised: the filler ends there.
@@ -120,11 +120,11 @@ impl Driver {
             let (call_id, runner) = (r.call.call_id.clone(), r.runner.clone());
             out.machine().push(Effect::CancelTool { call_id, runner });
             let outcome = if self.session.closing.is_some() {
-                ToolOutcome::Error(SESSION_CLOSING.to_owned())
+                ToolOutcome::ToolError(SESSION_CLOSING.to_owned())
             } else {
                 ToolOutcome::Cancelled
             };
-            let execution = answer(&r.call, outcome, wall);
+            let execution = answer(&r.call, outcome.into(), wall);
             self.on_tool_ended(
                 now,
                 speech,
@@ -192,7 +192,13 @@ impl Driver {
                 let id = format!("{call_id}_update_{}", r.updates);
                 r.updates += 1;
                 let running = r.clone();
-                let pair = pair_for(&running, &id, ToolOutcome::Reply(message), wall, || {
+                let progress = ToolOutcome::Value {
+                    text: message,
+                    reply_required: true,
+                    verbatim: false,
+                    more: None,
+                };
+                let pair = pair_for(&running, &id, progress.into(), wall, || {
                     self.session.ids.mint("item")
                 });
                 out.trace(TraceToolStep::Updated {
@@ -207,7 +213,7 @@ impl Driver {
                 }));
                 self.commit_pair(&running, id, pair, out);
             }
-            ToolUpdate::Final { answer: raw } => {
+            ToolUpdate::Final { report } => {
                 let id = format!("{call_id}_final");
                 let tools = &mut self.activity.tools.running;
                 let i = tools.iter().position(|r| r.call.call_id == call_id);
@@ -220,47 +226,158 @@ impl Driver {
                 });
                 let closing = self.session.closing_past_edge();
                 out.machine().append(self.session.states.on_tool_call_ended(now, closing));
-                // Silent returns voice nothing; an `Agent` or cancellation is refused.
-                let outcome = match raw {
-                    ToolAnswer::Returned { value: None } => None,
-                    ToolAnswer::Raised(crate::tool_executor::ToolRaise::StopResponse) => None,
-                    ToolAnswer::Cancelled => {
+                // A silent return voices nothing (`_execute_tool`'s `None` and `StopResponse`).
+                match report.outcome {
+                    ToolOutcome::Cancelled => {
                         emit_ended(out, id, call_id, None, ToolEndStatus::Cancelled);
-                        return;
+                        return self.try_deliver_tool_reply(now, out);
                     }
-                    other => Some(decide(other)),
+                    ToolOutcome::Nothing | ToolOutcome::StopResponse => {
+                        emit_ended(out, id, call_id, None, ToolEndStatus::Done);
+                        return self.try_deliver_tool_reply(now, out);
+                    }
+                    _ => {}
+                }
+                let pair = pair_for(&running, &id, report, wall, || self.session.ids.mint("item"));
+                let status = match pair.end {
+                    ToolEnd::Error => ToolEndStatus::Error,
+                    ToolEnd::Done | ToolEnd::Cancelled | ToolEnd::Detached => ToolEndStatus::Done,
                 };
-                let Some(outcome) = outcome else {
-                    emit_ended(out, id, call_id, None, ToolEndStatus::Done);
-                    return;
-                };
-                let pair = pair_for(&running, &id, outcome, wall, || self.session.ids.mint("item"));
-                let status =
-                    if pair.1.is_error { ToolEndStatus::Error } else { ToolEndStatus::Done };
-                emit_ended(out, id.clone(), call_id, Some(pair.1.output.clone()), status);
+                emit_ended(out, id.clone(), call_id, Some(pair.output.output.clone()), status);
                 self.commit_pair(&running, id, pair, out);
             }
         }
         self.try_deliver_tool_reply(now, out);
     }
 
-    /// Commit the pair to the record at once, so an earlier reply still sees it, and batch it.
-    fn commit_pair(
-        &mut self,
-        running: &Running,
-        id: String,
-        pair: (FunctionCall, FunctionCallOutput),
-        out: &mut Out,
-    ) {
-        let (call, output) = pair;
+    /// Commit the pair to the record at once, so an earlier reply still sees it, deliver what it
+    /// owes the person, and batch it for the deferred reply when it asks for one
+    /// (`_enqueue_reply`).
+    fn commit_pair(&mut self, running: &Running, id: String, pair: ToolExecution, out: &mut Out) {
+        let ToolExecution { call, output, delivery, .. } = pair;
+        let reply_required = output.reply_required;
         let source = Source::ToolUpdate { speech: running.speech, step: running.step };
         let items = vec![ChatItem::FunctionCall(call), ChatItem::FunctionCallOutput(output)];
         for item in &items {
             self.commit_item(item.clone(), source.clone(), Visibility::Both, out);
         }
         self.publish_activity();
-        let agent = self.activity.agent.clone();
-        self.activity.tools.pending.push(Pending { agent, items, update_id: id });
+        if let Some(delivery) = delivery {
+            self.deliver_outcome(self.step.now, running.speech, delivery, out);
+        }
+        if reply_required {
+            let agent = self.activity.agent.clone();
+            self.activity.tools.pending.push(Pending { agent, items, update_id: id });
+        }
+    }
+
+    // ------------------------------------------------------------------ deliveries
+
+    /// What a call's outcome owes the person: a verbatim result said as written (`say()`), or an
+    /// `InputRequired` asked (`_apply_transition`), its call answered by the person's next
+    /// message, the question the output of a run ending on the tool's speech.
+    pub(crate) fn deliver_outcome(
+        &mut self,
+        now: Ts,
+        speech: SpeechId,
+        delivery: Delivery,
+        out: &mut Out,
+    ) {
+        match delivery {
+            Delivery::Say(text) => {
+                self.say_text(now, text, out);
+            }
+            Delivery::Ask(ask) => {
+                if let Some(transition) = &ask.transition {
+                    let output = crate::run_result::RunOutput::Value(transition.clone());
+                    self.session.runs.outputs.insert(speech, output);
+                }
+                let asking = if ask.verbatim {
+                    self.say_text(now, ask.question.clone(), out)
+                } else {
+                    let instructions = format!(
+                        "{}{}",
+                        lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS,
+                        ask.question
+                    );
+                    self.reply_with_instructions(now, instructions, None, out)
+                };
+                if let (Some(asking), Some(transition)) = (asking, &ask.transition) {
+                    let output = crate::run_result::RunOutput::Value(transition.clone());
+                    self.session.runs.outputs.insert(asking, output);
+                }
+                self.activity.tools.pending_input = Some(ask);
+            }
+        }
+    }
+
+    /// The person's message answers the call an `InputRequired` left open: written as that call's
+    /// output, as an approval's answer when the call asked for one (`_answer_pending_input`).
+    pub(crate) fn answer_pending_input(&mut self, text: &str, out: &mut Out) {
+        let Some(ask) = self.activity.tools.pending_input.take() else { return };
+        let Some(ChatItem::FunctionCallOutput(mut output)) =
+            self.session.chat_ctx.item(&ask.output_id).cloned()
+        else {
+            return;
+        };
+        output.output = crate::tool_executor::answered_text(&self.session.chat_ctx, &ask, text);
+        self.replace_item(ChatItem::FunctionCallOutput(output), out);
+    }
+
+    /// `say(text)` from inside the driver: on a realtime session the model's, else a pipeline
+    /// say. `None` when nothing was scheduled (no voice to speak it).
+    pub(crate) fn say_text(&mut self, now: Ts, text: String, out: &mut Out) -> Option<SpeechId> {
+        let realtime = self.activity.rt_session.is_some();
+        if self.session.tts.is_none()
+            && self.session.outputs.plays_audio()
+            && !(realtime && self.activity.realtime_state.says())
+        {
+            out.trace(crate::trace::SpeechStep::SayRefused {
+                why: crate::agent_activity::speech::SAY_WITHOUT_TTS_REFUSED,
+            });
+            return None;
+        }
+        if realtime {
+            let request = Request::Say { text, add_to_chat_ctx: true };
+            return self.realtime_request(now, request, None, None, out);
+        }
+        let interruptible = self.session.config.effective.turn.interruption.enabled();
+        let spec = SpeechSpec::new(SpeechKind::Say, ReplySource::Text(text), interruptible);
+        Some(self.start_speech(now, spec, out).id())
+    }
+
+    /// `generate_reply(instructions=, tool_choice="none")` from inside the driver, on `chat_ctx`
+    /// when given; a realtime model answers on its own socket.
+    fn reply_with_instructions(
+        &mut self,
+        now: Ts,
+        text: String,
+        chat_ctx: Option<lk_agents_abi::ChatContext>,
+        out: &mut Out,
+    ) -> Option<SpeechId> {
+        if self.activity.rt_session.is_some() {
+            let tool_choice = Some(lk_agents_abi::ToolChoice::Forbidden);
+            return self.realtime_reply(now, None, Some(text), None, tool_choice, None, false, out);
+        }
+        let message_id = self.session.ids.mint("item");
+        let handle = self.start_speech(
+            now,
+            SpeechSpec {
+                turn_instructions: Some(TurnInstructions {
+                    instructions: crate::generation::Instructions::plain(text),
+                    message_id,
+                }),
+                tool_choice: Some(lk_agents_abi::ToolChoice::Forbidden),
+                chat_ctx,
+                ..SpeechSpec::new(
+                    SpeechKind::GenerateReply,
+                    ReplySource::Llm,
+                    self.session.config.effective.turn.interruption.enabled(),
+                )
+            },
+            out,
+        );
+        Some(handle.id())
     }
 
     // ------------------------------------------------------------------ the deferred reply
@@ -334,36 +451,9 @@ impl Driver {
             }
             ctx
         });
-        // A realtime model answers on its own socket, as `generate_reply()` does there.
-        if self.activity.rt_session.is_some() {
-            let tool_choice = Some(lk_agents_abi::ToolChoice::Forbidden);
-            let Some(speech) =
-                self.realtime_reply(now, None, Some(text), None, tool_choice, None, false, out)
-            else {
-                return;
-            };
-            return self.tool_reply_scheduled(speech, update_ids, at_tail, out);
-        }
-        let message_id = self.session.ids.mint("item");
-        let handle = self.start_speech(
-            now,
-            SpeechSpec {
-                turn_instructions: Some(TurnInstructions {
-                    instructions: crate::generation::Instructions::plain(text),
-                    message_id,
-                }),
-                // The summary must not start another round of tool calls.
-                tool_choice: Some(lk_agents_abi::ToolChoice::Forbidden),
-                chat_ctx,
-                ..SpeechSpec::new(
-                    SpeechKind::GenerateReply,
-                    ReplySource::Llm,
-                    self.session.config.effective.turn.interruption.enabled(),
-                )
-            },
-            out,
-        );
-        self.tool_reply_scheduled(handle.id(), update_ids, at_tail, out);
+        // The summary must not start another round of tool calls.
+        let Some(speech) = self.reply_with_instructions(now, text, chat_ctx, out) else { return };
+        self.tool_reply_scheduled(speech, update_ids, at_tail, out);
     }
 
     fn tool_reply_scheduled(

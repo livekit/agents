@@ -6,10 +6,10 @@ mod provider_bridge {
     //! The provider bridge's values as their own impls and the proxies cross them. The real
     //! package must not be imported here, so `livekit.agents.types` and `livekit.rtc` are stubs;
     //! nextest's process per test keeps each type's cached class on these.
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
     use crate::python::{HostBridge as _, HostHandle, extract_generated, pyo3_async_runtimes};
     use crate::{AudioFrame, LlmChunk, Role, SpeechEvent, VadEvent};
+    use pyo3::prelude::*;
+    use pyo3::types::PyDict;
 
     fn host_ref_table_len() -> usize {
         crate::python::media().len_after_drain()
@@ -147,7 +147,8 @@ class Detector:
 out = (loop, thread.ident, Detector())
 "#,
             );
-            let (event_loop, loop_thread, detector): (Py<PyAny>, u64, Py<PyAny>) = out.extract(py).unwrap();
+            let (event_loop, loop_thread, detector): (Py<PyAny>, u64, Py<PyAny>) =
+                out.extract(py).unwrap();
             let handle = HostHandle::from_parts(
                 detector.clone_ref(py),
                 pyo3_async_runtimes::TaskLocals::new(event_loop.bind(py).clone()),
@@ -161,7 +162,8 @@ out = (loop, thread.ident, Detector())
             let detector = detector.bind(py);
             let done = detector.getattr("done").unwrap().call_method1("wait", (5.0,)).unwrap();
             assert!(done.extract::<bool>().unwrap(), "the calls never reached the loop");
-            let calls: Vec<Bound<'_, PyAny>> = detector.getattr("calls").unwrap().extract().unwrap();
+            let calls: Vec<Bound<'_, PyAny>> =
+                detector.getattr("calls").unwrap().extract().unwrap();
             let got: Vec<String> = calls.iter().map(|c| c.repr().unwrap().to_string()).collect();
             let want = [
                 format!("('push', 16000, {loop_thread})"),
@@ -274,7 +276,11 @@ out = (loop, context, [context.run(f) for f in (stream, one, nothing)])
                     items
                 })
                 .collect();
-            let want = vec![vec!["agent".to_owned(), "agent!".to_owned()], vec!["agent".to_owned()], vec![]];
+            let want = vec![
+                vec!["agent".to_owned(), "agent!".to_owned()],
+                vec!["agent".to_owned()],
+                vec![],
+            ];
             assert_eq!(read, want);
             let stop = event_loop.bind(py).getattr("stop").unwrap();
             event_loop.bind(py).call_method1("call_soon_threadsafe", (stop,)).unwrap();
@@ -348,8 +354,10 @@ out = (asyncio.new_event_loop(), Plain())
 "#,
             );
             let (event_loop, plain): (Py<PyAny>, Py<PyAny>) = out.extract(py).unwrap();
-            let handle =
-                HostHandle::from_parts(plain, pyo3_async_runtimes::TaskLocals::new(event_loop.bind(py).clone()));
+            let handle = HostHandle::from_parts(
+                plain,
+                pyo3_async_runtimes::TaskLocals::new(event_loop.bind(py).clone()),
+            );
             let seen = handle.core_surface("host.Base", "_core_id").unwrap();
             let id = seen.object().bind(py).call_method0("_core_id").unwrap();
             assert_eq!(id.get_item("label").unwrap().extract::<String>().unwrap(), "plain");
@@ -390,10 +398,16 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
             assert_eq!(alt.source_languages.as_deref(), Some(&[][..]), "[] is not None");
             assert_eq!(alt.target_texts, None, "None is not []");
             let words = alt.words.as_ref().expect("word alignment must survive");
-            assert_eq!((words[0].text.as_str(), words[0].start_time, words[0].end_time), ("w", Some(0.25), None));
+            assert_eq!(
+                (words[0].text.as_str(), words[0].start_time, words[0].end_time),
+                ("w", Some(0.25), None)
+            );
             assert_eq!(alt.metadata.as_ref().expect("plugin metadata must survive")["voice"], "a");
 
-            let bare = speech_event(py, "out = SpeechEvent('final_transcript', alternatives=[SpeechData()])");
+            let bare = speech_event(
+                py,
+                "out = SpeechEvent('final_transcript', alternatives=[SpeechData()])",
+            );
             assert!(bare.recognition_usage.is_none());
             assert!(bare.alternatives[0].words.is_none());
             assert!(bare.alternatives[0].metadata.is_none());
@@ -411,10 +425,15 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
             assert!(ev.frames.is_none());
             assert_eq!(host_ref_table_len(), before, "no entry for []");
 
-            let obj = eval_with_stubs(py, "out = VADEvent('end_of_speech', frames=[frame(), frame()])");
+            let obj =
+                eval_with_stubs(py, "out = VADEvent('end_of_speech', frames=[frame(), frame()])");
             let ev: VadEvent = extract_generated::<VadEvent>(obj.bind(py)).unwrap();
             assert!(ev.frames.is_some(), "real audio must be interned");
-            assert_eq!(host_ref_table_len(), before + 1, "one entry for the whole list, not one per frame");
+            assert_eq!(
+                host_ref_table_len(),
+                before + 1,
+                "one entry for the whole list, not one per frame"
+            );
         });
     }
 
@@ -442,11 +461,16 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
             assert!(full.has_response(), "a tool call is a response even with empty content");
 
             let role_less = chunk("out = ChatChunk(delta=ChoiceDelta(content=''))");
-            assert_eq!(role_less.delta.as_ref().unwrap().role, None, "role is absent after the first chunk");
+            assert_eq!(
+                role_less.delta.as_ref().unwrap().role,
+                None,
+                "role is absent after the first chunk"
+            );
             let odd = chunk("out = ChatChunk(delta=ChoiceDelta(role='narrator', content='hi'))");
             assert_eq!(odd.delta.as_ref().unwrap().role, None, "an unknown role reads as absent");
 
-            let usage_only = chunk("out = ChatChunk(delta=None, usage=CompletionUsage(total_tokens=11))");
+            let usage_only =
+                chunk("out = ChatChunk(delta=None, usage=CompletionUsage(total_tokens=11))");
             assert!(usage_only.delta.is_none(), "there is no delta to invent");
             assert_eq!(usage_only.usage.unwrap().total_tokens, 11);
         });
@@ -491,9 +515,18 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
             assert_eq!(
                 keys,
                 [
-                    "confidence", "end_time", "language", "metadata",
-                    "source_languages", "source_texts", "speaker_id", "start_time",
-                    "target_languages", "target_texts", "text", "words",
+                    "confidence",
+                    "end_time",
+                    "language",
+                    "metadata",
+                    "source_languages",
+                    "source_texts",
+                    "speaker_id",
+                    "start_time",
+                    "target_languages",
+                    "target_texts",
+                    "text",
+                    "words",
                 ]
             );
             let got = |k: &str| alt.get_item(k).unwrap().unwrap().extract::<Vec<String>>().unwrap();
@@ -509,14 +542,12 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
     }
 }
 
-
 mod side_tables {
+    use crate::python::{capture, capture_value, errors, raise_original, resolve_captured};
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::prelude::*;
-    use crate::python::{capture, capture_value, errors, raise_original, resolve_captured};
 
     // ------------------------------------------------------------------------ the side tables
-
 
     /// A stand-in for a plugin's `APIStatusError` subclass. The package is not importable here, so
     /// these pin the side table; the isinstance half is pinned in `tests/test_exceptions.py`.
@@ -614,7 +645,6 @@ exc = Hostile()
         });
     }
 
-
     // Catches: `capture(PyErr)` capturing a different object, an exception outside the taxonomy
     // treated as retryable (`llm/llm.py:287` only retries `APIError`), or a raising `__str__`
     // taking the capture down.
@@ -654,10 +684,10 @@ exc = Hostile()
 
 mod session_bridge {
     //! The leaves and lists as their own impls cross them, and the call schemas the RTC seam sends.
+    use crate::python::{extract_generated, value_to_py};
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
     use serde_json::{Map, Value};
-    use crate::python::{extract_generated, value_to_py};
 
     fn attach<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         Python::initialize();
@@ -667,7 +697,12 @@ mod session_bridge {
     /// `program`'s `out`, evaluated.
     fn out(py: Python<'_>, program: &str) -> Py<PyAny> {
         let globals = PyDict::new(py);
-        py.run(std::ffi::CString::new(format!("{program}\n")).unwrap().as_c_str(), Some(&globals), None).unwrap();
+        py.run(
+            std::ffi::CString::new(format!("{program}\n")).unwrap().as_c_str(),
+            Some(&globals),
+            None,
+        )
+        .unwrap();
         globals.get_item("out").unwrap().unwrap().unbind()
     }
 
@@ -689,10 +724,14 @@ mod session_bridge {
     fn every_key_of_a_tool_spec_lands_including_the_flag_that_used_to_be_dropped() {
         attach(|py| {
             let specs = parse_specs(py, "").expect("the producers' dict reads");
-            let [crate::ToolSpec { name, description, json_schema, flags }] = <[_; 1]>::try_from(specs).unwrap();
+            let [crate::ToolSpec { name, description, json_schema, flags }] =
+                <[_; 1]>::try_from(specs).unwrap();
             assert_eq!((name.as_str(), description.as_str()), ("lookup", "look something up"));
             assert_eq!(json_schema["type"], "object");
-            assert!(flags.ignore_on_enter, "the flag was read as the default rather than the value");
+            assert!(
+                flags.ignore_on_enter,
+                "the flag was read as the default rather than the value"
+            );
         });
     }
 
@@ -709,29 +748,52 @@ mod session_bridge {
         });
     }
 
-    fn answer(py: Python<'_>, program: &str) -> PyResult<crate::llm::tool_executor::RawToolAnswer> {
+    fn answer(py: Python<'_>, program: &str) -> PyResult<crate::llm::tool_executor::ToolReport> {
         let v = out(py, program);
-        extract_generated::<crate::llm::tool_executor::RawToolAnswer>(v.bind(py))
+        extract_generated::<crate::llm::tool_executor::ToolReport>(v.bind(py))
     }
 
-    // Catches: `value` read past, `None` refused, or a non-JSON value accepted.
+    // Catches: a kind read as another, a defaulted flag read as given, the approval mark or the
+    // transition dropped, or a malformed outcome accepted.
     #[test]
-    fn a_tool_answer_carries_its_json_value() {
+    fn a_tool_outcome_carries_its_payload() {
+        use crate::llm::tool_executor::ToolOutcome;
         attach(|py| {
-            let a = answer(py, "out = {'kind': 'returned', 'value': {'temp': 12, 'ok': True}}").unwrap();
-            assert_eq!(a.value, Some(serde_json::json!({"temp": 12, "ok": true})));
-            let a = answer(py, "out = {'kind': 'returned', 'value': None}").unwrap();
-            assert_eq!(a.value, None, "`None` means the same as absent");
-            let a = answer(py, "out = {'kind': 'returned'}").unwrap();
-            assert_eq!(a.value, None, "absent optional keys are absent, not malformed");
-            assert!(answer(py, "out = {'kind': 'returned', 'value': object()}").is_err(), "a value that is not JSON");
+            let a = answer(py, "out = {'kind': 'value', 'text': '12C', 'reply_required': False}")
+                .unwrap();
+            let value = ToolOutcome::Value {
+                text: "12C".into(),
+                reply_required: false,
+                verbatim: false,
+                more: None,
+            };
+            assert_eq!(a.outcome, value);
+            assert!(a.approval.is_none() && a.transition.is_none());
+            let program = "out = {'kind': 'input_required', 'text': 'Yes?', 'verbatim': True, \
+                           'approval': 'asked', 'transition': object()}";
+            let a = answer(py, program).unwrap();
+            let ask =
+                ToolOutcome::InputRequired { question: "Yes?".into(), verbatim: true, tool: None };
+            assert_eq!(a.outcome, ask);
+            assert_eq!(a.approval, Some(crate::llm::tool_executor::Approval::Asked));
+            assert!(a.transition.is_some());
+            assert_eq!(
+                answer(py, "out = {'kind': 'working'}").unwrap().outcome,
+                ToolOutcome::Working(None)
+            );
+            assert!(answer(py, "out = {'kind': 'returned'}").is_err(), "an unknown kind");
+            assert!(
+                answer(py, "out = {'kind': 'tool_error'}").is_err(),
+                "a ToolError without its message"
+            );
             assert!(answer(py, "out = 'sunny'").is_err(), "not a dict at all");
         });
     }
 
     /// The keys of a built kwargs dict, sorted and compared whole, so an extra key fails too.
     fn keys(d: &Bound<'_, PyDict>) -> Vec<String> {
-        let mut out: Vec<String> = d.keys().iter().map(|k| k.extract::<String>().expect("str keys")).collect();
+        let mut out: Vec<String> =
+            d.keys().iter().map(|k| k.extract::<String>().expect("str keys")).collect();
         out.sort();
         out
     }
@@ -815,21 +877,41 @@ if not hasattr(rtc, 'AudioFrame'):
     fn every_realtime_command_carries_its_kind_and_exactly_its_own_payload() {
         attach_rtc(|py| {
             let every = vec![
-                RealtimeCommand::UpdateInstructions(rt::UpdateInstructions { instructions: "be brief".into() }),
+                RealtimeCommand::UpdateInstructions(rt::UpdateInstructions {
+                    instructions: "be brief".into(),
+                }),
                 RealtimeCommand::UpdateChatCtx(rt::UpdateChatCtx {
                     req_id: "r1".into(),
                     chat_ctx: crate::ChatContext::new(vec![chat_item()]),
                 }),
                 RealtimeCommand::UpdateTools(rt::UpdateTools { tools: Vec::new() }),
-                RealtimeCommand::PushAudio(rt::PushAudio { frame: crate::AudioFrame::new(vec![0u8; 4], 24_000, 1, 2) }),
-                RealtimeCommand::PushItem(rt::PushItem { item: Box::new(chat_item()), reply_required: true }),
-                RealtimeCommand::GenerateReply(rt::GenerateReply { req_id: "r2".into(), instructions: None, tool_choice: None }),
-                RealtimeCommand::Say(rt::Say { req_id: "r3".into(), text: "hello".into(), add_to_chat_ctx: true }),
+                RealtimeCommand::PushAudio(rt::PushAudio {
+                    frame: crate::AudioFrame::new(vec![0u8; 4], 24_000, 1, 2),
+                }),
+                RealtimeCommand::PushItem(rt::PushItem {
+                    item: Box::new(chat_item()),
+                    reply_required: true,
+                }),
+                RealtimeCommand::GenerateReply(rt::GenerateReply {
+                    req_id: "r2".into(),
+                    instructions: None,
+                    tool_choice: None,
+                }),
+                RealtimeCommand::Say(rt::Say {
+                    req_id: "r3".into(),
+                    text: "hello".into(),
+                    add_to_chat_ctx: true,
+                }),
                 RealtimeCommand::CancelReply(rt::CancelReply { req_id: "r4".into() }),
                 RealtimeCommand::CommitAudio(rt::CommitAudio {}),
                 RealtimeCommand::ClearAudio(rt::ClearAudio {}),
                 RealtimeCommand::Interrupt(rt::Interrupt { response_id: Some("resp_1".into()) }),
-                RealtimeCommand::Truncate(rt::Truncate { message_id: "m1".into(), has_audio: true, audio_end_ms: 120, audio_transcript: None }),
+                RealtimeCommand::Truncate(rt::Truncate {
+                    message_id: "m1".into(),
+                    has_audio: true,
+                    audio_end_ms: 120,
+                    audio_transcript: None,
+                }),
             ];
             let shapes: Vec<(String, Vec<String>)> = every
                 .into_iter()
@@ -847,13 +929,25 @@ if not hasattr(rtc, 'AudioFrame'):
                     (k("update_tools"), vec![k("kind"), k("names")]),
                     (k("push_audio"), vec![k("frame"), k("kind")]),
                     (k("push_item"), vec![k("item"), k("kind"), k("reply_required")]),
-                    (k("generate_reply"), vec![k("instructions"), k("kind"), k("req_id"), k("tool_choice")]),
+                    (
+                        k("generate_reply"),
+                        vec![k("instructions"), k("kind"), k("req_id"), k("tool_choice")]
+                    ),
                     (k("say"), vec![k("add_to_chat_ctx"), k("kind"), k("req_id"), k("text")]),
                     (k("cancel_reply"), vec![k("kind"), k("req_id")]),
                     (k("commit_audio"), vec![k("kind")]),
                     (k("clear_audio"), vec![k("kind")]),
                     (k("interrupt"), vec![k("kind"), k("response_id")]),
-                    (k("truncate"), vec![k("audio_end_ms"), k("audio_transcript"), k("has_audio"), k("kind"), k("message_id")]),
+                    (
+                        k("truncate"),
+                        vec![
+                            k("audio_end_ms"),
+                            k("audio_transcript"),
+                            k("has_audio"),
+                            k("kind"),
+                            k("message_id")
+                        ]
+                    ),
                 ]
             );
         });
@@ -865,7 +959,8 @@ if not hasattr(rtc, 'AudioFrame'):
     fn generate_reply_carries_its_tool_choice_in_the_hosts_shape() {
         attach_rtc(|py| {
             let choice = |tool_choice| {
-                let reply = rt::GenerateReply { req_id: "r".into(), instructions: None, tool_choice };
+                let reply =
+                    rt::GenerateReply { req_id: "r".into(), instructions: None, tool_choice };
                 let d = command(py, RealtimeCommand::GenerateReply(reply));
                 d.get_item("tool_choice").unwrap().unwrap().repr().unwrap().to_string()
             };
@@ -874,7 +969,10 @@ if not hasattr(rtc, 'AudioFrame'):
             assert_eq!(choice(Some(ToolChoice::Auto)), "'auto'");
             assert_eq!(choice(Some(ToolChoice::Required)), "'required'");
             assert_eq!(choice(Some(ToolChoice::Forbidden)), "'none'", "not Python None");
-            assert_eq!(choice(Some(ToolChoice::Named("lookup".into()))), "{'type': 'function', 'function': {'name': 'lookup'}}");
+            assert_eq!(
+                choice(Some(ToolChoice::Named("lookup".into()))),
+                "{'type': 'function', 'function': {'name': 'lookup'}}"
+            );
         });
     }
 
@@ -901,9 +999,15 @@ if not hasattr(rtc, 'AudioFrame'):
     #[test]
     fn an_error_is_forwarded_with_its_optional_correlation() {
         attach(|py| {
-            let d = dict(py, "{'kind': 'error', 'timestamp': 1.0, 'label': 'fake', 'message': 'boom', 'recoverable': True}");
+            let d = dict(
+                py,
+                "{'kind': 'error', 'timestamp': 1.0, 'label': 'fake', 'message': 'boom', 'recoverable': True}",
+            );
             let Event::Error(e) = ev(&d) else { panic!() };
-            assert_eq!((e.label.as_str(), e.message.as_str(), e.recoverable), ("fake", "boom", true));
+            assert_eq!(
+                (e.label.as_str(), e.message.as_str(), e.recoverable),
+                ("fake", "boom", true)
+            );
             assert_eq!((e.req_id, e.code, e.timestamp), (None, None, crate::Ts::ZERO));
             d.set_item("req_id", "req_7").unwrap();
             d.set_item("code", "busy").unwrap();
@@ -944,18 +1048,37 @@ if not hasattr(rtc, 'AudioFrame'):
     #[test]
     fn an_optional_key_may_be_absent_and_a_required_one_may_not() {
         attach(|py| {
-            let Event::GenerationCreated(v) = ev(&dict(py, "{'kind': 'generation_created', 'response_id': 'r'}")) else { panic!() };
+            let Event::GenerationCreated(v) =
+                ev(&dict(py, "{'kind': 'generation_created', 'response_id': 'r'}"))
+            else {
+                panic!()
+            };
             assert_eq!(v.req_id, None, "an absent `req_id` is a server-initiated turn");
             assert!(refused(&dict(py, "{'kind': 'generation_created'}")).contains("response_id"));
             let msg = refused(&dict(py, "{'kind': 'input_speech_stopped'}"));
-            assert!(msg.contains("user_transcription_enabled"), "the error must name the key: {msg}");
+            assert!(
+                msg.contains("user_transcription_enabled"),
+                "the error must name the key: {msg}"
+            );
             assert!(refused(&dict(py, "{'kind': 'not_an_event'}")).contains("not_an_event"));
-            assert_eq!(ev(&dict(py, "{'kind': 'input_speech_started'}")), Event::InputSpeechStarted(rt::InputSpeechStarted {}));
-            assert_eq!(ev(&dict(py, "{'kind': 'session_reconnected'}")), Event::SessionReconnected(rt::SessionReconnected {}));
+            assert_eq!(
+                ev(&dict(py, "{'kind': 'input_speech_started'}")),
+                Event::InputSpeechStarted(rt::InputSpeechStarted {})
+            );
+            assert_eq!(
+                ev(&dict(py, "{'kind': 'session_reconnected'}")),
+                Event::SessionReconnected(rt::SessionReconnected {})
+            );
 
-            let d = dict(py, "{'kind': 'generate_reply_failed', 'req_id': 'r9', 'message': 'busy', 'code': 'active'}");
+            let d = dict(
+                py,
+                "{'kind': 'generate_reply_failed', 'req_id': 'r9', 'message': 'busy', 'code': 'active'}",
+            );
             let Event::GenerateReplyFailed(v) = ev(&d) else { panic!() };
-            assert_eq!((v.req_id.as_str(), v.error.message.as_str(), v.error.code.as_deref()), ("r9", "busy", Some("active")));
+            assert_eq!(
+                (v.req_id.as_str(), v.error.message.as_str(), v.error.code.as_deref()),
+                ("r9", "busy", Some("active"))
+            );
             d.del_item("code").unwrap();
             let Event::GenerateReplyFailed(v) = ev(&d) else { panic!() };
             assert_eq!(v.error.code, None, "most non-OpenAI errors carry no code");
@@ -968,17 +1091,36 @@ if not hasattr(rtc, 'AudioFrame'):
     fn modalities_and_status_words_are_read_as_the_reference_does() {
         use crate::llm::realtime::{GenerationStatus, Modalities};
         attach(|py| {
-            for (word, want) in [("text", Modalities::TextOnly), ("audio", Modalities::AudioAndText)] {
-                let d = dict(py, &format!("{{'kind': 'message_modalities', 'message_id': 'm1', 'modalities': '{word}'}}"));
+            for (word, want) in
+                [("text", Modalities::TextOnly), ("audio", Modalities::AudioAndText)]
+            {
+                let d = dict(
+                    py,
+                    &format!(
+                        "{{'kind': 'message_modalities', 'message_id': 'm1', 'modalities': '{word}'}}"
+                    ),
+                );
                 let Event::MessageModalities(v) = ev(&d) else { panic!() };
                 assert_eq!(v.modalities, want, "{word}");
             }
-            for (word, want) in [("something_new", GenerationStatus::Completed), ("cancelled", GenerationStatus::Cancelled)] {
-                let d = dict(py, &format!("{{'kind': 'generation_done', 'response_id': 'r', 'status': '{word}'}}"));
+            for (word, want) in [
+                ("something_new", GenerationStatus::Completed),
+                ("cancelled", GenerationStatus::Cancelled),
+            ] {
+                let d = dict(
+                    py,
+                    &format!(
+                        "{{'kind': 'generation_done', 'response_id': 'r', 'status': '{word}'}}"
+                    ),
+                );
                 let Event::GenerationDone(v) = ev(&d) else { panic!() };
                 assert_eq!(v.status, want, "{word}");
             }
-            let Event::GenerationDone(v) = ev(&dict(py, "{'kind': 'generation_done', 'response_id': 'r'}")) else { panic!() };
+            let Event::GenerationDone(v) =
+                ev(&dict(py, "{'kind': 'generation_done', 'response_id': 'r'}"))
+            else {
+                panic!()
+            };
             assert_eq!(v.status, GenerationStatus::Completed, "an absent status completes");
         });
     }
@@ -990,7 +1132,10 @@ if not hasattr(rtc, 'AudioFrame'):
     #[test]
     fn an_input_transcription_keeps_its_turn_start_as_the_hosts_wall_seconds() {
         attach(|py| {
-            let d = dict(py, "{'kind': 'input_transcription', 'item_id': 'item_9', 'transcript': 'hello there', 'is_final': True}");
+            let d = dict(
+                py,
+                "{'kind': 'input_transcription', 'item_id': 'item_9', 'transcript': 'hello there', 'is_final': True}",
+            );
             d.set_item("turn_started_at", 1_000_000.5).unwrap();
             let read = || match host_event(&d).unwrap().anchored(None) {
                 Event::HostInputTranscription(v) => v,
@@ -998,7 +1143,10 @@ if not hasattr(rtc, 'AudioFrame'):
             };
             let v = read();
             let t = &v.transcription;
-            assert_eq!((t.item_id.as_str(), t.transcript.as_str(), t.is_final), ("item_9", "hello there", true));
+            assert_eq!(
+                (t.item_id.as_str(), t.transcript.as_str(), t.is_final),
+                ("item_9", "hello there", true)
+            );
             assert_eq!(t.confidence, None, "an absent confidence is absent");
             assert_eq!(v.turn_started_at, Some(1_000_000.5));
             d.set_item("turn_started_at", py.None()).unwrap();
@@ -1016,7 +1164,11 @@ if not hasattr(rtc, 'AudioFrame'):
     fn a_tagged_bytes_leaf_reads_back_as_bytes_and_nothing_else_does() {
         attach(|py| {
             let tag = crate::llm::provider_format::BYTES_TAG;
-            let v = value_to_py(py, &serde_json::json!({"img": {tag: "AQID"}, "other": {tag: "AQID", "x": 1}})).unwrap();
+            let v = value_to_py(
+                py,
+                &serde_json::json!({"img": {tag: "AQID"}, "other": {tag: "AQID", "x": 1}}),
+            )
+            .unwrap();
             let img = v.get_item("img").unwrap();
             assert_eq!(img.cast::<pyo3::types::PyBytes>().unwrap().as_bytes(), &[1, 2, 3]);
             assert!(v.get_item("other").unwrap().is_instance_of::<PyDict>());

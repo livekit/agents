@@ -331,6 +331,19 @@ impl SessionChatCtx {
         self.ids.contains(id)
     }
 
+    /// Every item of every agent, in record order.
+    pub fn items(&self) -> impl Iterator<Item = &ChatItem> {
+        self.items.iter().map(|c| &c.item)
+    }
+
+    pub fn item(&self, id: &str) -> Option<&ChatItem> {
+        self.entry(id).map(|c| &c.item)
+    }
+
+    pub fn entry(&self, id: &str) -> Option<&Committed> {
+        self.contains(id).then(|| self.items.iter().find(|c| c.item.id() == id)).flatten()
+    }
+
     /// After the last item stamped at or before this one: ties go after.
     fn find_insertion_index(&self, item: &ChatItem) -> usize {
         let at = item.created_at();

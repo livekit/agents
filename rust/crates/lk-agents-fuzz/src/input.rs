@@ -389,8 +389,13 @@ plain_enum! {
     /// `AfterIdle` is `async with ctx.foreground()` inside the body: the tool asks the agent to go
     /// idle, from its own origin, holds the floor and returns once it has. `AwaitOwnSpeech` is
     /// `await ctx.speech_handle` inside the body, refused because that speech waits on the tool,
-    /// then returns.
-    ToolAnswer { Return, Value, Error, StopResponse, Cancelled, Detached, AfterIdle, AwaitOwnSpeech }
+    /// then returns. `Recorded` is `ToolResult(text, reply_required=False)`, `Verbatim`
+    /// `ToolResult(text, verbatim=True)`; `Completed`, `Failed`, `Rejected`, `Ask`
+    /// (`InputRequired`), `AskVerbatim` and `Working` are the transitions.
+    ToolAnswer {
+        Return, Value, Error, StopResponse, Cancelled, Detached, AfterIdle, AwaitOwnSpeech,
+        Recorded, Verbatim, Completed, Failed, Rejected, Ask, AskVerbatim, Working
+    }
 }
 plain_enum! {
     /// Something the realtime server did of its own accord: its VAD heard the person start or
@@ -617,7 +622,8 @@ inputs! {
     /// `AgentTask.complete(result)` from inside a speech's tool.
     SetRunOutput { speech: Ref<Speech>, ok: bool } leaf speech::SetRunOutput;
     /// A background tool speaking again after its first `ctx.update()`.
-    ToolUpdate { tool: Ref<Tool>, progress: Option<AgentText> } leaf speech::ToolUpdate;
+    /// `progress: None` is its end, answered as `end`.
+    ToolUpdate { tool: Ref<Tool>, progress: Option<AgentText>, end: ToolAnswer } leaf speech::ToolUpdate;
     /// `with_filler()` entered: the filler speaks while the tool runs.
     FillerStart { tool: Ref<Tool>, speech: Ref<Speech>, delay: Millis, interval: Option<Millis>, text: Option<AgentText> }
         opens [Filler] leaf speech::FillerStart;

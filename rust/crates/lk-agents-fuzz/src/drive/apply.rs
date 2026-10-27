@@ -357,21 +357,17 @@ impl Run {
                 let (value, error) = if *ok { (output, None) } else { (None, output) };
                 api.set_run_output(&speech, value, error).is_ok()
             }
-            Input::ToolUpdate { tool, progress } => {
+            Input::ToolUpdate { tool, progress, end } => {
                 let Some(call_id) = self.tool_call_id(*tool) else { return false };
-                match progress {
+                let outcome = match progress {
                     Some(AgentText(m)) => {
-                        api.tool_update(call_id, "progress", Some(m.clone()), Some(m.clone()), None)
+                        ToolOutcome::Update { message: m.clone(), raw: m.clone() }
                     }
-                    None => api.tool_update(
-                        call_id,
-                        "final",
-                        None,
-                        None,
-                        Some(Answered::Returned { value: None }),
-                    ),
-                }
-                .is_ok()
+                    // A later update is progress, however it was drawn; the end is anything else.
+                    None if *end == crate::input::ToolAnswer::Detached => ToolOutcome::Nothing,
+                    None => crate::fakes::tools::outcome_of(*end, "the tool finished"),
+                };
+                api.tool_update(call_id, outcome.into()).is_ok()
             }
             Input::FillerStart { tool, speech, delay, interval, text } => {
                 let (Some(call_id), Some(speech)) =

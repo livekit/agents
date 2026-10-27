@@ -90,84 +90,299 @@ pub struct ToolHandlingOptions {
     pub async_options: Option<AsyncToolOptions>,
 }
 
-// --- the marshal's report ---------------------------------------------------------------------
+// --- a tool's outcome: the one representation crossing from the host -------------------------
 
-// The `kind` word the marshal writes; `from_wire` is `None` for one this build does not know.
-#[crate::host(wire_strs(msg = format!("unknown tool answer kind {s:?}")))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolAnswerKind {
-    Returned,
-    Raised,
-    /// Something `_is_valid_function_output` rejects.
-    Invalid,
-    Cancelled,
-    /// An async tool's first `ctx.update()`.
-    Detached,
-}
+/// `make_function_call_output`'s text for an unexpected exception; says nothing about it.
+pub const INTERNAL_ERROR_OUTPUT: &str = "An internal error occurred";
 
-/// As the marshal's `isinstance` chain classified it.
-#[crate::host(wire_strs(msg = format!("unknown tool raise kind {s:?}")))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolRaiseKind {
-    /// The author's message is for the model.
-    ToolError,
+/// `make_function_call_output`'s text for a return value the model cannot be told about.
+pub const INVALID_OUTPUT: &str = "the tool returned an invalid output";
+
+/// How a call's output reads while it waits on the person; the answer replaces it.
+pub const WAITING_PREFIX: &str = "waiting for the person's answer to: ";
+
+/// What the model reads as the output of a verbatim result it did not write.
+pub const DELIVERED: &str = "delivered to the person as written: ";
+
+/// How the agent facing the person is told to ask a question that is not verbatim.
+pub const ASK_IN_OWN_WORDS: &str =
+    "Ask the person this, in your own words, as your whole reply, and add nothing else: ";
+
+/// What a tool's run came to, as the host classified the value it returned or raised. The host
+/// only classifies; [`ToolOutcome::shape`] and the voice core decide what it means.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolOutcome {
+    /// A value the model reads: `text` is a string as written, anything else as its JSON.
+    /// `ToolResult(..)` sets `reply_required` and `verbatim`; `more` is what a delegate's
+    /// verbatim result carries for the model alone.
+    Value {
+        text: String,
+        reply_required: bool,
+        verbatim: bool,
+        more: Option<String>,
+    },
+    /// `None`: nothing to say, no reply asked.
+    Nothing,
+    /// `ToolError(message)`: the author's words, for the model.
+    ToolError(String),
+    /// `StopResponse`: answered with nothing, no reply.
     StopResponse,
+    /// Any other exception; the host logged it, the model is told nothing about it.
     Internal,
+    /// A value the model can't be told about (`_is_valid_function_output`).
+    Invalid,
+    /// The host cancelled the body.
+    Cancelled,
+    /// `ctx.update(message)`: `message` rendered, `raw` as written; the tool runs on.
+    Update {
+        message: String,
+        raw: String,
+    },
+    /// `Completed(value)`: the value as text (`completed` for `None`).
+    Completed {
+        text: String,
+        verbatim: bool,
+    },
+    Failed(String),
+    Rejected(String),
+    /// `InputRequired(question)`: the turn waits on the person; `tool` takes the answer.
+    InputRequired {
+        question: String,
+        verbatim: bool,
+        tool: Option<String>,
+    },
+    /// `Working(message=)`: waits on a system, nothing delivered.
+    Working(Option<String>),
 }
 
-/// `kind` selects the shape. A malformed dict is an error, which `HostToolRunner::answer` turns
-/// into the reference's internal-error output.
+/// The output a [`ToolOutcome`] records, and whether it asks the model for a reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolShape {
+    pub text: String,
+    pub is_error: bool,
+    pub reply_required: bool,
+}
+
+impl ToolOutcome {
+    /// `make_tool_output` and the activity's transitions as one table: the call output and
+    /// whether it asks for a reply. A verbatim result's delivery is the voice core's.
+    pub fn shape(&self) -> ToolShape {
+        let shape = |text: &str, is_error: bool, reply_required: bool| ToolShape {
+            text: text.to_owned(),
+            is_error,
+            reply_required,
+        };
+        match self {
+            ToolOutcome::Value { text, reply_required, .. } => shape(text, false, *reply_required),
+            ToolOutcome::Nothing | ToolOutcome::StopResponse | ToolOutcome::Cancelled => {
+                shape("", false, false)
+            }
+            ToolOutcome::ToolError(message) => shape(message, true, true),
+            ToolOutcome::Internal => shape(INTERNAL_ERROR_OUTPUT, true, true),
+            ToolOutcome::Invalid => shape(INVALID_OUTPUT, true, true),
+            ToolOutcome::Update { message, .. } => shape(message, false, true),
+            // The reference's `_apply_transition`: these ask for a reply.
+            ToolOutcome::Completed { text, .. } => shape(text, false, true),
+            ToolOutcome::Failed(text) | ToolOutcome::Rejected(text) => shape(text, true, true),
+            // The question is asked, not replied to; the person's answer replaces it.
+            ToolOutcome::InputRequired { question, .. } => {
+                shape(&format!("{WAITING_PREFIX}{question}"), false, false)
+            }
+            ToolOutcome::Working(message) => {
+                shape(message.as_deref().unwrap_or("working"), false, false)
+            }
+        }
+    }
+
+    /// The text the person gets exactly as written, when the outcome is verbatim.
+    pub fn verbatim(&self) -> Option<&str> {
+        match self {
+            ToolOutcome::Value { text, verbatim: true, .. }
+            | ToolOutcome::Completed { text, verbatim: true } => Some(text),
+            _ => None,
+        }
+    }
+
+    /// What the model reads once the verbatim text was said (`delivered`), then the delegate's
+    /// note for the model.
+    pub fn delivered(&self) -> Option<String> {
+        let text = self.verbatim()?;
+        Some(match self {
+            ToolOutcome::Value { more: Some(more), .. } => format!("{DELIVERED}{text}\n{more}"),
+            _ => format!("{DELIVERED}{text}"),
+        })
+    }
+}
+
+/// How a call of a tool that requires approval went (`approval_scope`): it asked for approval
+/// with its read-back, or ran on the person's answer. Marked on the call for the next to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Approval {
+    Asked,
+    Granted,
+}
+
+impl Approval {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Approval::Asked => "asked",
+            Approval::Granted => "granted",
+        }
+    }
+}
+
+/// The host's report of one run: its outcome, and how its approval went.
 #[derive(Debug, Clone)]
-pub struct RawToolAnswer {
-    pub kind: String,
-    pub value: Option<serde_json::Value>,
-    pub error: Option<String>,
-    pub message: Option<String>,
-    /// Before the template.
-    pub raw: Option<String>,
+pub struct ToolReport {
+    pub outcome: ToolOutcome,
+    pub approval: Option<Approval>,
+    /// The `InputRequired` itself, the output of a run that ends on this call's speech.
+    pub transition: Option<crate::HostRef>,
+}
+
+impl From<ToolOutcome> for ToolReport {
+    fn from(outcome: ToolOutcome) -> Self {
+        ToolReport { outcome, approval: None, transition: None }
+    }
 }
 
 #[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for RawToolAnswer {
+impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolOutcome {
+    type Error = pyo3::PyErr;
+
+    /// The host's `{"kind": .., ..}` dict. An unknown kind, or one missing its key, is a
+    /// `ValueError`, never a guess.
+    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
+        use crate::python::{item, item_or};
+        use pyo3::types::PyAnyMethods as _;
+        const OWNER: &str = "ToolOutcome";
+        let obj = &*obj;
+        let kind: String = item(obj, OWNER, "kind")?;
+        let text = || item::<String>(obj, OWNER, "text");
+        let flag = |key: &str, default: bool| {
+            item_or(obj, OWNER, key, |v| v.extract::<bool>(), || default)
+        };
+        let opt = |key: &str| item_or(obj, OWNER, key, |v| v.extract::<Option<String>>(), || None);
+        Ok(match kind.as_str() {
+            "value" => ToolOutcome::Value {
+                text: text()?,
+                reply_required: flag("reply_required", true)?,
+                verbatim: flag("verbatim", false)?,
+                more: opt("more")?,
+            },
+            "nothing" => ToolOutcome::Nothing,
+            "tool_error" => ToolOutcome::ToolError(text()?),
+            "stop_response" => ToolOutcome::StopResponse,
+            "internal" => ToolOutcome::Internal,
+            "invalid" => ToolOutcome::Invalid,
+            "cancelled" => ToolOutcome::Cancelled,
+            "update" => ToolOutcome::Update { message: text()?, raw: item(obj, OWNER, "raw")? },
+            "completed" => {
+                ToolOutcome::Completed { text: text()?, verbatim: flag("verbatim", false)? }
+            }
+            "failed" => ToolOutcome::Failed(text()?),
+            "rejected" => ToolOutcome::Rejected(text()?),
+            "input_required" => ToolOutcome::InputRequired {
+                question: text()?,
+                verbatim: flag("verbatim", false)?,
+                tool: opt("tool")?,
+            },
+            "working" => ToolOutcome::Working(opt("text")?),
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "unknown tool outcome kind {other:?}"
+                )));
+            }
+        })
+    }
+}
+
+#[cfg(feature = "python")]
+impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolReport {
     type Error = pyo3::PyErr;
 
     fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{item, item_or, value_from_py};
+        use crate::python::item_or;
         use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "ToolAnswerFromPy";
+        const OWNER: &str = "ToolOutcome";
         let obj = &*obj;
-        let extract = |v: &pyo3::Bound<'py, pyo3::PyAny>| v.extract::<Option<String>>();
-        Ok(RawToolAnswer {
-            kind: item(obj, OWNER, "kind")?,
-            value: item_or(
-                obj,
-                OWNER,
-                "value",
-                |v| if v.is_none() { Ok(None) } else { value_from_py(v, "value").map(Some) },
-                || None,
-            )?,
-            error: item_or(obj, OWNER, "error", extract, || None)?,
-            message: item_or(obj, OWNER, "message", extract, || None)?,
-            raw: item_or(obj, OWNER, "raw", extract, || None)?,
+        let transition = |v: &pyo3::Bound<'py, pyo3::PyAny>| {
+            if v.is_none() { Ok(None) } else { v.extract::<crate::HostRef>().map(Some) }
+        };
+        let approval = |v: &pyo3::Bound<'py, pyo3::PyAny>| match v.extract::<Option<String>>()? {
+            None => Ok(None),
+            Some(s) if s == "asked" => Ok(Some(Approval::Asked)),
+            Some(s) if s == "granted" => Ok(Some(Approval::Granted)),
+            Some(other) => {
+                Err(pyo3::exceptions::PyValueError::new_err(format!("unknown approval {other:?}")))
+            }
+        };
+        Ok(ToolReport {
+            outcome: obj.extract()?,
+            approval: item_or(obj, OWNER, "approval", approval, || None)?,
+            transition: item_or(obj, OWNER, "transition", transition, || None)?,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolAnswerKind, ToolRaiseKind};
+    use super::*;
 
-    // Catches: a misspelled marshal word, or an unknown one accepted.
+    // Catches: a transition read as silent (its output lost), `Failed`/`Rejected` not errors, an
+    // `InputRequired` with no question, `ToolResult(reply_required=False)` losing its text, or
+    // exception detail reaching the model.
     #[test]
-    fn the_marshal_words_parse_and_unknown_ones_are_refused() {
-        // The marshal's own spellings, which `voice/tool_executor.py` writes and its tests read.
-        assert_eq!(ToolAnswerKind::from_wire("detached"), Some(ToolAnswerKind::Detached));
-        assert_eq!(ToolRaiseKind::from_wire("stop_response"), Some(ToolRaiseKind::StopResponse));
-        assert_eq!(ToolAnswerKind::from_wire("done"), None);
-        assert_eq!(
-            ToolRaiseKind::from_wire("stop"),
-            None,
-            "`stop` is `ToolOutcome`'s word, not this wire's"
-        );
+    fn each_outcome_records_its_output_and_asks_for_a_reply_as_the_reference_does() {
+        let value = |text: &str, reply_required| ToolOutcome::Value {
+            text: text.into(),
+            reply_required,
+            verbatim: false,
+            more: None,
+        };
+        let ask = ToolOutcome::InputRequired {
+            question: "Which day?".into(),
+            verbatim: false,
+            tool: None,
+        };
+        let cases: &[(ToolOutcome, (&str, bool, bool))] = &[
+            (value("12C", true), ("12C", false, true)),
+            (value("sent DTMF 1", false), ("sent DTMF 1", false, false)),
+            (ToolOutcome::Nothing, ("", false, false)),
+            (ToolOutcome::StopResponse, ("", false, false)),
+            (ToolOutcome::ToolError("nope".into()), ("nope", true, true)),
+            (ToolOutcome::Internal, (INTERNAL_ERROR_OUTPUT, true, true)),
+            (ToolOutcome::Invalid, (INVALID_OUTPUT, true, true)),
+            (
+                ToolOutcome::Completed { text: "booked".into(), verbatim: false },
+                ("booked", false, true),
+            ),
+            (ToolOutcome::Failed("no slot".into()), ("no slot", true, true)),
+            (ToolOutcome::Rejected("not mine".into()), ("not mine", true, true)),
+            (ask, ("waiting for the person's answer to: Which day?", false, false)),
+            (ToolOutcome::Working(None), ("working", false, false)),
+        ];
+        for (outcome, (text, is_error, reply)) in cases {
+            let shape = outcome.shape();
+            let got = (shape.text.as_str(), shape.is_error, shape.reply_required);
+            assert_eq!(got, (*text, *is_error, *reply), "{outcome:?}");
+        }
+    }
+
+    // Catches: a verbatim result's model text not saying it was delivered, or the delegate's note
+    // dropped.
+    #[test]
+    fn a_verbatim_result_reads_as_delivered() {
+        let v = ToolOutcome::Value {
+            text: "Your code is 1234.".into(),
+            reply_required: true,
+            verbatim: true,
+            more: Some("ask if they need more".into()),
+        };
+        assert_eq!(v.verbatim(), Some("Your code is 1234."));
+        let delivered =
+            "delivered to the person as written: Your code is 1234.\nask if they need more";
+        assert_eq!(v.delivered().as_deref(), Some(delivered));
+        assert_eq!(ToolOutcome::Nothing.delivered(), None);
     }
 }

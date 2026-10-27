@@ -39,7 +39,7 @@ mod output;
 pub mod realtime;
 pub mod vocabulary;
 mod stt;
-mod tools;
+pub(crate) mod tools;
 mod tts;
 mod vad;
 

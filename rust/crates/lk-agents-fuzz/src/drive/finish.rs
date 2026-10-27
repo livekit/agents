@@ -115,7 +115,7 @@ impl Run {
         // A running tool is answered; one that detached is ended by the host's final update.
         for nth in self.record.live().of(Kind::Tool) {
             out.push(if self.tool_detached(nth) {
-                Input::ToolUpdate { tool: Ref::new(nth), progress: None }
+                Input::ToolUpdate { tool: Ref::new(nth), progress: None, end: ToolAnswer::Return }
             } else {
                 Input::ToolAnswered {
                     tool: Ref::new(nth),

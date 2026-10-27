@@ -79,14 +79,15 @@ impl ToolStep {
         };
         // `_tool_execution_started_cb`: the call is stamped with its start (history is ordered by
         // `created_at`, and it was made before the step was authorized), then told.
-        let start = move |shared: &SessionShared, handle: &SpeechHandle, call: &mut FunctionCall| {
-            call.created_at = shared.time.wall();
-            if advertised {
-                handle.item_added(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
-            }
-            let call = Box::new(call.clone());
-            shared.report(GenEvent::ToolCallStarted { speech, step, call, runner });
-        };
+        let start =
+            move |shared: &SessionShared, handle: &SpeechHandle, call: &mut FunctionCall| {
+                call.created_at = shared.time.wall();
+                if advertised {
+                    handle.item_added(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
+                }
+                let call = Box::new(call.clone());
+                shared.report(GenEvent::ToolCallStarted { speech, step, call, runner });
+            };
         let mut one = call.clone();
         let deferred = if handle.step_authorized(step) {
             start(shared, handle, &mut one);
@@ -125,22 +126,25 @@ impl ToolStep {
                     start(&shared, &handle, &mut one);
                 }
                 let _ = started_tx.send(());
-                // The host reports, the driver decides (`decide`).
-                let outcome = match work {
+                // The host classifies, the driver decides (`answer`).
+                let report = match work {
                     // The speech waits on the body until it answers or detaches: awaiting the
                     // speech from inside it is refused meanwhile.
                     Ok(runner) => {
                         handle.tool_blocking(&one.call_id, &one.name);
-                        let answer = runner.answer(&one, &host_speech, step).await;
+                        // Decided as the body starts: a call dropped unrun spends no answer.
+                        let granted = crate::tool_executor::grant(&shared, &one);
+                        let report = runner.answer(&one, &host_speech, granted).await;
                         handle.tool_returned(&one.call_id);
-                        crate::tool_executor::decide(answer)
+                        report
                     }
                     // Never run: answered in the reference executor's words so the model corrects.
-                    Err(available) => ToolOutcome::Error(
+                    Err(available) => ToolOutcome::ToolError(
                         crate::tool_executor::unknown_tool_message(&one.name, &available),
-                    ),
+                    )
+                    .into(),
                 };
-                let _ = tx.send(Some(answer(&one, outcome, shared.time.wall())));
+                let _ = tx.send(Some(answer(&one, report, shared.time.wall())));
             });
             task_owner.add_task(abort);
             Some(rx)
@@ -189,7 +193,11 @@ pub(crate) async fn run_tools(
             // Never started: the reference returns before executing, so it is owed nothing.
             Ok(None) => continue,
             // Aborted or panicked: never a hole, since `next_step` pairs by index.
-            Err(_) => answer(&d.call, ToolOutcome::Missing, shared.time.wall()),
+            Err(_) => {
+                let missing =
+                    ToolOutcome::ToolError(crate::tool_executor::MISSING_TOOL_OUTPUT.into());
+                answer(&d.call, missing.into(), shared.time.wall())
+            }
         };
         // The lifecycle event's text: nothing for a silent return, handoff or cancellation.
         let message = match execution.end {
@@ -207,7 +215,6 @@ pub(crate) async fn run_tools(
     if executions.is_empty() {
         return None;
     }
-
 
     let mut decision = crate::tool_executor::next_step(crate::tool_executor::StepInputs {
         tool_output: &executions,
@@ -229,9 +236,12 @@ pub(crate) async fn run_tools(
     shared.report(GenEvent::ToolsFinished {
         speech: handle.id(),
         step: handle.num_steps(),
-        commit: decision.commit.clone(),
-        executed: decision.tools_executed.clone().map(Box::new),
-        warnings: decision.warnings.clone(),
+        tools: crate::tool_executor::StepTools {
+            commit: decision.commit.clone(),
+            executed: decision.tools_executed.clone().map(Box::new),
+            warnings: decision.warnings.clone(),
+            deliveries: decision.deliveries.clone(),
+        },
         verdict: waits.then_some(tx),
     });
     if waits && let Ok(verdict) = rx.await {

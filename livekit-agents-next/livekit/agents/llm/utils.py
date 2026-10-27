@@ -457,6 +457,71 @@ class FunctionCallResult:
     execution. Empty unless the tool actually called ``ctx.update()``."""
 
 
+def _value_text(value: Any) -> str | None:
+    """What the model reads of a value: the value itself, a model or dataclass as its JSON;
+    ``None`` when the model cannot be told about it."""
+    if not _is_valid_function_output(value):
+        # dataclasses and models, alone or in lists and dicts, reach the model as their JSON
+        with contextlib.suppress(PydanticSerializationError):
+            value = to_json(value).decode()
+    return str(value) if _is_valid_function_output(value) else None
+
+
+def tool_outcome(output: Any, exception: BaseException | None = None) -> dict[str, Any]:
+    """What a tool returned or raised, classified for the core (``_core.ToolOutcome``), which
+    decides what the model reads and whether it replies."""
+    from .tool_context import (
+        Completed,
+        Failed,
+        InputRequired,
+        Rejected,
+        StopResponse,
+        ToolResult,
+        Working,
+    )
+
+    if isinstance(output, BaseException):
+        exception, output = output, None
+    if isinstance(exception, ToolError):
+        return {"kind": "tool_error", "text": exception.message}
+    if isinstance(exception, StopResponse):
+        return {"kind": "stop_response"}
+    if exception is not None:
+        return {"kind": "internal"}
+    if isinstance(output, Completed):
+        text = "completed" if output.value is None else _value_text(output.value)
+        if text is None:
+            return {"kind": "invalid"}
+        return {"kind": "completed", "text": text, "verbatim": output.verbatim}
+    if isinstance(output, Failed):
+        return {"kind": "failed", "text": output.error}
+    if isinstance(output, Rejected):
+        return {"kind": "rejected", "text": output.reason}
+    if isinstance(output, InputRequired):
+        return {
+            "kind": "input_required",
+            "text": output.question,
+            "verbatim": output.verbatim,
+            "tool": output.tool.info.name if output.tool is not None else None,
+            "transition": output,
+        }
+    if isinstance(output, Working):
+        return {"kind": "working", "text": output.message}
+    if output is None:
+        return {"kind": "nothing"}
+    outcome: dict[str, Any] = {"kind": "value"}
+    if isinstance(output, ToolResult):
+        outcome["reply_required"] = output.reply_required
+        outcome["verbatim"] = output.verbatim
+        outcome["more"] = getattr(output, "_more", None)
+        output = output.output
+    text = "" if output is None else _value_text(output)
+    if text is None:
+        return {"kind": "invalid"}
+    outcome["text"] = text
+    return outcome
+
+
 def make_function_call_output(
     *,
     fnc_call: FunctionCall,
@@ -464,43 +529,28 @@ def make_function_call_output(
     exception: BaseException | None,
 ) -> FunctionCallResult:
     """Create a FunctionCallResult, handling ToolError, StopResponse, and validation. The
-    output each outcome gives the model is the core's (``_core.tool_call_output_shape``)."""
-    from .chat_context import FunctionCallOutput
-    from .tool_context import StopResponse, ToolError, ToolResult
-
+    output each outcome gives the model is the core's (``_core.tool_call_output``)."""
     if isinstance(output, BaseException):
         exception, output = output, None
-    raw_output, reply_required = output, True
-    if isinstance(exception, ToolError):
-        outcome, output = "tool_error", exception.message
-    elif isinstance(exception, StopResponse):
-        outcome = "stop"  # silence, not a call left unanswered
-    elif exception is not None:
-        outcome = "internal"
-    else:
-        if isinstance(output, ToolResult):
-            reply_required, output = output.reply_required, output.output
-        if not _is_valid_function_output(output):
-            # dataclasses and models, alone or in lists and dicts, reach the model as their JSON
-            with contextlib.suppress(PydanticSerializationError):
-                output = to_json(output).decode()
-        outcome = "ok" if _is_valid_function_output(output) else "invalid"
-        if outcome == "invalid":
-            logger.error(
-                f"AI function `{fnc_call.name}` returned an invalid output",
-                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
-            )
-    text, is_error, reply = _core.tool_call_output_shape(outcome)
+    outcome = tool_outcome(output, exception)
+    if outcome["kind"] == "invalid":
+        logger.error(
+            f"AI function `{fnc_call.name}` returned an invalid output",
+            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
+        )
+    text, is_error, reply_required = _core.tool_call_output(outcome)
+    from .chat_context import FunctionCallOutput
+
     return FunctionCallResult(
         fnc_call=fnc_call,
         fnc_call_out=FunctionCallOutput(
             name=fnc_call.name,
             call_id=fnc_call.call_id,
-            output=text if text is not None else "" if output is None else str(output),
+            output=text,
             is_error=is_error,
-            reply_required=reply and reply_required,
+            reply_required=reply_required,
         ),
-        raw_output=raw_output,
+        raw_output=output,
         raw_exception=exception,
     )
 

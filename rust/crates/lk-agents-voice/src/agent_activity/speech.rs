@@ -742,38 +742,24 @@ impl Driver {
             // Reported by a task; said by the loop, which is the only place with the bus.
             GenEvent::Emit(ev) => out.machine().emit(*ev),
 
-            GenEvent::ToolsFinished { speech, step, commit, executed, warnings, verdict } => {
+            GenEvent::ToolsFinished { speech, step, tools, verdict } => {
                 // With a host running hooks, `function_tools_executed` is its to emit, and the step
                 // waits for what the handlers leave.
-                if let (Some(event), Some(verdict)) = (&executed, verdict) {
+                if let (Some(event), Some(verdict)) = (&tools.executed, verdict) {
                     let id = self.activity.hooks.mint();
-                    let call = HookCall::FunctionToolsExecuted {
-                        id,
-                        speech,
-                        event: Box::new((**event).clone()),
-                    };
+                    let call = HookCall::FunctionToolsExecuted { id, speech, event: event.clone() };
                     let wait = self.hook_wait();
                     if self.activity.hook_bound.is_some()
                         && self.issue_hook(now, call, Some(wait), out)
                     {
-                        let event = (**event).clone();
-                        let handling = Handling { speech, step, event, warnings, verdict };
+                        let handling = Handling { speech, step, tools, verdict };
                         self.activity.tools.handling.insert(id, handling);
                         return;
                     }
-                    self.finish_tools(
-                        speech,
-                        step,
-                        commit,
-                        executed,
-                        warnings,
-                        Some(verdict),
-                        false,
-                        out,
-                    );
+                    self.finish_tools(speech, step, tools, Some(verdict), false, out);
                     return;
                 }
-                self.finish_tools(speech, step, commit, executed, warnings, None, false, out);
+                self.finish_tools(speech, step, tools, None, false, out);
             }
 
             // The reply's tools are done and it has a next step: behind whatever was queued.

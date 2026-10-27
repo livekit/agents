@@ -33,7 +33,10 @@ impl<'py> pyo3::IntoPyObject<'py> for ToolFlag {
     type Output = pyo3::Bound<'py, pyo3::types::PyInt>;
     type Error = std::convert::Infallible;
 
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> Result<pyo3::Bound<'py, pyo3::types::PyInt>, std::convert::Infallible> {
+    fn into_pyobject(
+        self,
+        py: pyo3::Python<'py>,
+    ) -> Result<pyo3::Bound<'py, pyo3::types::PyInt>, std::convert::Infallible> {
         self.0.into_pyobject(py)
     }
 }
@@ -213,9 +216,10 @@ pub fn decide_duplicate_wire(
         DuplicateMode::Replace if in_flight.iter().any(|(_, cancellable)| !cancellable) => {
             ("not_cancellable", Some(name.into()))
         }
-        DuplicateMode::Replace => {
-            ("cancel_then_proceed", Some(in_flight.into_iter().map(|(id, _)| id).collect::<Vec<_>>().into()))
-        }
+        DuplicateMode::Replace => (
+            "cancel_then_proceed",
+            Some(in_flight.into_iter().map(|(id, _)| id).collect::<Vec<_>>().into()),
+        ),
         DuplicateMode::Reject => ("reject", None),
         // Truthiness, not presence: missing and `false` both mean "not confirmed".
         DuplicateMode::Confirm if !confirm_duplicate.unwrap_or(false) => ("confirm", None),
@@ -269,38 +273,17 @@ pub fn inject_confirm_duplicate(parameters: &Value) -> Value {
     Value::Object(params)
 }
 
-/// `make_function_call_output`'s table: `(output, is_error, reply_required)` for one outcome.
-/// `output` is `None` where the host owns the text. An unknown outcome raises: a typo would
-/// otherwise mean `is_error=False` on a failed call.
-//
-// The outcome is the host's `isinstance` verdict (`llm/utils.py:713`). The host's text is the
-// exception's `message` for a `ToolError`, `str(output or "")` for `ok`. `StopResponse` is
-// answered (`reply_required = false`, `is_error = false`): a realtime provider rejects an
-// unanswered call, and an error would make the agent apologise. The error strings are
-// model-facing prompts and deliberately leak nothing about the exception.
-#[crate::host(export(pid = false))]
-pub fn tool_call_output_shape(outcome: &str) -> Result<(Option<&'static str>, bool, bool), String> {
-    Ok(match outcome {
-        "tool_error" => (None, true, true),
-        "stop" => (Some(""), false, false),
-        "internal" => (Some("An internal error occurred"), true, true),
-        "invalid" => (Some("the tool returned an invalid output"), true, true),
-        "ok" => (None, false, true),
-        _ => {
-            return Err(format!(
-                "unknown tool outcome {outcome:?} (expected tool_error, stop, internal, invalid or ok)"
-            ));
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::*;
     use serde_json::json;
 
-    fn decide(mode: DuplicateMode, confirm: Option<bool>, in_flight: &[(&str, bool)]) -> (&'static str, Option<Value>) {
+    fn decide(
+        mode: DuplicateMode,
+        confirm: Option<bool>,
+        in_flight: &[(&str, bool)],
+    ) -> (&'static str, Option<Value>) {
         let in_flight = in_flight.iter().map(|(id, c)| ((*id).to_owned(), *c)).collect();
         decide_duplicate_wire("f", mode, confirm, in_flight)
     }
@@ -317,14 +300,23 @@ mod tests {
             (Replace, None, &[], ("proceed", None)),
             (Confirm, None, &[], ("proceed", None)),
             (Replace, None, &[("a", true), ("b", false)], ("not_cancellable", Some(json!("f")))),
-            (Replace, None, &[("a", true), ("b", true)], ("cancel_then_proceed", Some(json!(["a", "b"])))),
+            (
+                Replace,
+                None,
+                &[("a", true), ("b", true)],
+                ("cancel_then_proceed", Some(json!(["a", "b"]))),
+            ),
             (Confirm, None, &busy, ("confirm", None)),
             (Confirm, Some(false), &busy, ("confirm", None)),
             (Confirm, Some(true), &busy, ("proceed", None)),
             (Reject, Some(true), &busy, ("reject", None)),
         ];
         for (mode, confirm, in_flight, want) in cases {
-            assert_eq!(&decide(*mode, *confirm, in_flight), want, "{mode:?} {confirm:?} {in_flight:?}");
+            assert_eq!(
+                &decide(*mode, *confirm, in_flight),
+                want,
+                "{mode:?} {confirm:?} {in_flight:?}"
+            );
         }
     }
 
@@ -349,19 +341,6 @@ mod tests {
         let once = inject_confirm_duplicate(&json!({"type": "object"}));
         assert!(once["properties"][CONFIRM_DUPLICATE_PARAM].is_object());
         assert_eq!(inject_confirm_duplicate(&once)["required"], json!([CONFIRM_DUPLICATE_PARAM]));
-    }
-
-    // Catches: `StopResponse` written as an error or left unanswered, a `ToolError` given a canned
-    // message instead of the author's text, exception detail leaking to the model, or an unknown
-    // tag defaulting instead of refusing.
-    #[test]
-    fn each_outcome_has_the_references_output_shape_and_an_unknown_one_is_refused() {
-        assert_eq!(tool_call_output_shape("stop"), Ok((Some(""), false, false)));
-        assert_eq!(tool_call_output_shape("tool_error"), Ok((None, true, true)));
-        assert_eq!(tool_call_output_shape("internal"), Ok((Some("An internal error occurred"), true, true)));
-        assert_eq!(tool_call_output_shape("invalid"), Ok((Some("the tool returned an invalid output"), true, true)));
-        assert_eq!(tool_call_output_shape("ok"), Ok((None, false, true)));
-        assert!(tool_call_output_shape("error").is_err());
     }
 
     // Catches: `name` scope including the arguments, hashing arguments in serialized order, or

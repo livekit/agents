@@ -26,12 +26,6 @@ pub fn unknown_tool_message(name: &str, available: &[String]) -> String {
 
 pub const MISSING_TOOL_OUTPUT: &str = "the tool executor did not report a result";
 
-/// `make_function_call_output`'s text for an unexpected exception; says nothing about it.
-pub const INTERNAL_ERROR_OUTPUT: &str = "An internal error occurred";
-
-/// `make_function_call_output`'s text for a return value the model cannot be told about.
-pub const INVALID_OUTPUT: &str = "the tool returned an invalid output";
-
 /// `_RunningTasks` and the deferred reply (`AgentActivity`'s background tool calls), the open
 /// filler scopes, and the steps whose `function_tools_executed` the host is handling.
 #[derive(Debug, Default)]
@@ -45,6 +39,8 @@ pub(crate) struct Tools {
     pub(crate) fillers: BTreeMap<FillerId, FillerRun>,
     /// The steps whose `function_tools_executed` handlers the host runs, until they answer.
     pub(crate) handling: BTreeMap<HookId, Handling>,
+    /// The call an `InputRequired` left open: the person's next message is its output.
+    pub(crate) pending_input: Option<Ask>,
 }
 
 impl Tools {
@@ -246,9 +242,190 @@ pub(crate) struct FillerTimer {
 pub(crate) struct Handling {
     pub(crate) speech: SpeechId,
     pub(crate) step: u32,
-    pub(crate) event: ToolsExecutedEvent,
-    pub(crate) warnings: Vec<StepWarning>,
+    /// With its `executed` event, as issued.
+    pub(crate) tools: StepTools,
     pub(crate) verdict: tokio::sync::oneshot::Sender<ToolsVerdict>,
+}
+
+/// A finished tool step, as the driver commits it.
+#[derive(Debug)]
+pub struct StepTools {
+    /// Used when there is no `executed` event; otherwise the event's calls and outputs are.
+    pub commit: Vec<ChatItem>,
+    /// `function_tools_executed`.
+    pub executed: Option<Box<ToolsExecutedEvent>>,
+    pub warnings: Vec<StepWarning>,
+    pub deliveries: Vec<Delivery>,
+}
+
+/// `FunctionCall.extra` key on a call of a tool that requires approval: `asked` when it returned
+/// the read-back, `granted` when it ran on the person's answer.
+pub const APPROVAL_KEY: &str = "lk.approval";
+
+/// The output of an answered `InputRequired`: the person's words, or, for an approval's
+/// read-back, that the call has not run and how to run it (`APPROVAL_ANSWERED`).
+pub(crate) fn answered_text(
+    record: &crate::agent::SessionChatCtx,
+    ask: &Ask,
+    text: &str,
+) -> String {
+    let asked = record.items().any(|item| match item {
+        ChatItem::FunctionCall(call) => {
+            call.call_id == ask.call_id
+                && call.extra.get(APPROVAL_KEY).and_then(|v| v.as_str()) == Some("asked")
+        }
+        _ => false,
+    });
+    if !asked {
+        return text.to_owned();
+    }
+    let name = record
+        .items()
+        .find_map(|item| match item {
+            ChatItem::FunctionCall(call) if call.call_id == ask.call_id => Some(call.name.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    format!(
+        "not run yet: the person answered {} to its read-back. If they agreed, call {name} again \
+         with exactly the same arguments to run it; if not, do not, and go on from what they said.",
+        python_repr(text)
+    )
+}
+
+/// `approval_granted`: whether `call` repeats the latest read-back of its tool, with the same
+/// arguments, after the person answered it, and no earlier repeat used that answer. A reading of
+/// the record by the calls' [`APPROVAL_KEY`] marks: a call that asked something else, such as a
+/// missing detail, is neither a read-back nor a run.
+pub fn approval_granted(items: &[ChatItem], call: &FunctionCall) -> bool {
+    let answered = |call_id: &str| {
+        items.iter().any(|i| match i {
+            ChatItem::FunctionCallOutput(o) => {
+                o.call_id == call_id
+                    && !o.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX)
+            }
+            _ => false,
+        })
+    };
+    let key = canonical_arguments(&call.arguments);
+    // The arguments of the latest answered, unused read-back.
+    let mut asked: Option<String> = None;
+    for item in items {
+        let ChatItem::FunctionCall(c) = item else { continue };
+        if c.name != call.name {
+            continue;
+        }
+        if c.call_id == call.call_id {
+            break;
+        }
+        match c.extra.get(APPROVAL_KEY).and_then(|v| v.as_str()) {
+            Some("granted") if asked.as_deref() == Some(&canonical_arguments(&c.arguments)) => {
+                asked = None;
+            }
+            Some("asked") => {
+                asked = answered(&c.call_id).then(|| canonical_arguments(&c.arguments));
+            }
+            _ => {}
+        }
+    }
+    asked == Some(key)
+}
+
+/// Whether `call` runs on an answered read-back ([`approval_granted`]), decided as the model makes
+/// it, off the session's approval record: one answer grants one repeat, also to a call made before
+/// the granted one is committed.
+pub(crate) fn grant(shared: &crate::agent_session::SessionShared, call: &FunctionCall) -> bool {
+    let mut record = shared.approvals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !approval_granted(&record, call) {
+        return false;
+    }
+    let mut marked = call.clone();
+    let mark = serde_json::Value::String(Approval::Granted.as_str().to_owned());
+    marked.extra.insert(APPROVAL_KEY.to_owned(), mark);
+    record.push(ChatItem::FunctionCall(marked));
+    true
+}
+
+/// A call is committed with the grant it ran under, however it ended (a cut one included), as
+/// `approval_scope` marks it: that answer is spent.
+pub(crate) fn mark_granted(record: &[ChatItem], item: &mut ChatItem) {
+    let ChatItem::FunctionCall(call) = item else { return };
+    if call.extra.contains_key(APPROVAL_KEY) {
+        return;
+    }
+    let granted = record.iter().any(|i| matches!(i, ChatItem::FunctionCall(g) if g.id == call.id));
+    if granted {
+        let mark = serde_json::Value::String(Approval::Granted.as_str().to_owned());
+        call.extra.insert(APPROVAL_KEY.to_owned(), mark);
+    }
+}
+
+/// The session's approval record (`SessionShared::approvals`): every agent's calls marked
+/// `lk.approval`, in order, with their outputs as last committed. What [`grant`] reads, in place of
+/// the whole history.
+pub(crate) fn note_approval(record: &mut Vec<ChatItem>, item: &ChatItem) {
+    let tracked = match item {
+        ChatItem::FunctionCall(c) => c.extra.contains_key(APPROVAL_KEY),
+        ChatItem::FunctionCallOutput(o) => record.iter().any(|i| match i {
+            ChatItem::FunctionCall(c) => c.call_id == o.call_id,
+            _ => false,
+        }),
+        _ => false,
+    };
+    if !tracked {
+        return;
+    }
+    match record.iter_mut().find(|i| i.id() == item.id()) {
+        Some(known) => *known = item.clone(),
+        None => record.push(item.clone()),
+    }
+}
+
+/// Arguments compared as JSON with sorted keys; a string that is not JSON compares as written.
+fn canonical_arguments(arguments: &str) -> String {
+    fn sorted(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let sorted: std::collections::BTreeMap<_, _> =
+                    map.into_iter().map(|(k, v)| (k, sorted(v))).collect();
+                serde_json::Value::Object(sorted.into_iter().collect())
+            }
+            serde_json::Value::Array(a) => {
+                serde_json::Value::Array(a.into_iter().map(sorted).collect())
+            }
+            other => other,
+        }
+    }
+    let arguments = if arguments.is_empty() { "{}" } else { arguments };
+    match serde_json::from_str::<serde_json::Value>(arguments) {
+        Ok(v) => sorted(v).to_string(),
+        Err(_) => arguments.to_owned(),
+    }
+}
+
+/// `repr(str)`, as the reference's `{answer!r}` writes it.
+fn python_repr(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push(quote);
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
 }
 
 /// `{call_ids}` as Python's `str.format` spells a list: `['a', 'b']`.
@@ -266,10 +443,10 @@ pub fn default_reply_instructions(call_ids: &[String], at_tail: bool) -> String 
 pub(crate) fn pair_for(
     running: &Running,
     id: &str,
-    outcome: ToolOutcome,
+    report: ToolReport,
     wall: std::time::SystemTime,
     mut mint: impl FnMut() -> String,
-) -> (FunctionCall, FunctionCallOutput) {
+) -> ToolExecution {
     let call = FunctionCall {
         id: mint(),
         call_id: id.to_owned(),
@@ -279,13 +456,24 @@ pub(crate) fn pair_for(
         extra: running.call.extra.clone(),
         group_id: None,
     };
-    let execution = answer(&call, outcome, wall);
-    let mut output = execution.output;
-    output.id = mint();
-    (call, output)
+    let mut execution = answer(&call, report, wall);
+    execution.output.id = mint();
+    if let Some(Delivery::Ask(ask)) = &mut execution.delivery {
+        ask.output_id = execution.output.id.clone();
+    }
+    execution
 }
 
-// --- fillers: `RunContext.with_filler` on the driver's clock ---
+pub use lk_agents_abi::llm::tool_executor::{Approval, ToolOutcome, ToolReport};
+
+/// `make_function_call_output`'s answer for a classified outcome, `(output, is_error,
+/// reply_required)`: the table a call reads too.
+#[lk_agents_abi::host(export(pid = false))]
+pub fn tool_call_output(outcome: ToolOutcome) -> (String, bool, bool) {
+    let lk_agents_abi::llm::tool_executor::ToolShape { text, is_error, reply_required } =
+        outcome.shape();
+    (text, is_error, reply_required)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolExecution {
@@ -295,14 +483,39 @@ pub struct ToolExecution {
     pub end: ToolEnd,
     /// The first update as the tool wrote it (`ToolCallUpdated.message`), for a detached call.
     pub raw_update: Option<String>,
+    /// What the person gets because of this call, once its output is committed.
+    pub delivery: Option<Delivery>,
+}
+
+/// What reaches the person because of a call's outcome (the reference's verbatim `say()` and
+/// `_apply_transition`), once the call's output is committed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Delivery {
+    /// A verbatim result: said as written, the model reads that it was delivered.
+    Say(String),
+    /// `InputRequired`: the question asked, and the person's next message written as the output
+    /// `output_id` of the call `call_id` (the approval's read-back included).
+    Ask(Ask),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ask {
+    pub call_id: String,
+    pub output_id: String,
+    pub question: String,
+    pub verbatim: bool,
+    /// `InputRequired(tool=)`: the tool the answer goes to.
+    pub tool: Option<String>,
+    /// The `InputRequired` object, the output of a run ending on the asking speech.
+    pub transition: Option<lk_agents_abi::HostRef>,
 }
 
 /// How a tool's run ended (`ToolCallEnded{status}`), plus `Detached`, which is not an end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolEnd {
-    /// A value, a silent return, a handoff: `status: "done"`.
+    /// A value, a transition, a silent return: `status: "done"`.
     Done,
-    /// An error output the model reads: `status: "error"`.
+    /// An exception the model reads: `status: "error"`.
     Error,
     /// The host cancelled the tool: `status: "cancelled"`, an empty output, no reply.
     Cancelled,
@@ -310,86 +523,23 @@ pub enum ToolEnd {
     Detached,
 }
 
-/// What the host's run of one tool came back with, before any decision; [`decide`] makes them.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ToolAnswer {
-    /// The tool returned `value` as JSON.
-    Returned {
-        value: Option<serde_json::Value>,
-    },
-    Raised(ToolRaise),
-    /// A value the model can't be told about (`_is_valid_function_output`).
-    Invalid,
-    Cancelled,
-    /// `ctx.update(message)`: rendered `message`, `raw` as written; the tool runs on.
-    Detached {
-        message: String,
-        raw: String,
-    },
-}
-
-/// The three exception kinds the reference tells apart (`llm/utils.py`, `make_function_call_output`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolRaise {
-    /// `ToolError(message)`: the author's words, for the model.
-    ToolError(String),
-    /// `StopResponse`: the call is answered and nothing is said.
-    StopResponse,
-    /// Anything else. The detail went to the host's log; the model is told nothing about it.
-    Internal,
-}
-
-/// `REPLY_INSTRUCTIONS_AT_TAIL` and `REPLY_INSTRUCTIONS_MAYBE_COVERED`, the deferred-reply templates.
-/// Pure constants, read at import, so no fork guard.
-#[lk_agents_abi::host(export(pid = false))]
-pub fn tool_reply_templates() -> (&'static str, &'static str) {
-    (REPLY_AT_TAIL, REPLY_MAYBE_COVERED)
-}
-
-/// A detached tool's raw answer (`tool_update(kind="final", answer=..)`): the marshal's dict; a
-/// malformed one is the `ValueError` naming what is wrong.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolAnswer {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        let raw: lk_agents_abi::llm::tool_executor::RawToolAnswer =
-            lk_agents_abi::python::extract_generated(&obj.to_owned())?;
-        ToolAnswer::try_from(raw).map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-}
-
-impl TryFrom<lk_agents_abi::llm::tool_executor::RawToolAnswer> for ToolAnswer {
-    type Error = String;
-
-    /// The marshal's dict as a [`ToolAnswer`]. An unknown kind, or one missing its key, is an
-    /// error, never a guess.
-    fn try_from(raw: lk_agents_abi::llm::tool_executor::RawToolAnswer) -> Result<Self, String> {
-        use lk_agents_abi::llm::tool_executor::{ToolAnswerKind, ToolRaiseKind};
-        let kind = ToolAnswerKind::from_wire(&raw.kind)
-            .ok_or_else(|| format!("unknown tool answer kind {:?}", raw.kind))?;
-        let message = |m: Option<String>| {
-            m.ok_or_else(|| format!("a `{}` answer carries a `message`", raw.kind))
-        };
-        Ok(match kind {
-            ToolAnswerKind::Returned => ToolAnswer::Returned { value: raw.value },
-            ToolAnswerKind::Raised => {
-                let raised = raw.error.as_deref().and_then(ToolRaiseKind::from_wire);
-                ToolAnswer::Raised(
-                    match raised.ok_or_else(|| format!("unknown raised kind {:?}", raw.error))? {
-                        ToolRaiseKind::ToolError => ToolRaise::ToolError(message(raw.message)?),
-                        ToolRaiseKind::StopResponse => ToolRaise::StopResponse,
-                        ToolRaiseKind::Internal => ToolRaise::Internal,
-                    },
-                )
+impl ToolEnd {
+    fn of(outcome: &ToolOutcome) -> ToolEnd {
+        match outcome {
+            ToolOutcome::Update { .. } => ToolEnd::Detached,
+            ToolOutcome::Cancelled => ToolEnd::Cancelled,
+            ToolOutcome::ToolError(_) | ToolOutcome::Internal | ToolOutcome::Invalid => {
+                ToolEnd::Error
             }
-            ToolAnswerKind::Invalid => ToolAnswer::Invalid,
-            ToolAnswerKind::Cancelled => ToolAnswer::Cancelled,
-            ToolAnswerKind::Detached => ToolAnswer::Detached {
-                message: message(raw.message)?,
-                raw: raw.raw.ok_or("a `detached` answer carries `raw`")?,
-            },
-        })
+            ToolOutcome::Value { .. }
+            | ToolOutcome::Nothing
+            | ToolOutcome::StopResponse
+            | ToolOutcome::Completed { .. }
+            | ToolOutcome::Failed(_)
+            | ToolOutcome::Rejected(_)
+            | ToolOutcome::InputRequired { .. }
+            | ToolOutcome::Working(_) => ToolEnd::Done,
+        }
     }
 }
 
@@ -417,18 +567,20 @@ impl std::fmt::Debug for Toolset {
 }
 
 /// `voice/tool_executor.py`'s `ToolRunner`, the only port on the generation path: runs one call
-/// and reports the marshal's dict. A report, not a decision; [`decide`] owns the output.
+/// and classifies what the body returned or raised. A report, not a decision; [`answer`] owns
+/// the output.
 #[lk_agents_abi::host(proxy)]
 #[async_trait::async_trait]
 pub trait HostToolRunner: Send + Sync {
     /// `speech` is the call's speech as the host's `SpeechHandle` sees it (`_core.SpeechHandle`),
-    /// whose `host` is the host's own object once it made one.
+    /// whose `host` is the host's own object once it made one. `granted`: the call repeats a
+    /// read-back the person answered ([`approval_granted`]), so a tool that requires approval runs.
     async fn run(
         &self,
         call: &FunctionCall,
         speech: &lk_agents_abi::CoreObject,
-        step: u32,
-    ) -> Result<lk_agents_abi::llm::tool_executor::RawToolAnswer, lk_agents_abi::errors::HostError>;
+        granted: bool,
+    ) -> Result<ToolReport, lk_agents_abi::errors::HostError>;
 
     /// `_ToolExecutor.cancel`, unconditionally as its `aclose()` does: the body running under
     /// `call_id` is cancelled. Fire-and-forget: the driver has already told the call's end.
@@ -437,22 +589,18 @@ pub trait HostToolRunner: Send + Sync {
 
 impl dyn HostToolRunner {
     /// Resolves when the tool returns, raises, is cancelled, or releases the step with its first
-    /// `ctx.update()`. Every call gets exactly one answer: a marshal that raises or reports an
-    /// unreadable dict is answered as the reference's internal error, and logged.
+    /// `ctx.update()`. Every call gets exactly one answer: a runner that raises or reports an
+    /// unreadable outcome is answered as the reference's internal error, and logged.
     pub async fn answer(
         &self,
         call: &FunctionCall,
         speech: &lk_agents_abi::CoreObject,
-        step: u32,
-    ) -> ToolAnswer {
-        let answer = match self.run(call, speech, step).await {
-            Ok(raw) => ToolAnswer::try_from(raw),
-            Err(e) => Err(e.to_string()),
-        };
-        answer.unwrap_or_else(|e| {
+        granted: bool,
+    ) -> ToolReport {
+        self.run(call, speech, granted).await.unwrap_or_else(|e| {
             log::error!(target: "livekit.agents", function = call.name.as_str(), call_id = call.call_id.as_str();
                 "the tool executor failed outside the tool's own error handling: {e}");
-            ToolAnswer::Raised(ToolRaise::Internal)
+            ToolOutcome::Internal.into()
         })
     }
 }
@@ -463,85 +611,46 @@ impl std::fmt::Debug for dyn HostToolRunner {
     }
 }
 
-/// What one tool produced, decided; [`answer`] turns it into exactly one output.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ToolOutcome {
-    Reply(String),
-    /// Empty output, no reply: a `None` return or `StopResponse`.
-    Silent,
-    Error(String),
-    /// A progress update: answered like a reply, and the call is marked non-blocking.
-    Detached {
-        message: String,
-        raw: String,
-    },
-    /// The host cancelled the tool: an empty output, no reply, not an error.
-    Cancelled,
-    Missing,
-}
-
-/// What the model reads: a string verbatim, anything else as canonical JSON.
-pub fn render(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-/// The decision: text, error, whether a reply is asked for (`make_tool_output` +
-/// `make_function_call_output`).
-pub fn decide(answer: ToolAnswer) -> ToolOutcome {
-    match answer {
-        ToolAnswer::Returned { value } => match value {
-            None => ToolOutcome::Silent,
-            Some(v) => ToolOutcome::Reply(render(&v)),
-        },
-        ToolAnswer::Raised(ToolRaise::ToolError(message)) => ToolOutcome::Error(message),
-        ToolAnswer::Raised(ToolRaise::StopResponse) => ToolOutcome::Silent,
-        ToolAnswer::Raised(ToolRaise::Internal) => {
-            ToolOutcome::Error(INTERNAL_ERROR_OUTPUT.to_owned())
-        }
-        ToolAnswer::Invalid => ToolOutcome::Error(INVALID_OUTPUT.to_owned()),
-        ToolAnswer::Cancelled => ToolOutcome::Cancelled,
-        ToolAnswer::Detached { message, raw } => ToolOutcome::Detached { message, raw },
-    }
-}
-
-/// The one formatter: every committed `FunctionCallOutput` comes through here.
-pub fn answer(call: &FunctionCall, outcome: ToolOutcome, now: SystemTime) -> ToolExecution {
-    let output = |text: String, is_error: bool, reply_required: bool| {
-        let mut out = FunctionCallOutput::new(
-            format!("{}_out", call.id),
-            call.call_id.clone(),
-            text,
-            is_error,
-            now,
-        );
-        out.name = call.name.clone();
-        out.reply_required = reply_required;
-        out
-    };
+/// The one formatter: every committed `FunctionCallOutput` comes through here, from the one
+/// decision table (`ToolOutcome::shape`), a verbatim result rewritten as delivered.
+pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolExecution {
+    let ToolReport { outcome, approval, transition } = report;
+    let shape = outcome.shape();
+    let mut output = FunctionCallOutput::new(
+        format!("{}_out", call.id),
+        call.call_id.clone(),
+        outcome.delivered().unwrap_or(shape.text),
+        shape.is_error,
+        now,
+    );
+    output.name = call.name.clone();
+    output.reply_required = shape.reply_required;
     let mut call = call.clone();
-    let mut raw_update = None;
-    let (output, end) = match outcome {
-        ToolOutcome::Reply(text) => (output(text, false, true), ToolEnd::Done),
-        ToolOutcome::Silent => (output(String::new(), false, false), ToolEnd::Done),
-        ToolOutcome::Error(text) => (output(text, true, true), ToolEnd::Error),
-        ToolOutcome::Detached { message, raw } => {
+    if let Some(approval) = approval {
+        let mark = serde_json::Value::String(approval.as_str().to_owned());
+        call.extra.insert(APPROVAL_KEY.to_owned(), mark);
+    }
+    let end = ToolEnd::of(&outcome);
+    let delivery = match outcome {
+        ToolOutcome::Update { raw, .. } => {
             // `RunContext.update`'s marker: a non-blocking tool may wait on its own speech.
             call.extra.insert(
                 crate::speech_handle::TOOL_NON_BLOCKING_EXTRA_KEY.to_owned(),
                 serde_json::Value::Bool(true),
             );
-            raw_update = Some(raw);
-            (output(message, false, true), ToolEnd::Detached)
+            return ToolExecution { call, output, end, raw_update: Some(raw), delivery: None };
         }
-        ToolOutcome::Cancelled => (output(String::new(), false, false), ToolEnd::Cancelled),
-        ToolOutcome::Missing => {
-            (output(MISSING_TOOL_OUTPUT.to_owned(), true, true), ToolEnd::Error)
-        }
+        ToolOutcome::InputRequired { question, verbatim, tool } => Some(Delivery::Ask(Ask {
+            call_id: call.call_id.clone(),
+            output_id: output.id.clone(),
+            question,
+            verbatim,
+            tool,
+            transition,
+        })),
+        other => other.verbatim().map(|text| Delivery::Say(text.to_owned())),
     };
-    ToolExecution { call, output, end, raw_update }
+    ToolExecution { call, output, end, raw_update: None, delivery }
 }
 
 pub use lk_agents_abi::voice::events::ToolsExecutedEvent;
@@ -591,6 +700,8 @@ pub struct StepDecision {
     /// Items committed on arrival, so results survive a reply that never runs. Calls, then outputs.
     pub commit: Vec<ChatItem>,
     pub warnings: Vec<StepWarning>,
+    /// What the calls owe the person, delivered once the commit is made.
+    pub deliveries: Vec<Delivery>,
     max_steps_reached: bool,
     /// The second interruption read.
     interrupted: bool,
@@ -685,6 +796,7 @@ pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
         tools_executed: None,
         commit: Vec::new(),
         warnings,
+        deliveries: inputs.tool_output.iter().filter_map(|o| o.delivery.clone()).collect(),
         max_steps_reached,
         interrupted: inputs.interrupted,
         previous_user_metrics: inputs
@@ -717,6 +829,7 @@ fn quiet(next: NextStep) -> StepDecision {
         tools_executed: None,
         commit: Vec::new(),
         warnings: Vec::new(),
+        deliveries: Vec::new(),
         max_steps_reached: false,
         interrupted: false,
         previous_user_metrics: None,
@@ -740,6 +853,13 @@ fn interrupted(tool_output: &[ToolExecution]) -> StepDecision {
             handoff_required: false,
         }),
         commit,
+        // A verbatim result was the person's as the call returned; a question is not asked of
+        // a person who has moved on.
+        deliveries: tool_output
+            .iter()
+            .filter_map(|o| o.delivery.clone())
+            .filter(|d| matches!(d, Delivery::Say(_)))
+            .collect(),
         ..quiet(NextStep::Interrupted)
     }
 }
@@ -761,12 +881,13 @@ impl Driver {
         left: Option<(Vec<bool>, bool)>,
         out: &mut Out,
     ) {
-        let Some(Handling { speech, step, mut event, warnings, verdict }) =
+        let Some(Handling { speech, step, mut tools, verdict }) =
             self.activity.tools.handling.remove(&hook)
         else {
             return;
         };
-        if let Some((reply_required, handoff_required)) = left {
+        if let (Some((reply_required, handoff_required)), Some(event)) = (left, &mut tools.executed)
+        {
             if reply_required.len() == event.function_call_outputs.len() {
                 for (out, required) in event.function_call_outputs.iter_mut().zip(reply_required) {
                     out.reply_required = required;
@@ -779,25 +900,22 @@ impl Driver {
             // A handler can cancel the handoff, not ask for one.
             event.handoff_required &= handoff_required;
         }
-        let executed = Some(Box::new(event));
-        self.finish_tools(speech, step, Vec::new(), executed, warnings, Some(verdict), true, out);
+        self.finish_tools(speech, step, tools, Some(verdict), true, out);
     }
 
     /// A step's tools are over and `function_tools_executed` handled: the results committed with
-    /// whether the activity drains, and the waiting step (`verdict`) told what the handlers left.
-    /// `hosted`: the host emitted the event itself.
-    #[allow(clippy::too_many_arguments)]
+    /// whether the activity drains, what the calls owe the person delivered, and the waiting step
+    /// (`verdict`) told what the handlers left. `hosted`: the host emitted the event itself.
     pub(crate) fn finish_tools(
         &mut self,
         speech: SpeechId,
         step: u32,
-        commit: Vec<ChatItem>,
-        executed: Option<Box<ToolsExecutedEvent>>,
-        warnings: Vec<StepWarning>,
+        tools: StepTools,
         verdict: Option<tokio::sync::oneshot::Sender<ToolsVerdict>>,
         hosted: bool,
         out: &mut Out,
     ) {
+        let StepTools { commit, executed, warnings, deliveries } = tools;
         // What the handlers left is what is committed: calls, then outputs.
         let commit = match &executed {
             Some(e) => crate::tool_executor::commit_of(&e.function_calls, &e.function_call_outputs),
@@ -849,6 +967,10 @@ impl Driver {
         self.activity.tools_committed.insert((speech, step), draining);
         self.activity.set_tools_in_flight(speech, false);
         self.publish_activity();
+        // Before the follow-up is let go, so a verbatim result is heard before the reply to it.
+        for delivery in deliveries {
+            self.deliver_outcome(self.step.now, speech, delivery, out);
+        }
         for w in &warnings {
             // A core crate has no logger, so the host says these (and the trace records them).
             // Only the spent step budget has a sentence in the reference.
@@ -894,88 +1016,5 @@ impl Driver {
             Origin::Tool { call_id } => self.activity.tools.speech_of(call_id),
             Origin::Host | Origin::Hook | Origin::Amd | Origin::Ivr => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod host_answer_tests {
-    use super::{ToolAnswer, ToolRaise};
-    use lk_agents_abi::llm::tool_executor::RawToolAnswer;
-
-    fn raw(
-        kind: &str,
-        error: Option<&str>,
-        message: Option<&str>,
-        detached_raw: Option<&str>,
-    ) -> RawToolAnswer {
-        RawToolAnswer {
-            kind: kind.to_owned(),
-            value: None,
-            error: error.map(str::to_owned),
-            message: message.map(str::to_owned),
-            raw: detached_raw.map(str::to_owned),
-        }
-    }
-
-    // Catches: a kind that reaches this reader and stops there, answered with a default.
-    #[test]
-    fn every_kind_of_answer_lands_with_its_payload() {
-        let mut returned = raw("returned", None, None, None);
-        returned.value = Some(serde_json::json!({"temp": 12}));
-        assert_eq!(
-            ToolAnswer::try_from(returned),
-            Ok(ToolAnswer::Returned { value: Some(serde_json::json!({"temp": 12})) })
-        );
-        assert_eq!(
-            ToolAnswer::try_from(raw("raised", Some("tool_error"), Some("nope"), None)),
-            Ok(ToolAnswer::Raised(ToolRaise::ToolError("nope".to_owned())))
-        );
-        assert_eq!(
-            ToolAnswer::try_from(raw("raised", Some("stop_response"), None, None)),
-            Ok(ToolAnswer::Raised(ToolRaise::StopResponse))
-        );
-        assert_eq!(
-            ToolAnswer::try_from(raw("raised", Some("internal"), None, None)),
-            Ok(ToolAnswer::Raised(ToolRaise::Internal))
-        );
-        assert_eq!(ToolAnswer::try_from(raw("invalid", None, None, None)), Ok(ToolAnswer::Invalid));
-        assert_eq!(
-            ToolAnswer::try_from(raw("cancelled", None, None, None)),
-            Ok(ToolAnswer::Cancelled)
-        );
-        assert_eq!(
-            ToolAnswer::try_from(raw(
-                "detached",
-                None,
-                Some("The tool has updated: working"),
-                Some("working")
-            )),
-            Ok(ToolAnswer::Detached {
-                message: "The tool has updated: working".to_owned(),
-                raw: "working".to_owned()
-            })
-        );
-    }
-
-    // Catches: a malformed answer read as a plausible one instead of refused.
-    #[test]
-    fn a_malformed_answer_is_refused_rather_than_guessed() {
-        assert!(ToolAnswer::try_from(raw("done", None, None, None)).is_err(), "an unknown kind");
-        assert!(
-            ToolAnswer::try_from(raw("raised", None, None, None)).is_err(),
-            "a raise without its kind"
-        );
-        assert!(
-            ToolAnswer::try_from(raw("raised", Some("tool_error"), None, None)).is_err(),
-            "a ToolError without its message"
-        );
-        assert!(
-            ToolAnswer::try_from(raw("detached", None, None, None)).is_err(),
-            "an update without its message"
-        );
-        assert!(
-            ToolAnswer::try_from(raw("detached", None, Some("m"), None)).is_err(),
-            "an update without its raw text"
-        );
     }
 }

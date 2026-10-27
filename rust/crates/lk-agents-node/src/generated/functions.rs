@@ -163,13 +163,6 @@ pub fn unknown_tool_message(name: String, available: Vec<String>) -> String {
     lk_agents_voice::tool_executor::unknown_tool_message(&name, &available)
 }
 
-/// `REPLY_INSTRUCTIONS_AT_TAIL` and `REPLY_INSTRUCTIONS_MAYBE_COVERED`, the deferred-reply templates.
-/// Pure constants, read at import, so no fork guard.
-#[napi(js_name = "toolReplyTemplates")]
-pub fn tool_reply_templates() -> (String, String) {
-    { let (t0, t1,) = lk_agents_voice::tool_executor::tool_reply_templates(); (t0.to_string(), t1.to_string()) }
-}
-
 /// The join token a simulated job's agent participant uses.
 #[napi(js_name = "agentJoinToken")]
 pub fn agent_join_token(env: Env, api_key: String, api_secret: String, identity: String, room: String) -> napi::Result<String> {
@@ -575,16 +568,6 @@ pub fn confirm_duplicate_description() -> String {
 #[napi(js_name = "injectConfirmDuplicate")]
 pub fn inject_confirm_duplicate(parameters: serde_json::Value) -> serde_json::Value {
     lk_agents_abi::llm::provider_format::tools::inject_confirm_duplicate(&parameters)
-}
-
-/// `make_function_call_output`'s table: `(output, is_error, reply_required)` for one outcome.
-/// `output` is `None` where the host owns the text. An unknown outcome raises: a typo would
-/// otherwise mean `is_error=False` on a failed call.
-#[napi(js_name = "toolCallOutputShape")]
-pub fn tool_call_output_shape(env: Env, outcome: String) -> napi::Result<(Option<String>, bool, bool)> {
-    crate::host_error::run(&env, || {
-        Ok({ let (t0, t1, t2,) = lk_agents_abi::llm::provider_format::tools::tool_call_output_shape(&outcome).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))?; (t0.map(|v| v.to_string()), t1, t2) })
-    })
 }
 
 /// `to_fnc_ctx(tools)` for a dialect; each tool is the host's `[kind, schema, name]` (`name` only for

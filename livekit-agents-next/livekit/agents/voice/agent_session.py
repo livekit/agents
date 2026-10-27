@@ -764,7 +764,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_item_added(self, wire: dict[str, Any]) -> None:
         item = from_core_item(wire["item"])
-        self._chat_ctx.insert(item)
+        # an output told again changed in place (an answered question's)
+        idx = self._chat_ctx.index_by_id(item.id) if item.type == "function_call_output" else None
+        if idx is not None:
+            self._chat_ctx.items[idx] = item
+        else:
+            self._chat_ctx.insert(item)
         if (run := wire["run"]) is not None:
             if item.type == "agent_handoff":
                 run._agent_handoff(
