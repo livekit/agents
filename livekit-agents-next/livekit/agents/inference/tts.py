@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import functools
 from typing import Any
 
@@ -25,7 +24,7 @@ from .._generated.inference_tts import (
 )
 from ..language import LanguageCode
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..utils import aio, is_given, shortuuid
+from ..utils import is_given, shortuuid
 from ._utils import Credentials, get_inference_headers
 
 __all__ = [
@@ -217,29 +216,4 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        async def _send() -> None:
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    native.flush()
-                else:
-                    self.mark_started()
-                    native.push(data)
-            native.end_input()
-
-        async def _recv() -> None:
-            started = False
-            while (audio := await native.recv()) is not None:
-                if not started:
-                    started = True
-                    output_emitter.start_segment(segment_id=audio["segment_id"] or shortuuid())
-                if words := audio["timed_transcript"]:
-                    output_emitter.push_timed_transcript(words)
-                output_emitter.push_frame(audio["frame"])
-            output_emitter.end_input()
-
-        tasks = [asyncio.create_task(t()) for t in (_send, _recv)]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await aio.gracefully_cancel(*tasks)
-            await native.aclose()
+        await tts._duplex(self, native, output_emitter, self.input, lambda t: t, native.push)

@@ -590,17 +590,31 @@ impl Attempt {
         self.produced = true;
     }
 
-    /// The attempt failed; on [`Retry::After`] the counter has advanced.
-    pub fn failed(&mut self, retryable: bool) -> Retry {
-        let retries_so_far = self.attempt - 1;
-        if self.produced || !retryable || retries_so_far >= self.budget.max_retry {
+    /// The attempt failed; on [`Retry::After`] the counter has advanced. The policy is the one
+    /// every provider retry follows (`types::retry::decide`); output already produced forbids a
+    /// retry on top of it.
+    pub fn failed(
+        &mut self,
+        error: &lk_agents_abi::errors::ProviderError,
+        kind: lk_agents_abi::types::retry::RequestKind,
+    ) -> Retry {
+        use lk_agents_abi::types::retry::{RetryDecision, decide};
+        if self.produced {
             return Retry::Never;
         }
-        let after =
-            Duration::from_secs_f64(self.budget.interval_for_retry(retries_so_far).max(0.0));
+        let retries_so_far = self.attempt - 1;
+        let decision = decide(
+            kind,
+            &self.budget,
+            retries_so_far,
+            error.retryable(),
+            error.status_code(),
+            false,
+        );
+        let RetryDecision::Retry(delay) = decision else { return Retry::Never };
         let failed = self.attempt;
         self.attempt += 1;
-        Retry::After { attempt: failed, after }
+        Retry::After { attempt: failed, after: Duration::from_secs_f64(delay.max(0.0)) }
     }
 }
 

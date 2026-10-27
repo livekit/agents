@@ -64,9 +64,8 @@ impl InputTee {
         Arc::new(InputTee::default())
     }
 
-    /// How much audio is held while no stream is serving: 2 s of 20 ms frames, oldest dropped
-    /// first.
-    pub const PREROLL_FRAMES: usize = 100;
+    /// How much audio is held while no stream is serving: the bound of every reconnect.
+    pub const PREROLL_FRAMES: usize = lk_agents_abi::stt::retry::HELD_FRAMES;
 
     /// Replays what arrived while no stream served (as the reference's `_input_ch` buffers), then
     /// ends it if the caller already finished.
@@ -307,6 +306,12 @@ impl std::fmt::Display for SttChainError {
 impl std::error::Error for SttChainError {}
 
 /// `stt:79-93`, field for field; `offline_recognize` is not merged, as in the reference.
+/// `stt.FallbackAdapter`'s capabilities, which the host reads before any chain is built.
+#[lk_agents_abi::host(export(name = "stt_fallback_capabilities", pid = false))]
+pub fn stt_capabilities_for_host(entries: Vec<SttCapabilities>) -> SttCapabilities {
+    merge_capabilities(&entries)
+}
+
 pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
     let all = |f: fn(&SttCapabilities) -> bool| entries.iter().all(f);
     let any = |f: fn(&SttCapabilities) -> bool| entries.iter().any(f);

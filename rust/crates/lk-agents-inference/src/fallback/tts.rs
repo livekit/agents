@@ -303,6 +303,12 @@ impl std::fmt::Display for TtsChainError {
 impl std::error::Error for TtsChainError {}
 
 /// `tts:92-95`: `streaming` is `any`, `aligned_transcript` is `all`, over the members as given.
+/// `tts.FallbackAdapter`'s capabilities, which the host reads before any chain is built.
+#[lk_agents_abi::host(export(name = "tts_fallback_capabilities", pid = false))]
+pub fn tts_capabilities_for_host(entries: Vec<TtsCapabilities>) -> TtsCapabilities {
+    merge_capabilities(&entries)
+}
+
 pub fn merge_capabilities(entries: &[TtsCapabilities]) -> TtsCapabilities {
     TtsCapabilities {
         streaming: entries.iter().any(|c| c.streaming),

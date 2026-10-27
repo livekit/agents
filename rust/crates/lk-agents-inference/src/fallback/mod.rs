@@ -28,10 +28,10 @@ pub use realtime::{
 };
 pub use realtime_policy::{AvailabilityChange, ErrorPlan, RealtimePolicy};
 pub use stt::{
-    FallbackStt, InputTee, SttBackend, SttChainError, SttReq, SttSession, merge_capabilities as merge_stt_capabilities,
+    FallbackStt, InputTee, SttBackend, SttChainError, SttReq, SttSession, merge_capabilities as merge_stt_capabilities, stt_capabilities_for_host,
 };
 pub use tts::{
-    FallbackTts, Token, TokenLog, TtsBackend, TtsChainError, TtsReq, merge_capabilities as merge_tts_capabilities,
+    FallbackTts, Token, TokenLog, TtsBackend, TtsChainError, TtsReq, merge_capabilities as merge_tts_capabilities, tts_capabilities_for_host,
 };
 
 #[cfg(test)]

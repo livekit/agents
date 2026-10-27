@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterable, Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from pydantic import BaseModel
@@ -107,6 +107,37 @@ class Attempts:
                 await asyncio.sleep(delay)
                 self.count += 1
                 again()
+
+
+async def pump(
+    native: Any,
+    items: AsyncIterable[Any],
+    feed: Callable[[Any], None],
+    out: Callable[[Any], None],
+) -> None:
+    """A core stream fed ``items`` (each through ``feed``, then its end of input) while ``out``
+    takes what it yields, until it ends. A feed that fails ends the stream with its error rather
+    than leaving it waiting for an end of input; the stream is closed either way."""
+    from .utils import aio
+
+    async def _feed() -> None:
+        async for item in items:
+            feed(item)
+        native.end_input()
+
+    async def _drain() -> None:
+        while (item := await native.recv()) is not None:
+            out(item)
+
+    feeding, draining = asyncio.create_task(_feed()), asyncio.create_task(_drain())
+    try:
+        await asyncio.wait({feeding, draining}, return_when=asyncio.FIRST_EXCEPTION)
+        if feeding.done() and not feeding.cancelled() and (error := feeding.exception()):
+            raise error
+        await draining
+    finally:
+        await aio.cancel_and_wait(feeding, draining)
+        await native.aclose()
 
 
 def metrics_context(provider: Any, *, cancelled: bool = False) -> tuple[float, str, bool, str, str]:

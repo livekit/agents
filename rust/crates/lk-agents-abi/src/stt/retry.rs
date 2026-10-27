@@ -191,6 +191,10 @@ impl Stt for RetryingStt {
     }
 }
 
+/// How much audio a reconnecting recognition holds for the next connection: 2 s of 20 ms frames,
+/// the oldest dropped first. One bound for every reconnect (this retry, a fallback chain's).
+pub const HELD_FRAMES: usize = 100;
+
 /// What the caller pushed, held while no attempt is open (the reference's `_input_ch`).
 #[derive(Clone)]
 enum Pushed {
@@ -242,6 +246,9 @@ impl Input {
                 return Ok(());
             }
             st.sink = None;
+        }
+        if st.held.len() == HELD_FRAMES {
+            st.held.pop_front();
         }
         st.held.push_back(item);
         Ok(())

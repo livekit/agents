@@ -51,6 +51,14 @@ pub fn strip_expr_markup(text: String) -> String {
     lk_agents_abi::tts::markup::strip_expr_markup(&text)
 }
 
+/// Only the `<expr/>` dialect stripped, with its markers: the provider-native tags stay in the
+/// words. With markers the text loses its trailing blanks, and a marker heading it takes the blank
+/// after it along.
+#[napi(js_name = "splitExprMarkup")]
+pub fn split_expr_markup(text: String) -> (String, Vec<crate::generated::records::ExpressiveTag>) {
+    { let (t0, t1,) = lk_agents_abi::tts::markup::split_expr_markup(&text); (t0, t1.into_iter().map(|v| crate::generated::records::ExpressiveTag::from(&v)).collect::<Vec<_>>()) }
+}
+
 /// `expression_attribute` as the one-entry `{ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json}` dict the
 /// reference returns.
 #[napi(js_name = "expressionAttribute")]
@@ -642,6 +650,16 @@ pub fn validate_synthesis(env: Env, text: String, duration: f64, segments: Optio
     crate::host_error::run(&env, || {
         let segments = segments.map(|v| Ok::<_, crate::host_error::JsError>({ let (t0, t1,) = v; (<usize>::try_from(t0).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("segments: {e}")))?, <usize>::try_from(t1).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("segments: {e}")))?) })).transpose()?;
         Ok(lk_agents_abi::types::retry::validate_synthesis(&text, duration, segments))
+    })
+}
+
+/// `tts:92-95`: `streaming` is `any`, `aligned_transcript` is `all`, over the members as given.
+/// `tts.FallbackAdapter`'s capabilities, which the host reads before any chain is built.
+#[napi(js_name = "ttsFallbackCapabilities")]
+pub fn tts_fallback_capabilities(env: Env, entries: Vec<crate::generated::records::TtsCapabilities>) -> napi::Result<crate::generated::records::TtsCapabilities> {
+    crate::host_error::run(&env, || {
+        let entries = entries.into_iter().map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).collect::<Result<Vec<_>, _>>()?;
+        Ok(crate::generated::records::TtsCapabilities::from(&lk_agents_inference::fallback::tts_capabilities_for_host(entries)))
     })
 }
 

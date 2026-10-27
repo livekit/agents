@@ -35,6 +35,24 @@ pub fn strip_expr_markup(text: &str) -> String {
     split_expr(text).0
 }
 
+/// Only the `<expr/>` dialect stripped, with its markers: the provider-native tags stay in the
+/// words. With markers the text loses its trailing blanks, and a marker heading it takes the blank
+/// after it along.
+#[crate::host(export(pid = false))]
+pub fn split_expr_markup(text: &str) -> (String, Vec<ExpressiveTag>) {
+    let (clean, tags) = split_expr(text);
+    if tags.is_empty() {
+        return (text.to_owned(), tags);
+    }
+    let clean = clean.trim_end_matches([' ', '\t']);
+    let clean = if text.trim_start().starts_with("<expr") {
+        clean.trim_start_matches([' ', '\t'])
+    } else {
+        clean
+    };
+    (clean.to_owned(), tags)
+}
+
 /// `{"expression", "mood"}` from a segment's leading expression/emotion tag.
 pub fn expression_attribute(tags: &[ExpressiveTag]) -> Option<(&'static str, String)> {
     let expression = tags.iter().find(|t| t.kind == "expression" || t.kind == "emotion")?;

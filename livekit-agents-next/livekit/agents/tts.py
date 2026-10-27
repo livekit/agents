@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import re
 import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
@@ -61,10 +60,6 @@ class ExpressiveTag(TypedDict):
     value: str
 
 
-_EXPR_MARKER_RE = re.compile(r"<expr\b([^>]*?)/?\s*>")
-_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
-
-
 def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     """Strip every provider's expressive XML markup; brackets are prose and stay."""
     clean, tags = _core.split_all_markup(text)
@@ -78,31 +73,35 @@ def strip_all_markup(text: str) -> str:
 def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     """Strip only the ``<expr/>`` dialect, returning the clean text and its markers; the
     provider-native tags stay in the words."""
-    tags = [
-        ExpressiveTag(type=attrs.get("type", ""), value=attrs.get("label", ""))
-        for attrs in (dict(_ATTR_RE.findall(m)) for m in _EXPR_MARKER_RE.findall(text))
-    ]
-    if not tags:
-        return text, tags
-    clean = _core.strip_expr_markup(text).rstrip(" \t")
-    # a marker heading the text takes the space after it along
-    return (clean.lstrip(" \t") if text.lstrip().startswith("<expr") else clean), tags
+    clean, tags = _core.split_expr_markup(text)
+    return clean, [ExpressiveTag(type=t["type"], value=t["value"]) for t in tags]
 
 
 def strip_expr_markup(text: str) -> str:
     return split_expr_markup(text)[0]
 
 
-async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bool) -> None:
-    """Forward a core synthesis (``_core.*TtsStream``) into ``output_emitter``."""
+def _into(output_emitter: AudioEmitter, *, stream: bool) -> Any:
+    """What forwards a core synthesis's audio into ``output_emitter``, one segment if streamed."""
     started = not stream
-    while (audio := await native.recv()) is not None:
+
+    def out(audio: Any) -> None:
+        nonlocal started
         if not started:
             started = True
             output_emitter.start_segment(segment_id=audio["segment_id"] or utils.shortuuid())
         if words := audio["timed_transcript"]:
             output_emitter.push_timed_transcript(words)
         output_emitter.push_frame(audio["frame"])
+
+    return out
+
+
+async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bool) -> None:
+    """Forward a core synthesis (``_core.*TtsStream``) into ``output_emitter``."""
+    out = _into(output_emitter, stream=stream)
+    while (audio := await native.recv()) is not None:
+        out(audio)
 
 
 @dataclass
@@ -136,9 +135,9 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         self._max_retry_per_tts = max_retry_per_tts
         sample_rate = sample_rate or max(t.sample_rate for t in tts)
         super().__init__(
+            # the chain's own merge, read before any chain is built
             capabilities=TTSCapabilities(
-                streaming=any(t.capabilities.streaming for t in tts),
-                aligned_transcript=all(t.capabilities.aligned_transcript for t in tts),
+                **_core.tts_fallback_capabilities([t.capabilities for t in tts])
             ),
             sample_rate=sample_rate,
             num_channels=tts[0].num_channels,
@@ -248,25 +247,20 @@ async def _duplex(
     output_emitter: AudioEmitter,
     texts: Any,
     lower: Any,
+    push: Any = None,
 ) -> None:
-    """Text from ``texts`` into a core duplex synthesis, its audio into ``output_emitter``."""
+    """Text from ``texts`` into a core duplex synthesis (``push``, its ``push_text`` by default),
+    its audio into ``output_emitter``."""
+    push = push or native.push_text
 
-    async def _send() -> None:
-        async for text in texts:
-            if isinstance(text, SynthesizeStream.Flush):
-                native.flush()
-            elif text := lower(text):
-                stream.mark_started()
-                native.push_text(text)
-        native.end_input()
+    def feed(text: Any) -> None:
+        if isinstance(text, SynthesizeStream.Flush):
+            native.flush()
+        elif text := lower(text):
+            stream.mark_started()
+            push(text)
 
-    send = asyncio.create_task(_send())
-    try:
-        await _drain_native(native, output_emitter, stream=True)
-        await send
-    finally:
-        await utils.aio.cancel_and_wait(send)
-        await native.aclose()
+    await _bindings.pump(native, texts, feed, _into(output_emitter, stream=True))
 
 
 class StreamAdapter(TTS):

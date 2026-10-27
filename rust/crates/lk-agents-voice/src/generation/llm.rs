@@ -323,7 +323,11 @@ pub(super) async fn retry(
     error: &ProviderError,
     provider: &(dyn Fn(ProviderError, bool) + Sync),
 ) -> Retried {
-    let decision = attempt.failed(error.retryable());
+    let kind = match leg {
+        ProviderKind::Llm => lk_agents_abi::types::retry::RequestKind::Llm,
+        ProviderKind::Tts => lk_agents_abi::types::retry::RequestKind::TtsStream,
+    };
+    let decision = attempt.failed(error, kind);
     provider(error.clone(), matches!(decision, Retry::After { .. }));
     // Every failed attempt is the reference's `error` event: `recoverable` while retried, terminal
     // when the budget gives up.

@@ -1780,6 +1780,32 @@ impl TryFrom<MetricsReport> for lk_agents_abi::MetricsReport {
     }
 }
 
+#[napi(object, js_name = "TtsCapabilities")]
+pub struct TtsCapabilities {
+    /// Whether this TTS supports streaming (generally using websockets)
+    pub streaming: bool,
+    /// Whether this TTS supports aligned transcripts with word timestamps
+    pub aligned_transcript: bool,
+}
+
+impl From<&lk_agents_abi::TtsCapabilities> for TtsCapabilities {
+    fn from(v: &lk_agents_abi::TtsCapabilities) -> Self {
+        TtsCapabilities {
+            streaming: v.streaming,
+            aligned_transcript: v.aligned_transcript,
+        }
+    }
+}
+
+impl From<TtsCapabilities> for lk_agents_abi::TtsCapabilities {
+    fn from(v: TtsCapabilities) -> Self {
+        lk_agents_abi::TtsCapabilities {
+            streaming: v.streaming,
+            aligned_transcript: v.aligned_transcript,
+        }
+    }
+}
+
 #[napi(object, js_name = "RealtimeCapabilities")]
 pub struct RealtimeCapabilities {
     /// Whether generated assistant messages can be truncated after interruption
@@ -2362,32 +2388,6 @@ impl TryFrom<TtsMetrics> for lk_agents_abi::metrics::base::TtsMetrics {
             speech_id: v.speech_id,
             metadata: v.metadata.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
         })
-    }
-}
-
-#[napi(object, js_name = "TtsCapabilities")]
-pub struct TtsCapabilities {
-    /// Whether this TTS supports streaming (generally using websockets)
-    pub streaming: bool,
-    /// Whether this TTS supports aligned transcripts with word timestamps
-    pub aligned_transcript: bool,
-}
-
-impl From<&lk_agents_abi::TtsCapabilities> for TtsCapabilities {
-    fn from(v: &lk_agents_abi::TtsCapabilities) -> Self {
-        TtsCapabilities {
-            streaming: v.streaming,
-            aligned_transcript: v.aligned_transcript,
-        }
-    }
-}
-
-impl From<TtsCapabilities> for lk_agents_abi::TtsCapabilities {
-    fn from(v: TtsCapabilities) -> Self {
-        lk_agents_abi::TtsCapabilities {
-            streaming: v.streaming,
-            aligned_transcript: v.aligned_transcript,
-        }
     }
 }
 

@@ -29,7 +29,7 @@ pub use strip::{convert_expression_tags, extract_and_strip};
 pub use transcript::{
     CuePlan, TranscriptMarkupStripper, drop_bracket_cues, drop_bracket_cues_plan,
     expression_attribute, expression_attribute_map, split_all_markup, strip_all_markup,
-    strip_expr_markup,
+    split_expr_markup, strip_expr_markup,
 };
 
 /// Returned because the blingfire tokenizer lives outside this crate.

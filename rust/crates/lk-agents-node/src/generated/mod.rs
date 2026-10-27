@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 265 core items bound (117 functions and consts, 75 classes, 72 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 267 core items bound (119 functions and consts, 75 classes, 72 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -31,6 +31,7 @@
 //! - `lk_agents_abi::types::retry::decide_for_host`: parameter `kind`: not yet: `RequestKind` is an open string (#[host(string)])
 //! - `lk_agents_abi::telemetry::provider::stt_batch_for_host`: parameter `event`: `SpeechEvent` cannot be built from JS: `kind`: a declared enum is read from JS only as a parameter (it has no `FromStr` to rely on)
 //! - `lk_agents_abi::telemetry::provider::stt_stream_for_host`: parameter `event`: `SpeechEvent` cannot be built from JS: `kind`: a declared enum is read from JS only as a parameter (it has no `FromStr` to rely on)
+//! - `lk_agents_inference::fallback::stt_capabilities_for_host`: field `aligned_transcript`: `AlignedTranscript` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_inference::mcp::resolve_tool_options`: field `flags`: `ToolFlag` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::background_audio::Sound::for_host`: parameter `stream`: not yet: `Arc<dyn FrameStream>` (a host object behind a proxy)
 //! - `lk_agents_voice::background_audio::BackgroundAudioPlayer::start_for_host`: parameter `room`: not yet: `Arc<dyn SessionRoom>` (a host object behind a proxy)

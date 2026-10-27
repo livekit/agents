@@ -3,7 +3,6 @@ declarations) and the adapters, whose fallback chain is the core's (``_core.Fall
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
@@ -108,17 +107,9 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
             "max_retry_per_stt": max_retry_per_stt,
             "retry_interval": retry_interval,
         }
-        aligned = all(t.capabilities.aligned_transcript for t in stt)
-        super().__init__(
-            capabilities=STTCapabilities(
-                streaming=True,
-                interim_results=all(t.capabilities.interim_results for t in stt),
-                diarization=all(t.capabilities.diarization for t in stt),
-                aligned_transcript=stt[0].capabilities.aligned_transcript if aligned else False,
-                keyterms=any(t.capabilities.keyterms for t in stt),
-                chat_context=any(t.capabilities.chat_context for t in stt),
-            )
-        )
+        # the chain's own merge, read before any chain is built
+        merged = _core.stt_fallback_capabilities([t.capabilities for t in stt])
+        super().__init__(capabilities=STTCapabilities(**merged))
 
     @property
     def _native(self) -> _core.FallbackStt:
@@ -214,22 +205,14 @@ class StreamAdapterWrapper(RecognizeStream):
 
     async def _run(self) -> None:
         native = await self._native.stream(self._language, self.start_time_offset)
-
-        async def _push() -> None:
-            async for item in self.input:
-                if isinstance(item, self.Flush):
-                    native.flush()
-                else:
-                    native.push_frame(item)
-            native.end_input()
-
-        push = asyncio.create_task(_push())
-        try:
-            while (ev := await native.recv()) is not None:
-                self.send(_speech_event_from_core(ev))
-        finally:
-            await utils.aio.cancel_and_wait(push)
-            await native.aclose()
+        await _bindings.pump(
+            native,
+            self.input,
+            lambda item: (
+                native.flush() if isinstance(item, self.Flush) else native.push_frame(item)
+            ),
+            lambda ev: self.send(_speech_event_from_core(ev)),
+        )
 
 
 class StreamAdapter(STT):

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import functools
 from typing import Any
@@ -33,7 +32,7 @@ from .._generated.inference_stt import (
 from ..language import LanguageCode
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..utils import aio, is_given
+from ..utils import is_given
 from ._utils import Credentials, get_inference_headers
 
 __all__ = [
@@ -261,20 +260,12 @@ class SpeechStream(stt.SpeechStream):
         native = self._native = self._stt._core_native().stream(
             language=self._language, start_time_offset=self.start_time_offset
         )
-
-        async def _push() -> None:
-            async for item in self.input:
-                if isinstance(item, self.Flush):
-                    native.flush()
-                else:
-                    native.push(item)
-            native.end_input()
-
-        push = asyncio.create_task(_push())
         try:
-            while (ev := await native.recv()) is not None:
-                self.send(stt._speech_event_from_core(ev))
+            await _bindings.pump(
+                native,
+                self.input,
+                lambda item: native.flush() if isinstance(item, self.Flush) else native.push(item),
+                lambda ev: self.send(stt._speech_event_from_core(ev)),
+            )
         finally:
             self._native = None
-            await aio.cancel_and_wait(push)
-            await native.aclose()
