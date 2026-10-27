@@ -152,9 +152,8 @@ from .worker import (
     AgentHandler,
     AgentServer,
     RtcDoor,
-    WorkerOptions,
+    ServerType,
     WorkerPermissions,
-    WorkerType,
     rtc_session,
 )
 
@@ -194,8 +193,7 @@ __all__ = [
     "RtcDoor",
     "rtc_session",
     "a2a_session",
-    "WorkerOptions",
-    "WorkerType",
+    "ServerType",
     "WorkerPermissions",
     "JobProcess",
     "JobContext",

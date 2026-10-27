@@ -243,7 +243,6 @@
   "normalize_date_of_birth",
   "normalize_email_address",
   "normalize_language",
-  "normalize_log_level",
   "normalize_phone_number",
   "observability_url",
   "otel_turn_records",

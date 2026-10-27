@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
-import os
 import sys
 import uuid
 
@@ -15,34 +14,27 @@ from livekit.rtc.jupyter import display_room
 
 from . import cli
 from .job import JobExecutorType
-from .worker import AgentServer, WorkerOptions
+from .worker import AgentServer
 
 
-def run_app(server: AgentServer | WorkerOptions, *, jupyter_url: str | None = None) -> None:
+def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
     nest_asyncio.apply()
 
-    if isinstance(server, WorkerOptions):
-        IN_COLAB = "google.colab" in sys.modules
-
-        if IN_COLAB:
+    if not jupyter_url:
+        if "google.colab" in sys.modules:
             from google.colab import userdata  # type: ignore
 
-            if not jupyter_url:
-                server.ws_url = userdata.get("LIVEKIT_URL")
-                server.api_key = userdata.get("LIVEKIT_API_KEY")
-                server.api_secret = userdata.get("LIVEKIT_API_SECRET")
-        else:
-            server.ws_url = server.ws_url or os.environ.get("LIVEKIT_URL", "")
-            server.api_key = server.api_key or os.environ.get("LIVEKIT_API_KEY", "")
-            server.api_secret = server.api_secret or os.environ.get("LIVEKIT_API_SECRET", "")
-
-        if not jupyter_url and (not server.ws_url or not server.api_key or not server.api_secret):
+            server.update_options(
+                ws_url=userdata.get("LIVEKIT_URL"),
+                api_key=userdata.get("LIVEKIT_API_KEY"),
+                api_secret=userdata.get("LIVEKIT_API_SECRET"),
+            )
+        config = server._config
+        if not config.ws_url or not config.api_key or not config.api_secret:
             raise ValueError(
                 "Failed to get LIVEKIT_URL, LIVEKIT_API_KEY, or LIVEKIT_API_SECRET from environment variables. "  # noqa: E501
                 "Alternatively, you can use `jupyter_url`, which generates and uses join tokens for authentication."  # noqa: E501
             )
-
-        server = AgentServer.from_server_options(server)
 
     server.update_options(job_executor_type=JobExecutorType.THREAD)
 

@@ -24,7 +24,7 @@ from .job import JobAcceptArguments, JobExecutorType, RunningJobInfo
 from .log import _add_global_log_fields, logger
 from .plugin import Plugin
 from .telemetry import loop_monitor
-from .worker import AgentServer, WorkerOptions
+from .worker import AgentServer
 
 __all__ = ["main", "run_app"]
 
@@ -65,10 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def run_app(server: AgentServer | WorkerOptions) -> None:
+def run_app(server: AgentServer) -> None:
     """``python myagent.py start [--dev]``: the interface ``lk agent`` drives."""
-    if isinstance(server, WorkerOptions):
-        server = AgentServer.from_server_options(server)
     _dispatch(server, _core.parse_cli(sys.argv[1:]))
 
 

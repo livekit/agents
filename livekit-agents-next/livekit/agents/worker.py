@@ -20,17 +20,13 @@ import datetime
 import functools
 import inspect
 import json
-import math
 import multiprocessing as mp
 import os
-import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
-
-from starlette.types import ASGIApp
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 from livekit import rtc
 from livekit.protocol import agent, models
@@ -61,10 +57,24 @@ from .version import __version__
 if TYPE_CHECKING:
     from .a2a.endpoint import A2AEndpoint, AuthCallable
 
-# The server's lifecycle (options, health listener, load, registration, availability, assignment,
-# status, drain, close) and the endpoint data plane are the core's, `_core.ServerRuntime`; this
-# module owns the doors, the job processes and `AgentServer.http`.
-DRAIN_TIMEOUT = 3600  # 1hr
+# The server's lifecycle (options and their defaults, health listener, load, registration,
+# availability, assignment, status, drain, close) and the endpoint data plane are the core's,
+# `_core.ServerRuntime`; this module owns the doors, the job processes and `AgentServer.http`.
+
+
+class ServerType(Enum):
+    ROOM = agent.JobType.JT_ROOM
+    PUBLISHER = agent.JobType.JT_PUBLISHER
+
+
+@dataclass
+class WorkerPermissions:
+    can_publish: bool = True
+    can_subscribe: bool = True
+    can_publish_data: bool = True
+    can_update_metadata: bool = True
+    can_publish_sources: list[models.TrackSource] = field(default_factory=list)
+    hidden: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,182 +122,15 @@ async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
 
 
-class ServerType(Enum):
-    ROOM = agent.JobType.JT_ROOM
-    PUBLISHER = agent.JobType.JT_PUBLISHER
-
-
-WorkerType = ServerType
-
-
-@dataclass
-class WorkerPermissions:
-    can_publish: bool = True
-    can_subscribe: bool = True
-    can_publish_data: bool = True
-    can_update_metadata: bool = True
-    can_publish_sources: list[models.TrackSource] = field(default_factory=list)
-    hidden: bool = False
-
-
-if sys.platform.startswith("win"):
-    # Some python versions on Windows gets a BrokenPipeError when creating a new process
-    _default_job_executor_type = JobExecutorType.THREAD
-else:
-    _default_job_executor_type = JobExecutorType.PROCESS
-
-
-T = TypeVar("T")
-
-
-@dataclass(frozen=True)
-class ServerEnvOption(Generic[T]):
-    dev_default: T
-    prod_default: T
-
-    @staticmethod
-    def getvalue(opt: T | ServerEnvOption[T], devmode: bool) -> T:
-        if isinstance(opt, ServerEnvOption):
-            return opt.dev_default if devmode else opt.prod_default
-        return opt
-
-
-_default_load_threshold = ServerEnvOption(dev_default=math.inf, prod_default=0.7)
-_default_log_level = ServerEnvOption(dev_default="DEBUG", prod_default="INFO")
-_default_permissions = WorkerPermissions()
-_default_num_idle_processes = ServerEnvOption(
-    dev_default=0, prod_default=math.ceil(_core.cpu_count())
-)
-_default_port = ServerEnvOption(dev_default=0, prod_default=8081)
-
-
-# NOTE: this object must be pickle-able
-@dataclass
-class ServerOptions:
-    entrypoint_fnc: Callable[[JobContext], Awaitable[None]]
-    """Entrypoint function that will be called when a job is assigned to this worker."""
-    request_fnc: Callable[[JobRequest], Awaitable[None]] = _default_request_fnc
-    """Inspect the request and decide if the current worker should handle it.
-
-    When left empty, all jobs are accepted."""
-    prewarm_fnc: Callable[[JobProcess], Any] = _default_setup_fnc
-    """A function to perform any necessary initialization before the job starts."""
-    load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None
-    """Called to determine the current load of the worker. Should return a value between 0 and 1.
-    Left ``None``, the worker samples the CPU itself (in the Rust core)."""
-    job_executor_type: JobExecutorType = _default_job_executor_type
-    """Which executor to use to run jobs. (currently thread or process are supported)"""
-    load_threshold: float | ServerEnvOption[float] = _default_load_threshold
-    """When the load exceeds this threshold, the worker will be marked as unavailable.
-
-    Defaults to 0.7 on "production" mode, and is disabled in "development" mode.
-    """
-
-    job_memory_warn_mb: float = 1000
-    """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""  # noqa: E501
-    job_memory_limit_mb: float = 0
-    """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
-    Defaults to 0 (disabled).
-    """  # noqa: E501
-
-    drain_timeout: int = DRAIN_TIMEOUT
-    """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
-    num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
-        dev_default=0, prod_default=min(math.ceil(_core.cpu_count()), 4)
-    )
-    """Number of idle processes to keep warm."""
-    shutdown_process_timeout: float = 10.0
-    """Maximum amount of time to wait for a job to shut down gracefully"""
-    session_end_timeout: float = 300.0
-    """Maximum amount of time to wait for on_session_end to complete (default: 5 minutes)."""
-    initialize_process_timeout: float = 10.0
-    """Maximum amount of time to wait for a process to initialize/prewarm"""
-    permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
-    """Permissions that the agent should join the room with."""
-    agent_name: str = ""
-    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API.
-
-    By default it uses ``LIVEKIT_AGENT_NAME`` from environment"""  # noqa: E501
-    worker_type: WorkerType = WorkerType.ROOM
-    """Whether to spin up an agent for each room or publisher."""
-    max_retry: int = 16
-    """Maximum number of times to retry connecting to LiveKit."""
-    ws_url: str | None = None
-    """URL to connect to the LiveKit server.
-
-    By default it uses ``LIVEKIT_URL`` from environment"""
-    api_key: str | None = field(repr=False, default=None)
-    """API key to authenticate with LiveKit.
-
-    By default it uses ``LIVEKIT_API_KEY`` from environment"""
-    api_secret: str | None = field(repr=False, default=None)
-    """API secret to authenticate with LiveKit.
-
-    By default it uses ``LIVEKIT_API_SECRET`` from environment"""
-
-    log_level: str | ServerEnvOption[str] = _default_log_level
-    """Log level for the worker.
-
-    Defaults to ``DEBUG`` in development mode and ``INFO`` in production mode.
-    Can also be set via the ``LIVEKIT_LOG_LEVEL`` environment variable or
-    the ``--log-level`` CLI argument (CLI takes highest precedence)."""
-
-    host: str = ""  # default to all interfaces
-    port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081)
-    """Port for local HTTP server to listen on.
-
-    The HTTP server is used as a health check endpoint.
-    """
-
-    http_proxy: NotGivenOr[str | None] = NOT_GIVEN
-    """HTTP proxy used to connect to the LiveKit server.
-
-    By default it uses ``HTTP_PROXY`` or ``HTTPS_PROXY`` from environment
-    """
-    multiprocessing_context: Literal["spawn", "forkserver"] = (
-        "spawn" if not sys.platform.startswith("linux") else "forkserver"
-    )
-    """The multiprocessing context to use.
-
-    By default it uses "spawn" on all platforms, but "forkserver" on Linux.
-    """
-    prometheus_port: NotGivenOr[int] = NOT_GIVEN
-    """When enabled, will expose prometheus metrics on :{prometheus_port}/metrics"""
-    prometheus_multiproc_dir: str | None = None
-    """Directory for prometheus multiprocess mode to enable metrics collection from child job processes.
-    When set, the PROMETHEUS_MULTIPROC_DIR environment variable will be configured automatically.
-    When None (default), multiprocess mode is disabled and only main process metrics are collected.
-    Users can also set PROMETHEUS_MULTIPROC_DIR environment variable directly before starting the worker."""
-
-    def __post_init__(self) -> None:
-        level = _core.normalize_log_level(self.log_level)
-        self.log_level = ServerEnvOption(*level) if isinstance(level, tuple) else level
-
-    def validate_config(self, devmode: bool) -> None:
-        load_threshold = ServerEnvOption.getvalue(self.load_threshold, devmode)
-        if load_threshold > 1 and not devmode:
-            logger.warning(
-                f"load_threshold in prod env must be less than 1, current value: {load_threshold}"
-            )
-
-
-WorkerOptions = ServerOptions
-
-
-@dataclass
-class WorkerInfo:
-    http_port: int
-    cloud_agents: bool
-
-
-EventTypes = Literal["worker_started", "worker_registered"]
+Entrypoint = Callable[[JobContext], Awaitable[None]]
+_EntrypointT = TypeVar("_EntrypointT", bound=Entrypoint)
 
 
 @dataclass(frozen=True)
 class RtcDoor:
-    """The voice door as an object: what ``rtc_session`` returns and ``AgentServer.add`` serves."""
+    """The voice door: what ``rtc_session`` returns and ``AgentServer.add`` serves."""
 
-    entrypoint: Callable[[JobContext], Awaitable[None]]
+    entrypoint: Entrypoint
     endpoint: str = ""
     type: ServerType = ServerType.ROOM
     on_request: Callable[[JobRequest], Any] | None = None
@@ -302,24 +145,18 @@ def rtc_session(
     on_request: Callable[[JobRequest], Any] | None = None,
     on_session_end: Callable[[JobContext], Any] | None = None,
     on_simulation_end: Callable[[SimulationContext], Any] | None = None,
-) -> Callable[[Callable[[JobContext], Awaitable[None]]], RtcDoor]:
-    """The voice door as a decorator with no server: a module defines it, ``AgentServer.add()``
-    serves it (``server.rtc_session()`` does both)."""
-
-    def decorator(f: Callable[[JobContext], Awaitable[None]]) -> RtcDoor:
-        return RtcDoor(
-            f,
-            endpoint=endpoint,
-            type=type,
-            on_request=on_request,
-            on_session_end=on_session_end,
-            on_simulation_end=on_simulation_end,
-        )
-
-    return decorator
-
-
-_RtcEntrypointT = TypeVar("_RtcEntrypointT", bound=Callable[[JobContext], Awaitable[None]])
+) -> Callable[[Entrypoint], RtcDoor]:
+    """The voice door as a decorator with no handler: the entrypoint a job runs, as an
+    ``RtcDoor`` that ``AgentServer.add()`` serves. ``endpoint`` is the door's name under the
+    agent, ``{agent_name}/{endpoint}``; the agent's name when left empty."""
+    return functools.partial(
+        RtcDoor,
+        endpoint=endpoint,
+        type=type,
+        on_request=on_request,
+        on_session_end=on_session_end,
+        on_simulation_end=on_simulation_end,
+    )
 
 
 class AgentHandler:
@@ -334,24 +171,31 @@ class AgentHandler:
 
     ``lane`` names the lane the doors write (docs/lanes.md); the worker's own when left out.
     The voice door writes the worker's lane, so a handler with a lane of its own has text
-    doors only.
+    doors only. ``AgentServer`` is the handler of the worker's own lane that serves its doors.
     """
 
     def __init__(self, *, lane: str | None = None) -> None:
         self.lane = lane
         self.doors: list[RtcDoor | A2AEndpoint] = []
 
+    def add(
+        self, *doors: AgentHandler | RtcDoor | A2AEndpoint
+    ) -> tuple[AgentHandler | RtcDoor | A2AEndpoint, ...]:
+        for door in doors:
+            self.doors.extend(door.doors if isinstance(door, AgentHandler) else [door])
+        return doors
+
     @overload
     def rtc_session(
         self,
-        func: _RtcEntrypointT,
+        func: _EntrypointT,
         *,
         endpoint: str = "",
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
         on_simulation_end: Callable[[SimulationContext], Any] | None = None,
-    ) -> _RtcEntrypointT: ...
+    ) -> _EntrypointT: ...
 
     @overload
     def rtc_session(
@@ -363,11 +207,11 @@ class AgentHandler:
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
         on_simulation_end: Callable[[SimulationContext], Any] | None = None,
-    ) -> Callable[[_RtcEntrypointT], _RtcEntrypointT]: ...
+    ) -> Callable[[_EntrypointT], _EntrypointT]: ...
 
     def rtc_session(
         self,
-        func: Callable[[JobContext], Awaitable[None]] | None = None,
+        func: Entrypoint | None = None,
         *,
         endpoint: str = "",
         type: ServerType = ServerType.ROOM,
@@ -375,7 +219,15 @@ class AgentHandler:
         on_session_end: Callable[[JobContext], Any] | None = None,
         on_simulation_end: Callable[[SimulationContext], Any] | None = None,
     ) -> Any:
-        """The voice door, as ``AgentServer.rtc_session``."""
+        """The voice door, as ``livekit.agents.rtc_session``, served by this handler::
+
+        @server.rtc_session()
+        async def my_agent(ctx: JobContext): ...
+        """
+        if self.lane:
+            raise ValueError(
+                "the voice door writes the worker's lane: AgentHandler() without lane="
+            )
         door = rtc_session(
             endpoint=endpoint,
             type=type,
@@ -384,12 +236,8 @@ class AgentHandler:
             on_simulation_end=on_simulation_end,
         )
 
-        def decorator(f: Callable[[JobContext], Awaitable[None]]) -> Any:
-            if self.lane:
-                raise ValueError(
-                    "the voice door writes the worker's lane: AgentHandler() without lane="
-                )
-            self.doors.append(door(f))
+        def decorator(f: Entrypoint) -> Entrypoint:
+            self.add(door(f))
             return f
 
         return decorator(func) if func is not None else decorator
@@ -406,7 +254,25 @@ class AgentHandler:
         storage: AgentDBStorage | None = None,
         version: str | None = None,
     ) -> Callable[[Handler], A2AEndpoint]:
-        """The text door, as ``AgentServer.a2a_session``, on this handler's lane."""
+        """The text door on this handler's lane (docs/text-endpoints.md): one A2A endpoint
+        served under ``/<endpoint>``, its card at ``/<endpoint>/.well-known/agent-card.json``
+        and JSON-RPC over HTTP+SSE and WebSocket at ``/<endpoint>/v1``.
+
+        ::
+
+            @server.a2a_session(endpoint="scheduling", description="Book or move an appointment.")
+            async def scheduling(ctx: A2ASessionContext) -> str: ...
+
+        Args:
+            endpoint: The last path segment of the endpoint's URL.
+            description: What the card says the agent does.
+            public: Whether a caller needs no token.
+            auth: A callable deciding who may call.
+            inbox: The turn policy for a message that arrives while one runs.
+            debounce: How long to wait for more of a burst.
+            storage: This endpoint's storage when it is not the server's.
+            version: The card's version; the deployment's by default.
+        """
         from .a2a.endpoint import a2a_session
 
         door = a2a_session(
@@ -423,81 +289,65 @@ class AgentHandler:
 
         def decorator(handler: Handler) -> A2AEndpoint:
             ep = door(handler)
-            self.doors.append(ep)
+            self.add(ep)
             return ep
 
         return decorator
 
 
-class AgentServer(utils.EventEmitter[EventTypes]):
+def _core_options(given: dict[str, Any]) -> dict[str, Any]:
+    """The server options given by name, as the core takes them; the core has the defaults."""
+    skip = ("self", "__class__", "storage", "setup_fnc", "load_fnc")
+    options = {k: v for k, v in given.items() if k not in skip and is_given(v)}
+    if "job_executor_type" in options:
+        options["job_executor_type"] = options["job_executor_type"].value
+    if "permissions" in options:
+        options["permissions"] = dataclasses.asdict(options["permissions"])
+    return options
+
+
+class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "worker_registered"]]):
     """The worker: its doors (one voice door, text doors under ``/<endpoint>``), the job
     processes, and the connection to LiveKit, whose lifecycle is the core's
-    (``_core.ServerRuntime``)."""
+    (``_core.ServerRuntime``). An option left out is the core's default, from the environment
+    where one applies (``LIVEKIT_URL``, ``LIVEKIT_AGENT_NAME``, ...) and per mode otherwise
+    (``load_threshold``, ``num_idle_processes`` and ``port`` differ in development)."""
 
     def __init__(
         self,
         *,
-        job_executor_type: JobExecutorType = _default_job_executor_type,
-        load_threshold: float | ServerEnvOption[float] = _default_load_threshold,
-        job_memory_warn_mb: float = 1000,
-        job_memory_limit_mb: float = 0,
-        drain_timeout: int = DRAIN_TIMEOUT,
-        num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
-        shutdown_process_timeout: float = 10.0,
-        session_end_timeout: float = 300.0,
-        initialize_process_timeout: float = 10.0,
-        permissions: WorkerPermissions = _default_permissions,
-        max_retry: int = 16,
-        ws_url: str | None = None,
-        api_key: str | None = None,
-        api_secret: str | None = None,
-        host: str = "",  # default to all interfaces
-        port: int | ServerEnvOption[int] = _default_port,
-        http_proxy: NotGivenOr[str | None] = NOT_GIVEN,
-        multiprocessing_context: Literal["spawn", "forkserver"] = (
-            "spawn" if not sys.platform.startswith("linux") else "forkserver"
-        ),
+        agent_name: NotGivenOr[str] = NOT_GIVEN,
+        storage: AgentDBStorage | None = None,
         setup_fnc: Callable[[JobProcess], Any] | None = None,
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
-        prometheus_port: int | None = None,
-        prometheus_multiproc_dir: str | None = None,
-        log_level: str | ServerEnvOption[str] = _default_log_level,
-        storage: AgentDBStorage | None = None,
-        agent_name: str = "",
+        ws_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        job_executor_type: NotGivenOr[JobExecutorType] = NOT_GIVEN,
+        load_threshold: NotGivenOr[float] = NOT_GIVEN,
+        job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN,
+        job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
+        drain_timeout: NotGivenOr[float | None] = NOT_GIVEN,
+        num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
+        shutdown_process_timeout: NotGivenOr[float] = NOT_GIVEN,
+        session_end_timeout: NotGivenOr[float] = NOT_GIVEN,
+        initialize_process_timeout: NotGivenOr[float] = NOT_GIVEN,
+        permissions: NotGivenOr[WorkerPermissions] = NOT_GIVEN,
+        max_retry: NotGivenOr[int] = NOT_GIVEN,
+        host: NotGivenOr[str] = NOT_GIVEN,
+        port: NotGivenOr[int] = NOT_GIVEN,
+        http_proxy: NotGivenOr[str | None] = NOT_GIVEN,
+        multiprocessing_context: NotGivenOr[Literal["spawn", "forkserver"]] = NOT_GIVEN,
+        prometheus_port: NotGivenOr[int] = NOT_GIVEN,
+        prometheus_multiproc_dir: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        super().__init__()
-        options: dict[str, Any] = {
-            "job_executor_type": job_executor_type.value,
-            "load_threshold": load_threshold,
-            "job_memory_warn_mb": job_memory_warn_mb,
-            "job_memory_limit_mb": job_memory_limit_mb,
-            "drain_timeout": drain_timeout,
-            "num_idle_processes": num_idle_processes,
-            "shutdown_process_timeout": shutdown_process_timeout,
-            "session_end_timeout": session_end_timeout,
-            "initialize_process_timeout": initialize_process_timeout,
-            "permissions": dataclasses.asdict(permissions),
-            "max_retry": max_retry,
-            "ws_url": ws_url,
-            "api_key": api_key,
-            "api_secret": api_secret,
-            "host": host,
-            "port": port,
-            "multiprocessing_context": multiprocessing_context,
-            "prometheus_port": prometheus_port,
-            "prometheus_multiproc_dir": prometheus_multiproc_dir,
-            "log_level": log_level,
-            "agent_name": agent_name,
-            "version": __version__,
-        }
-        if is_given(http_proxy):
-            options["http_proxy"] = http_proxy
-        # the options, resolved against the environment by the core
-        self._config = _core.ServerConfig(options)
-        # the session storage every door of this server opens its lane with (plan 5.7)
+        options = _core_options(locals())
+        AgentHandler.__init__(self)
+        utils.EventEmitter.__init__(self)
+        self._config = _core.ServerConfig({**options, "version": __version__})
         self._storage = storage
-        self._setup_fnc = setup_fnc
-        self._load_fnc = load_fnc
+        self.setup_fnc = setup_fnc
+        self.load_fnc = load_fnc
         self._rtc: RtcDoor | None = None
         # built here and not in run(): the @server.http decorators run at import time
         self._http = AgentHttp()
@@ -507,7 +357,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     @property
     def storage(self) -> AgentDBStorage | None:
-        """The session storage every door of this server opens its lane with (plan 5.7)."""
+        """The session storage every door of this server opens its lane with."""
         return self._storage
 
     @property
@@ -525,267 +375,49 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         """
         return self._http
 
-    def mount(self, path: str, app: ASGIApp, *, name: str | None = None) -> None:
-        """Serve an ASGI application (FastAPI, another Starlette app, ...) under ``path``."""
-        self._http.mount(path, app, name=name)
-
-    def a2a_session(
-        self,
-        *,
-        endpoint: str,
-        description: str,
-        public: bool = True,
-        auth: AuthCallable | None = None,
-        inbox: Policy | Mapping[str, Policy] | None = None,
-        debounce: datetime.timedelta | Mapping[str, datetime.timedelta] | None = None,
-        storage: AgentDBStorage | None = None,
-        version: str | None = None,
-        lane: str | None = None,
-    ) -> Callable[[Handler], A2AEndpoint]:
-        """The text door (plan 7.3): one A2A endpoint served as an ASGI app under ``/<endpoint>``.
-
-        ::
-
-            @server.a2a_session(endpoint="scheduling", description="Book or move an appointment.")
-            async def scheduling(ctx: A2ASessionContext) -> str:
-                result = await scheduler.run(ctx.message, message_history=ctx.message_history, context=app)
-                return str(result.output)
-
-        The endpoint publishes its card at ``/<endpoint>/.well-known/agent-card.json`` and
-        serves JSON-RPC over HTTP+SSE and over WebSocket at ``/<endpoint>/v1``. The route is
-        a session route: the node resolves the thread and hands it over in the preamble.
-        ``livekit.agents.a2a_session`` is the same decorator with no server, for a door a
-        module defines and ``add()`` serves.
-
-        Args:
-            endpoint: The last path segment of the endpoint's URL.
-            description: What the card says the agent does.
-            public: Whether a caller needs no token.
-            auth: A callable deciding who may call.
-            inbox: The turn policy for a message that arrives while one runs.
-            debounce: How long to wait for more of a burst.
-            storage: This endpoint's storage when it is not the server's.
-            version: The card's version; the deployment's by default.
-            lane: The lane the door writes, when not the worker's own.
-        """
-        from .a2a.endpoint import a2a_session
-
-        door = a2a_session(
-            endpoint=endpoint,
-            description=description,
-            public=public,
-            auth=auth,
-            inbox=inbox,
-            debounce=debounce,
-            storage=storage,
-            version=version,
-            lane=lane,
-        )
-
-        def decorator(handler: Handler) -> A2AEndpoint:
-            ep = door(handler)
-            self.add(ep)
-            return ep
-
-        return decorator
+    @property
+    def a2a_endpoints(self) -> dict[str, A2AEndpoint]:
+        """The text doors served, by endpoint name."""
+        return dict(self._a2a_endpoints)
 
     def add(
         self, *doors: AgentHandler | RtcDoor | A2AEndpoint
     ) -> tuple[AgentHandler | RtcDoor | A2AEndpoint, ...]:
-        """Serve what a module defined: ``AgentHandler``s, and doors from ``rtc_session`` and
+        """Serve what a module defined: ``AgentHandler``s and the doors of ``rtc_session`` and
         ``a2a_session``, the one voice door of the worker and text doors under ``/<endpoint>``.
         Returns them."""
         from .a2a.auth import Credentials
         from .a2a.endpoint import A2AEndpoint
 
-        for door in doors:
-            if isinstance(door, AgentHandler):
-                self.add(*door.doors)
-            elif isinstance(door, RtcDoor):
+        config = self._config
+        served = len(self.doors)
+        super().add(*doors)
+        for door in self.doors[served:]:
+            if isinstance(door, RtcDoor):
                 if self._rtc is not None:
                     raise RuntimeError("an AgentServer has one rtc_session")
                 self._rtc = door
-            elif isinstance(door, A2AEndpoint):
-                if door.name in self._a2a_endpoints:
-                    raise ValueError(f"a2a_session(endpoint={door.name!r}) is already served")
-                config = self._config
-                credentials = (
+                continue
+            if not isinstance(door, A2AEndpoint):
+                raise TypeError(f"not a door: {door!r}")
+            if door.name in self._a2a_endpoints:
+                raise ValueError(f"a2a_session(endpoint={door.name!r}) is already served")
+            door.bind(
+                storage=self._storage,
+                agent_name=lambda: config.agent_name,
+                credentials=(
                     Credentials(config.api_key, config.api_secret)
                     if config.api_key and config.api_secret
                     else None
-                )
-                door.bind(
-                    storage=self._storage,
-                    agent_name=lambda: self._config.agent_name,
-                    credentials=credentials,
-                    url_base=self._endpoint_url_base,
-                )
-                self._http.mount(f"/{door.name}", door.app, name=door.name)
-                self._http.configure_endpoint(f"/{door.name}", public=door.public)
-                self._a2a_endpoints[door.name] = door
-            else:
-                raise TypeError(f"not a door: {door!r}")
-        return doors
-
-    @property
-    def a2a_endpoints(self) -> dict[str, A2AEndpoint]:
-        """The text doors registered on this server, by endpoint name."""
-        return dict(self._a2a_endpoints)
-
-    def _endpoint_url_base(self) -> str | None:
-        """``https://<project>.livekit.cloud/agents/<agent>/<deployment>`` when known (plan 7.2)."""
-        return _core.endpoint_url_base(  # type: ignore[no-any-return]
-            self._config.ws_url, self._config.agent_name, self._config.deployment
-        )
-
-    def configure_endpoint(self, path: str, *, public: bool = False) -> None:
-        """Set routing policy for one ``server.http`` route: ``public`` routes are reachable
-        without a project token."""
-        self._http.configure_endpoint(path, public=public)
-
-    @property
-    def setup_fnc(self) -> Callable[[JobProcess], Any] | None:
-        return self._setup_fnc
-
-    @setup_fnc.setter
-    def setup_fnc(self, value: Callable[[JobProcess], Any] | None) -> None:
-        if value is not None and not callable(value):
-            raise TypeError("setup_fnc must be a callable or None")
-        self._setup_fnc = value
-
-    @property
-    def load_fnc(self) -> Callable[[AgentServer], float] | Callable[[], float] | None:
-        return self._load_fnc
-
-    @load_fnc.setter
-    def load_fnc(self, value: Callable[..., float] | None) -> None:
-        if value is not None and not callable(value):
-            raise TypeError("load_fnc must be a callable or None")
-        self._load_fnc = value
-
-    @property
-    def log_level(self) -> str | ServerEnvOption[str]:
-        level = self._config.log_level
-        return ServerEnvOption(*level) if isinstance(level, tuple) else level
-
-    @classmethod
-    def from_server_options(cls, options: ServerOptions) -> AgentServer:
-        server = cls(
-            job_executor_type=options.job_executor_type,
-            load_threshold=options.load_threshold,
-            job_memory_limit_mb=options.job_memory_limit_mb,
-            job_memory_warn_mb=options.job_memory_warn_mb,
-            drain_timeout=options.drain_timeout,
-            num_idle_processes=options.num_idle_processes,
-            shutdown_process_timeout=options.shutdown_process_timeout,
-            session_end_timeout=options.session_end_timeout,
-            initialize_process_timeout=options.initialize_process_timeout,
-            permissions=options.permissions,
-            max_retry=options.max_retry,
-            ws_url=options.ws_url,
-            api_key=options.api_key,
-            api_secret=options.api_secret,
-            host=options.host,
-            port=options.port,
-            http_proxy=options.http_proxy,
-            multiprocessing_context=options.multiprocessing_context,
-            prometheus_port=options.prometheus_port if is_given(options.prometheus_port) else None,
-            prometheus_multiproc_dir=options.prometheus_multiproc_dir,
-            setup_fnc=options.prewarm_fnc,
-            load_fnc=options.load_fnc,
-            log_level=options.log_level,
-            agent_name=options.agent_name,
-        )
-        server.rtc_session(
-            options.entrypoint_fnc,
-            type=options.worker_type,
-            on_request=options.request_fnc,
-        )
-        return server
-
-    @overload
-    def rtc_session(
-        self,
-        func: Callable[[JobContext], Awaitable[None]],
-        *,
-        endpoint: str = "",
-        type: ServerType = ServerType.ROOM,
-        on_request: Callable[[JobRequest], Any] | None = None,
-        on_session_end: Callable[[JobContext], Any] | None = None,
-        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
-    ) -> Callable[[JobContext], Awaitable[None]]: ...
-
-    @overload
-    def rtc_session(
-        self,
-        *,
-        endpoint: str = "",
-        type: ServerType = ServerType.ROOM,
-        on_request: Callable[[JobRequest], Any] | None = None,
-        on_session_end: Callable[[JobContext], Any] | None = None,
-        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
-    ) -> Callable[
-        [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
-    ]: ...
-
-    def rtc_session(
-        self,
-        func: Callable[[JobContext], Awaitable[None]] | None = None,
-        *,
-        endpoint: str = "",
-        type: ServerType = ServerType.ROOM,
-        on_request: Callable[[JobRequest], Any] | None = None,
-        on_session_end: Callable[[JobContext], Any] | None = None,
-        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
-    ) -> (
-        Callable[[JobContext], Awaitable[None]]
-        | Callable[
-            [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
-        ]
-    ):
-        """The voice door: the entrypoint a job runs. ``endpoint`` is the door's name under the
-        agent, ``{agent_name}/{endpoint}``; the agent's name when left empty.
-        ``livekit.agents.rtc_session`` is the same decorator with no server, for a door a
-        module defines and ``add()`` serves.
-
-        Usage:
-            @server.rtc_session()
-            async def my_agent(job_ctx: JobContext): ...
-
-            server.rtc_session(my_agent)
-        """
-
-        def decorator(
-            f: Callable[[JobContext], Awaitable[None]],
-        ) -> Callable[[JobContext], Awaitable[None]]:
-            self.add(
-                RtcDoor(
-                    f,
-                    endpoint=endpoint,
-                    type=type,
-                    on_request=on_request,
-                    on_session_end=on_session_end,
-                    on_simulation_end=on_simulation_end,
-                )
+                ),
+                url_base=lambda: _core.endpoint_url_base(
+                    config.ws_url, config.agent_name, config.deployment
+                ),
             )
-            return f
-
-        if func is not None:
-            return decorator(func)
-
-        return decorator
-
-    @property
-    def rtc_endpoint(self) -> str:
-        """The voice door's name under the agent, ``{agent_name}/{endpoint}``."""
-        if self._rtc is None:
-            return ""
-        return self._rtc.endpoint or self._config.agent_name
-
-    @property
-    def worker_info(self) -> WorkerInfo:
-        port = self._runtime.http_port if self._runtime is not None else 0
-        return WorkerInfo(http_port=port, cloud_agents=self._config.cloud)
+            self._http.mount(f"/{door.name}", door.app, name=door.name)
+            self._http.configure_endpoint(f"/{door.name}", public=door.public)
+            self._a2a_endpoints[door.name] = door
+        return doors
 
     async def run(self, *, devmode: bool = False, unregistered: bool = False) -> None:
         """Start the job processes and the health listener and, unless ``unregistered``, register
@@ -819,16 +451,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         load_threshold: NotGivenOr[float] = NOT_GIVEN,
         job_memory_warn_mb: NotGivenOr[float] = NOT_GIVEN,
         job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
-        drain_timeout: NotGivenOr[int] = NOT_GIVEN,
+        drain_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         shutdown_process_timeout: NotGivenOr[float] = NOT_GIVEN,
         session_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         initialize_process_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-        given = {k: v for k, v in locals().items() if k != "self" and is_given(v)}
-        if is_given(job_executor_type):
-            given["job_executor_type"] = job_executor_type.value
-        self._config.update(given)
+        """Change the given options before the server starts."""
+        self._config.update(_core_options(locals()))
 
     @property
     def id(self) -> str:
@@ -842,7 +472,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
     def draining(self) -> bool:
         return self._runtime is not None and self._runtime.draining
 
-    async def drain(self, timeout: NotGivenOr[int | None] = NOT_GIVEN) -> None:
+    async def drain(self, timeout: NotGivenOr[float | None] = NOT_GIVEN) -> None:
         """Stop taking jobs and wait for the running ones; past ``timeout`` (the server's
         ``drain_timeout`` when not given) raises ``asyncio.TimeoutError``."""
         if self._runtime is not None:
@@ -1118,5 +748,5 @@ class _ServerHost:
         if load_fnc is None:
             return None
         takes_server = bool(inspect.signature(load_fnc).parameters)
-        call = functools.partial(load_fnc, self._server) if takes_server else load_fnc
+        call = functools.partial(load_fnc, self._server) if takes_server else load_fnc  # type: ignore[call-arg]
         return await asyncio.get_running_loop().run_in_executor(None, call)  # type: ignore[arg-type]

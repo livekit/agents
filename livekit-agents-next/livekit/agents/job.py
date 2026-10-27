@@ -439,7 +439,7 @@ class JobContext:
         """Returns an LiveKitAPI for making API calls to LiveKit.
 
         Credentials are sourced from environment variables if not provided explicitly.
-        When starting via the worker, values passed in `WorkerOptions` are exported to
+        When starting via the worker, values passed to `AgentServer` are exported to
         LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET so this API is always
         usable inside job entrypoints.
         """

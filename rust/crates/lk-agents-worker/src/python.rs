@@ -647,59 +647,7 @@ fn transport_for(routes: bool) -> TransportConfig {
 
 // --------------------------------------------------------------------- ServerConfig
 
-use crate::server::{self, LOG_LEVELS, ServerSettings, ServerStatus};
-
-/// A value, or a `ServerEnvOption` (anything with `dev_default` and `prod_default`).
-fn env_option<'py, T>(v: &Bound<'py, PyAny>) -> PyResult<EnvOption<T>>
-where
-    T: for<'a> FromPyObject<'a, 'py>,
-    for<'a> <T as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
-{
-    let extract = |v: Bound<'py, PyAny>| v.extract::<T>().map_err(Into::into);
-    if v.hasattr("dev_default")? {
-        return Ok(EnvOption::Split {
-            dev: extract(v.getattr("dev_default")?)?,
-            prod: extract(v.getattr("prod_default")?)?,
-        });
-    }
-    Ok(EnvOption::Fixed(extract(v.clone())?))
-}
-
-/// A value as given, or a split one as `(dev, prod)`.
-fn env_option_py<'py, T>(py: Python<'py>, o: EnvOption<T>) -> PyResult<Bound<'py, PyAny>>
-where
-    T: IntoPyObject<'py> + Copy,
-    (T, T): IntoPyObject<'py>,
-{
-    use pyo3::IntoPyObjectExt as _;
-    match o {
-        EnvOption::Fixed(v) => v.into_bound_py_any(py),
-        EnvOption::Split { dev, prod } => (dev, prod).into_bound_py_any(py),
-    }
-}
-
-fn log_level(level: &str) -> PyResult<&'static str> {
-    let upper = server::normalize_log_level(level).map_err(PyValueError::new_err)?;
-    Ok(LOG_LEVELS.iter().copied().find(|l| *l == upper).unwrap_or("INFO"))
-}
-
-/// `log_level` normalised: uppercased, and refused when it names no level.
-fn log_levels(v: &Bound<'_, PyAny>) -> PyResult<EnvOption<&'static str>> {
-    Ok(match env_option::<String>(v)? {
-        EnvOption::Fixed(l) => EnvOption::Fixed(log_level(&l)?),
-        EnvOption::Split { dev, prod } => {
-            EnvOption::Split { dev: log_level(&dev)?, prod: log_level(&prod)? }
-        }
-    })
-}
-
-/// `ServerOptions.log_level`'s check: the level uppercased, a split one as `(dev, prod)`.
-#[pyfunction]
-fn normalize_log_level<'py>(py: Python<'py>, level: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-    env_option_py(py, log_levels(level)?)
-}
-
-lk_agents_abi::register_host!(fn normalize_log_level);
+use crate::server::{self, ServerSettings, ServerStatus};
 
 /// `AgentServer._endpoint_url_base`.
 #[pyfunction]
@@ -723,14 +671,13 @@ fn apply(s: &mut ServerSettings, options: &Bound<'_, PyDict>) -> PyResult<()> {
             "api_secret" => s.api_secret = text(&v)?,
             "agent_name" => s.agent_name = text(&v)?,
             "host" => s.host = text(&v)?,
-            "port" => s.port = env_option(&v).map_err(wrap)?,
-            "load_threshold" => s.load_threshold = env_option(&v).map_err(wrap)?,
-            "num_idle_processes" => s.num_idle_processes = env_option(&v).map_err(wrap)?,
+            "port" => s.port = EnvOption::Fixed(v.extract().map_err(wrap)?),
+            "load_threshold" => s.load_threshold = EnvOption::Fixed(v.extract().map_err(wrap)?),
+            "num_idle_processes" => s.num_idle_processes = EnvOption::Fixed(v.extract().map_err(wrap)?),
             "drain_timeout" => s.drain_timeout = v.extract::<Option<f64>>()?.unwrap_or(0.0),
             "max_retry" => s.max_retry = v.extract()?,
             "permissions" => s.permissions = v.extract()?,
             "http_proxy" => s.http_proxy = v.extract()?,
-            "log_level" => s.log_level = log_levels(&v)?,
             "prometheus_port" => s.prometheus_port = v.extract()?,
             "prometheus_multiproc_dir" => s.prometheus_multiproc_dir = v.extract()?,
             "version" => s.version = v.extract()?,
@@ -819,12 +766,6 @@ impl PyServerConfig {
     #[getter]
     fn drain_timeout(&self) -> f64 {
         self.get().drain_timeout
-    }
-
-    /// A level, or `(dev, prod)`.
-    #[getter]
-    fn log_level<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        env_option_py(py, self.get().log_level)
     }
 
     #[getter]

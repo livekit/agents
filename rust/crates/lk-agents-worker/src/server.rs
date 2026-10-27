@@ -14,23 +14,11 @@ use crate::{
     WorkerPermissions,
 };
 
-/// `log_level`'s names, in the order the error lists them.
-pub const LOG_LEVELS: [&str; 6] = ["CRITICAL", "DEBUG", "ERROR", "INFO", "TRACE", "WARN"];
-
 /// `load_threshold`'s default, to which a hosted (Cloud) worker is held.
 pub const DEFAULT_LOAD_THRESHOLD: EnvOption<f32> = EnvOption::Split {
     dev: crate::config::DEFAULT_LOAD_THRESHOLD_DEV,
     prod: crate::config::DEFAULT_LOAD_THRESHOLD_PROD,
 };
-
-/// `level`, uppercased, when it names a level.
-pub fn normalize_log_level(level: &str) -> Result<String, String> {
-    let upper = level.to_uppercase();
-    if LOG_LEVELS.contains(&upper.as_str()) {
-        return Ok(upper);
-    }
-    Err(format!("Invalid log level '{level}'. Valid levels: {}", LOG_LEVELS.join(", ")))
-}
 
 /// What `AgentServer(...)` was given, with the environment read where an option was left empty, as
 /// `AgentServer.__init__` reads it. `update_options` writes over it until the server starts.
@@ -53,7 +41,6 @@ pub struct ServerSettings {
     pub max_retry: u32,
     pub permissions: WorkerPermissions,
     pub http_proxy: Option<String>,
-    pub log_level: EnvOption<&'static str>,
     pub prometheus_port: Option<u16>,
     pub prometheus_multiproc_dir: Option<String>,
     /// Set by `--simulation`: load shedding off, and no health listener (runs share a host).
@@ -91,13 +78,14 @@ impl Default for ServerSettings {
             max_retry: 16,
             permissions: WorkerPermissions::default(),
             http_proxy: None,
-            log_level: EnvOption::Split { dev: "DEBUG", prod: "INFO" },
             prometheus_port: None,
             prometheus_multiproc_dir: None,
             simulation: false,
             version: env!("CARGO_PKG_VERSION").into(),
-            job_executor_type: "process".into(),
-            multiprocessing_context: "spawn".into(),
+            // a thread on Windows: some Pythons there get a BrokenPipeError spawning a process
+            job_executor_type: if cfg!(windows) { "thread" } else { "process" }.into(),
+            multiprocessing_context: if cfg!(target_os = "linux") { "forkserver" } else { "spawn" }
+                .into(),
             job_memory_warn_mb: 1000.0,
             job_memory_limit_mb: 0.0,
             shutdown_process_timeout: 10.0,
@@ -520,14 +508,6 @@ mod tests {
         s.api_secret = "s".into();
         assert!(s.check_registration(false).is_ok());
         assert!(s.check_registration(true).unwrap_err().contains("agent_name"));
-    }
-
-    // Catches: a level accepted in the wrong case not normalised, or an unknown one let through.
-    #[test]
-    fn log_levels_are_uppercased_and_checked() {
-        assert_eq!(normalize_log_level("debug").unwrap(), "DEBUG");
-        let err = normalize_log_level("verbose").unwrap_err();
-        assert_eq!(err, "Invalid log level 'verbose'. Valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN");
     }
 
     // Catches: `/worker` printing zero fields, out of order, or without the protobuf's indent.
