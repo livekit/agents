@@ -497,8 +497,11 @@ impl Server {
             }
             "response.create" => {
                 if self.active.is_some() {
+                    // Knowing only if the client had been told of the response refusing it: one
+                    // it told the server to cancel no longer is (a cancel frees the conversation
+                    // at once), and one the server opened in the same breath it could not know of.
                     let knowing = self
-                        .told_active
+                        .active
                         .and_then(|r| self.responses[r as usize].told_created)
                         .is_some_and(|at| at < now);
                     let why = "Conversation already has an active response in progress. Wait until the response is finished before creating a new one.";
