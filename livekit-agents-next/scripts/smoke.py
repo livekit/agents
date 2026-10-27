@@ -1257,7 +1257,7 @@ async def job() -> None:
     waits for the participant in the room, for whom a participant entrypoint runs, an API call is
     skipped, the
     shutdown it asks for runs the shutdown callback and tells the parent."""
-    from livekit.agents.ipc.job_proc_lazy_main import _JobProc
+    from livekit.agents.ipc.child import _JobProc
     from livekit.agents.job import (
         JobAcceptArguments,
         JobContext,
@@ -1984,7 +1984,7 @@ def agent_name(session: VoiceSession) -> str:
 _JOB_LOGS = """
 import asyncio, logging, multiprocessing as mp, sys
 from livekit.agents import Agent, cli
-from livekit.agents.ipc.job_proc_executor import ProcJobExecutor
+from livekit.agents.ipc import JobExecutor
 from livekit.agents.job import JobAcceptArguments, RunningJobInfo
 from livekit.protocol import agent, models
 
@@ -1997,7 +1997,7 @@ async def entrypoint(ctx):
 
 async def main(style):
     cli.setup_logging("INFO", style)
-    proc = ProcJobExecutor(
+    proc = JobExecutor(
         job_entrypoint_fnc=entrypoint, session_end_fnc=None,
         simulation_end_fnc=None, inference_executor=None, initialize_timeout=60,
         close_timeout=10, session_end_timeout=10, memory_warn_mb=0, memory_limit_mb=0,

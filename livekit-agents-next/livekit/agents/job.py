@@ -67,7 +67,7 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
 if TYPE_CHECKING:
-    from .ipc.inference_executor import InferenceExecutor
+    from .ipc import InferenceExecutor
     from .llm import ChatContext
     from .metrics import ModelUsage
     from .simulation import SimulationContext

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from livekit import rtc
 
-    from .ipc.inference_executor import InferenceExecutor
+    from .ipc import InferenceExecutor
     from .job import JobContext
 
 __all__ = ["fake_job_context"]

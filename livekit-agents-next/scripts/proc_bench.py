@@ -28,7 +28,7 @@ from typing import Any
 
 import psutil
 
-from livekit.agents.ipc.job_proc_executor import ProcJobExecutor
+from livekit.agents.ipc import JobExecutor
 
 PRELOAD = ["livekit.agents.ipc._preload", "livekit.agents.ipc._preload_freeze"]
 
@@ -37,8 +37,8 @@ async def _entrypoint(ctx: Any) -> None:
     ctx.shutdown("bench")
 
 
-def _executor(method: str) -> ProcJobExecutor:
-    return ProcJobExecutor(
+def _executor(method: str) -> JobExecutor:
+    return JobExecutor(
         job_entrypoint_fnc=_entrypoint,
         session_end_fnc=None,
         simulation_end_fnc=None,
@@ -57,7 +57,7 @@ def _executor(method: str) -> ProcJobExecutor:
     )
 
 
-async def _ready(method: str) -> tuple[ProcJobExecutor, float]:
+async def _ready(method: str) -> tuple[JobExecutor, float]:
     proc = _executor(method)
     started = time.perf_counter()
     await proc.start()

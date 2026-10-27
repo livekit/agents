@@ -358,8 +358,8 @@ class _ServerHost:
 
     def __init__(self, server: AgentServer) -> None:
         self._server = server
-        self._proc_pool: ipc.proc_pool.ProcPool | None = None
-        self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = None
+        self._proc_pool: ipc.ProcPool | None = None
+        self._inference_executor: ipc.InferenceProcess | None = None
 
     def open(self, kind: str, args: Any) -> Awaitable[Any]:
         if kind == "endpoint":
@@ -402,7 +402,7 @@ class _ServerHost:
             mp_ctx.set_forkserver_preload(plugin_packages)
         loop = asyncio.get_running_loop()
         if _InferenceRunner.registered_runners:
-            self._inference_executor = ipc.inference_proc_executor.InferenceProcExecutor(
+            self._inference_executor = ipc.InferenceProcess(
                 runners=_InferenceRunner.registered_runners,
                 mp_ctx=mp_ctx,
                 loop=loop,
@@ -412,7 +412,7 @@ class _ServerHost:
             await self._inference_executor.start()
             await self._inference_executor.initialize()
         storage = self._server._storage
-        self._proc_pool = ipc.proc_pool.ProcPool(
+        self._proc_pool = ipc.ProcPool(
             job_entrypoint_fnc=(
                 CallThreadEntrypoint(door.entrypoint, storage) if storage else door.entrypoint
             ),
@@ -477,7 +477,7 @@ class _ServerHost:
         if self._inference_executor is not None:
             await self._inference_executor.aclose()
 
-    def _job_status(self, proc: ipc.job_executor.JobExecutor) -> None:
+    def _job_status(self, proc: ipc.JobExecutor) -> None:
         if proc.running_job is not None and self._server._runtime is not None:
             self._server._runtime.job_status(proc.running_job.job.id, proc.status.value)
 

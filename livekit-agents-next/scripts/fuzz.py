@@ -787,7 +787,7 @@ async def room_call_body(call: Call) -> None:
 async def job_call(call: Call) -> None:
     """A console job, as a job process runs it, whose entrypoint starts a session on its room."""
     from livekit.agents import _core, get_job_context
-    from livekit.agents.ipc.job_proc_lazy_main import _JobProc
+    from livekit.agents.ipc.child import _JobProc
     from livekit.agents.job import (
         JobAcceptArguments,
         JobContext,

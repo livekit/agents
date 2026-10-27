@@ -14,7 +14,7 @@ from huggingface_hub import errors
 
 from livekit.agents import LanguageCode, Plugin, _core, llm
 from livekit.agents.inference_runner import _InferenceRunner
-from livekit.agents.ipc.inference_executor import InferenceExecutor
+from livekit.agents.ipc import InferenceExecutor
 from livekit.agents.job import get_job_context
 
 from .log import logger

@@ -1,55 +1,73 @@
+"""What runs inside a job or inference process (or a job thread): the handshake with the
+parent and its messages over the core's ``IpcClient``, the process's own log lines, and the job
+itself: its ``JobContext``, the steps of the shutdown the core runs (``_core.JobRun``), its spans.
+The parent's side is ``ipc/__init__.py``."""
+
 from __future__ import annotations
 
 from multiprocessing import current_process
 
-if current_process().name == "job_proc":
+if current_process().name in ("job_proc", "agents_inference_process"):
     import signal
 
-    # ignore signals in the jobs process (the parent process will handle them)
+    # the parent handles the signals (and asks the process to shut down)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
     if hasattr(signal, "SIGUSR1"):
-        from .proc_client import _dump_stack_traces
-
-        signal.signal(signal.SIGUSR1, _dump_stack_traces)
+        signal.signal(signal.SIGUSR1, lambda *_: _dump_stack_traces())
 
 import asyncio
+import contextlib
 import contextvars
+import functools
+import logging
+import math
 import os
 import socket
 import time
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
+from unittest.mock import AsyncMock, create_autospec
 
 from opentelemetry import trace
 
 from livekit import rtc
 
 from .. import _core
+from ..inference_runner import _RunnersDict
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..utils import aio, http_context, log_exceptions
-from .proc_client import _dump_stack_traces_impl, log_to_stdout, serve_parent
 
 _T = TypeVar("_T")
 
 
 @dataclass
-class ProcStartArgs:
+class JobArgs:
+    """What a job process (or thread) is started with."""
+
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
+    simulation_end_fnc: Callable[[Any], Any] | None
     session_end_timeout: float
-    user_arguments: Any | None
+    user_arguments: Any | None = None
+    mp_cch: socket.socket | None = None
+    log_config: tuple[str, str] | None = None
+    logger_levels: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class InferenceArgs:
     mp_cch: socket.socket
+    runners: _RunnersDict
     log_config: tuple[str, str] | None
-    logger_levels: dict[str, int]
-    simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
-def proc_main(args: ProcStartArgs) -> None:
+def job_main(args: JobArgs) -> None:
     # a process forked from the forkserver inherits its core: this one is a job process
     _core.init(_core.Role.Job)
     job_proc = _JobProc(
@@ -61,7 +79,7 @@ def proc_main(args: ProcStartArgs) -> None:
         simulation_end_fnc=args.simulation_end_fnc,
     )
     log_to_stdout(args.log_config, args.logger_levels, job_proc.log_fields)
-    serve_parent(args.mp_cch, job_proc, job=True)
+    serve_parent(cast(socket.socket, args.mp_cch), job_proc, job=True)
 
     import sys
     import threading
@@ -138,7 +156,7 @@ class _JobProc:
         return self._start_job(RunningJobInfo._from_wire(fields))
 
     async def _core_dump_stacks(self) -> None:
-        _dump_stack_traces_impl()
+        _dump_stack_traces()
 
     async def aclose(self) -> None:
         # the parent went or the job ended: a job still running is cancelled
@@ -149,9 +167,7 @@ class _JobProc:
         job = info.job
         self.log_fields.update(job_id=job.id, room=job.room.name, room_id=job.room.sid)
         if info.fake_job:
-            from .mock_room import create_mock_room
-
-            self._room = cast(rtc.Room, create_mock_room())
+            self._room = cast(rtc.Room, _mock_room())
         else:
             self._room = rtc.Room()
         self._room._info.name = info.job.room.name
@@ -340,20 +356,8 @@ def _start_job_span(job_ctx: JobContext) -> trace.Span:
     return span
 
 
-@dataclass
-class ThreadStartArgs:
-    job_entrypoint_fnc: Callable[[JobContext], Any]
-    session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
-    session_end_timeout: float
-    mp_cch: socket.socket
-    user_arguments: Any | None
-    simulation_end_fnc: Callable[[Any], Any] | None = None
-
-
-def thread_main(
-    args: ThreadStartArgs,
-) -> None:
-    """main function for the job process when using the ThreadedJobRunner"""
+def thread_main(args: JobArgs) -> None:
+    """A job thread's main: the job runs on a loop of the thread's own, logging as the worker."""
     job_proc = _JobProc(
         args.job_entrypoint_fnc,
         args.session_end_fnc,
@@ -362,5 +366,262 @@ def thread_main(
         user_arguments=args.user_arguments,
         simulation_end_fnc=args.simulation_end_fnc,
     )
+    serve_parent(cast(socket.socket, args.mp_cch), job_proc, job=True)
 
-    serve_parent(args.mp_cch, job_proc, job=True)
+
+def inference_main(args: InferenceArgs) -> None:
+    _core.init(_core.Role.Inference)
+    log_to_stdout(args.log_config, {}, {"pid": os.getpid(), "inference": True})
+    serve_parent(args.mp_cch, _InferenceProc(args.runners), job=False)
+
+
+class _InferenceProc:
+    def __init__(self, runners: _RunnersDict) -> None:
+        # create an instance of each runner (the ctor must not requires any argument)
+        self._runners = {name: runner() for name, runner in runners.items()}
+        self._executor = ThreadPoolExecutor(max_workers=math.ceil(_core.cpu_count()))
+
+    def initialize(self, http_proxy: str | None) -> None:
+        for runner in self._runners.values():
+            try:
+                logger.debug(
+                    "initializing inference runner",
+                    extra={"runner": runner.__class__.INFERENCE_METHOD},
+                )
+                start_time = time.perf_counter()
+                runner.initialize()
+                logger.debug(
+                    "inference runner initialized",
+                    extra={
+                        "runner": runner.__class__.INFERENCE_METHOD,
+                        "elapsed_time": time.perf_counter() - start_time,
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "error initializing inference runner",
+                    extra={"runner": runner.__class__.INFERENCE_METHOD},
+                )
+
+    # --- the parent's messages, as the core's IpcClient serves them -------------------------
+
+    async def _core_dump_stacks(self) -> None:
+        _dump_stack_traces()
+
+    async def _core_inference(self, method: str, data: bytes) -> bytes | None:
+        if method not in self._runners:
+            logger.warning("unknown inference method", extra={"method": method})
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, self._runners[method].run, data)
+
+    async def aclose(self) -> None:
+        pass
+
+
+def log_to_stdout(
+    config: tuple[str, str] | None, levels: dict[str, int], fields: dict[str, Any]
+) -> None:
+    """A child process writes its own log lines, as the worker does (``config``: its level and
+    line style, none when the worker set up no logging), to the stdout it inherits; each record
+    stamped with ``fields``, the process's (its pid, the job's ids once one runs)."""
+    from ..cli import setup_logging
+
+    if config is not None:
+        setup_logging(*config).addFilter(_Stamp(fields))
+    for name, level in levels.items():
+        logging.getLogger(name).setLevel(level)
+
+
+class _Stamp(logging.Filter):
+    def __init__(self, fields: dict[str, Any]) -> None:
+        super().__init__()
+        self._fields = fields
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.__dict__.update(self._fields)
+        return True
+
+
+def serve_parent(mp_cch: socket.socket, host: Any, *, job: bool) -> None:
+    """A child process's (or job thread's) side of the parent's socket: the handshake
+    (``host.initialize(http_proxy)``), then a loop of its own on which ``_core.IpcClient.serve``
+    hands the parent's messages to ``host`` until the parent goes or the child is done. A failed
+    initialization returns at once (the parent was told)."""
+    try:
+        client = _core.IpcClient(mp_cch.detach(), host.initialize, job=job)
+    except Exception:
+        return
+    host._client = client
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.set_debug(client.asyncio_debug)
+    loop.slow_callback_duration = 0.1  # 100ms
+    # flag synchronous code blocking the job loop (spans + warnings), see telemetry.loop_monitor
+    loop_monitor.start_monitoring(loop, name="job")
+
+    try:
+        task = loop.create_task(_serve(client, host), name="proc_client_main")
+        while not task.done():
+            # the parent handles the process's shutdown (its ShutdownRequest)
+            with contextlib.suppress(KeyboardInterrupt):
+                loop.run_until_complete(task)
+    finally:
+        loop_monitor.stop_monitoring(loop)
+        # shut the loop down the way asyncio.run() does, a thread runner reuses the process
+        try:
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+
+@log_exceptions(logger=logger)
+async def _serve(client: _core.IpcClient, host: Any) -> None:
+    try:
+        await client.serve(host)
+    finally:
+        await host.aclose()
+        await client.aclose()
+
+
+def _dump_stack_traces() -> None:
+    """The process's threads and asyncio tasks, and its memory, in a file under
+    ``LK_DUMP_DIR`` (the temp dir), when ``LK_DUMP_STACK_TRACES`` is set."""
+    import asyncio
+    import faulthandler
+    import os
+    import tempfile
+    import time
+    import traceback
+    from multiprocessing import current_process
+    from pathlib import Path
+
+    import psutil
+
+    if os.getenv("LK_DUMP_STACK_TRACES", "0").lower() in ("0", "false", "no"):
+        return
+
+    dir: str = os.getenv("LK_DUMP_DIR", tempfile.gettempdir())
+    Path(dir).mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=dir,
+        delete=False,
+        prefix=f"livekit-agents-pid-{current_process().pid}-{time.time_ns()}-",
+        suffix=".stacktrace",
+    ) as f:
+        print(f"\n{'=' * 60}", file=f)
+        print(
+            f"Process {current_process().name} (pid {current_process().pid}) stack trace dump",
+            file=f,
+        )
+        print(f"{'=' * 60}\n", file=f)
+
+        faulthandler.dump_traceback(file=f, all_threads=True)
+        print("\n", file=f)
+
+        try:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop is not None:
+                print("=" * 60, file=f)
+                print("ASYNCIO TASKS", file=f)
+                print("=" * 60, file=f)
+
+                tasks = asyncio.all_tasks(loop)
+                print(f"Total tasks: {len(tasks)}\n", file=f)
+
+                for i, task in enumerate(tasks, 1):
+                    print(f"\n--- Task {i}/{len(tasks)} ---", file=f)
+                    print(f"Name: {task.get_name()}", file=f)
+                    print(f"Done: {task.done()}", file=f)
+
+                    if not task.done():
+                        print(f"Cancelled: {task.cancelled()}", file=f)
+
+                        try:
+                            stack = task.get_stack()
+                            print(f"Stack frames: {len(stack)}", file=f)
+                            print("Stack trace:", file=f)
+                            for frame in stack:
+                                traceback.print_stack(frame, limit=1, file=f)
+                        except Exception as e:
+                            print(f"Could not get stack: {e}", file=f)
+
+                        try:
+                            coro = task.get_coro()
+                            print(f"Coroutine: {coro}", file=f)
+                            if cr_frame := getattr(coro, "cr_frame", None):
+                                print("Coroutine frame:", file=f)
+                                traceback.print_stack(cr_frame, file=f)
+                        except Exception as e:
+                            print(f"Could not get coroutine: {e}", file=f)
+                    else:
+                        try:
+                            exc = task.exception()
+                            if exc:
+                                print(f"Exception: {exc}", file=f)
+                                print("Exception traceback:", file=f)
+                                traceback.print_exception(type(exc), exc, exc.__traceback__, file=f)
+                        except Exception as e:
+                            print(f"Could not get exception: {e}", file=f)
+
+                    print("", file=f)
+            else:
+                print("No asyncio event loop running", file=f)
+        except Exception as e:
+            print(f"Error dumping asyncio tasks: {e}", file=f)
+            traceback.print_exc(file=f)
+
+        try:
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / (1024 * 1024)
+
+            print("\n" + "=" * 60, file=f)
+            print("MEMORY USAGE", file=f)
+            print("=" * 60, file=f)
+            print(f"RSS: {memory_mb:.2f} MB", file=f)
+            print(f"VMS: {memory_info.vms / (1024 * 1024):.2f} MB", file=f)
+        except Exception:
+            pass
+
+
+@functools.cache
+def _mock_room() -> Any:
+    MockRoom = create_autospec(rtc.Room, instance=True)
+    MockRoom.local_participant = create_autospec(rtc.LocalParticipant, instance=True)
+    # autospec leaves attributes as truthy mocks; pin sid/identity to real strings
+    # so they don't leak into places like inference request headers (see _utils.py).
+    MockRoom.local_participant.sid = ""
+    MockRoom.local_participant.identity = "agent"
+    MockRoom._info = create_autospec(rtc.room.proto_room.RoomInfo, instance=True)  # type: ignore
+    MockRoom.isconnected.return_value = True
+    MockRoom.name = "console"
+    MockRoom.metadata = ""
+    MockRoom.num_participants = 2
+    MockRoom.num_publishers = 2
+    MockRoom.connection_state = rtc.ConnectionState.CONN_CONNECTED
+    MockRoom.departure_timeout = 0
+    MockRoom.empty_timeout = 0
+
+    MockRoom.sid = AsyncMock(return_value="RM_mock_sid")
+
+    mock_remote_participant = create_autospec(rtc.RemoteParticipant, instance=True)
+    mock_remote_participant.identity = "mock_user"
+    mock_remote_participant.sid = "PA_mock_user"
+    mock_remote_participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    mock_remote_participant.state = rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE
+    MockRoom.remote_participants = {mock_remote_participant.identity: mock_remote_participant}
+    return MockRoom
