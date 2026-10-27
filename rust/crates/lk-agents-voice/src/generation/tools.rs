@@ -173,7 +173,7 @@ pub(crate) async fn run_tools(
 
     // Read **before** the executions are awaited (selects `NextStep::Interrupted`); the read
     // after is a different behaviour. The speech's interruption, not the step's.
-    let interrupted_before_tools = handle.interrupted_speech();
+    let interrupted_before_tools = handle.interrupted();
 
     // Awaited in the model's order: they ran concurrently, so this is a join, not a sequence.
     let mut executions = Vec::with_capacity(tools.calls.len());
@@ -209,7 +209,7 @@ pub(crate) async fn run_tools(
         interrupted_before_tools,
         // Re-read after: a interruption during a tool suppresses the reply, not the handoff, commit
         // or step increment.
-        interrupted: handle.interrupted_speech(),
+        interrupted: handle.interrupted(),
         num_steps: handle.num_steps(),
         max_tool_steps: ctx.speech.max_tool_steps(),
         forwarded_text_empty,

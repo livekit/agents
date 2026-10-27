@@ -325,7 +325,7 @@ pub enum SpeechCommand {
     /// the whole answer); the socket is told once; the queue is walked in pop order up to the first
     /// refusal, each speech whole.
     Interrupt { force: bool, call: Option<RequestId> },
-    /// Unforced it is scoped to the playing step; `force` ends the speech, tools and all.
+    /// The whole speech: its playout, its tools and any follow-up; `force` past a protection.
     InterruptSpeech { speech: SpeechId, force: bool },
     /// Flush, wait for the final (skipped if one landed in the last 0.5 s), commit. No STT or
     /// closing: `""`, no commit. A newer commit cancels a waiting one; realtime commits and asks

@@ -85,8 +85,6 @@ mod speech_scheduler {
         kind: SpeechKind,
         add_to_chat_ctx: bool,
         status: Status,
-        /// An interrupted candidate is never authorized.
-        interrupted: bool,
     }
 
     /// `AgentActivity`'s scheduling state (`_speech_q`, `_current_speech`, `_scheduling_paused`,
@@ -208,7 +206,8 @@ mod speech_scheduler {
 
         /// The current speech has not been interrupted.
         pub fn current_speech_uninterrupted(&self) -> bool {
-            self.current_speech().and_then(|c| self.entry(c)).is_some_and(|e| !e.interrupted)
+            let current = self.current_speech().and_then(|c| self.entry(c));
+            current.is_some_and(|e| !e.handle.interrupted())
         }
 
         /// No current speech and none chosen next: at most the gap is owed.
@@ -246,7 +245,7 @@ mod speech_scheduler {
             status: Status,
         ) {
             let speech = handle.id();
-            let entry = Entry { handle, kind, add_to_chat_ctx, status, interrupted: false };
+            let entry = Entry { handle, kind, add_to_chat_ctx, status };
             self.speeches.insert(speech, entry);
         }
 
@@ -289,7 +288,7 @@ mod speech_scheduler {
                     }
                 };
                 let live = self.speeches.get(&candidate);
-                if live.is_some_and(|e| !e.interrupted && e.status == Status::Queued) {
+                if live.is_some_and(|e| !e.handle.interrupted() && e.status == Status::Queued) {
                     break candidate;
                 }
                 // Gone, interrupted or discarded while it waited: forget it and look again.
@@ -310,16 +309,7 @@ mod speech_scheduler {
             SchedulingPass { released, next: NextSpeech::Authorized(candidate) }
         }
 
-        /// The speech was interrupted: never authorized now. `false` when the queue no longer
-        /// holds it.
-        pub(crate) fn interrupted(&mut self, speech: SpeechId) -> bool {
-            let Some(entry) = self.speeches.get_mut(&speech) else { return false };
-            entry.interrupted = true;
-            true
-        }
-
-        /// A `Working` speech's next step: back on the queue, its step-scoped interruption cleared;
-        /// refused while closing.
+        /// A `Working` speech's next step: back on the queue; refused while closing.
         pub(super) fn requeue(&mut self, speech: SpeechId, closing: bool) -> Requeue {
             let Some(entry) =
                 self.speeches.get_mut(&speech).filter(|e| e.status == Status::Working)
@@ -330,8 +320,6 @@ mod speech_scheduler {
                 entry.status = Status::Discarded;
                 return Requeue::Refused;
             }
-            // The step boundary ends a step-scoped interruption.
-            entry.interrupted = false;
             entry.status = Status::Queued;
             self.speech_q.push_back(speech);
             Requeue::Requeued
@@ -436,7 +424,7 @@ mod speech_scheduler {
         ) -> Option<(SpeechId, PreemptiveVerdict)> {
             (self.preemptive_generation_count, self.preflight) = (0, None);
             let (speech, preflight) = self.preemptive_generation.take()?;
-            let interrupted = self.entry(speech)?.interrupted;
+            let interrupted = self.entry(speech)?.handle.interrupted();
             let verdict = reconcile_preemptive_generation(&preflight, committed, interrupted);
             match verdict {
                 PreemptiveVerdict::Reuse => {

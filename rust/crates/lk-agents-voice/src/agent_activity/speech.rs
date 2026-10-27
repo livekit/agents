@@ -303,33 +303,21 @@ impl Driver {
             }
             SpeechCommand::InterruptSpeech { speech: id, force } => {
                 out.trace(InterruptStep::HostInterrupt { speech: Some(id), force });
-                let tell_socket = if !force
-                    && self.activity.speech_scheduler.status(id) == Some(Status::Working)
-                {
-                    // Unforced, on a speech whose tools are running (the tool interrupting its own
-                    // handle): scoped to that step, journalled, and the tool reply still follows.
-                    // Forced is the host ending the speech, tools and all.
-                    out.trace(InterruptStep::Interrupted {
-                        speech: id,
-                        cause: InterruptCause::Host,
-                        force,
-                    });
-                    false
-                } else {
-                    // Current or queued. The refusal is the same one by name.
-                    match self.interrupt_speech(now, id, InterruptCause::Host, force, out) {
-                        // The socket too, once, for a pipeline speech on a realtime session.
-                        Ok(InterruptOutcome::Now) => !self.is_realtime_speech(id),
-                        // Already interrupted or done: a no-op, so another speech's live
-                        // generation is not cancelled under it.
-                        Ok(InterruptOutcome::Already) => false,
-                        // The reference raises before anything moves.
-                        Err(_) => {
-                            out.trace(InterruptStep::ByAudioActivityRefused(
-                                InterruptRefusal::NotAllowed,
-                            ));
-                            false
-                        }
+                // The whole speech, wherever it is: queued, playing, or in its tools (which finish
+                // and commit, with no follow-up). The refusal is the same one by name.
+                let interrupted = self.interrupt_speech(now, id, InterruptCause::Host, force, out);
+                let tell_socket = match interrupted {
+                    // The socket too, once, for a pipeline speech on a realtime session.
+                    Ok(InterruptOutcome::Now) => !self.is_realtime_speech(id),
+                    // Already interrupted or done: a no-op, so another speech's live generation is
+                    // not cancelled under it.
+                    Ok(InterruptOutcome::Already) => false,
+                    // The reference raises before anything moves.
+                    Err(_) => {
+                        out.trace(InterruptStep::ByAudioActivityRefused(
+                            InterruptRefusal::NotAllowed,
+                        ));
+                        false
                     }
                 };
                 if tell_socket {
@@ -911,7 +899,7 @@ impl Driver {
         // The state moves on the speech's interruption, not the step's; a filler ending inside
         // another speech's tool span goes back to `thinking` (listening would arm the away timer).
         let speech_interrupted =
-            self.activity.speech_scheduler.handle(speech).is_some_and(|h| h.interrupted_speech());
+            self.activity.speech_scheduler.handle(speech).is_some_and(|h| h.interrupted());
         let eos = end_of_speech(
             speech_interrupted,
             has_tool_output,

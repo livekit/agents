@@ -228,7 +228,7 @@ async fn pipeline_reply_task_impl(
             // otherwise wait on its own speech.
             if matches!(spoken, Ok(Some(_))) {
                 let has_tools = !tools.is_empty();
-                let tools_running = has_tools && !handle.interrupted_speech();
+                let tools_running = has_tools && !handle.interrupted();
                 mark_generation_done(handle);
                 step_spoken(shared, handle, handle.interrupted(), has_tools, tools_running, None);
             }
@@ -263,7 +263,7 @@ async fn pipeline_reply_task_impl(
         _ => TurnStats::default(),
     };
     let has_tools = !tools.is_empty();
-    let tools_running = has_tools && !handle.interrupted_speech();
+    let tools_running = has_tools && !handle.interrupted();
     let finished = finish_step(
         shared,
         handle,

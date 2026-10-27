@@ -108,7 +108,7 @@ pub(crate) async fn realtime_generation_task(
     let stats = TurnStats::default();
     // The speech's interruption decides it, as the pipeline's step does: a reply whose audio the
     // output cut still has its tools running.
-    let tools_running = has_calls && !handle.interrupted_speech();
+    let tools_running = has_calls && !handle.interrupted();
     // `assistant_metrics["provider_request_ids"] = [generation_ev.response_id]` (`:4168-4169`).
     let request_ids = response_id.map(|id| vec![id]);
     // The server's id, as `_realtime_generation_task` commits it: it fills the placeholder.

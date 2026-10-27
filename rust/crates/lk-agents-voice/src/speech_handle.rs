@@ -173,17 +173,6 @@ pub enum CreationError {
     Consumed,
 }
 
-/// How wide an interruption is. A tool's own `interrupt()` (or a session `Interrupt` while its tools
-/// run) stops only the playing step, cleared at [`SpeechHandle::step`]; everything else is the
-/// whole speech. Not [`Monotone`]: `Step` regresses to `None` at the step boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Interruption {
-    None,
-    /// The step whose playout it cut, counting as [`SpeechHandle::num_steps`] does.
-    Step(u32),
-    Speech,
-}
-
 /// `_allow_interruptions` and its hold count and restore value, in one cell so holds are atomic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Interruptions {
@@ -232,8 +221,8 @@ pub struct SpeechHandle {
     interrupt_requested: AtomicBool,
 
     scheduled: Monotone<bool>,
-    /// Level-triggered: a step-scoped interruption is cleared at the step boundary.
-    interrupted: watch::Sender<Interruption>,
+    /// `_interrupt_fut`: one-shot, the whole speech (its tools and any follow-up step).
+    interrupted: Monotone<bool>,
     done: Monotone<bool>,
 
     // Level-triggered, because `SpeechHandle._clear_authorization` clears it.
@@ -271,7 +260,7 @@ impl SpeechHandle {
             api,
             interrupt_requested: AtomicBool::new(false),
             scheduled: Monotone::new(false),
-            interrupted: watch::Sender::new(Interruption::None),
+            interrupted: Monotone::new(false),
             done: Monotone::new(false),
             authorized: watch::Sender::new(false),
             interruptions: watch::Sender::new(Interruptions {
@@ -365,31 +354,14 @@ impl SpeechHandle {
         self.created().ok_or(SpeechRefused::Detached)
     }
 
-    /// `speech_handle._num_steps += 1` on the tool-loop back edge. Ends a step-scoped interruption
-    /// and disarms its watchdog; a whole-speech interruption is untouched.
+    /// `speech_handle._num_steps += 1` on the tool-loop back edge.
     pub fn step(&self) -> u32 {
-        let n = self.num_steps.fetch_add(1, Ordering::AcqRel) + 1;
-        let cleared = self.interrupted.send_if_modified(|i| match i {
-            Interruption::Step(_) => {
-                *i = Interruption::None;
-                true
-            }
-            Interruption::None | Interruption::Speech => false,
-        });
-        if cleared {
-            self.inner.lock().unwrap().watchdog_armed = false;
-        }
-        n
+        self.num_steps.fetch_add(1, Ordering::AcqRel) + 1
     }
 
-    /// Whether the speech or its playing step is interrupted right now.
+    /// The loop interrupted the speech: its playout, its tools and any follow-up step.
     pub fn interrupted(&self) -> bool {
-        !matches!(*self.interrupted.borrow(), Interruption::None)
-    }
-
-    /// Whether the whole speech was interrupted: decides whether a tool's follow-up reply is owed.
-    pub fn interrupted_speech(&self) -> bool {
-        matches!(*self.interrupted.borrow(), Interruption::Speech)
+        self.interrupted.get()
     }
 
     /// `SpeechHandle._mark_scheduled`. Idempotent, like the `suppress(InvalidStateError)`.
@@ -404,8 +376,7 @@ impl SpeechHandle {
     }
 
     pub async fn wait_for_interrupted(&self) {
-        let mut rx = self.interrupted.subscribe();
-        let _ = rx.wait_for(|i| !matches!(i, Interruption::None)).await;
+        self.interrupted.wait_for(|i| *i).await;
     }
 
     pub async fn wait_for_done(&self) {
@@ -478,18 +449,8 @@ impl SpeechHandle {
 
     /// `interrupt(force=...)`. Returns whether it landed now; on `true` the driver arms
     /// [`INTERRUPTION_TIMEOUT`] and calls [`on_interruption_timeout`](Self::on_interruption_timeout).
+    /// The guards, then `_cancel` (`speech_handle.SpeechHandle._cancel`).
     pub fn interrupt(&self, force: bool) -> Result<bool, SpeechError> {
-        self.stop(force, Interruption::Speech)
-    }
-
-    /// `interrupt()` scoped to the playing step; [`step`](Self::step) clears it so the tool's
-    /// follow-up plays on the same handle. Never forced.
-    pub fn interrupt_step(&self) -> Result<bool, SpeechError> {
-        self.stop(false, Interruption::Step(self.num_steps()))
-    }
-
-    /// The guards, then `_cancel` (`speech_handle.SpeechHandle._cancel`, `.wait_if_not_interrupted`).
-    fn stop(&self, force: bool, how: Interruption) -> Result<bool, SpeechError> {
         // Before the `allow_interruptions` guard: a done non-interruptible speech does not raise.
         if self.interrupted() || self.done() {
             return Ok(false);
@@ -497,7 +458,7 @@ impl SpeechHandle {
         if !force && !self.allow_interruptions() {
             return Err(SpeechError::InterruptionsNotAllowed);
         }
-        self.interrupted.send_replace(how);
+        self.interrupted.set(true);
         self.inner.lock().unwrap().watchdog_armed = true;
         Ok(true)
     }
@@ -625,12 +586,13 @@ impl SpeechHandle {
         Ok(self.inner.lock().unwrap().error.clone())
     }
 
-    /// How a done speech ended, as `SpeechDone` reports it.
+    /// How a done speech ended, as `SpeechDone` reports it: as the host reads the handle, so an
+    /// `interrupt()` that raced the speech's end is not reported completed.
     pub fn outcome(&self) -> crate::events::SpeechOutcome {
         use crate::events::SpeechOutcome;
         if matches!(self.exception(), Ok(Some(_))) {
             SpeechOutcome::Failed
-        } else if self.interrupted() {
+        } else if self.interrupted_for_host() {
             SpeechOutcome::Interrupted
         } else {
             SpeechOutcome::Completed

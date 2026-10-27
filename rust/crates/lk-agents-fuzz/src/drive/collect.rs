@@ -60,7 +60,7 @@ impl Run {
                     kind: None,
                     done,
                     done_since: done.then_some(now),
-                    interrupted: handle.interrupted(),
+                    interrupted: handle.interrupted_for_host(),
                     scheduled: handle.scheduled(),
                     allow_interruptions: handle.allow_interruptions(),
                     error: if ended {

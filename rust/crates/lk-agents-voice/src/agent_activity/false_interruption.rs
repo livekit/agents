@@ -257,9 +257,9 @@ pub enum TurnSettled {
 
 impl Driver {
     /// **The only writer of a speech's interruption.** `Err(InterruptionsNotAllowed)` when
-    /// forbidden and not forced; an ended speech is `Ok(Already)`. The handle's own `interrupt()`
-    /// (a tool's `ctx.speech_handle.interrupt()`: the host, unforced) stops only the playing step,
-    /// so the tool's follow-up is still spoken; every other cause stops the whole speech.
+    /// forbidden and not forced; an ended speech is `Ok(Already)`. The whole speech stops, whatever
+    /// the cause (`_interrupt_fut` is one-shot): a cut playout cancels its tools, a speech in its
+    /// tools lets them finish and commit, and no follow-up is spoken.
     pub(crate) fn interrupt_speech(
         &mut self,
         now: Ts,
@@ -268,26 +268,10 @@ impl Driver {
         force: bool,
         out: &mut Out,
     ) -> Result<InterruptOutcome, SpeechError> {
-        let step_only = cause == InterruptCause::Host && !force;
-        self.stop_speech(now, speech, cause, force, step_only, out)
-    }
-
-    /// `step_only` stops the current step and lets the tool reply follow; otherwise the whole
-    /// speech stops, as the session-level `interrupt()` does: running tools end, outputs commit,
-    /// no follow-up is spoken.
-    fn stop_speech(
-        &mut self,
-        now: Ts,
-        speech: SpeechId,
-        cause: InterruptCause,
-        force: bool,
-        step_only: bool,
-        out: &mut Out,
-    ) -> Result<InterruptOutcome, SpeechError> {
         let Some(handle) = self.activity.speech_scheduler.handle(speech).cloned() else {
             return Ok(InterruptOutcome::Already);
         };
-        let landed = if step_only { handle.interrupt_step()? } else { handle.interrupt(force)? };
+        let landed = handle.interrupt(force)?;
         // A close's cut: the task reports its end during the drain; the hard edge releases what
         // is still open.
         if !landed {
@@ -304,8 +288,8 @@ impl Driver {
         self.fillers_speech_ended(speech, out);
         // A tool's `foreground()` / `wait_for_idle()` ask is refused too when the cut lands during
         // playout (the reference cancels the tools), or it would wait on the speech itself. A
-        // speech already in its tool phase, or a step interruption, keeps its tools running.
-        if !step_only && !self.activity.tools_in_flight.contains(&speech) {
+        // speech already in its tool phase keeps its tools running.
+        if !self.activity.tools_in_flight.contains(&speech) {
             self.withdraw_idle_asks(speech, out);
         }
         if let Some(output) = sink {
@@ -317,10 +301,7 @@ impl Driver {
         // the close: every handle is interrupted there and the loop exits.
         let closing = self.session.closing_past_edge();
         let watchdog = Timer::InterruptionTimeout(speech);
-        if self.activity.speech_scheduler.interrupted(speech)
-            && !closing
-            && !self.armed(watchdog, out)
-        {
+        if !closing && !self.armed(watchdog, out) {
             let at = now.saturating_add(INTERRUPTION_TIMEOUT);
             out.machine().arm(watchdog, at);
             out.trace(SpeechStep::WatchdogArmed { speech, at });
@@ -751,13 +732,13 @@ impl Driver {
             })
             .collect();
         for id in working {
-            if let Ok(InterruptOutcome::Now) = self.stop_speech(now, id, cause, force, false, out) {
+            if let Ok(InterruptOutcome::Now) = self.interrupt_speech(now, id, cause, force, out) {
                 reached.push(id);
             }
         }
         // In pop order: the first refusal keeps that speech and all behind it (the reference breaks).
         for id in self.activity.speech_scheduler.speech_q().clone() {
-            match self.stop_speech(now, id, cause, force, false, out) {
+            match self.interrupt_speech(now, id, cause, force, out) {
                 Ok(InterruptOutcome::Now) => reached.push(id),
                 Ok(InterruptOutcome::Already) => {}
                 Err(_) => {
@@ -778,7 +759,7 @@ impl Driver {
         cause: InterruptCause,
         out: &mut Out,
     ) -> Result<bool, InterruptRefusal> {
-        match self.stop_speech(now, id, cause, force, false, out) {
+        match self.interrupt_speech(now, id, cause, force, out) {
             Ok(outcome) => Ok(matches!(outcome, InterruptOutcome::Now)),
             Err(_) => {
                 let refusal = InterruptRefusal::NotAllowed;
