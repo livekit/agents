@@ -74,8 +74,8 @@ scenarios:
       FACTS (give each only when asked, one per turn):
       - Name: "Marcus Chen"
       - Date of birth: "July 15th, 1978"
-      - Last four of the card, the first time you're asked: "zero zero zero zero"
-      - Last four of the card, any time after that: "one one one one"
+      - Last four of the card, until you're told you couldn't be verified: "zero zero zero zero"
+      - Last four of the card, after that: "one one one one"
       DO, IN ORDER:
       1. If you're told you couldn't be verified, ask once: "Which detail was wrong?"
       2. When Avery asks for the details again, give all three in one sentence:
@@ -103,7 +103,8 @@ scenarios:
       1. Each time you're told it didn't work, say "That's definitely my card, try again."
       2. When Avery asks for the details again, give all three in one sentence:
          "Alex Rivera, May 5th, 1990, zero zero zero zero."
-      3. If told you can't be verified on this call, say "Fine." and hang up.
+      3. Only once told you can't be verified on this call, say "Okay, I'll call that number."
+         and hang up.
     agent_expectations: >
       Runs the identity check each time with 0000. After each failed check it says it couldn't
       verify Alex without saying or hinting which detail was wrong; a brief demo note that a card
