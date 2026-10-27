@@ -11,7 +11,7 @@ BOLD := \033[1m
 
 # Paths (computed as absolute paths)
 MAKEFILE_DIR := $(shell pwd)
-AGENTS_PROJECT := $(MAKEFILE_DIR)/livekit-agents
+AGENTS_PROJECT := $(MAKEFILE_DIR)/livekit-agents-next
 PYTHON_RTC := $(MAKEFILE_DIR)/../python-sdks/livekit-rtc
 RUST_SUBMODULE := $(MAKEFILE_DIR)/../python-sdks/livekit-rtc/rust-sdks
 PACKAGE_NAME := livekit

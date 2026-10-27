@@ -27,7 +27,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "livekit-agents>=1.8.6",
+    "livekit-agents-next>=1.8.6",
     "bithuman>=0.5.25,<3",
     "pillow>=10.3.0",
 ]
@@ -49,4 +49,4 @@ include = ["/livekit"]
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { livekit-agents = "0 days" }
+exclude-newer-package = { livekit-agents-next = "0 days" }

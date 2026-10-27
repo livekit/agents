@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "livekit-agents[openai]>=1.8.6",
+    "livekit-agents-next[openai]>=1.8.6",
     "aiohttp",
     "livekit",
     "httpx2>=2.12,<3",
@@ -45,4 +45,4 @@ include = ["/livekit"]
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { livekit = "0 days", livekit-agents = "0 days" }
+exclude-newer-package = { livekit = "0 days", livekit-agents-next = "0 days" }

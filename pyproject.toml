@@ -1,5 +1,8 @@
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
+# `livekit.agents` is livekit-agents-next here; the published livekit-agents that livekit-browser
+# depends on would install the same files over it.
+override-dependencies = ["livekit-agents; sys_platform == 'never'"]
 default-groups = ["dev", "typing"]
 # Universal resolution only checks that a wheel exists for the Python version.
 # A release that publishes wheels for one platform and no sdist (bithuman 2.12.2
@@ -12,7 +15,7 @@ required-environments = [
 ]
 
 [tool.uv.sources]
-livekit-agents = { workspace = true }
+livekit-agents-next = { workspace = true }
 # python-sdks main has the agent grants, not yet released to PyPI; an archive, since git clones fail on LFS
 livekit-api = { url = "https://github.com/livekit/python-sdks/archive/bdeadbacc75ece1274c55e02d3da9a34c8bde5b8.tar.gz", subdirectory = "livekit-api" }
 livekit-plugins-anam = { workspace = true }
@@ -94,7 +97,7 @@ livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
 
 [tool.uv.workspace]
-members = ["livekit-plugins/*", "livekit-agents", "examples_old/avatar", "examples_old/drive_thru", "examples_old/expressive_agent", "examples_old/frontdesk", "examples_old/healthcare", "examples_old/homepage", "examples_old/hotel_receptionist", "examples_old/inference", "examples_old/survey", "examples_old/voice_agents"]
+members = ["livekit-plugins/*", "livekit-agents-next", "examples_old/avatar", "examples_old/drive_thru", "examples_old/expressive_agent", "examples_old/frontdesk", "examples_old/healthcare", "examples_old/homepage", "examples_old/hotel_receptionist", "examples_old/inference", "examples_old/survey", "examples_old/voice_agents"]
 exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blockguard",

@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = ["livekit-agents>=1.8.6"]
+dependencies = ["livekit-agents-next>=1.8.6"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
@@ -41,4 +41,4 @@ include = ["/livekit"]
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { livekit-agents = "0 days" }
+exclude-newer-package = { livekit-agents-next = "0 days" }
