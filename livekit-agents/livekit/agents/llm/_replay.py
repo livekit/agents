@@ -55,7 +55,6 @@ async def serve(stream: LLMStream, url: str) -> None:
                 raise APIStatusError(
                     f"replay: {body.get('error', resp.reason)}",
                     status_code=resp.status,
-                    body=body,
                     retryable=False,
                 )
 
