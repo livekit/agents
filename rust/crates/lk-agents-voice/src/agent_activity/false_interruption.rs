@@ -459,6 +459,12 @@ impl Driver {
                 if self.session.config.effective.turn.interruption.detection_enabled() {
                     self.session.by_audio_activity = true;
                 }
+                // Paused once the person had stopped (a detector's verdict, a late transcript):
+                // no end of speech is coming to arm the resume, so it is armed now, as the
+                // reference's transcript paths do ("interrupted after end_of_speech").
+                if !self.activity.audio_recognition.user_speaking() {
+                    self.start_false_interruption_timer(now, out);
+                }
             }
             // The handle may have stopped allowing interruptions since guard 5 read it. A
             // interruption never overrides `allow_interruptions`; only the host may.

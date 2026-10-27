@@ -481,6 +481,9 @@ impl Driver {
             self.pump_schedule(now, &mut out);
         }
         self.settle_waiters(now, &mut out);
+        // What the waiters started (a background tool's deferred reply, a filler's say) is scheduled
+        // in this cycle too, or it waits, the floor free, for some unrelated wake.
+        self.pump_schedule(now, &mut out);
         self.release_providers(&mut out);
         self.execute(out);
         self.publish_gate();
