@@ -23,7 +23,7 @@ from ..llm.tool_context import (
     APPROVAL_ANSWERED,
     APPROVAL_KEY,
     ASK_IN_OWN_WORDS,
-    SAY_VERBATIM,
+    SAY_EXACTLY,
     Completed,
     Failed,
     FunctionTool,
@@ -1863,7 +1863,7 @@ class AgentActivity(RecognitionHooks):
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
-    def _say_verbatim(self, text: str) -> SpeechHandle:
+    def _say_exactly(self, text: str) -> SpeechHandle:
         """Exact text, spoken as written with ``say()`` when a TTS or the realtime model can;
         otherwise the model is asked to say it, with a warning each time."""
         if (
@@ -1878,7 +1878,7 @@ class AgentActivity(RecognitionHooks):
             "and the wording is not guaranteed",
             extra={"agent": self._agent.id, "text": text},
         )
-        return self._generate_reply(instructions=SAY_VERBATIM.format(text=text), tool_choice="none")
+        return self._generate_reply(instructions=SAY_EXACTLY.format(text=text), tool_choice="none")
 
     def _generate_reply(
         self,
@@ -3207,7 +3207,7 @@ class AgentActivity(RecognitionHooks):
                     fnc_call_out.reply_required = True
             elif not task.done():
                 if transition.verbatim:
-                    self._say_verbatim(str(transition.value))
+                    self._say_exactly(str(transition.value))
                 task._complete(transition.value)
         elif isinstance(transition, (Failed, Rejected)):
             text = transition.error if isinstance(transition, Failed) else transition.reason
@@ -3226,7 +3226,7 @@ class AgentActivity(RecognitionHooks):
             if transition.verbatim:
                 if transition.tool is not None:
                     self._claim_next_turn(transition.tool.info.name)
-                handle = self._say_verbatim(transition.question)
+                handle = self._say_exactly(transition.question)
             else:
                 # the model asks in its own words, with no tool to call; the answer's turn is
                 # claimed once it has asked, so the claim does not steer this reply
