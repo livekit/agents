@@ -426,6 +426,7 @@ class JobContext:
         if not session:
             raise RuntimeError("Cannot prepare report, no VoiceSession was found")
 
+        recording_started_at = session._recorder.started_at if session._recorder else None
         sr = SessionReport(
             job_id=self.job.id,
             room_id=self.job.room.sid,
@@ -436,10 +437,10 @@ class JobContext:
             chat_history=session.history.copy(),
             model_usage=session.usage.model_usage,
             audio_recording_path=session._recording_path,
-            audio_recording_started_at=(
-                session._recorder.started_at if session._recorder is not None else None
-            ),
+            audio_recording_started_at=recording_started_at,
         )
+        if recording_started_at is not None:
+            sr.duration = sr.timestamp - recording_started_at
 
         return sr
 
