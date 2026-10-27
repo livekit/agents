@@ -783,7 +783,8 @@ fn proxy(
         let has_params = f.sig.inputs.iter().any(|i| matches!(i, syn::FnArg::Typed(_)));
         let action = match meta_str(&fm, "soon") {
             Some(method) => ProxyAction::Soon { method },
-            None if fm.is_empty() => ProxyAction::Core,
+            // `live`: a getter read on every call instead of once; the same host call.
+            None if fm.is_empty() || head_of(&fm) == "live" => ProxyAction::Core,
             None => {
                 return Err(format!(
                     "{mat}: #[host({})] -- a proxy method takes soon = \"..\" or nothing",

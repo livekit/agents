@@ -45,13 +45,19 @@ impl Driver {
         }
     }
 
+    /// The session STT's identity as it is now: a `FallbackAdapter` names the instance serving.
+    pub(crate) fn stt_identity(&self) -> Option<lk_agents_abi::ProviderId> {
+        let stt = self.session.stt.as_ref()?;
+        Some(self.shared.resources.stt(stt.id).map_or_else(|| stt.provider.clone(), |s| s.id()))
+    }
+
     pub(crate) fn on_stt(&mut self, now: Ts, ev: Tagged<SpeechEvent>, out: &mut Out) {
         let Tagged { stream, item: ev } = ev;
         self.anchor_stt_stream(now);
         // `RecognizeStream._metrics_monitor_task`: one `STTMetrics` per usage report.
         if ev.kind == SpeechEventType::RecognitionUsage {
             let usage = ev.recognition_usage.clone().unwrap_or_default();
-            let id = self.session.stt.as_ref().map(|s| s.provider.clone()).unwrap_or_default();
+            let id = self.stt_identity().unwrap_or_default();
             let record = lk_agents_abi::metrics::base::SttMetrics {
                 label: id.label.clone(),
                 request_id: ev.request_id.clone(),

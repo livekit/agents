@@ -122,8 +122,10 @@ pub trait Stt: Send + Sync {
     fn capabilities(&self) -> SttCapabilities;
 
     /// The model and provider labelling this instance's turn metrics.
-    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
+    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label. Read
+    // when stamped: a `FallbackAdapter` names the instance serving now.
     #[python(identity)]
+    #[host(live)]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label(self.label())
     }

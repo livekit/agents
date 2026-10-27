@@ -25,6 +25,8 @@ struct Method {
     ret: Option<syn::Type>,
     ret_ref: bool,
     action: Action,
+    /// `#[host(live)]`: a getter read on every call, not once (a value the host object changes).
+    live: bool,
 }
 
 enum Action {
@@ -63,8 +65,9 @@ fn read(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<Proxy> {
     for item in &tr.items {
         let syn::TraitItem::Fn(f) = item else { continue };
         let fm = Metas::of(&f.attrs)?;
+        let live = fm.head() == "live";
         let action = match (fm.head(), &host) {
-            ("", _) => Action::Core,
+            ("", _) | ("live", _) => Action::Core,
             ("soon", None) => Action::Soon(fm.text("soon")?.unwrap_or_default().to_owned()),
             (other, Some(_)) => {
                 return Err(syn::Error::new_spanned(&f.sig.ident, format!("host({other}): a bare proxy's methods carry no marker")));
@@ -92,7 +95,7 @@ fn read(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<Proxy> {
         {
             return Err(syn::Error::new_spanned(&f.sig.ident, "`soon` is fire-and-forget: it returns () or Result<(), E>"));
         }
-        methods.push(Method { ident: f.sig.ident.clone(), is_async: sig.asyncness.is_some(), sig, params, ret, ret_ref, action });
+        methods.push(Method { ident: f.sig.ident.clone(), is_async: sig.asyncness.is_some(), sig, params, ret, ret_ref, action, live });
     }
     Ok(Proxy {
         trait_ident: tr.ident.clone(),
@@ -112,7 +115,7 @@ fn is_getter(m: &Method) -> bool {
 
 /// Every getter, unless the trait is `live`: then only one that lends a borrow.
 fn once(p: &Proxy, m: &Method) -> bool {
-    is_getter(m) && (!p.live || m.ret_ref)
+    is_getter(m) && (!p.live || m.ret_ref) && !m.live
 }
 
 /// The return without its borrow.

@@ -101,15 +101,6 @@ def _eou_detector(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
         _rewrite_records(t, "EOUMetrics", 2)
 
 
-def _fallback_stt(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
-    if not any(e[0] == "stt_availability_changed" for e in ref.get("events", [])):
-        return
-    for t in (ref, nxt):
-        for r in _reports(t):
-            if "stt_metadata" in r:
-                r["stt_metadata"] = "*"
-
-
 def _unmetered(metric: str, kind: str) -> Any:
     """Drops a message timing from both transcripts when no record of `kind` was metered."""
 
@@ -159,13 +150,6 @@ KNOWN: list[tuple[str, str, Callable[[dict[str, Any], dict[str, Any]], None]]] =
         "the core's EOUMetrics name the detector it resolved (the default turn detector, or the "
         "mode it fell back to); the reference's name only a turn_detection the developer passed",
         _eou_detector,
-    ),
-    (
-        "fallback_stt_identity_at_bind",
-        "the core reads a provider's model and provider once, when it is bound, so after a "
-        "failover a user turn names the FallbackAdapter's first STT; the reference's "
-        "FallbackAdapter.metrics_metadata names the instance that answered",
-        _fallback_stt,
     ),
     (
         "node_str_ttft",
