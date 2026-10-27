@@ -63,7 +63,7 @@ table! { RealtimeWire:
     wire::TranscriptionCompleted => Covered("conversation.item.input_audio_transcription.completed");
     wire::TranscriptionFailed => Covered("conversation.item.input_audio_transcription.failed");
     wire::TranscriptionUpdated => Skipped("xAI only; the fake server speaks OpenAI's dialect");
-    wire::TextDelta => Skipped("text output only; the native session always asks for audio (`output_modalities: [audio]`)");
+    wire::TextDelta => Covered("response.output_text.delta");
     wire::AudioTranscriptDelta => Covered("response.output_audio_transcript.delta");
     wire::AudioDelta => Covered("response.output_audio.delta");
     wire::OutputItemDone => Covered("response.output_item.done");
@@ -93,7 +93,7 @@ table! { RealtimeEvents:
     event::GenerationDone => Covered("response.done");
     event::RemoteItemAdded => Covered("conversation.item.added");
     event::SessionReconnected => Covered("a connection the session opened again");
-    event::SessionSwapped => Skipped("the fallback adapter's; the fakes run one native session");
+    event::SessionSwapped => Covered("a fallback setup's FatalError: the adapter swaps to its other server");
     event::Metrics => Covered("response.done usage, transcription usage");
     event::Error => Covered("error, a failed connection");
     event::HostError => Skipped("a host session's wall-clock error");

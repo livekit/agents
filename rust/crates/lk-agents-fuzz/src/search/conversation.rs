@@ -1244,6 +1244,12 @@ impl Talk {
                     ]);
                     rows.push(Input::RealtimeEvent { socket: socket_ref, event });
                 }
+                // A fallback adapter's model fails for good now and then: it swaps to the other.
+                if self.run.setup.realtime.is_some_and(|r| r.fallback)
+                    && self.rng.u8(0..100) < self.providers.socket_drops
+                {
+                    rows.push(Input::RealtimeEvent { socket: socket_ref, event: RtEvent::FatalError });
+                }
                 // The server drops the socket mid-reply and comes back.
                 if self.rng.u8(0..100) < self.providers.socket_drops {
                     let socket = Ref::new(socket);

@@ -63,7 +63,10 @@ impl Rule for SpeechErrorIsInjected {
                 .is_some_and(|down| down);
             // A realtime speech waits on the socket for its reply; dropped, the request fails.
             let socket_dropped = inputs.accepted().filter(before_done).any(|sent| {
-                matches!(sent.input, Input::RealtimeEvent { event: RtEvent::Disconnected, .. })
+                matches!(
+                    sent.input,
+                    Input::RealtimeEvent { event: RtEvent::Disconnected | RtEvent::FatalError, .. }
+                )
             });
             // The realtime server is a simulation of the real one, and refuses and times out as
             // that does: a `response.create` over its own response, a connection slower than the

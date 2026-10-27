@@ -425,7 +425,8 @@ fn the_realtime_server_behaves_as_recorded() {
     for (variant, coverage) in vocabulary::realtime_wire_claims() {
         if let Coverage::Covered(event) = coverage {
             assert!(DOCUMENTED.contains(&event), "{variant}: {event} is no documented server event");
-            let failure_only = matches!(event, "conversation.item.deleted" | "conversation.item.input_audio_transcription.failed");
+            // Made by a failure input, or by a text-only session (the replays are all audio).
+            let failure_only = matches!(event, "conversation.item.deleted" | "conversation.item.input_audio_transcription.failed" | "response.output_text.delta");
             assert!(fake_types.contains(event) || failure_only, "{variant}: the fake never sent {event} in the replays");
         }
     }

@@ -404,10 +404,11 @@ plain_enum! {
     /// stop speaking (`speech_started`, `speech_stopped`: the commit, and with `create_response`
     /// a reply, follow), it dropped the socket or took connections again, sent a delta for no
     /// response, opened a response unasked, finished the one it is generating at once, sent an
-    /// `error`, failed the response (`status: failed`) or the last transcription.
+    /// `error`, failed the response (`status: failed`) or the last transcription, or sent an
+    /// `error` the session cannot go on after (the account's quota).
     RtEvent {
         Disconnected, Reconnected, StrayDelta, SecondGeneration, GenerationDone, SpeechStarted,
-        SpeechStopped, ServerError, ResponseFailed, TranscriptionFailed
+        SpeechStopped, ServerError, ResponseFailed, TranscriptionFailed, FatalError
     }
 }
 plain_enum! {

@@ -40,6 +40,30 @@ impl Rule for InterruptionHasCause {
                 InterruptCause::ByAudioActivity | InterruptCause::UserTurn => {
                     user_input_before(&inputs, at)
                 }
+                // The model failed for good (a fatal error, a socket that never came back, a
+                // connection that never opened), reported as the realtime model's error, and the
+                // adapter swapped to another.
+                InterruptCause::ModelSwapped => {
+                    let failed = inputs.sent().iter().any(|sent| {
+                        sent.at < at
+                            && matches!(
+                                sent.input,
+                                Input::RealtimeEvent {
+                                    event: RtEvent::FatalError | RtEvent::Disconnected,
+                                    ..
+                                }
+                            )
+                    });
+                    failed
+                        || r.host_view().events().iter().any(|(e, ev)| {
+                            *e < at
+                                && matches!(
+                                    ev,
+                                    lk_agents_voice::events::SessionEvent::Error(err)
+                                        if err.source == lk_agents_voice::events::ErrorSource::Realtime
+                                )
+                        })
+                }
                 InterruptCause::Detector
                 | InterruptCause::Superseded
                 | InterruptCause::ScheduleRejected => true,

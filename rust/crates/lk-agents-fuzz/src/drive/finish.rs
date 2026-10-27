@@ -86,12 +86,17 @@ impl Run {
                 .applied()
                 .iter()
                 .filter(|a| a.accepted)
+                // This socket's: one a fallback adapter swapped away from took its person along.
                 .filter_map(|a| match &a.input {
-                    Input::RealtimeEvent { event: RtEvent::SpeechStarted, .. } => Some(true),
+                    Input::RealtimeEvent { socket: s, event: RtEvent::SpeechStarted }
+                        if s.nth == socket =>
+                    {
+                        Some(true)
+                    }
                     Input::RealtimeEvent {
+                        socket: s,
                         event: RtEvent::SpeechStopped | RtEvent::Disconnected,
-                        ..
-                    } => Some(false),
+                    } if s.nth == socket => Some(false),
                     _ => None,
                 })
                 .last()

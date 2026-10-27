@@ -140,6 +140,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         // Half the models call tools at the recorded rate, the rest as often as their prompt
         // has them.
         realtime.tool_calls = rng.bool().then(|| rng.u8(0..=100));
+        realtime.text_only = rng.u8(0..100) < 25;
+        realtime.fallback = rng.u8(0..100) < 30;
     }
     // The legs' retry budgets, and a voice that does not stream, drawn last too.
     setup.conn = rng.bool().then(|| ConnSetup {

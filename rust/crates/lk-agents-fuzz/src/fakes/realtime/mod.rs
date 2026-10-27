@@ -56,6 +56,8 @@ pub struct ServerSetup {
     pub connect: Duration,
     /// How often a response calls a tool, in percent; `None` is the corpus's rate.
     pub tool_calls: Option<u8>,
+    /// The model answers in text (`modalities=["text"]`).
+    pub text_only: bool,
 }
 
 pub struct FakeRealtime {
@@ -94,6 +96,7 @@ impl FakeRealtime {
         };
         // Server detection left at its default is the driver's to switch off when it detects
         // turns itself; switched off by the developer, it stays off.
+        opts.audio_output = !self.setup.text_only;
         let given = self.setup.vad.is_none();
         // The model's own clock, as a model built by the host runs on (`RealClock` from its
         // construction): never the session's.
@@ -338,6 +341,7 @@ pub(super) fn deliver(socket: &Socket, what: &Input) -> bool {
                 RtEvent::SecondGeneration => Exo::ServerResponse,
                 RtEvent::GenerationDone => Exo::FinishNow,
                 RtEvent::ServerError => Exo::ServerError,
+                RtEvent::FatalError => Exo::FatalError,
                 RtEvent::ResponseFailed => Exo::ResponseFailed,
                 RtEvent::TranscriptionFailed => Exo::TranscriptionFailed,
                 RtEvent::Disconnected | RtEvent::Reconnected => unreachable!("answered above"),
@@ -385,7 +389,8 @@ impl WsTransport for Transport {
             let mut server =
                 Server::new(socket.seed ^ state.connection)
                     .with_tool_calls(socket.tool_calls)
-                    .with_ids(format!("{}c", state.connection));
+                    // Unique across the session's sockets too, as a real server's ids are.
+                    .with_ids(format!("{}s{}c", socket.slot.get().map_or(0, |s| s.nth), state.connection));
             server.connect(socket.now());
             state.server = Some(server);
             state.connection

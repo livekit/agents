@@ -80,7 +80,9 @@ impl Run {
         // The providers, and the nodes an agent overriding them opens over each.
         let stt = setup.stt.then(|| session_stt(setup, &registry, connect));
         let llm = pipeline.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>);
-        let tts = (setup.tts && pipeline).then(|| {
+        // A realtime session has a voice too when the developer gives one: it speaks `say()`, and
+        // a text-only model's replies.
+        let tts = setup.tts.then(|| {
             (match setup.tts_latency {
                 Some(seed) => {
                     fakes::FakeTts::with_latency(registry.clone(), seed, !setup.chunked_tts)
@@ -107,14 +109,32 @@ impl Run {
                     } else {
                         fakes::RealtimeVad::Server
                     });
-                    let setup = fakes::ServerSetup {
-                        vad,
-                        seed: server.seed,
-                        connect,
-                        tool_calls: server.tool_calls,
+                    let fake = |seed: u64, connect: Duration| {
+                        let setup = fakes::ServerSetup {
+                            vad,
+                            seed,
+                            connect,
+                            tool_calls: server.tool_calls,
+                            text_only: server.text_only,
+                        };
+                        fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
+                            as Arc<dyn Realtime>
                     };
-                    fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
-                        as Arc<dyn Realtime>
+                    if !server.fallback {
+                        return fake(server.seed, connect);
+                    }
+                    use lk_agents_inference::fallback::realtime::{RealtimeChild, RealtimeFallbackModel};
+                    let children = vec![
+                        RealtimeChild::Native(fake(server.seed, connect)),
+                        // The fallback is a healthy model, connecting at once.
+                        RealtimeChild::Native(fake(server.seed.rotate_left(17), Duration::ZERO)),
+                    ];
+                    let anchor = lk_agents_abi::WallAnchor::of(&*time.clock());
+                    let observer = Arc::new(lk_agents_inference::fallback::IgnoreEvents);
+                    Arc::new(
+                        RealtimeFallbackModel::new(children, 10.0, true, observer, anchor)
+                            .expect("two children that agree"),
+                    ) as Arc<dyn Realtime>
                 }),
                 None,
                 tts,

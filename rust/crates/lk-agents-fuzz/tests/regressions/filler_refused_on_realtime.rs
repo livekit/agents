@@ -16,6 +16,8 @@ fn a_filler_on_a_realtime_model_without_say_is_refused() {
             ..RealtimeSetup::default()
         }),
         tools: vec!["lookup".into()],
+        // No voice: with one, the TTS speaks the filler.
+        tts: false,
         ..Setup::default()
     };
     let inputs = [

@@ -86,6 +86,8 @@ pub enum Exo {
     FinishNow,
     /// A server-side `error` event, the session staying open.
     ServerError,
+    /// An `error` the session cannot go on after (`insufficient_quota`).
+    FatalError,
     /// The response in progress fails: `response.done` with `status: failed`.
     ResponseFailed,
     /// The last user item's transcription fails.
@@ -781,6 +783,11 @@ impl Server {
             Exo::ServerError => {
                 let ev = self.event_id();
                 self.at(now, None, json!({"type": "error", "event_id": ev, "error": {"type": "server_error", "code": null, "message": "The server had an error while processing your request.", "event_id": null}}));
+                true
+            }
+            Exo::FatalError => {
+                let ev = self.event_id();
+                self.at(now, None, json!({"type": "error", "event_id": ev, "error": {"type": "insufficient_quota", "code": "insufficient_quota", "message": "You exceeded your current quota, please check your plan and billing details.", "event_id": null}}));
                 true
             }
             Exo::ResponseFailed => {

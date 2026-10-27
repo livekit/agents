@@ -225,7 +225,10 @@ fn host_cut(r: &Recording, created: u64, to: u64) -> bool {
                 // server's response in flight, an unasked one included.
                 | Input::SetAudioOutput { attach: false, .. }
                 | Input::RealtimeEvent {
-                    event: RtEvent::Disconnected | RtEvent::ResponseFailed | RtEvent::ServerError,
+                    event: RtEvent::Disconnected
+                        | RtEvent::ResponseFailed
+                        | RtEvent::ServerError
+                        | RtEvent::FatalError,
                     ..
                 }
         )

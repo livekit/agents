@@ -305,11 +305,23 @@ pub struct RealtimeSetup {
     /// How often the model calls a tool when it has some, in percent: the developer's prompt
     /// decides it. `None` is the corpus's rate.
     pub tool_calls: Option<u8>,
+    /// `RealtimeModel(modalities=["text"])`: the server answers in text, which the session's TTS
+    /// speaks when the setup has one.
+    pub text_only: bool,
+    /// `RealtimeModelFallbackAdapter` over two such servers: a fatal error swaps to the other.
+    pub fallback: bool,
 }
 
 impl Default for RealtimeSetup {
     fn default() -> Self {
-        RealtimeSetup { turn_detection: true, semantic: true, seed: 0, tool_calls: None }
+        RealtimeSetup {
+            turn_detection: true,
+            semantic: true,
+            seed: 0,
+            tool_calls: None,
+            text_only: false,
+            fallback: false,
+        }
     }
 }
 
