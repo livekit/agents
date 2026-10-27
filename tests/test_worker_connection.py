@@ -8,12 +8,13 @@ hanging forever (https://github.com/livekit/agents/issues/6083).
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
-from livekit.agents.job import JobContext
+from livekit.agents.job import JobAcceptArguments, JobContext, RunningJobInfo
 from livekit.agents.worker import AgentServer
+from livekit.protocol import agent
 
 pytestmark = pytest.mark.unit
 
@@ -50,3 +51,33 @@ async def test_run_raises_when_connection_exhausts_retries() -> None:
         finally:
             await server.aclose()
             await server.aclose()  # repeated aclose() stays a no-op
+
+
+async def test_reports_running_jobs_as_assigned_after_registering() -> None:
+    server = _make_server()
+
+    # the job as the availability request carried it: the identity is the one
+    # the worker accepted it with
+    job = agent.Job(id="AJ_running", state=agent.JobState(worker_id="AW_test"))
+    running = RunningJobInfo(
+        accept_arguments=JobAcceptArguments(name="test", identity="agent-identity", metadata=""),
+        job=job,
+        url="ws://localhost",
+        token="test-token",
+        worker_id="AW_test",
+        fake_job=False,
+    )
+
+    with (
+        patch.object(AgentServer, "active_jobs", new_callable=PropertyMock, return_value=[running]),
+        patch.object(server, "_queue_msg", new_callable=AsyncMock) as queue_msg,
+    ):
+        await server._report_active_jobs()
+
+    req = queue_msg.call_args.args[0].migrate_job
+    assert list(req.job_ids) == ["AJ_running"]
+    assert len(req.jobs) == 1
+    assert req.jobs[0].id == "AJ_running"
+    assert req.jobs[0].state.worker_id == "AW_test"
+    assert req.jobs[0].state.participant_identity == "agent-identity"
+    assert job.state.participant_identity == "", "the running job is not changed"

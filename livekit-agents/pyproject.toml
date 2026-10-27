@@ -30,7 +30,7 @@ dependencies = [
     "livekit==1.1.21",
     "livekit-api>=1.2.0,<2",
     "livekit-local-inference>=0.2.7",
-    "livekit-protocol>=1.1.28,<2",
+    "livekit-protocol>=1.1.29,<2",
     "livekit-blingfire~=1.1,<2",
     "protobuf>=3",
     "pyjwt>=2.0",
@@ -115,6 +115,7 @@ palabra = ["livekit-plugins-palabra>=1.8.9"]
 perplexity = ["livekit-plugins-perplexity>=1.8.9"]
 protoface = ["livekit-plugins-protoface>=1.8.9"]
 resemble = ["livekit-plugins-resemble>=1.8.9"]
+reson8 = ["livekit-plugins-reson8>=1.8.9"]
 respeecher = ["livekit-plugins-respeecher>=1.8.9"]
 rime = ["livekit-plugins-rime>=1.8.9"]
 runway = ["livekit-plugins-runway>=1.8.9"]
