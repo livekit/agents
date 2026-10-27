@@ -23,7 +23,7 @@ mod conversation;
 mod setup;
 mod uniform;
 
-pub use conversation::{Dials, explore, explore_at, randomness, stt_kinds};
+pub use conversation::{Dials, explore, explore_at, explore_with, randomness, stt_kinds};
 pub use setup::sample_setup;
 
 #[cfg(test)]

@@ -411,7 +411,18 @@ pub fn explore(setup: Setup, seed: u64, budget: usize) -> Outcome {
 
 /// [`explore`] with chosen dials instead of the seed's.
 pub fn explore_at(setup: Setup, seed: u64, budget: usize, dials: Dials) -> Outcome {
-    crate::drive::simulate_with(seed, converse_in(setup, seed, budget, dials))
+    explore_with(setup, seed, budget, dials, Policy::of(seed))
+}
+
+/// [`explore_at`] under a chosen queue policy instead of the seed's.
+pub fn explore_with(
+    setup: Setup,
+    seed: u64,
+    budget: usize,
+    dials: Dials,
+    policy: Policy,
+) -> Outcome {
+    crate::drive::simulate_with(seed, converse_in(setup, seed, budget, dials, policy))
 }
 
 /// The two dials that shape a whole run rather than one actor.
@@ -443,11 +454,17 @@ impl Dials {
     }
 }
 
-async fn converse_in(setup: Setup, seed: u64, budget: usize, dials: Dials) -> Outcome {
+async fn converse_in(
+    setup: Setup,
+    seed: u64,
+    budget: usize,
+    dials: Dials,
+    policy: Policy,
+) -> Outcome {
     let mut talk = Talk {
-        run: Run::start(&setup, seed, Policy::of(seed)).await,
+        run: Run::start(&setup, seed, policy).await,
         outcome: Outcome {
-            case: Case { setup, schedule: seed, policy: Policy::of(seed), ..Case::default() },
+            case: Case { setup, schedule: seed, policy, ..Case::default() },
             ..Outcome::default()
         },
         rng: Rng::with_seed(seed),

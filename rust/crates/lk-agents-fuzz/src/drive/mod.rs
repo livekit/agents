@@ -498,6 +498,8 @@ const NO_PROGRESS_STEPS: u32 = 10_000;
 struct Tasks {
     stamps: Stamps,
     spawned: Mutex<Vec<Spawned>>,
+    /// The task bridge, under `Policy::TaskPos`.
+    gate: Option<Arc<queue::Gate>>,
 }
 
 struct Spawned {
@@ -509,6 +511,10 @@ struct Spawned {
 impl Spawner for Tasks {
     fn spawn(&self, future: BoxFuture<'static, ()>) -> lk_agents_abi::AbortHandle {
         let site = std::panic::Location::caller();
+        let future = match &self.gate {
+            Some(gate) => gate.wrap(future),
+            None => future,
+        };
         let task = tokio::spawn(future);
         let abort = task.abort_handle().into();
         self.spawned.lock().unwrap().push(Spawned { at: self.stamps.now(), site, task });

@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[allow(unused_imports)]
 use lk_agents_fuzz::{
     check::KNOWN_FINDINGS,
-    drive::{Outcome, PHASES, Setup},
+    drive::{Outcome, PHASES, Policy, Setup},
     input::Input,
     record::Kind,
     rules::RULES,
@@ -47,7 +47,11 @@ fn survey() {
     // noise floor is measured, and a change is only a change if it beats that floor.
     let first = single.or(env("VOICE_FIRST_SEED")).unwrap_or(0);
     let budget = env("VOICE_BUDGET").unwrap_or(BUDGET as u64) as usize;
-    let window = Window { first, seeds, budget, single: single.is_some() };
+    // `VOICE_POLICY=FullPos` runs every seed under one queue policy instead of its own draw.
+    let policy = std::env::var("VOICE_POLICY").ok().map(|name| {
+        Policy::named(&name).unwrap_or_else(|| panic!("VOICE_POLICY: no policy {name}"))
+    });
+    let window = Window { first, seeds, budget, single: single.is_some(), policy };
     campaign(&window);
 }
 
@@ -155,6 +159,8 @@ struct Window {
     budget: usize,
     /// `VOICE_SEED`: one seed, reported in full.
     single: bool,
+    /// `VOICE_POLICY`.
+    policy: Option<Policy>,
 }
 
 /// Every seed of the window, run on all cores and returned in seed order, so the report does not
@@ -179,7 +185,13 @@ fn run_all(window: &Window) -> Vec<(u64, Outcome, std::time::Duration)> {
                         // from.
                         let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
                         let began = std::time::Instant::now();
-                        let outcome = search::explore(setup, seed, window.budget);
+                        let outcome = match window.policy {
+                            Some(policy) => {
+                                let dials = search::Dials::of(seed);
+                                search::explore_with(setup, seed, window.budget, dials, policy)
+                            }
+                            None => search::explore(setup, seed, window.budget),
+                        };
                         mine.push((seed, outcome, began.elapsed()));
                     }
                 })

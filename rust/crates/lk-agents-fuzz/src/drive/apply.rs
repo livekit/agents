@@ -1121,6 +1121,8 @@ impl Run {
         done: impl std::future::Future<Output = T>,
     ) -> Option<T> {
         let mut done = std::pin::pin!(done);
+        let gate = self.tasks.gate.clone();
+        let _shut = gate.as_ref().map(|gate| gate.shut());
         // Iterations at one virtual instant: an event, a wake, frames or a task's turn each.
         let mut instant = (self.time.now(), 0u32);
         loop {
@@ -1146,6 +1148,9 @@ impl Run {
                 // The host's loop outlives the session's: what is ready still runs, so a task the
                 // driver cancelled on its way out is gone before the case sends anything else.
                 // Bounded, as the session's own instants are: a task left spinning never stops.
+                if let Some(gate) = &gate {
+                    gate.open();
+                }
                 for _ in 0..NO_PROGRESS_STEPS {
                     if !tasks_runnable() {
                         break;
@@ -1157,6 +1162,7 @@ impl Run {
             while let Ok(event) = runtime.queue.try_recv() {
                 self.queue.push(event);
             }
+            self.queue.reported();
             // Frames are not scheduled: each reaches the data plane as it arrives.
             if !runtime.frames.is_empty() {
                 let now = self.time.read();
@@ -1180,7 +1186,8 @@ impl Run {
                 self.step(|runtime| runtime.handle(Event::Wake, now));
                 continue;
             }
-            match self.queue.next(tasks_runnable()) {
+            let ready = gate.as_ref().map(|gate| gate.ready()).unwrap_or_default();
+            match self.queue.next(tasks_runnable(), &ready) {
                 Some(Next::Event(event)) => {
                     let now = self.time.read();
                     let paired = self.queue.paired().then(|| self.steps.lock().unwrap().len());
@@ -1196,15 +1203,34 @@ impl Run {
                     one_task_turn().await;
                     continue;
                 }
+                Some(Next::Task(id)) => {
+                    let gate = gate.as_ref().expect("a bridged task's turn has a gate");
+                    gate.grant(id);
+                    // Its tokio task is woken; the pool's spurious polls may come first.
+                    for _ in 0..GRANT_TURNS {
+                        one_task_turn().await;
+                        if !gate.granting() {
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 None => {}
             }
             if until.is_some_and(|until| now >= until) {
                 return None;
             }
             let next = [wake_at, until].into_iter().flatten().min();
+            let woken = async {
+                match &gate {
+                    Some(gate) => gate.woken().await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
                 biased;
                 value = &mut done => return Some(value),
+                () = woken => {}
                 () = self.time.wait_until_opt(next) => {}
                 Some(frame) = runtime.frames.recv() => {
                     let now = self.time.read();
@@ -1301,6 +1327,9 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
         .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
         .unwrap_or_default()
 }
+
+/// Turns a granted task's poll may wait behind: the pool's own, each a poll that returns at once.
+const GRANT_TURNS: usize = 64;
 
 /// Let the runtime poll one task, then come back: the run's future wakes itself and, with an event
 /// interval of one, is polled again after the next task. `yield_now` defers its wake until every
