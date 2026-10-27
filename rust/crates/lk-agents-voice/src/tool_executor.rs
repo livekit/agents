@@ -79,6 +79,11 @@ impl Tools {
         true
     }
 
+    /// The running call named `call_id` not yet heard to detach: its updates wait for it.
+    pub(crate) fn undetached(&mut self, call_id: &str) -> Option<&mut Running> {
+        self.running.iter_mut().find(|r| r.call.call_id == call_id && !r.detached())
+    }
+
     /// The detached call named `call_id`, which may send updates.
     pub(crate) fn detached(&mut self, call_id: &str) -> Option<&mut Running> {
         self.running.iter_mut().find(|r| r.call.call_id == call_id && r.detached())
@@ -161,6 +166,9 @@ pub(crate) struct Running {
     pub(crate) step: u32,
     /// Progress updates sent so far, the first (the step's answer) included.
     pub(crate) updates: u32,
+    /// Updates sent before the step's join heard the call detach (`ctx.update()` reaches the
+    /// driver directly, the detach in the model's order): applied, in order, once it has.
+    pub(crate) early: Vec<crate::agent_session::ToolUpdate>,
     /// What runs the body: its cancel goes there.
     pub(crate) runner: Arc<dyn HostToolRunner>,
 }

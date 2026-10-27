@@ -62,6 +62,7 @@ impl Driver {
             speech,
             step,
             updates: 0,
+            early: Vec::new(),
             runner,
         });
     }
@@ -89,9 +90,18 @@ impl Driver {
                 self.fillers_reset_dwell(now, &call_id, out);
                 out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Updated {
                     id: call_id.clone(),
-                    call_id,
+                    call_id: call_id.clone(),
                     message: message.unwrap_or_default(),
                 }));
+                let early = self
+                    .activity
+                    .tools
+                    .detached(&call_id)
+                    .map(|r| std::mem::take(&mut r.early))
+                    .unwrap_or_default();
+                for update in early {
+                    self.on_tool_update(now, call_id.clone(), update, out);
+                }
                 return;
             }
         };
@@ -180,7 +190,10 @@ impl Driver {
         out: &mut Out,
     ) {
         if self.activity.tools.detached(&call_id).is_none() {
-            out.trace(TraceToolStep::UpdateRefused { call_id });
+            match self.activity.tools.undetached(&call_id) {
+                Some(running) => running.early.push(update),
+                None => out.trace(TraceToolStep::UpdateRefused { call_id }),
+            }
             return;
         }
         let wall = self.step.wall();

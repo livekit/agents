@@ -385,7 +385,7 @@ pub enum FillerSource {
     Host(Option<lk_agents_abi::HostRef>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ToolUpdate {
     /// `raw` as written; `message` rendered by the host.
     Progress { message: String, raw: String },
