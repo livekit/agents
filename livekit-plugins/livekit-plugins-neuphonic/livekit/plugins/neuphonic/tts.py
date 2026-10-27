@@ -156,7 +156,12 @@ class TTS(tts.TTS):
         else:
             headers = None
 
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        return await asyncio.wait_for(
+            # the monitor sends its own pings and handles the pongs, so aiohttp
+            # must not answer them itself or they stop counting as activity.
+            session.ws_connect(url, headers=headers, autoping=False),
+            timeout,
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -424,6 +429,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal chunks
+            monitor: utils.aio.WebSocketMonitor | None = None
             while True:
                 if chunks == 0:
                     if input_done:
@@ -432,9 +438,16 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     input_changed.clear()
                     await input_changed.wait()
+                    # nothing was owed while waiting for the next sentence, so that wait
+                    # is not silence: the liveness clock starts again from here
+                    monitor = None
                     continue
 
-                msg = await ws.receive()
+                if monitor is None:
+                    monitor = utils.aio.WebSocketMonitor(
+                        ws, liveness_timeout=self._conn_options.liveness_timeout
+                    )
+                msg = await monitor.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
