@@ -83,11 +83,17 @@ impl Rule for ForwardedWhileEnabled {
             })
             .next()
             .map(|(at, ())| at);
-        // The person's track unpublished (a relink under a duplicate identity republishes it):
-        // what it still carried goes with it (seed 68376).
+        // The person's track unpublished (a relink under a duplicate identity republishes it) or
+        // unsubscribed: what its stream still carried goes with it (seed 68376).
         let unpublished: Vec<Observed> = r
             .journal_where(|step| {
-                matches!(step, Step::Room(RoomStep::Event(RoomEventKind::TrackUnpublished))).then_some(())
+                matches!(
+                    step,
+                    Step::Room(RoomStep::Event(
+                        RoomEventKind::TrackUnpublished | RoomEventKind::TrackUnsubscribed
+                    ))
+                )
+                .then_some(())
             })
             .map(|(at, ())| at)
             .collect();

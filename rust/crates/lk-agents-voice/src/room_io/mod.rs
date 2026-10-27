@@ -424,6 +424,7 @@ impl RoomIo {
                 self.on_participant_disconnected(participant.identity(), *reason);
             }
             RoomEvent::TrackSubscribed { .. }
+            | RoomEvent::TrackUnsubscribed { .. }
             | RoomEvent::TrackPublished { .. }
             | RoomEvent::TrackUnpublished { .. }
             | RoomEvent::LocalTrackPublished { .. }

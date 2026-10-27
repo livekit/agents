@@ -252,6 +252,10 @@ class Room:
             lambda track, pub, p: bus.track_subscribed(self._remote(p), self._publication(pub)),
         )
         room.on(
+            "track_unsubscribed",
+            lambda track, pub, p: bus.track_unsubscribed(self._remote(p), self._publication(pub)),
+        )
+        room.on(
             "track_published",
             lambda pub, p: bus.track_published(self._remote(p), self._publication(pub)),
         )

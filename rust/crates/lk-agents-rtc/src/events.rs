@@ -13,7 +13,7 @@ use crate::{ConnectionState, DisconnectReason, ParticipantIdentity, StreamInfo, 
 /// waits forever. Control events are rare; only media is lossy.
 pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
-/// One of the eleven.
+/// One of the twelve.
 ///
 /// Handles rather than identifiers in the payloads: §1.5 chose an object graph over a flat session
 /// so that "which participant, which publication" and "this publication is gone" are expressible.
@@ -24,6 +24,12 @@ pub enum RoomEvent {
     /// A remote track is subscribed and its frames can be read.
     /// `_input.py` reacts by opening an `audio_stream`.
     TrackSubscribed {
+        participant: Arc<dyn RemoteParticipant>,
+        publication: Arc<dyn TrackPublication>,
+    },
+    /// A remote track is no longer subscribed: its stream ended. Re-subscribing the same
+    /// publication (a reconnect, `set_subscribed(true)`) arrives as a new `TrackSubscribed`.
+    TrackUnsubscribed {
         participant: Arc<dyn RemoteParticipant>,
         publication: Arc<dyn TrackPublication>,
     },
@@ -86,6 +92,11 @@ impl fmt::Debug for RoomEvent {
         match self {
             RoomEvent::TrackSubscribed { participant, publication } => f
                 .debug_struct("TrackSubscribed")
+                .field("participant", participant.identity())
+                .field("publication", publication.sid())
+                .finish(),
+            RoomEvent::TrackUnsubscribed { participant, publication } => f
+                .debug_struct("TrackUnsubscribed")
                 .field("participant", participant.identity())
                 .field("publication", publication.sid())
                 .finish(),
@@ -174,6 +185,11 @@ impl RoomEventBus {
     #[host(method)]
     pub fn track_subscribed(&self, participant: Arc<dyn RemoteParticipant>, publication: Arc<dyn TrackPublication>) {
         self.emit(RoomEvent::TrackSubscribed { participant, publication });
+    }
+
+    #[host(method)]
+    pub fn track_unsubscribed(&self, participant: Arc<dyn RemoteParticipant>, publication: Arc<dyn TrackPublication>) {
+        self.emit(RoomEvent::TrackUnsubscribed { participant, publication });
     }
 
     #[host(method)]

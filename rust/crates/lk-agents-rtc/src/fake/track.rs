@@ -120,11 +120,13 @@ impl FakeTrackPublication {
             // `notify_waiters` only wakes current waiters; later ones read the flag. Both are needed.
             self.subscription.notify_waiters();
         }
-        if subscribed
-            && !was
-            && let Some(participant) = self.owner.as_ref().and_then(Weak::upgrade)
-        {
+        let Some(participant) = self.owner.as_ref().and_then(Weak::upgrade) else { return };
+        if subscribed && !was {
             self.bus.emit(RoomEvent::TrackSubscribed { participant, publication: self.clone() });
+        } else if !subscribed && was {
+            // As the SDK: the track's streams end, then `track_unsubscribed`.
+            self.close_streams();
+            self.bus.emit(RoomEvent::TrackUnsubscribed { participant, publication: self.clone() });
         }
     }
 

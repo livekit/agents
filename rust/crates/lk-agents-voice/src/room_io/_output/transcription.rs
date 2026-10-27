@@ -492,6 +492,7 @@ impl ParticipantTranscriptionOutput {
             RoomEvent::Close { reason: _ } => self.writer.lock().unwrap().disconnected(),
             RoomEvent::TrackSubscribed { participant: _, publication: _ }
             | RoomEvent::TrackUnpublished { participant: _, publication: _ }
+            | RoomEvent::TrackUnsubscribed { participant: _, publication: _ }
             | RoomEvent::ParticipantConnected { participant: _ }
             | RoomEvent::ParticipantActive { participant: _ }
             | RoomEvent::ParticipantAttributesChanged { participant: _ }

@@ -723,6 +723,7 @@ pub enum RoomLinkStep {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomEventKind {
     TrackSubscribed,
+    TrackUnsubscribed,
     TrackPublished,
     TrackUnpublished,
     LocalTrackPublished,
@@ -740,6 +741,7 @@ impl RoomEventKind {
         use lk_agents_rtc::RoomEvent as E;
         match ev {
             E::TrackSubscribed { .. } => RoomEventKind::TrackSubscribed,
+            E::TrackUnsubscribed { .. } => RoomEventKind::TrackUnsubscribed,
             E::TrackPublished { .. } => RoomEventKind::TrackPublished,
             E::TrackUnpublished { .. } => RoomEventKind::TrackUnpublished,
             E::LocalTrackPublished { .. } => RoomEventKind::LocalTrackPublished,

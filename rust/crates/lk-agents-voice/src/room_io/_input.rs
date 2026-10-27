@@ -95,11 +95,12 @@ impl ParticipantVideoInput {
                 () = lease.stopped() => None,
                 frame = stream.recv() => frame,
             };
-            let Some(frame) = received else { return };
+            let Some(frame) = received else { break };
             if !self.reader.deliver(&lease, frame) {
                 return;
             }
         }
+        self.reader.ended(&lease);
     }
 
     /// The next frame, or `None` once closed. The host's `VideoInput` wraps this.
@@ -235,12 +236,15 @@ fn secs_to_ts(secs: f64) -> Ts {
     Ts::from_nanos((secs * 1e9) as u64)
 }
 
+/// The participant's first subscribed track the leg takes, `skip` aside.
 fn read_first(
     participant: &Arc<dyn RemoteParticipant>,
+    skip: Option<&TrackSid>,
     mut try_read: impl FnMut(&Arc<dyn TrackPublication>) -> bool,
 ) {
     for publication in participant.track_publications() {
-        if publication.is_subscribed() && try_read(&publication) {
+        if Some(publication.sid()) != skip && publication.is_subscribed() && try_read(&publication)
+        {
             return;
         }
     }
@@ -324,7 +328,7 @@ impl<T> TrackReader<T> {
             return;
         }
         if let Some(p) = identity.and_then(|i| room.participant(&i)) {
-            read_first(&p, |t| try_read(&p, t));
+            read_first(&p, None, |t| try_read(&p, t));
         }
     }
 
@@ -337,7 +341,15 @@ impl<T> TrackReader<T> {
             // `_on_track_unavailable`: fall back to the participant's next track.
             RoomEvent::TrackUnpublished { participant, publication } => {
                 if self.release(participant.identity(), publication.sid()) {
-                    read_first(participant, |t| try_read(participant, t));
+                    read_first(participant, None, |t| try_read(participant, t));
+                }
+            }
+            // `_on_track_unsubscribed`: the same publication subscribed again arrives as its own
+            // `track_subscribed`, so only the participant's other tracks are fallbacks.
+            RoomEvent::TrackUnsubscribed { participant, publication } => {
+                let sid = publication.sid();
+                if self.release(participant.identity(), sid) {
+                    read_first(participant, Some(sid), |t| try_read(participant, t));
                 }
             }
             RoomEvent::TrackPublished { .. }
@@ -395,6 +407,15 @@ impl<T> TrackReader<T> {
         }
         s.stop_pump();
         true
+    }
+
+    /// The pump holding `lease` read its track to the end: the track is no longer read, so the
+    /// same publication subscribed again is claimed anew.
+    pub(crate) fn ended(&self, lease: &Lease) {
+        let mut s = self.state.lock().unwrap();
+        if s.generation == lease.generation {
+            s.stop_pump();
+        }
     }
 
     /// One item from the pump holding `lease`; `false` when superseded. The generation check is the
@@ -573,6 +594,7 @@ impl ParticipantAudioInput {
         let samples = self.config.sample_rate / 2;
         let silence = silence_frame(samples, self.config.sample_rate, self.config.num_channels);
         self.reader.deliver(&lease, silence);
+        self.reader.ended(&lease);
     }
 
     /// Convert the pre-connect buffer to the live stream's rate once.

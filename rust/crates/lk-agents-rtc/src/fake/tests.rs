@@ -378,6 +378,10 @@ async fn leaving_unpublishes_every_track_before_the_departure_is_reported() {
                 assert_eq!(participant.identity().as_str(), "user");
                 format!("unpublished {}", publication.sid().as_str())
             }
+            RoomEvent::TrackUnsubscribed { participant, publication } => {
+                assert_eq!(participant.identity().as_str(), "user");
+                format!("unsubscribed {}", publication.sid().as_str())
+            }
             RoomEvent::ParticipantDisconnected { participant, reason } => {
                 assert_eq!(participant.identity().as_str(), "user");
                 assert!(
@@ -389,7 +393,16 @@ async fn leaving_unpublishes_every_track_before_the_departure_is_reported() {
             other => panic!("unexpected {other:?}"),
         });
     }
-    assert_eq!(seen, ["unpublished TR_mic", "unpublished TR_cam", "disconnected Migration"]);
+    assert_eq!(
+        seen,
+        [
+            "unsubscribed TR_mic",
+            "unpublished TR_mic",
+            "unsubscribed TR_cam",
+            "unpublished TR_cam",
+            "disconnected Migration"
+        ]
+    );
 }
 
 // Catches: two participants with one identity. The server refuses that: the older session is
@@ -411,6 +424,7 @@ async fn a_duplicate_identity_drops_the_older_participant_first() {
     while let Ok(ev) = events.try_recv() {
         seen.push(match ev {
             RoomEvent::TrackUnpublished { .. } => "track_unpublished".to_owned(),
+            RoomEvent::TrackUnsubscribed { .. } => "track_unsubscribed".to_owned(),
             RoomEvent::ParticipantDisconnected { reason, .. } => {
                 format!("participant_disconnected {reason:?}")
             }
@@ -425,6 +439,7 @@ async fn a_duplicate_identity_drops_the_older_participant_first() {
     assert_eq!(
         seen,
         [
+            "track_unsubscribed",
             "track_unpublished",
             "participant_disconnected DuplicateIdentity",
             "participant_connected",
@@ -476,6 +491,31 @@ async fn track_subscribed_fires_only_on_the_rising_edge() {
     assert!(events.try_recv().is_err(), "a second rising edge was invented");
 }
 
+// Catches: an unsubscribe the reader never hears of. The SDK ends the track's stream and emits
+// `track_unsubscribed`; subscribing the same publication again is a new `track_subscribed` with
+// the same sid, which a reader keyed on the sid alone refuses as the track it already reads.
+#[tokio::test(start_paused = true)]
+async fn an_unsubscribe_ends_the_stream_and_is_reported() {
+    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let room = rtc.room("session");
+    let user = room.add_participant("user", ParticipantKind::Standard);
+    let publication = user.publish_microphone("TR_mic");
+    let mut stream = publication.audio_stream(AudioStreamOptions::default());
+    let mut events = room.events();
+
+    publication.set_subscribed(false).await.unwrap();
+    assert_eq!(eventually(stream.recv()).await, None, "the stream must end");
+    assert!(matches!(events.try_recv(), Ok(RoomEvent::TrackUnsubscribed { .. })));
+
+    publication.set_subscribed(true).await.unwrap();
+    match events.try_recv() {
+        Ok(RoomEvent::TrackSubscribed { publication, .. }) => {
+            assert_eq!(publication.sid().as_str(), "TR_mic")
+        }
+        other => panic!("expected the same track subscribed again, got {other:?}"),
+    }
+}
+
 // Catches: the local/remote split answering a question that has no meaning on its side.
 // `set_subscribed` on the agent's own track and `wait_for_subscription` on someone else's are
 // both nonsense; a double that returned `Ok` for them would let the confusion ship.
@@ -525,6 +565,7 @@ async fn all_eight_room_events_can_be_produced() {
             RoomEvent::TrackPublished { .. } => "track_published",
             RoomEvent::TrackSubscribed { .. } => "track_subscribed",
             RoomEvent::TrackUnpublished { .. } => "track_unpublished",
+            RoomEvent::TrackUnsubscribed { .. } => "track_unsubscribed",
             RoomEvent::LocalTrackPublished { .. } => "local_track_published",
             RoomEvent::ParticipantDisconnected { .. } => "participant_disconnected",
             RoomEvent::Close { .. } => "close",
@@ -536,6 +577,7 @@ async fn all_eight_room_events_can_be_produced() {
         "participant_connected",
         "track_published",
         "track_subscribed",
+        "track_unsubscribed",
         "track_unpublished",
         "local_track_published",
         "participant_disconnected",

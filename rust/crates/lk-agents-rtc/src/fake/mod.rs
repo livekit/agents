@@ -797,8 +797,14 @@ impl FakeRemoteParticipant {
                 None => return false,
             }
         };
-        publication.close_streams();
         let me = self.me.upgrade().expect("participant dropped while unpublishing");
+        // A subscribed track is unsubscribed first, as the SDK reports an unpublish.
+        let subscribed = publication.is_subscribed();
+        publication.close_streams();
+        if subscribed {
+            let publication = publication.clone();
+            self.bus.emit(RoomEvent::TrackUnsubscribed { participant: me.clone(), publication });
+        }
         self.bus.emit(RoomEvent::TrackUnpublished { participant: me, publication });
         true
     }

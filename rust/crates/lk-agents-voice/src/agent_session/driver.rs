@@ -563,6 +563,7 @@ impl Driver {
             // The departure arrives as the link's own edge (`ParticipantUnlinked`); the rest is
             // `RoomIo`'s.
             RoomEvent::TrackSubscribed { .. }
+            | RoomEvent::TrackUnsubscribed { .. }
             | RoomEvent::TrackPublished { .. }
             | RoomEvent::TrackUnpublished { .. }
             | RoomEvent::LocalTrackPublished { .. }
