@@ -916,6 +916,144 @@ Open: on a realtime session a filler's `say` speaks with no voice instead of bei
 The survey (1,024 seeds) runs in 1.7 s and the campaign (4,096 seeds) in 6.3 s on a laptop,
 within the 2 s and 11 s they took before the calibration.
 
+## 14. Manually found bugs and what catches them
+
+Would the automated checks have caught every bug found by hand? Not before this section. Of the
+55 bugs below, fixed on 2026-10-25 and 2026-10-26 after real-room calls, latency runs, parity
+diffs, smoke runs, coverage work and review rather than a failing seed, 9 passed every check with
+their fix reverted. They fell in classes the checks did not look at: Python glue and job wiring
+(the DST runs the core alone; smoke and parity follow fixed scripts), latency (no check measured
+time to first audio, and the DST does not run the production provider clients), cost (nothing
+counted wake-ups) and helpers no script calls. Each now has a check, marked **new** below, proven
+to fail with the bug and to pass without it.
+
+**Method.** Each fix was reverted alone on the tree of 2026-10-26 (`402ac3b49`); where the code
+had moved, the bug was re-created in today's code with the smallest change that brings the
+behaviour back (the patches are not committed). Then the checks ran: the launch gate's DST steps
+(the fuzz suites with the regression tests, the 1,024-seed survey, the 4,096-seed campaign),
+`smoke.py`, `parity.py` on a wheel rebuilt with the bug, `fuzz.py` and, for provider clients,
+their crates' unit tests. "gate:" names the regression test that fails, "search:" the rule and
+seed the random survey or campaign fails on with no hand-written test. A regression test written
+with a fix guards that exact path; the search guards its neighbours.
+
+| Bug | Fix | Found by | What catches it now |
+|---|---|---|---|
+| A session started on the job's room never joined the call: not the job's primary session, no report, not closed on shutdown | 298135e33 | real room | **new** `fuzz.py` job seeds: "the session on the job's room is not the job's primary session" (seeds 1, 3, 4) |
+| The primary session no longer served the remote session protocol: every `lk agent simulate` timed out | 8663bd6af | real room | smoke (`console`: no session state) |
+| A reply cut before any of its audio played was committed whole: the model read its unheard question as asked | 564b876ed | real room | gate: `unheard_reply_not_committed`, once 519e2f411's guard (which also drops the item) is reverted with it; alone it no longer reproduces |
+| A spoken user turn carried no end-of-turn metrics: no reply had an `e2e_latency` | 2ca3177a0 | real room | gate: `user_turn_metrics`, `preemptive_reply_latency` |
+| A realtime server's item placeholders went into history empty; the user's words were lost | 64646b925 | real room | gate: `realtime_items_filled` |
+| On a realtime model the default turn detector turned the server's turn detection off | f1c8fc3cb | real room | **new** `fuzz.py` realtime seeds with the default VAD: "the realtime server's turn detection was turned off" (seeds 4, 42, 70) |
+| The OpenAI realtime model never declared `auto_turn_reply_generation`: the core asked a reply over the server's own (+0.4 s, `conversation_already_has_active_response`) | 361c7c874 | real room | gate search: `speech_is_heard` (campaign seed 1209); re-created in the Rust native model, where the setting now lives |
+| A toolset that failed its setup (an unreachable A2A back office) crashed the job before the agent joined | bba142c4c | real room | **new** `fuzz.py` failing-toolset seeds: "raised ConnectionError" (seeds 6, 7) |
+| `lk.agent.state` taken before the room connected was never written | 677959027 | real room | gate: `agent_state_written_on_connect` |
+| A realtime reply's audio was held until the server finished generating it (0.5 to 1 s) | c8a832860 | real room | parity (`realtime_reply`, `realtime_stt_default_detection`); **new** `fuzz.py` measured replies: "a reply took 1.94 s to be heard, its providers 0.51 s" (seeds 26, 30, 37) |
+| A realtime tool's output reached the server after the `response.create` that should read it; updates could land out of order | 1145f5450 | real room | **new** `fuzz.py` realtime measured replies: the reply comes before its user message reached the server (seeds 7, 37, 48) |
+| A cut reply fell back to its whole text when a host output reported the cut late (every real room) | 986135c09 | real room | gate: `cut_reply_keeps_heard_words` |
+| A realtime generation's words never reached the transcription output | 745680163 | real room | gate: `realtime_transcript_forwarded` |
+| A realtime barge-in paused the reply instead of interrupting it: the agent went silent | c6881abb9 | real room rerun | gate: `realtime_onset_reply_heard`, `realtime_server_onset_interrupts`; search: `speech_is_heard` (seeds 405, 1209) |
+| Chat items lost their STT/LLM/TTS model metadata | 9024425d9 | real room rerun | gate search: `items_carry_their_payload` (seeds 7, 1035) and its probe |
+| A job log record carrying an Agent raised a PicklingError traceback (and hung the transport) | 7f2488fc8 | real room rerun | smoke (`log transport`: times out, smoke never exits) |
+| The gateway TTS reconnected and reconfigured per reply (0.57 s to first audio against 0.36 s) | 54c213e74 | latency.py on real calls | **new** gate: `voice_connection_reused` (reply 0: 417 ms against 217 ms owed); **new** gate: its own unit test (`a_second_synthesis_reuses_the_socket_the_first_finished_on`), which ran nowhere until the gate ran the provider clients' tests |
+| TTS TTFB and time to first sentence counted from the first token, not from the text sent | 1bbf57ccb | real calls | gate: `tts_first_byte_anchor` |
+| `llm_node_tps` counted chunks over the whole request | c55a5f1cc | real calls | gate: `llm_tokens_per_second` |
+| An adopted preemptive reply reported no `e2e_latency` | aec87eef0 | real calls | gate: `preemptive_reply_latency` |
+| The gateway LLM opened its connection inside the first reply's TTFT (no prewarm) | 000af03c2 | latency investigation | **new** smoke (`llm_prewarm`: the gateway saw no `GET /models`) |
+| JobRun regression: the entrypoint, shutdown callbacks and session end ran without the job's context; the room never connected | 75b974c28 | real calls | reverting alone no longer reproduces (the core now awaits those steps inside the job task, which holds the context); **new** `fuzz.py` job seeds fail on the class: "the entrypoint ran without the job's context" (seeds 1, 3, 4) |
+| Every `room_options=` raised TypeError | f0170e9c0 | parity wiring | smoke (`room_camera`); **new** `fuzz.py` room-options seeds (seeds 0, 2, 5) |
+| After an AMD machine verdict the releasing turn still got a reply | 5bbdb5392 | parity wiring | gate: `amd_releasing_turn_no_reply` |
+| `conversation_item_added` omitted the agent handoff items | 73971cd6c | parity | parity |
+| Error events carried a dict, not the provider's typed error and source | 97c378710 | parity | parity |
+| `stt.FallbackAdapter` made `start()` raise AttributeError | 6ea2177a1 | parity | parity (`stt_fallback`); **new** `fuzz.py` fallback-STT seeds (seeds 5, 10, 12) |
+| A reply's speech was announced not user-initiated and after its user item and EOU metrics | 50ea404d7 | parity | parity (`user_turn`, `interruption`, `backchannel`, ...) |
+| A turn over an uninterruptible speech still got a reply | fb2f9816e | parity | gate: `uninterruptible_drops_turn`; search: `speech_settles` (seed 2934) |
+| A TTS failure before any audio committed an assistant item | 519e2f411 | parity | gate: `unvoiced_synthesis_no_item` |
+| Unset turn detection with an STT and no VAD took the STT path, not the reference's VAD path | 1b24973d9 | parity | gate: `unset_detection_stt_only`; search: `speech_settles` (seed 3505) |
+| The room transcript arrived all at once at the end, not word by word with the audio | 6a0d4d89c | parity | parity (`live_transcript`, `interruption`, `false_interruption`) |
+| After a handoff the new agent saw calls to tools it lacks | 71698a569 | parity | parity (`handoff_update_agent`) |
+| A realtime reply's state changed after its message was added | 4f485f3b3 | parity | parity (`realtime_reply`, `realtime_interruption`) |
+| Under STT turn detection the STT's end of speech never resumed a false-interruption pause (aclose hung) | d871f977f | parity | gate: `stt_end_resumes_pause` |
+| A final over a paused speech planned an extra preemptive request | 3977e266b | parity | gate: `final_over_paused_no_preemptive` |
+| `session.input.audio` was not the room's microphone | a109d87c4 | parity | smoke |
+| A final transcript's pause never ended while a drain held scheduling | 4a8d5c8a6 | real calls (seed 2068) | gate search: `pause_resolves` (campaign seed 3693) |
+| A non-streaming TTS reported one TTSMetrics per reply, not per sentence | 863c3a853 | parity | parity (`say_cut`, `interruption`, `vad_*`, ...) |
+| An `llm_node` returning a str was metered | 12fb3f3fa | parity | gate: `node_text_not_metered` |
+| A realtime session was not told to stop at a close | f73f4dbd3 | parity | gate: `realtime_close_interrupts` |
+| No VADMetrics, and no LLMMetrics for AMD's classification | 36057f580 | parity | gate: `model_metrics_reported` |
+| A manual-mode turn with no words was dropped at the close | b706c2c9b | parity | gate: `manual_turn_closed_empty` |
+| `commit_user_turn()` committed nothing until awaited | bd872d15a | parity | parity |
+| A `tts_node` over the default one reported one record for its output, not the provider's calls | a79ed02a0 | parity | parity (`tts_node`, `tts_node_interruption`) |
+| A `tts_node` running no default node was metered | 9b5a5a357 | parity | parity (`tts_node_own_audio`), re-created in the node's call ledger |
+| A transcript pause showed a word whose audio had not played | 848f9fb25 | parity | parity (`realtime_interruption`) |
+| `tts_text_transforms` never reached the voice: markdown and emoji were spoken | 8255100c9 | coverage | gate: `tts_text_transforms` |
+| The room's speaker stayed paused until the close (three ways) | e142b2fbd | coverage | reverting the releases alone no longer reproduces; its regression tests (`pause_outlives_its_speech`) stay, and `speech_is_heard` bounds the silence at 15 s |
+| A recogniser failing mid-utterance left the person speaking for the rest of the call | 5121ed4bb | coverage | reverting alone no longer reproduces; its regression test (`recogniser_failed_speaking`) stays |
+| The idle background audio mixer polled every millisecond | a61e6faa0 | coverage | **new** gate search: `idle_is_cheap` (survey seed 1: 1,000 wake-ups a second against at most 29) |
+| A cancelled `BackgroundAudioPlayer.aclose()` closed the player anyway | d0e624905 | review | smoke (`background_audio`) |
+| `AudioStreamDecoder(sample_rate=None)` decoded at 48 kHz, not the source's rate | e04d5310e | review | **new** smoke (`decoder`: `(None, {48000})`) |
+| A recognize-only STT failed to open on a call | b37ea9517 | glue round 6 | smoke (`session.run()`: "the session has no a streaming STT"); `fuzz.py` recognize-only seeds (seed 0) |
+| A host stream cancelled at the close was reported as `stt_error` carrying a CancelledError | 6689bcd7a | smoke (rare) | **new** `fuzz.py` (run by smoke), a plugin stream ending in the close's cancellation: "Exception in callback STT._core_failed(CancelledError())" (seeds 2, 23, 44); its own abi unit test needs the binding and runs in no gate |
+
+Three fixes no longer reproduce their bug when reverted alone on today's tree, because another
+path now covers it: e142b2fbd and 5121ed4bb (the speaker's pause outliving its speech, the
+recogniser failing mid-utterance: their regression tests pass with the releases reverted) and
+75b974c28 (the core now awaits the job's steps inside the job task, which holds the context, so
+the explicit context copy is belt and braces). Their regression tests, and for 75b974c28 the
+`fuzz.py` job seeds, guard a recurrence through the original path.
+
+### 14.1 The checks added
+
+- **`first_audio_is_prompt`** (DST rule, a latency contract on virtual time): once a speech may
+  play, its first audio reaches the speaker within 100 ms of the product having it: the voice's
+  first chunk after its calibrated time to first audio, or the realtime server's first delta
+  after the server's calibrated delays; a pause, a cut, an output replaced or the close excuse
+  the wait. A realtime reply's first audio held 600 ms fails survey seed 30, a synthesis's seed
+  20; clean on 12,288 seeds. None of the bugs above is in the core's last hop, so it catches none
+  of them; it holds the class c8a832860 was (audio buffered before the speaker) where the core is.
+- **`idle_is_cheap`** (DST rule, a cost contract): a call averages at most 200 wake-ups of its
+  thread per second of virtual time (the runtime's park count; the busiest of 2,048 survey seeds
+  is at 29). With a61e6faa0 reverted the room-legs seeds with background audio run at 1,000.
+- **`voice_connection_reused`** (regression test, a latency contract): the production LiveKit
+  Inference TTS client over a gateway that charges 200 ms of connection setup and draws its time
+  to first audio from the corpus; five replies of a call, each heard within the voice's own delay
+  and 50 ms. With 54c213e74 reverted reply 0 takes 417 ms against 217 ms owed; with only its
+  prewarm reverted, the same.
+- **`fuzz.py`** (`livekit-agents-next/scripts/fuzz.py`, run by `smoke.py`): seeded random calls
+  through the real Python `LiveSession` over `_core.FakeRoom` on the reference tests'
+  virtual-time loop, with providers whose delays are drawn from `corpus/calibration.json`:
+  pipeline (streaming, recognize-only over a VAD, or fallback STT; a chunked or streaming voice)
+  or realtime (server turn detection or not, the default VAD or none), room options, a toolset
+  that fails its setup, a plugin stream that ends in the close's cancellation, and a quarter of
+  the seeds inside a console job. Per seed: nothing raises, logs a traceback or emits an error
+  event; every speech finishes; the session closes once and leaves no task running; a reply asked
+  of an idle agent is heard within its providers' drawn delays and 0.4 s; a realtime reply is
+  asked only once earlier updates applied, and the server's turn detection is kept unless a
+  detector was named; in a job the entrypoint, session end and shutdown callbacks see the job's
+  context, the session is the job's primary and connected the room once, and the parent hears
+  shutting down and exiting. 64 seeds take about 5 s (`smoke.py` runs them), 200 about 15 s.
+- **`smoke.py`**: `decoder` (a 16 kHz WAV decodes at 16 kHz with `sample_rate=None`) and
+  `llm_prewarm` (the gateway LLM sends `GET /models` as the session starts).
+- **The launch gate runs the provider clients' unit tests** (`lk-agents-inference`,
+  `lk-agents-abi`, about 20 s): they ran nowhere before (CI tests only the storage and A2A
+  crates), so 54c213e74's own unit test could not fail anything.
+
+### 14.2 Still outside every check
+
+- **The binding's own tests**: the abi tests behind the Python feature (`host_tests`, 6689bcd7a's
+  among them) need the binding and run in no gate. Under `--release` two abi tests fail on
+  today's tree (a `should_panic` that relies on a debug assertion, and a wall-clock test); the
+  gate runs them in the debug profile, where they pass.
+- **Findings past the gate's window**: on today's tree a campaign over seeds 4,096 to 12,287
+  finds `pause_resolves` (seed 6775), `provider_streams_closed` (7022), `speech_error_is_injected`
+  (8990) and `speech_settles` (6679), none of them known findings; the gate's 5,120 seeds do not
+  reach them.
+- **End-to-end turn latency in the DST**: `first_audio_is_prompt` judges the last hop (audio in
+  hand to the speaker); the hops before it (turn decided to request, the model's text to the
+  voice) are judged by `fuzz.py`'s measured replies and by `speech_is_heard`'s 15 s.
+- **What only a real room shows**: network, real provider sockets other than the realtime
+  model's and the voice's, and the worker's process boundary are still exercised only by
+  `latency.py` and real calls.
+
 ## Appendix: operation x phase, exact seeds
 
 Of 1,024 seeds. `Advance`, `AwaitAnswer`, `AwaitExit`, `AwaitSpeech` and `Settle` are the
