@@ -1234,7 +1234,10 @@ impl PyServer {
         .map_err(PyValueError::new_err)?;
         let (life, host) = (self.life.clone(), self.host.clone());
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let _guard = life.lock().await;
+            // not held across the launch: a close while the process warms up is not delayed
+            if life.lock().await.phase != Phase::Running {
+                return Err(PyRuntimeError::new_err("the server is not running"));
+            }
             host.launch_job(info).await.map(|_| ()).map_err(lk_agents_abi::python::raise_host_error)
         })
     }
