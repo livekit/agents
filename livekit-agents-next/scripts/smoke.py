@@ -17,8 +17,10 @@ import base64
 import contextlib
 import json
 import logging
+import subprocess
 import sys
 from collections.abc import AsyncIterable, AsyncIterator, Callable
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -1553,6 +1555,66 @@ async def warm_transfer() -> None:
     assert posts == ["post Calls.json from=+15550133", "post Calls.json from=+15550122"], posts
 
 
+async def decoder() -> None:
+    """``AudioStreamDecoder``: a 16 kHz WAV comes out at its own rate with ``sample_rate=None``,
+    as the reference's, and at the rate asked otherwise."""
+    import io
+    import wave
+
+    from livekit.agents.utils.codecs import AudioStreamDecoder
+
+    print("== decoder")
+    wav = io.BytesIO()
+    with wave.open(wav, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * 1600)
+    for asked, expected in ((None, 16000), (24000, 24000)):
+        decoder = AudioStreamDecoder(sample_rate=asked, format="audio/wav")
+        decoder.push(wav.getvalue())
+        decoder.end_input()
+        rates = {frame.sample_rate async for frame in decoder}
+        print(f"decoded at {rates} with sample_rate={asked}")
+        assert rates == {expected}, (asked, rates)
+
+
+async def llm_prewarm() -> None:
+    """The gateway LLM is prewarmed as the session starts (``GET /models``, the reference's
+    ``models.list()``), so a call's first reply finds a connection open."""
+    from livekit.agents import inference
+
+    print("== llm prewarm")
+    seen: list[str] = []
+
+    async def models(request: web.Request) -> web.Response:
+        seen.append(f"{request.method} {request.path}")
+        return web.json_response({"object": "list", "data": []})
+
+    app = web.Application()
+    app.router.add_get("/models", models)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    llm_ = inference.LLM(
+        "openai/gpt-4.1-mini", base_url=f"http://127.0.0.1:{port}", api_key="k", api_secret="s"
+    )
+    session = LiveSession(stt=ScriptedSTT(), llm=llm_, tts=SilentTTS(), vad=None)
+    await session.start(Agent(instructions="You answer."), room=room)
+    for _ in range(100):
+        if seen:
+            break
+        await asyncio.sleep(0.02)
+    await session.aclose()
+    await runner.cleanup()
+    print(f"gateway saw {seen}")
+    assert seen == ["GET /models"], seen
+
+
 def agent_name(session: LiveSession) -> str:
     return type(session.current_agent).__name__
 
@@ -1709,6 +1771,8 @@ async def main() -> int:
     await tools()
     await toolsets()
     await cli()
+    await decoder()
+    await llm_prewarm()
     log_transport()
     return 0
 
@@ -1731,4 +1795,7 @@ if __name__ == "__main__":
     if _Tracebacks.count:
         print(f"FAILED: {_Tracebacks.count} logged traceback(s)")
         code = 1
-    sys.exit(code)
+    # the property-based seeds: random calls through the same session, on virtual time
+    print("== fuzz.py")
+    fuzz = subprocess.run([sys.executable, str(Path(__file__).with_name("fuzz.py"))])
+    sys.exit(code or fuzz.returncode)
