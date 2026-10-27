@@ -286,9 +286,11 @@ impl Walk<'_> {
                 return Err(StrictError::NullableUnionBranch { path: self.path() });
             };
 
-            // A branch with no `type` (`{"$ref": ...} | None`) keeps its `anyOf` (#4236); the
-            // reference goes on to try `oneOf`.
-            if !variants[index].as_object().is_some_and(|b| b.contains_key("type")) {
+            // A branch with no `type` (`{"$ref": ...} | None`) keeps its `anyOf` (#4236), and so does
+            // a `const` (`Literal["x"] | None`), which a widened `type` cannot let null through
+            // (#7715); the reference goes on to try `oneOf`.
+            let branch = variants[index].as_object();
+            if !branch.is_some_and(|b| b.contains_key("type") && !b.contains_key("const")) {
                 continue;
             }
 
@@ -504,6 +506,12 @@ mod tests {
                 json!({"anyOf": [{"enum": ["a", "b"], "type": "string"}, {"type": "null"}]}),
                 false,
                 r##"{"enum":["a","b",null],"type":["string","null"]}"##,
+            ),
+            (
+                "a_nullable_const_is_left_as_a_union",
+                json!({"anyOf": [{"const": "known", "type": "string"}, {"type": "null"}]}),
+                false,
+                r##"{"anyOf":[{"const":"known","type":"string"},{"type":"null"}]}"##,
             ),
             (
                 "a_nullable_union_over_an_untyped_branch_is_left_as_a_union",
