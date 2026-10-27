@@ -140,7 +140,6 @@ async def test_a_failed_run_keeps_the_tool_calls_that_ran(door: Callable[..., Do
 
 
 @pytest.mark.rule("B47")
-@pytest.mark.xfail(strict=True, reason="B47: the exception's text is the failed task's message")
 async def test_a_failed_run_puts_a_fixed_sentence_on_the_wire_not_the_exception(
     door: Callable[..., Door],
 ) -> None:
@@ -295,7 +294,9 @@ async def test_a_failed_expert_is_a_tool_error_the_front_desk_tells(
     assert sent.state == "completed"
     assert sent.answer == "Sorry, I cannot get the fare right now."
     out = tool_output(model, "c1")
-    assert out is not None and out.is_error and "the fares service is down" in out.output
+    # the expert's failure in a fixed sentence: its exception stays in the expert's log
+    assert out is not None and out.is_error and "the agent failed before it finished" in out.output
+    assert "the fares service is down" not in out.output
 
 
 class GoesDown(httpx.AsyncBaseTransport):

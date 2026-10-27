@@ -27,6 +27,9 @@ from .resolve import AgentRegistry, Thread
 
 S = TypeVar("S", default=None)  # a door declared with no state: ``A2ASessionContext``
 
+RUN_FAILED = "the agent failed before it finished"
+"""A failed run's message on the wire; what raised stays in the worker's log."""
+
 Handler = Callable[["A2ASessionContext[S]"], "Awaitable[object] | AsyncIterable[str]"]
 """The developer's handler: the context in, the answer out, either returned whole or yielded as
 it is written (an async generator), in which case the answer is the last run's result."""
@@ -188,14 +191,14 @@ class TurnHost(Generic[S]):
                 output = await handled
         except StorageError:
             raise
-        except Exception as e:
+        except Exception:
             logger.exception(
                 "the a2a_session handler raised; the task fails",
                 extra={"lane": ctx.lane, "taskId": ctx.task_id},
             )
             # the tool calls that ran are kept, so the next turn does not run them again
             return HandlerOutput(
-                error=f"{type(e).__name__}: {e}",
+                error=RUN_FAILED,
                 new_items=[item_to_payload(item) for item in added],
             )
         finally:
