@@ -12,7 +12,7 @@ use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle,
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::{ReplySource, TurnInstructions};
 use crate::tool_executor::{
-    Batch, FillerRun, Pending, Rendering, Reply, RunnerRef, Running, ToolAnswer, ToolEnd,
+    Batch, FillerRun, Pending, Rendering, Reply, Running, ToolAnswer, ToolEnd,
     ToolOutcome, answer, decide, default_reply_instructions, emit_ended, pair_for,
 };
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
@@ -33,7 +33,7 @@ impl Driver {
         speech: SpeechId,
         step: u32,
         call: FunctionCall,
-        runner: Option<RunnerRef>,
+        runner: Option<std::sync::Arc<dyn crate::tool_executor::HostToolRunner>>,
         out: &mut Out,
     ) {
         out.trace(TraceToolStep::CallStarted {

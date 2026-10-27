@@ -115,8 +115,8 @@ pub enum ToolRaiseKind {
     Internal,
 }
 
-/// `kind` selects the shape. A malformed dict is an error, which `HostTools` turns into the
-/// reference's internal-error output.
+/// `kind` selects the shape. A malformed dict is an error, which `HostToolRunner::answer` turns
+/// into the reference's internal-error output.
 #[derive(Debug, Clone)]
 pub struct RawToolAnswer {
     pub kind: String,

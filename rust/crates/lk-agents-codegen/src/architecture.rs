@@ -29,8 +29,7 @@ const CORE: &[&str] = &[
     "agent_session::ActivitySnapshot",
     "io::RealtimeAudioNode",
     "tool_executor::Toolset",
-    "tool_executor::SessionTools",
-    "tool_executor::ToolRunner",
+    "tool_executor::HostToolRunner",
 ];
 const SESSION_EXECUTION: &[&str] = &[
     // With its api, commands, driver, host_events and time.

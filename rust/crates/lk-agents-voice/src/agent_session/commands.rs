@@ -45,7 +45,7 @@ pub enum Command {
 pub struct HookId(pub u64);
 
 /// `AMD.execute()` sends `AddTools`, `Start` then `SeedTranscript` on a `machine-ivr` verdict.
-#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
+#[derive(Debug, Clone, lk_agents_abi::Vocabulary)]
 pub enum IvrCommand {
     /// A running navigator stands.
     Start {
@@ -58,7 +58,7 @@ pub enum IvrCommand {
     Close,
     /// Added to the **session's** tools before `Start` and AMD's resume; acted on by the core, not
     /// relayed.
-    AddTools(crate::tool_executor::SessionTools),
+    AddTools(crate::tool_executor::Toolset),
 }
 
 #[derive(Debug, lk_agents_abi::Vocabulary)]

@@ -123,7 +123,7 @@ impl AgentActivity {
     /// names the agent lacks (a provider refuses duplicates).
     pub(crate) fn advertised_toolset(
         &self,
-        session_tools: &crate::tool_executor::SessionTools,
+        session_tools: &crate::tool_executor::Toolset,
     ) -> Arc<crate::tool_executor::Toolset> {
         let extra: Vec<_> = session_tools
             .specs

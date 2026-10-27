@@ -1180,10 +1180,7 @@ fn host_toolset(
     Toolset {
         specs: tools.unwrap_or_default(),
         host,
-        runner: runner.map(|r| {
-            Arc::new(crate::tool_executor::HostTools(r))
-                as Arc<dyn crate::tool_executor::ToolRunner>
-        }),
+        runner,
     }
 }
 
@@ -1191,8 +1188,8 @@ fn host_toolset(
 fn session_tools(
     tools: Option<Vec<lk_agents_abi::ToolSpec>>,
     host: Option<lk_agents_abi::HostRef>,
-) -> Option<crate::tool_executor::SessionTools> {
-    tools.map(|specs| crate::tool_executor::SessionTools { specs, host })
+) -> Option<Toolset> {
+    tools.map(|specs| Toolset { specs, host, runner: None })
 }
 
 /// LLM and TTS run at zero because the engine's `Attempt` loop owns their retries, and two loops

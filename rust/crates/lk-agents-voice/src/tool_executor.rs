@@ -166,7 +166,7 @@ pub(crate) struct Running {
     /// Progress updates sent so far, the first (the step's answer) included.
     pub(crate) updates: u32,
     /// What runs the body: its cancel goes there.
-    pub(crate) runner: RunnerRef,
+    pub(crate) runner: Arc<dyn HostToolRunner>,
 }
 
 impl Running {
@@ -401,7 +401,8 @@ pub struct Toolset {
     /// Required when `specs` is non-empty and the LLM is host-backed: `PyLlm` cannot rebuild a
     /// Python `Tool` from a `ToolSpec`.
     pub host: Option<lk_agents_abi::HostRef>,
-    pub runner: Option<Arc<dyn ToolRunner>>,
+    /// `None` on the session's own additions: the agent's runner runs them.
+    pub runner: Option<Arc<dyn HostToolRunner>>,
 }
 
 impl std::fmt::Debug for Toolset {
@@ -415,50 +416,8 @@ impl std::fmt::Debug for Toolset {
     }
 }
 
-/// `_start_ivr_detection`'s `send_dtmf_events`. The agent's own tools win on a name clash; kept
-/// across handoffs.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct SessionTools {
-    pub specs: Vec<lk_agents_abi::ToolSpec>,
-    pub host: Option<lk_agents_abi::HostRef>,
-}
-
-/// The only port on the generation path; what the core decides around it is pure (`next_step`).
-#[async_trait::async_trait]
-pub trait ToolRunner: Send + Sync {
-    /// Resolves when the tool returns, raises, is cancelled, or releases the step with its first
-    /// `ctx.update()`.
-    async fn run(
-        &self,
-        call: lk_agents_abi::FunctionCall,
-        speech: lk_agents_abi::CoreObject,
-        step: u32,
-    ) -> crate::tool_executor::ToolAnswer;
-
-    /// `_ToolExecutor.cancel`, unconditionally as its `aclose()` does: the body running under
-    /// `call_id` is cancelled. Fire-and-forget: the driver has already told the call's end.
-    fn cancel(&self, call_id: &str);
-}
-
-/// A running call's [`ToolRunner`], kept so its cancel reaches the runner that ran it. Compared by
-/// identity.
-#[derive(Clone)]
-pub struct RunnerRef(pub Arc<dyn ToolRunner>);
-
-impl PartialEq for RunnerRef {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl std::fmt::Debug for RunnerRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ToolRunner")
-    }
-}
-
-/// `voice/tool_executor.py`'s `ToolRunner`: runs one call and reports the marshal's dict. A
-/// report, not a decision; [`decide`] owns the output.
+/// `voice/tool_executor.py`'s `ToolRunner`, the only port on the generation path: runs one call
+/// and reports the marshal's dict. A report, not a decision; [`decide`] owns the output.
 #[lk_agents_abi::host(proxy)]
 #[async_trait::async_trait]
 pub trait HostToolRunner: Send + Sync {
@@ -471,18 +430,22 @@ pub trait HostToolRunner: Send + Sync {
         step: u32,
     ) -> Result<lk_agents_abi::llm::tool_executor::RawToolAnswer, lk_agents_abi::errors::HostError>;
 
+    /// `_ToolExecutor.cancel`, unconditionally as its `aclose()` does: the body running under
+    /// `call_id` is cancelled. Fire-and-forget: the driver has already told the call's end.
     fn cancel(&self, call_id: &str);
 }
 
-/// The driver's [`ToolRunner`](crate::tool_executor::ToolRunner) over a host executor. Every
-/// call gets exactly one answer: a marshal that raises or reports an unreadable dict is answered
-/// as the reference's internal error, and logged.
-pub struct HostTools(pub std::sync::Arc<dyn HostToolRunner>);
-
-#[async_trait::async_trait]
-impl crate::tool_executor::ToolRunner for HostTools {
-    async fn run(&self, call: FunctionCall, speech: lk_agents_abi::CoreObject, step: u32) -> ToolAnswer {
-        let answer = match self.0.run(&call, &speech, step).await {
+impl dyn HostToolRunner {
+    /// Resolves when the tool returns, raises, is cancelled, or releases the step with its first
+    /// `ctx.update()`. Every call gets exactly one answer: a marshal that raises or reports an
+    /// unreadable dict is answered as the reference's internal error, and logged.
+    pub async fn answer(
+        &self,
+        call: &FunctionCall,
+        speech: &lk_agents_abi::CoreObject,
+        step: u32,
+    ) -> ToolAnswer {
+        let answer = match self.run(call, speech, step).await {
             Ok(raw) => ToolAnswer::try_from(raw),
             Err(e) => Err(e.to_string()),
         };
@@ -492,9 +455,11 @@ impl crate::tool_executor::ToolRunner for HostTools {
             ToolAnswer::Raised(ToolRaise::Internal)
         })
     }
+}
 
-    fn cancel(&self, call_id: &str) {
-        self.0.cancel(call_id);
+impl std::fmt::Debug for dyn HostToolRunner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HostToolRunner")
     }
 }
 

@@ -830,7 +830,7 @@ pub enum GenEvent {
         speech: SpeechId,
         step: u32,
         call: Box<lk_agents_abi::FunctionCall>,
-        runner: Option<crate::tool_executor::RunnerRef>,
+        runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
     },
     /// `None` when there is nothing to say.
     ToolCallEnded {

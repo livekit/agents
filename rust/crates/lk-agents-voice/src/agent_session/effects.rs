@@ -194,7 +194,7 @@ pub enum Effect {
     /// The body running under `call_id` is cancelled; the driver has told its end.
     CancelTool {
         call_id: String,
-        runner: crate::tool_executor::RunnerRef,
+        runner: Arc<dyn crate::tool_executor::HostToolRunner>,
     },
 }
 
@@ -857,7 +857,7 @@ impl Driver {
                     session.send(cmd);
                 }
             }
-            E::CancelTool { call_id, runner } => runner.0.cancel(&call_id),
+            E::CancelTool { call_id, runner } => runner.cancel(&call_id),
             E::Decision(Decision::EndpointingDelayUpdated { min_delay: _ }) => {}
             // Journal-only: the owner's declaration, read by the rules.
             E::Decision(Decision::TurnDeclared { owner: _ }) => {}

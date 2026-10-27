@@ -63,7 +63,7 @@ pub(crate) struct VoiceSession {
     /// `session.output` as the core decides with it.
     pub(crate) outputs: Outputs,
     /// `AgentSession._tools`, and the hosts that run them.
-    pub(crate) tools: crate::tool_executor::SessionTools,
+    pub(crate) tools: crate::tool_executor::Toolset,
     pub(crate) tool_hosts: Vec<lk_agents_abi::HostRef>,
     pub(crate) keyterms: Option<crate::keyterm_detection::KeytermSlot>,
     /// `stt_context_options["forward_chat_context"]` (default on).
@@ -199,7 +199,7 @@ impl VoiceSession {
     /// `AgentConfigUpdate`, as in the reference). The names added.
     pub(crate) fn extend_tools(
         &mut self,
-        tools: crate::tool_executor::SessionTools,
+        tools: crate::tool_executor::Toolset,
     ) -> Vec<String> {
         let mut added = Vec::new();
         for spec in tools.specs {

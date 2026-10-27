@@ -61,7 +61,7 @@ impl ToolStep {
         };
         // Hosted calls enter the loop's running set; driver-answered ones never run.
         let runner = match &work {
-            Some(Ok(runner)) => Some(crate::tool_executor::RunnerRef(Arc::clone(runner))),
+            Some(Ok(runner)) => Some(Arc::clone(runner)),
             Some(Err(_)) | None => None,
         };
         let (speech, step) = (handle.id(), handle.num_steps());
@@ -127,9 +127,9 @@ impl ToolStep {
                 let _ = started_tx.send(());
                 // The host reports, the driver decides (`decide`).
                 let outcome = match work {
-                    Ok(runner) => crate::tool_executor::decide(
-                        runner.run(one.clone(), host_speech, step).await,
-                    ),
+                    Ok(runner) => {
+                        crate::tool_executor::decide(runner.answer(&one, &host_speech, step).await)
+                    }
                     // Never run: answered in the reference executor's words so the model corrects.
                     Err(available) => ToolOutcome::Error(
                         crate::tool_executor::unknown_tool_message(&one.name, &available),
