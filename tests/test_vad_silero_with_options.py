@@ -223,10 +223,15 @@ async def _push_window(stream: agents_vad.VADStream, value: int) -> list[agents_
             return events
 
 
-def test_with_options_keeps_the_band_when_update_options_moved_only_the_activation() -> None:
-    """update_options can leave a band that is neither chosen nor derived; a copy keeps it."""
+def test_with_options_keeps_a_band_that_is_neither_chosen_nor_derived() -> None:
+    """A band left over from an earlier activation threshold is the one in use, so a copy keeps it.
+
+    The state is built directly rather than through update_options: whether that call re-derives
+    the band is #7597 (#8155), and this case has to hold whichever way that lands.
+    """
     vad = _vad()
-    vad.update_options(activation_threshold=0.7)
+    vad._opts.activation_threshold = 0.7
+    vad._opts.deactivation_threshold = 0.35
 
     derived = vad.with_options(activation_threshold=0.8)
 
