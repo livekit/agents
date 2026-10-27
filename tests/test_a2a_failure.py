@@ -377,7 +377,6 @@ class Down(httpx.AsyncBaseTransport):
 
 
 @pytest.mark.rule("R26", "B33")
-@pytest.mark.xfail(strict=True, reason="B33: with no card the tool's description is generic")
 async def test_an_expert_down_at_setup_is_a_tool_error_and_the_other_tools_run(
     door: Callable[..., Door],
 ) -> None:
@@ -504,7 +503,6 @@ def fares_expert(storage: AgentDBStorage, asked: list[str]) -> httpx.AsyncClient
 
 
 @pytest.mark.rule("B33")
-@pytest.mark.xfail(strict=True, reason="B33: the placeholder keeps its description for the run")
 async def test_an_expert_that_comes_back_in_text_gets_its_cards_description_in_the_run(
     door: Callable[..., Door], agentdb_storage: AgentDBStorage
 ) -> None:
@@ -536,7 +534,6 @@ async def test_an_expert_that_comes_back_in_text_gets_its_cards_description_in_t
 
 
 @pytest.mark.rule("B33")
-@pytest.mark.xfail(strict=True, reason="B33: a call keeps the placeholder until it ends")
 async def test_an_expert_that_comes_back_on_a_call_updates_the_realtime_sessions_tools(
     agentdb_storage: AgentDBStorage,
 ) -> None:

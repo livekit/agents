@@ -68,7 +68,10 @@ The agent knows what it can ask from the expert's own card, read once in
 the toolset's `setup()`: the toolset's id is the card's name, the tool is
 `ask`, or `name=` when one agent has two experts, and its description is
 the card's description followed by one fixed sentence that says to state
-the request in full. The tool hands the request on with the
+the request in full. While the card cannot be read, the same tool names
+the expert instead; the next `setup()` or call that reads the card puts
+the card's description in its place, and a call in progress offers it
+to the model at once. The tool hands the request on with the
 run's thread and history, speaks the expert's progress through
 `ctx.update()` and its exact text through `ctx.say()`, returns the answer, or the question the expert has for the
 person, and records the expert's task on the call. On a call its first

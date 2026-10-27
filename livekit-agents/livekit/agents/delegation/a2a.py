@@ -55,6 +55,12 @@ ASK = (
 )
 """The second paragraph of the tool's description, after the card's own."""
 
+UNREAD = (
+    "Its description could not be read; a call still tries it, and says why if it cannot answer."
+)
+"""The second paragraph of the tool's description while the card cannot be read, after the
+expert's name."""
+
 DISPATCHED = (
     'Acknowledge in a few natural words, "one moment", "sure, let me check", "okay, looking '
     'now", varying the wording, restating none of the request, asking nothing and promising '
@@ -80,13 +86,13 @@ class A2ADelegate(Delegate, Toolset):
             result = await A2ADelegate(ELIGIBILITY).run(f"{payer} coverage", progress=ctx.update)
             return result.output
 
-    As a toolset it is one tool, ``ask``, described by the card, read once in ``setup()``;
-    ``name=`` tells two experts on one agent apart. The tool hands the request on with the run's
-    thread and history, passes the expert's progress to ``ctx.update()`` and its exact text to
-    ``ctx.say()``, records the expert's task on the call and returns the answer, or the question
-    the expert has for the person; an answer or a question the expert flagged reaches the person
-    as written. On a call ``announce`` releases the turn with a line the model acknowledges
-    while the expert works.
+    As a toolset it is one tool, ``ask``, described by the card, read in ``setup()`` (or by a call,
+    while it could not be read); ``name=`` tells two experts on one agent apart. The tool hands the
+    request on with the run's thread and history, passes the expert's progress to ``ctx.update()``
+    and its exact text to ``ctx.say()``, records the expert's task on the call and returns the
+    answer, or the question the expert has for the person; an answer or a question the expert
+    flagged reaches the person as written. On a call ``announce`` releases the turn with a line the
+    model acknowledges while the expert works.
 
     An expert whose card offers the Live extension gets the caller's session id as the
     ``contextId`` and the caller's lane as ``livekit/callerLane``, and writes its own lane of
@@ -120,6 +126,8 @@ class A2ADelegate(Delegate, Toolset):
         self._tool_name = name
         self._announce = announce
         self._tool: FunctionTool | None = None
+        # the tool names the expert only: its card could not be read yet
+        self._unread = False
         Toolset.__init__(self, id=self._url.rsplit("/", 1)[-1] or self._url)
 
     # -- the toolset --
@@ -130,26 +138,37 @@ class A2ADelegate(Delegate, Toolset):
 
     async def setup(self) -> A2ADelegate:
         """Reads the card and builds the tool from it, once per delegate. While the card cannot
-        be read the tool is offered without it, a call says why the expert did not answer, and
-        the error is raised for the caller to log."""
-        if self._tool is not None and self._client is not None and self._client.card is not None:
+        be read the tool names the expert and the error is raised for the caller to log."""
+        if self._tool is not None and not self._unread:
             return self
 
-        name = self._tool_name or "ask"
         try:
             client = await self._connect()
         except A2AError:
             # the run logs a failed setup and keeps the tools as they are: offer this one first
             if self._tool is None:
-                self._tool = function_tool(self._ask, name=name, description=ASK)
+                label = self._tool_name or self.id
+                self._tool = function_tool(
+                    self._ask, name=self._tool_name or "ask", description=f"{label}\n\n{UNREAD}"
+                )
+                self._unread = True
             raise
 
+        self._build_tool(client)
+        return self
+
+    def _build_tool(self, client: AgentClient) -> None:
+        """The tool as the card describes it, in place of the one that names the expert."""
         card = client.card
         self._id = card.name if card is not None else self.id
         about = card.description.strip() if card is not None and card.description else ""
         description = f"{about}\n\n{ASK}" if about else ASK
-        self._tool = function_tool(self._ask, name=name, description=description)
-        return self
+        self._tool = function_tool(
+            self._ask, name=self._tool_name or "ask", description=description
+        )
+        if self._unread:
+            self._unread = False
+            self._tools_changed()
 
     async def _ask(self, ctx: RunContext, request: str) -> str | InputRequired | ToolResult:
         """The tool: the request to the expert with what the run knows, the answer back.
@@ -224,6 +243,9 @@ class A2ADelegate(Delegate, Toolset):
         except A2AError as e:
             # unreachable, or refused: the caller's model hears why
             raise DelegationFailed(f"the expert did not take the request: {e}") from e
+        if self._unread:
+            # the expert is back: the next request offers the tool as its card describes it
+            self._build_tool(client)
         offers = client.offers_extension
 
         try:
