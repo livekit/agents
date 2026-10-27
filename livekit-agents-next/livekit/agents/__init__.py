@@ -126,7 +126,6 @@ from .voice.keyterm_detection import (
     KeytermsOptions,
     STTContextOptions,
 )
-from .voice.room_io import RoomInputOptions, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
     ChatMessageEvent,
@@ -206,8 +205,6 @@ __all__ = [
     "ChatContext",
     "ChatItem",
     "room_io",
-    "RoomInputOptions",
-    "RoomOutputOptions",
     "ChatMessage",
     "ChatRole",
     "ChatContent",

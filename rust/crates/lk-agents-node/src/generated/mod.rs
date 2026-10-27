@@ -196,8 +196,6 @@
 //! - `NoiseCancellationParams (record NoiseCancellationParams)`: field `participant`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
 //! - `TextInputOptions (record TextInputOptions)`: field `text_input_cb`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
 //! - `AudioOutputOptions (record AudioOutputOptions)`: field `track_publish_options`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
-//! - `RoomInputOptions (record RoomInputOptions)`: field `noise_cancellation`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
-//! - `RoomOutputOptions (record RoomOutputOptions)`: field `audio_publish_options`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
 //! - `TextInput (record TextInputEvent)`: field `participant`: `ParticipantIdentity` has no Node shape (not a declared record, enum or JSON)
 //! - `GetDOBResult (record GetDOBResult)`: field `date_of_birth`: `Date` has no Node shape (not a declared record, enum or JSON)
 

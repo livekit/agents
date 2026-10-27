@@ -2,9 +2,7 @@ from ...types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from .types import (
     AudioInputOptions,
     AudioOutputOptions,
-    RoomInputOptions,
     RoomOptions,
-    RoomOutputOptions,
     TextInputEvent,
     TextInputOptions,
     TextOutputOptions,
@@ -13,8 +11,6 @@ from .types import (
 
 __all__ = [
     "RoomOptions",
-    "RoomInputOptions",
-    "RoomOutputOptions",
     "ATTRIBUTE_PUBLISH_ON_BEHALF",
     "TextInputEvent",
     "TextInputOptions",
