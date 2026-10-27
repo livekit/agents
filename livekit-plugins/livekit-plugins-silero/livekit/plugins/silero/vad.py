@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 import weakref
 from dataclasses import dataclass
@@ -48,6 +47,9 @@ class _VADOptions:
     activation_threshold: float
     deactivation_threshold: float
     sample_rate: int
+    # whether a caller chose deactivation_threshold, rather than it being derived from the
+    # activation threshold: a copy keeps a chosen band instead of re-deriving it
+    deactivation_threshold_is_explicit: bool = False
 
 
 def _default_deactivation_threshold(activation_threshold: float) -> float:
@@ -144,6 +146,7 @@ class VAD(agents.vad.VAD):
             deactivation_threshold=deactivation_threshold
             or _default_deactivation_threshold(activation_threshold),
             sample_rate=sample_rate,
+            deactivation_threshold_is_explicit=is_given(deactivation_threshold),
         )
         return cls(session=session, opts=opts)
 
@@ -212,12 +215,9 @@ class VAD(agents.vad.VAD):
             if deactivation_threshold <= 0:
                 raise ValueError("deactivation_threshold must be greater than 0")
             resolved_deactivation = deactivation_threshold
-        elif is_given(activation_threshold) and math.isclose(
-            self._opts.deactivation_threshold,
-            _default_deactivation_threshold(self._opts.activation_threshold),
-        ):
-            # the hysteresis band was still the derived one, so it follows the new threshold;
-            # a band the caller chose is theirs and stays, which is what a copy must do
+        elif is_given(activation_threshold) and not self._opts.deactivation_threshold_is_explicit:
+            # the hysteresis band was derived, so it follows the new threshold; a band the
+            # caller chose is theirs and stays, which is what a copy must do
             resolved_deactivation = _default_deactivation_threshold(resolved_activation)
         else:
             resolved_deactivation = self._opts.deactivation_threshold
@@ -246,6 +246,9 @@ class VAD(agents.vad.VAD):
             activation_threshold=resolved_activation,
             deactivation_threshold=resolved_deactivation,
             sample_rate=resolved_sample_rate,
+            deactivation_threshold_is_explicit=(
+                is_given(deactivation_threshold) or self._opts.deactivation_threshold_is_explicit
+            ),
         )
         return type(self)(session=self._onnx_session, opts=opts)
 
@@ -319,6 +322,7 @@ class VAD(agents.vad.VAD):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.deactivation_threshold_is_explicit = True
 
         for stream in self._streams:
             stream.update_options(

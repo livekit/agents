@@ -30,6 +30,8 @@ def _vad(**overrides: Any) -> VAD:
         "activation_threshold": 0.5,
         "deactivation_threshold": 0.35,
         "sample_rate": 16000,
+        # as in `load`: a band the caller passes is a choice, not the derived default
+        "deactivation_threshold_is_explicit": "deactivation_threshold" in overrides,
     }
     values.update(overrides)
     # Options are resolved before the session is used, so these cases need no model.
@@ -120,6 +122,27 @@ def test_with_options_keeps_a_chosen_deactivation_threshold_when_the_activation_
     derived = vad.with_options(activation_threshold=0.7)
 
     assert derived._opts.deactivation_threshold == pytest.approx(0.45)
+
+
+def test_with_options_keeps_a_chosen_band_that_matches_the_derived_one() -> None:
+    """Provenance, not the value: 0.35 happens to equal load()'s default for 0.5, still a choice."""
+    vad = _vad(activation_threshold=0.5, deactivation_threshold=0.35)
+
+    derived = vad.with_options(activation_threshold=0.7)
+
+    assert derived._opts.deactivation_threshold == pytest.approx(0.35)
+
+
+def test_update_options_records_a_chosen_deactivation_threshold() -> None:
+    vad = _vad()
+    assert not vad._opts.deactivation_threshold_is_explicit
+
+    vad.update_options(deactivation_threshold=0.3)
+
+    assert vad._opts.deactivation_threshold_is_explicit
+    assert vad.with_options(activation_threshold=0.7)._opts.deactivation_threshold == pytest.approx(
+        0.3
+    )
 
 
 def test_with_options_keeps_the_type_of_a_subclass() -> None:
