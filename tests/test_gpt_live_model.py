@@ -1703,6 +1703,12 @@ async def test_an_answer_with_no_start_answers_the_open_turn_without_splitting_i
         assert [name for name, _ in events].count("input_speech_started") == 1
         assert events[-2][1].transcript == "Where is my order?"
         assert events[-1][0] == "input_speech_stopped"
+
+        # that answer is spent, so the next turn waits for its own
+        session._handle_event(_transcript("user", "Thanks", 9000))
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session.push_audio(_silence(100))
+        assert events[-1][0] == "input_audio_transcription_completed"
     finally:
         await session.aclose()
         await model.aclose()

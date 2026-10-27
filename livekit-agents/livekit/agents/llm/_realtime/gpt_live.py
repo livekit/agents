@@ -877,6 +877,9 @@ class GPTLiveSession(
         """Close a speaker's message; for the user this is the end of their turn."""
         if (speech := self._speech.pop(role, None)) is None or role != "user":
             return
+        # its answer is spent: no later turn began before it
+        if (reply_ms := self._reply_ms(speech)) is not None:
+            self._answers = [a for a in self._answers if a > reply_ms]
         # the final transcript goes out first, so nothing waits for one after the stop
         self.emit(
             "input_audio_transcription_completed",
