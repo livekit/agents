@@ -71,6 +71,8 @@ pub struct SessionApi {
     host: HostParts,
     /// Every provider handed over is registered here; the driver performs against it.
     resources: lk_agents_abi::resources::Resources,
+    /// `conn_options=`: every leg handed over, at start or later, is bound to its budget.
+    conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     #[cfg(feature = "dst")]
     probe: Mutex<Option<(HostEventProbe, oneshot::Sender<crate::runtime::Runtime>)>>,
 }
@@ -451,9 +453,9 @@ impl SessionApi {
             current.clone()
         };
         let models = ModelRefs {
-            llm: map(llm, |l| r.register_llm(nodes.llm(llm_leg(l)))),
-            tts: map(tts, |t| r.register_tts(nodes.tts(tts_leg(t, clock)))),
-            stt: map(stt, |s| r.register_stt(nodes.stt(stt_leg(s, vad_now)))),
+            llm: map(llm, |l| r.register_llm(nodes.llm(llm_leg(l, &self.conn.llm)))),
+            tts: map(tts, |t| r.register_tts(nodes.tts(tts_leg(t, clock, &self.conn.tts)))),
+            stt: map(stt, |s| r.register_stt(nodes.stt(stt_leg(s, vad_now, &self.conn.stt)))),
             vad: map(vad, |v| r.register_vad(v)),
         };
         {
@@ -1238,29 +1240,41 @@ fn session_tools(
     tools.map(|specs| Toolset { specs, host, runner: None })
 }
 
-/// LLM and TTS run at zero because the engine's `Attempt` loop owns their retries, and two loops
-/// would multiply; a host STT keeps its budget, which its `RetryingStt` spends.
-fn engine_retries() -> lk_agents_abi::ApiConnectOptions {
-    lk_agents_abi::ApiConnectOptions { max_retry: 0, ..lk_agents_abi::ApiConnectOptions::default() }
+/// A host provider is attempted once per call with the leg's timeout: the engine's `Attempt`
+/// loop owns the LLM's and the TTS's retries (on `SessionShared::conn`), and two loops would
+/// multiply.
+fn one_attempt(conn: &lk_agents_abi::ApiConnectOptions) -> lk_agents_abi::ApiConnectOptions {
+    lk_agents_abi::ApiConnectOptions { max_retry: 0, ..*conn }
 }
 
-/// A recognize-only STT goes over `vad` (`Agent.stt_node`'s default `StreamAdapter`).
-fn stt_leg(stt: Arc<dyn Stt>, vad: Option<Arc<dyn Vad>>) -> Arc<dyn Stt> {
-    let stt = stt.with_conn_options(&lk_agents_abi::ApiConnectOptions::default()).unwrap_or(stt);
+/// A host STT spends its budget in its `RetryingStt`; a recognize-only one goes over `vad`
+/// (`Agent.stt_node`'s default `StreamAdapter`).
+fn stt_leg(
+    stt: Arc<dyn Stt>,
+    vad: Option<Arc<dyn Vad>>,
+    conn: &lk_agents_abi::ApiConnectOptions,
+) -> Arc<dyn Stt> {
+    let stt = stt.with_conn_options(conn).unwrap_or(stt);
     lk_agents_abi::stt::stream_adapter::SttStreamAdapter::adapted(stt, vad)
 }
 
-fn llm_leg(llm: Arc<dyn Llm>) -> Arc<dyn Llm> {
-    llm.with_conn_options(&engine_retries()).unwrap_or(llm)
+fn llm_leg(llm: Arc<dyn Llm>, conn: &lk_agents_abi::ApiConnectOptions) -> Arc<dyn Llm> {
+    llm.with_conn_options(&one_attempt(conn)).unwrap_or(llm)
 }
 
-/// A non-streaming TTS is split into sentences with BlingFire, as the reference.
-fn tts_leg(tts: Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Arc<dyn Tts> {
-    let tts = tts.with_conn_options(&engine_retries()).unwrap_or(tts);
+/// A non-streaming TTS is split into sentences with BlingFire, as the reference, each sentence
+/// retried on the leg's budget.
+fn tts_leg(
+    tts: Arc<dyn Tts>,
+    clock: Arc<dyn Clock>,
+    conn: &lk_agents_abi::ApiConnectOptions,
+) -> Arc<dyn Tts> {
+    let tts = tts.with_conn_options(&one_attempt(conn)).unwrap_or(tts);
     lk_agents_abi::StreamAdapter::adapted(
         tts,
         lk_agents_media::blingfire::SentenceBuffer::factory(),
         clock,
+        *conn,
     )
 }
 

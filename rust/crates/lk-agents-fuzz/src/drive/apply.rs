@@ -516,8 +516,12 @@ impl Run {
                     given(llm, || fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
                     given(tts, || {
                         (match self.setup.tts_latency {
-                            Some(seed) => fakes::FakeTts::with_latency(registry.clone(), !seed),
-                            None => fakes::FakeTts::new(registry.clone()),
+                            Some(seed) => fakes::FakeTts::with_latency(
+                                registry.clone(),
+                                !seed,
+                                !self.setup.chunked_tts,
+                            ),
+                            None => fakes::FakeTts::new(registry.clone(), !self.setup.chunked_tts),
                         }) as Arc<Tts>
                     }),
                     given(stt, || session_stt(&self.setup, &registry, connect)),

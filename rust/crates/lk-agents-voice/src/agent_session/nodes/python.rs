@@ -309,6 +309,7 @@ fn tts_node(
         tts,
         lk_agents_media::blingfire::SentenceBuffer::factory(),
         Arc::clone(&clock),
+        options,
     );
     let input = caller_input(py, text, Box::new(|t| t.extract::<String>().map_err(Into::into)))?;
     let (output, frames) = item_stream(py, audio_frame)?;

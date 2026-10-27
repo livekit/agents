@@ -46,6 +46,8 @@ pub struct DriverBuilder {
     pub capture_run: Option<crate::run_result::RunSpec>,
     /// Consecutive unrecoverable errors of one leg tolerated before closing (default `3`).
     pub max_unrecoverable_errors: u32,
+    /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.
+    pub conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     /// `expressive=`, the session's and the opening agent's.
     pub expressive: crate::generation::ExpressiveLayers,
     /// Where the providers below are registered, and every one handed over later.
@@ -279,6 +281,7 @@ impl DriverBuilder {
                 self.config.effective.speech.tts_text_transforms(),
             ),
             realtime_audio: self.realtime_audio_node.clone(),
+            conn: self.conn,
             queue: queue.clone(),
             closing,
             draining: tokio::sync::watch::channel(false).0,

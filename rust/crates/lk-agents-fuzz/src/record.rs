@@ -553,6 +553,8 @@ pub struct Recording {
     parks: u64,
     live: Live,
     index: Index,
+    /// The legs' retry budgets the session was built with.
+    conn: Option<(crate::drive::ConnSetup, bool)>,
 }
 
 /// Lookups by identity, maintained as facts arrive.
@@ -586,6 +588,11 @@ impl Recording {
 
     pub fn phase(&self) -> Phase {
         self.phase
+    }
+
+    /// The legs' retry budgets, and whether the voice was spoken sentence by sentence.
+    pub fn conn(&self) -> Option<(crate::drive::ConnSetup, bool)> {
+        self.conn
     }
 
     /// When the runner stopped adding work, and when it ran out of things to release.
@@ -870,6 +877,10 @@ impl Recording {
 
     pub fn set_parks(&mut self, parks: u64) {
         self.parks = parks;
+    }
+
+    pub fn set_conn(&mut self, conn: crate::drive::ConnSetup, chunked_tts: bool) {
+        self.conn = Some((conn, chunked_tts));
     }
 
     pub fn set_now(&mut self, now: Observed) {

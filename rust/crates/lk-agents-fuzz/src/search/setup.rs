@@ -4,7 +4,7 @@ use lk_agents_abi::voice::session_options::TextTransformSet;
 
 use crate::{
     drive::{
-        AmdAnswer, AmdSetup, KeytermDetectionSetup, NodeSetup, PreConnect, RealtimeSetup, RoomLegs,
+        AmdAnswer, AmdSetup, ConnSetup, KeytermDetectionSetup, NodeSetup, PreConnect, RealtimeSetup, RoomLegs,
         RoomSetup, Setup,
     },
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
@@ -88,6 +88,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         avatar_reports_start: false,
         stt_model: 0,
         tts_latency: None,
+        conn: None,
+        chunked_tts: false,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
@@ -139,5 +141,13 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         // has them.
         realtime.tool_calls = rng.bool().then(|| rng.u8(0..=100));
     }
+    // The legs' retry budgets, and a voice that does not stream, drawn last too.
+    setup.conn = rng.bool().then(|| ConnSetup {
+        stt: rng.u32(0..4),
+        llm: rng.u32(0..4),
+        tts: rng.u32(0..4),
+        interval_ms: DELAYS_MS[rng.usize(0..DELAYS_MS.len())],
+    });
+    setup.chunked_tts = rng.u8(0..100) < 30;
     setup
 }

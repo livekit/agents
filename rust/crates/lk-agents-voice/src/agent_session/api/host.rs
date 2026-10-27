@@ -176,12 +176,13 @@ impl SessionApi {
             agent: agent_expressive.given(),
         };
         let session_layer = options.map(|o| o.session()).unwrap_or_default();
+        let conn = options.map(|o| o.conn()).unwrap_or_default();
         let forward_chat_context =
             stt_context.as_ref().and_then(|cfg| cfg.forward_chat_context).unwrap_or(true);
         let keyterms = stt_context.map(|cfg| crate::keyterm_detection::KeytermSetup {
             detection: crate::keyterm_detection::resolve_detection(cfg.keyterm_detection.as_ref()),
             static_keyterms: cfg.keyterms.unwrap_or_default(),
-            llm: keyterm_llm.map(llm_leg),
+            llm: keyterm_llm.map(|l| llm_leg(l, &conn.llm)),
             tools_host: keyterm_tools,
         });
         let stack = crate::agent_activity::options::ConfigStack {
@@ -189,9 +190,9 @@ impl SessionApi {
             agent: agent_turn_handling.as_ref().map(crate::turn::agent_layer),
         };
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
-        let stt = stt.map(|s| nodes.stt(stt_leg(s, vad.clone())));
-        let llm = llm.map(|l| nodes.llm(llm_leg(l)));
-        let tts = tts.map(|t| nodes.tts(tts_leg(t, clock.clone())));
+        let stt = stt.map(|s| nodes.stt(stt_leg(s, vad.clone(), &conn.stt)));
+        let llm = llm.map(|l| nodes.llm(llm_leg(l, &conn.llm)));
+        let tts = tts.map(|t| nodes.tts(tts_leg(t, clock.clone(), &conn.tts)));
         let vad_leg = vad.clone();
         let interruption = interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
@@ -334,6 +335,7 @@ impl SessionApi {
             hook_bound: hook_bound.map(Duration::from_secs_f64),
             capture_run: None,
             max_unrecoverable_errors,
+            conn,
             expressive,
             eot: turn_detector.clone(),
             llm,
@@ -380,6 +382,7 @@ impl SessionApi {
             agents,
             host: HostParts::default(),
             resources,
+            conn,
             #[cfg(feature = "dst")]
             probe: Mutex::new(None),
         };
@@ -839,9 +842,9 @@ impl SessionApi {
         let setup = crate::amd::detector::AmdSetup {
             config,
             prompt: cfg.prompt.unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
-            llm: llm_leg(llm),
+            llm: llm_leg(llm, &self.conn.llm),
             tools_host: tools,
-            stt: stt.map(|s| stt_leg(s, None)),
+            stt: stt.map(|s| stt_leg(s, None, &self.conn.stt)),
             room: self.host.call_room.clone(),
             participant: participant_identity,
         };

@@ -1781,6 +1781,30 @@ async def providers() -> None:
     said = await ears.recognize([_square(0.0)], conn_options=QUICK_RETRIES)
     assert said.alternatives[0].text == "batch words" and seen == [True], seen
 
+    # in a session, a voice that does not stream is retried sentence by sentence on the session's
+    # tts_conn_options: each sentence's first attempt fails, and the whole reply is still spoken
+    print("== a session's voice retries each sentence")
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    voice = FlakyTTS(fails=1)
+    seen = error_events(voice)
+    session = VoiceSession(
+        stt=ScriptedSTT(),
+        llm=ScriptedLLM(),
+        tts=voice,
+        vad=None,
+        conn_options=SessionConnectOptions(tts_conn_options=QUICK_RETRIES),
+    )
+    await session.start(Agent(instructions="You retry.", name="retries"), room=room)
+    await settle(room, 1)
+    session.say("Hello there, this is the first sentence. And this is the second one.")
+    await settle(room, 4)
+    await session.aclose()
+    assert len(voice.attempts) == 2 and set(voice.attempts.values()) == {2}, voice.attempts
+    assert seen == [True, True], seen
+
 
 async def llm_prewarm() -> None:
     """The gateway LLM is prewarmed as the session starts (``GET /models``, the reference's

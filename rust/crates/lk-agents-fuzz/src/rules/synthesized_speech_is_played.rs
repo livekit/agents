@@ -6,6 +6,7 @@
 //! up here as the same absence, which is what lets this catch failures nobody wrote a rule for.
 use lk_agents_voice::{
     agent_activity::scheduling::SpeechId,
+    events::{ErrorSource, SessionEvent},
     trace::{GenerationStep, PlayoutStep, Step},
 };
 
@@ -42,6 +43,16 @@ impl Rule for SynthesizedSpeechIsPlayed {
             }
             let trace = internal.speech(speech.id);
             let Some(asked) = trace.synthesis_requested_at() else { continue };
+            // A voice that failed for good was surfaced as the speech's unrecoverable error: the
+            // speech had nothing left to play with.
+            let voice_lost = internal.steps().iter().any(|(_, step)| {
+                matches!(step, Step::Emitted(SessionEvent::Error(ev))
+                    if ev.source == ErrorSource::Tts && !ev.recoverable
+                        && ev.speech.is_some_and(|s| s.0 == speech.id))
+            });
+            if voice_lost {
+                continue;
+            }
             check.expect(
                 &speech,
                 trace.audio_played(),

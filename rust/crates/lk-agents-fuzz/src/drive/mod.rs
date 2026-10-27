@@ -37,7 +37,7 @@ use lk_agents_abi::{
     turn::keyterms::{DetectionLlm, KeytermDetectionConfig, SttContextConfig},
     voice::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig},
     voice::session_options::{
-        EndpointingKwargs, HostValue, InterruptionKwargs, PreemptiveKwargs, SessionKwargs,
+        EndpointingKwargs, HostValue, InterruptionKwargs, SessionConnOptions, PreemptiveKwargs, SessionKwargs,
         TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
     },
 };
@@ -212,6 +212,25 @@ pub struct Setup {
     /// The voice takes as long to its first audio as the recorded one did, drawn from this seed;
     /// `None` answers at once.
     pub tts_latency: Option<u64>,
+    /// `conn_options=SessionConnectOptions(..)`: each leg's retry budget. `None` is the defaults.
+    pub conn: Option<ConnSetup>,
+    /// A voice that does not stream: the session speaks it sentence by sentence through its
+    /// stream adapter, each sentence a synthesis of its own, retried on its own.
+    pub chunked_tts: bool,
+}
+
+/// Each leg's `max_retry`, and the interval between retries.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ConnSetup {
+    pub stt: u32,
+    pub llm: u32,
+    pub tts: u32,
+    pub interval_ms: u64,
+}
+
+impl ConnSetup {
+    /// `SessionConnectOptions()`: three retries on every leg, two seconds apart.
+    pub const DEFAULT: ConnSetup = ConnSetup { stt: 3, llm: 3, tts: 3, interval_ms: 2_000 };
 }
 
 /// The room's legs, and whether the person's app sends the audio it buffered before the agent
@@ -364,6 +383,8 @@ impl Default for Setup {
             background_audio: false,
             avatar: false,
             avatar_reports_start: false,
+            conn: None,
+            chunked_tts: false,
         }
     }
 }

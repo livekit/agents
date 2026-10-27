@@ -215,8 +215,10 @@ impl TtsBackend {
     /// A member without a duplex path streams through BlingFire sentences (`tts:384-395`).
     pub fn new(tts: &Arc<dyn Tts>, policy: &ChainPolicy, clock: Arc<dyn Clock>) -> Arc<Self> {
         let (inner, probe) = bound_views(tts, policy, |conn| tts.with_conn_options(conn));
+        let no_retry = lk_agents_abi::ApiConnectOptions { max_retry: 0, ..Default::default() };
         let adapted = |t| {
-            StreamAdapter::adapted(t, SentenceBuffer::factory(), Arc::clone(&clock))
+            // The chain retries each member itself: a sentence is not retried on top.
+            StreamAdapter::adapted(t, SentenceBuffer::factory(), Arc::clone(&clock), no_retry)
         };
         let (inner, probe) = (adapted(inner), adapted(probe));
         Arc::new(TtsBackend { label: tts.label(), inner, probe, clock })

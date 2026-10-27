@@ -64,7 +64,9 @@ pub trait StreamSource<T>: Send {
 }
 
 /// Told of each failed attempt a stream retries.
-pub type RetryReport = std::sync::Arc<dyn Fn(crate::errors::ProviderError) + Send + Sync>;
+pub type RetryReport = std::sync::Arc<
+    dyn Fn(crate::errors::ProviderError, u32, std::time::Duration) + Send + Sync,
+>;
 
 /// A stream's provider calls, read by another task: `take(in_flight)` is
 /// [`StreamSource::take_call_metrics`].

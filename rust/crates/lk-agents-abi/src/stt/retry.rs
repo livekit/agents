@@ -71,7 +71,7 @@ impl Failure<'_> {
             RetryDecision::Retry(delay) => {
                 report.failed(error.clone(), true);
                 if let Some(hook) = hook {
-                    hook(error.clone());
+                    hook(error.clone(), retries + 1, std::time::Duration::from_secs_f64(delay.max(0.0)));
                 }
                 let streamed = kind == RequestKind::SttStream;
                 log::warn!(
@@ -452,7 +452,7 @@ mod tests {
         let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
         let hooked = Arc::new(Mutex::new(0));
         let calls = Arc::clone(&hooked);
-        source.report_retries(Arc::new(move |_| *calls.lock().unwrap() += 1));
+        source.report_retries(Arc::new(move |_, _, _| *calls.lock().unwrap() += 1));
         let next = tokio::spawn(async move { source.next().await.map(|ev| ev.map(|ev| ev.kind)) });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         sink.push(AudioFrame::new(vec![0u8; 4], 16_000, 1, 2)).unwrap();

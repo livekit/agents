@@ -106,6 +106,12 @@ impl Authored {
 
     // --- the driver's side ---------------------------------------------------------------------
 
+    /// The legs' retry budgets the session was built with.
+    pub fn conn(mut self, conn: crate::drive::ConnSetup, chunked_tts: bool) -> Self {
+        self.recording.set_conn(conn, chunked_tts);
+        self
+    }
+
     pub fn journal(mut self, step: Step) -> Self {
         let at = self.next();
         self.recording.record_journal(at, step);

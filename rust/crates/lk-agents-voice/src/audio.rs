@@ -292,7 +292,7 @@ pub(super) fn spawn_drain<T: Into<crate::agent_session::Event> + Send + 'static>
 
 /// A stream's retried failures, sent to the session loop.
 pub(crate) fn report_to(queue: Tx) -> lk_agents_abi::RetryReport {
-    Arc::new(move |error| {
+    Arc::new(move |error, _, _| {
         let _ = queue.send(crate::agent_session::Input::SttRetried(error));
     })
 }

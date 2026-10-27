@@ -6,7 +6,7 @@ use super::pipeline_reply::{fatal, teardown_deadline};
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use crate::agent_session::DriverError;
 use crate::agent_session::SessionShared;
-use crate::generation::{Attempt, TurnAccumulator};
+use crate::generation::{Attempt, GenEvent, TurnAccumulator};
 use crate::speech_handle::SpeechHandle;
 use crate::trace::{GenerationStep, ProviderKind};
 use crate::transcription::Heard;
@@ -58,7 +58,7 @@ pub(super) async fn perform_tts_inference(
     mut aligned: Option<&mut Aligned<'_>>,
     playback: &mut SynthesisPlayout<'_>,
 ) -> Result<Heard, Lost> {
-    let mut attempt = Attempt::new(lk_agents_abi::ApiConnectOptions::default());
+    let mut attempt = Attempt::new(shared.conn.tts);
     // The segment's words so far and whether its text has ended: what a retried open replays.
     let mut text = first;
     let mut input_done = false;
@@ -77,7 +77,20 @@ pub(super) async fn perform_tts_inference(
         }
         let (error, produced) = match tts.stream().await {
             Err(error) => (error, false),
-            Ok((sink, source)) => {
+            Ok((sink, mut source)) => {
+                // A voice that does not stream retries its sentences itself: each retry is the
+                // session's recoverable error and a retry the journal waits out.
+                let (on, speech) = (Arc::clone(shared), handle.id());
+                source.report_retries(Arc::new(move |error, attempt, wait| {
+                    on.report(GenEvent::ProviderFailed {
+                        speech,
+                        leg: ProviderKind::Tts,
+                        recoverable: true,
+                        error: Box::new(error),
+                    });
+                    let at = on.time.now().saturating_add(wait);
+                    on.trace(GenerationStep::RetryArmed { speech, leg: ProviderKind::Tts, attempt, at });
+                }));
                 let aligned = aligned.as_deref_mut();
                 let tts_data = TtsGenerationData::new(tts, shared, segment);
                 let streaming = Streaming {

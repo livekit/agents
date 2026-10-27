@@ -46,23 +46,36 @@ pub struct StreamAdapter {
     clock: Arc<dyn Clock>,
     /// `_expressive`, set by the framework before each synthesis and snapshotted at `stream()`.
     expressive: AtomicBool,
+    /// Each sentence's retries (`ChunkedStream`'s own loop in the reference): a sentence failing
+    /// after earlier ones were heard is synthesized again, not the whole reply lost.
+    budget: crate::ApiConnectOptions,
 }
 
 impl StreamAdapter {
+    /// No sentence is retried; see [`with_budget`](Self::with_budget).
     pub fn new(tts: Arc<dyn Tts>, splitter: SplitterFactory, clock: Arc<dyn Clock>) -> Self {
-        StreamAdapter { tts, splitter, clock, expressive: AtomicBool::new(false) }
+        let budget = crate::ApiConnectOptions { max_retry: 0, ..crate::ApiConnectOptions::default() };
+        StreamAdapter { tts, splitter, clock, expressive: AtomicBool::new(false), budget }
     }
 
-    /// Itself when it has a duplex path, else adapted; decided per instance by its capabilities.
+    /// Each sentence retried within `budget`.
+    pub fn with_budget(mut self, budget: crate::ApiConnectOptions) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// Itself when it has a duplex path, else adapted, each sentence retried within `budget`;
+    /// decided per instance by its capabilities.
     pub fn adapted(
         tts: Arc<dyn Tts>,
         splitter: SplitterFactory,
         clock: Arc<dyn Clock>,
+        budget: crate::ApiConnectOptions,
     ) -> Arc<dyn Tts> {
         if tts.capabilities().streaming {
             return tts;
         }
-        Arc::new(StreamAdapter::new(tts, splitter, clock))
+        Arc::new(StreamAdapter::new(tts, splitter, clock).with_budget(budget))
     }
 }
 
@@ -92,7 +105,10 @@ pub async fn adapter_stream(
         ProviderError::Local(ApiError { retryable: false, ..ApiError::new(e.to_string()) })
     })?;
     let provider = provider.with_conn_options(&options).unwrap_or(provider);
-    StreamAdapter::new(provider, Arc::new(|_| Box::new(PreSplit)), clock).stream().await
+    StreamAdapter::new(provider, Arc::new(|_| Box::new(PreSplit)), clock)
+        .with_budget(options)
+        .stream()
+        .await
 }
 
 #[async_trait]
@@ -157,6 +173,9 @@ impl Tts for StreamAdapter {
         let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
         let source = AdapterSource {
             tts: self.tts.clone(),
+            budget: self.budget,
+            sentence: None,
+            report: None,
             clock: Arc::clone(&self.clock),
             rx,
             splitter: (self.splitter)(lowering.is_some()),
@@ -231,6 +250,11 @@ impl StreamSink<String> for AdapterSink {
 
 struct AdapterSource {
     tts: Arc<dyn Tts>,
+    budget: crate::ApiConnectOptions,
+    /// The sentence being synthesized and its failed attempts: what a retry synthesizes again.
+    sentence: Option<(String, u32)>,
+    /// Who hears of each retried sentence (the engine's error event and journal).
+    report: Option<crate::utils::stream::RetryReport>,
     clock: Arc<dyn Clock>,
     rx: mpsc::UnboundedReceiver<AdapterInput>,
     splitter: Box<dyn SentenceSplitter>,
@@ -379,7 +403,8 @@ impl AdapterSource {
                     Err(e) => {
                         self.ledger().call = None;
                         self.close_current().await;
-                        return Err(e);
+                        self.retry_sentence(e).await?;
+                        continue;
                     }
                 }
             }
@@ -404,10 +429,59 @@ impl AdapterSource {
             if text.is_empty() {
                 continue;
             }
-            let start = crate::unix_secs(self.clock.wall());
-            self.current = Some(self.tts.synthesize(&text).await?);
-            self.ledger().call = Some(Call { text, start, fold: TtsMetricState::for_host(false) });
+            self.sentence = Some((text, 0));
+            self.open_sentence().await?;
         }
+    }
+
+    /// The current sentence's synthesis, retried while its open fails within the budget.
+    async fn open_sentence(&mut self) -> Result<(), ProviderError> {
+        loop {
+            let Some((text, _)) = self.sentence.clone() else { return Ok(()) };
+            let start = crate::unix_secs(self.clock.wall());
+            match self.tts.synthesize(&text).await {
+                Ok(source) => {
+                    self.current = Some(source);
+                    let fold = TtsMetricState::for_host(false);
+                    self.ledger().call = Some(Call { text, start, fold });
+                    return Ok(());
+                }
+                Err(e) => self.retry_sentence(e).await?,
+            }
+        }
+    }
+
+    /// `Ok` once the wait before the sentence's next attempt is over, and that attempt opened; the
+    /// failure, final, when the sentence's budget is spent or it may not be retried.
+    async fn retry_sentence(&mut self, error: ProviderError) -> Result<(), ProviderError> {
+        use crate::types::retry::{RequestKind, RetryDecision, decide};
+        let Some((_, retries)) = self.sentence.as_mut() else { return Err(error) };
+        let decision = match error.api_kind() {
+            None => RetryDecision::Raise,
+            Some(_) => decide(
+                RequestKind::TtsBatch,
+                &self.budget,
+                *retries,
+                error.retryable(),
+                error.status_code(),
+                false,
+            ),
+        };
+        let RetryDecision::Retry(delay) = decision else { return Err(error.into_final()) };
+        *retries += 1;
+        log::warn!(
+            target: "livekit.agents",
+            "{}: failed to synthesize speech: {error}, retrying in {delay}s (attempt {retries})",
+            self.tts.label()
+        );
+        let wait = std::time::Duration::from_secs_f64(delay.max(0.0));
+        if let Some(report) = &self.report {
+            report(error.clone(), *retries, wait);
+        }
+        self.tts.failed(error, true);
+        let at = self.clock.now().saturating_add(wait);
+        self.clock.wait_until(at).await;
+        Box::pin(self.open_sentence()).await
     }
 }
 
@@ -466,6 +540,10 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
 
     fn take_call_metrics(&mut self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
         Some(self.ledger().take(in_flight))
+    }
+
+    fn report_retries(&mut self, report: crate::utils::stream::RetryReport) {
+        self.report = Some(report);
     }
 
     fn call_ledger(&self) -> Option<crate::utils::stream::CallLedger> {
@@ -941,9 +1019,10 @@ mod tests {
         assert_eq!(tts.texts(), vec!["first."]);
     }
 
-    // Catches: swallowing an inner failure, or emitting the held frame after it.
+    // Catches: swallowing an inner failure, emitting the held frame after it, or leaving a spent
+    // sentence retryable (the engine would retry the whole reply on top of its budget).
     #[tokio::test]
-    async fn an_inner_failure_surfaces_as_an_error_with_its_retryability_intact() {
+    async fn an_inner_failure_surfaces_as_a_final_error() {
         let mut tts = FakeTts::new(3);
         Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
         let (sink, mut source) = adapter(tts).stream().await.unwrap();
@@ -954,8 +1033,26 @@ mod tests {
         let err = bounded("failing frame", source.next())
             .await
             .expect_err("the 429 must not become a clean EOS");
-        assert!(err.retryable());
+        assert!(!err.retryable());
         assert_eq!(err.status_code(), Some(429));
+    }
+
+    // Catches: a failed sentence not synthesized again within the budget (the reference's
+    // per-sentence `ChunkedStream` retries), or retried past it.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_sentence_is_synthesized_again_within_its_budget() {
+        let mut tts = FakeTts::new(3);
+        Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
+        let budget = crate::ApiConnectOptions { max_retry: 2, retry_interval: 0.0, timeout: 1.0 };
+        let clock = Arc::new(crate::utils::clock::SimClock::new());
+        let splitter: SplitterFactory = Arc::new(|_| Box::new(DotSplitter::default()));
+        let adapter = StreamAdapter::new(tts.clone(), splitter, clock).with_budget(budget);
+        let (sink, source) = adapter.stream().await.unwrap();
+        sink.push("first. second.".into()).unwrap();
+        sink.end_input();
+        let err = drain(source).await.expect_err("every attempt fails");
+        assert!(!err.retryable());
+        assert_eq!(tts.texts(), vec!["first.", "first.", "first."]);
     }
 
     // Catches: dropping the inner `TtsSource` instead of closing it (leaks a host task per sentence).

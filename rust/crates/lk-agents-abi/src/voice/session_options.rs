@@ -143,6 +143,14 @@ impl BackchannelBoundary {
     }
 }
 
+/// `SessionConnectOptions`: each leg's retry budget and timeout; not given is the defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct SessionConnOptions {
+    pub stt: crate::ApiConnectOptions,
+    pub llm: crate::ApiConnectOptions,
+    pub tts: crate::ApiConnectOptions,
+}
+
 /// A kwarg whose value is a host object, or a dict that holds one: only presence crosses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostValue {
@@ -458,7 +466,7 @@ pub struct SessionKwargs {
         ty = "NotGivenOr[SessionConnectOptions]",
         type_import = "..voice.agent_session:SessionConnectOptions"
     )]
-    pub conn_options: HostValue,
+    pub conn_options: SessionConnOptions,
 }
 
 /// `AgentSession.update_options(..)`'s option surface.
@@ -787,6 +795,30 @@ mod host {
                 });
             }
             Ok(Instructions::plain(obj.extract::<String>()?))
+        }
+    }
+
+    /// `NOT_GIVEN` and `None` are the defaults; a `SessionConnectOptions` is read by attribute.
+    impl<'a, 'py> FromPyObject<'a, 'py> for SessionConnOptions {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            let MaybeNull::Given(options) = obj.extract::<MaybeNull<Bound<'py, PyAny>>>()? else {
+                return Ok(SessionConnOptions::default());
+            };
+            let leg = |name: &str| -> PyResult<crate::ApiConnectOptions> {
+                let conn = options.getattr(name)?;
+                Ok(crate::ApiConnectOptions {
+                    max_retry: conn.getattr("max_retry")?.extract()?,
+                    retry_interval: conn.getattr("retry_interval")?.extract()?,
+                    timeout: conn.getattr("timeout")?.extract()?,
+                })
+            };
+            Ok(SessionConnOptions {
+                stt: leg("stt_conn_options")?,
+                llm: leg("llm_conn_options")?,
+                tts: leg("tts_conn_options")?,
+            })
         }
     }
 

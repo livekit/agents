@@ -53,15 +53,7 @@ struct Node<P: ?Sized> {
 /// The engine does not retry a node: the provider the node calls retries below it, and the node's
 /// own code runs once per request, as in the reference.
 fn final_error(error: ProviderError) -> ProviderError {
-    match error {
-        ProviderError::Host { error, api_kind, status_code, .. } => {
-            ProviderError::Host { error, api_kind, retryable: false, status_code }
-        }
-        ProviderError::Local(error) => ProviderError::Local(lk_agents_abi::errors::ApiError {
-            retryable: false,
-            ..error
-        }),
-    }
+    error.into_final()
 }
 
 struct Final<T>(Box<dyn StreamSource<T>>);

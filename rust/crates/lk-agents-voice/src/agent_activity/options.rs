@@ -623,6 +623,11 @@ impl HostOptions {
         self.lock().session
     }
 
+    /// `conn_options=`: each leg's retry budget and timeout.
+    pub fn conn(&self) -> lk_agents_abi::voice::session_options::SessionConnOptions {
+        self.lock().kwargs.conn_options
+    }
+
     /// The session's `expressive=` as of now.
     pub fn expressive(&self) -> Expressive {
         self.lock().expressive.clone()

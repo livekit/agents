@@ -35,6 +35,16 @@ impl<'py> pyo3::IntoPyObject<'py> for ProviderError {
 }
 
 impl ProviderError {
+    /// The same failure, no longer to be retried: whoever spent the budget already gave up.
+    pub fn into_final(self) -> ProviderError {
+        match self {
+            ProviderError::Host { error, api_kind, status_code, .. } => {
+                ProviderError::Host { error, api_kind, retryable: false, status_code }
+            }
+            ProviderError::Local(error) => ProviderError::Local(ApiError { retryable: false, ..error }),
+        }
+    }
+
     /// Answerable with no GIL held.
     pub fn retryable(&self) -> bool {
         match self {

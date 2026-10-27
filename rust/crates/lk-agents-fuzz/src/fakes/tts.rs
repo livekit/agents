@@ -26,16 +26,19 @@ pub struct FakeTts {
     /// The voice's time to first audio, drawn per stream from the corpus (`tts/first_audio`),
     /// when the setup gives the voice latency; `None` answers at once.
     latency: Option<Mutex<fastrand::Rng>>,
+    /// Off, the voice only synthesizes whole texts: the session adapts it sentence by sentence.
+    streaming: bool,
 }
 
 impl FakeTts {
-    pub fn new(registry: Arc<Registry>) -> Arc<Self> {
-        Arc::new(FakeTts { registry, latency: None })
+    pub fn new(registry: Arc<Registry>, streaming: bool) -> Arc<Self> {
+        Arc::new(FakeTts { registry, latency: None, streaming })
     }
 
     /// A voice that takes as long to start as the recorded one did.
-    pub fn with_latency(registry: Arc<Registry>, seed: u64) -> Arc<Self> {
-        Arc::new(FakeTts { registry, latency: Some(Mutex::new(fastrand::Rng::with_seed(seed))) })
+    pub fn with_latency(registry: Arc<Registry>, seed: u64, streaming: bool) -> Arc<Self> {
+        let latency = Some(Mutex::new(fastrand::Rng::with_seed(seed)));
+        Arc::new(FakeTts { registry, latency, streaming })
     }
 }
 
@@ -130,7 +133,7 @@ impl Tts for FakeTts {
     }
 
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: true, aligned_transcript: false }
+        TtsCapabilities { streaming: self.streaming, aligned_transcript: false }
     }
 
     fn sample_rate(&self) -> u32 {

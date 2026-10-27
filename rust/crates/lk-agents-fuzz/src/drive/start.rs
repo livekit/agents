@@ -82,8 +82,10 @@ impl Run {
         let llm = pipeline.then(|| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>);
         let tts = (setup.tts && pipeline).then(|| {
             (match setup.tts_latency {
-                Some(seed) => fakes::FakeTts::with_latency(registry.clone(), seed),
-                None => fakes::FakeTts::new(registry.clone()),
+                Some(seed) => {
+                    fakes::FakeTts::with_latency(registry.clone(), seed, !setup.chunked_tts)
+                }
+                None => fakes::FakeTts::new(registry.clone(), !setup.chunked_tts),
             }) as Arc<Tts>
         });
         let (llm_node, tts_node, stt_node) = nodes(setup, &llm, &tts, &stt);
@@ -320,6 +322,7 @@ impl Run {
             setup: setup.clone(),
             record: Recording::default(),
         };
+        run.record.set_conn(setup.conn.unwrap_or(ConnSetup::DEFAULT), setup.chunked_tts);
         if let Some((nth, cli)) = console_mic {
             run.mics.insert(nth, (Mic::Console(cli), 0));
         }
@@ -466,7 +469,14 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         user_away_timeout: Some(15.0),
         transcription_timeout: setup.transcription_timeout_ms.map(secs),
         session_close_transcript_timeout: 2.0,
-        conn_options: HostValue::NotGiven,
+        conn_options: setup.conn.map_or_else(SessionConnOptions::default, |c| {
+            let leg = |max_retry| lk_agents_abi::ApiConnectOptions {
+                max_retry,
+                retry_interval: secs(c.interval_ms),
+                ..lk_agents_abi::ApiConnectOptions::default()
+            };
+            SessionConnOptions { stt: leg(c.stt), llm: leg(c.llm), tts: leg(c.tts) }
+        }),
     }
 }
 

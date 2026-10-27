@@ -371,6 +371,8 @@ impl IdMint {
 
 pub struct SessionShared {
     pub time: Timebase,
+    /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.
+    pub conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     /// `session.output` as the core last published it.
     pub output: tokio::sync::watch::Sender<Outputs>,
     pub recorder: Arc<std::sync::RwLock<Option<crate::recorder_io::RecorderTap>>>,
