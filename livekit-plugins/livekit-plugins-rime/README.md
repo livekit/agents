@@ -175,8 +175,8 @@ session = AgentSession(llm=model)
 ### LiveKit compatibility
 
 Prism targets LiveKit's standard realtime interface from 1.7.1 onward. We test
-1.7.1, 1.8.6, and 1.8.8 with `rimelabs-sdk==0.1.0a24`. The package still requires
-`livekit-agents>=1.8.8`; installation on 1.7.1 needs a release that permits it.
+1.7.1, 1.8.6, and 1.8.8 with `rimelabs-sdk==0.1.0a24`. The package now requires
+`livekit-agents>=1.8.9`; installation on older versions needs a release that permits it.
 
 LiveKit 1.7.1 fixes active-response cancellation through `SpeechHandle.interrupt()`.
 Versions 1.7.1 through 1.8.5 still ignore realtime `max_tool_steps`, including for
