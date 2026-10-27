@@ -38,6 +38,7 @@ mod filler_without_voice_ends;
 mod realtime_close_interrupts;
 mod realtime_cut_reply_tool_runs;
 mod realtime_items_filled;
+mod realtime_metrics_wall_clock;
 mod realtime_onset_reply_heard;
 mod realtime_reply_asked_when_authorized;
 mod realtime_server_onset_interrupts;

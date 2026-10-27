@@ -3,7 +3,7 @@
 
 use super::{Generation, MessageState, RealtimeMachine, Step};
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::Ts;
@@ -288,7 +288,7 @@ impl RealtimeMachine {
         }
 
         let mut step = Step::default();
-        let created_at = wall_from(now);
+        let created_at = self.wall_at(now);
         match wire::from_wire_item(&item, created_at) {
             Ok(lk_item) => {
                 let id = lk_item.id().to_owned();
@@ -522,8 +522,3 @@ impl RealtimeMachine {
     }
 }
 
-/// `ChatItem.created_at` from the monotonic clock anchored at the epoch: the stamps are only
-/// compared with each other. The driver overwrites them from `Clock::wall` if needed.
-fn wall_from(now: Ts) -> SystemTime {
-    SystemTime::UNIX_EPOCH + Duration::from_nanos(now.as_nanos())
-}

@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 pub(crate) use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::errors::ApiError;
@@ -85,6 +85,8 @@ pub struct RealtimeMachine {
 
     session_deadline: Option<Ts>,
     closing: bool,
+    /// The wall clock at `Ts(0)` of the session's clock: what `time.time()` stamps are read from.
+    wall_anchor: SystemTime,
 }
 
 impl RealtimeMachine {
@@ -125,7 +127,24 @@ impl RealtimeMachine {
             reply_frames: HashMap::new(),
             session_deadline: None,
             closing: false,
+            wall_anchor: SystemTime::UNIX_EPOCH,
         }
+    }
+
+    /// The session clock's wall time at `Ts(0)`, so its stamps are `time.time()`'s.
+    pub fn with_wall_anchor(mut self, wall_anchor: SystemTime) -> Self {
+        self.wall_anchor = wall_anchor;
+        self
+    }
+
+    /// The wall time a session instant fell at.
+    pub(crate) fn wall_at(&self, t: Ts) -> SystemTime {
+        self.wall_anchor + Duration::from_nanos(t.as_nanos())
+    }
+
+    /// `time.time()` at a session instant.
+    fn wall_secs(&self, t: Ts) -> f64 {
+        self.wall_at(t).duration_since(SystemTime::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
     }
 
     /// The host model's `label`, on every error this session reports.
@@ -153,7 +172,7 @@ impl RealtimeMachine {
         let metrics = lk_agents_abi::metrics::base::RealtimeModelMetrics {
             label: String::new(),
             request_id: String::new(),
-            timestamp: secs(now),
+            timestamp: self.wall_secs(now),
             duration: 0.0,
             session_duration: 0.0,
             ttft: lk_agents_abi::metrics::base::RealtimeModelMetrics::NO_TTFT,
@@ -186,7 +205,7 @@ impl RealtimeMachine {
         let metrics = SttMetrics {
             label: self.label.clone(),
             request_id: t.event_id.clone(),
-            timestamp: secs(now),
+            timestamp: self.wall_secs(now),
             duration: 0.0,
             audio_duration,
             streamed: true,
@@ -216,7 +235,7 @@ impl RealtimeMachine {
         let metrics = RealtimeModelMetrics {
             label: self.label.clone(),
             request_id: response_id.to_owned(),
-            timestamp: secs(created),
+            timestamp: self.wall_secs(created),
             duration,
             session_duration: 0.0,
             ttft: first.map_or(RealtimeModelMetrics::NO_TTFT, |f| secs(f) - secs(created)),
@@ -1119,7 +1138,7 @@ impl CtxUpdate {
     }
 }
 
-/// A session-clock stamp in `time.time()` seconds: the native session runs on the wall clock.
+/// A session-clock instant in seconds, for durations between two of them.
 fn secs(t: Ts) -> f64 {
     t.as_nanos() as f64 / 1e9
 }

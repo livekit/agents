@@ -312,7 +312,8 @@ impl NativeRealtime {
             self.images.clone(),
         )
         .with_label(label.clone())
-        .with_provider(self.metrics_provider());
+        .with_provider(self.metrics_provider())
+        .with_wall_anchor(self.clock.wall() - Duration::from_nanos(self.clock.now().as_nanos()));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
