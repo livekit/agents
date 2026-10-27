@@ -15,12 +15,22 @@ from typing import Any
 import httpx
 import pytest
 
-from livekit.agents import Agent, AgentServer, RunContext
+from livekit.agents import Agent, AgentServer, LiveSession, RunContext, utils
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.codec import metadata_from_wire
 from livekit.agents.a2a.extension import REASON
 from livekit.agents.delegation import A2ADelegate
-from livekit.agents.llm import ChatContext, FunctionCallOutput, LLMStream, Tool, Toolset
+from livekit.agents.llm import (
+    ChatContext,
+    FunctionCall,
+    FunctionCallOutput,
+    FunctionTool,
+    GenerationCreatedEvent,
+    LLMStream,
+    MessageGeneration,
+    Tool,
+    Toolset,
+)
 from livekit.agents.storage import AgentDBStorage, StorageUnavailable
 
 from . import fake_agentstore
@@ -38,6 +48,7 @@ from .a2a_driver import (
     output_of,
 )
 from .agentdb_fixture import ON_PROJECT, PROJECT_URL, let_the_lease_lapse
+from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
 pytestmark = [pytest.mark.unit]
 
@@ -59,6 +70,25 @@ def tool_output(model: ScriptedLLM, call_id: str) -> FunctionCallOutput | None:
         if isinstance(item, FunctionCallOutput) and item.call_id == call_id
     ]
     return outputs[0] if outputs else None
+
+
+class OffersRecorded(ScriptedLLM):
+    """A scripted model that also keeps, per request, each offered tool's description by id."""
+
+    def __init__(self, *replies: Reply) -> None:
+        super().__init__(*replies)
+        self.offered: list[dict[str, str]] = []
+
+    def chat(
+        self, *, chat_ctx: ChatContext, tools: list[Tool] | None = None, **kwargs: Any
+    ) -> LLMStream:
+        self.offered.append(
+            {
+                tool.id: (tool.info.description or "") if isinstance(tool, FunctionTool) else ""
+                for tool in tools or []
+            }
+        )
+        return super().chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -347,10 +377,11 @@ class Down(httpx.AsyncBaseTransport):
 
 
 @pytest.mark.rule("R26", "B33")
+@pytest.mark.xfail(strict=True, reason="B33: with no card the tool's description is generic")
 async def test_an_expert_down_at_setup_is_a_tool_error_and_the_other_tools_run(
     door: Callable[..., Door],
 ) -> None:
-    model = ScriptedLLM(
+    model = OffersRecorded(
         Reply(
             tool_calls=[
                 call("ask", "c1", request="what is the fare to Oslo"),
@@ -360,7 +391,7 @@ async def test_an_expert_down_at_setup_is_a_tool_error_and_the_other_tools_run(
         Reply("Oslo is sunny; I cannot get the fare right now.", when=output_of("c2")),
     )
     http = httpx.AsyncClient(transport=Down(), base_url="http://experts.test")
-    delegate = A2ADelegate(f"http://experts.test/{EXPERT}", httpx_client=http)
+    delegate = A2ADelegate("http://experts.test/fares-desk", httpx_client=http)
     front = Agent(instructions="front desk", llm=model, tools=[delegate])
 
     @front.tool
@@ -384,6 +415,8 @@ async def test_an_expert_down_at_setup_is_a_tool_error_and_the_other_tools_run(
     assert asked is not None and asked.is_error and "connection refused" in asked.output
     other = tool_output(model, "c2")
     assert other is not None and other.output == "sunny in Oslo"
+    # with no card, the tool's description still names the expert
+    assert "fares-desk" in model.offered[0]["ask"]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -401,20 +434,6 @@ class Unreachable(Toolset):
     async def setup(self) -> Unreachable:
         self.setups += 1
         raise ConnectionError("the CRM server is down")
-
-
-class OffersRecorded(ScriptedLLM):
-    """A scripted model that also keeps the tool ids each request offered."""
-
-    def __init__(self, *replies: Reply) -> None:
-        super().__init__(*replies)
-        self.offered: list[list[str]] = []
-
-    def chat(
-        self, *, chat_ctx: ChatContext, tools: list[Tool] | None = None, **kwargs: Any
-    ) -> LLMStream:
-        self.offered.append([tool.id for tool in tools or []])
-        return super().chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
 
 
 @pytest.mark.rule("B48")
@@ -450,3 +469,122 @@ async def test_a_toolset_that_cannot_be_set_up_leaves_the_turn_its_other_tools(
     assert again.answer == "Still sunny."
     # the next run tries again
     assert crm.setups == 2
+
+
+# ---------------------------------------------------------------------------------------------
+# an expert that comes back
+# ---------------------------------------------------------------------------------------------
+
+
+class DownFirst(httpx.AsyncBaseTransport):
+    """Refuses the first ``down`` requests, the card's included, then serves: an expert that was
+    down when the front desk first set it up and came back."""
+
+    def __init__(self, app: Any, *, down: int = 1) -> None:
+        self._app = httpx.ASGITransport(app=app)
+        self.down = down
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if self.down > 0:
+            self.down -= 1
+            raise httpx.ConnectError("connection refused", request=request)
+        return await self._app.handle_async_request(request)
+
+
+def fares_expert(storage: AgentDBStorage, asked: list[str]) -> httpx.AsyncClient:
+    """A client to a fares expert whose first request is refused."""
+
+    async def fares(ctx: A2ASessionContext[Any]) -> str:
+        asked.append(ctx.message.text_content or "")
+        return "The fare to Oslo is 120 euros."
+
+    server = AgentServer(storage=storage, agent_name=EXPERT, api_key=API_KEY, api_secret=API_SECRET)
+    server.a2a_session(endpoint=EXPERT, description="Answers fares.")(fares)
+    return httpx.AsyncClient(transport=DownFirst(server.http.app), base_url="http://experts.test")
+
+
+@pytest.mark.rule("B33")
+@pytest.mark.xfail(strict=True, reason="B33: the placeholder keeps its description for the run")
+async def test_an_expert_that_comes_back_in_text_gets_its_cards_description_in_the_run(
+    door: Callable[..., Door], agentdb_storage: AgentDBStorage
+) -> None:
+    asked: list[str] = []
+    http = fares_expert(agentdb_storage, asked)
+    delegate = A2ADelegate(f"http://experts.test/{EXPERT}", httpx_client=http, name="fares")
+    model = OffersRecorded(
+        Reply(tool_calls=[call("fares", "c1", request="the fare to Oslo")]),
+        Reply("It is 120 euros.", when=output_of("c1")),
+    )
+    front = Agent(instructions="front desk", llm=model, tools=[delegate])
+
+    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+        return (await front.run(ctx.message, message_history=ctx.message_history)).output
+
+    desk = door(handler)
+    try:
+        sent = await desk.send("fare to Oslo?", context_id=await desk.thread())
+    finally:
+        await delegate.aclose()
+        await http.aclose()
+    assert sent.answer == "It is 120 euros."
+    assert asked == ["the fare to Oslo"]
+    first, second = model.offered
+    # down at the first request: a placeholder that names the expert, not the card's text
+    assert "fares" in first["fares"] and "Answers fares." not in first["fares"]
+    # the call read the card: the same tool, now as the card describes it
+    assert second["fares"].startswith("Answers fares.")
+
+
+@pytest.mark.rule("B33")
+@pytest.mark.xfail(strict=True, reason="B33: a call keeps the placeholder until it ends")
+async def test_an_expert_that_comes_back_on_a_call_updates_the_realtime_sessions_tools(
+    agentdb_storage: AgentDBStorage,
+) -> None:
+    asked: list[str] = []
+    http = fares_expert(agentdb_storage, asked)
+    delegate = A2ADelegate(
+        f"http://experts.test/{EXPERT}", httpx_client=http, name="fares", announce=False
+    )
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    agent = Agent(instructions="front desk", tools=[delegate])
+
+    def offered() -> str:
+        tool = model.active_session.tools.get_function_tool("fares")
+        assert tool is not None and isinstance(tool, FunctionTool)
+        return tool.info.description or ""
+
+    try:
+        async with LiveSession(llm=model) as session:
+            await session.start(agent)
+            assert "fares" in offered() and "Answers fares." not in offered()
+            sessions = len(model.created_sessions)
+
+            session.generate_reply()
+            while not model.active_session._reply_futs:
+                await asyncio.sleep(0)
+            messages = utils.aio.Chan[MessageGeneration]()
+            messages.close()
+            calls = utils.aio.Chan[FunctionCall]()
+            calls.send_nowait(
+                FunctionCall(
+                    call_id="c1", name="fares", arguments=json.dumps({"request": "fare to Oslo"})
+                )
+            )
+            calls.close()
+            model.active_session._reply_futs[0].set_result(
+                GenerationCreatedEvent(
+                    message_stream=messages, function_stream=calls, user_initiated=True
+                )
+            )
+
+            async def updated() -> None:
+                while not offered().startswith("Answers fares."):
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(updated(), timeout=10)
+            assert asked == ["fare to Oslo"]
+            # the same call and session: no handoff, no new realtime session
+            assert len(model.created_sessions) == sessions
+    finally:
+        await delegate.aclose()
+        await http.aclose()
