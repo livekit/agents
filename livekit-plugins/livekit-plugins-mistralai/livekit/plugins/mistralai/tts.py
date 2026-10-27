@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Literal
 
-import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
+import httpx2  # mistralai raises httpx2.TimeoutException from its http client
 
 from livekit.agents import (
     APIConnectionError,
@@ -185,7 +185,7 @@ class ChunkedStream(tts.ChunkedStream):
 
             output_emitter.flush()
 
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(

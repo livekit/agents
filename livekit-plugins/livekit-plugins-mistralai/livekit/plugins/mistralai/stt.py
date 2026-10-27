@@ -5,7 +5,7 @@ import os
 import weakref
 from dataclasses import dataclass
 
-import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
+import httpx2  # mistralai raises httpx2.TimeoutException from its http client
 
 from livekit import rtc
 from livekit.agents import (
@@ -234,7 +234,7 @@ class STT(stt.STT):
                 ],
             )
 
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(
@@ -459,7 +459,7 @@ class SpeechStream(stt.RecognizeStream):
 
         except (APIStatusError, APITimeoutError, APIConnectionError):
             raise
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(

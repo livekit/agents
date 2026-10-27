@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
+import httpx2  # mistralai raises httpx2.TimeoutException from its http client
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
@@ -120,8 +120,6 @@ class LLM(llm.LLM):
         self._client = client or Mistral(api_key=mistral_api_key)
 
     async def _prewarm_impl(self) -> None:
-        # the SDK imports sub-APIs lazily on first attribute access; do it off the event loop
-        # so the first request doesn't block it
         await asyncio.to_thread(lambda: self._client.beta.conversations)
         await self._client.models.list_async()
 
@@ -269,7 +267,7 @@ class LLMStream(llm.LLMStream):
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError(retryable=retryable) from e
         except APIStatusError as e:
             raise APIStatusError(
