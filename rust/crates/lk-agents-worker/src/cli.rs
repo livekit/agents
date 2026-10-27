@@ -423,7 +423,7 @@ pub type DevJob = (Vec<u8>, String, String, String, String, String, String, bool
 pub trait DevServer: Send + Sync {
     /// The jobs running now.
     fn running_jobs(&self) -> Vec<DevJob>;
-    /// Resume the jobs the CLI kept from before the reload.
+    /// Resume the jobs the CLI kept from before the reload, on this server's URL and a fresh token.
     async fn reload_jobs(&self, jobs: Vec<DevJob>) -> Result<(), HostError>;
 }
 
@@ -447,11 +447,19 @@ fn from_proto(pb: livekit_protocol::agent::RunningAgentJobInfo) -> DevJob {
 
 /// The dev channel to `lk agent dev` at `cli_addr` (`host:port`), length-prefixed
 /// `AgentDevMessage`s: the server's name and URL first, then the jobs kept from before the reload
-/// asked for and resumed, then every running-jobs request answered, until the CLI closes it. A
-/// failure is logged: the worker runs on without the channel.
+/// asked for and resumed (on `url`, each with its token extended by the server's API key and
+/// secret), then every running-jobs request answered, until the CLI closes it. A failure is
+/// logged: the worker runs on without the channel.
 #[lk_agents_abi::host(export)]
-pub async fn dev_channel(cli_addr: String, agent_name: String, url: String, server: Arc<dyn DevServer>) {
-    if let Err(err) = serve_dev_channel(cli_addr, agent_name, url, server).await {
+pub async fn dev_channel(
+    cli_addr: String,
+    agent_name: String,
+    url: String,
+    api_key: String,
+    api_secret: String,
+    server: Arc<dyn DevServer>,
+) {
+    if let Err(err) = serve_dev_channel(cli_addr, agent_name, url, (api_key, api_secret), server).await {
         log::error!(target: LOG, "dev channel failed: {err}");
     }
 }
@@ -460,6 +468,7 @@ async fn serve_dev_channel(
     cli_addr: String,
     agent_name: String,
     url: String,
+    (api_key, api_secret): (String, String),
     server: Arc<dyn DevServer>,
 ) -> Result<(), HostError> {
     use livekit_protocol::agent::{
@@ -486,13 +495,20 @@ async fn serve_dev_channel(
         Ok(decoded.message)
     }
 
-    send(&mut stream, Message::ServerInfo(ServerInfo { agent_name, url })).await.map_err(io)?;
+    send(&mut stream, Message::ServerInfo(ServerInfo { agent_name, url: url.clone() })).await.map_err(io)?;
     send(&mut stream, Message::GetRunningJobsRequest(GetRunningAgentJobsRequest {})).await.map_err(io)?;
     let Ok(first) = recv(&mut stream).await else { return Ok(()) };
     if let Some(Message::GetRunningJobsResponse(kept)) = first {
         if !kept.jobs.is_empty() {
             log::info!(target: LOG, "reloading {} job(s)", kept.jobs.len());
-            server.reload_jobs(kept.jobs.into_iter().map(from_proto).collect()).await?;
+            let mut jobs = Vec::with_capacity(kept.jobs.len());
+            for mut job in kept.jobs {
+                job.token = crate::auth::extend_job_token(&job.token, &api_key, &api_secret)
+                    .map_err(|e| HostError::new(format!("cannot reload a job: {e}")))?;
+                job.url = url.clone();
+                jobs.push(from_proto(job));
+            }
+            server.reload_jobs(jobs).await?;
         }
     }
     // Asked before the CLI restarts this process: what runs now, to resume after the reload.

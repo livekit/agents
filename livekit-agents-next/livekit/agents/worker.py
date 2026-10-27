@@ -39,7 +39,7 @@ from .job import (
     JobRequest,
     RunningJobInfo,
 )
-from .log import DEV_LEVEL, logger
+from .log import logger
 from .plugin import Plugin
 from .simulation import SimulationContext
 from .storage.agentdb import AgentDBStorage
@@ -349,19 +349,6 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
     async def aclose(self) -> None:
         if self._runtime is not None:
             await self._runtime.aclose()
-
-    async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
-        """Relaunch the jobs a dev reload carried over, each on a fresh token."""
-        config = self._config
-        for aj in jobs:
-            logger.log(
-                DEV_LEVEL,
-                "reloading job",
-                extra={"job_id": aj.job.id, "agent_name": aj.job.agent_name},
-            )
-            token = _core.extend_job_token(aj.token, config.api_key, config.api_secret)
-            assert self._jobs is not None
-            await self._jobs.launch(dataclasses.replace(aj, url=config.ws_url, token=token))
 
 
 class _ServerHost:

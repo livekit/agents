@@ -25,7 +25,7 @@ from typing import Any
 
 from aiohttp import web
 
-from livekit import rtc
+from livekit import api, rtc
 from livekit.agents import (
     AMD,
     VAD,
@@ -1587,8 +1587,10 @@ async def cli() -> None:
             )
         ]
 
-        async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
-            self.reloaded.extend(jobs)
+        class _jobs:  # noqa: N801
+            @staticmethod
+            async def launch(info: RunningJobInfo) -> None:
+                Server.reloaded.append(info)
 
     async def read(reader: asyncio.StreamReader) -> agent_dev.AgentDevMessage:
         (length,) = struct.unpack("!I", await reader.readexactly(4))
@@ -1600,11 +1602,16 @@ async def cli() -> None:
 
     seen: list[str] = []
     done = asyncio.Event()
+    kept_token = (
+        api.AccessToken("key", "secret_of_32_bytes_or_more_ok!!").with_identity("agent").to_jwt()
+    )
 
     async def lk_cli(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         seen.append((await read(reader)).server_info.agent_name)
         assert (await read(reader)).HasField("get_running_jobs_request")
-        kept = agent_dev.RunningAgentJobInfo(job=agent_proto.Job(id="AJ_kept").SerializeToString())
+        kept = agent_dev.RunningAgentJobInfo(
+            job=agent_proto.Job(id="AJ_kept").SerializeToString(), token=kept_token, url="ws://old"
+        )
         write(
             writer,
             agent_dev.AgentDevMessage(
@@ -1628,7 +1635,12 @@ async def cli() -> None:
     server = Server()
     await asyncio.wait_for(
         _core.dev_channel(
-            f"127.0.0.1:{port}", "dev-agent", "wss://x", agents_cli._DevServer(server)
+            f"127.0.0.1:{port}",
+            "dev-agent",
+            "wss://x",
+            "key",
+            "secret_of_32_bytes_or_more_ok!!",
+            agents_cli._DevServer(server),
         ),  # type: ignore[arg-type]
         10,
     )
@@ -1637,6 +1649,9 @@ async def cli() -> None:
     print(f"dev channel {seen}, reloaded {[j.job.id for j in server.reloaded]}")
     assert seen == ["dev-agent", "AJ_running"], seen
     assert [j.job.id for j in server.reloaded] == ["AJ_kept"], server.reloaded
+    # on this server, with the token extended
+    assert server.reloaded[0].url == "wss://x", server.reloaded
+    assert server.reloaded[0].token not in ("", kept_token), server.reloaded
 
     exits = _core.ExitSignals(escalate=False)
     assert exits.signal(False) == "schedule"

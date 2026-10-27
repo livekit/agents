@@ -21,7 +21,7 @@ from livekit.protocol import agent
 from . import _core
 from ._exceptions import CLIError
 from .job import JobAcceptArguments, JobExecutorType, RunningJobInfo
-from .log import _add_global_log_fields, logger
+from .log import DEV_LEVEL, _add_global_log_fields, logger
 from .plugin import Plugin
 from .telemetry import loop_monitor
 from .worker import AgentServer
@@ -248,7 +248,14 @@ async def _serve(server: AgentServer, devmode: bool, cli_addr: str | None) -> No
     channel = None
     if cli_addr:
         config = server._config
-        dev = _core.dev_channel(cli_addr, config.agent_name, config.ws_url, _DevServer(server))
+        dev = _core.dev_channel(
+            cli_addr,
+            config.agent_name,
+            config.ws_url,
+            config.api_key,
+            config.api_secret,
+            _DevServer(server),
+        )
         channel = asyncio.ensure_future(dev)
     try:
         await server.run(devmode=devmode, unregistered=False)
@@ -308,21 +315,20 @@ class _DevServer:
         ]
 
     async def _core_reload_jobs(self, jobs: list[tuple[Any, ...]]) -> None:
-        await self._server._reload_jobs(
-            [
-                RunningJobInfo(
-                    accept_arguments=JobAcceptArguments(
-                        name=name, identity=identity, metadata=meta
-                    ),
-                    job=agent.Job.FromString(bytes(job)),
-                    url=url,
-                    token=token,
-                    worker_id=worker_id,
-                    fake_job=fake_job,
-                )
-                for job, name, identity, meta, url, token, worker_id, fake_job in jobs
-            ]
-        )
+        """The jobs a dev reload carried over, on this server and a fresh token: relaunched."""
+        for job, name, identity, meta, url, token, worker_id, fake_job in jobs:
+            info = RunningJobInfo(
+                accept_arguments=JobAcceptArguments(name=name, identity=identity, metadata=meta),
+                job=agent.Job.FromString(bytes(job)),
+                url=url,
+                token=token,
+                worker_id=worker_id,
+                fake_job=fake_job,
+            )
+            extra = {"job_id": info.job.id, "agent_name": info.job.agent_name}
+            logger.log(DEV_LEVEL, "reloading job", extra=extra)
+            assert self._server._jobs is not None
+            await self._server._jobs.launch(info)
 
 
 # --- the console -------------------------------------------------------------------------------
