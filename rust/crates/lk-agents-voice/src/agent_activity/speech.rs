@@ -1001,6 +1001,11 @@ impl Driver {
             if !h.done() {
                 h.mark_done(None);
             }
+            // A host `interrupt()` still on its way when the speech ended landed on the handle.
+            if h.take_interrupted_at_done() {
+                let cause = InterruptCause::Host;
+                out.trace(InterruptStep::Interrupted { speech, cause, force: false });
+            }
             out.machine().emit(SessionEvent::SpeechDone { speech, outcome: h.outcome() });
             // The run that owned it lets it go, and its verdict moves to this speech.
             let h = Arc::clone(h);
