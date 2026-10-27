@@ -17,7 +17,6 @@
 See https://docs.livekit.io/agents/integrations/llm/anthropic/ for more information.
 """
 
-from .computer_tool import ComputerTool
 from .llm import LLM, LLMStream
 from .log import logger
 from .models import ChatModels
@@ -28,7 +27,6 @@ __all__ = [
     "LLM",
     "LLMStream",
     "AnthropicTool",
-    "ComputerTool",
     "ComputerUse",
     "ChatModels",
     "logger",

@@ -1,7 +1,7 @@
 [tool.uv]
 constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
-# `livekit.agents` is livekit-agents-next here; the published livekit-agents that livekit-browser
-# depends on would install the same files over it.
+# `livekit.agents` is livekit-agents-next here; the published livekit-agents that the plugins
+# depend on would install the same files over it.
 override-dependencies = ["livekit-agents; sys_platform == 'never'"]
 default-groups = ["dev", "typing"]
 # Universal resolution only checks that a wheel exists for the Python version.
@@ -79,7 +79,6 @@ livekit-plugins-smallestai = { workspace = true }
 livekit-plugins-simplismart = { workspace = true }
 livekit-plugins-soniox = { workspace = true }
 livekit-plugins-speechify = { workspace = true }
-livekit-plugins-browser = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
 livekit-plugins-spatius = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
