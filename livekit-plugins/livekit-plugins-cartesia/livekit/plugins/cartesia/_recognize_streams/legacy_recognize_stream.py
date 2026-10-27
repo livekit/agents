@@ -169,7 +169,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self._last_speech_end_time: float = 0
 
     async def _run(self) -> None:
-        closing_ws = False
+        closing_ws = asyncio.Event()
         # Reset per-connection state so a transport-error retry (a new _run
         # invocation by the base class) starts fresh.
         self._speaking = False
@@ -186,7 +186,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             samples_per_chunk = self._sample_rate * self._audio_chunk_duration_ms // 1000
             audio_bstream = utils.audio.AudioByteStream(
@@ -215,11 +214,9 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
-                closing_ws = True
+                closing_ws.set()
                 await ws.send_str("close")
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError(
                     message="Cartesia STT connection closed unexpectedly",
                     retryable=True,
@@ -227,7 +224,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -238,16 +234,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
-                        return
-                    raise APIConnectionError(
-                        message=(
-                            "Cartesia STT connection closed unexpectedly "
-                            f"(close_code={ws.close_code}, "
-                            f"data={msg.data!r}, extra={msg.extra!r})"
-                        ),
-                        retryable=True,
-                    )
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Cartesia STT message type %s", msg.type)
@@ -273,6 +260,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
                     background=[asyncio.create_task(keepalive_task(ws))],
+                    draining=closing_ws,
                 )
                 if not reconnect:
                     break

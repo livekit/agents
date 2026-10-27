@@ -11,6 +11,18 @@ from ...types import DEFAULT_API_CONNECT_OPTIONS
 _CLOSE_TIMEOUT = 0.1
 
 
+class WebSocketError(APIConnectionError):
+    """A WebSocket closed before its operation completed."""
+
+    def __init__(self, close_code: int | None, reason: str | None) -> None:
+        super().__init__(
+            f"WebSocket closed unexpectedly (code={close_code})",
+            retryable=close_code not in {1002, 1003, 1007, 1008, 1009, 1010},
+        )
+        self.close_code = close_code
+        self.body = reason
+
+
 class WebSocketMonitor:
     """Receive WebSocket messages with an idle probe and a bounded silence timeout.
 
@@ -18,6 +30,8 @@ class WebSocketMonitor:
     heartbeat. Incoming control frames are handled here so they count as activity.
     Use one monitor per active connection, including across cancelled receive calls.
     Transport errors raise ``APIConnectionError`` with the original error as the cause.
+    Standard failure close codes raise ``WebSocketError``; application close codes
+    are returned for the provider to classify.
     """
 
     def __init__(
@@ -56,6 +70,16 @@ class WebSocketMonitor:
                         if cause is None and isinstance(msg.data, BaseException):
                             cause = msg.data
                         raise APIConnectionError("WebSocket connection lost") from cause
+
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
+                        code = msg.data if isinstance(msg.data, int) else self._ws.close_code
+                        # Application close codes belong to the provider protocol.
+                        if code is not None and 1002 <= code <= 1015 and code != 1005:
+                            raise WebSocketError(code, msg.extra)
 
                     if msg.type in (
                         aiohttp.WSMsgType.TEXT,

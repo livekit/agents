@@ -762,7 +762,7 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
-        self._closing_ws = False
+        self._closing_ws = asyncio.Event()
 
     def update_options(
         self,
@@ -896,7 +896,7 @@ class SpeechStream(stt.SpeechStream):
                 # Connect to the WebSocket
                 async with self._session.ws_connect(session_url, autoping=False) as ws:
                     self._ws = ws
-                    self._closing_ws = False
+                    self._closing_ws.clear()
                     self._session_time_offset = self._pushed_audio_duration
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
@@ -905,6 +905,7 @@ class SpeechStream(stt.SpeechStream):
                             asyncio.create_task(self._send_audio_task()),
                             asyncio.create_task(self._recv_messages_task()),
                             reconnect=self._reconnect_event,
+                            draining=self._closing_ws,
                         )
                         if not reconnect:
                             if self._input_ch.closed and self._input_ch.empty():
@@ -1003,12 +1004,10 @@ class SpeechStream(stt.SpeechStream):
             # stop_recording terminates this provider session. _run drains its final
             # messages and opens another connection when input remains.
             self._audio_duration_collector.flush()
-            self._closing_ws = True
+            self._closing_ws.set()
             if self._ws:
                 await self._ws.send_str(json.dumps({"type": "stop_recording"}))
         except (aiohttp.ClientError, ConnectionError) as e:
-            if self._session.closed:
-                return
             raise APIConnectionError("Gladia connection closed unexpectedly") from e
 
     async def _recv_messages_task(self) -> None:
@@ -1025,7 +1024,7 @@ class SpeechStream(stt.SpeechStream):
                     self._process_gladia_message(data)
                     if data.get("type") in ("transcript", "translation"):
                         self._mark_provider_progress()
-                    if self._closing_ws and data.get("type") in (
+                    if data.get("type") in (
                         "post_final_transcript",
                         "end_session",
                     ):
@@ -1034,9 +1033,6 @@ class SpeechStream(stt.SpeechStream):
                     logger.exception(f"Error processing Gladia message: {e}")
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
-
-        if not (self._closing_ws or self._session.closed or self._reconnect_event.is_set()):
-            raise APIConnectionError("Gladia connection closed unexpectedly")
 
     def _process_gladia_message(self, data: dict) -> None:
         """Process messages from Gladia WebSocket."""

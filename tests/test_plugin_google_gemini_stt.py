@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import stt
+from livekit.agents import APIConnectionError, stt
 from livekit.plugins.google.beta.gemini_stt import STT
 
 pytestmark = pytest.mark.plugin("google")
@@ -53,7 +53,7 @@ def _frame() -> rtc.AudioFrame:
     )
 
 
-async def _drain(messages: list[_Message]) -> list[stt.SpeechEvent]:
+async def _drain(messages: list[_Message], *, complete: bool = True) -> list[stt.SpeechEvent]:
     """Run a stream against a scripted set of Live API messages."""
     with patch("livekit.plugins.google.beta.gemini_stt.Client") as client_cls:
         mock_client = MagicMock()
@@ -65,6 +65,8 @@ async def _drain(messages: list[_Message]) -> list[stt.SpeechEvent]:
         async def receive():  # type: ignore[no-untyped-def]
             for message in messages:
                 yield message
+            if complete:
+                yield _Message(_ServerContent(turn_complete=True))
 
         mock_session.receive = MagicMock(side_effect=receive)
 
@@ -198,6 +200,14 @@ async def test_completion_without_any_transcript_emits_nothing() -> None:
     events = await _drain([_Message(_ServerContent(generation_complete=True))])
 
     assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == []
+
+
+async def test_interim_followed_by_close_is_not_successful_completion() -> None:
+    with pytest.raises(APIConnectionError):
+        await _drain(
+            [_Message(_ServerContent(interim_input_transcription=_Transcription("unfinished")))],
+            complete=False,
+        )
 
 
 @pytest.mark.asyncio

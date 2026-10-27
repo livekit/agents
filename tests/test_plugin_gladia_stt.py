@@ -11,7 +11,8 @@ import pytest
 from livekit import rtc
 from livekit.agents import APIConnectOptions, stt
 
-from .stt_contract_cases import CASES_BY_NAME, assert_control_write_failure, make_provider
+from .stt_harness.discovery import provider_by_name
+from .stt_harness.faults import assert_control_write_failure, make_provider
 
 pytestmark = pytest.mark.plugin("gladia")
 
@@ -47,7 +48,7 @@ async def test_update_options_rejects_translation_without_target_languages():
 @pytest.mark.no_concurrent
 @pytest.mark.parametrize("completion", ["close", "post_final_transcript", "end_session"])
 async def test_gladia_drains_final_transcript_after_input_ends(monkeypatch, completion):
-    _, provider, transport = make_provider(CASES_BY_NAME["gladia"], monkeypatch)
+    _, provider, transport = make_provider(provider_by_name("gladia").fault_case, monkeypatch)
     stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
 
     async def collect():
@@ -100,7 +101,7 @@ async def _wait_for_stop(socket):
 @pytest.mark.no_concurrent
 async def test_stop_recording_write_failure_is_reported(monkeypatch):
     await assert_control_write_failure(
-        CASES_BY_NAME["gladia"], monkeypatch, "stop_recording", "end"
+        provider_by_name("gladia").fault_case, monkeypatch, "stop_recording", "end"
     )
 
 
@@ -112,7 +113,7 @@ async def test_segment_completion_preserves_queued_audio(monkeypatch, stop, firs
     from livekit.plugins.gladia.stt import AudioEnergyFilter
 
     case = replace(
-        CASES_BY_NAME["gladia"],
+        provider_by_name("gladia").fault_case,
         completion=(
             {
                 "type": "transcript",

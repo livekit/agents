@@ -19,7 +19,6 @@ from .. import stt, utils, vad
 from .._exceptions import (
     APIConnectionError,
     APIError,
-    APIStatusError,
     APITimeoutError,
     create_api_error_from_http,
 )
@@ -1119,9 +1118,8 @@ class SpeechStream(stt.SpeechStream):
                 return
             try:
                 await ws.send_str(json.dumps({"type": "session.finalize"}))
-            except Exception:
-                logger.debug("failed to send session.finalize from VAD, ws may be closing")
-                return
+            except (aiohttp.ClientError, ConnectionError) as e:
+                raise APIConnectionError("LiveKit Inference STT finalize write failed") from e
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
@@ -1177,8 +1175,6 @@ class SpeechStream(stt.SpeechStream):
                 }
                 await ws.send_str(json.dumps(finalize_msg))
             except (aiohttp.ClientError, ConnectionError) as e:
-                if input_ended.is_set() or http_session.closed:
-                    return
                 raise APIConnectionError(
                     "LiveKit Inference STT connection closed unexpectedly"
                 ) from e
@@ -1190,24 +1186,13 @@ class SpeechStream(stt.SpeechStream):
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                try:
-                    msg = await monitor.receive()
-                except APIConnectionError:
-                    if http_session.closed:
-                        return
-                    raise
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if input_ended.is_set() or http_session.closed:
-                        return
-                    raise APIStatusError(
-                        message="LiveKit Inference STT connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        retryable=True,
-                    )
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected LiveKit Inference STT message type %s", msg.type)
@@ -1238,12 +1223,6 @@ class SpeechStream(stt.SpeechStream):
                     pass
                 elif msg_type == "session.closed":
                     session_closed = True
-                    if not input_ended.is_set():
-                        raise APIStatusError(
-                            message="LiveKit Inference STT session closed before input ended",
-                            status_code=-1,
-                            retryable=True,
-                        )
                     return
                 elif msg_type == "error":
                     logger.error(
@@ -1290,6 +1269,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(receive_until_complete()),
                     background=background,
+                    draining=input_ended,
                 )
             finally:
                 transcript_timeout.cancel()

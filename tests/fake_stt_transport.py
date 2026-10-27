@@ -30,6 +30,7 @@ class Socket(_Context):
         self._response = SimpleNamespace(headers={}, status=101)
         self.messages = asyncio.Queue()
         self.writes = []
+        self.stops = asyncio.Queue()
         self.pings = 0
         self.receives = 0
         self.errors = 0
@@ -65,10 +66,39 @@ class Socket(_Context):
             self.closed = True
         return message
 
+    def is_stop(self, data):
+        expected = self.transport.case.stop
+        if expected is None:
+            return False
+        if isinstance(expected, dict):
+            if not isinstance(data, str):
+                return False
+            try:
+                actual = json.loads(data)
+            except json.JSONDecodeError:
+                return False
+            return isinstance(actual, dict) and all(actual.get(k) == v for k, v in expected.items())
+        return data == expected
+
+    def record_write(self, data):
+        if self.is_stop(data):
+            if self.transport.fail_stop:
+                if self.transport.fail_stop == "close":
+                    self.server_close()
+                raise self.transport.error
+            self.stops.put_nowait(data)
+        self.writes.append(data)
+
+    async def _before_write(self):
+        if self.transport.block_writes:
+            self.transport.write_blocked.set()
+            await self.transport.release_writes.wait()
+
     async def send_str(self, data):
         if self.closed:
             raise aiohttp.ClientConnectionError("test write failed")
-        self.writes.append(data)
+        await self._before_write()
+        self.record_write(data)
         if self.transport.auto_reply and self.transport.case.reply is not None:
             self.transport.case.reply(self, data)
 
@@ -78,7 +108,8 @@ class Socket(_Context):
     async def send_bytes(self, data):
         if self.closed:
             raise aiohttp.ClientConnectionError("test write failed")
-        self.writes.append(bytes(data))
+        await self._before_write()
+        self.record_write(bytes(data))
 
     async def ping(self, data=b""):
         self.pings += 1
@@ -118,10 +149,14 @@ class Transport:
         self.case = case
         self.failure = None
         self.auto_reply = False
+        self.fail_stop = None
         self.error = aiohttp.ServerTimeoutError("test connection lost")
         self.sockets = []
         self.connected = asyncio.Event()
         self.progress = asyncio.Event()
+        self.block_writes = False
+        self.write_blocked = asyncio.Event()
+        self.release_writes = asyncio.Event()
 
     def session(self, *args, **kwargs):
         transport = self

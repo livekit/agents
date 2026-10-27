@@ -16,6 +16,8 @@ from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, inference, vad
 from livekit.agents.stt import SpeechEvent, SpeechEventType
 from livekit.plugins.openai import stt
 
+from .stt_harness.discovery import provider_by_name
+
 pytestmark = pytest.mark.unit
 
 
@@ -891,17 +893,19 @@ async def test_end_input_drains_all_items_after_clear_ack(empty_commit: bool) ->
 
 @pytest.mark.parametrize("message", ["input_audio_buffer.commit", "input_audio_buffer.clear"])
 async def test_final_control_write_failure_is_retryable(message, monkeypatch):
-    from .stt_contract_cases import CASES_BY_NAME, assert_control_write_failure
+    from .stt_harness.faults import assert_control_write_failure
 
-    await assert_control_write_failure(CASES_BY_NAME["openai"], monkeypatch, message, "end")
+    await assert_control_write_failure(
+        provider_by_name("openai").fault_case, monkeypatch, message, "end"
+    )
 
 
 async def test_remote_close_before_final_ack_is_an_error(monkeypatch):
     from livekit.agents import APIError
 
-    from .stt_contract_cases import CASES_BY_NAME, make_provider
+    from .stt_harness.faults import make_provider
 
-    _, instance, transport = make_provider(CASES_BY_NAME["openai"], monkeypatch)
+    _, instance, transport = make_provider(provider_by_name("openai").fault_case, monkeypatch)
     stream = instance.stream(
         conn_options=dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
     )

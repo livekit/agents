@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from livekit.agents import APIStatusError
+from livekit.agents.utils.aio.websocket import WebSocketError
 from livekit.plugins import sarvam
 from livekit.plugins.sarvam import stt_streaming, tts
 
@@ -35,6 +36,7 @@ def _make_stream(
     stream._request_id = ""
     stream._session_id = ""
     stream._session_ended = False
+    stream._end_stream_sent = asyncio.Event()
     stream._utterance_idx = None
     stream._utterance_in_progress = False
     stream._active_endpointing = endpointing
@@ -1091,12 +1093,13 @@ async def test_new_speech_start_emits_pending_end_of_speech_for_previous_utteran
 
 
 @pytest.mark.asyncio
-async def test_streaming_safe_send_str_ignores_closed_transport() -> None:
+async def test_streaming_safe_send_str_reports_a_failed_write() -> None:
     stream = _make_stream()
     calls = []
 
     closed_ws = SimpleNamespace(closed=True, send_str=lambda payload: calls.append(payload))
-    await stream._safe_send_str(closed_ws, {"event": "end"})
+    with pytest.raises(stt_streaming.APIConnectionError):
+        await stream._safe_send_str(closed_ws, {"event": "end"})
 
     assert calls == []
 
@@ -1104,7 +1107,8 @@ async def test_streaming_safe_send_str_ignores_closed_transport() -> None:
         raise stt_streaming.aiohttp.ClientConnectionResetError("Cannot write to closing transport")
 
     closing_ws = SimpleNamespace(closed=False, send_str=_raise_reset)
-    await stream._safe_send_str(closing_ws, {"event": "end"})
+    with pytest.raises(stt_streaming.APIConnectionError):
+        await stream._safe_send_str(closing_ws, {"event": "end"})
 
 
 @pytest.mark.asyncio
@@ -1322,10 +1326,10 @@ async def test_streaming_process_messages_raises_on_realtime_rejection_close() -
         close_code=4000,
     )
 
-    with pytest.raises(APIStatusError) as excinfo:
+    with pytest.raises(WebSocketError) as excinfo:
         await stream._process_messages(ws)
 
-    assert excinfo.value.status_code == 4000
+    assert excinfo.value.close_code == 4000
     assert "beta access denied" in excinfo.value.message
 
 
@@ -1385,7 +1389,7 @@ async def test_streaming_process_messages_logs_realtime_rejection_close(
     )
 
     with caplog.at_level(logging.ERROR, logger=stt_streaming.logger.name):
-        with pytest.raises(APIStatusError):
+        with pytest.raises(WebSocketError):
             await stream._process_messages(ws)
 
     close_records = [
@@ -1745,12 +1749,13 @@ async def test_end_of_speech_is_emitted_as_a_bare_pipeline_sentinel(endpointing:
 
 
 @pytest.mark.asyncio
-async def test_streaming_safe_send_bytes_ignores_closed_transport() -> None:
+async def test_streaming_safe_send_bytes_reports_a_failed_write() -> None:
     stream = _make_stream()
     calls = []
 
     closed_ws = SimpleNamespace(closed=True, send_bytes=lambda payload: calls.append(payload))
-    await stream._safe_send_bytes(closed_ws, b"\x00\x01")
+    with pytest.raises(stt_streaming.APIConnectionError):
+        await stream._safe_send_bytes(closed_ws, b"\x00\x01")
 
     assert calls == []
 
@@ -1758,7 +1763,8 @@ async def test_streaming_safe_send_bytes_ignores_closed_transport() -> None:
         raise stt_streaming.aiohttp.ClientConnectionResetError("Cannot write to closing transport")
 
     closing_ws = SimpleNamespace(closed=False, send_bytes=_raise_reset)
-    await stream._safe_send_bytes(closing_ws, b"\x00\x01")
+    with pytest.raises(stt_streaming.APIConnectionError):
+        await stream._safe_send_bytes(closing_ws, b"\x00\x01")
 
 
 @pytest.mark.asyncio
@@ -1802,12 +1808,8 @@ async def test_process_audio_stops_pumping_after_session_end() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_audio_survives_reset_race_on_peer_close() -> None:
-    """A reset raised mid-send must not fail the stream.
-
-    The peer can close between the loop's closed check and the write, so the audio
-    send has to tolerate a reset the same way the JSON control sends do.
-    """
+async def test_process_audio_reports_a_reset_before_completion() -> None:
+    """A reset is a failure until the server confirms session completion."""
     stream = _make_stream()
     sent: list[str] = []
 
@@ -1833,9 +1835,10 @@ async def test_process_audio_survives_reset_race_on_peer_close() -> None:
     stream._input_ch = _input()
     stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
 
-    await stream._process_audio(ws)
+    with pytest.raises(stt_streaming.APIConnectionError):
+        await stream._process_audio(ws)
 
-    assert [json.loads(payload)["event"] for payload in sent] == ["end"]
+    assert sent == []
 
 
 @pytest.mark.asyncio

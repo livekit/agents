@@ -865,7 +865,6 @@ class SpeechStream(stt.SpeechStream):
             nonlocal awaiting_final, input_finished, pending_replay
             nonlocal pending_user_state_finalize, recover_primary_after_final
             samples_per_buffer = self._samples_per_buffer()
-            bytes_per_sample = _BYTES_PER_SAMPLE
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
@@ -875,7 +874,7 @@ class SpeechStream(stt.SpeechStream):
             if pending_replay:
                 replay_data = pending_replay
                 pending_replay = None
-                chunk_bytes = samples_per_buffer * bytes_per_sample
+                chunk_bytes = samples_per_buffer * _BYTES_PER_SAMPLE
                 for i in range(0, len(replay_data), chunk_bytes):
                     await send_audio_payload(
                         ws, replay_data[i : i + chunk_bytes], count_usage=False
@@ -888,8 +887,6 @@ class SpeechStream(stt.SpeechStream):
             for frame in pending_frames:
                 frames = audio_bstream.write(frame.data.tobytes())
                 for out in frames:
-                    if len(out.data) % bytes_per_sample != 0:
-                        continue
                     payload = bytes(out.data)
                     await send_audio_payload(ws, payload, count_usage=True)
                     buffered_audio.extend(payload)
@@ -904,9 +901,6 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
-                    if len(frame.data) % bytes_per_sample != 0:
-                        continue
-
                     payload = bytes(frame.data)
                     await send_audio_payload(ws, payload, count_usage=True)
 
@@ -936,9 +930,6 @@ class SpeechStream(stt.SpeechStream):
 
             frames = audio_bstream.flush()
             for frame in frames:
-                if len(frame.data) % bytes_per_sample != 0:
-                    continue
-
                 payload = bytes(frame.data)
                 await send_audio_payload(ws, payload, count_usage=True)
                 buffered_audio.extend(payload)
@@ -1012,6 +1003,7 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if msg_type != "Metadata":
                         self._mark_provider_progress()
+                        candidate_attempts = 0
                     continue
 
                 if msg_type == "Results":
@@ -1049,6 +1041,7 @@ class SpeechStream(stt.SpeechStream):
 
                 if msg_type in ("partial_transcript", "final_transcript"):
                     self._mark_provider_progress()
+                    candidate_attempts = 0
                     text = data.get("transcript", "")
                     text = text.strip() if isinstance(text, str) else ""
                     is_final = msg_type == "final_transcript"
@@ -1198,7 +1191,13 @@ class SpeechStream(stt.SpeechStream):
                 recv.add_done_callback(retrieve_task_exception)
                 if keepalive is not None:
                     keepalive.add_done_callback(retrieve_task_exception)
-                connection = asyncio.create_task(self._run_connection_tasks(send, recv))
+                connection = asyncio.create_task(
+                    self._run_connection_tasks(
+                        send,
+                        recv,
+                        require_completion=False,
+                    )
+                )
                 wait_switch = asyncio.create_task(switch_event.wait())
                 wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
                 wait_user_state = asyncio.create_task(self._user_state_event.wait())
@@ -1304,7 +1303,7 @@ class SpeechStream(stt.SpeechStream):
 
                     if connection in done:
                         connection.result()
-                        input_exhausted = recv.result()
+                        input_exhausted = input_finished
                         await utils.aio.gracefully_cancel(
                             *[
                                 task

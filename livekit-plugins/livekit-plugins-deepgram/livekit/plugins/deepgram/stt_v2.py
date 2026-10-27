@@ -465,11 +465,10 @@ class SpeechStreamv2(stt.SpeechStream):
             logger.debug("failed to send Configure to deepgram")
 
     async def _run(self) -> None:
-        closing_ws = False
+        closing_ws = asyncio.Event()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             # Repack incoming frames into the configured outgoing PCM chunk duration.
             chunk_samples = self._opts.sample_rate * self._opts.audio_chunk_duration_ms // 1000
@@ -498,46 +497,28 @@ class SpeechStreamv2(stt.SpeechStream):
                         has_ended = False
 
                 # tell deepgram we are done sending audio/inputs
-                closing_ws = True
+                closing_ws.set()
                 await ws.send_str(SpeechStreamv2._CLOSE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # a mid-write socket drop surfaces here as a raw connection error.
                 # if the close is expected (aclose or the http session closing) just
                 # return; otherwise re-raise as a retryable APIError so _main_task
                 # reconnects, symmetric with recv_task.
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError("deepgram connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                try:
-                    msg = await monitor.receive()
-                except APIConnectionError:
-                    if self._session.closed:
-                        return
-                    raise
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    # close is expected, see SpeechStream.aclose
-                    # or when the agent session ends, the http session is closed
-                    if closing_ws or self._session.closed:
-                        return
-
-                    # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="deepgram connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
@@ -568,6 +549,7 @@ class SpeechStreamv2(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
+                    draining=closing_ws,
                 )
                 if not reconnect:
                     break

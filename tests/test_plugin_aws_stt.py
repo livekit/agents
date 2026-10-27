@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, stt
 from livekit.agents.metrics import STTMetrics
 from livekit.plugins.aws import stt as aws_stt
 
@@ -192,6 +192,14 @@ async def test_aws_stream_flushes_pending_usage_when_input_channel_closes(
 async def test_aws_stream_cleanup_survives_closed_event_channel(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    transport_closed = asyncio.Event()
+    original_close = aws_stt.AWSCRTHTTPClient.close
+
+    async def close_transport(client):
+        await original_close(client)
+        transport_closed.set()
+
+    monkeypatch.setattr(aws_stt.AWSCRTHTTPClient, "close", close_transport)
     provider, stream, transcribe_stream = _make_stream(monkeypatch)
     stream._last_audio_duration_report_time = time.monotonic()
 
@@ -202,7 +210,7 @@ async def test_aws_stream_cleanup_survives_closed_event_channel(
 
         await stream.aclose()
 
-        assert transcribe_stream.input_stream.closed is True
+        assert transport_closed.is_set()
     finally:
         if not stream._task.done():
             await stream.aclose()
@@ -266,6 +274,27 @@ async def test_idle_timeouts_obey_retry_limit(monkeypatch, processing):
         with pytest.raises(APIConnectionError):
             await asyncio.wait_for(stream._task, 1)
         assert len(transport.configs) == (3 if processing else 1)
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+async def test_bad_request_preserves_details_without_retrying(monkeypatch):
+    detail = "The specified vocabulary does not exist"
+    provider, stream, transport = _make_stream(
+        monkeypatch, output_error=aws_stt.BadRequestException(detail), max_retry=2
+    )
+    errors = []
+    provider.on("error", errors.append)
+    try:
+        with pytest.raises(APIStatusError) as failure:
+            async for _ in stream:
+                pass
+        assert failure.value.status_code == 400
+        assert failure.value.body == detail
+        assert not failure.value.retryable
+        assert len(transport.configs) == 1
+        assert errors and not errors[-1].recoverable
     finally:
         await stream.aclose()
         await provider.aclose()

@@ -1,6 +1,7 @@
 import pytest
 
-from .stt_contract_cases import CASES_BY_NAME, assert_control_write_failure
+from .stt_harness.discovery import provider_by_name
+from .stt_harness.faults import assert_control_write_failure
 
 pytestmark = pytest.mark.plugin("inworld")
 
@@ -12,7 +13,9 @@ pytestmark = pytest.mark.plugin("inworld")
     [("audioChunk", "audio"), ("endTurn", "flush"), ("closeStream", "end")],
 )
 async def test_send_failure_is_not_treated_as_a_successful_stop(message, action, monkeypatch):
-    await assert_control_write_failure(CASES_BY_NAME["inworld"], monkeypatch, message, action)
+    await assert_control_write_failure(
+        provider_by_name("inworld").fault_case, monkeypatch, message, action
+    )
 
 
 @pytest.mark.virtual_time
@@ -24,9 +27,9 @@ async def test_shutdown_sends_close_stream_without_end_turn(monkeypatch):
     from livekit import rtc
     from livekit.agents import APIConnectOptions
 
-    from .stt_contract_cases import make_provider
+    from .stt_harness.faults import make_provider
 
-    _, provider, transport = make_provider(CASES_BY_NAME["inworld"], monkeypatch)
+    _, provider, transport = make_provider(provider_by_name("inworld").fault_case, monkeypatch)
     stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
     try:
         stream.push_frame(rtc.AudioFrame.create(16000, 1, 1600))

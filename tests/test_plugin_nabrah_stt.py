@@ -126,6 +126,7 @@ async def test_malformed_message_does_not_expose_provider_content(
 ) -> None:
     transcript = "private customer transcript"
     ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.close_code = 1000
     ws.receive = AsyncMock(
         side_effect=[
             MagicMock(type=aiohttp.WSMsgType.TEXT, data='{"type": "transcript"}'),

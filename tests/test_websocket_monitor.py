@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectionError
 from livekit.agents.utils.aio import WebSocketMonitor
+from livekit.agents.utils.aio.websocket import WebSocketError
 
 pytestmark = pytest.mark.unit
 
@@ -251,3 +252,43 @@ async def test_unresponsive_close_cannot_delay_failure() -> None:
             assert ws.closed
         finally:
             release.set()
+
+
+@pytest.mark.parametrize(
+    ("code", "fails"),
+    [
+        (1000, False),
+        (1001, False),
+        (1005, False),
+        (4000, False),
+        (4401, False),
+        (1002, True),
+        (1003, True),
+        (1006, True),
+        (1007, True),
+        (1008, True),
+        (1009, True),
+        (1010, True),
+        (1011, True),
+        (1012, True),
+        (1013, True),
+    ],
+)
+async def test_transport_close_codes_are_classified_before_provider_dispatch(code, fails):
+    ws = AsyncMock()
+    ws.close_code = code
+    message = aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, code, "provider details")
+    ws.receive.return_value = message
+    monitor = WebSocketMonitor(cast(aiohttp.ClientWebSocketResponse, ws))
+    if fails:
+        with pytest.raises(WebSocketError) as info:
+            await monitor.receive()
+        assert info.value.close_code == code
+        assert not hasattr(info.value, "status_code")
+        assert info.value.body == "provider details"
+        assert info.value.retryable is (code not in {1002, 1003, 1007, 1008, 1009, 1010})
+        ws.close.assert_awaited_once()
+    else:
+        # Providers still classify their application codes and expected normal closes.
+        assert await monitor.receive() is message
+        ws.close.assert_not_awaited()

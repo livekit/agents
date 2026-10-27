@@ -240,14 +240,14 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._request_id = ""
         self._speaking = False
         self._speech_duration: float = 0.0
-        self._closing_ws = False
+        self._closing_ws = asyncio.Event()
         # cumulative transcript for the current turn; used to re-emit on turn.resume
         self._current_transcript = ""
 
     async def _run(self) -> None:
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
-                while not self._closing_ws:
+                while not self._closing_ws.is_set():
                     await ws.ping()
                     await asyncio.sleep(30)
             except Exception:
@@ -278,11 +278,9 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
-                self._closing_ws = True
+                self._closing_ws.set()
                 await ws.send_str('{"type":"close"}')
             except (aiohttp.ClientError, ConnectionError) as e:
-                if self._closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError(
                     message="Cartesia STT connection closed unexpectedly",
                     retryable=True,
@@ -300,16 +298,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if self._closing_ws or self._session.closed:
-                        return
-                    raise APIConnectionError(
-                        message=(
-                            "Cartesia STT connection closed unexpectedly "
-                            f"(close_code={ws.close_code}, "
-                            f"data={msg.data!r}, extra={msg.extra!r})"
-                        ),
-                        retryable=True,
-                    )
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Cartesia STT message type %s", msg.type)
@@ -339,7 +328,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._speaking = False
         self._current_transcript = ""
         self._speech_duration = 0.0
-        self._closing_ws = False
+        self._closing_ws.clear()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
@@ -350,6 +339,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     background=[asyncio.create_task(keepalive_task(ws))],
+                    draining=self._closing_ws,
                 )
             finally:
                 self._send_recognition_usage_event()

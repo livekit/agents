@@ -31,7 +31,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
     LanguageCode,
     stt,
     utils,
@@ -246,10 +245,9 @@ class SpeechStream(stt.SpeechStream):
         when something went wrong.
         """
 
-        closing_ws = False
+        closing_ws = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             samples_per_buffer = 1920
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -274,14 +272,13 @@ class SpeechStream(stt.SpeechStream):
                         "audio": audio_data,
                     }
                     await ws.send_str(json.dumps(audio_msg))
-            closing_ws = True
+            closing_ws.set()
             try:
                 await ws.send_str(json.dumps({"type": "end_of_stream"}))
             except (aiohttp.ClientError, ConnectionError) as e:
                 raise APIConnectionError("Gradium STT end-of-stream send failed") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             buffered_text: list[str] = []
             speaking = False
             remaining_vad_steps: int | None = None
@@ -321,13 +318,8 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:
-                        finish_speech()
-                        return
-                    raise APIStatusError(
-                        "Gradium connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                    raise APIConnectionError(
+                        "gradium STT closed before its final response completed"
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -384,8 +376,6 @@ class SpeechStream(stt.SpeechStream):
                                 remaining_vad_steps = None
 
                     elif type_ == "end_of_stream":
-                        if not closing_ws:
-                            raise APIConnectionError("Gradium STT ended before input completed")
                         finish_speech()
                         return
                     elif type_ == "ready":
@@ -413,6 +403,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
+                    draining=closing_ws,
                 )
                 if not reconnect:
                     break

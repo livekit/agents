@@ -465,3 +465,29 @@ async def test_manual_flush_requires_support_from_every_fallback(supports_flush)
         assert adapter.capabilities.manual_flush is True
     finally:
         await adapter.aclose()
+
+
+async def test_attempt_timeout_preserves_the_final_response_budget(monkeypatch):
+    primary = FakeSTT(fake_transcript="words")
+    received = []
+    original_stream = primary.stream
+
+    def stream(**kwargs):
+        received.append(kwargs["conn_options"])
+        return original_stream(**kwargs)
+
+    monkeypatch.setattr(primary, "stream", stream)
+    adapter = FallbackAdapter([primary], attempt_timeout=0.01)
+    try:
+        async with adapter.stream(
+            conn_options=APIConnectOptions(final_response_timeout=3)
+        ) as speech:
+            speech.end_input()
+            async for _ in speech:
+                pass
+        assert received
+        assert received[0].timeout == 0.01
+        assert received[0].final_response_timeout == 3
+    finally:
+        await adapter.aclose()
+        await primary.aclose()

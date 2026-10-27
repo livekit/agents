@@ -499,7 +499,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        closing_ws = False
+        closing_ws = asyncio.Event()
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # Resets the public API's inactivity timer while no audio flows; the server
@@ -514,13 +514,12 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # With no audio flowing this write is where a dropped socket shows first.
-                if closing_ws or self._session.closed:
+                if closing_ws.is_set() or self._session.closed:
                     return
                 raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             # 50 ms packets, the cadence the Pulse docs recommend.
             samples_per_chunk = self._opts.sample_rate // 20
@@ -553,39 +552,27 @@ class SpeechStream(stt.SpeechStream):
                             await ws.send_str(SpeechStream._FINALIZE_MSG)
 
                 # Input closed: the server flushes, answers with is_last and closes.
-                closing_ws = True
+                closing_ws.set()
                 await ws.send_str(SpeechStream._CLOSE_STREAM_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # A dropped socket surfaces on the write side first. Expected closes just
                 # return; anything else reconnects through _run, like recv_task.
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                try:
-                    msg = await monitor.receive()
-                except APIConnectionError:
-                    if self._session.closed:
-                        return
-                    raise
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
-                        return
-                    raise APIStatusError(
-                        message="Smallest AI STT connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                    raise APIConnectionError(
+                        "smallestai STT closed before its final response completed"
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -639,6 +626,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
                     background=[asyncio.create_task(keepalive_task(ws))],
+                    draining=closing_ws,
                 )
                 if not reconnect:
                     break

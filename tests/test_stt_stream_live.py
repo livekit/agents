@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from livekit import rtc
 from livekit.agents import APIConnectOptions, stt
 
-from .stt_contract_cases import CASES
+from .stt_harness.discovery import providers
 
 pytestmark = pytest.mark.stt
 
@@ -38,8 +38,10 @@ async def _send_utterance(stream, name):
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
+@pytest.mark.parametrize("case", providers(), ids=lambda case: case.name)
 async def test_live_stream_flush_idle_and_completion(case):
+    if not case.live_constructor:
+        pytest.skip("live driver is not configured for this variant")
     load_dotenv()
     missing = [name for name in case.required_env if not os.environ.get(name)]
     if missing:

@@ -318,7 +318,6 @@ class SpeechStream(stt.RecognizeStream):
 
         if vad_stream is not None:
             vad_stream.end_input()
-        await connection.end_audio()
 
     async def _vad_task(
         self,
@@ -414,46 +413,55 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 )
 
+                return
+
             elif isinstance(event, RealtimeTranscriptionError):
                 raise APIStatusError(
                     message=str(event.error.message), status_code=event.error.code, body=event.error
                 )
 
+        raise APIConnectionError("Mistral STT closed before transcription.done")
+
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
+        async def send(
+            connection: RealtimeConnection,
+            vad_stream: vad.VADStream | None,
+            vad_worker: asyncio.Task[None] | None,
+            input_ended: asyncio.Event,
+        ) -> None:
+            await self._send_task(connection, vad_stream)
+            if vad_worker is not None:
+                await vad_worker
+            input_ended.set()
+            await connection.end_audio()
+
         try:
             while True:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
                     vad_stream = self._vad.stream() if self._vad else None
 
-                    tasks = [
-                        asyncio.create_task(self._send_task(connection, vad_stream)),
-                        asyncio.create_task(self._recv_task(connection)),
-                    ]
-                    if vad_stream is not None:
-                        tasks.append(asyncio.create_task(self._vad_task(vad_stream, connection)))
+                    vad_worker = (
+                        asyncio.create_task(self._vad_task(vad_stream, connection))
+                        if vad_stream is not None
+                        else None
+                    )
 
-                    tasks_group = asyncio.gather(*tasks)
-                    wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
-
+                    input_ended = asyncio.Event()
                     try:
-                        done, _ = await asyncio.wait(
-                            (tasks_group, wait_reconnect),
-                            return_when=asyncio.FIRST_COMPLETED,
+                        reconnect = await self._run_connection_tasks(
+                            asyncio.create_task(
+                                send(connection, vad_stream, vad_worker, input_ended)
+                            ),
+                            asyncio.create_task(self._recv_task(connection)),
+                            reconnect=self._reconnect_event,
+                            background=[vad_worker] if vad_worker is not None else [],
+                            draining=input_ended,
                         )
-
-                        for task in done:
-                            if task != wait_reconnect:
-                                task.result()
-
-                        if wait_reconnect not in done:
+                        if not reconnect:
                             break
-
                         self._reconnect_event.clear()
                     finally:
-                        await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
-                        tasks_group.cancel()
-                        tasks_group.exception()
                         if vad_stream is not None:
                             await vad_stream.aclose()
 

@@ -28,7 +28,6 @@ import aiohttp
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
-    APIStatusError,
     LanguageCode,
     stt,
     utils,
@@ -323,10 +322,9 @@ class SpeechStream(stt.SpeechStream):
         when something went wrong.
         """
 
-        closing_ws = False
+        closing_ws = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             samples_per_buffer = self._opts.sample_rate // 20  # 50ms chunk
             audio_bstream = utils.audio.AudioByteStream(
@@ -345,11 +343,10 @@ class SpeechStream(stt.SpeechStream):
                     await self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
-            closing_ws = True
+            closing_ws.set()
             await ws.send_str(self._CLOSE_MSG)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -364,14 +361,7 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:
-                        return
-
-                    raise APIStatusError(
-                        "Fireworks connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("unexpected FireworksAI message type %s", msg.type)
@@ -394,6 +384,8 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
+                    draining=closing_ws,
+                    require_completion=False,
                 )
                 if not reconnect:
                     break

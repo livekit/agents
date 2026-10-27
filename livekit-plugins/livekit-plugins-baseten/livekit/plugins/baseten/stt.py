@@ -32,6 +32,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     stt,
@@ -435,10 +436,9 @@ class SpeechStream(stt.SpeechStream):
         when something went wrong.
         """
 
-        closing_ws = False
+        closing_ws = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             samples_per_buffer = 512
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -460,14 +460,12 @@ class SpeechStream(stt.SpeechStream):
 
                         int16_array = np.frombuffer(frame.data, dtype=np.int16)
                         await ws.send_bytes(int16_array.tobytes())
-                closing_ws = True
+                closing_ws.set()
+                await ws.send_str(json.dumps({"type": "end_audio"}))
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError("Baseten connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -482,13 +480,7 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:
-                        return
-                    raise APIStatusError(
-                        "Baseten connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("Unexpected Baseten message type: %s", msg.type)
@@ -497,8 +489,14 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
 
-                    # Skip non-transcription messages (e.g. error, status)
                     msg_type = data.get("type")
+                    if msg_type == "end_audio":
+                        if data.get("body", {}).get("status") == "finished":
+                            return
+                        continue
+                    if msg_type == "error":
+                        raise APIStatusError("Baseten STT returned an error", body=data)
+                    # Skip non-transcription status messages.
                     if msg_type and msg_type not in ("transcription",):
                         logger.debug("Ignoring message type: %s", msg_type)
                         continue
@@ -593,6 +591,8 @@ class SpeechStream(stt.SpeechStream):
                     if msg_type == "transcription" or "transcript" in data or "segments" in data:
                         self._mark_provider_progress()
 
+                except APIError:
+                    raise
                 except Exception:
                     logger.exception("Failed to process message from Baseten")
 
@@ -605,6 +605,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
+                    draining=closing_ws,
                 )
                 if not reconnect:
                     break

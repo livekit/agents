@@ -41,6 +41,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils.aio.websocket import WebSocketError
 from livekit.agents.utils.misc import is_given
 
 from ._utils import PeriodicCollector
@@ -772,22 +773,28 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 # Give the metrics monitor a chance to consume the usage event before
                 # super().aclose() cancels it.
                 await asyncio.sleep(0)
+        finally:
+            await super().aclose()
             if self._ws and not self._ws.closed:
                 await self._ws.close()
-        finally:
             self._ws = None
-            await super().aclose()
 
     async def _run(self) -> None:
         # A single connection attempt: this endpoint bills per connection, so the
         # stream never reconnects on its own (`stream()` also forces max_retry=0).
         ws: aiohttp.ClientWebSocketResponse | None = None
+        self._end_stream_sent = asyncio.Event()
+
+        async def receive(socket: aiohttp.ClientWebSocketResponse) -> None:
+            await self._process_messages(socket)
+
         try:
             ws = await self._connect_ws()
             self._ws = ws
             await self._run_connection_tasks(
                 asyncio.create_task(self._process_audio(ws)),
-                asyncio.create_task(self._process_messages(ws)),
+                asyncio.create_task(receive(ws)),
+                draining=self._end_stream_sent,
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Timed out connecting to Sarvam realtime STT") from e
@@ -843,35 +850,25 @@ class RealtimeSpeechStream(stt.SpeechStream):
         ws: Any,
         payload: dict[str, Any],
     ) -> bool:
-        """Send a JSON control message, tolerating a peer that already closed.
-
-        Returns:
-            Whether the payload reached the socket.
-        """
-        if ws.closed:
+        if self._session_ended:
             return False
-
         try:
+            if ws.closed:
+                raise APIConnectionError("Sarvam realtime STT connection closed before send")
             await ws.send_str(json.dumps(payload))
-        except (aiohttp.ClientConnectionResetError, ConnectionError):
-            self._logger.debug(
-                "Sarvam realtime STT WebSocket closed before send completed",
-                extra={**self._build_log_context(), "payload": payload},
-            )
-            return False
+        except (aiohttp.ClientError, ConnectionError) as e:
+            raise APIConnectionError("Sarvam realtime STT control write failed") from e
         return True
 
     async def _safe_send_bytes(self, ws: Any, payload: bytes) -> None:
-        if ws.closed:
+        if self._session_ended:
             return
-
         try:
+            if ws.closed:
+                raise APIConnectionError("Sarvam realtime STT connection closed before send")
             await ws.send_bytes(payload)
-        except (aiohttp.ClientConnectionResetError, ConnectionError):
-            self._logger.debug(
-                "Sarvam realtime STT WebSocket closed before audio send completed",
-                extra={**self._build_log_context(), "payload_bytes": len(payload)},
-            )
+        except (aiohttp.ClientError, ConnectionError) as e:
+            raise APIConnectionError("Sarvam realtime STT audio write failed") from e
 
     async def _send_pending_config_update(self, ws: Any) -> None:
         payload = self._pending_config_update
@@ -971,6 +968,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
         self._emit_local_usage_fallback()
         if not self._session_ended:
+            self._end_stream_sent.set()
             await self._safe_send_str(ws, {"event": "end"})
 
     @utils.log_exceptions(logger=logger)
@@ -1006,17 +1004,13 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSING,
             ):
-                close_code = ws.close_code if ws.close_code is not None else msg.data
+                close_code = msg.data if isinstance(msg.data, int) else ws.close_code
                 close_reason = msg.extra
                 if self._session_ended and close_code in (1000, 1001, None):
                     self._flush_terminal_utterance()
                     self._emit_local_usage_fallback()
                     break
                 if close_code in (1000, 1001, None) and not _looks_like_error_text(close_reason):
-                    if not self._input_ch.closed and not self._session.closed:
-                        raise APIConnectionError(
-                            "Sarvam realtime STT connection closed unexpectedly"
-                        )
                     self._flush_terminal_utterance()
                     self._emit_local_usage_fallback()
                     break
@@ -1028,15 +1022,15 @@ class RealtimeSpeechStream(stt.SpeechStream):
                         "close_reason": close_reason,
                     },
                 )
-                raise self._status_error_from_close(close_code, close_reason)
+                raise self._error_from_close(close_code, close_reason)
             else:
                 self._logger.debug(
                     "Unknown Sarvam realtime STT WebSocket message type",
                     extra={**self._build_log_context(), "message_type": str(msg.type)},
                 )
 
-    def _status_error_from_close(self, close_code: object, close_reason: object) -> APIStatusError:
-        status_code = int(close_code) if isinstance(close_code, int) else -1
+    def _error_from_close(self, close_code: object, close_reason: object) -> WebSocketError:
+        code = int(close_code) if isinstance(close_code, int) else None
         retryable = close_code == 1013
         message = f"Sarvam realtime STT WebSocket closed unexpectedly: {close_reason}"
         if close_code == 1003:
@@ -1048,16 +1042,10 @@ class RealtimeSpeechStream(stt.SpeechStream):
         elif close_code == 4000:
             message = f"Sarvam realtime STT rejected the session: {close_reason}"
 
-        return APIStatusError(
-            message=message,
-            status_code=status_code,
-            request_id=self._request_id or None,
-            body={
-                "close_code": close_code,
-                "close_reason": close_reason,
-            },
-            retryable=retryable,
-        )
+        error = WebSocketError(code, close_reason if isinstance(close_reason, str) else None)
+        error.message = message
+        error.retryable = retryable
+        return error
 
     async def _handle_message(self, data: dict[str, Any]) -> None:
         event = data.get("event")

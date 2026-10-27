@@ -50,7 +50,6 @@ from livekit.plugins.reson8._utils import (
     status_error,
 )
 from livekit.plugins.reson8.stt import (
-    _FINAL_TURN_TIMEOUT,
     AudioOptions,
     BiasingOptions,
     SpeechStream,
@@ -120,6 +119,7 @@ def make_stream() -> MakeStream:
         stream._turn_settled = asyncio.Event()
         stream._turn_ended = asyncio.Event()
         stream._start_time_offset = 0.0
+        stream._on_provider_progress = None
         stream._speech_duration = 0.0
         stream._event_ch = FakeChan()  # type: ignore[assignment]
         return stream
@@ -1482,11 +1482,13 @@ async def test_a_close_with_a_turn_open_is_an_error(
     await stream.aclose()
 
 
-async def test_trailing_silence_does_not_fail_the_stream(
+async def test_unacknowledged_trailing_audio_reports_a_timeout(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
     server = await reson8_server()
-    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+    stream = _stt(server.base_url, client_session, language="en").stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.2, final_response_timeout=0.2)
+    )
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
     stream.push_frame(_frame())
@@ -1501,30 +1503,34 @@ async def test_trailing_silence_does_not_fail_the_stream(
 
     events: list[stt.SpeechEvent] = []
     started = time.time()
-    async with asyncio.timeout(10):
-        async for event in stream:
-            events.append(event)
+    with pytest.raises(APITimeoutError):
+        async with asyncio.timeout(2):
+            async for event in stream:
+                events.append(event)
 
     elapsed = time.time() - started
     await stream.aclose()
 
     finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
     assert [e.alternatives[0].text for e in finals] == ["all done"]
-    assert elapsed < _FINAL_TURN_TIMEOUT * 3
+    assert elapsed < 1
 
 
-async def test_an_unanswered_flush_closes_cleanly(
+async def test_an_unanswered_flush_is_a_timeout(
     finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
 ) -> None:
     base_url = await finalizing_server(answer_flush=False)
-    stream = _stt(base_url, client_session).stream(conn_options=NO_RETRY)
+    stream = _stt(base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.2, final_response_timeout=0.2)
+    )
 
     stream.push_frame(_frame())
     stream.end_input()
 
-    async with asyncio.timeout(10):
-        async for _ in stream:
-            pass
+    with pytest.raises(APITimeoutError):
+        async with asyncio.timeout(2):
+            async for _ in stream:
+                pass
 
     await stream.aclose()
 

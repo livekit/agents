@@ -226,7 +226,7 @@ class SpeechStream(stt.SpeechStream):
         self._stt: STT = stt
         self._language = language
         self._ws: aiohttp.ClientWebSocketResponse | None = None
-        self._closing_ws = False
+        self._closing_ws = asyncio.Event()
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._request_id = ""
@@ -290,12 +290,13 @@ class SpeechStream(stt.SpeechStream):
             try:
                 ws = await self._connect_ws()
                 self._ws = ws
-                self._closing_ws = False
+                self._closing_ws.clear()
 
                 reconnect = await self._run_connection_tasks(
                     asyncio.create_task(self._send_audio_task()),
                     asyncio.create_task(self._recv_messages_task()),
                     reconnect=self._reconnect_event,
+                    draining=self._closing_ws,
                 )
                 if not reconnect:
                     break
@@ -350,12 +351,10 @@ class SpeechStream(stt.SpeechStream):
         self._audio_duration_collector.flush()
         # Input channel closed — tell the server to close the stream
         if self._ws:
-            self._closing_ws = True
+            self._closing_ws.set()
             try:
                 await self._ws.send_str(json.dumps({"closeStream": {}}))
             except (aiohttp.ClientError, ConnectionError) as e:
-                if self._ensure_session().closed:
-                    return
                 raise APIConnectionError("Inworld STT connection closed unexpectedly") from e
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -383,14 +382,10 @@ class SpeechStream(stt.SpeechStream):
                         continue
                     self._process_stream_event(data)
                     result = data.get("result", {})
-                    if self._closing_ws and "usage" in result:
+                    if self._closing_ws.is_set() and "usage" in result:
                         return
                     if "speechStarted" in result or "transcription" in result:
                         self._mark_provider_progress()
-            if not (
-                self._closing_ws or self._ensure_session().closed or self._reconnect_event.is_set()
-            ):
-                raise APIConnectionError("Inworld STT connection closed unexpectedly")
         except APIConnectionError:
             raise
         except aiohttp.ClientError as e:

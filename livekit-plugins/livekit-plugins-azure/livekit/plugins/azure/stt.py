@@ -268,6 +268,32 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
+        input_ended = asyncio.Event()
+
+        async def process_input() -> None:
+            async for input in self._input_ch:
+                if isinstance(input, rtc.AudioFrame):
+                    self._audio_duration += input.duration
+                    self._maybe_emit_recognition_usage()
+                    self._stream.write(input.data.tobytes())
+                elif isinstance(input, self._FlushSentinel):
+                    self._emit_recognition_usage()
+            self._emit_recognition_usage()
+
+        async def send() -> None:
+            await process_input()
+            input_ended.set()
+            self._stream.close()
+
+        async def receive() -> None:
+            await self._session_stopped_event.wait()
+            if self._cancellation_error is not None:
+                details = self._cancellation_error
+                raise APIConnectionError(
+                    f"Azure STT canceled: "
+                    f"{details.error_details or details.reason} ({details.code})"
+                )
+
         while True:
             self._session_stopped_event.clear()
             self._cancellation_error = None
@@ -294,54 +320,19 @@ class SpeechStream(stt.SpeechStream):
                     self._session_started_event.wait(), self._conn_options.timeout
                 )
 
-                async def process_input() -> None:
-                    async for input in self._input_ch:
-                        if isinstance(input, rtc.AudioFrame):
-                            self._audio_duration += input.duration
-                            self._maybe_emit_recognition_usage()
-                            self._stream.write(input.data.tobytes())
-                        elif isinstance(input, self._FlushSentinel):
-                            self._emit_recognition_usage()
-                    self._emit_recognition_usage()
+                input_ended.clear()
 
-                process_input_task = asyncio.create_task(process_input())
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                wait_stopped_task = asyncio.create_task(self._session_stopped_event.wait())
+                reconnect = await self._run_connection_tasks(
+                    asyncio.create_task(send()),
+                    asyncio.create_task(receive()),
+                    reconnect=self._reconnect_event,
+                    draining=input_ended,
+                )
+                if reconnect:
+                    self._reconnect_event.clear()
+                    self._stream.close()
 
-                input_ended = False
-                try:
-                    done, _ = await asyncio.wait(
-                        [process_input_task, wait_reconnect_task, wait_stopped_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task not in [wait_reconnect_task, wait_stopped_task]:
-                            task.result()
-
-                    if wait_stopped_task in done:
-                        if self._cancellation_error is not None:
-                            details = self._cancellation_error
-                            raise APIConnectionError(
-                                f"Azure STT canceled: "
-                                f"{details.error_details or details.reason} ({details.code})"
-                            )
-                        raise APIConnectionError("SpeechRecognition session stopped")
-
-                    # session-stopped is handled above, so the wait unblocked
-                    # either because input ended (process_input drained) or a
-                    # reconnect was requested; reset the event in the latter case
-                    input_ended = wait_reconnect_task not in done
-                    if not input_ended:
-                        self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(process_input_task, wait_reconnect_task)
-
-                # close the push stream to flush finals for buffered audio before
-                # teardown, otherwise ending input truncates the transcript
-                self._stream.close()
-                await self._session_stopped_event.wait()
-
-                if input_ended:
+                if not reconnect:
                     break
             finally:
 

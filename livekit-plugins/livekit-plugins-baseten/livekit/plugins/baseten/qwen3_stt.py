@@ -283,8 +283,10 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
             raise APIConnectionError() from e
 
         input_ended = asyncio.Event()
+        pending_commits = 0
 
         async def _send() -> None:
+            nonlocal pending_commits
             # LiveKit resamples to SAMPLE_RATE for us; this only re-chunks into
             # the ~100ms frames the server expects.
             chunker = utils.audio.AudioByteStream(
@@ -313,6 +315,9 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                 async for data in self._input_ch:
                     if isinstance(data, self._FlushSentinel):
                         await append(chunker.flush())
+                        pending_commits += 1
+                        if self._input_ch.closed and self._input_ch.empty():
+                            input_ended.set()
                         await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
                         committed = True
                     else:
@@ -320,11 +325,13 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                         committed = False
                 if not committed:
                     await append(chunker.flush())
+                    pending_commits += 1
                     await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
             finally:
                 input_ended.set()
 
         async def _recv() -> None:
+            nonlocal pending_commits
             speaking = False
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
@@ -336,9 +343,9 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if input_ended.is_set():
-                        return
-                    raise APIConnectionError("Baseten closed the STT websocket")
+                    raise APIConnectionError(
+                        "baseten STT closed before its final response completed"
+                    )
                 if msg.type is not aiohttp.WSMsgType.TEXT:
                     continue
 
@@ -386,14 +393,17 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                         speaking = False
                     # Only the commit-triggered final ends the session; VAD
                     # finals just close a turn and the stream keeps going.
-                    if event.get("is_end_of_audio_flush") and input_ended.is_set():
-                        return
+                    if event.get("is_end_of_audio_flush"):
+                        pending_commits -= 1
+                        if pending_commits == 0 and input_ended.is_set():
+                            return
 
         try:
             await ws.send_str(json.dumps(self._opts.handshake()))
             await self._run_connection_tasks(
                 asyncio.create_task(_send(), name="qwen3-stt-send"),
                 asyncio.create_task(_recv(), name="qwen3-stt-recv"),
+                draining=input_ended,
             )
         except (APIConnectionError, APIStatusError, APITimeoutError):
             raise

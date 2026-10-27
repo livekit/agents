@@ -216,6 +216,10 @@ class SpeechStream(stt.SpeechStream):
                 raise self._recv_failed.result()
             for task in done:
                 await task
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("RTZR STT connection operation timed out") from e
+        except (aiohttp.ClientError, ConnectionError, OSError) as e:
+            raise APIConnectionError("RTZR STT connection operation failed") from e
         finally:
             await utils.aio.gracefully_cancel(send_task)
             self._recv_failed.cancel()
@@ -257,8 +261,8 @@ class SpeechStream(stt.SpeechStream):
             try:
                 await self._ws.send_str("EOS")
                 logger.info("Sent EOS to close audio segment")
-            except Exception:
-                logger.exception("Failed to send EOS")
+            except (aiohttp.ClientError, ConnectionError) as e:
+                raise APIConnectionError("RTZR STT end-of-stream send failed") from e
             await self._await_recv_completion()
             await self._cleanup_connection()
             self._state = _StreamState.IDLE
