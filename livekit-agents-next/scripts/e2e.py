@@ -252,7 +252,9 @@ async def entry(ctx: Any) -> None:
             if name == "close":
                 snapshot("close")
 
-        session.on(name, on_event)
+        # 2.0 removed metrics_collected from the session (INTENDED lists the difference)
+        with contextlib.suppress(ValueError):
+            session.on(name, on_event)
 
     def snapshot(why: str) -> None:
         with contextlib.suppress(Exception):

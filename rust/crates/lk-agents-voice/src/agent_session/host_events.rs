@@ -125,6 +125,7 @@ impl HostEvent {
 impl SessionEvent {
     pub fn wire(&self, anchor: lk_agents_abi::WallAnchor) -> HostWire {
         use crate::events::{RunFailure, RunOutcome};
+        use lk_agents_abi::metrics::base::AgentMetrics;
         use lk_agents_abi::voice::events as w;
         let speech_id = |id: SpeechId| id.to_string();
         // `created_at` is the host's stamp (`#[binding(skip)]`): inert here.
@@ -279,9 +280,11 @@ impl SessionEvent {
                 HostWire::OverlappingSpeech(w::OverlappingSpeechWire { event: (**event).clone() })
             }
             SessionEvent::MetricsCollected { metrics, speech } => {
+                let leg = matches!(**metrics, AgentMetrics::Vad(_)).then(|| "vad".to_owned());
                 HostWire::MetricsCollected(w::MetricsCollectedWire {
                     metrics: (**metrics).clone(),
                     speech_id: speech.map(speech_id),
+                    leg,
                 })
             }
             SessionEvent::Error(e) => HostWire::Error(e.wire()),

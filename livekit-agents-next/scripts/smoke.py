@@ -175,7 +175,8 @@ class BatchSTT(stt.STT):
 
 
 class ScriptedVAD(VAD):
-    """Speech starts with the first frame and ends after half a second, its frames attached."""
+    """Speech starts with the first frame and ends after half a second, its frames attached; an
+    inference is reported for every frame."""
 
     def __init__(self) -> None:
         super().__init__(capabilities=VADCapabilities(update_interval=0.032))
@@ -189,7 +190,19 @@ class _Detect(VADStream):
         speech: list[rtc.AudioFrame] = []
         ended = False
         async for frame in self.input:
-            if not isinstance(frame, rtc.AudioFrame) or ended:
+            if not isinstance(frame, rtc.AudioFrame):
+                continue
+            self.send(
+                VADEvent(
+                    type=VADEventType.INFERENCE_DONE,
+                    samples_index=0,
+                    timestamp=0.0,
+                    speech_duration=0.0,
+                    silence_duration=0.0,
+                    inference_duration=0.001,
+                )
+            )
+            if ended:
                 continue
             kind = VADEventType.START_OF_SPEECH if not speech else None
             speech.append(frame)
@@ -718,7 +731,10 @@ async def nodes() -> None:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
     batch = BatchSTT()
-    session = VoiceSession(stt=batch, llm=ScriptedLLM(), tts=SilentTTS(), vad=ScriptedVAD())
+    vad = ScriptedVAD()
+    vad_metrics: list[Any] = []
+    vad.on("metrics_collected", vad_metrics.append)
+    session = VoiceSession(stt=batch, llm=ScriptedLLM(), tts=SilentTTS(), vad=vad)
     heard.clear()
     session.on("user_input_transcribed", lambda ev: heard.append(ev.transcript))
     await session.start(Agent(instructions="x", name="batch"), room=room)
@@ -729,6 +745,14 @@ async def nodes() -> None:
     print(f"heard {heard} utterances {batch.utterances}")
     assert heard == ["batch words"], heard
     assert batch.utterances and batch.utterances[0] >= 0.5, batch.utterances
+    # the session meters its VAD's inferences on the provider, as the reference's stream did
+    assert vad_metrics and vad_metrics[0].type == "vad_metrics", vad_metrics
+    try:
+        session.on("metrics_collected", print)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("session.on('metrics_collected') must say it is gone")
 
 
 async def avatar() -> None:

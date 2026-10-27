@@ -854,6 +854,9 @@ pub struct MetricsCollectedWire {
     pub metrics: crate::metrics::base::AgentMetrics,
     /// `speech_{n}` of the speech the record belongs to; `None` for a leg that has none.
     pub speech_id: Option<String>,
+    /// The session leg whose provider emits the record as its own `metrics_collected`: `"vad"`
+    /// for the VAD's, which the session folds; `None` for one a provider metered itself.
+    pub leg: Option<String>,
 }
 
 /// `session_usage_updated`'s wire payload: the session's usage once a record was folded in.

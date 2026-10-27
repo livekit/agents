@@ -849,7 +849,13 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_metrics(self, wire: dict[str, Any]) -> None:
-        collect_usage(_AGENT_METRICS.validate_python(wire["metrics"]))
+        record = _AGENT_METRICS.validate_python(wire["metrics"])
+        collect_usage(record)
+        # a record the session metered for a provider (its VAD's) is that provider's event
+        if (leg := wire["leg"]) is not None and (
+            provider := getattr(_VoiceBinding(self, self.current_agent), leg)
+        ) is not None:
+            provider.emit("metrics_collected", record)
 
     def _error_record(self, wire: dict[str, Any]) -> tuple[Any, Any]:
         """The reference's payload: the provider's error record, and the provider that failed."""
@@ -987,6 +993,15 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         audio_in = self._audio_input_options
         if audio_in is not None and isinstance(audio_in.noise_cancellation, rtc.FrameProcessor):
             audio_in.noise_cancellation._close()
+
+    def on(self, event: EventTypes, callback: Callable[..., Any] | None = None) -> Any:  # type: ignore[override]
+        if event == "metrics_collected":
+            raise ValueError(
+                "VoiceSession has no 'metrics_collected' event in 2.0: use "
+                "'session_usage_updated' for usage, ChatMessage.metrics for per-turn latency, "
+                "or a provider's own 'metrics_collected' (llm, stt, tts, vad)"
+            )
+        return super().on(event, callback)
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
         self._recorded_events.append(arg)
