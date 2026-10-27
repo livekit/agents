@@ -22,23 +22,44 @@ pub struct VadCapabilities {
 pub type VadSink = Box<dyn StreamSink<AudioFrame>>;
 pub type VadSource = Box<dyn StreamSource<VadEvent>>;
 
-/// A voice activity detector. A host `vad.VAD` is this trait through its bare `#[host(proxy)]`
-/// (`PyVad`): each method calls the base class's `_core_<method>`.
+// A host `vad.VAD` is this trait through its bare `#[host(proxy)]` (`PyVad`), over the base class
+// `lk-agents-codegen` writes from the `#[python]` markers.
+/// A voice activity detector.
+///
+/// Plugins implement `stream()`, returning a `VADStream` whose `_main_task` turns the pushed
+/// audio into `VADEvent`s.
 #[crate::host(proxy(host = "livekit.agents.vad.VAD", clock))]
+#[python(provider(module = "vad", path = "livekit.agents.vad", events = "metrics_collected"))]
 #[async_trait]
 pub trait Vad: Send + Sync {
-    /// `VAD._label`: the reference has no public `label`.
+    /// The name logs and metrics give this instance: its class path.
+    #[python(label)]
     fn label(&self) -> String;
+
+    /// What this instance supports, fixed at construction.
+    #[python(init)]
     fn capabilities(&self) -> VadCapabilities;
 
-    /// `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
+    /// The model and provider labelling this instance's metrics.
+    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
+    #[python(identity)]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label(self.label())
     }
 
-    /// `prewarm()`: open the connection pool early; a provider with nothing to warm ignores it.
+    /// Load the model early; a detector with nothing to warm ignores it.
+    #[python(hook)]
     fn prewarm(&self) {}
 
-    /// `Err` is a construction failure. `async` as on [`Tts`](crate::Tts).
+    /// Open a stream detecting speech in the audio pushed into it.
+    // `Err` is a construction failure. `async` as on [`Tts`](crate::Tts).
+    #[python(
+        hook,
+        stream(
+            name = "VADStream",
+            kind = "vad",
+            doc = "A live detection: audio in through ``push_frame``, ``VADEvent`` out.\n\nPlugins implement ``_main_task``, reading ``_input_ch`` and sending to ``_event_ch``."
+        )
+    )]
     async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError>;
 }

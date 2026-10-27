@@ -9,10 +9,19 @@
 
 from __future__ import annotations
 
+import asyncio
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
+from types import TracebackType
+from typing import Generic, Literal, TypeVar
 
 from livekit import rtc
+from typing_extensions import Self
+
+from ..utils import aio
+from .chat_items import MetricsMetadata
 
 
 @unique
@@ -63,6 +72,180 @@ class VADCapabilities:
     update_interval: float
 
 
+TEvent = TypeVar("TEvent")
+
+
+class VAD(
+    ABC,
+    rtc.EventEmitter[Literal["metrics_collected"] | TEvent],
+    Generic[TEvent],
+):
+    """A voice activity detector.
+
+    Plugins implement ``stream()``, returning a ``VADStream`` whose ``_main_task`` turns the pushed
+    audio into ``VADEvent``s.
+    """
+
+    def __init__(self, *, capabilities: VADCapabilities) -> None:
+        super().__init__()
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._capabilities = capabilities
+
+    @property
+    def label(self) -> str:
+        """The name logs and metrics give this instance: its class path."""
+        return self._label
+
+    @property
+    def capabilities(self) -> VADCapabilities:
+        """What this instance supports, fixed at construction."""
+        return self._capabilities
+
+    @property
+    def model(self) -> str:
+        """The model name; ``"unknown"`` until a plugin overrides it."""
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        """The provider name; ``"unknown"`` until a plugin overrides it."""
+        return "unknown"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """The model and provider labelling this instance's metrics."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
+    def prewarm(self) -> None:
+        """Load the model early; a detector with nothing to warm ignores it."""
+
+    @abstractmethod
+    def stream(self) -> VADStream:
+        """Open a stream detecting speech in the audio pushed into it."""
+
+    async def aclose(self) -> None:
+        """Close the provider and everything it opened."""
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    def _core_label(self) -> str:
+        return self.label
+
+    def _core_capabilities(self) -> VADCapabilities:
+        return self.capabilities
+
+    def _core_id(self) -> dict[str, str]:
+        return {"label": self.label, "model": self.model, "provider": self.provider}
+
+    def _core_prewarm(self) -> None:
+        self.prewarm()
+
+    async def _core_stream(self) -> VADStream:
+        return self.stream()
+
+
+class VADStream(ABC):
+    """A live detection: audio in through ``push_frame``, ``VADEvent`` out.
+
+    Plugins implement ``_main_task``, reading ``_input_ch`` and sending to ``_event_ch``.
+    """
+
+    class _FlushSentinel:
+        """Marks the end of a segment in ``_input_ch``."""
+
+    def __init__(self, vad: VAD) -> None:
+        self._vad = vad
+        self._input_ch = aio.Chan[rtc.AudioFrame | VADStream._FlushSentinel]()
+        self._event_ch = aio.Chan[VADEvent]()
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    @abstractmethod
+    async def _main_task(self) -> None: ...
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        """Push some audio frame to be analyzed"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(frame)
+
+    def flush(self) -> None:
+        """Mark the end of the current segment.
+
+        Implementations MUST treat this as a hard segment boundary: drop any accumulated
+        speech/silence state so the next pushed frame starts a fresh segment. Used by the
+        pipeline to recover from out-of-band end-of-turn signals (e.g. STT EOS) without
+        tearing down and recreating the stream.
+        """
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -> None:
+        """Mark the end of input, no more audio will be pushed"""
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -> None:
+        """Close the stream immediately"""
+        self._input_ch.close()
+        await aio.cancel_and_wait(self._task)
+        self._event_ch.close()
+
+    async def __anext__(self) -> VADEvent:
+        try:
+            val = await self._event_ch.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+            raise StopAsyncIteration from None
+        return val
+
+    def __aiter__(self) -> AsyncIterator[VADEvent]:
+        return self
+
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+
+    def _check_input_not_ended(self) -> None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    def _core_push(self, frame: rtc.AudioFrame) -> None:
+        self.push_frame(frame)
+
+    def _core_flush(self) -> None:
+        if not self._input_ch.closed:
+            self.flush()
+
+    def _core_end_input(self) -> None:
+        if not self._input_ch.closed:
+            self.end_input()
+
+
 # --- the frozen public paths -----------------------------------------------------------------
 #
 # Assigned here rather than in each class body: pydantic resolves annotations against
@@ -73,3 +256,5 @@ class VADCapabilities:
 VADEventType.__module__ = "livekit.agents.vad"
 VADEvent.__module__ = "livekit.agents.vad"
 VADCapabilities.__module__ = "livekit.agents.vad"
+VAD.__module__ = "livekit.agents.vad"
+VADStream.__module__ = "livekit.agents.vad"

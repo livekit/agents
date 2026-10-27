@@ -729,6 +729,7 @@ impl Writer<'_> {
             "chunked" => self.synthesis_stream(s, CHUNKED)?,
             "synthesize" => self.synthesis_stream(s, SYNTHESIZE)?,
             "chat" => self.chat_stream(s)?,
+            "vad" => self.vad_stream(s)?,
             other => return Err(format!("{}: no stream idiom `{other}`", m.rust)),
         };
         b.push_str(&text);
@@ -890,6 +891,29 @@ impl Writer<'_> {
     }
 
     // ------------------------------------------------------------------- the stream idioms
+
+    /// `stream(kind = "vad")`: audio frames in, `VADEvent`s out; the plugin's `_main_task` is the
+    /// detection.
+    fn vad_stream(&mut self, s: &StreamClass) -> Result<String, String> {
+        for (m, n) in [
+            ("", "asyncio"),
+            ("abc", "abstractmethod"),
+            ("collections.abc", "AsyncIterator"),
+            ("livekit", "rtc"),
+            ("..utils", "aio"),
+        ] {
+            self.need(m, n);
+        }
+        let event = self.record("VadEvent").ok_or("VadEvent is not declared")?;
+        let mut b = format!("class {}(ABC):\n", s.name);
+        docstring(&mut b, &s.doc, 4);
+        b.push_str(
+            &VAD.replace("{Stream}", &s.name)
+                .replace("{Provider}", &self.p.class)
+                .replace("{Event}", &event),
+        );
+        Ok(b)
+    }
 
     /// `stream(kind = "chat")`: one completion's chunks, a failure after output marked final
     /// unless the stream retries on sent chunks.
@@ -1524,4 +1548,71 @@ const CHAT: &str = r#"
             usage=usage,
             extra=extra,
         )
+"#;
+
+/// The detection stream's idiom.
+const VAD: &str = r#"
+    class _FlushSentinel:
+        """Marks the end of a segment in ``_input_ch``."""
+
+    def __init__(self, vad: {Provider}) -> None:
+        self._vad = vad
+        self._input_ch = aio.Chan[rtc.AudioFrame | {Stream}._FlushSentinel]()
+        self._event_ch = aio.Chan[{Event}]()
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    @abstractmethod
+    async def _main_task(self) -> None: ...
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        """Push some audio frame to be analyzed"""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(frame)
+
+    def flush(self) -> None:
+        """Mark the end of the current segment.
+
+        Implementations MUST treat this as a hard segment boundary: drop any accumulated
+        speech/silence state so the next pushed frame starts a fresh segment. Used by the
+        pipeline to recover from out-of-band end-of-turn signals (e.g. STT EOS) without
+        tearing down and recreating the stream.
+        """
+        self._check_input_not_ended()
+        self._check_not_closed()
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -> None:
+        """Mark the end of input, no more audio will be pushed"""
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -> None:
+        """Close the stream immediately"""
+        self._input_ch.close()
+        await aio.cancel_and_wait(self._task)
+        self._event_ch.close()
+
+    async def __anext__(self) -> {Event}:
+        try:
+            val = await self._event_ch.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+            raise StopAsyncIteration from None
+        return val
+
+    def __aiter__(self) -> AsyncIterator[{Event}]:
+        return self
+
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+
+    def _check_input_not_ended(self) -> None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 "#;
