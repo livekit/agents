@@ -113,7 +113,7 @@ impl Connections {
     fn take(&mut self, now: f64) -> (Option<(u64, Connection)>, Vec<Connection>) {
         let reused = self.pool.get(now).and_then(|id| self.idle.remove(&id).map(|c| (id, c)));
         let mut expired = Vec::new();
-        while let Some(id) = self.pool.next_closing() {
+        while let Some(id) = self.pool.pop_closing() {
             expired.extend(self.idle.remove(&id));
         }
         (reused, expired)
@@ -121,7 +121,7 @@ impl Connections {
 
     fn opened(&mut self, now: f64) -> u64 {
         self.next_id += 1;
-        self.pool.connected(self.next_id, now);
+        self.pool.connected(self.next_id, now, self.pool.generation(), None);
         self.next_id
     }
 
@@ -132,7 +132,7 @@ impl Connections {
 
     fn forget(&mut self, id: u64) {
         self.pool.remove(id);
-        while self.pool.next_closing().is_some() {}
+        while self.pool.pop_closing().is_some() {}
     }
 }
 

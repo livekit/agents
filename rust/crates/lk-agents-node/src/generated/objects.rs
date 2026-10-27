@@ -2245,12 +2245,27 @@ impl ConnectionPoolState {
         ConnectionPoolState { inner: lk_agents_abi::utils::connection_pool::ConnectionPool::new(maximum_age, refresh_on_get) }
     }
 
+    #[napi(getter, js_name = "generation")]
+    pub fn generation(&self) -> i64 {
+        i64::try_from(self.inner.generation()).unwrap_or(i64::MAX)
+    }
+
+    #[napi(getter, js_name = "lastAcquireTime")]
+    pub fn last_acquire_time(&self) -> f64 {
+        self.inner.last_acquire_time()
+    }
+
+    #[napi(getter, js_name = "lastConnectionReused")]
+    pub fn last_connection_reused(&self) -> bool {
+        self.inner.last_connection_reused()
+    }
+
     #[napi(js_name = "connected")]
-    pub fn connected(&mut self, env: Env, id: i64, now: f64) -> napi::Result<()> {
+    pub fn connected(&mut self, env: Env, id: i64, now: f64, generation: i64, acquire_time: Option<f64>) -> napi::Result<bool> {
         crate::host_error::run(&env, || {
             let id = <u64>::try_from(id).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("id: {e}")))?;
-            self.inner.connected(id, now);
-            Ok(())
+            let generation = <u64>::try_from(generation).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("generation: {e}")))?;
+            Ok(self.inner.connected(id, now, generation, acquire_time))
         })
     }
 
@@ -2287,9 +2302,23 @@ impl ConnectionPoolState {
         self.inner.invalidate();
     }
 
+    #[napi(js_name = "closeAll")]
+    pub fn close_all(&mut self) {
+        self.inner.close_all();
+    }
+
     #[napi(js_name = "nextClosing")]
-    pub fn next_closing(&mut self) -> Option<i64> {
+    pub fn next_closing(&self) -> Option<i64> {
         self.inner.next_closing().map(|v| i64::try_from(v).unwrap_or(i64::MAX))
+    }
+
+    #[napi(js_name = "closed")]
+    pub fn closed(&mut self, env: Env, id: i64) -> napi::Result<()> {
+        crate::host_error::run(&env, || {
+            let id = <u64>::try_from(id).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("id: {e}")))?;
+            self.inner.closed(id);
+            Ok(())
+        })
     }
 }
 
