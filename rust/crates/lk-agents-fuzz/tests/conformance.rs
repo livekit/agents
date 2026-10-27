@@ -9,7 +9,9 @@
 //! * every delay lies within what the provider was recorded taking.
 //!
 //! The realtime server is replayed against the recorded client frames and the recorded VAD
-//! verdicts; the recogniser model against the recorded speech spans.
+//! verdicts; the recogniser model against the recorded speech spans. The realtime server is also
+//! held to the probes (`corpus/probes`, `corpus/probe_realtime.py`): the protocol's edge cases
+//! driven on the real server on purpose, each client frame answered as the real one answered it.
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_abi::Ts;
@@ -461,6 +463,420 @@ fn the_realtime_failures_send_documented_events() {
         assert!(DOCUMENTED.contains(&t.as_str()), "{t} is no documented server event");
     }
     assert!(types.contains("conversation.item.input_audio_transcription.failed"));
+}
+
+// ================================================================================================
+// The realtime server's edge cases
+// ================================================================================================
+
+// The realtime server against the real one's edge cases. Every probe in `corpus/probes`
+// (`corpus/probe_realtime.py`: the protocol's corners driven on purpose through LiveKit
+// Inference) is replayed through the fake server, frame by frame, and each client frame must get
+// the reaction the real server gave it: the same acknowledgement or the same error code, citing
+// the frame or not as the real one did, within the real delay's envelope; and each onset the
+// real server heard over a reply must end that reply the same way.
+//
+// A frame the probe sent in reaction to an event (a cancel once audio flowed) is sent once the
+// fake has sent that event, after the same gap; one whose outcome depends on whether a reply is
+// still generating is compared only where the fake's reply was in the same state, and every
+// frame must be compared on at least one seed. A truncation is moved onto the fake's audio: the
+// same distance past its end, or the same share of it.
+
+fn probes() -> Vec<(String, Value)> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/probes");
+    let mut out: Vec<(String, Value)> = std::fs::read_dir(&dir)
+        .expect("corpus/probes")
+        .flatten()
+        .map(|e| e.path())
+        .map(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            (name, serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap())
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    assert!(!out.is_empty(), "no probes");
+    out
+}
+
+fn secs(t: Ts) -> f64 {
+    t.as_nanos() as f64 / 1e9
+}
+
+/// Server ids to the probe's ordinals (`item0`, `resp1`, `call0`), minted in the order the
+/// probe's recorder meets them, so `@item1` in a frame names the same item in both.
+#[derive(Default)]
+struct Ordinals {
+    of: BTreeMap<String, String>,
+    count: BTreeMap<&'static str, usize>,
+}
+
+impl Ordinals {
+    fn see(&mut self, kind: &'static str, raw: &Value) {
+        let Some(raw) = raw.as_str().filter(|s| !s.is_empty()) else { return };
+        if !self.of.contains_key(raw) {
+            let n = self.count.entry(kind).or_default();
+            self.of.insert(raw.to_owned(), format!("{kind}{n}"));
+            *n += 1;
+        }
+    }
+
+    /// As `record.py`'s `shape` reads an event, key by key.
+    fn read(&mut self, ev: &Value) {
+        self.see("resp", &ev["response_id"]);
+        self.see("item", &ev["item_id"]);
+        self.see("item", &ev["previous_item_id"]);
+        self.see("item", &ev["item"]["id"]);
+        self.see("call", &ev["item"]["call_id"]);
+        self.see("resp", &ev["response"]["id"]);
+        for o in ev["response"]["output"].as_array().into_iter().flatten() {
+            if o["type"] == "function_call" {
+                self.see("call", &o["call_id"]);
+            }
+        }
+    }
+
+    fn raw(&self, ordinal: &str) -> Option<String> {
+        self.of.iter().find(|(_, o)| *o == ordinal).map(|(r, _)| r.clone())
+    }
+}
+
+/// An event as the probe recorded it, whichever side it came from: what a reaction is read by.
+#[derive(Clone, Debug)]
+struct Ev {
+    t: f64,
+    ty: String,
+    code: Option<String>,
+    cites: Option<String>,
+    status: Option<String>,
+    reason: Option<String>,
+    asked: bool,
+    item_type: Option<String>,
+    item_role: Option<String>,
+    item: Option<String>,
+    audio_ms: f64,
+}
+
+fn recorded(e: &Value) -> Ev {
+    let s = |v: &Value| v.as_str().map(str::to_owned);
+    Ev {
+        t: e["t"].as_f64().unwrap(),
+        ty: s(&e["type"]).unwrap(),
+        code: s(&e["error"]["code"]),
+        cites: s(&e["error"]["event_id"]),
+        status: s(&e["response"]["status"]),
+        reason: s(&e["response"]["reason"]),
+        asked: e["response"]["client_event_id"].as_bool().unwrap_or(false),
+        item_type: s(&e["item"]["type"]),
+        item_role: s(&e["item"]["role"]),
+        item: s(&e["item_id"]),
+        audio_ms: e["ms"].as_f64().unwrap_or(0.0),
+    }
+}
+
+fn faked(t: f64, e: &Value, ids: &Ordinals) -> Ev {
+    let s = |v: &Value| v.as_str().map(str::to_owned);
+    let audio_ms = if e["type"] == "response.output_audio.delta" { 400.0 } else { 0.0 };
+    Ev {
+        t,
+        ty: s(&e["type"]).unwrap(),
+        code: s(&e["error"]["code"]),
+        cites: s(&e["error"]["event_id"]),
+        status: s(&e["response"]["status"]),
+        reason: s(&e["response"]["status_details"]["reason"]),
+        asked: e["response"]["metadata"]["client_event_id"].is_string(),
+        item_type: s(&e["item"]["type"]),
+        item_role: s(&e["item"]["role"]),
+        item: e["item_id"].as_str().and_then(|i| ids.of.get(i).cloned()),
+        audio_ms,
+    }
+}
+
+/// Whether a reply was generating at `t`: created and not yet done.
+fn generating(events: &[Ev], t: f64) -> bool {
+    let created = events.iter().filter(|e| e.ty == "response.created" && e.t <= t).count();
+    let done = events.iter().filter(|e| e.ty == "response.done" && e.t <= t).count();
+    created > done
+}
+
+/// The audio a message had delivered by `t`, ms.
+fn audio_of(events: &[Ev], item: &str, t: f64) -> f64 {
+    events
+        .iter()
+        .filter(|e| e.t <= t && e.ty == "response.output_audio.delta" && e.item.as_deref() == Some(item))
+        .map(|e| e.audio_ms)
+        .sum()
+}
+
+/// What the server answered `frame` with, sent at `t`: the first event not yet claimed that
+/// acknowledges a frame of its type, or an error citing it (or citing nothing).
+fn reaction(frame: &Value, t: f64, events: &[Ev], claimed: &mut BTreeSet<usize>) -> (String, f64) {
+    let ty = frame["type"].as_str().unwrap();
+    let id = frame["event_id"].as_str();
+    let acks = |e: &Ev| match ty {
+        "session.update" => e.ty == "session.updated",
+        "input_audio_buffer.commit" => e.ty == "input_audio_buffer.committed",
+        "input_audio_buffer.clear" => e.ty == "input_audio_buffer.cleared",
+        "conversation.item.create" => {
+            e.ty == "conversation.item.added"
+                && e.item_type.as_deref() == frame["item"]["type"].as_str()
+                && e.item_role.as_deref() == frame["item"]["role"].as_str()
+        }
+        "conversation.item.delete" => e.ty == "conversation.item.deleted",
+        "conversation.item.retrieve" => e.ty == "conversation.item.retrieved",
+        "conversation.item.truncate" => e.ty == "conversation.item.truncated",
+        "response.create" => e.ty == "response.created" && e.asked,
+        "response.cancel" => {
+            e.ty == "response.done" && e.reason.as_deref() == Some("client_cancelled")
+        }
+        _ => false,
+    };
+    // An acknowledgement or an error citing the frame first; an error citing nothing only when
+    // neither came (two frames in one breath can be answered in either order).
+    let cites = |e: &Ev| e.ty == "error" && e.cites.is_some() && e.cites.as_deref() == id;
+    let uncited = |e: &Ev| e.ty == "error" && e.cites.is_none();
+    let open = |n: &usize, e: &Ev| e.t >= t - 1e-6 && e.t <= t + 3.0 && !claimed.contains(n);
+    let find = |pick: &dyn Fn(&Ev) -> bool| {
+        events.iter().enumerate().find(|(n, e)| open(n, e) && pick(e))
+    };
+    let hit = find(&|e| acks(e) || cites(e)).or_else(|| find(&uncited));
+    match hit {
+        Some((n, e)) => {
+            claimed.insert(n);
+            let token = match &e.code {
+                Some(code) => format!("error {code}{}", if e.cites.is_some() { " citing it" } else { "" }),
+                None => e.ty.clone(),
+            };
+            (token, e.t - t)
+        }
+        None => ("nothing".into(), 0.0),
+    }
+}
+
+/// One step of a probe: a client frame, or the person's speech as the real server's VAD heard it.
+enum ProbeStep {
+    /// The n-th client frame.
+    Frame(usize, Value),
+    Exo(Exo),
+}
+
+/// The fake server through one probe: its events as the probe would have recorded them, and the
+/// instant each client frame went in, and the events as it sent them. `None` when a frame waited
+/// on an event the fake never sent.
+fn replay_probe(rec: &Value, seed: u64) -> Option<(Vec<Ev>, Vec<(f64, Value)>, Vec<f64>)> {
+    let real: Vec<Ev> = rec["events"].as_array().unwrap().iter().map(recorded).collect();
+    // Each step, with the audio appended by then and when it goes: after an event, as the probe
+    // did, or at its instant.
+    let mut steps: Vec<(f64, f64, ProbeStep)> = Vec::new();
+    let frames = rec["frames"].as_array().unwrap();
+    for (n, f) in frames.iter().enumerate() {
+        let appended = f["appended_ms"].as_f64().unwrap_or(0.0);
+        steps.push((f["t"].as_f64().unwrap(), appended, ProbeStep::Frame(n, f["frame"].clone())));
+    }
+    for e in rec["events"].as_array().unwrap() {
+        let exo = match e["type"].as_str().unwrap() {
+            "input_audio_buffer.speech_started" => Exo::SpeechStarted,
+            "input_audio_buffer.speech_stopped" => Exo::SpeechStopped,
+            _ => continue,
+        };
+        steps.push((e["t"].as_f64().unwrap(), e["appended_ms"].as_f64().unwrap_or(0.0), ProbeStep::Exo(exo)));
+    }
+    steps.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // A step's anchor: the last event the real server sent before it, as `(type, how many of
+    // that type came before it)`, and the gap after it.
+    let anchors: Vec<Option<(String, usize, f64)>> = steps
+        .iter()
+        .map(|(t, _, step)| {
+            if matches!(step, ProbeStep::Exo(_)) {
+                return None;
+            }
+            let before: Vec<&Ev> = real.iter().filter(|e| e.t < *t).collect();
+            let last = before.last()?;
+            let nth = before.iter().filter(|e| e.ty == last.ty).count() - 1;
+            Some((last.ty.clone(), nth, t - last.t))
+        })
+        .collect();
+
+    let mut server = Server::new(seed).with_ids(format!("s{seed}_"));
+    let mut hooks = NoHooks(0);
+    let mut ids = Ordinals::default();
+    let mut out: Vec<Ev> = Vec::new();
+    let mut sent: Vec<(f64, Value)> = Vec::new();
+    let mut sent_at: Vec<Option<f64>> = vec![None; steps.len()];
+    let mut frame_sent = vec![0.0; frames.len()];
+    let mut appended = 0.0;
+    // The clock in the server's own instants, so an event due now is due exactly now.
+    let mut clock = Ts::ZERO;
+    server.connect(clock);
+    loop {
+        let now = secs(clock);
+        // Deliver what is due now.
+        while let Some(frame) = server.pop(clock, &mut hooks) {
+            ids.read(&frame);
+            out.push(faked(now, &frame, &ids));
+            sent.push((now * 1000.0, frame));
+        }
+        let server_next = server.next_due();
+        // The next step, in order, and when it goes.
+        let Some(n) = sent_at.iter().position(Option::is_none) else {
+            match server_next {
+                Some(due) => {
+                    clock = due.max(clock);
+                    continue;
+                }
+                None => break,
+            }
+        };
+        let due = match &anchors[n] {
+            None => Some(at(steps[n].0)),
+            Some((ty, nth, gap)) => {
+                let times: Vec<f64> = out.iter().filter(|e| &e.ty == ty).map(|e| e.t).collect();
+                times.get(*nth).map(|t| at(t + gap))
+            }
+        };
+        match due {
+            Some(due) if due <= clock => {
+                let (_, upto, step) = &steps[n];
+                if *upto > appended {
+                    let samples = ((upto - appended) * 24.0) as usize;
+                    let pcm = vec![1u8; samples * 2];
+                    let audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, pcm);
+                    server.client(clock, &json!({"type": "input_audio_buffer.append", "audio": audio}), &mut hooks);
+                    appended = *upto;
+                }
+                match step {
+                    ProbeStep::Exo(exo) => {
+                        server.exo(clock, *exo);
+                    }
+                    ProbeStep::Frame(k, frame) => {
+                        let frame = substitute(frame, &ids, &real, &out, now)?;
+                        server.client(clock, &frame, &mut hooks);
+                        frame_sent[*k] = now;
+                    }
+                }
+                sent_at[n] = Some(now);
+            }
+            Some(due) => clock = server_next.map_or(due, |s| s.min(due)).max(clock),
+            // Waiting on an event the fake has not sent: on the server's next one, or never.
+            None => clock = server_next?.max(clock),
+        }
+    }
+    Some((out, sent, frame_sent))
+}
+
+/// The frame with the probe's ordinals as the fake's ids, and a truncation moved onto the
+/// fake's audio. `None` when it names something the fake never minted.
+fn substitute(frame: &Value, ids: &Ordinals, real: &[Ev], fake: &[Ev], now: f64) -> Option<Value> {
+    fn walk(v: &Value, ids: &Ordinals) -> Option<Value> {
+        Some(match v {
+            Value::String(s) if s.starts_with('@') => json!(ids.raw(&s[1..])?),
+            Value::Object(m) => {
+                Value::Object(m.iter().map(|(k, x)| Some((k.clone(), walk(x, ids)?))).collect::<Option<_>>()?)
+            }
+            Value::Array(a) => Value::Array(a.iter().map(|x| walk(x, ids)).collect::<Option<_>>()?),
+            other => other.clone(),
+        })
+    }
+    let mut out = walk(frame, ids)?;
+    if frame["type"] == "conversation.item.truncate"
+        && let Some(item) = frame["item_id"].as_str().and_then(|i| i.strip_prefix('@'))
+    {
+        let end = frame["audio_end_ms"].as_f64().unwrap_or(0.0);
+        let recorded_t = real.iter().map(|e| e.t).fold(0.0, f64::max);
+        let real_audio = audio_of(real, item, recorded_t);
+        let fake_audio = audio_of(fake, item, now);
+        let moved = if end >= real_audio {
+            fake_audio + (end - real_audio)
+        } else if real_audio > 0.0 {
+            end * fake_audio / real_audio
+        } else {
+            end
+        };
+        out["audio_end_ms"] = json!(moved.round() as u64);
+    }
+    Some(out)
+}
+
+// Catches: a fake server that acknowledges what the real one refuses, refuses what it takes,
+// refuses with another code or cites the frame where the real one does not, answers a cancel or
+// a reply asked over another as the real one does not, keeps a reply the person talked over that
+// the real server ended (or the reverse), or takes far longer than the real server to answer.
+#[test]
+fn the_realtime_server_answers_the_probes_as_the_real_one() {
+    // What a response may look like: as one did in a recording or a probe. A truncation the
+    // client asks later is the client's, not the response's shape.
+    let untruncated = |shape: String| shape.replace(" > conversation.item.truncated", "");
+    let shapes: BTreeSet<String> = recordings("realtime-")
+        .into_iter()
+        .chain(probes())
+        .flat_map(|(_, r)| response_shapes(r["events"].as_array().unwrap()))
+        .map(untruncated)
+        .collect();
+    for (name, rec) in probes() {
+        let real: Vec<Ev> = rec["events"].as_array().unwrap().iter().map(recorded).collect();
+        let frames: Vec<(f64, Value)> = rec["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| (f["t"].as_f64().unwrap(), f["frame"].clone()))
+            .collect();
+        let mut claimed = BTreeSet::new();
+        let expected: Vec<(String, f64)> =
+            frames.iter().map(|(t, f)| reaction(f, *t, &real, &mut claimed)).collect();
+        let onsets: Vec<f64> = real.iter().filter(|e| e.ty == "input_audio_buffer.speech_started").map(|e| e.t).collect();
+        let ends = |events: &[Ev], from: f64| -> Option<String> {
+            // How the reply generating at an onset ended.
+            generating(events, from).then_some(())?;
+            let done = events.iter().find(|e| e.ty == "response.done" && e.t >= from)?;
+            Some(format!("{}/{}", done.status.as_deref().unwrap_or("?"), done.reason.as_deref().unwrap_or("-")))
+        };
+        let mut compared = vec![false; frames.len()];
+        let mut onsets_compared = vec![false; onsets.len()];
+        let mut replays = 0;
+        for seed in 0..SEEDS {
+            let Some((fake, sent, frame_sent)) = replay_probe(&rec, seed) else { continue };
+            replays += 1;
+            check_documented_order(&name, &sent);
+            let frames_sent: Vec<Value> = sent.iter().map(|(_, e)| e.clone()).collect();
+            for shape in response_shapes(&frames_sent).into_iter().map(untruncated) {
+                assert!(shapes.contains(&shape), "{name} seed {seed}: a response shaped as no recorded one was:\n  {shape}");
+            }
+            let mut claimed = BTreeSet::new();
+            for (n, (t, frame)) in frames.iter().enumerate() {
+                let ft = frame_sent[n];
+                let got = reaction(frame, ft, &fake, &mut claimed);
+                let ty = frame["type"].as_str().unwrap();
+                // A frame whose answer hangs on a reply generating, where the fake's was not in
+                // the state the real one's was, is not this seed's to judge.
+                if matches!(ty, "response.create" | "response.cancel")
+                    && generating(&real, *t) != generating(&fake, ft)
+                {
+                    continue;
+                }
+                compared[n] = true;
+                let (want, real_delay) = &expected[n];
+                assert_eq!(&got.0, want, "{name} seed {seed}: {ty} ({:?}) at {ft:.3}: the real server answered {want}, the fake {}", frame["event_id"], got.0);
+                assert!(got.1 <= real_delay * 2.0 + 0.2, "{name} seed {seed}: {ty} answered after {:.3}s, the real server after {real_delay:.3}s", got.1);
+            }
+            // Onsets over a reply end it as the real server's did.
+            let fake_onsets: Vec<f64> = fake.iter().filter(|e| e.ty == "input_audio_buffer.speech_started").map(|e| e.t).collect();
+            for (k, at) in onsets.iter().enumerate() {
+                let (Some(want), Some(fake_at)) = (ends(&real, *at), fake_onsets.get(k)) else {
+                    onsets_compared[k] |= !generating(&real, *at);
+                    continue;
+                };
+                let Some(got) = ends(&fake, *fake_at) else { continue };
+                onsets_compared[k] = true;
+                assert_eq!(got, want, "{name} seed {seed}: the reply generating at onset {k} ended {got}, the real one {want}");
+            }
+        }
+        assert!(replays > 0, "{name}: no seed replayed it to the end");
+        for (n, done) in compared.iter().enumerate() {
+            assert!(done, "{name}: {} at {:.3} was compared on no seed", frames[n].1["type"], frames[n].0);
+        }
+        for (k, done) in onsets_compared.iter().enumerate() {
+            assert!(done, "{name}: onset {k} over a reply was compared on no seed");
+        }
+    }
 }
 
 // ================================================================================================

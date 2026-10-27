@@ -588,8 +588,9 @@ fn a_reconnect_replays_the_conversation_and_asks_again_for_the_pending_reply() {
         step.events
     );
     assert_eq!(step.events.last(), Some(&Event::SessionReconnected(lk_agents_abi::llm::realtime::SessionReconnected {})));
-    // a fresh 10 s from the reconnection
-    assert_eq!(m.next_deadline(), Some(at(12)));
+    // a fresh 10 s from the reconnection; the replay is awaited first
+    assert_eq!(m.pending_replies.get("response_create_2"), Some(&at(12)));
+    assert_eq!(m.next_deadline(), Some(at(2).saturating_add(super::UPDATE_CHAT_CTX_TIMEOUT)));
     let step = recv(&mut m, at(3), response_created("resp_2", Some("response_create_2")));
     assert!(step.events.contains(&Event::GenerationCreated(GenerationCreated {
         response_id: "resp_2".into(),

@@ -77,6 +77,7 @@ def realtime() -> dict:
         "audio_ms_per_char": [],
         "committed_after_commit": [],
         "error_after_client": [],
+        "done_after_cancel": [],
     }
     order: Counter[str] = Counter()
     tools = {"responses": 0, "with_call": 0, "rate_limits": 0}
@@ -175,9 +176,34 @@ def realtime() -> dict:
                 sent = [c["t"] for c in client if c["t"] <= t]
                 if sent:
                     out["error_after_client"].append(ms(t - sent[-1]))
+            if ty == "response.done" and e["response"]["reason"] == "client_cancelled":
+                cancels = [c["t"] for c in client if c["type"] == "response.cancel" and c["t"] <= t]
+                if cancels:
+                    out["done_after_cancel"].append(ms(t - cancels[-1]))
         for iid, total in audio.items():
             if chars.get(iid):
                 out["audio_ms_per_char"].append(round(total / chars[iid], 1))
+    # The probes (`probe_realtime.py`) drive the edge cases on purpose: how long the server takes
+    # to end a reply the client cancelled, and to refuse a frame (an error citing it).
+    for path in sorted((HERE / "probes").glob("probe-*.json")):
+        rec = json.loads(path.read_text())
+        frames = rec["frames"]
+        for e in rec["events"]:
+            t = e["t"]
+            if e["type"] == "response.done" and e["response"]["reason"] == "client_cancelled":
+                cancels = [
+                    f["t"]
+                    for f in frames
+                    if f["frame"]["type"] == "response.cancel" and f["t"] <= t
+                ]
+                if cancels:
+                    out["done_after_cancel"].append(ms(t - cancels[-1]))
+            elif e["type"] == "error" and e["error"].get("event_id"):
+                cited = [
+                    f["t"] for f in frames if f["frame"].get("event_id") == e["error"]["event_id"]
+                ]
+                if cited:
+                    out["error_after_client"].append(ms(t - cited[-1]))
     for v in out.values():
         v.sort()
     out["function_call_share"] = [tools["with_call"], tools["responses"]]

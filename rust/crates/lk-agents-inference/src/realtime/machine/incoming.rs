@@ -169,6 +169,9 @@ impl RealtimeMachine {
             }
 
             Incoming::TextDelta { item_id, delta } => {
+                if self.stale(&item_id) {
+                    return Step::default();
+                }
                 self.first_token(now);
                 let mut step = self.on_output(now, &item_id);
                 let response_id = self.response_id();
@@ -186,7 +189,9 @@ impl RealtimeMachine {
             }
 
             Incoming::AudioTranscriptDelta { item_id, delta, start_time } => {
-                if matches!(self.generation, Generation::Discarded | Generation::None) {
+                if matches!(self.generation, Generation::Discarded | Generation::None)
+                    || self.stale(&item_id)
+                {
                     return Step::default();
                 }
                 if let Generation::Active { messages, .. } = &mut self.generation
@@ -199,6 +204,9 @@ impl RealtimeMachine {
             }
 
             Incoming::AudioDelta { item_id, pcm } => {
+                if self.stale(&item_id) {
+                    return Step::default();
+                }
                 self.first_token(now);
                 let mut step = self.on_output(now, &item_id);
                 step.merge(self.settle_modalities(&item_id, Modalities::AudioAndText));
@@ -256,6 +264,9 @@ impl RealtimeMachine {
             return step;
         }
 
+        if let Generation::Active { messages, .. } = &self.generation {
+            self.closed_messages = messages.keys().cloned().collect();
+        }
         step.merge(self.close_generation());
         self.response_spoke = false;
         self.generation = Generation::Active {
@@ -409,6 +420,13 @@ impl RealtimeMachine {
         step
     }
 
+    /// A delta of a message of the generation the open one replaced: the cancelled response's
+    /// tail, which the server still streams after the next response was created (a cancel and a
+    /// new reply in one breath, `corpus/probes/probe-cancel_then_create.json`).
+    fn stale(&self, item_id: &str) -> bool {
+        self.closed_messages.contains(item_id)
+    }
+
     fn on_response_done(&mut self, now: Ts, done: crate::realtime::wire::ResponseDone) -> Step {
         if matches!(self.generation, Generation::Discarded) {
             self.generation = Generation::None;
@@ -421,6 +439,14 @@ impl RealtimeMachine {
         else {
             return Step::default();
         };
+        // A cancelled response's `response.done` can come after the next response's
+        // `response.created` (a cancel and a new reply in one breath: the server frees the
+        // conversation at the cancel). That response was closed when the next one opened; its end
+        // must not close the one now generating (nor take its metrics' clock).
+        if !done.response_id.is_empty() && done.response_id != response_id {
+            self.generation = Generation::Active { response_id, messages, order };
+            return Step::default();
+        }
 
         let mut step = Step::default();
         let default_modalities = self.default_modalities();
@@ -450,7 +476,6 @@ impl RealtimeMachine {
         if let Some(metrics) = self.response_metrics(now, &done.response_id, done.status, &done.usage) {
             step.events.push(metrics);
         }
-        debug_assert!(response_id == done.response_id || done.response_id.is_empty());
 
         if done.status == GenerationStatus::Failed {
             // "failures are largely undocumented by openai, so we assume optimistically

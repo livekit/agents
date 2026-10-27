@@ -1,0 +1,578 @@
+{
+ "provider": "realtime",
+ "model": "openai/gpt-realtime",
+ "via": "livekit-inference",
+ "probe": "refusals",
+ "doc": "Every frame a server might refuse, on an idle session, one at a time.",
+ "speech": [],
+ "frames": [
+  {
+   "t": 0.0001,
+   "appended_ms": 0,
+   "frame": {
+    "type": "session.update",
+    "event_id": "session_update_0",
+    "session": {
+     "type": "realtime",
+     "output_modalities": [
+      "audio"
+     ],
+     "audio": {
+      "input": {
+       "format": {
+        "type": "audio/pcm",
+        "rate": 24000
+       },
+       "noise_reduction": null,
+       "transcription": {
+        "model": "gpt-4o-mini-transcribe"
+       },
+       "turn_detection": null
+      },
+      "output": {
+       "format": {
+        "type": "audio/pcm",
+        "rate": 24000
+       },
+       "speed": 1.0,
+       "voice": "marin"
+      }
+     },
+     "max_output_tokens": "inf",
+     "tool_choice": "auto",
+     "tracing": null,
+     "instructions": "<82>",
+     "tools": [
+      {
+       "type": "function",
+       "name": "lookup_order",
+       "description": "Look up the caller's order.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 0.1097,
+   "appended_ms": 0,
+   "frame": {
+    "type": "response.cancel",
+    "event_id": "cancel_idle"
+   }
+  },
+  {
+   "t": 0.7119,
+   "appended_ms": 0,
+   "frame": {
+    "type": "response.cancel",
+    "event_id": "cancel_named",
+    "response_id": "resp_nope"
+   }
+  },
+  {
+   "t": 1.3141,
+   "appended_ms": 0,
+   "frame": {
+    "type": "input_audio_buffer.commit",
+    "event_id": "commit_empty"
+   }
+  },
+  {
+   "t": 1.9162,
+   "appended_ms": 0,
+   "frame": {
+    "type": "input_audio_buffer.clear",
+    "event_id": "clear_empty"
+   }
+  },
+  {
+   "t": 2.5184,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.retrieve",
+    "event_id": "retrieve_nope",
+    "item_id": "nope"
+   }
+  },
+  {
+   "t": 3.1206,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.delete",
+    "event_id": "delete_nope",
+    "item_id": "nope"
+   }
+  },
+  {
+   "t": 3.7227,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.truncate",
+    "event_id": "truncate_nope",
+    "item_id": "nope",
+    "content_index": 0,
+    "audio_end_ms": 0
+   }
+  },
+  {
+   "t": 4.325,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.create",
+    "item": {
+     "type": "message",
+     "role": "user",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "<63>"
+      }
+     ]
+    },
+    "previous_item_id": "nope",
+    "event_id": "create_after_nope"
+   }
+  },
+  {
+   "t": 4.9268,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.create",
+    "event_id": "output_nope",
+    "item": {
+     "type": "function_call_output",
+     "call_id": "call_nope",
+     "output": "<2>"
+    }
+   }
+  },
+  {
+   "t": 5.5294,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.create",
+    "item": {
+     "type": "message",
+     "role": "user",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "<63>"
+      }
+     ],
+     "id": "probe_a"
+    },
+    "event_id": "create_a"
+   }
+  },
+  {
+   "t": 6.131,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.create",
+    "item": {
+     "type": "message",
+     "role": "user",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "<63>"
+      }
+     ],
+     "id": "@item0"
+    },
+    "event_id": "create_a_again"
+   }
+  },
+  {
+   "t": 6.7332,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.truncate",
+    "event_id": "truncate_user",
+    "item_id": "@item0",
+    "content_index": 0,
+    "audio_end_ms": 0
+   }
+  },
+  {
+   "t": 7.3334,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.create",
+    "event_id": "create_assistant_audio",
+    "item": {
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "output_audio",
+       "transcript": "<2>"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 7.9356,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.create",
+    "event_id": "create_assistant_text",
+    "item": {
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "<2>"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 8.5409,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.retrieve",
+    "event_id": "retrieve_a",
+    "item_id": "@item0"
+   }
+  },
+  {
+   "t": 9.1544,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.delete",
+    "event_id": "delete_a",
+    "item_id": "@item0"
+   }
+  },
+  {
+   "t": 9.7555,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.delete",
+    "event_id": "delete_a_again",
+    "item_id": "@item0"
+   }
+  },
+  {
+   "t": 10.3577,
+   "appended_ms": 0,
+   "frame": {
+    "type": "output_audio_buffer.clear",
+    "event_id": "output_clear"
+   }
+  },
+  {
+   "t": 10.9599,
+   "appended_ms": 0,
+   "frame": {
+    "type": "no.such.event",
+    "event_id": "unknown"
+   }
+  },
+  {
+   "t": 11.5611,
+   "appended_ms": 20,
+   "frame": {
+    "type": "input_audio_buffer.commit",
+    "event_id": "commit_20ms"
+   }
+  },
+  {
+   "t": 12.1634,
+   "appended_ms": 520,
+   "frame": {
+    "type": "input_audio_buffer.commit",
+    "event_id": "commit_500ms"
+   }
+  }
+ ],
+ "events": [
+  {
+   "t": 0.1096,
+   "type": "session.created"
+  },
+  {
+   "t": 0.1097,
+   "type": "session.updated",
+   "session": {
+    "voice": "marin",
+    "turn_detection": null
+   }
+  },
+  {
+   "t": 0.2097,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "response_cancel_not_active",
+    "message": "Cancellation failed: no active response found",
+    "param": null,
+    "event_id": "cancel_idle"
+   }
+  },
+  {
+   "t": 0.808,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "response_cancel_not_found",
+    "message": "Response with id 'resp_nope' not found",
+    "param": null,
+    "event_id": null
+   }
+  },
+  {
+   "t": 1.4045,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "input_audio_buffer_commit_empty",
+    "message": "Error committing input audio buffer: buffer too small. Expected at least 100ms of audio, but buffer only has 0.00ms of audio.",
+    "param": null,
+    "event_id": "commit_empty"
+   }
+  },
+  {
+   "t": 2.0028,
+   "type": "input_audio_buffer.cleared"
+  },
+  {
+   "t": 2.6089,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "item_retrieve_invalid_item_id",
+    "message": "Error retrieving item: the item with id 'nope' does not exist.",
+    "param": null,
+    "event_id": "retrieve_nope"
+   }
+  },
+  {
+   "t": 3.21,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "item_delete_invalid_item_id",
+    "message": "Error deleting item: the item with id 'nope' does not exist.",
+    "param": null,
+    "event_id": "delete_nope"
+   }
+  },
+  {
+   "t": 3.815,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "item_truncate_invalid_item_id",
+    "message": "Item with item_id not found: nope",
+    "param": null,
+    "event_id": "truncate_nope"
+   }
+  },
+  {
+   "t": 4.4159,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "item_create_invalid_previous_item_id",
+    "message": "Error adding item: the previous item with id 'nope' does not exist.",
+    "param": null,
+    "event_id": "create_after_nope"
+   }
+  },
+  {
+   "t": 5.015,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "invalid_tool_call_id",
+    "message": "Tool call ID 'call_nope' not found in conversation.",
+    "param": null,
+    "event_id": null
+   }
+  },
+  {
+   "t": 5.62,
+   "type": "conversation.item.added",
+   "previous_item_id": null,
+   "item": {
+    "id": "item0",
+    "type": "message",
+    "role": "user",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 5.6201,
+   "type": "conversation.item.done",
+   "previous_item_id": null,
+   "item": {
+    "id": "item0",
+    "type": "message",
+    "role": "user",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 6.2189,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "item_create_duplicate_item_id",
+    "message": "Error adding item: an item with id 'probe_a' already exists.",
+    "param": null,
+    "event_id": "create_a_again"
+   }
+  },
+  {
+   "t": 6.8216,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "unsupported_content_type",
+    "message": "Only model output audio messages can be truncated",
+    "param": null,
+    "event_id": null
+   }
+  },
+  {
+   "t": 7.4318,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "missing_required_parameter",
+    "message": "Missing required parameter: 'item.content[0].text'.",
+    "param": "item.content[0].text",
+    "event_id": "create_assistant_audio"
+   }
+  },
+  {
+   "t": 8.0249,
+   "type": "conversation.item.added",
+   "previous_item_id": "item0",
+   "item": {
+    "id": "item1",
+    "type": "message",
+    "role": "assistant",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 8.0249,
+   "type": "conversation.item.done",
+   "previous_item_id": "item0",
+   "item": {
+    "id": "item1",
+    "type": "message",
+    "role": "assistant",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 8.631,
+   "type": "conversation.item.retrieved",
+   "item": {
+    "id": "item0",
+    "type": "message",
+    "role": "user",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 9.24,
+   "type": "conversation.item.deleted",
+   "item_id": "item0"
+  },
+  {
+   "t": 9.8487,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "item_delete_invalid_item_id",
+    "message": "Error deleting item: the item with id 'probe_a' does not exist.",
+    "param": null,
+    "event_id": "delete_a_again"
+   }
+  },
+  {
+   "t": 10.4549,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "invalid_value",
+    "message": "Invalid value: 'out...ear'. Supported values are: 'session.update', 'transcription_session.update', 'session.close', 'input_audio_buffer.append', 'input_audio_buffer.commit', 'input_audio_buffer.clear', 'conversation.item.create', 'conversation.item.truncate', 'conversation.item.delete', 'conversation.item.retrieve', 'response.create', and 'response.cancel'.",
+    "param": "type",
+    "event_id": "output_clear"
+   }
+  },
+  {
+   "t": 11.0532,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "invalid_value",
+    "message": "Invalid value: 'no.such.event'. Supported values are: 'session.update', 'transcription_session.update', 'session.close', 'input_audio_buffer.append', 'input_audio_buffer.commit', 'input_audio_buffer.clear', 'conversation.item.create', 'conversation.item.truncate', 'conversation.item.delete', 'conversation.item.retrieve', 'response.create', and 'response.cancel'.",
+    "param": "type",
+    "event_id": "unknown"
+   }
+  },
+  {
+   "t": 11.6489,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "input_audio_buffer_commit_empty",
+    "message": "Error committing input audio buffer: buffer too small. Expected at least 100ms of audio, but buffer only has 20.00ms of audio.",
+    "param": null,
+    "event_id": "commit_20ms"
+   }
+  },
+  {
+   "t": 12.3389,
+   "type": "input_audio_buffer.committed",
+   "item_id": "item2",
+   "previous_item_id": "item1"
+  },
+  {
+   "t": 12.3389,
+   "type": "conversation.item.added",
+   "previous_item_id": "item1",
+   "item": {
+    "id": "item2",
+    "type": "message",
+    "role": "user",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 12.339,
+   "type": "conversation.item.done",
+   "previous_item_id": "item1",
+   "item": {
+    "id": "item2",
+    "type": "message",
+    "role": "user",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 12.6118,
+   "type": "conversation.item.input_audio_transcription.completed",
+   "item_id": "item2",
+   "content_index": 0,
+   "words": 0,
+   "usage": "tokens"
+  }
+ ],
+ "recorded": "2026-10-26"
+}

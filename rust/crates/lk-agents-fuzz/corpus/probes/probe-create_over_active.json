@@ -1,0 +1,598 @@
+{
+ "provider": "realtime",
+ "model": "openai/gpt-realtime",
+ "via": "livekit-inference",
+ "probe": "create_over_active",
+ "doc": "A reply asked while one is generating; a cancel once it is done.",
+ "speech": [],
+ "frames": [
+  {
+   "t": 0.0,
+   "appended_ms": 0,
+   "frame": {
+    "type": "session.update",
+    "event_id": "session_update_0",
+    "session": {
+     "type": "realtime",
+     "output_modalities": [
+      "audio"
+     ],
+     "audio": {
+      "input": {
+       "format": {
+        "type": "audio/pcm",
+        "rate": 24000
+       },
+       "noise_reduction": null,
+       "transcription": {
+        "model": "gpt-4o-mini-transcribe"
+       },
+       "turn_detection": null
+      },
+      "output": {
+       "format": {
+        "type": "audio/pcm",
+        "rate": 24000
+       },
+       "speed": 1.0,
+       "voice": "marin"
+      }
+     },
+     "max_output_tokens": "inf",
+     "tool_choice": "auto",
+     "tracing": null,
+     "instructions": "<82>",
+     "tools": [
+      {
+       "type": "function",
+       "name": "lookup_order",
+       "description": "Look up the caller's order.",
+       "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 0.166,
+   "appended_ms": 0,
+   "frame": {
+    "type": "conversation.item.create",
+    "item": {
+     "type": "message",
+     "role": "user",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "<63>"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "t": 0.166,
+   "appended_ms": 0,
+   "frame": {
+    "type": "response.create",
+    "event_id": "create_a",
+    "response": {
+     "metadata": {
+      "client_event_id": "create_a"
+     }
+    }
+   }
+  },
+  {
+   "t": 0.166,
+   "appended_ms": 0,
+   "frame": {
+    "type": "response.create",
+    "event_id": "create_b",
+    "response": {
+     "metadata": {
+      "client_event_id": "create_b"
+     }
+    }
+   }
+  },
+  {
+   "t": 2.9417,
+   "appended_ms": 0,
+   "frame": {
+    "type": "response.cancel",
+    "event_id": "cancel_after_done"
+   }
+  }
+ ],
+ "events": [
+  {
+   "t": 0.1659,
+   "type": "session.created"
+  },
+  {
+   "t": 0.1659,
+   "type": "session.updated",
+   "session": {
+    "voice": "marin",
+    "turn_detection": null
+   }
+  },
+  {
+   "t": 0.2759,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "conversation_already_has_active_response",
+    "message": "Conversation already has an active response in progress: <id>. Wait until the response is finished before creating a new one.",
+    "param": null,
+    "event_id": "create_b"
+   }
+  },
+  {
+   "t": 0.2759,
+   "type": "conversation.item.added",
+   "previous_item_id": null,
+   "item": {
+    "id": "item0",
+    "type": "message",
+    "role": "user",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 0.2759,
+   "type": "conversation.item.done",
+   "previous_item_id": null,
+   "item": {
+    "id": "item0",
+    "type": "message",
+    "role": "user",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 0.2964,
+   "type": "response.created",
+   "response": {
+    "id": "resp0",
+    "status": "in_progress",
+    "reason": null,
+    "error": null,
+    "outputs": [],
+    "client_event_id": true,
+    "details_type": null,
+    "calls": []
+   }
+  },
+  {
+   "t": 0.4927,
+   "type": "response.output_item.added",
+   "response_id": "resp0",
+   "output_index": 0,
+   "item": {
+    "id": "item1",
+    "type": "message",
+    "role": "assistant",
+    "status": "in_progress"
+   }
+  },
+  {
+   "t": 0.4927,
+   "type": "conversation.item.added",
+   "previous_item_id": "item0",
+   "item": {
+    "id": "item1",
+    "type": "message",
+    "role": "assistant",
+    "status": "in_progress"
+   }
+  },
+  {
+   "t": 0.5076,
+   "type": "response.content_part.added",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "part": "audio"
+  },
+  {
+   "t": 0.5084,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 4
+  },
+  {
+   "t": 0.5136,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 1
+  },
+  {
+   "t": 0.7254,
+   "type": "response.output_audio.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "ms": 400.0
+  },
+  {
+   "t": 0.7254,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 2
+  },
+  {
+   "t": 0.7254,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 3
+  },
+  {
+   "t": 0.7254,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 6
+  },
+  {
+   "t": 0.7254,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 5
+  },
+  {
+   "t": 0.7254,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 6
+  },
+  {
+   "t": 0.8223,
+   "type": "response.output_audio.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "ms": 400.0
+  },
+  {
+   "t": 0.8223,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 8
+  },
+  {
+   "t": 0.8447,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 4
+  },
+  {
+   "t": 0.8447,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 5
+  },
+  {
+   "t": 0.9598,
+   "type": "response.output_audio.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "ms": 400.0
+  },
+  {
+   "t": 1.0327,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 2
+  },
+  {
+   "t": 1.0377,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 3
+  },
+  {
+   "t": 1.0433,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 6
+  },
+  {
+   "t": 1.051,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 5
+  },
+  {
+   "t": 1.0644,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 2
+  },
+  {
+   "t": 1.0697,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 6
+  },
+  {
+   "t": 1.07,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 3
+  },
+  {
+   "t": 1.0761,
+   "type": "response.output_audio_transcript.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "chars": 1
+  },
+  {
+   "t": 1.1079,
+   "type": "response.output_audio.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "ms": 400.0
+  },
+  {
+   "t": 1.1688,
+   "type": "response.output_audio.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "ms": 400.0
+  },
+  {
+   "t": 1.2295,
+   "type": "response.output_audio.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "ms": 400.0
+  },
+  {
+   "t": 1.2885,
+   "type": "response.output_audio.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "ms": 400.0
+  },
+  {
+   "t": 1.3416,
+   "type": "response.output_audio.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "ms": 400.0
+  },
+  {
+   "t": 1.405,
+   "type": "response.output_item.added",
+   "response_id": "resp0",
+   "output_index": 1,
+   "item": {
+    "id": "item2",
+    "type": "function_call",
+    "role": null,
+    "status": "in_progress",
+    "call_id": "call0"
+   }
+  },
+  {
+   "t": 1.405,
+   "type": "conversation.item.added",
+   "previous_item_id": "item1",
+   "item": {
+    "id": "item2",
+    "type": "function_call",
+    "role": null,
+    "status": "in_progress",
+    "call_id": "call0"
+   }
+  },
+  {
+   "t": 1.4051,
+   "type": "response.function_call_arguments.delta",
+   "response_id": "resp0",
+   "item_id": "item2",
+   "output_index": 1
+  },
+  {
+   "t": 1.4387,
+   "type": "response.output_audio.delta",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "ms": 200.0
+  },
+  {
+   "t": 1.4388,
+   "type": "response.output_audio.done",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0
+  },
+  {
+   "t": 1.4388,
+   "type": "response.output_audio_transcript.done",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0
+  },
+  {
+   "t": 1.4388,
+   "type": "response.content_part.done",
+   "response_id": "resp0",
+   "item_id": "item1",
+   "output_index": 0,
+   "content_index": 0,
+   "part": "audio"
+  },
+  {
+   "t": 1.4391,
+   "type": "conversation.item.done",
+   "previous_item_id": null,
+   "item": {
+    "id": "item1",
+    "type": "message",
+    "role": "assistant",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 1.4391,
+   "type": "response.output_item.done",
+   "response_id": "resp0",
+   "output_index": 0,
+   "item": {
+    "id": "item1",
+    "type": "message",
+    "role": "assistant",
+    "status": "completed"
+   }
+  },
+  {
+   "t": 1.4391,
+   "type": "response.function_call_arguments.done",
+   "response_id": "resp0",
+   "item_id": "item2",
+   "output_index": 1,
+   "name": "lookup_order"
+  },
+  {
+   "t": 1.4391,
+   "type": "conversation.item.done",
+   "previous_item_id": "item1",
+   "item": {
+    "id": "item2",
+    "type": "function_call",
+    "role": null,
+    "status": "completed",
+    "call_id": "call0"
+   }
+  },
+  {
+   "t": 1.4392,
+   "type": "response.output_item.done",
+   "response_id": "resp0",
+   "output_index": 1,
+   "item": {
+    "id": "item2",
+    "type": "function_call",
+    "role": null,
+    "status": "completed",
+    "call_id": "call0"
+   }
+  },
+  {
+   "t": 1.4404,
+   "type": "response.done",
+   "response": {
+    "id": "resp0",
+    "status": "completed",
+    "reason": null,
+    "error": null,
+    "outputs": [
+     "message",
+     "function_call"
+    ],
+    "client_event_id": true,
+    "details_type": null,
+    "usage": {
+     "input": 351,
+     "output": 117,
+     "input_text": 351,
+     "input_audio": 0
+    },
+    "calls": [
+     "call0"
+    ]
+   }
+  },
+  {
+   "t": 3.0273,
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "code": "response_cancel_not_active",
+    "message": "Cancellation failed: no active response found",
+    "param": null,
+    "event_id": "cancel_after_done"
+   }
+  }
+ ],
+ "recorded": "2026-10-26"
+}

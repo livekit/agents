@@ -1,6 +1,6 @@
 //! The realtime model: the production native session (`lk_agents_inference::realtime`, the one a
 //! LiveKit Inference realtime model runs on) over a socket whose far end is [`server::Server`],
-//! the OpenAI Realtime server as the docs specify it and the corpus shows it.
+//! the OpenAI Realtime server as the real one answers (`corpus/probes/`) and the corpus shows it.
 //!
 //! So what reaches the driver is what the production wire machine makes of real server traffic:
 //! its reconnects, its stale-response bookkeeping, its transcripts and its errors are under test
@@ -10,7 +10,8 @@
 //!
 //! The socket is a resource (`Kind::Realtime`), one per session the driver opens, and every
 //! response the client has been told of is one too (`Kind::Generation`), until its
-//! `response.done`. Audio deltas are tagged with the generation and its chunk.
+//! `response.done`. Audio deltas are tagged with the generation and its chunk. What the server
+//! refused, or answered from the wrong state, is recorded as a `Breach` on the socket.
 use std::{
     collections::HashMap,
     sync::{
@@ -262,6 +263,12 @@ impl server::Hooks for Hooks<'_> {
 
     fn produced(&mut self, source: u32, chunk: u16) {
         self.socket.registry.record_generated(source, chunk);
+    }
+
+    fn breach(&mut self, breach: crate::record::Breach) {
+        if let Some(slot) = self.socket.slot.get() {
+            self.socket.registry.record_breach(slot.nth, breach);
+        }
     }
 
     fn heard(&mut self, pcm: &[u8]) {
