@@ -8,7 +8,7 @@ import weakref
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
+import httpx2  # mistralai raises httpx2.TimeoutException from its http client
 from websockets.exceptions import ConnectionClosed
 
 from livekit import rtc
@@ -427,7 +427,7 @@ class STT(stt.STT):
                 ],
             )
 
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(
@@ -655,22 +655,24 @@ class SpeechStream(stt.RecognizeStream):
             else None
         )
 
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=self._request_id,
-                alternatives=[
-                    stt.SpeechData(
-                        text=event.get("text") or "",
-                        language=LanguageCode(language)
-                        if (language := event.get("language"))
-                        else self._detected_language,
-                        speaker_id=next((spk for _, _, _, spk in segments if spk), None),
-                        words=words,
-                    )
-                ],
+        # the server also sends a last, empty one when the audio ends: it only carries the usage
+        if event.get("text") or segments:
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    request_id=self._request_id,
+                    alternatives=[
+                        stt.SpeechData(
+                            text=event.get("text") or "",
+                            language=LanguageCode(language)
+                            if (language := event.get("language"))
+                            else self._detected_language,
+                            speaker_id=next((spk for _, _, _, spk in segments if spk), None),
+                            words=words,
+                        )
+                    ],
+                )
             )
-        )
 
         usage = event.get("usage") or {}
         self._event_ch.send_nowait(
@@ -773,7 +775,7 @@ class SpeechStream(stt.RecognizeStream):
 
         except (APIStatusError, APITimeoutError, APIConnectionError):
             raise
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(
