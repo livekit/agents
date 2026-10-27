@@ -1,10 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import weakref
 from collections.abc import Callable, Generator
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from .. import _core, llm
+from ..log import logger
+
+
+@dataclass
+class InputDetails:
+    modality: Literal["text", "audio"]
+
+
+DEFAULT_INPUT_DETAILS = InputDetails(modality=_core.default_input_modality())  # type: ignore[arg-type]
+
+InterruptionSource = Literal["audio_activity", "user_turn", "programmatic"]
+"""Why a speech was interrupted, as the reference's ``agent_turn`` trace names it."""
+
+_LOW, _NORMAL, _HIGH = _core.speech_priorities()
 
 
 class SpeechHandle:
@@ -13,9 +30,16 @@ class SpeechHandle:
     ``exception()`` for a failure. The core hands this object back wherever the speech is named
     (``speech_created``, a tool's ``RunContext``), for as long as it lives."""
 
+    SPEECH_PRIORITY_LOW = _LOW
+    """Priority for messages that should be played after all other messages in the queue"""
+    SPEECH_PRIORITY_NORMAL = _NORMAL
+    """Every speech generates by the VoiceAgent defaults to this priority."""
+    SPEECH_PRIORITY_HIGH = _HIGH
+    """Priority for important messages that should be played before others."""
+
     def __init__(self, core: _core.SpeechHandle) -> None:
         self._core = core
-        self._callbacks: set[asyncio.Task[None]] = set()
+        self._done_callbacks: list[Callable[[SpeechHandle], None]] = []
         core.host = weakref.ref(self)
 
     @staticmethod
@@ -31,6 +55,11 @@ class SpeechHandle:
     @property
     def num_steps(self) -> int:
         return self._core.num_steps
+
+    @property
+    def input_details(self) -> InputDetails:
+        """How the input this speech answers arrived: the core runs every speech as audio."""
+        return DEFAULT_INPUT_DETAILS
 
     @property
     def scheduled(self) -> bool:
@@ -58,9 +87,20 @@ class SpeechHandle:
         return self._core.done()
 
     def exception(self) -> BaseException | None:
+        """The error the speech failed with, or ``None``.
+
+        Raises:
+            asyncio.InvalidStateError: If the speech is not done yet.
+        """
+        if not self.done():
+            raise asyncio.InvalidStateError("SpeechHandle is not done yet")
         return self._core.exception()
 
-    def interrupt(self, *, force: bool = False) -> SpeechHandle:
+    def interrupt(
+        self, *, force: bool = False, source: InterruptionSource = "programmatic"
+    ) -> SpeechHandle:
+        """Interrupt the speech. ``source`` is accepted for the reference's signature: the trace
+        records the cause the core observed."""
         self._core.interrupt(force=force)
         return self
 
@@ -80,13 +120,37 @@ class SpeechHandle:
         return _await().__await__()
 
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
-        async def _call() -> None:
-            await self.wait_for_playout()
-            callback(self)
+        """``callback(handle)`` once the speech is done; soon, if it is already."""
+        if self.done():
+            asyncio.get_running_loop().call_soon(callback, self)
+            return
+        self._done_callbacks.append(callback)
 
-        task = asyncio.ensure_future(_call())
-        self._callbacks.add(task)
-        task.add_done_callback(self._callbacks.discard)
+    def remove_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
+        with contextlib.suppress(ValueError):
+            self._done_callbacks.remove(callback)
+
+    def _mark_done(self) -> None:
+        """The core reported the speech done (``speech_done``): its callbacks run, in order."""
+        callbacks, self._done_callbacks = self._done_callbacks, []
+        for callback in callbacks:
+            try:
+                callback(self)
+            except Exception as e:
+                logger.warning(f"error in done_callback: {callback}", exc_info=e)
+
+    async def wait_if_not_interrupted(self, aw: list[asyncio.Future[Any]]) -> None:
+        """Wait for ``aw``, unless the speech is interrupted first; ``aw`` is never cancelled."""
+        gathered = asyncio.gather(*[asyncio.shield(fut) for fut in aw], return_exceptions=True)
+        interrupted = asyncio.ensure_future(self._core.wait_for_interrupted())
+        try:
+            await asyncio.wait({gathered, interrupted}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for fut in (gathered, interrupted):
+                if not fut.done():
+                    fut.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await fut
 
     def __repr__(self) -> str:
         return f"SpeechHandle(id={self.id!r}, done={self.done()}, interrupted={self.interrupted})"

@@ -52,11 +52,6 @@ pub enum SpeechRefused {
     )]
     Detached,
     #[error(
-        "this speech has not been created yet, so its interruptibility cannot be changed; pass \
-         allow_interruptions= to say()/generate_reply() instead"
-    )]
-    NotCreated,
-    #[error(
         "cannot call `SpeechHandle.wait_for_playout()` from inside the function tool `{name}` that \
          owns this SpeechHandle. This creates a circular wait: the speech handle is waiting for \
          the function tool to complete, while the function tool is simultaneously waiting for the \
@@ -188,6 +183,8 @@ struct Interruptions {
     allow: bool,
     holds: u32,
     restore: bool,
+    /// What the host set before the loop created the speech: the speech is created with it.
+    requested: Option<bool>,
 }
 
 /// Whether the host's call was answered: `say()` and `generate_reply()` return before the loop
@@ -281,6 +278,7 @@ impl SpeechHandle {
                 holds: 0,
                 // `_interruption_holds_restore = allow_interruptions` (`SpeechHandle.__init__`).
                 restore: allow_interruptions,
+                requested: None,
             }),
             generations: Mutex::new(Vec::new()),
             // `_num_steps = 1`, so `RunContext`'s `_initial_step_idx` is 0.
@@ -311,13 +309,13 @@ impl SpeechHandle {
         Arc::new(SpeechHandle::base(Creation::Pending, allow_interruptions.unwrap_or(true), api))
     }
 
-    /// The loop creates the speech behind this handle: its id, and its resolved interruptibility.
+    /// The loop creates the speech behind this handle: its id, and its resolved interruptibility,
+    /// unless the host set one since its call (its later write wins).
     pub fn create(&self, id: SpeechId, allow_interruptions: bool) {
-        // Untouched since `pending`: the host can neither set nor hold it before this.
-        self.interruptions.send_replace(Interruptions {
-            allow: allow_interruptions,
-            holds: 0,
-            restore: allow_interruptions,
+        // The host cannot hold it before this.
+        self.interruptions.send_modify(|s| {
+            let allow = s.requested.unwrap_or(allow_interruptions);
+            *s = Interruptions { allow, holds: 0, restore: allow, requested: None };
         });
         let _ = self.speech_id.set(id.to_string().into());
         let _ = self.id.set(id);
@@ -753,7 +751,8 @@ impl SpeechHandle {
 
     /// The setter (`speech_handle.py:117`): sent to the loop, the one writer of a speech's
     /// interruption state, which journals it. Raises the reference's `RuntimeError` on an
-    /// already-interrupted speech; the getter follows the loop's write by one wake.
+    /// already-interrupted speech; the getter follows the loop's write by one wake. Before the
+    /// loop has created the speech, the value is the one it is created with.
     #[host(setter(name = "allow_interruptions"))]
     pub fn set_allow_interruptions_for_host(&self, value: bool) -> Result<(), SpeechRefused> {
         if !value && self.interrupt_requested.load(Ordering::Acquire) {
@@ -762,7 +761,14 @@ impl SpeechHandle {
         if *self.creation.borrow() == Creation::Detached {
             return Ok(self.set_allow_interruptions(value)?);
         }
-        let Some(speech) = self.created() else { return Err(SpeechRefused::NotCreated) };
+        let Some(speech) = self.created() else {
+            // Pending: nothing runs yet, so the request is the handle's until the loop creates it.
+            self.interruptions.send_modify(|s| {
+                s.allow = value;
+                s.requested = Some(value);
+            });
+            return Ok(());
+        };
         if !value && self.interrupted() {
             return Err(SpeechError::AlreadyInterrupted.into());
         }

@@ -13,6 +13,7 @@ import contextlib
 import contextvars
 import inspect
 import time
+import weakref
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -258,6 +259,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._recording_path: Path | None = None
         self._recording_finished: asyncio.Future[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
+        # the handles the core announced, for their done callbacks (``speech_done``)
+        self._speech_handles: weakref.WeakValueDictionary[str, SpeechHandle] = (
+            weakref.WeakValueDictionary()
+        )
 
     # --- state ---------------------------------------------------------------------------
 
@@ -796,12 +801,17 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_speech_created(self, wire: dict[str, Any]) -> None:
         handle = SpeechHandle._of(wire["speech_handle"])
+        self._speech_handles[handle.id] = handle
         self.emit(
             "speech_created",
             SpeechCreatedEvent(
                 user_initiated=wire["user_initiated"], source=wire["source"], speech_handle=handle
             ),
         )
+
+    def _on_speech_done(self, wire: dict[str, Any]) -> None:
+        if (handle := self._speech_handles.pop(wire["speech_id"], None)) is not None:
+            handle._mark_done()
 
     def _on_item_added(self, wire: dict[str, Any]) -> None:
         item = from_core_item(wire["item"])
@@ -1163,6 +1173,7 @@ class _AgentNodes:
 
 _HANDLERS: dict[str, Callable[[VoiceSession[Any], dict[str, Any]], None]] = {
     "speech_created": VoiceSession._on_speech_created,
+    "speech_done": VoiceSession._on_speech_done,
     "conversation_item_added": VoiceSession._on_item_added,
     "run_item_added": VoiceSession._on_run_item,
     "run_refused": VoiceSession._on_run_refused,

@@ -85,6 +85,13 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     assert!(!detached.allow_interruptions());
     assert!(matches!(detached.exception_for_host(), Ok(None)));
 
+    // A setter before the loop created the speech is the value it is created with.
+    let pending = SpeechHandle::pending(Tx::disconnected(), None);
+    pending.set_allow_interruptions_for_host(false).unwrap();
+    assert!(!pending.allow_interruptions());
+    pending.create(SpeechId(7), true);
+    assert!(!pending.allow_interruptions(), "the host's later write wins over the resolved value");
+
     let lost = SpeechHandle::pending(Tx::disconnected(), None);
     lost.interrupt_for_host(false, spawner()).unwrap();
     assert!(lost.interrupted_for_host());

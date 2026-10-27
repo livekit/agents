@@ -59,6 +59,7 @@ from livekit.agents.llm._realtime import RealtimeModel as OpenAIRealtimeModel
 from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import shortuuid
+from livekit.agents.voice import SpeechHandle
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -2218,8 +2219,40 @@ async def main() -> int:
 
     print("== say")
     handle = session.say("Let me say something.")
+    # set before the core created the speech: the speech is created with it
+    handle.allow_interruptions = False
+    calls: list[str] = []
+    handle.add_done_callback(lambda h: calls.append(f"first {h.id}"))
+    handle.add_done_callback(dropped := lambda h: calls.append("dropped"))
+    handle.add_done_callback(lambda h: calls.append("second"))
+    handle.remove_done_callback(dropped)
+    try:
+        handle.exception()
+    except asyncio.InvalidStateError:
+        pass
+    else:
+        raise AssertionError("exception() before done must raise InvalidStateError")
     await settle(room, 2)
     assert handle.done(), "say() did not finish"
+    assert not handle.allow_interruptions, "the setter before creation was lost"
+    assert calls == [f"first {handle.id}", "second"], calls
+    assert handle.exception() is None
+    late: list[str] = []
+    handle.add_done_callback(lambda h: late.append("late"))
+    await asyncio.sleep(0)
+    assert late == ["late"], "a callback added after done runs soon"
+
+    print("== wait_if_not_interrupted")
+    handle = session.say("A long sentence the agent will not finish saying.")
+    work: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    waiting = asyncio.ensure_future(handle.wait_if_not_interrupted([work]))
+    await settle(room, 0.2)
+    handle.interrupt()
+    await settle(room, 1)
+    assert waiting.done() and not work.done(), "an interrupt ends the wait, never the work"
+    work.cancel()
+    assert SpeechHandle.SPEECH_PRIORITY_LOW < SpeechHandle.SPEECH_PRIORITY_HIGH
+    assert handle.input_details.modality == "audio"
 
     print("== say, streamed words and pre-synthesised audio")
 
