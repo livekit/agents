@@ -9,13 +9,15 @@ import numpy as np
 import pytest
 
 pytest.importorskip("onnxruntime")
+silero_vad = pytest.importorskip("livekit.plugins.silero.vad")
 
 from livekit import rtc  # noqa: E402
 from livekit.agents import vad as agents_vad  # noqa: E402
-from livekit.plugins.silero import vad as silero_vad  # noqa: E402
 from livekit.plugins.silero.vad import VAD, _VADOptions  # noqa: E402
 
-pytestmark = pytest.mark.plugin("silero")
+# Hermetic: no cloud account and no model download, like tests/test_vad_buffer_resize.py.
+# The plugin category is the cloud matrix, which is skipped for PRs from forks.
+pytestmark = pytest.mark.unit
 
 _SAMPLE_RATE = 16000
 _WINDOW_SAMPLES = 512
