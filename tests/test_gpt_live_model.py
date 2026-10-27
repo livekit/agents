@@ -1624,11 +1624,69 @@ async def test_an_answer_that_arrives_before_the_callers_words_still_ends_their_
         await model.aclose()
 
 
+async def test_each_caller_turn_takes_the_first_answer_after_it_began(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Answers are matched to turns on the model's clock, whatever order the two transcripts
+    arrive in: a delegation counts at the caller audio pushed when it arrives, and a turn that
+    begins just as an answer does is not answered by it."""
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+
+    def finals() -> list[str]:
+        return [
+            ev.transcript
+            for name, ev in events
+            if name == "input_audio_transcription_completed" and ev.is_final
+        ]
+
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_transcript("assistant", "Yes.", 2000))
+        session._handle_event(_transcript("assistant", "Sure.", 5000))
+        session._handle_event(_transcript("user", "Question one.", 1000))
+        session._handle_event(_transcript("user", "Question two.", 3500))
+        session._handle_event(_transcript("user", "Hello", 6000))
+        assert finals() == ["Question one.", "Question two."]
+
+        session._handle_event(_transcript("assistant", "Hi.", 7000))
+        session._handle_event(_transcript("user", "Can you", 7000))
+        session._handle_event(_transcript("user", " help me?", 7800))
+        assert finals()[-1] == "Hello"
+
+        delegation = {
+            "type": "session.delegation.created",
+            "delegation": {"id": "item_d1", "type": "delegation", "target": "client"},
+        }
+        for _ in range(100):
+            session.push_audio(_silence(100))
+        assert finals()[-1] == "Hello"
+        session._handle_event(delegation)
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session.push_audio(_silence(100))
+        assert finals()[-1] == "Can you help me?"
+
+        for _ in range(12):
+            session.push_audio(_silence(100))
+        session._handle_event(delegation)
+        session._handle_event(_transcript("user", "Book it.", 11500))
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session.push_audio(_silence(100))
+        assert finals()[-1] == "Book it."
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_a_tool_call_commits_the_callers_request_before_it_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The model may delegate without speaking, and the tool reads the request from the chat
-    context."""
+    context; a request the caller began after the delegation is not the tool's to commit."""
     _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
@@ -1642,10 +1700,23 @@ async def test_a_tool_call_commits_the_callers_request_before_it_runs(
     try:
         await session._update_session()
         await asyncio.sleep(0.05)
+        for _ in range(20):
+            session.push_audio(_silence(100))
         session._handle_event(_transcript("user", "What's the weather in Paris?", 1000))
+        session._handle_event(
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": "item_d1", "type": "delegation", "target": "responses"},
+            }
+        )
         session._handle_event(_response_event("item_d1", {"type": "response.created"}))
         session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
         assert order == ["final", "call"]
+
+        # the caller starts their next request while the first one's tools still run
+        session._handle_event(_transcript("user", "Also", 3000))
+        session._handle_event(_response_event("item_d1", _function_call_done("call_2")))
+        assert order == ["final", "call", "call"]
     finally:
         await session.aclose()
         await model.aclose()

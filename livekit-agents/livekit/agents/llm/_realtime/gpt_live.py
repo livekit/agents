@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import bisect
 import contextlib
 import json
 import math
@@ -122,9 +123,6 @@ class _Speech:
     start_ms: int | None = None
     end_ms: int | None = None
     started_at: float = field(default_factory=time.time)
-    reply_ms: float | None = None
-    """Where on the model's clock the model began answering the user's turn; infinite when the
-    answer has no known start, so no later fragment is known to follow it."""
     quiet_ms: int = 0
     """Input audio pushed since the user's last fragment, once the model has answered."""
 
@@ -422,6 +420,12 @@ class GPTLiveSession(
         # reconnect; the framework's chat context is the adapter's, not this
         self._history = llm.ChatContext.empty()
         self._speech: dict[Role, _Speech] = {}
+        # where on the model's clock it began answering, ascending: each of its messages, and each
+        # delegation at the caller audio pushed so far, which that clock follows. infinite when
+        # the start is unknown. a caller turn's answer is the first to begin after the turn did;
+        # the caller's transcript runs behind, so the answer can arrive before the turn opens
+        self._answers: list[float] = []
+        self._input_ms = 0
 
         # delegation_id -> call_ids of its response that has not completed yet; on completion the
         # call_ids move to the open set, and stay there until each output is sent to the backend.
@@ -577,6 +581,8 @@ class GPTLiveSession(
         self._session_closed_fut = asyncio.Future()
         self._end_speech("user")
         self._speech.clear()
+        self._answers.clear()
+        self._input_ms = 0
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
@@ -799,9 +805,9 @@ class GPTLiveSession(
             # they pause: a fragment from after the answer began starts the next one
             ends = (
                 speech is not None
-                and speech.reply_ms is not None
+                and (reply_ms := self._reply_ms(speech)) is not None
                 and event.start_ms is not None
-                and event.start_ms >= speech.reply_ms
+                and event.start_ms >= reply_ms
             )
         else:
             # a pause on the model's clock ends its message even when its fragments arrived
@@ -819,11 +825,10 @@ class GPTLiveSession(
             speech = self._speech[role] = _Speech(
                 message_id=utils.shortuuid("speech_"), start_ms=event.start_ms
             )
-            # the caller's transcript runs behind the model's, so the answer can arrive first
-            if role == "user" and (model := self._speech.get("assistant")) is not None:
-                self._answer(speech, model.start_ms)
-            elif role == "assistant" and (user := self._speech.get("user")) is not None:
-                self._answer(user, speech.start_ms)
+            if role == "user" and event.start_ms is not None:
+                self._answers = [a for a in self._answers if a > event.start_ms]
+            elif role == "assistant":
+                self._add_answer(event.start_ms)
             self._history.insert(
                 llm.ChatMessage(
                     id=speech.message_id,
@@ -861,15 +866,12 @@ class GPTLiveSession(
                 ),
             )
 
-    def _answer(self, user: _Speech, start_ms: int | None) -> None:
-        """Record model output that began at ``start_ms`` as the answer to the caller's turn, if
-        it began no earlier than the turn did: speech already under way is no answer to it."""
-        if user.reply_ms is not None:
-            return
-        if start_ms is None or user.start_ms is None:
-            user.reply_ms = math.inf
-        elif start_ms >= user.start_ms:
-            user.reply_ms = start_ms
+    def _add_answer(self, start_ms: float | None) -> None:
+        bisect.insort(self._answers, math.inf if start_ms is None else start_ms)
+
+    def _reply_ms(self, user: _Speech) -> float | None:
+        """Where the model began answering the caller's turn: speech it began first is no answer."""
+        return next((a for a in self._answers if user.start_ms is None or a > user.start_ms), None)
 
     def _end_speech(self, role: Role) -> None:
         """Close a speaker's message; for the user this is the end of their turn."""
@@ -891,8 +893,7 @@ class GPTLiveSession(
 
     def _handle_delegation_created(self, event: types.SessionDelegationCreatedEvent) -> None:
         # delegating is the model acting on what the caller said, whether or not it speaks
-        if (user := self._speech.get("user")) is not None:
-            self._answer(user, None)
+        self._add_answer(self._input_ms)
         delegation = event.delegation
         if not delegation.id:
             logger.warning("gpt-live delegation has no id; nothing can answer it")
@@ -949,8 +950,10 @@ class GPTLiveSession(
                 name=item.name,
                 arguments=item.arguments,
             )
-            # the tool reads the chat context, so the request it serves is committed first
-            self._end_speech("user")
+            # the tool reads the chat context, so the request it serves is committed first. a turn
+            # that began after the delegation is not its request
+            if (user := self._speech.get("user")) is not None and self._reply_ms(user) is not None:
+                self._end_speech("user")
             self._history.insert(fnc_call)
             self.emit("function_call", fnc_call)
 
@@ -1107,7 +1110,8 @@ class GPTLiveSession(
         # once the model answers, the caller's turn ends on their own audio: this much pushed
         # since their last fragment. the caller's transcript runs behind the model's, so their
         # last words can still arrive after the answer began
-        if (speech := self._speech.get("user")) is not None and speech.reply_ms is not None:
+        self._input_ms += round(frame.duration * 1000)
+        if (speech := self._speech.get("user")) is not None and self._reply_ms(speech) is not None:
             speech.quiet_ms += round(frame.duration * 1000)
             if speech.quiet_ms >= _MIN_SILENCE_MS:
                 self._end_speech("user")
