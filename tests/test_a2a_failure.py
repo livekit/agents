@@ -417,7 +417,6 @@ class OffersRecorded(ScriptedLLM):
 
 
 @pytest.mark.rule("B48")
-@pytest.mark.xfail(strict=True, reason="B48: a toolset whose setup raises fails the text turn")
 async def test_a_toolset_that_cannot_be_set_up_leaves_the_turn_its_other_tools(
     door: Callable[..., Door],
 ) -> None:

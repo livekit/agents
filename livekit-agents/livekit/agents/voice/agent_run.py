@@ -490,6 +490,8 @@ class AgentRun(Generic[Run_T]):
         # the message answers a question whose tool takes it: that call comes first, no model
         answer_tool = hooks.answer_tool if hooks is not None else None
 
+        # a toolset whose setup failed is not tried again in this run; the next run tries again
+        unready: set[Toolset] = set()
         for _ in range(self._max_steps):
             if hooks is not None and hooks.boundary is not None and await hooks.boundary():
                 # a newer message waits for the lane: stop here, what ran is kept, no reply
@@ -505,8 +507,17 @@ class AgentRun(Generic[Run_T]):
 
             tools: list[Tool | Toolset] = list(agent.tools)
             for toolset in tools:
-                if isinstance(toolset, Toolset):
+                if not isinstance(toolset, Toolset) or toolset in unready:
+                    continue
+                try:
                     await toolset.setup()  # once per toolset object; a no-op after
+                except Exception as e:
+                    # as on a call: the run goes on with the toolset's tools as they are
+                    unready.add(toolset)
+                    logger.warning(
+                        "a toolset could not be set up",
+                        extra={"toolset": toolset.id, "error": str(e)},
+                    )
             wants_tool_output = self._output_type is not None and self._output_type is not str
             if wants_tool_output:
                 tools.append(self._final_result_tool())
