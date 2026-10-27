@@ -519,8 +519,10 @@ impl Drop for Tasks {
 /// Where a microphone's frames go: the host's own leg, or the person's track in the room.
 enum Mic {
     Host(mpsc::UnboundedSender<AudioFrame>),
-    /// The track, and how many frames went into it at which instant.
-    Room { track: Arc<lk_agents_rtc::FakeTrackPublication>, burst: (u64, u32) },
+    /// The track, how many frames went into it at which instant, and, once the room io has read
+    /// it, since when it is subscribed: past that instant the room io had its turn to read it
+    /// again, so words spoken into it are owed to the session even when nothing reads them.
+    Room { track: Arc<lk_agents_rtc::FakeTrackPublication>, burst: (u64, u32), read: Option<u64> },
     /// The console's socket, as the CLI sends its microphone.
     Console(fakes::FakeCli),
 }

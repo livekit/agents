@@ -764,9 +764,13 @@ impl Talk {
                 self.send(Input::Room { event: RoomIn::Linked }).await?;
                 continue;
             }
-            // In a room, the person sometimes types instead of speaking.
+            // In a room, the person sometimes types instead of speaking, and their connection
+            // sometimes drops and recovers: the same microphone, subscribed again.
             if self.run.setup.room_legs.is_some() && self.rng.u8(0..100) < self.persona.leaves {
                 self.send(Input::Room { event: RoomIn::Chat }).await?;
+            }
+            if self.run.setup.room_legs.is_some() && self.rng.u8(0..100) < self.persona.leaves {
+                self.send(Input::Room { event: RoomIn::Resubscribed }).await?;
             }
             // On the console, the developer's TUI asks the session things as the call goes.
             if self.run.setup.console && self.rng.u8(0..100) < self.persona.leaves {

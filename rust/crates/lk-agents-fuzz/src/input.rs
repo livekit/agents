@@ -440,8 +440,9 @@ plain_enum! {
 }
 plain_enum! {
     /// What happens in the room the session is in: the link the room io machine reports, the
-    /// room's own two events that name no participant, and the person typing in the chat.
-    RoomIn { Linked, Unlinked, StateChanged, Closed, Chat }
+    /// room's own two events that name no participant, the person typing in the chat, and their
+    /// microphone unsubscribed and subscribed again (a reconnect: the same track, a new stream).
+    RoomIn { Linked, Unlinked, StateChanged, Closed, Chat, Resubscribed }
 }
 plain_enum! {
     /// What `GetDtmfTask`'s event half is told: start collecting, a SIP digit, stop.

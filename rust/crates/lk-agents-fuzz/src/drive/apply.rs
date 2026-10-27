@@ -214,8 +214,28 @@ impl Run {
                 true
             }
             RoomIn::Closed => {
+                for (leg, _) in self.mics.values_mut() {
+                    if let Mic::Room { read, .. } = leg {
+                        *read = None;
+                    }
+                }
                 self.room.close(reason);
                 true
+            }
+            RoomIn::Resubscribed => {
+                use lk_agents_rtc::TrackPublication as _;
+                let now = self.record.now().at_ms;
+                let mut any = false;
+                for (leg, _) in self.mics.values_mut() {
+                    let Mic::Room { track, read, .. } = leg else { continue };
+                    let _ = ready_now(track.set_subscribed(false));
+                    let _ = ready_now(track.set_subscribed(true));
+                    if read.is_some() {
+                        *read = Some(now);
+                    }
+                    any = true;
+                }
+                any
             }
             RoomIn::Chat => {
                 let info = lk_agents_rtc::StreamInfo {
@@ -747,7 +767,18 @@ impl Run {
             // A track nobody reads yet (the room io has not subscribed) carries the words nowhere.
             let heard = match leg {
                 Mic::Host(sender) => sender.send(frame).is_ok(),
-                Mic::Room { track, .. } => track.push_frame(frame) > 0,
+                // A track the room io read, and had its turn to read again since it was last
+                // subscribed, carries the words even when nothing reads them: the agent went deaf,
+                // which the rules are to see.
+                Mic::Room { track, read, .. } => {
+                    use lk_agents_rtc::TrackPublication as _;
+                    if track.push_frame(frame) > 0 {
+                        read.get_or_insert(now);
+                        true
+                    } else {
+                        track.is_subscribed() && read.is_some_and(|since| now > since)
+                    }
+                }
                 Mic::Console(cli) => cli.send(Message::AudioInput(console_io::AudioFrame {
                     data: frame.data.to_vec(),
                     sample_rate: frame.sample_rate,

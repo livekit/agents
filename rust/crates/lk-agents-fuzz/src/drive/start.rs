@@ -424,7 +424,7 @@ impl Run {
             }
         }
         let nth = self.registry.new_mic();
-        self.mics.insert(nth, (Mic::Room { track: mic, burst: (0, 0) }, 0));
+        self.mics.insert(nth, (Mic::Room { track: mic, burst: (0, 0), read: None }, 0));
         // `RoomOptions(video_input=True)`: their camera, which the case feeds like the host's.
         if self.setup.room_camera {
             let camera = caller.publish_track(
