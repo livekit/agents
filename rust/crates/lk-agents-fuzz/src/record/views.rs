@@ -237,6 +237,23 @@ impl<'a> InputsView<'a> {
             .flatten()
     }
 
+    /// How many output toggles (`SetIoEnabled` on the agent's audio or transcription) the driver
+    /// received before `swap` in its instant: each rotates a synchroniser's segment, a closing
+    /// flush its forwarder delivers to the text output after the swap (seed 45765).
+    pub fn toggles_before(&self, swap: Observed) -> usize {
+        let mut received = self.received_commands();
+        self.accepted()
+            .filter_map(|a| {
+                let at = received(&a.input)?;
+                let output = matches!(
+                    a.input,
+                    Input::SetIoEnabled { leg: IoKind::AudioOutput | IoKind::Transcription, .. }
+                );
+                (output && at < swap && at.at_ms == swap.at_ms).then_some(())
+            })
+            .count()
+    }
+
     /// When the driver received each accepted io command, in the order the case sent them: the
     /// n-th accepted command of a kind is the n-th `CommandReceived` of that kind.
     fn received_commands(&self) -> impl FnMut(&Input) -> Option<Observed> + 'a {

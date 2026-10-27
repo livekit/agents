@@ -76,9 +76,17 @@ impl Rule for OutputReplacementIsClean {
             });
             let mut release_owed = released && output.is_audio();
             // One closing flush for the swap's rotation and one for the session's close, text
-            // outputs only: before the close only the swap's is owed, after it either may be.
+            // outputs only: before the close only the swap's are owed, after it any may be. An
+            // output toggled just before the swap rotated too, delivered after it (seed 45765).
             let text = !output.is_audio();
-            let (mut swap_flush, mut close_flush) = (text, text);
+            let mut swap_flushes =
+                if text { 1 + r.inputs_view().toggles_before(swapped) } else { 0 };
+            let mut close_flush = text;
+            let mut take_swap = || {
+                let owed = swap_flushes > 0;
+                swap_flushes = swap_flushes.saturating_sub(1);
+                owed
+            };
             for (at, sink) in output.received() {
                 let owed = at < swapped
                     // The synchroniser releases a step's heard words as its playback finishes,
@@ -89,9 +97,9 @@ impl Rule for OutputReplacementIsClean {
                     || (matches!(sink, Sink::Resumed { .. }) && std::mem::take(&mut release_owed))
                     || (matches!(sink, Sink::TextFlush { .. })
                         && if at < close {
-                            std::mem::take(&mut swap_flush)
+                            take_swap()
                         } else {
-                            std::mem::take(&mut close_flush) || std::mem::take(&mut swap_flush)
+                            std::mem::take(&mut close_flush) || take_swap()
                         });
                 // Anything else reaching this instance after its replacement was attached is
                 // output the host had already taken away.
