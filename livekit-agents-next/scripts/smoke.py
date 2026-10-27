@@ -563,8 +563,8 @@ async def native_realtime() -> None:
     )
     session = LiveSession(llm=model, vad=None)
     session.on("conversation_item_added", print_item)
-    metrics: list[Any] = []
-    session.on("metrics_collected", lambda ev: metrics.append(ev.metrics))
+    usage: list[Any] = []
+    session.on("session_usage_updated", lambda ev: usage.append(ev.usage.model_usage))
     await session.start(Agent(instructions="You are realtime.", name="native"), room=room)
     handle = session.generate_reply(instructions="greet the user")
     for _ in range(300):
@@ -576,10 +576,9 @@ async def native_realtime() -> None:
     assert sessions[0]["audio"]["output"]["voice"] == "cedar", sessions[0]
     await session.aclose()
     await runner.cleanup()
-    realtime_metrics = [m for m in metrics if m.type == "realtime_model_metrics"]
-    # the connection's, then the reply's
-    assert [m.request_id != "" for m in realtime_metrics] == [False, True], metrics
-    print(f"played_bytes={room.played_bytes()} realtime_metrics={len(realtime_metrics)}")
+    # the connection's record, then the reply's, each folded into the realtime model's usage
+    assert [[u.model for u in models] for models in usage] == [["gpt-realtime"]] * 2, usage
+    print(f"played_bytes={room.played_bytes()} usage_updates={len(usage)}")
 
 
 class Shouting(Agent):

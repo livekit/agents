@@ -33,7 +33,7 @@ from ..llm import (
     RealtimeModelError,
 )
 from ..log import logger
-from ..metrics import AgentMetrics, AgentSessionUsage
+from ..metrics import AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
 
@@ -173,16 +173,6 @@ class FunctionToolsExecutedEvent(BaseModel):
     @model_validator(mode="after")
     def verify_lists_length(self) -> Self:
         return _bindings.verify_lists_length(self)
-
-
-class MetricsCollectedEvent(BaseModel):
-    """Deprecated: use session_usage_updated for usage tracking.
-    Per-turn latency metrics are available on ChatMessage.metrics.
-    """
-
-    type: Literal["metrics_collected"] = "metrics_collected"
-    metrics: AgentMetrics
-    created_at: float = Field(default_factory=time.time)
 
 
 class SessionUsageUpdatedEvent(BaseModel):
@@ -328,7 +318,6 @@ AgentEvent = Annotated[
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent
-    | MetricsCollectedEvent
     | SessionUsageUpdatedEvent
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
@@ -356,7 +345,6 @@ EotPredictionEvent.__module__ = "livekit.agents.voice.events"
 _AgentBackchannelOpportunityEvent.__module__ = "livekit.agents.voice.events"
 AgentFalseInterruptionEvent.__module__ = "livekit.agents.voice.events"
 FunctionToolsExecutedEvent.__module__ = "livekit.agents.voice.events"
-MetricsCollectedEvent.__module__ = "livekit.agents.voice.events"
 SessionUsageUpdatedEvent.__module__ = "livekit.agents.voice.events"
 _TypeDiscriminator.__module__ = "livekit.agents.voice.events"
 ConversationItemAddedEvent.__module__ = "livekit.agents.voice.events"

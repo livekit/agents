@@ -13,7 +13,7 @@ from ... import utils
 from ...job import get_job_context
 from ...log import logger
 from ...metrics.base import AvatarMetrics, Metadata
-from ..events import ConversationItemAddedEvent, MetricsCollectedEvent
+from ..events import ConversationItemAddedEvent
 
 if TYPE_CHECKING:
     from ..agent_session import LiveSession
@@ -205,4 +205,3 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         assert self._agent_session is not None
 
         self.emit("metrics_collected", metrics)
-        self._agent_session.emit("metrics_collected", MetricsCollectedEvent(metrics=metrics))

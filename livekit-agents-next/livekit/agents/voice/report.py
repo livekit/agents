@@ -34,13 +34,7 @@ class SessionReport:
     """Version of the agents SDK"""
 
     def to_dict(self) -> dict:
-        events_dict: list[dict] = []
-
-        for event in self.events:
-            if event.type == "metrics_collected":
-                continue  # metrics are too noisy, Cloud is using the chat_history as the source of thruth
-
-            events_dict.append(event.model_dump())
+        events_dict = [event.model_dump() for event in self.events]
 
         return {
             "job_id": self.job_id,

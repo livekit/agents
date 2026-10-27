@@ -249,17 +249,6 @@ pub struct FunctionToolsExecuted {
     pub handoff_required: bool,
 }
 
-/// Deprecated: use session_usage_updated for usage tracking.
-/// Per-turn latency metrics are available on ChatMessage.metrics.
-#[derive(Host)]
-#[python(pydantic, name = "MetricsCollectedEvent", tag = "type", tag_value = "metrics_collected")]
-pub struct MetricsCollected {
-    #[python(ty = "AgentMetrics", import = "..metrics:AgentMetrics")]
-    pub metrics: (),
-    #[python(default_factory = "time.time")]
-    pub created_at: f64,
-}
-
 #[derive(Host)]
 #[python(
     pydantic,
@@ -565,7 +554,6 @@ pub enum AgentEvent {
     UserStateChanged(UserStateChanged),
     AgentStateChanged(AgentStateChanged),
     AgentFalseInterruption(AgentFalseInterruption),
-    MetricsCollected(MetricsCollected),
     SessionUsageUpdated(SessionUsageUpdated),
     ConversationItemAdded(ConversationItemAdded),
     FunctionToolsExecuted(FunctionToolsExecuted),

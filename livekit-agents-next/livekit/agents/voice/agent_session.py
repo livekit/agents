@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic
 
 import numpy as np
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict, TypeVar
 
 from livekit import rtc
@@ -39,7 +40,7 @@ from ..job import get_job_context
 from ..llm import ChatContext, RealtimeModel, StopResponse
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..metrics import AgentSessionUsage
+from ..metrics import AgentMetrics, AgentSessionUsage
 from ..metrics.usage import _MODEL_USAGE
 from ..telemetry import otel_metrics
 from ..types import (
@@ -60,7 +61,6 @@ from .events import (
     ErrorEvent,
     EventTypes,
     FunctionToolsExecutedEvent,
-    MetricsCollectedEvent,
     RunContext,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
@@ -787,9 +787,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_metrics(self, wire: dict[str, Any]) -> None:
-        ev = MetricsCollectedEvent(metrics=wire["metrics"])
-        otel_metrics.collect_usage(ev.metrics)
-        self.emit("metrics_collected", ev)
+        otel_metrics.collect_usage(_AGENT_METRICS.validate_python(wire["metrics"]))
 
     def _error_record(self, wire: dict[str, Any]) -> tuple[Any, Any]:
         """The reference's payload: the provider's error record, and the provider that failed."""
@@ -831,19 +829,12 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_close(self, wire: dict[str, Any]) -> None:
         self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=None))
 
-    def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
-        if event == "metrics_collected" and callback is not None:
-            logger.warning(
-                "metrics_collected is deprecated. "
-                "Use session_usage_updated for usage tracking "
-                "and ChatMessage.metrics for per-turn latency."
-            )
-        return super().on(event, callback)
-
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
         self._recorded_events.append(arg)
         super().emit(event, arg)
 
+
+_AGENT_METRICS: TypeAdapter[AgentMetrics] = TypeAdapter(AgentMetrics)
 
 _ERROR_RECORDS: dict[str, tuple[Any, str]] = {
     "llm_error": (llm.LLMError, "llm"),
