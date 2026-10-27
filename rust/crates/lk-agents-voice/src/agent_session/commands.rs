@@ -205,7 +205,9 @@ impl Command {
 pub struct Close {
     pub reason: lk_agents_abi::voice::events::CloseReason,
     pub drain: bool,
-    pub error: Option<lk_agents_abi::errors::ProviderError>,
+    /// The unrecoverable error that closes the session: the `error` event's, which `close`
+    /// carries too.
+    pub error: Option<crate::events::ErrorEvent>,
 }
 
 impl Default for Close {

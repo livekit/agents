@@ -360,7 +360,7 @@ impl SessionApi {
         &self,
         reason: lk_agents_abi::voice::events::CloseReason,
         drain: bool,
-        error: Option<ProviderError>,
+        error: Option<crate::events::ErrorEvent>,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
         let running = match &mut *self.lock() {
             Stage::Running(r) => Some((r.api.clone(), r.drained.take(), r.tasks.clone())),

@@ -92,21 +92,19 @@ pub struct AgentStateChanged {
     tag_value = "user_input_transcribed"
 )]
 #[node(interface)]
-// The binding's dict is a subset of the model: `_on_core_event` reads `transcript` and `is_final`
-// and the `#[binding(skip)]` fields take the model's defaults. The remote session reads it back
-// (`language` too, which its host never sends).
+// The remote session reads it back (`language` too, which its host never sends).
 #[binding(emit, extract, from_items, read_tag = "kind")]
 pub struct UserInputTranscribed {
     pub transcript: String,
     pub is_final: bool,
     /// Provider-specific ID for the transcribed input item, when available.
-    #[binding(skip, extract_skip)]
+    #[binding(extract_skip)]
     #[python(default = "None")]
     pub item_id: Option<String>,
-    #[binding(skip, extract_skip)]
+    #[binding(extract_skip)]
     #[python(default = "None")]
     pub speaker_id: Option<String>,
-    #[binding(skip, default)]
+    #[binding(default)]
     #[python(ty = "LanguageCode | None", import = "..language:LanguageCode", default = "None")]
     #[node(ty = "string | null")]
     pub language: Option<String>,
@@ -812,16 +810,14 @@ pub struct ContextCarriedWire {
     pub items: Vec<String>,
 }
 
-/// `close`'s wire payload. `error` is written only when the driver holds one: the host attaches
-/// its own error when the key is absent, so absent and `None` differ.
+/// `close`'s wire payload: `error` is the unrecoverable `error` event that closed the session, the
+/// key absent when none did.
 #[derive(Debug, Clone, Host)]
 #[binding(emit, tag = "type", tag_value = "close")]
 pub struct CloseWire {
     pub reason: CloseReason,
-    pub has_error: bool,
-    /// The driver's own error as a host exception; the key is absent when there is none.
     #[binding(skip_if_none)]
-    pub error: Option<crate::errors::ProviderError>,
+    pub error: Option<SessionErrorWire>,
 }
 
 /// `metrics_collected`'s wire payload: the record plus the driver's `speech_id` correlation.

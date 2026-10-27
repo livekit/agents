@@ -669,12 +669,11 @@ impl VoiceSession {
     }
 
     #[napi(js_name = "aclose", ts_return_type = "Promise<void>")]
-    pub fn aclose<'env>(&self, env: &'env Env, reason: Option<String>, drain: Option<bool>, has_error: Option<bool>) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+    pub fn aclose<'env>(&self, env: &'env Env, reason: Option<String>, drain: Option<bool>) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
         let reply = crate::host_error::run(env, || {
             let reason = reason.as_deref().unwrap_or("user_initiated");
             let drain = drain.unwrap_or(false);
-            let has_error = has_error.unwrap_or(false);
-            self.inner.aclose(&reason, drain, has_error).map_err(crate::generated::errors::unknown_close_reason_to_node)
+            self.inner.aclose(&reason, drain).map_err(crate::generated::errors::unknown_close_reason_to_node)
         })?;
         env.spawn_future_with_callback(async move { Ok(Ok::<_, crate::host_error::JsError>(reply.await)) }, |env, out| match out {
             Ok(out) => Ok(()),

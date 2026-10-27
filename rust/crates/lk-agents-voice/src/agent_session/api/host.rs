@@ -21,7 +21,6 @@ use crate::agent_session::{Answer, CommitSuperseded, HostEvent};
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
-use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::HostWire;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::{Llm, Maybe, Spawner, SpawnerExt, Stt, Tts, Vad};
@@ -863,26 +862,16 @@ impl SessionApi {
     /// `_aclose_impl`: the hooks' `closing` (AMD), `Command::Close { reason, drain, error }`, the
     /// turn-detector stream, the remote session host, the room io, then the session's toolsets.
     /// Resolves once all of it ran; the loop's `close` handlers ran before the room io (the
-    /// reference's "close room io after close event is emitted"). `has_error` says whether an
-    /// error close carries one (the object stays with the host). An unknown `reason` is a
+    /// reference's "close room io after close event is emitted"). An unknown `reason` is a
     /// `ValueError`. Idempotent: a second call waits for the first.
-    #[host(method(kw_only, defaults(reason = "user_initiated", drain = false, has_error = false)))]
-    pub fn aclose(
-        &self,
-        reason: &str,
-        drain: bool,
-        has_error: bool,
-    ) -> Result<Reply<()>, UnknownCloseReason> {
+    #[host(method(kw_only, defaults(reason = "user_initiated", drain = false)))]
+    pub fn aclose(&self, reason: &str, drain: bool) -> Result<Reply<()>, UnknownCloseReason> {
         let reason = lk_agents_abi::voice::events::CloseReason::from_wire(reason)
             .ok_or_else(|| UnknownCloseReason(reason.to_owned()))?;
-        // The error object is the host's; the driver carries only the fact of it.
-        let error = has_error.then(|| {
-            ProviderError::Local(lk_agents_abi::errors::ApiError::new("the host's close error"))
-        });
         // A session never started has nothing to wait for, and its turn-detector stream stays the
         // host's to close.
         let was_running = self.api().is_ok();
-        let closing = self.close(reason, drain, error);
+        let closing = self.close(reason, drain, None);
         let close_io = self.close_io();
         let clock = self.time.clock();
         let eot = self.host.eot.clone().filter(|_| was_running);
@@ -916,7 +905,7 @@ impl SessionApi {
     /// `AgentSession.shutdown(drain=)`: [`aclose`](Self::aclose) without waiting for it.
     #[host(method(kw_only, defaults(drain = true)))]
     pub fn shutdown(&self, drain: bool) {
-        if let Ok(closing) = self.aclose("user_initiated", drain, false) {
+        if let Ok(closing) = self.aclose("user_initiated", drain) {
             self.spawner.spawn_unboxed(closing);
         }
     }

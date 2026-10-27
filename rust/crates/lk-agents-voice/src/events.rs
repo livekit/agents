@@ -19,6 +19,12 @@ pub struct ErrorEvent {
     pub speech: Option<crate::agent_activity::scheduling::SpeechId>,
 }
 
+impl ErrorEvent {
+    fn journal_form(&self) -> ErrorEvent {
+        ErrorEvent { error: journal_error(&self.error), ..self.clone() }
+    }
+}
+
 /// The four legs the reference's `_on_error` names. An interruption detector failure degrades to
 /// VAD silently and the EOT model's `error` is never subscribed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, lk_agents_abi::Vocabulary)]
@@ -34,15 +40,11 @@ impl SessionEvent {
     /// the journal never pins a host exception.
     pub fn journal_form(&self) -> SessionEvent {
         match self {
-            SessionEvent::Error(e) => SessionEvent::Error(Box::new(ErrorEvent {
-                source: e.source,
-                recoverable: e.recoverable,
-                error: journal_error(&e.error),
-                speech: e.speech,
-            })),
-            SessionEvent::Close { reason, error } => {
-                SessionEvent::Close { reason: *reason, error: error.as_ref().map(journal_error) }
-            }
+            SessionEvent::Error(e) => SessionEvent::Error(Box::new(e.journal_form())),
+            SessionEvent::Close { reason, error } => SessionEvent::Close {
+                reason: *reason,
+                error: error.as_ref().map(ErrorEvent::journal_form),
+            },
             other => other.clone(),
         }
     }
@@ -451,7 +453,7 @@ pub enum SessionEvent {
     /// The session closed: the last event. `error` is set for a `CloseReason::Error` close.
     Close {
         reason: lk_agents_abi::voice::events::CloseReason,
-        error: Option<lk_agents_abi::errors::ProviderError>,
+        error: Option<ErrorEvent>,
     },
     ConversationItemAdded {
         item: Box<lk_agents_abi::ChatItem>,

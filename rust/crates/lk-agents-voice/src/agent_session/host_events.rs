@@ -2,7 +2,7 @@
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::commands::HookId;
-use crate::events::SessionEvent;
+use crate::events::{ErrorEvent, SessionEvent};
 use crate::filler_scheduler::FillerId;
 use lk_agents_abi::voice::events::HostWire;
 
@@ -130,13 +130,17 @@ impl SessionEvent {
         // `created_at` is the host's stamp (`#[binding(skip)]`): inert here.
         let host_stamp = 0.0;
         match self {
+            // `alternatives[0]`'s text, speaker and language; an unnamed language is none.
             SessionEvent::UserInputTranscribed(t) => {
+                let best = t.ev.best_alternative();
                 HostWire::UserTranscript(w::UserInputTranscribed {
-                    transcript: t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default(),
+                    transcript: best.map(|a| a.text.clone()).unwrap_or_default(),
                     is_final: t.is_final,
                     item_id: t.item_id.clone(),
-                    speaker_id: None,
-                    language: None,
+                    speaker_id: best.and_then(|a| a.speaker_id.clone()),
+                    language: best
+                        .map(|a| a.language.to_string())
+                        .filter(|language| !language.is_empty()),
                     created_at: host_stamp,
                 })
             }
@@ -275,8 +279,7 @@ impl SessionEvent {
             }
             SessionEvent::Close { reason, error } => HostWire::Close(w::CloseWire {
                 reason: *reason,
-                has_error: error.is_some(),
-                error: error.clone(),
+                error: error.as_ref().map(ErrorEvent::wire),
             }),
             SessionEvent::OverlappingSpeech(event) => {
                 HostWire::OverlappingSpeech(w::OverlappingSpeechWire { event: (**event).clone() })
@@ -287,17 +290,7 @@ impl SessionEvent {
                     speech_id: speech.map(speech_id),
                 })
             }
-            SessionEvent::Error(e) => HostWire::Error(w::SessionErrorWire {
-                source: e.source.as_str().to_owned(),
-                recoverable: e.recoverable,
-                label: match e.error {
-                    lk_agents_abi::errors::ProviderError::Host { .. } => "host",
-                    _ => "engine",
-                }
-                .to_owned(),
-                error: e.error.clone(),
-                speech_id: e.speech.map(speech_id),
-            }),
+            SessionEvent::Error(e) => HostWire::Error(e.wire()),
             SessionEvent::ToolExecutionUpdated(update) => {
                 HostWire::ToolExecutionUpdated(w::ToolExecutionUpdated {
                     update: update.wire(),
@@ -305,5 +298,68 @@ impl SessionEvent {
                 })
             }
         }
+    }
+}
+
+impl ErrorEvent {
+    /// `error`'s payload, and `close`'s for the error that closed the session.
+    fn wire(&self) -> lk_agents_abi::voice::events::SessionErrorWire {
+        lk_agents_abi::voice::events::SessionErrorWire {
+            source: self.source.as_str().to_owned(),
+            recoverable: self.recoverable,
+            label: match self.error {
+                lk_agents_abi::errors::ProviderError::Host { .. } => "host",
+                _ => "engine",
+            }
+            .to_owned(),
+            error: self.error.clone(),
+            speech_id: self.speech.map(|id| id.to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{ErrorSource, UserTranscriptEvent};
+    use lk_agents_abi::voice::events::CloseReason;
+    use lk_agents_abi::{SpeechData, SpeechEvent, SpeechEventType};
+
+    fn anchor() -> lk_agents_abi::WallAnchor {
+        lk_agents_abi::WallAnchor { wall: 0.0, at: lk_agents_abi::Ts::ZERO }
+    }
+
+    // Catches: `user_input_transcribed` naming no speaker and no language whatever the STT said
+    // (the reference reads both off `alternatives[0]`), as the e2e suite found on LiveKit Cloud.
+    #[test]
+    fn a_transcript_names_its_speaker_and_language() {
+        let mut ev = SpeechEvent::new(SpeechEventType::FinalTranscript);
+        let mut alt = SpeechData::new("en", "hello");
+        alt.speaker_id = Some("S1".into());
+        ev.alternatives = vec![alt];
+        let t = UserTranscriptEvent { ev, is_final: true, speaking: None, item_id: None };
+        let HostWire::UserTranscript(w) =
+            SessionEvent::UserInputTranscribed(Box::new(t)).wire(anchor())
+        else {
+            panic!("not a transcript")
+        };
+        assert_eq!((w.speaker_id.as_deref(), w.language.as_deref()), (Some("S1"), Some("en")));
+        assert_eq!(w.item_id, None, "the reference's STT path names no item");
+    }
+
+    // Catches: `close.error` always `None`, though the reference closes with the error record of
+    // the unrecoverable `error` event.
+    #[test]
+    fn an_error_close_carries_its_error() {
+        let error = ErrorEvent {
+            source: ErrorSource::Llm,
+            recoverable: false,
+            error: lk_agents_abi::errors::ApiError::new("boom").into(),
+            speech: None,
+        };
+        let close = SessionEvent::Close { reason: CloseReason::Error, error: Some(error) };
+        let HostWire::Close(w) = close.wire(anchor()) else { panic!("not a close") };
+        let e = w.error.expect("the close's error");
+        assert_eq!((e.source.as_str(), e.recoverable), ("llm_error", false));
     }
 }

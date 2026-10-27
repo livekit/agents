@@ -596,7 +596,7 @@ impl Run {
                 .unwrap_or(false),
             Input::Close { drain } => {
                 self.record.enter_phase(Phase::Closing);
-                let Ok(closing) = api.aclose("user_initiated", *drain, false) else { return false };
+                let Ok(closing) = api.aclose("user_initiated", *drain) else { return false };
                 // `await session.aclose()`, the room io's teardown included.
                 let mut closing: BoxFuture<'static, ()> = Box::pin(closing);
                 // The first poll is what sends the close.

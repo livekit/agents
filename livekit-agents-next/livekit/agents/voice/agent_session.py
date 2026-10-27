@@ -924,7 +924,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         job_ctx.delete_room(room_name=wire["room"])
 
     def _on_close(self, wire: dict[str, Any]) -> None:
-        self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=None))
+        error = self._error_record(cause)[0] if (cause := wire.get("error")) else None
+        self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=error))
         if (recorder := self._recorder) is not None:
             # the core flushed it at the close's edge; the trailer and the file's close are ours
             self._recording_finished = asyncio.ensure_future(asyncio.to_thread(recorder.finish))

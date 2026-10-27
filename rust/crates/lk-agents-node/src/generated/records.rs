@@ -67,9 +67,9 @@ impl From<&lk_agents_abi::voice::events::UserInputTranscribed> for UserInputTran
         UserInputTranscribedEvent {
             transcript: v.transcript.to_string(),
             is_final: v.is_final,
-            item_id: None,
-            speaker_id: None,
-            language: None,
+            item_id: v.item_id.as_ref().map(|v| v.to_string()),
+            speaker_id: v.speaker_id.as_ref().map(|v| v.to_string()),
+            language: v.language.as_ref().map(|v| v.to_string()),
             created_at: Some(lk_agents_abi::epoch_secs(std::time::SystemTime::now())),
         }
     }

@@ -536,7 +536,7 @@ async fn host_arguments_are_checked_before_anything_is_sent() {
         metadata: None,
     });
     assert!(invalid(api.host_metrics(HostMetricsRecord(eou))).contains("count it twice"));
-    assert!(api.aclose("bogus", false, false).is_err());
+    assert!(api.aclose("bogus", false).is_err());
     // Well-formed, but nothing runs yet.
     assert!(matches!(api.set_io_enabled("audio_input", true), Err(CommandRefused::Session(_))));
 }

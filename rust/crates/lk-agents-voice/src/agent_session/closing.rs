@@ -3,7 +3,6 @@
 //! transcript, legs. Also the commands refused past the edge and the errors that close.
 
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::CloseReason;
 
 use super::{HookId, RequestId};
@@ -44,7 +43,7 @@ pub const EDGE_BOUND: Duration = crate::speech_handle::INTERRUPTION_TIMEOUT;
 
 pub(crate) struct Closing {
     pub(crate) reason: CloseReason,
-    pub(crate) error: Option<ProviderError>,
+    pub(crate) error: Option<crate::events::ErrorEvent>,
     pub(crate) phase: ClosePhase,
     /// Host `drain()`s answered by the close's own drain (the reference's drain waits on the
     /// activity lock `_aclose_impl` holds), `Ok` once the edge has settled. `None` once answered:
@@ -590,13 +589,13 @@ impl Driver {
         speech: Option<SpeechId>,
         out: &mut Out,
     ) {
-        let ev = crate::events::ErrorEvent { source, recoverable, error: error.clone(), speech };
-        out.machine().emit(SessionEvent::Error(Box::new(ev)));
+        let ev = crate::events::ErrorEvent { source, recoverable, error, speech };
+        out.machine().emit(SessionEvent::Error(Box::new(ev.clone())));
         if recoverable || self.session.closing.is_some() {
             return;
         }
         if self.session.errors.exhausted_by(source) {
-            let close = Close { reason: CloseReason::Error, drain: false, error: Some(error) };
+            let close = Close { reason: CloseReason::Error, drain: false, error: Some(ev) };
             self.begin_closing(now, close, out);
         }
     }
