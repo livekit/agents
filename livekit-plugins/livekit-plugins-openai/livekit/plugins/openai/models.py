@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
-from livekit.agents.llm._realtime.openai_types import RealtimeModels as RealtimeModels
+from livekit.agents.llm._realtime import RealtimeModels as RealtimeModels
 from openai.types import AudioModel
 
 # AudioModel covers the transcriptions endpoint; these two are served only over realtime

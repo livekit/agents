@@ -435,11 +435,11 @@ class LLMStream(ABC):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-CompletionUsage.__module__ = "livekit.agents.llm.llm"
-FunctionToolCall.__module__ = "livekit.agents.llm.llm"
-ChoiceDelta.__module__ = "livekit.agents.llm.llm"
-CollectedResponse.__module__ = "livekit.agents.llm.llm"
-ChatChunk.__module__ = "livekit.agents.llm.llm"
-LLMError.__module__ = "livekit.agents.llm.llm"
-LLM.__module__ = "livekit.agents.llm.llm"
-LLMStream.__module__ = "livekit.agents.llm.llm"
+CompletionUsage.__module__ = "livekit.agents.llm"
+FunctionToolCall.__module__ = "livekit.agents.llm"
+ChoiceDelta.__module__ = "livekit.agents.llm"
+CollectedResponse.__module__ = "livekit.agents.llm"
+ChatChunk.__module__ = "livekit.agents.llm"
+LLMError.__module__ = "livekit.agents.llm"
+LLM.__module__ = "livekit.agents.llm"
+LLMStream.__module__ = "livekit.agents.llm"

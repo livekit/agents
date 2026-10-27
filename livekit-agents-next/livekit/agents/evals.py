@@ -49,7 +49,7 @@ def _judge_chat_kwargs(llm: LLM) -> dict[str, Any]:
 
     Empty for a plugin LLM, which has no LiveKit Inference class to set.
     """
-    from ..inference import LLM as InferenceLLM
+    from .inference import LLM as InferenceLLM
 
     if isinstance(llm, InferenceLLM):
         return {"inference_class": "low"}
@@ -658,8 +658,8 @@ class JudgeGroup:
             judges: The judges to run during evaluation.
         """
         if isinstance(llm, str):
-            from ..inference import LLM as InferenceLLM
-            from ..inference.llm import min_reasoning_effort
+            from .inference import LLM as InferenceLLM
+            from .inference.llm import min_reasoning_effort
 
             extra_kwargs: dict[str, Any] = {}
             if (effort := min_reasoning_effort(llm)) is not None:
@@ -700,8 +700,8 @@ class JudgeGroup:
         Returns:
             EvaluationResult containing all judgment results.
         """
-        from ..job import get_job_context
-        from ..log import logger
+        from .job import get_job_context
+        from .log import logger
 
         # Run all judges concurrently
         async def run_judge(judge: Evaluator) -> tuple[str, JudgmentResult | BaseException]:

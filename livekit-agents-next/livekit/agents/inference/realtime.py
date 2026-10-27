@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from ... import _core
-from ...llm import realtime as llm_realtime
-from ...llm._realtime.openai import RealtimeModel as _RealtimeModel, RealtimeSession
-from ...llm.tool_context import ToolChoice
-from ...types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from .._utils import (
+from .. import _core
+from ..llm import realtime as llm_realtime
+from ..llm._realtime import RealtimeModel as _RealtimeModel, RealtimeSession
+from ..llm.tool_context import ToolChoice
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ._utils import (
     InferenceClass,
     get_default_inference_url,
     get_inference_headers,
@@ -17,7 +17,10 @@ from .._utils import (
 if TYPE_CHECKING:
     import aiohttp
 
-__all__ = ["RealtimeModel", "RealtimeSession"]
+__all__ = [
+    "RealtimeModel",
+    "RealtimeSession",
+]
 
 
 class RealtimeModel(_RealtimeModel):

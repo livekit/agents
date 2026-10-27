@@ -6,11 +6,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from ... import _core
+from livekit.agents import _core, llm
 
 if TYPE_CHECKING:
-    from ..chat_context import ChatContext
-    from ..tool_context import ProviderTool, ToolContext
+    from .chat_context import ChatContext
+    from .tool_context import ProviderTool, ToolContext
 
 __all__ = [
     "TOOL_BEHAVIOR",
@@ -21,6 +21,27 @@ __all__ = [
     "to_chat_ctx",
     "to_fnc_ctx",
 ]
+
+_DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE = "<instructions>\n{content}\n</instructions>"
+
+
+def convert_mid_conversation_instructions(
+    chat_ctx: llm.ChatContext,
+    *,
+    role: llm.ChatRole = "user",
+    template: str = _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE,
+) -> llm.ChatContext:
+    """Rewrite every system or developer message but a leading preamble as a ``role`` message
+    wrapped in ``template``, so it keeps its position; one without text is dropped."""
+    from .._core_view import from_core_item, to_core_items
+
+    plan = _core.convert_mid_conversation_instructions(
+        to_core_items(chat_ctx.items), role=role, template=template
+    )
+    return llm.ChatContext(
+        [chat_ctx.items[i] if new is None else from_core_item(new) for i, new in plan]
+    )
+
 
 TOOL_BEHAVIOR = Literal["UNSPECIFIED", "BLOCKING", "NON_BLOCKING"]
 
@@ -61,9 +82,9 @@ def to_chat_ctx(
     inject_trailing_user_message: bool = False,
     thought_signatures: dict[str, bytes] | None = None,
 ) -> tuple[list[dict], Any]:
-    from ..._core_view import to_core_items
-    from ..chat_context import ImageContent
-    from ..utils import serialize_image
+    from .._core_view import to_core_items
+    from .chat_context import ImageContent
+    from .utils import serialize_image
 
     images = {
         content.id: serialize_image(content)
@@ -93,8 +114,8 @@ def to_fnc_ctx(
     tool_behavior: TOOL_BEHAVIOR | None = None,
     use_parameters_json_schema: bool = True,
 ) -> list[dict[str, Any]]:
-    from ..tool_context import FunctionTool, RawFunctionTool
-    from ..utils import build_legacy_openai_schema, build_strict_openai_schema
+    from .tool_context import FunctionTool, RawFunctionTool
+    from .utils import build_legacy_openai_schema, build_strict_openai_schema
 
     responses = format == "openai.responses"
     specs: list[list[Any]] = []

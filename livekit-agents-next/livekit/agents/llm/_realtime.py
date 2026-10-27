@@ -10,22 +10,38 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any, Literal
 
-from ... import _core
-from ...types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from .. import realtime as llm_realtime
-from ..tool_context import ToolChoice
-from .openai_types import RealtimeModels
+from .. import _core
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from . import realtime as llm_realtime
+from .tool_context import ToolChoice
 
 if TYPE_CHECKING:
     import aiohttp
 
+RealtimeModels = Literal[
+    "gpt-realtime",
+    "gpt-realtime-1.5",
+    "gpt-realtime-2",
+    "gpt-realtime-2025-08-28",
+    "gpt-4o-realtime-preview",
+]
+
+
 SAMPLE_RATE = 24000
+
+
 NUM_CHANNELS = 1
+
+
 OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+
 DEFAULT_VOICE = "marin"
+
 
 # the metrics label direct OpenAI sessions had before the client moved into the core
 _PLUGIN_LABEL = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
+
 
 # sessions run in the core; the name stays for the plugins that subclass it
 RealtimeSession = llm_realtime.RealtimeSession

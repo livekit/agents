@@ -1,3 +1,13 @@
+from .._generated.llm import (
+    LLM,
+    ChatChunk,
+    ChoiceDelta,
+    CollectedResponse,
+    CompletionUsage,
+    FunctionToolCall,
+    LLMError,
+    LLMStream,
+)
 from . import remote_chat_context, utils
 from .chat_context import (
     AgentConfigUpdate,
@@ -27,16 +37,6 @@ from .duplex_adapter import (
     FixedGate,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
-from .llm import (
-    LLM,
-    ChatChunk,
-    ChoiceDelta,
-    CollectedResponse,
-    CompletionUsage,
-    FunctionToolCall,
-    LLMError,
-    LLMStream,
-)
 from .realtime import (
     GenerationCreatedEvent,
     InputSpeechStartedEvent,

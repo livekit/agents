@@ -50,7 +50,7 @@ from livekit.agents import (
     stt,
     tts,
 )
-from livekit.agents.llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
+from livekit.agents.llm._realtime import RealtimeModel as OpenAIRealtimeModel
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import shortuuid
 from livekit.agents.voice.avatar import DataStreamAudioOutput

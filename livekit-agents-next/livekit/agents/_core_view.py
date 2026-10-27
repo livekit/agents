@@ -58,7 +58,7 @@ def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
 def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool | Toolset]]) -> Any:
     """``model`` as the core takes it: its own model for an OpenAI-protocol model or a fallback
     chain, else a plugin's model bound to the session's tools."""
-    from .llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
+    from .llm._realtime import RealtimeModel as OpenAIRealtimeModel
     from .llm.realtime_fallback_adapter import RealtimeModelFallbackAdapter
 
     if isinstance(model, OpenAIRealtimeModel):

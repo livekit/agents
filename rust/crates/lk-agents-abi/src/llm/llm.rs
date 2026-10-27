@@ -216,7 +216,7 @@ impl ChatRequest {
 #[crate::host(proxy(host = "livekit.agents.llm.LLM", clock))]
 #[python(provider(
     module = "llm",
-    path = "livekit.agents.llm.llm",
+    path = "livekit.agents.llm",
     events = "metrics_collected, error",
     error(name = "LLMError", kind = "llm_error")
 ))]

@@ -30,9 +30,9 @@ from .chat_context import ChatContext, ImageContent
 from .tool_context import FunctionTool, RawFunctionTool, ToolError, is_raw_function_tool
 
 if TYPE_CHECKING:
+    from .._generated.llm import FunctionToolCall
     from ..voice.events import RunContext
     from .chat_context import FunctionCall, FunctionCallOutput
-    from .llm import FunctionToolCall
     from .tool_context import ToolContext
 
 THINK_TAG_START = "<think>"

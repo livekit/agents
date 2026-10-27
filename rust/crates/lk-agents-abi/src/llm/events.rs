@@ -6,7 +6,7 @@ use lk_agents_host_derive::Host;
 
 // `llm/llm.py:35`. Field `///`s are the reference's, verbatim.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[python(pydantic, module = "llm", path = "livekit.agents.llm.llm", name = "CompletionUsage")]
+#[python(pydantic, module = "llm", path = "livekit.agents.llm", name = "CompletionUsage")]
 #[binding(emit, extract)]
 pub struct CompletionUsage {
     /// The number of tokens in the completion.
@@ -42,7 +42,7 @@ pub struct CompletionUsage {
 #[python(
     pydantic,
     module = "llm",
-    path = "livekit.agents.llm.llm",
+    path = "livekit.agents.llm",
     name = "FunctionToolCall",
     tag = "type",
     tag_value = "function"
@@ -62,7 +62,7 @@ pub struct FunctionToolCall {
 
 // `llm/llm.py:71`.
 #[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(pydantic, module = "llm", path = "livekit.agents.llm.llm", name = "ChoiceDelta")]
+#[python(pydantic, module = "llm", path = "livekit.agents.llm", name = "ChoiceDelta")]
 // Read by hand (`FromPyObject` below): an unknown role reads as absent.
 #[binding(emit)]
 pub struct ChoiceDelta {
@@ -82,7 +82,7 @@ pub struct ChoiceDelta {
 
 // What `LLMStream.collect()` gathers. Host only: the reference has no class docstring.
 #[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(pydantic, module = "llm", path = "livekit.agents.llm.llm", name = "CollectedResponse", with_bases)]
+#[python(pydantic, module = "llm", path = "livekit.agents.llm", name = "CollectedResponse", with_bases)]
 pub struct CollectedResponse {
     #[python(default = "\"\"")]
     pub text: String,
@@ -124,7 +124,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ChoiceDelta {
     pydantic,
     zero_defaults,
     module = "llm",
-    path = "livekit.agents.llm.llm",
+    path = "livekit.agents.llm",
     name = "ChatChunk",
     method(
         name = "has_response",

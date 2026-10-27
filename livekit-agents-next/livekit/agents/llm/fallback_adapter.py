@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .. import _core
+from .._generated.llm import LLM, ChatChunk, LLMStream
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext, MetricsMetadata
-from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import Tool, ToolChoice
 
 __all__ = ["AvailabilityChangedEvent", "FallbackAdapter"]

@@ -1,17 +1,3 @@
-# Copyright 2023 LiveKit, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from __future__ import annotations
 
 import asyncio
@@ -46,6 +32,7 @@ from . import _provider_format
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
+    from ..voice.tool_executor import ToolHandlingOptions
 
 
 class Tool(ABC):
@@ -245,6 +232,8 @@ class Working:
 
 
 Transition = Completed[Any] | Failed | Rejected | InputRequired | Working
+
+
 """What a tool or a hook returns to change the state of the turn or the task."""
 
 
@@ -260,7 +249,10 @@ class ToolFlag(Flag):
 
 DuplicateMode = Literal["allow", "reject", "replace", "confirm"]
 
+
 DuplicateScope = Literal["name", "name_and_args"]
+
+
 """What counts as a duplicate of an in-flight call, i.e. what ``on_duplicate`` acts on.
 
 ``"name"``           any in-flight call of the same tool (default).
@@ -294,6 +286,8 @@ class FunctionToolInfo:
 
 
 ReadBack = Callable[..., "str | InputRequired | Awaitable[str | InputRequired]"]
+
+
 """``needs_approval=`` as a function: the read-back the person approves. It takes the tool's
 own parameters, ``self`` and the context included, and is called with the call's arguments.
 An ``InputRequired`` instead asks for what is missing before there is anything to approve."""
@@ -325,6 +319,8 @@ class RawFunctionToolInfo:
 
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
+
+
 """Schema parameter added when ``@function_tool(on_duplicate='confirm')``."""
 
 
@@ -338,6 +334,8 @@ class _ApprovalScope:
 
 
 APPROVAL_KEY = "lk.approval"
+
+
 """``FunctionCall.extra`` key on a call of a tool that requires approval: ``asked`` when it
 returned the read-back, ``granted`` when it ran on the person's answer."""
 
@@ -350,9 +348,14 @@ _approval_scope: ContextVar[_ApprovalScope | None] = ContextVar(
 ASK_IN_OWN_WORDS = (
     "Ask the person this, in your own words, as your whole reply, and add nothing else: {question}"
 )
+
+
 """How the agent facing the person is told to ask a question that is not verbatim."""
 
+
 DELIVERED = "delivered to the person as written: {text}"
+
+
 """What the model reads as the output of a verbatim result it did not write."""
 
 
@@ -369,6 +372,8 @@ APPROVAL_ANSWERED = (
     "again with exactly the same arguments to run it; if not, do not, and go on from what they "
     "said."
 )
+
+
 """What the model reads as the output of a call that asked for approval, once answered: the
 answer alone reads like a call that ran."""
 
@@ -397,6 +402,8 @@ def as_model_reads(items: Sequence[Any]) -> list[Any]:
 
 
 WAITING_PREFIX = "waiting for the person's answer to: "
+
+
 """How a call's output reads while it waits on the person; the answer replaces it."""
 
 
@@ -448,7 +455,11 @@ def approval_scope(call: Any, granted: bool) -> Iterator[None]:
 
 
 _InfoT = TypeVar("_InfoT", FunctionToolInfo, RawFunctionToolInfo)
+
+
 _P = ParamSpec("_P")
+
+
 _R = TypeVar("_R", bound=Awaitable[Any])
 
 
@@ -840,3 +851,36 @@ class ToolContext:
     ) -> list[dict[str, Any]]:
         """Parse the function tools to a provider-specific schema."""
         return _provider_format.to_fnc_ctx(self, format, **kwargs)
+
+
+class AsyncToolset(Toolset):
+    """Session-scoped toolset whose tools survive agent handoff.
+
+    Background updates from tools in this toolset are delivered to whichever agent
+    is current at delivery time, so a ``ctx.update()`` started under agent A still
+    completes after a handoff to agent B. Tools placed on ``Agent(tools=...)``
+    instead use the activity-scoped executor and are cancelled/awaited on handoff.
+
+    Example::
+
+        @function_tool(on_duplicate="confirm", flags=ToolFlag.CANCELLABLE)
+        async def book_flight(ctx, origin: str, destination: str) -> dict:
+            await ctx.update(f"Looking up flights {origin} → {destination}...")
+            flights = await search(origin, destination)
+            await ctx.update(f"Found {len(flights)}, picking the best...")
+            return await book_best(flights)
+
+        session = VoiceSession(tools=[AsyncToolset(id="booking", tools=[book_flight])])
+    """
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        tools: Sequence[Tool] | None = None,
+        tool_handling: ToolHandlingOptions | None = None,
+    ) -> None:
+        super().__init__(id=id, tools=tools)
+        self._async_tool_options_override = (
+            tool_handling.get("async_options") if tool_handling is not None else None
+        )
