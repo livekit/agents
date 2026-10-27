@@ -209,3 +209,45 @@ async def _push_window(stream: agents_vad.VADStream, value: int) -> list[agents_
         events.append(event)
         if event.type == agents_vad.VADEventType.INFERENCE_DONE:
             return events
+
+
+def test_with_options_keeps_the_band_when_update_options_moved_only_the_activation() -> None:
+    """update_options can leave a band that is neither chosen nor derived; a copy keeps it."""
+    vad = _vad()
+    vad.update_options(activation_threshold=0.7)
+
+    derived = vad.with_options(activation_threshold=0.8)
+
+    assert derived._opts.deactivation_threshold == pytest.approx(0.35)
+
+
+class _FakeModel:
+    """Stands in for the ONNX model: these cases only exercise option handling."""
+
+    sample_rate = _SAMPLE_RATE
+    window_size_samples = _WINDOW_SAMPLES
+
+    def predict(self, samples: np.ndarray) -> float:
+        return 0.0
+
+    __call__ = predict
+
+    def reset(self) -> None:
+        pass
+
+
+async def test_a_band_chosen_on_a_stream_survives_a_copy() -> None:
+    """Streams share the options object, so a threshold picked there is a chosen one."""
+    vad = _vad()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(silero_vad.onnx_model, "OnnxModel", lambda **_: _FakeModel())
+        stream = vad.stream()
+
+    try:
+        stream.update_options(deactivation_threshold=0.4)
+
+        assert vad._opts.deactivation_threshold_is_explicit
+        derived = vad.with_options(activation_threshold=0.7)
+        assert derived._opts.deactivation_threshold == pytest.approx(0.4)
+    finally:
+        await stream.aclose()

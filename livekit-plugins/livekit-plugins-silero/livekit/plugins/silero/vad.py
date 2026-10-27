@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 import weakref
 from dataclasses import dataclass
@@ -150,6 +151,22 @@ class VAD(agents.vad.VAD):
         )
         return cls(session=session, opts=opts)
 
+    def _deactivation_follows_activation(self) -> bool:
+        """Whether the hysteresis band is still the one derived from the current activation.
+
+        Provenance decides this, not the value: a band a caller chose stays even when it happens
+        to equal the derived one. The value is only used to notice a band that is neither chosen
+        nor derived any more -- what ``update_options(activation_threshold=...)`` leaves behind
+        when it moves the activation threshold on its own -- and such a band is kept, because it
+        is the one the instance is actually running with.
+        """
+        if self._opts.deactivation_threshold_is_explicit:
+            return False
+        return math.isclose(
+            self._opts.deactivation_threshold,
+            _derived_deactivation_threshold(self._opts.activation_threshold),
+        )
+
     def with_options(
         self,
         *,
@@ -215,9 +232,9 @@ class VAD(agents.vad.VAD):
             if deactivation_threshold <= 0:
                 raise ValueError("deactivation_threshold must be greater than 0")
             resolved_deactivation = deactivation_threshold
-        elif is_given(activation_threshold) and not self._opts.deactivation_threshold_is_explicit:
-            # the hysteresis band was derived, so it follows the new threshold; a band the
-            # caller chose is theirs and stays, which is what a copy must do
+        elif is_given(activation_threshold) and self._deactivation_follows_activation():
+            # the hysteresis band is still the derived one, so it follows the new threshold; a
+            # band a caller chose is theirs and stays, which is what a copy must do
             resolved_deactivation = _derived_deactivation_threshold(resolved_activation)
         else:
             resolved_deactivation = self._opts.deactivation_threshold
@@ -389,6 +406,9 @@ class VADStream(agents.vad.VADStream):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
+            # the options object is shared with the VAD, so a band chosen here is a chosen band
+            # for any copy taken afterwards
+            self._opts.deactivation_threshold_is_explicit = True
 
         if self._input_sample_rate:
             assert self._speech_buffer is not None
