@@ -614,6 +614,60 @@ async def test_custom_prompt_config_update_options(mock_google_adc):
     assert stt._config.custom_prompt_config is NOT_GIVEN
 
 
+async def test_update_options_rejected_adaptation_changes_nothing(mock_google_adc):
+    """An adaptation the model can't take must raise before any other option is applied."""
+    from google.cloud.speech_v1.types import resource as resource_v1
+
+    from livekit.plugins.google import STT
+
+    stt = STT(model="chirp_3", languages="en-US", punctuate=True, profanity_filter=False)
+    before = (
+        list(stt._config.languages),
+        stt._config.detect_language,
+        stt._config.interim_results,
+        stt._config.punctuate,
+        stt._config.spoken_punctuation,
+        stt._config.profanity_filter,
+        stt._config.model,
+    )
+
+    with pytest.raises(ValueError, match="cloud_speech_v2.SpeechAdaptation"):
+        stt.update_options(
+            languages="fr-FR",
+            detect_language=False,
+            interim_results=False,
+            punctuate=False,
+            spoken_punctuation=True,
+            profanity_filter=True,
+            adaptation=resource_v1.SpeechAdaptation(),
+        )
+
+    after = (
+        list(stt._config.languages),
+        stt._config.detect_language,
+        stt._config.interim_results,
+        stt._config.punctuate,
+        stt._config.spoken_punctuation,
+        stt._config.profanity_filter,
+        stt._config.model,
+    )
+    assert after == before
+
+
+async def test_update_options_rejected_model_switch_keeps_languages(mock_google_adc):
+    """Switching to a model the current adaptation doesn't fit leaves the options as they were."""
+    from livekit.plugins.google import STT
+
+    stt = STT(model="chirp_3", languages="en-US", adaptation=cloud_speech_v2.SpeechAdaptation())
+
+    with pytest.raises(ValueError, match="resource_v1.SpeechAdaptation"):
+        stt.update_options(model="long", languages="de-DE", punctuate=False)
+
+    assert stt._config.languages == [LanguageCode("en-US")]
+    assert stt._config.punctuate is True
+    assert stt._config.model == "chirp_3"
+
+
 async def test_custom_prompt_config_cleared_on_model_switch_from_chirp_3(mock_google_adc):
     """Test that switching from chirp_3 to another V2 model clears a previously
     configured custom_prompt_config, so it is not forwarded to a rebuilt
