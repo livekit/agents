@@ -31,14 +31,8 @@ from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobC
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..utils import aio, http_context, log_exceptions
-from .proc_client import _dump_stack_traces_impl, _ProcClient
-from .proto import (
-    Exiting,
-    InitializeRequest,
-    ShutdownRequestAck,
-    ShuttingDown,
-    StartJobRequest,
-)
+from .proc_client import _dump_stack_traces_impl, serve_parent
+from .proto import StartJobRequest
 
 # The core's bound on VoiceSession.aclose() during the job shutdown, a guardrail against close
 # paths that hang: past it the rest of the shutdown (on_session_end, ShuttingDown,
@@ -65,7 +59,6 @@ def proc_main(args: ProcStartArgs) -> None:
     import logging
 
     from .log_queue import LogQueueHandler
-    from .proc_client import _ProcClient
 
     root_logger = logging.getLogger()
     for name, level in args.logger_levels.items():
@@ -86,14 +79,7 @@ def proc_main(args: ProcStartArgs) -> None:
         simulation_end_fnc=args.simulation_end_fnc,
     )
 
-    client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc)
-    try:
-        client.initialize()
-    except Exception:
-        log_handler.close()
-        return  # initialization failed, exit (initialize will send an error to the worker)
-
-    client.run()
+    serve_parent(args.mp_cch, job_proc, job=True)
 
     import sys
     import threading
@@ -157,17 +143,14 @@ class _JobProc:
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
+        # the parent's socket, set once initialized
+        self._client: _core.IpcClient
 
-    @property
-    def has_running_job(self) -> bool:
-        return self._job_task is not None
-
-    def initialize(self, init_req: InitializeRequest, client: _ProcClient) -> None:
-        self._client = client
+    def initialize(self, http_proxy: str | None) -> None:
         self._job_proc = JobProcess(
             executor_type=self._executor_type,
             user_arguments=self._user_arguments,
-            http_proxy=init_req.http_proxy or None,
+            http_proxy=http_proxy,
         )
         # the framework's warm-up; a no-op under a forkserver, which imported it already
         from . import _preload  # noqa: F401
@@ -176,20 +159,8 @@ class _JobProc:
 
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
-    async def _core_start_job(self, fields: dict[str, Any]) -> None:
-        if self.has_running_job:
-            logger.warning("trying to start a new job while one is already running")
-            return
-        self._start_job(StartJobRequest._from_wire(fields))
-
-    async def _core_shutdown(self, reason: str) -> bool:
-        """Whether the process is done: with no job, at once."""
-        await self._client.send(ShutdownRequestAck())
-        if not self.has_running_job:
-            await self._client.send(ShuttingDown())
-            return True
-        self._run.shutdown(reason or "parent process shutdown", False)
-        return False
+    async def _core_start_job(self, fields: dict[str, Any]) -> _core.JobRun:
+        return self._start_job(StartJobRequest._from_wire(fields))
 
     async def _core_dump_stacks(self) -> None:
         _dump_stack_traces_impl()
@@ -199,7 +170,7 @@ class _JobProc:
         if self._job_task is not None:
             await aio.cancel_and_wait(self._job_task)
 
-    def _start_job(self, msg: StartJobRequest) -> None:
+    def _start_job(self, msg: StartJobRequest) -> _core.JobRun:
         info = msg.running_job
         if info.fake_job:
             from .mock_room import create_mock_room
@@ -227,6 +198,7 @@ class _JobProc:
 
         self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
         self._job_task.add_done_callback(lambda _: self._client.stop())
+        return self._run
 
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
@@ -338,13 +310,6 @@ class _JobProc:
     async def _core_upload(self, span: trace.Span) -> None:
         with trace.use_span(span, end_on_exit=False, record_exception=False):
             await self._in_job(self._job_ctx._on_session_end(), "job_upload")
-
-    async def _core_finish(self, reason: str, user_initiated: bool) -> None:
-        await self._client.send(ShuttingDown())
-        logger.debug(
-            "shutting down job task", extra={"reason": reason, "user_initiated": user_initiated}
-        )
-        await self._client.send(Exiting(reason=reason))
 
     async def _core_disconnect(self, span: trace.Span) -> None:
         with trace.use_span(span, end_on_exit=False, record_exception=False):
@@ -459,8 +424,6 @@ def thread_main(
     args: ThreadStartArgs,
 ) -> None:
     """main function for the job process when using the ThreadedJobRunner"""
-    from .proc_client import _ProcClient
-
     job_proc = _JobProc(
         args.initialize_process_fnc,
         args.job_entrypoint_fnc,
@@ -471,6 +434,4 @@ def thread_main(
         simulation_end_fnc=args.simulation_end_fnc,
     )
 
-    client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc)
-    client.initialize()
-    client.run()
+    serve_parent(args.mp_cch, job_proc, job=True)

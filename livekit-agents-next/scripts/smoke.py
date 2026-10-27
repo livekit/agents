@@ -1122,7 +1122,6 @@ async def job() -> None:
         JobAcceptArguments,
         JobContext,
         JobExecutorType,
-        JobProcess,
         RunningJobInfo,
     )
     from livekit.protocol import agent as agent_proto, models
@@ -1147,16 +1146,8 @@ async def job() -> None:
         seen.append(f"delete_room {type(await ctx.delete_room()).__name__}")
         ctx.shutdown("done")
 
-    class Parent:
-        """The IPC client the job process tells its parent through."""
-
-        sent: list[str] = []
-
-        async def send(self, msg: object) -> None:
-            self.sent.append(type(msg).__name__)
-
-        def stop(self) -> None:
-            pass
+    import socket
+    import struct
 
     runner = _JobProc(
         lambda _: None,
@@ -1165,10 +1156,26 @@ async def job() -> None:
         session_end_timeout=5.0,
         executor_type=JobExecutorType.THREAD,
     )
-    runner._client = Parent()  # type: ignore[assignment]
-    runner._job_proc = JobProcess(
-        executor_type=JobExecutorType.THREAD, user_arguments=None, http_proxy=None
-    )
+    # the parent's side of the socket, written and read by hand
+    parent, child = socket.socketpair()
+
+    def frame(msg: Any) -> bytes:
+        fields = msg._to_wire() if isinstance(msg, proto.StartJobRequest) else vars(msg)
+        data = _core.ipc_encode(msg.MSG_ID, fields)
+        return struct.pack(">I", len(data)) + data
+
+    parent.sendall(frame(proto.InitializeRequest()))
+    client = await asyncio.to_thread(_core.IpcClient, child.detach(), runner.initialize, job=True)
+    runner._client = client
+    reader, writer = await asyncio.open_connection(sock=parent)
+
+    async def received() -> str:
+        (size,) = struct.unpack(">I", await reader.readexactly(4))
+        msg_id, _ = _core.ipc_decode(await reader.readexactly(size))
+        return proto.IPC_MESSAGES[msg_id].__name__
+
+    assert await received() == "InitializeResponse"
+    serving = asyncio.ensure_future(client.serve(runner))
     request = proto.StartJobRequest()
     request.running_job = RunningJobInfo(
         accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
@@ -1178,10 +1185,14 @@ async def job() -> None:
         worker_id="smoke",
         fake_job=True,
     )
-    runner._start_job(request)
+    writer.write(frame(request))
+    sent = [await asyncio.wait_for(received(), 30) for _ in range(2)]
+    await asyncio.wait_for(serving, 30)
     assert runner._job_task is not None
     await asyncio.wait_for(runner._job_task, 30)
-    print(f"job {seen} sent={Parent.sent}")
+    await client.aclose()
+    writer.close()
+    print(f"job {seen} sent={sent}")
     # the participant's entrypoint runs beside the entrypoint, in no set order with it
     assert sorted(seen) == [
         "delete_room DeleteRoomResponse",
@@ -1189,7 +1200,7 @@ async def job() -> None:
         "shutdown callback 'done'",
         "waited for mock_user",
     ], seen
-    assert Parent.sent == ["ShuttingDown", "Exiting"], Parent.sent
+    assert sent == ["ShuttingDown", "Exiting"], sent
 
 
 async def workflows() -> None:

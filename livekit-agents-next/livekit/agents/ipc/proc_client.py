@@ -1,119 +1,64 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import socket
-from collections.abc import Callable
 from types import FrameType
 from typing import Any
 
 from .. import _core
 from ..log import logger
 from ..telemetry import loop_monitor
-from ..utils import aio, log_exceptions
-from .channel import Message, asend_message, recv_message, send_message
-from .proto import IPC_MESSAGES, InitializeRequest, InitializeResponse
+from ..utils import log_exceptions
 
 
-class _ProcClient:
-    """A child process's side of the parent's socket: the initialize handshake, then its loop,
-    on which ``_core.IpcClient.serve`` hands the parent's messages to ``host`` (its
-    ``_core_start_job``, ``_core_shutdown``, ``_core_inference`` and ``_core_dump_stacks``) until
-    the parent goes, ``host._core_shutdown`` says the child is done, or ``stop()``."""
+def serve_parent(mp_cch: socket.socket, host: Any, *, job: bool) -> None:
+    """A child process's (or job thread's) side of the parent's socket: the handshake
+    (``host.initialize(http_proxy)``), then a loop of its own on which ``_core.IpcClient.serve``
+    hands the parent's messages to ``host`` until the parent goes or the child is done. A failed
+    initialization returns at once (the parent was told)."""
+    try:
+        client = _core.IpcClient(mp_cch.detach(), host.initialize, job=job)
+    except Exception:
+        return
+    host._client = client
 
-    def __init__(
-        self,
-        mp_cch: socket.socket,
-        log_cch: socket.socket | None,
-        initialize_fnc: Callable[[InitializeRequest, _ProcClient], None],
-        host: Any,
-    ) -> None:
-        self._mp_cch = mp_cch
-        self._initialize_fnc = initialize_fnc
-        self._host = host
-        self._initialized = False
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.set_debug(client.asyncio_debug)
+    loop.slow_callback_duration = 0.1  # 100ms
+    # flag synchronous code blocking the job loop (spans + warnings), see telemetry.loop_monitor
+    loop_monitor.start_monitoring(loop, name="job")
 
-    def initialize(self) -> None:
+    try:
+        task = loop.create_task(_serve(client, host), name="proc_client_main")
+        while not task.done():
+            # the parent handles the process's shutdown (see proto.ShutdownRequest)
+            with contextlib.suppress(KeyboardInterrupt):
+                loop.run_until_complete(task)
+    finally:
+        loop_monitor.stop_monitoring(loop)
+        # shut the loop down the way asyncio.run() does, a thread runner reuses the process
         try:
-            cch = aio.duplex_unix._Duplex.open(self._mp_cch)
-            first_req = recv_message(cch, IPC_MESSAGES)
-
-            assert isinstance(first_req, InitializeRequest), (
-                "first message must be proto.InitializeRequest"
-            )
-
-            self._init_req = first_req
-            try:
-                self._initialize_fnc(self._init_req, self)
-                send_message(cch, InitializeResponse())
-            except Exception as e:
-                send_message(cch, InitializeResponse(error=str(e)))
-                raise
-
-            self._initialized = True
-            cch.detach()
-        except aio.duplex_unix.DuplexClosed as e:
-            raise RuntimeError("failed to initialize proc_client") from e
-
-    def run(self) -> None:
-        if not self._initialized:
-            raise RuntimeError("proc_client not initialized")
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.set_debug(self._init_req.asyncio_debug)
-        loop.slow_callback_duration = 0.1  # 100ms
-        # flag synchronous code blocking the job loop (spans + warnings), see telemetry.loop_monitor
-        loop_monitor.start_monitoring(loop, name="job")
-
-        try:
-            self._task = loop.create_task(self._monitor_task(), name="proc_client_main")
-            while not self._task.done():
-                try:
-                    loop.run_until_complete(self._task)
-                except KeyboardInterrupt:
-                    # ignore the keyboard interrupt, we handle the process shutdown ourselves on the worker process  # noqa: E501
-                    # (See proto.ShutdownRequest)
-                    pass
-
-        except KeyboardInterrupt:
-            pass
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
         finally:
-            loop_monitor.stop_monitoring(loop)
-            # shut the loop down the way asyncio.run() does, a thread runner reuses the process
-            try:
-                pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
-                for t in pending:
-                    t.cancel()
-                if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                loop.run_until_complete(loop.shutdown_default_executor())
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
+            asyncio.set_event_loop(None)
+            loop.close()
 
-    async def send(self, msg: Message) -> None:
-        await asend_message(self._acch, msg)
 
-    async def do_inference(self, method: str, data: bytes) -> bytes | None:
-        return await self._acch.do_inference(method, data)  # type: ignore[no-any-return]
-
-    def stop(self) -> None:
-        self._acch.stop()
-
-    @log_exceptions(logger=logger)
-    async def _monitor_task(self) -> None:
-        # the core closes the channel when the parent goes quiet past ping_timeout (+10 s); a
-        # job thread's parent sets no ping_timeout
-        health_timeout = None
-        if self._init_req.ping_interval > 0 and self._init_req.ping_timeout > 0:
-            health_timeout = self._init_req.ping_timeout + 10
-        self._acch = _core.IpcClient(self._mp_cch.detach(), health_timeout)
-        try:
-            await self._acch.serve(self._host)
-        finally:
-            await self._host.aclose()
-            await self._acch.aclose()
+@log_exceptions(logger=logger)
+async def _serve(client: _core.IpcClient, host: Any) -> None:
+    try:
+        await client.serve(host)
+    finally:
+        await host.aclose()
+        await client.aclose()
 
 
 def _dump_stack_traces_impl() -> None:

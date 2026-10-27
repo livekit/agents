@@ -117,15 +117,7 @@ impl PyProcHost {
     fn emit(&self, level: Level, msg: &str, extra: super::Extra, exc: Option<PyErr>) {
         self.call(|host| {
             let py = host.py();
-            let fields = PyDict::new(py);
-            for (key, value) in extra {
-                match value {
-                    ExtraValue::Int(v) => fields.set_item(key, v)?,
-                    ExtraValue::Float(v) => fields.set_item(key, v)?,
-                    ExtraValue::Str(v) => fields.set_item(key, v)?,
-                    ExtraValue::Bool(v) => fields.set_item(key, v)?,
-                }
-            }
+            let fields = extra_dict(py, extra)?;
             let exc = exc.map(|e| e.into_value(py));
             host.call_method1("_core_log", (level as i32, msg, fields, exc)).map(drop)
         });
@@ -192,24 +184,60 @@ impl ProcHost for PyProcHost {
 type Socket = tokio::net::UnixStream;
 #[cfg(windows)]
 type Socket = tokio::net::TcpStream;
+#[cfg(unix)]
+type StdSocket = std::os::unix::net::UnixStream;
+#[cfg(windows)]
+type StdSocket = std::net::TcpStream;
 
-/// Takes ownership of a connected socket (`socket.detach()`). Needs a runtime context.
-fn socket(fd: i64) -> PyResult<Socket> {
+/// Takes ownership of a connected socket (`socket.detach()`), blocking.
+fn std_socket(fd: i64) -> PyResult<StdSocket> {
     #[cfg(unix)]
-    let std = {
+    {
         use std::os::fd::FromRawFd;
         let fd = i32::try_from(fd).map_err(|_| PyValueError::new_err("bad socket fd"))?;
         // SAFETY: the caller detached the descriptor and hands its ownership over.
-        unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) }
-    };
+        Ok(unsafe { StdSocket::from_raw_fd(fd) })
+    }
     #[cfg(windows)]
-    let std = {
+    {
         use std::os::windows::io::FromRawSocket;
         // SAFETY: the caller detached the socket and hands its ownership over.
-        unsafe { std::net::TcpStream::from_raw_socket(fd as u64) }
-    };
+        Ok(unsafe { StdSocket::from_raw_socket(fd as u64) })
+    }
+}
+
+/// The async side of a blocking socket. Needs a runtime context.
+fn into_async(std: StdSocket) -> PyResult<Socket> {
     std.set_nonblocking(true)?;
     Ok(Socket::from_std(std)?)
+}
+
+/// Takes ownership of a connected socket (`socket.detach()`). Needs a runtime context.
+fn socket(fd: i64) -> PyResult<Socket> {
+    into_async(std_socket(fd)?)
+}
+
+/// One message off a blocking socket, in `read_frame`'s framing.
+fn recv_blocking(r: &mut impl std::io::Read) -> std::io::Result<Vec<u8>> {
+    let mut len = [0u8; 4];
+    r.read_exact(&mut len)?;
+    let mut buf = vec![0; u32::from_be_bytes(len) as usize];
+    r.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
+/// One message on a blocking socket, in `write_frame`'s framing.
+fn send_blocking(w: &mut impl std::io::Write, msg: &IpcMessage) -> std::io::Result<()> {
+    let data = msg.encode();
+    let len = u32::try_from(data.len()).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    w.write_all(&len.to_be_bytes())?;
+    w.write_all(&data)?;
+    w.flush()
+}
+
+/// A message with no fields, or with one string.
+fn message(id: i32, text: Option<String>) -> IpcMessage {
+    IpcMessage::new(id, text.map(Value::Str).into_iter().collect()).expect("the schema's fields")
 }
 
 /// The parent's side of one job or inference process (`ipc/supervised_proc.py`): its
@@ -447,10 +475,10 @@ lk_agents_abi::register_host!(class PyProcSupervisor);
 
 // ----------------------------------------------------------------------------------- client
 
-/// The child's side of the socket after the initialize handshake (`ipc/proc_client.py`): it
-/// serves the parent's messages (`serve`), answers the pings itself once the child's loop has
-/// run a callback, and matches the inference requests the job makes (`do_inference`) to their
-/// responses.
+/// The child's side of the parent's socket (`ipc/proc_client.py`): the initialize handshake, then
+/// it serves the parent's messages (`serve`), answers the pings itself once the child's loop has
+/// run a callback, matches the inference requests the job makes (`do_inference`) to their
+/// responses, starts the one job and acks the parent's shutdown.
 #[pyclass(name = "IpcClient", module = "livekit.agents._core", frozen)]
 pub struct PyIpcClient(Arc<Child>);
 
@@ -459,6 +487,11 @@ struct Child {
     inferences: Inferences,
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
+    /// A job process (its shutdown is acked, then waits for its job), not an inference process.
+    job: bool,
+    /// The job the parent started, once it did.
+    run: Mutex<Option<Py<PyJobRun>>>,
+    asyncio_debug: bool,
 }
 
 /// An `InferenceResponse`'s data and error.
@@ -540,11 +573,8 @@ impl Child {
     }
 
     /// One message from the parent; `false` ends the serving.
-    async fn on_message(&self, host: &CancellingHandle, msg: IpcMessage) -> PyResult<bool> {
-        let str_of = |name: &str| match msg.get(name) {
-            Some(Value::Str(s)) => s.clone(),
-            _ => String::new(),
-        };
+    async fn on_message(self: &Arc<Self>, host: &CancellingHandle, msg: IpcMessage) -> PyResult<bool> {
+        let str_of = |name: &str| msg.get_str(name).to_owned();
         match msg.id() {
             // answered once the loop ran a callback: the pong measures the loop's responsiveness
             super::PING_REQUEST => {
@@ -570,28 +600,65 @@ impl Child {
                 self.inferences.answered(&msg);
                 Ok(true)
             }
+            // the job starts once: its run ends with the parent's shutdown
             super::START_JOB_REQUEST => {
-                host.await_call(|h| h.call_method1("_core_start_job", (fields_of(h.py(), &msg)?,)))
+                if lock(&self.run).is_some() {
+                    py_log(Level::Warning, "trying to start a new job while one is already running", None);
+                    return Ok(true);
+                }
+                let run = host
+                    .await_call(|h| h.call_method1("_core_start_job", (fields_of(h.py(), &msg)?,)))
                     .await?;
+                let run: Py<PyJobRun> = Python::attach(|py| -> PyResult<_> { Ok(run.bind(py).cast::<PyJobRun>()?.clone().unbind()) })?;
+                let _ = run.get().0.parent.set(Arc::clone(self));
+                *lock(&self.run) = Some(run);
                 Ok(true)
             }
+            // a job process acks, then ends with its job (at once without one); an inference
+            // process exits
             super::SHUTDOWN_REQUEST => {
                 let reason = str_of("reason");
-                let done = host.await_call(|h| h.call_method1("_core_shutdown", (reason,))).await?;
-                Ok(!Python::attach(|py| done.bind(py).is_truthy())?)
+                if !self.job {
+                    let _ = self.send(message(super::EXITING, Some(reason))).await;
+                    return Ok(false);
+                }
+                if self.send(message(super::SHUTDOWN_REQUEST_ACK, None)).await.is_err() {
+                    return Ok(false);
+                }
+                let run = Python::attach(|py| lock(&self.run).as_ref().map(|r| r.clone_ref(py)));
+                let Some(run) = run else {
+                    let _ = self.send(message(super::SHUTTING_DOWN, None)).await;
+                    return Ok(false);
+                };
+                let reason = if reason.is_empty() { "parent process shutdown".into() } else { reason };
+                run.get().0.end(reason, false);
+                Ok(true)
             }
+            // the inference process runs it on the host (`_core_inference(method, data)`)
             super::INFERENCE_REQUEST => {
                 let data = match msg.get("data") {
                     Some(Value::Bytes(data)) => data.clone(),
                     _ => Vec::new(),
                 };
                 let (method, request_id) = (str_of("method"), str_of("request_id"));
-                host.await_call(|h| {
-                    let data = PyBytes::new(h.py(), &data);
-                    h.call_method1("_core_inference", (method, request_id, data))
-                })
-                .await?;
-                Ok(true)
+                let out = host
+                    .await_call(|h| h.call_method1("_core_inference", (method, PyBytes::new(h.py(), &data))))
+                    .await;
+                let (data, error) = Python::attach(|py| match out {
+                    Ok(out) if out.is_none(py) => (Value::Absent, String::new()),
+                    Ok(out) => match out.extract::<Vec<u8>>(py) {
+                        Ok(bytes) => (Value::Bytes(bytes), String::new()),
+                        Err(e) => (Value::Absent, e.value(py).to_string()),
+                    },
+                    Err(e) => {
+                        let error = e.value(py).to_string();
+                        py_log(Level::Error, "error running inference", Some(e));
+                        (Value::Absent, error)
+                    }
+                });
+                let reply = IpcMessage::new(super::INFERENCE_RESPONSE, vec![Value::Str(request_id), data, Value::Str(error)])
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                Ok(self.send(reply).await.is_ok())
             }
             super::DUMP_STACK_TRACE_REQUEST => {
                 host.await_call(|h| h.call_method0("_core_dump_stacks")).await?;
@@ -604,23 +671,56 @@ impl Child {
 
 #[pymethods]
 impl PyIpcClient {
-    /// `health_timeout`: seconds of parent silence after which the child calls itself orphaned.
+    /// The handshake on the parent's socket `fd`, blocking: the parent's InitializeRequest, then
+    /// `initialize(http_proxy)` and the answer (the error it raised, re-raised here). `job`: a job
+    /// process, else an inference process. Once initialized, the child calls itself orphaned when
+    /// the parent goes quiet past its `ping_timeout` (+10 s); a parent with no ping deadline (a
+    /// job thread's) never does.
     #[new]
-    #[pyo3(signature = (fd, health_timeout = None))]
-    fn new(fd: i64, health_timeout: Option<f64>) -> PyResult<Self> {
+    #[pyo3(signature = (fd, initialize, *, job))]
+    fn new(py: Python<'_>, fd: i64, initialize: Bound<'_, PyAny>, job: bool) -> PyResult<Self> {
         check_pid()?;
+        let mut sock = std_socket(fd)?;
+        let closed = |_| PyRuntimeError::new_err("failed to initialize proc_client");
+        let frame = py.detach(|| recv_blocking(&mut sock)).map_err(closed)?;
+        let req = IpcMessage::decode(&frame).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        if req.id() != super::INITIALIZE_REQUEST {
+            return Err(PyAssertionError::new_err("first message must be proto.InitializeRequest"));
+        }
+        let http_proxy = Some(req.get_str("http_proxy")).filter(|p| !p.is_empty());
+        let initialized = initialize.call1((http_proxy,));
+        let error = initialized.as_ref().err().map(|e| e.value(py).to_string()).unwrap_or_default();
+        let answer = message(super::INITIALIZE_RESPONSE, Some(error));
+        py.detach(|| send_blocking(&mut sock, &answer)).map_err(closed)?;
+        initialized?;
+
+        let float = |name: &str| match req.get(name) {
+            Some(Value::Float(v)) => f64::from(*v),
+            _ => 0.0,
+        };
+        let (ping_interval, ping_timeout) = (float("ping_interval"), float("ping_timeout"));
+        let health_timeout = (ping_interval > 0.0 && ping_timeout > 0.0)
+            .then(|| secs(ping_timeout + super::HEALTH_CHECK_GRACE));
         let _rt = pyo3_async_runtimes::tokio::get_runtime().enter();
-        let health_timeout = health_timeout.map(super::secs);
         Ok(Self(Arc::new(Child {
-            client: IpcClient::new(socket(fd)?, health_timeout),
+            client: IpcClient::new(into_async(sock)?, health_timeout),
             inferences: Inferences::default(),
             stop: watch::channel(false).0,
+            job,
+            run: Mutex::new(None),
+            asyncio_debug: matches!(req.get("asyncio_debug"), Some(Value::Bool(true))),
         })))
     }
 
-    /// Serve the parent's messages until the channel closes, `host._core_shutdown(reason)`
-    /// answers true, or `stop()`. `host` (on the running loop) runs `_core_start_job(fields)`,
-    /// `_core_shutdown(reason)`, `_core_inference(method, request_id, data)` and
+    /// The parent's loop runs in debug mode: so does the child's.
+    #[getter]
+    fn asyncio_debug(&self) -> bool {
+        self.0.asyncio_debug
+    }
+
+    /// Serve the parent's messages until the channel closes, the shutdown ends the process, or
+    /// `stop()`. `host` (on the running loop) runs `_core_start_job(fields)` (returning the job's
+    /// `JobRun`), `_core_inference(method, data)` (the result, or raises) and
     /// `_core_dump_stacks()`, each a coroutine. The inference requests still in flight at the end
     /// are cancelled.
     fn serve<'py>(&self, py: Python<'py>, host: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
@@ -673,14 +773,6 @@ impl PyIpcClient {
             let sender = child.clone();
             let send = |msg: IpcMessage| async move { sender.send(msg).await };
             child.inferences.request(&prefix, method, data, send).await
-        })
-    }
-
-    fn send_bytes<'py>(&self, py: Python<'py>, data: Cow<[u8]>) -> PyResult<Bound<'py, PyAny>> {
-        let child = self.0.clone();
-        let data = data.into_owned();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            child.client.send(&data).await.map_err(duplex_closed)
         })
     }
 
@@ -891,6 +983,8 @@ pub struct PyJobRun(Arc<JobRunInner>);
 
 struct JobRunInner {
     host: std::sync::OnceLock<CancellingHandle>,
+    /// The parent the job process reports its end to (none for a job run outside one).
+    parent: std::sync::OnceLock<Arc<Child>>,
     fake: bool,
     session_end_timeout: f64,
     state: Mutex<JobRunState>,
@@ -903,12 +997,34 @@ struct JobRunInner {
 
 /// `msg` on the `livekit.agents` logger, with `exc`'s traceback.
 fn py_log(level: Level, msg: &str, exc: Option<PyErr>) {
+    py_log_extra(level, msg, exc, Vec::new());
+}
+
+/// A log record's `extra`.
+fn extra_dict(py: Python<'_>, extra: super::Extra) -> PyResult<Bound<'_, PyDict>> {
+    let fields = PyDict::new(py);
+    for (key, value) in extra {
+        match value {
+            ExtraValue::Int(v) => fields.set_item(key, v)?,
+            ExtraValue::Float(v) => fields.set_item(key, v)?,
+            ExtraValue::Str(v) => fields.set_item(key, v)?,
+            ExtraValue::Bool(v) => fields.set_item(key, v)?,
+        }
+    }
+    Ok(fields)
+}
+
+/// `msg` on the `livekit.agents` logger, with `exc`'s traceback and the `extra` fields.
+fn py_log_extra(level: Level, msg: &str, exc: Option<PyErr>, extra: super::Extra) {
     Python::attach(|py| {
         let logged = (|| -> PyResult<()> {
             let logger = py.import("logging")?.call_method1("getLogger", ("livekit.agents",))?;
             let kwargs = PyDict::new(py);
             if let Some(exc) = exc {
                 kwargs.set_item("exc_info", exc.into_value(py))?;
+            }
+            if !extra.is_empty() {
+                kwargs.set_item("extra", extra_dict(py, extra)?)?;
             }
             logger.call_method("log", (level as i32, msg), Some(&kwargs))?;
             Ok(())
@@ -1132,7 +1248,15 @@ impl JobRunInner {
             .await;
         }
         self.spanned("session_end_upload", "_core_upload", None, "error in job_ctx._on_session_end").await;
-        self.call(|h| h.call_method1("_core_finish", (reason.as_str(), user_initiated))).await?;
+        // the parent learns the job is ending, then why
+        if let Some(parent) = self.parent.get() {
+            let _ = parent.send(message(super::SHUTTING_DOWN, None)).await;
+        }
+        let extra = vec![("reason", ExtraValue::Str(reason.clone())), ("user_initiated", ExtraValue::Bool(user_initiated))];
+        py_log_extra(Level::Debug, "shutting down job task", None, extra);
+        if let Some(parent) = self.parent.get() {
+            let _ = parent.send(message(super::EXITING, Some(reason.clone()))).await;
+        }
         let disconnect = self.span("room_disconnect", None)?;
         let r = self
             .call(|h| h.call_method1("_core_disconnect", (disconnect.clone_ref(h.py()),)))
@@ -1180,6 +1304,7 @@ impl PyJobRun {
     fn new(fake_job: bool, session_end_timeout: f64, redaction: bool) -> Self {
         Self(Arc::new(JobRunInner {
             host: std::sync::OnceLock::new(),
+            parent: std::sync::OnceLock::new(),
             fake: fake_job,
             session_end_timeout,
             state: Mutex::new(JobRunState { redaction, ..JobRunState::default() }),

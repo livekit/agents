@@ -24,8 +24,7 @@ from dataclasses import dataclass
 from .. import _core
 from ..inference_runner import _RunnersDict
 from ..log import logger
-from . import proto
-from .proc_client import _dump_stack_traces_impl, _ProcClient
+from .proc_client import _dump_stack_traces_impl, serve_parent
 
 
 @dataclass
@@ -36,17 +35,7 @@ class ProcStartArgs:
 
 
 def proc_main(args: ProcStartArgs) -> None:
-    from .proc_client import _ProcClient
-
-    inf_proc = _InferenceProc(args.runners)
-
-    client = _ProcClient(args.mp_cch, args.log_cch, inf_proc.initialize, inf_proc)
-    try:
-        client.initialize()
-    except Exception:
-        return  # initialization failed, exit (initialize will send an error to the worker)
-
-    client.run()
+    serve_parent(args.mp_cch, _InferenceProc(args.runners), job=False)
 
 
 class _InferenceProc:
@@ -55,9 +44,7 @@ class _InferenceProc:
         self._runners = {name: runner() for name, runner in runners.items()}
         self._executor = ThreadPoolExecutor(max_workers=math.ceil(_core.cpu_count()))
 
-    def initialize(self, init_req: proto.InitializeRequest, client: _ProcClient) -> None:
-        self._client = client
-
+    def initialize(self, http_proxy: str | None) -> None:
         for runner in self._runners.values():
             try:
                 logger.debug(
@@ -81,25 +68,14 @@ class _InferenceProc:
 
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
-    async def _core_shutdown(self, reason: str) -> bool:
-        await self._client.send(proto.Exiting(reason=reason))
-        return True
-
     async def _core_dump_stacks(self) -> None:
         _dump_stack_traces_impl()
 
-    async def _core_inference(self, method: str, request_id: str, data: bytes) -> None:
-        loop = asyncio.get_running_loop()
-
+    async def _core_inference(self, method: str, data: bytes) -> bytes | None:
         if method not in self._runners:
             logger.warning("unknown inference method", extra={"method": method})
-
-        try:
-            out = await loop.run_in_executor(self._executor, self._runners[method].run, data)
-            await self._client.send(proto.InferenceResponse(request_id=request_id, data=out))
-        except Exception as e:
-            logger.exception("error running inference")
-            await self._client.send(proto.InferenceResponse(request_id=request_id, error=str(e)))
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, self._runners[method].run, data)
 
     async def aclose(self) -> None:
         pass

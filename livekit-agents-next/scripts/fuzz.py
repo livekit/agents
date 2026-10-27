@@ -39,6 +39,8 @@ import gc
 import json
 import logging
 import random
+import socket
+import struct
 import sys
 import time
 from collections.abc import AsyncIterable
@@ -784,14 +786,13 @@ async def room_call_body(call: Call) -> None:
 
 async def job_call(call: Call) -> None:
     """A console job, as a job process runs it, whose entrypoint starts a session on its room."""
-    from livekit.agents import get_job_context
+    from livekit.agents import _core, get_job_context
     from livekit.agents.ipc import proto
     from livekit.agents.ipc.job_proc_lazy_main import _JobProc
     from livekit.agents.job import (
         JobAcceptArguments,
         JobContext,
         JobExecutorType,
-        JobProcess,
         RunningJobInfo,
     )
     from livekit.protocol import agent as agent_proto, models
@@ -829,17 +830,6 @@ async def job_call(call: Call) -> None:
     async def session_end(ctx: JobContext) -> None:
         in_job("session end")
 
-    class Parent:
-        def __init__(self) -> None:
-            self.sent: list[str] = []
-
-        async def send(self, msg: object) -> None:
-            self.sent.append(type(msg).__name__)
-
-        def stop(self) -> None:
-            pass
-
-    parent = Parent()
     runner = _JobProc(
         lambda _: None,
         entrypoint,
@@ -847,10 +837,28 @@ async def job_call(call: Call) -> None:
         session_end_timeout=5.0,
         executor_type=JobExecutorType.THREAD,
     )
-    runner._client = parent  # type: ignore[assignment]
-    runner._job_proc = JobProcess(
-        executor_type=JobExecutorType.THREAD, user_arguments=None, http_proxy=None
-    )
+    # the parent's side of the socket, written and read by hand; the handshake's request is
+    # already there, so the client reads it at once
+    parent, child = socket.socketpair()
+
+    def frame(msg: Any) -> bytes:
+        fields = msg._to_wire() if isinstance(msg, proto.StartJobRequest) else vars(msg)
+        data = _core.ipc_encode(msg.MSG_ID, fields)
+        return struct.pack(">I", len(data)) + data
+
+    parent.sendall(frame(proto.InitializeRequest()))
+    runner._client = _core.IpcClient(child.detach(), runner.initialize, job=True)
+    reader, writer = await asyncio.open_connection(sock=parent)
+
+    async def received() -> str:
+        (size,) = struct.unpack(">I", await reader.readexactly(4))
+        msg_id, _ = _core.ipc_decode(await reader.readexactly(size))
+        return proto.IPC_MESSAGES[msg_id].__name__
+
+    sent = [await received()]
+    # the core's IPC client starts the job from its own task, whose context the steps it later
+    # runs (the entrypoint, the callbacks) do not share
+    serving = contextvars.Context().run(asyncio.ensure_future, runner._client.serve(runner))
     request = proto.StartJobRequest()
     request.running_job = RunningJobInfo(
         accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
@@ -860,17 +868,20 @@ async def job_call(call: Call) -> None:
         worker_id="fuzz",
         fake_job=True,
     )
-    # the core's IPC client starts the job from its own task, whose context the steps it later
-    # runs (the entrypoint, the callbacks) do not share
-    contextvars.Context().run(runner._start_job, request)
+    writer.write(frame(request))
+    sent += [await asyncio.wait_for(received(), 60) for _ in range(2)]
+    await asyncio.wait_for(serving, 60)
     assert runner._job_task is not None
     await asyncio.wait_for(runner._job_task, 60)
+    await runner._client.aclose()
+    writer.close()
     for where in ("entrypoint", "shutdown callback", "session end"):
         check(seen.get(where), f"the {where} ran without the job's context")
     check(seen.get("primary"), "the session on the job's room is not the job's primary session")
     check(seen.get("connects") == 1, f"the job's room was connected {seen.get('connects')} times")
     check(call.closes == 1, f"the job's session closed {call.closes} times")
-    check(parent.sent == ["ShuttingDown", "Exiting"], f"the job told its parent {parent.sent}")
+    told = ["InitializeResponse", "ShuttingDown", "Exiting"]
+    check(sent == told, f"the job told its parent {sent}")
 
 
 # ============================================================================ the runner
