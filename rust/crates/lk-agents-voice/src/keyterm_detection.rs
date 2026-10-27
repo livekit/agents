@@ -869,6 +869,7 @@ impl Driver {
             }
             stt.update_keyterms(&terms);
         }
+        self.shared.keyterms.send_replace(Some(terms.clone()));
         out.trace(DetectorStep::KeytermsPushed { terms });
     }
 

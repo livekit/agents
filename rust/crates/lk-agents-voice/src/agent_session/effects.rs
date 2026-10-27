@@ -16,7 +16,7 @@ use crate::audio_recognition::{EndOfTurnInfo, InterruptionSignal, TurnDetectionM
 use crate::events::SessionEvent;
 use crate::run_result::Owned;
 use crate::trace::{
-    CoreStep, InputStep, InterruptStep, RealtimeStep, Step, ToolStep, Trace, TurnStep,
+    CoreStep, InputStep, InterruptStep, Journal, RealtimeStep, Step, ToolStep, TurnStep,
 };
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
@@ -24,7 +24,7 @@ use lk_agents_abi::voice::events::UserState;
 use lk_agents_abi::voice::io::AudioOutputExt;
 use lk_agents_abi::{FrameId, Ts};
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub struct Out {
     frame: FrameId,
@@ -34,11 +34,10 @@ pub struct Out {
     machine: Effects,
     signals: VecDeque<Signal>,
     answers: Vec<(RequestId, Answer)>,
-    trace: Arc<Mutex<Trace>>,
+    journal: Journal,
 }
 
 impl std::fmt::Debug for Out {
-    /// Without the trace, which would bury the fields a failing test's reader wants.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Out").field("frame", &self.frame).field("todo", &self.todo).finish()
     }
@@ -46,14 +45,14 @@ impl std::fmt::Debug for Out {
 
 impl Out {
     /// `frame` is the driver's `current` at the moment the event was dequeued.
-    pub fn new(frame: FrameId, trace: Arc<Mutex<Trace>>) -> Self {
+    pub fn new(frame: FrameId, journal: Journal) -> Self {
         Out {
             frame,
             todo: Vec::new(),
             machine: Effects::new(),
             signals: VecDeque::new(),
             answers: Vec::new(),
-            trace,
+            journal,
         }
     }
 
@@ -85,60 +84,50 @@ impl Out {
     /// instant it was decided. Called after every transition, so the journal reads in causal
     /// order; `perform` records nothing.
     pub fn absorb(&mut self) {
-        for effect in self.machine.take() {
-            match &effect {
-                // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
-                Effect::Emit(ev) => self.record(Step::Emitted(ev.journal_form())),
-                Effect::Arm(t, at) => {
-                    self.record(Step::Core(CoreStep::TimerArmed { timer: (*t).into(), at: *at }))
-                }
-                Effect::Cancel(t) => self.record(Step::Core(CoreStep::TimerCancelled((*t).into()))),
-                Effect::Provider(call) => {
-                    self.record(Step::Input(InputStep::ProviderCalled(*call)))
-                }
-                Effect::Detector(call) => {
-                    self.record(Step::Input(InputStep::DetectorCalled(*call)))
-                }
-                Effect::Audio(crate::agent_session::effects::AudioOp::Gate {
-                    speech,
-                    op,
-                    cause,
-                    output: _,
-                }) => self.record(Step::Interrupt(InterruptStep::PlayoutGate {
-                    speech: *speech,
-                    op: *op,
-                    cause: *cause,
-                })),
-                // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
-                Effect::Audio(
-                    crate::agent_session::effects::AudioOp::SetVideoInput
-                    | crate::agent_session::effects::AudioOp::SetAudioOutput { .. }
-                    | crate::agent_session::effects::AudioOp::SetTranscriptionOutput { .. }
-                    | crate::agent_session::effects::AudioOp::SetOutputEnabled { .. },
-                ) => {}
-                Effect::Decision(d) => self.record(Step::Decided(d.clone())),
-                // Journalled through the data plane's reports.
-                Effect::Forwarder(_) => {}
-                Effect::Realtime(cmd) => self.record(Step::Realtime(RealtimeStep::Sent {
-                    kind: cmd.kind(),
-                    req_id: cmd.req_id().map(str::to_owned),
-                })),
-                Effect::CancelTool { call_id, .. } => {
-                    self.record(Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() }))
-                }
-            }
-            self.todo.push(effect);
+        let effects = self.machine.take();
+        if self.journal.is_on() {
+            effects.iter().for_each(|effect| self.journal_effect(effect));
         }
+        self.todo.extend(effects);
     }
 
-    /// Record a driver decision. Immediate: the journal is shared, so there is nothing to buffer.
+    fn journal_effect(&self, effect: &Effect) {
+        let step = match effect {
+            // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
+            Effect::Emit(ev) => Step::Emitted(ev.journal_form()),
+            Effect::Arm(t, at) => Step::Core(CoreStep::TimerArmed { timer: (*t).into(), at: *at }),
+            Effect::Cancel(t) => Step::Core(CoreStep::TimerCancelled((*t).into())),
+            Effect::Provider(call) => Step::Input(InputStep::ProviderCalled(*call)),
+            Effect::Detector(call) => Step::Input(InputStep::DetectorCalled(*call)),
+            Effect::Audio(AudioOp::Gate { speech, op, cause, output: _ }) => {
+                let (speech, op, cause) = (*speech, *op, *cause);
+                Step::Interrupt(InterruptStep::PlayoutGate { speech, op, cause })
+            }
+            // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
+            Effect::Audio(
+                AudioOp::SetVideoInput
+                | AudioOp::SetAudioOutput { .. }
+                | AudioOp::SetTranscriptionOutput { .. }
+                | AudioOp::SetOutputEnabled { .. },
+            ) => return,
+            Effect::Decision(d) => Step::Decided(d.clone()),
+            // Journalled through the data plane's reports.
+            Effect::Forwarder(_) => return,
+            Effect::Realtime(cmd) => Step::Realtime(RealtimeStep::Sent {
+                kind: cmd.kind(),
+                req_id: cmd.req_id().map(str::to_owned),
+            }),
+            Effect::CancelTool { call_id, .. } => {
+                Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
+            }
+        };
+        self.journal.record(step);
+    }
+
+    /// Record a driver decision, after the effects decided before it.
     pub fn trace(&mut self, step: impl Into<Step>) {
         self.absorb();
-        self.record(step.into());
-    }
-
-    fn record(&mut self, step: Step) {
-        self.trace.lock().unwrap_or_else(|p| p.into_inner()).push(step);
+        self.journal.record(step);
     }
 
     pub fn take(&mut self) -> Vec<Effect> {

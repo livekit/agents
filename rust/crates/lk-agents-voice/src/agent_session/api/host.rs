@@ -21,7 +21,6 @@ use crate::agent_session::{Answer, CommitSuperseded, HostEvent};
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
-use crate::trace::Step;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::HostWire;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
@@ -312,6 +311,7 @@ impl SessionApi {
 
         let resources = lk_agents_abi::resources::Resources::default();
         let builder = DriverBuilder {
+            journal: Default::default(),
             resources: resources.clone(),
             session_id: session_id.unwrap_or_else(crate::agent_session::mint_session_id),
             agent,
@@ -913,12 +913,6 @@ impl SessionApi {
         Reply::new(async move { room_io.unset_participant().await })
     }
 
-    /// The driver's decision log, one `repr` per step.
-    #[host(method(name = "steps"))]
-    pub fn host_steps(&self) -> Vec<String> {
-        self.steps().iter().map(|s| format!("{s:?}")).collect()
-    }
-
     /// `RunContext.with_filler(..)` entered for tool `call_id` of `speech_id`: after `delay` s idle
     /// say `text` (or ask `source`, the host's callable), then repeat every `interval`. Returns the
     /// scope's number, which `filler_stop` takes.
@@ -1281,21 +1275,12 @@ impl SessionApi {
         })
     }
 
-    /// `session.keyterms`: the list the recogniser was last handed (static + confirmed), read off
-    /// the journal's last `KeytermsPushed`; `None` before any push.
+    /// `session.keyterms`: the list the recogniser was last handed (static + confirmed); `None`
+    /// before any push.
     #[host(method)]
     pub fn keyterms(&self) -> Option<Vec<String>> {
         match &*self.lock() {
-            Stage::Running(r) => {
-                r.trace.lock().unwrap_or_else(|p| p.into_inner()).steps().iter().rev().find_map(
-                    |s| match s {
-                        Step::Detector(crate::trace::DetectorStep::KeytermsPushed { terms }) => {
-                            Some(terms.clone())
-                        }
-                        _ => None,
-                    },
-                )
-            }
+            Stage::Running(r) => r.keyterms.borrow().clone(),
             _ => None,
         }
     }

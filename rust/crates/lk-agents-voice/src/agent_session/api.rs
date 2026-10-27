@@ -19,7 +19,7 @@ use crate::events::SessionEvent;
 use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
-use crate::trace::{CoreStep, Step, Trace};
+use crate::trace::{CoreStep, Step};
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::voice::events::HostWire;
 use lk_agents_abi::voice::session_effects::StartPlan;
@@ -72,7 +72,7 @@ pub struct SessionApi {
     /// Every provider handed over is registered here; the driver performs against it.
     resources: lk_agents_abi::resources::Resources,
     #[cfg(feature = "dst")]
-    probe: Mutex<Option<Probe>>,
+    probe: Mutex<Option<(HostEventProbe, oneshot::Sender<crate::runtime::Runtime>)>>,
 }
 
 /// Test-only (`dst`): what a deterministic simulation needs from a session it drives through this
@@ -90,10 +90,21 @@ pub struct Probe {
 #[cfg(feature = "dst")]
 pub type HostEventProbe = Box<dyn FnMut(&HostEvent) + Send>;
 
+#[cfg(any(test, feature = "dst"))]
+impl SessionApi {
+    /// Every step the driver journals, from the first, to `observer`. Before `start()`.
+    pub fn observe(&self, observer: impl FnMut(&Step) + Send + 'static) {
+        if let Stage::Ready(ready) = &mut *self.lock() {
+            ready.builder.journal = crate::trace::Journal::observed(observer);
+        }
+    }
+}
+
 #[cfg(feature = "dst")]
 impl SessionApi {
-    pub fn probe(&self, probe: Probe) {
-        *self.probe.lock().unwrap_or_else(|p| p.into_inner()) = Some(probe);
+    pub fn probe(&self, Probe { step, host_event, runtime }: Probe) {
+        self.observe(step);
+        *self.probe.lock().unwrap_or_else(|p| p.into_inner()) = Some((host_event, runtime));
     }
 
     /// Every provider and leg the session still holds.
@@ -174,17 +185,9 @@ impl SessionApi {
             builder.room_io_events = room_io.events();
 
             let (mut runtime, handle) = builder.start().await?;
-            let SessionHandle { api, events, answers, trace, peer, ivr_detection } = handle;
+            let SessionHandle { api, events, answers, keyterms, peer, ivr_detection } = handle;
             #[cfg(feature = "dst")]
-            let (host_event, queue_owner) = match probe {
-                Some(Probe { mut step, host_event, runtime }) => {
-                    let mut trace = trace.lock().unwrap_or_else(|p| p.into_inner());
-                    trace.steps().iter().for_each(&mut step);
-                    trace.observe(step);
-                    (Some(host_event), Some(runtime))
-                }
-                None => (None, None),
-            };
+            let (host_event, queue_owner) = probe.unzip();
             // The IVR navigator's task, subscribed before the opening cycle.
             start_ivr(&peer, ivr_detection);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
@@ -225,7 +228,7 @@ impl SessionApi {
             *stage.lock().unwrap_or_else(|p| p.into_inner()) = Stage::Running(Running {
                 api,
                 calls,
-                trace,
+                keyterms,
                 peer,
                 amd: None,
                 tasks,
@@ -336,14 +339,6 @@ impl SessionApi {
             }
             Ok(())
         })
-    }
-
-    /// Cloned: the loop is still writing. Empty until the loop runs.
-    pub fn steps(&self) -> Vec<Step> {
-        match &*self.lock() {
-            Stage::Running(r) => r.trace.lock().unwrap_or_else(|p| p.into_inner()).steps().to_vec(),
-            _ => Vec::new(),
-        }
     }
 
     /// `_aclose_impl`: resolves once the loop returned and the drain handed over the last event.
@@ -657,7 +652,8 @@ struct Ready {
 struct Running {
     api: Tx<Command>,
     calls: Calls,
-    trace: Arc<Mutex<Trace>>,
+    /// `session.keyterms`, as the driver last pushed them.
+    keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     peer: PeerHandle,
     /// One per session.
     amd: Option<crate::amd::detector::AmdHandle>,

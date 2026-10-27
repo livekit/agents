@@ -712,11 +712,6 @@ impl VoiceSession {
         })
     }
 
-    #[napi(js_name = "steps")]
-    pub fn steps(&self) -> Vec<String> {
-        self.inner.host_steps()
-    }
-
     #[napi(js_name = "fillerStop")]
     pub fn filler_stop(&self, env: Env, id: i64) -> napi::Result<()> {
         crate::host_error::run(&env, || {

@@ -15,7 +15,7 @@ use crate::audio_recognition::AudioRecognition;
 use crate::data_plane::{AudioForwarder, ForwarderCommand};
 use crate::generation::GenEvent;
 use crate::generation::Instructions;
-use crate::trace::{CoreStep, RealtimeStep, Step, Trace};
+use crate::trace::{CoreStep, Journal, RealtimeStep, Step};
 use lk_agents_abi::turn::detector::DetectorLeg;
 use lk_agents_abi::utils::frame::FrameTable;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
@@ -23,7 +23,7 @@ use lk_agents_abi::{
     FrameId, Llm, Spawner, SpawnerExt, SpeechEvent, Stt, TimerSet, Ts, Tts, Vad, VadEvent,
 };
 use lk_agents_rtc::RoomEvent;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct DriverBuilder {
@@ -80,6 +80,8 @@ pub struct DriverBuilder {
     pub toolset: crate::tool_executor::Toolset,
     /// Prefixes every chat item id the session mints, so items from two calls never collide.
     pub session_id: String,
+    /// Where the driver's steps go: nowhere in production.
+    pub journal: Journal,
 }
 
 impl DriverBuilder {
@@ -304,6 +306,8 @@ impl DriverBuilder {
             resources: self.resources.clone(),
             activity:
                 tokio::sync::watch::channel(crate::agent_session::ActivitySnapshot::default()).0,
+            keyterms: tokio::sync::watch::channel(None).0,
+            journal: self.journal.clone(),
         });
 
         let config
@@ -343,20 +347,19 @@ impl DriverBuilder {
 
         let mut session = session;
         session.expressive = self.expressive.clone();
-        let trace = Arc::new(Mutex::new(Trace::new()));
-        {
-            let mut t = trace.lock().unwrap_or_else(|p| p.into_inner());
-            t.push(Step::Core(CoreStep::ConfigApplied {
+        let journal = self.journal;
+        if journal.is_on() {
+            journal.record(Step::Core(CoreStep::ConfigApplied {
                 layer: crate::agent_activity::options::ConfigLayer::Session,
                 effective: Box::new(session.config.effective),
             }));
             // The wall clock at `Ts::ZERO`: the session may already be past it.
             let since_zero = self.time.now().saturating_duration_since(Ts::ZERO);
-            t.push(Step::Core(CoreStep::WallEpoch {
+            journal.record(Step::Core(CoreStep::WallEpoch {
                 at: self.time.wall().checked_sub(since_zero).unwrap_or(std::time::UNIX_EPOCH),
             }));
             if let Some(turn_detection_disabled) = realtime_disabled {
-                t.push(Step::Realtime(RealtimeStep::Opened { turn_detection_disabled }));
+                journal.record(Step::Realtime(RealtimeStep::Opened { turn_detection_disabled }));
             }
         }
 
@@ -414,7 +417,7 @@ impl DriverBuilder {
             shared,
             events: ev_tx,
             answers: answers_tx,
-            trace: Arc::clone(&trace),
+            journal: journal.clone(),
             watch: watch.clone(),
             realtime_tx: rt_tx,
             playback_tx,
@@ -461,10 +464,11 @@ impl DriverBuilder {
         }
         // `ivr_detection=True` is the IVR system's to start; the core starts no system.
         let ivr_detection = driver.session.config.effective.turn.ivr_detection();
+        let keyterms_pushed = driver.shared.keyterms.subscribe();
         let peer = PeerHandle {
             api: api_tx.clone(),
             events: ev_tx_for_peers,
-            trace: Arc::clone(&trace),
+            journal,
             time: self.time.clone(),
             spawner: Arc::clone(&self.spawner),
             watch,
@@ -479,7 +483,7 @@ impl DriverBuilder {
                 api: api_tx,
                 events: ev_rx,
                 answers: answers_rx,
-                trace,
+                keyterms: keyterms_pushed,
                 peer,
                 ivr_detection,
             },

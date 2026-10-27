@@ -34,8 +34,36 @@ fn fake_room(name: &str) -> (Arc<lk_agents_rtc::FakeRoom>, FixedRoom) {
     (room.clone(), FixedRoom { rtc: room, time: Timebase::from_virtual(clock) })
 }
 
+/// A session and the steps it journals.
+struct Recorded {
+    api: SessionApi,
+    steps: Arc<Mutex<Vec<Step>>>,
+}
+
+impl std::ops::Deref for Recorded {
+    type Target = SessionApi;
+    fn deref(&self) -> &SessionApi {
+        &self.api
+    }
+}
+
+impl Recorded {
+    fn steps(&self) -> Vec<Step> {
+        self.steps.lock().unwrap().clone()
+    }
+}
+
+/// A room-only session whose journal the test reads.
+fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> Recorded {
+    let api = unobserved(room, hook_bound);
+    let steps = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&steps);
+    api.observe(move |step: &Step| sink.lock().unwrap().push(step.clone()));
+    Recorded { api, steps }
+}
+
 /// A room-only session, every provider left out, through the host's constructor.
-fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
+fn unobserved(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
     let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
     #[rustfmt::skip]
     let api = SessionApi::host_new(
@@ -96,6 +124,34 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     assert!(matches!(api.send(TurnCommand::Clear), Err(SessionRefused::Closed)));
 }
 
+// Catches: a production session (no observer) that keeps every step it decides, so a long call's
+// memory grows with its length.
+#[tokio::test(start_paused = true)]
+async fn a_session_nobody_observes_keeps_no_journal() {
+    let api = unobserved(fake_room("no-journal").1, None);
+    let opening = api
+        .open(false, move |mut runner: SessionRunner| {
+            Box::pin(async move {
+                while let Some(ev) = runner.next_host_event().await {
+                    if let HostEvent::Hook(call) = ev {
+                        let _ = runner.api().send(Command::HookDone {
+                            id: call.id(),
+                            outcome: HookOutcome::Returned,
+                        });
+                    }
+                }
+            })
+        })
+        .expect("a ready session opens");
+    opening.await.expect("the loop starts");
+    for _ in 0..1000 {
+        api.send(TurnCommand::Clear).expect("the loop runs");
+    }
+    settle().await;
+    let Stage::Running(running) = &*api.lock() else { panic!("the session is not running") };
+    assert!(!running.peer.journal.is_on(), "a session nobody observes journals its steps");
+}
+
 // Catches: `RoomIo::on_agent_state_changed` with no caller, so the agent never writes
 // `lk.agent.state` and a frontend keyed on it shows the agent stuck.
 #[tokio::test(start_paused = true)]
@@ -137,7 +193,7 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
 }
 
 /// A room-only session whose host answers every hook but `on_exit`, which the test answers.
-async fn session_holding_exits() -> (SessionApi, tokio::sync::mpsc::UnboundedReceiver<HookId>) {
+async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedReceiver<HookId>) {
     // A host that runs hooks: without a bound the driver treats `on_exit` as over at once.
     let api = room_only(fake_room("session-api-test").1, Some(10.0));
     let (exits_tx, exits) = tokio::sync::mpsc::unbounded_channel();
@@ -163,12 +219,12 @@ async fn session_holding_exits() -> (SessionApi, tokio::sync::mpsc::UnboundedRec
     (api, exits)
 }
 
-fn answer_exit(api: &SessionApi, id: HookId) {
+fn answer_exit(api: &Recorded, id: HookId) {
     api.send(Command::HookDone { id, outcome: HookOutcome::Returned }).expect("the loop runs");
 }
 
 /// The `on_exit`s issued, of `agent` or of any.
-fn on_exits(api: &SessionApi, agent: Option<&str>) -> usize {
+fn on_exits(api: &Recorded, agent: Option<&str>) -> usize {
     api.steps()
         .iter()
         .filter(|s| {
@@ -237,7 +293,7 @@ async fn a_drain_during_the_close_is_answered_by_the_closes_drain() {
 
 /// A `say(audio=)` from `origin`, its frames held by the returned sender, and its handle.
 fn say_from(
-    api: &SessionApi,
+    api: &Recorded,
     origin: Origin,
 ) -> (tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>, Arc<SpeechHandle>) {
     let (words, rx) = tokio::sync::mpsc::channel(4);
@@ -256,7 +312,7 @@ fn say_from(
 /// A host handoff whose drain waits on a speech still being said: the window a switch holds the
 /// host's speech in. Dropping the returned sender ends that speech, and the swap follows.
 async fn handoff_draining(
-    api: &SessionApi,
+    api: &Recorded,
     exits: &mut tokio::sync::mpsc::UnboundedReceiver<HookId>,
 ) -> (
     tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>,
@@ -274,12 +330,12 @@ async fn handoff_draining(
     (words, swap)
 }
 
-fn position(api: &SessionApi, step: impl Fn(&Step) -> bool) -> Option<usize> {
+fn position(api: &Recorded, step: impl Fn(&Step) -> bool) -> Option<usize> {
     api.steps().iter().position(step)
 }
 
 fn rejected(
-    api: &SessionApi,
+    api: &Recorded,
     speech: SpeechId,
 ) -> Option<crate::agent_activity::scheduling::Rejected> {
     api.steps().iter().find_map(|s| match s {

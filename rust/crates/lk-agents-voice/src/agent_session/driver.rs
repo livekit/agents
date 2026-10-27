@@ -16,7 +16,7 @@ use crate::generation::GenEvent;
 use crate::room_io::StreamOpened;
 use crate::speech_handle::SpeechHandle;
 use crate::trace::{
-    CloseAct, CloseStep, CoreStep, HandoffStep, PlayoutStep, RoomStep, SpeechStep, Step, Trace,
+    CloseAct, CloseStep, CoreStep, HandoffStep, PlayoutStep, RoomStep, SpeechStep, Step, Journal,
 };
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
@@ -75,7 +75,7 @@ impl std::fmt::Debug for WatchHub {
 pub struct PeerHandle {
     pub api: Tx<Command>,
     pub(super) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
-    pub trace: Arc<Mutex<Trace>>,
+    pub journal: Journal,
     pub time: crate::agent_session::Timebase,
     pub spawner: Arc<dyn lk_agents_abi::Spawner>,
     pub(super) watch: WatchHub,
@@ -95,11 +95,13 @@ impl PeerHandle {
     }
 
     pub fn journal(&self, step: Step) {
-        self.trace.lock().unwrap_or_else(|p| p.into_inner()).push(step);
+        self.journal.record(step);
     }
 
     pub fn emit(&self, ev: SessionEvent) {
-        self.journal(Step::Emitted(ev.journal_form()));
+        if self.journal.is_on() {
+            self.journal(Step::Emitted(ev.journal_form()));
+        }
         let _ = self.events.send(HostEvent::Session(ev));
     }
 
@@ -132,7 +134,8 @@ pub struct SessionHandle {
     pub events: Rx<HostEvent>,
     /// Each awaited command's answer, once, by its call id.
     pub answers: Rx<(RequestId, Answer)>,
-    pub trace: Arc<Mutex<Trace>>,
+    /// The last keyterm list pushed to the recogniser; `None` before any push.
+    pub keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// What a system runs on; the host starts the systems it configures on this after `start()`.
     pub peer: PeerHandle,
     pub ivr_detection: bool,
@@ -249,7 +252,7 @@ pub enum Event {
 /// [`Runtime`](crate::runtime::Runtime), it merges them with its timers and orchestrates the
 /// components in sequence: the [`AgentSession`], its running
 /// [`AgentActivity`](crate::agent_activity::AgentActivity), and the [`AgentInput`] legs. Every
-/// decision is journalled into the shared trace, dated on the session clock.
+/// decision is journalled, dated on the session clock.
 pub struct Driver {
     pub(crate) session: VoiceSession,
     pub(crate) activity: crate::agent_activity::AgentActivity,
@@ -261,7 +264,7 @@ pub struct Driver {
     pub(crate) shared: Arc<SessionShared>,
     pub(crate) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
     pub(super) answers: tokio::sync::mpsc::UnboundedSender<(RequestId, Answer)>,
-    pub(super) trace: Arc<Mutex<Trace>>,
+    pub(crate) journal: Journal,
     /// The core knows no subscriber.
     pub(crate) watch: WatchHub,
     /// So a player's `ToolsDone` is ordered with the socket's events.
@@ -285,17 +288,19 @@ pub struct Driver {
 impl Driver {
     /// Only while performing an effect, when no cycle exists.
     pub(crate) fn journal(&self, step: Step) {
-        self.trace.lock().unwrap_or_else(|p| p.into_inner()).push(step);
+        self.journal.record(step);
     }
 
     /// An event sent to the host where no cycle exists, journalled first.
     pub(crate) fn emit_now(&self, ev: SessionEvent) {
-        self.journal(Step::Emitted(ev.journal_form()));
+        if self.journal.is_on() {
+            self.journal(Step::Emitted(ev.journal_form()));
+        }
         let _ = self.events.send(HostEvent::Session(ev));
     }
 
     pub(crate) fn out(&self) -> Out {
-        Out::new(self.current, Arc::clone(&self.trace))
+        Out::new(self.current, self.journal.clone())
     }
 
     /// Performed with its events on the host stream, so `start()` returns after them. Idempotent.

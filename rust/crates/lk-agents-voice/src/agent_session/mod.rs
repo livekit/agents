@@ -405,6 +405,10 @@ pub struct SessionShared {
     pub activity: tokio::sync::watch::Sender<ActivitySnapshot>,
     /// The providers by id.
     pub resources: lk_agents_abi::resources::Resources,
+    /// `session.keyterms`: the last list pushed to the recogniser.
+    pub keyterms: tokio::sync::watch::Sender<Option<Vec<String>>>,
+    /// A task's steps reach the loop's journal only when one is observed.
+    pub journal: crate::trace::Journal,
 }
 
 impl SessionShared {
@@ -418,8 +422,11 @@ impl SessionShared {
         let _ = self.events.send(ev);
     }
 
+    /// Through the queue, so the step is journalled in the loop's order.
     pub fn trace(&self, step: impl Into<crate::trace::Step>) {
-        self.report(GenEvent::Trace(step.into()));
+        if self.journal.is_on() {
+            self.report(GenEvent::Trace(step.into()));
+        }
     }
 
     pub fn recorder_tap(&self) -> Option<crate::recorder_io::RecorderTap> {
