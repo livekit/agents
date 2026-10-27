@@ -984,46 +984,6 @@ async def test_the_shared_client_names_no_thread_it_was_not_given(
 
 
 @pytest.mark.rule("R23")
-async def test_an_answer_in_several_flagged_parts_is_said_part_by_part(
-    door: Callable[..., Door],
-) -> None:
-    """An answer artifact with three flagged parts: the front desk says all three as written,
-    in order, with no model step."""
-
-    async def script(updater: TaskUpdater, context: RequestContext) -> None:
-        await updater.add_artifact(
-            [_flagged("one"), _flagged("two"), _flagged("three")],
-            artifact_id="a1",
-            name="answer",
-            last_chunk=True,
-        )
-        await updater.complete()
-
-    async with stock_server(_Scripted(script)) as app, stock_http(app) as http:
-        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
-        model = ScriptedLLM(Reply(tool_calls=[call("ask", "c1", request="the policy")]))
-        front = Agent(instructions="front desk", tools=[delegate], llm=model)
-
-        async def desk(ctx: A2ASessionContext[Any]) -> object:
-            return (await front.run(ctx.message, message_history=ctx.message_history)).output
-
-        sent = await door(desk).send("tell me the policy")
-        await delegate.aclose()
-
-    flagged = []
-    for frame in sent.frames:
-        status = frame.get("statusUpdate", {}).get("status", {})
-        artifact = frame.get("artifactUpdate", {}).get("artifact", {})
-        parts = status.get("message", {}).get("parts", []) if "statusUpdate" in frame else []
-        for part in parts or artifact.get("parts", []):
-            exact = metadata_from_wire(part.get("metadata")).get("livekit/verbatim") is True
-            flagged.append((part.get("text", ""), exact))
-    assert flagged == [("one", True), ("two", True), ("three", True)]
-    assert len(model.requests) == 1
-
-
-@pytest.mark.rule("R23")
-@pytest.mark.xfail(strict=True, reason="several exact results as one text: not built yet")
 async def test_an_experts_exact_results_are_one_answer_said_as_written(
     agentdb_workers: tuple[AgentDBStorage, AgentDBStorage],
 ) -> None:

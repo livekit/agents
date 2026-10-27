@@ -46,7 +46,7 @@ class DelegationResult(RunResult[object]):
         endpoint: str = "",
         transport: str = "",
         profile: str = "",
-        verbatim: str | list[str] | None = None,
+        verbatim: str | None = None,
     ) -> None:
         super().__init__(output_type=None)
         self.state = state

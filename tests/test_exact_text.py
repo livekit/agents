@@ -302,35 +302,6 @@ async def test_says_from_two_tools_of_one_step_go_out_as_they_finish(
 
 
 @pytest.mark.rule("R23")
-async def test_the_turn_ending_results_of_one_step_are_one_answer_in_call_order(
-    door: Callable[..., Door],
-) -> None:
-    """Three verbatim results that end the turn: every call runs, nothing is sent before the
-    answer, and the answer is one artifact with one flagged part per result, in call order."""
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("first", "c1"), call("second", "c2"), call("third", "c3")])
-    )
-    desk = Agent(instructions="desk", llm=model)
-
-    def ending(text: str, delay: float) -> Any:
-        async def tool(ctx: RunContext) -> ToolResult:
-            await asyncio.sleep(delay)
-            return ToolResult(text, verbatim=True, reply_required=False)
-
-        return tool
-
-    desk.tool(name="first", description="First.")(ending("one", 0.2))
-    desk.tool(name="second", description="Second.")(ending("two", 0.0))
-    desk.tool(name="third", description="Third.")(ending("three", 0.1))
-
-    sent = await door(serving(desk)).send("go")
-
-    assert working(sent.frames) == []
-    assert answer_parts(sent.frames) == [("one", True), ("two", True), ("three", True)]
-    assert len(model.requests) == 1
-
-
-@pytest.mark.rule("R23")
 async def test_a_turn_ending_result_is_said_when_another_asks_for_a_reply(
     door: Callable[..., Door],
 ) -> None:
@@ -392,11 +363,8 @@ async def test_a_cancel_during_a_step_stops_every_call() -> None:
 # several exact results are one text; an exact answer keeps the agent's output type
 # ---------------------------------------------------------------------------------------------
 
-ONE_TEXT_NOT_YET = "several exact results as one text, and the typed output kept: not built yet"
-
 
 @pytest.mark.rule("R23")
-@pytest.mark.xfail(strict=True, reason=ONE_TEXT_NOT_YET)
 async def test_the_turn_ending_results_of_one_step_are_one_exact_text(
     door: Callable[..., Door],
 ) -> None:
@@ -426,7 +394,6 @@ async def test_the_turn_ending_results_of_one_step_are_one_exact_text(
 
 
 @pytest.mark.rule("B46", "R23")
-@pytest.mark.xfail(strict=True, reason=ONE_TEXT_NOT_YET)
 async def test_an_exact_result_on_a_typed_agent_is_said_and_the_output_keeps_its_type(
     door: Callable[..., Door],
 ) -> None:

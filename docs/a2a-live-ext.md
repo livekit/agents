@@ -89,9 +89,7 @@ artifact. Exact text uses the same split, and the flag on the part is its
 only encoding. A `working` status whose text part is flagged is said to the
 person as written, at once; one without the flag is progress for the agent
 facing the person to word. The answer artifact is flagged only when the
-task ends on exact text, one flagged part for each exact result the task
-ended on, in order; a reader says each part as written. A question is
-flagged only when it is asked as written.
+task ends on exact text; a question only when it is asked as written.
 
 A tool says a notice, then the model answers in its own words:
 
@@ -107,12 +105,6 @@ The task ends on exact text, a confirmation code read as written:
 ```json
 {"artifactUpdate": {"taskId": "AST_2", "contextId": "AT_x", "artifact": {"artifactId": "art_2", "name": "answer", "parts": [{"text": "Your code is HTL-7A3K.", "metadata": {"https://livekit.io/a2a/ext/agents/v1/verbatim": true}}]}, "lastChunk": true}}
 {"statusUpdate": {"taskId": "AST_2", "contextId": "AT_x", "status": {"state": "TASK_STATE_COMPLETED"}}}
-```
-
-The task ends on two exact results of one step, each its own part, never joined:
-
-```json
-{"artifactUpdate": {"taskId": "AST_4", "contextId": "AT_x", "artifact": {"artifactId": "art_4", "name": "answer", "parts": [{"text": "Your code is HTL-7A3K.", "metadata": {"https://livekit.io/a2a/ext/agents/v1/verbatim": true}}, {"text": "Calls are recorded for quality.", "metadata": {"https://livekit.io/a2a/ext/agents/v1/verbatim": true}}]}, "lastChunk": true}}
 ```
 
 A question asked as written:

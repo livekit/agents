@@ -401,7 +401,7 @@ class AgentRun(Generic[Run_T]):
         ) -> RunResult[Run_T]:
             record_said()
             exact = input_required if input_required is not None else output
-            result._verbatim = exact if verbatim and isinstance(exact, (str, list)) else None
+            result._verbatim = exact if verbatim and isinstance(exact, str) else None
             result._run_output = output
             result._input_required = input_required
             result._interrupted = interrupted
@@ -457,8 +457,8 @@ class AgentRun(Generic[Run_T]):
                 )
             return None
 
-        # the verbatim results of a step that end the turn, in call order: the answer, one part
-        # each, unless a result of the step asks for a reply or a transition takes over
+        # the verbatim results of a step that end the turn, in call order: the answer, unless a
+        # result of the step asks for a reply or a transition takes over
         held: list[str] = []
 
         async def release_held() -> None:
@@ -466,12 +466,13 @@ class AgentRun(Generic[Run_T]):
                 await self._say(held.pop(0), record=False)
 
         async def run_call(
-            fnc_call: FunctionCall, tool_ctx: ToolContext
+            fnc_call: FunctionCall, tool_ctx: ToolContext, typed: bool
         ) -> ToolExecutionOutput | AgentTask[Any, Any]:
             out = await self._execute(tool_ctx.get_function_tool(fnc_call.name), fnc_call)
             said = out.raw_output if not isinstance(out, AgentTask) else None
-            if isinstance(said, ToolResult) and said.verbatim and said.reply_required:
-                # said when its tool returns; the model reads that it was
+            if isinstance(said, ToolResult) and said.verbatim and (said.reply_required or typed):
+                # said when its tool returns; the model reads that it was. On an agent whose
+                # output is not text, nothing but the model's typed output ends the turn
                 await self._say(_tool_text(said.output), record=False)
             return out
 
@@ -539,7 +540,9 @@ class AgentRun(Generic[Run_T]):
                 self._usage.tool_calls += 1
                 record(fnc_call)
             running = {
-                fnc_call.call_id: asyncio.ensure_future(run_call(fnc_call, tool_ctx))
+                fnc_call.call_id: asyncio.ensure_future(
+                    run_call(fnc_call, tool_ctx, wants_tool_output)
+                )
                 for fnc_call in calls
                 if not (fnc_call.name == FINAL_RESULT_TOOL and wants_tool_output)
             }
@@ -550,7 +553,7 @@ class AgentRun(Generic[Run_T]):
                 raise
             outs = {call_id: task.result() for call_id, task in running.items()}
 
-            replies = False
+            replies = stopped = False
             final: tuple[Any] | None = None
             for fnc_call in calls:
                 out = outs.get(fnc_call.call_id)
@@ -573,7 +576,7 @@ class AgentRun(Generic[Run_T]):
                     continue  # the call stays pending; the task takes the conversation
                 said = out.raw_output
                 if isinstance(said, ToolResult) and said.verbatim:
-                    if not said.reply_required:
+                    if not said.reply_required and not wants_tool_output:
                         held.append(_tool_text(said.output))
                     out.fnc_call_out.output = delivered(said).output
                 record(out.fnc_call_out)
@@ -612,12 +615,14 @@ class AgentRun(Generic[Run_T]):
                 if out.agent_task is not None:
                     self._hand_off(out.agent_task, record)
                 if isinstance(out.raw_exception, StopResponse):
-                    answer = held[0] if len(held) == 1 else list(held) or None
-                    return finish(answer, verbatim=answer is not None)
+                    stopped = True
+                    break
 
-            if held and not replies:
-                answer = held[0] if len(held) == 1 else list(held)
-                return finish(answer, verbatim=True)
+            if held and (stopped or not replies):
+                # the one place the step's exact results become one text
+                return finish("\n\n".join(held), verbatim=True)
+            if stopped:
+                return finish(None)
             await release_held()
 
         raise UnexpectedModelBehavior(

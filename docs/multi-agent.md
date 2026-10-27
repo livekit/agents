@@ -73,8 +73,7 @@ run's thread and history, passes the expert's progress to `ctx.update()`
 and its exact text to `ctx.say()`, returns the answer, or the question the
 expert has for the person, and records the expert's task on the call. An
 answer the expert flagged `livekit/verbatim` reaches the person as written,
-part by part, with no model step; a task that ends with no text is an
-empty answer. On a call its first
+with no model step; a task that ends with no text is an empty answer. On a call its first
 update releases the turn with a line the model acknowledges while the
 expert works; `announce=False` turns that off.
 

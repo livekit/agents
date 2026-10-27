@@ -81,9 +81,11 @@ outputs reach the model in call order once every call has returned; a
 cancel stops every call still running. Exact text a tool says, and a
 verbatim result that asks for a reply, go out when that tool returns. The
 verbatim results that end the turn are held: when nothing in the step asks
-for a reply, they are the answer, one part each in call order; when a
-result asks for a reply, or a tool hands off or asks a question, they are
-said in call order and the model goes on.
+for a reply, they are the answer, one text in call order with a blank line
+between them; when a result asks for a reply, or a tool hands off or asks a
+question, they are said in call order and the model goes on. On an agent
+whose `output_type` is not `str`, a verbatim result never ends the turn: it
+is said when its tool returns and the model goes on to the typed output.
 
 ## Approval
 

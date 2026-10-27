@@ -193,12 +193,8 @@ class WireHost(Generic[S]):
         already, the whole answer under the row's artifact id otherwise, flagged when it
         reaches the person as written."""
         output = outcome.result.output
+        text = output if isinstance(output, str) else json.dumps(output, separators=(",", ":"))
         verbatim = self._host.verbatim
-        text: str | list[str]
-        if verbatim and isinstance(output, list):
-            text = [str(part) for part in output]  # an exact answer in parts, one per result
-        else:
-            text = output if isinstance(output, str) else json.dumps(output, separators=(",", ":"))
         if self._streamed and "".join(self._streamed) == text and not verbatim:
             return artifact_event(
                 self._task_id,

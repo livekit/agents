@@ -175,12 +175,8 @@ class A2ADelegate(Delegate, Toolset):
             verbatim = result.verbatim is not None
             return InputRequired(result.input_required, tool=self._tool, verbatim=verbatim)
         if result.verbatim is not None:
-            # the person gets the answer as written, part by part, and the model words none of it
-            exact = result.verbatim
-            *said, last = [exact] if isinstance(exact, str) else exact
-            for part in said:
-                await ctx.say(part)
-            return ToolResult(last, verbatim=True, reply_required=False)
+            # the person gets the answer as written, and the model does not word it
+            return ToolResult(result.verbatim, verbatim=True, reply_required=False)
         return result.output if isinstance(result.output, str) else str(result.output or "")
 
     @property
@@ -229,25 +225,20 @@ class A2ADelegate(Delegate, Toolset):
         if update.state == "failed":
             raise DelegationFailed(text or "the delegation failed")
         asked = update.state == "input-required"
-        # an exact answer in several parts stays in its parts
-        several = update.verbatim and not asked and len(update.parts) > 1
-        output: str | list[str] = update.parts if several else text
 
         return DelegationResult(
-            output=output,
+            output=text,
             state=update.state,
             task_id=update.task_id or reply.task_id,
             context_id=update.context_id or reply.thread_id,
             input_required=text if asked else None,
-            new_messages=[
-                m for part in (update.parts if several else [text]) for m in answer_message(part)
-            ],
+            new_messages=answer_message(text),
             usage=usage,
             interrupted=update.state == "canceled",
             endpoint=self._url,
             transport=client.transport or "",
             profile="livekit" if offers else "a2a",
-            verbatim=output if update.verbatim and text else None,
+            verbatim=text if update.verbatim and text else None,
         )
 
     async def _send(

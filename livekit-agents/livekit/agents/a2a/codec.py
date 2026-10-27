@@ -10,7 +10,7 @@ alike. The server writes the extension's keys (``livekit/``) per request, when t
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -383,19 +383,18 @@ def artifact_event(
     context_id: str,
     *,
     artifact_id: str,
-    text: str | Sequence[str],
+    text: str,
     append: bool,
     last_chunk: bool,
     exts: Extensions,
     verbatim: bool = False,
 ) -> pb.TaskArtifactUpdateEvent:
-    """One chunk of the answer artifact; the final chunk sets ``lastChunk``. ``text`` is one
-    text part, or a list of them; a ``verbatim`` answer's parts are flagged."""
+    """One chunk of the answer artifact; the final chunk sets ``lastChunk``. A ``verbatim``
+    answer's part is flagged."""
     artifact = pb.Artifact(artifact_id=artifact_id, name=ANSWER_ARTIFACT_NAME)
-    for piece in [text] if isinstance(text, str) else text:
-        if piece or not append:
-            part = pb.Part(text=piece)
-            artifact.parts.append(_exact(part) if verbatim else part)
+    if text or not append:
+        part = pb.Part(text=text)
+        artifact.parts.append(_exact(part) if verbatim else part)
 
     return pb.TaskArtifactUpdateEvent(
         task_id=task_id,
@@ -482,31 +481,27 @@ class TaskUpdate:
     metadata: Metadata = field(default_factory=dict)
     verbatim: bool = False
     """The text reaches the person exactly as written: every text part of it is flagged."""
-    parts: list[str] = field(default_factory=list)
-    """The answer's text parts in order; appended chunks continue the part before them."""
 
 
 @dataclass
 class _Answer:
     """The artifact chunks of one task, accumulated until its terminal status."""
 
-    parts: dict[str, list[str]] = field(default_factory=dict)
+    bodies: dict[str, str] = field(default_factory=dict)
     names: dict[str, str] = field(default_factory=dict)
     exact: dict[str, bool] = field(default_factory=dict)
     last: str | None = None
     """The artifact whose last chunk arrived last: the whole answer, not a partial."""
 
     def collect(self, artifact: pb.Artifact, append: bool, last_chunk: bool = False) -> None:
+        chunk = _text(artifact.parts)
         exact = _flagged(artifact.parts)
-        texts = [p.text for p in artifact.parts if p.WhichOneof("content") == "text"]
-        parts = self.parts.get(artifact.artifact_id, []) if append else []
-        if parts and texts:
-            # a streamed chunk continues the part before it
-            parts[-1] += texts.pop(0)
-        self.parts[artifact.artifact_id] = parts + texts
+        if append:
+            chunk = self.bodies.get(artifact.artifact_id, "") + chunk
         if append and artifact.artifact_id in self.exact:
             # an empty closing chunk keeps what the chunks before it were
             exact = self.exact[artifact.artifact_id] and (exact or not artifact.parts)
+        self.bodies[artifact.artifact_id] = chunk
         self.exact[artifact.artifact_id] = exact
 
         if artifact.name:
@@ -517,14 +512,14 @@ class _Answer:
     def _answer_ids(self) -> list[str]:
         """The ``answer`` artifact that ended last; every ``answer`` artifact when none ended,
         every artifact when none carries that name."""
-        named = [i for i in self.parts if self.names.get(i) == ANSWER_ARTIFACT_NAME]
+        named = [i for i in self.bodies if self.names.get(i) == ANSWER_ARTIFACT_NAME]
         if self.last is not None and (not named or self.last in named):
             return [self.last]
-        return named or list(self.parts)
+        return named or list(self.bodies)
 
-    def text_parts(self) -> list[str]:
-        """The answer's text parts, in order."""
-        return [part for i in self._answer_ids() for part in self.parts[i]]
+    def text(self) -> str:
+        """The answer's text."""
+        return "\n".join(self.bodies[i] for i in self._answer_ids())
 
     def verbatim(self) -> bool:
         """Whether every part of the answer is flagged to reach the person as written."""
@@ -578,9 +573,7 @@ def _status_update(
             verbatim=_flagged(event.status.message.parts),
         )
 
-    parts = answer.text_parts()
-    # a reader that wants one text gets the parts on lines of their own, as `_text` does
-    answer_text = "\n".join(parts)
+    answer_text = answer.text()
     return TaskUpdate(
         state=state,
         text=answer_text or text,
@@ -588,7 +581,6 @@ def _status_update(
         context_id=ids.context_id,
         metadata=metadata,
         verbatim=answer.verbatim() if answer_text else _flagged(event.status.message.parts),
-        parts=parts if answer_text else [],
     )
 
 
