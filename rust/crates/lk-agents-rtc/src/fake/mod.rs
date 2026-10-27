@@ -428,6 +428,8 @@ pub struct FakeLocalParticipant {
     auto_subscribe: Arc<AtomicBool>,
     next_sid: AtomicU64,
     state: Mutex<LocalState>,
+    /// `false` holds every byte stream write, as a congested link does.
+    byte_writes: tokio::sync::watch::Sender<bool>,
 }
 
 #[derive(Default)]
@@ -456,7 +458,13 @@ impl FakeLocalParticipant {
             auto_subscribe,
             next_sid: AtomicU64::new(1),
             state: Mutex::new(LocalState::default()),
+            byte_writes: tokio::sync::watch::channel(true).0,
         }
+    }
+
+    /// Hold (`false`) or release byte stream writes: a write in flight awaits, as on a real link.
+    pub fn flow_byte_writes(&self, flowing: bool) {
+        self.byte_writes.send_replace(flowing);
     }
 
     pub fn attributes(&self) -> HashMap<String, String> {
@@ -643,7 +651,7 @@ impl LocalParticipant for FakeLocalParticipant {
         self.check()?;
         let recorded = Arc::new(Mutex::new(RecordedByteStream { opts, chunks: Vec::new(), closed: false }));
         self.state.lock().unwrap().byte_streams.push(recorded.clone());
-        Ok(Box::new(FakeByteStreamWriter { recorded }))
+        Ok(Box::new(FakeByteStreamWriter { recorded, flowing: self.byte_writes.subscribe() }))
     }
 
     async fn perform_rpc(&self, destination: ParticipantIdentity, method: String, payload: String) -> Result<(u32, String)> {
@@ -661,11 +669,13 @@ impl LocalParticipant for FakeLocalParticipant {
 
 struct FakeByteStreamWriter {
     recorded: Arc<Mutex<RecordedByteStream>>,
+    flowing: tokio::sync::watch::Receiver<bool>,
 }
 
 #[async_trait]
 impl crate::ByteStreamWriter for FakeByteStreamWriter {
     async fn write(&self, data: &[u8]) -> Result<()> {
+        let _ = self.flowing.clone().wait_for(|flowing| *flowing).await;
         self.recorded.lock().unwrap().chunks.push(data.to_vec());
         Ok(())
     }

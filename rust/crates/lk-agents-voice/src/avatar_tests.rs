@@ -88,6 +88,31 @@ async fn a_segment_is_one_byte_stream_to_the_avatar_once_it_has_joined() {
     assert_eq!(*f.events.0.lock().unwrap(), ["started"], "no lk.playback_started: the first frame stands for it");
 }
 
+// Catches: a capture dropped mid-write (the playout declines a push on interruption) taking the
+// segment's writer with it: the host stream stays open, and the flush finds no writer, so the
+// avatar never sees the segment end.
+#[tokio::test]
+async fn a_capture_dropped_mid_write_leaves_the_segment_to_its_flush() {
+    let f = fixture("r_drop", None, false);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    settle().await;
+    f.room.local_participant().flow_byte_writes(false);
+    let capture = {
+        let out = f.out.clone();
+        tokio::spawn(async move { out.capture_frame(&frame()).await })
+    };
+    settle().await;
+    capture.abort();
+    let _ = capture.await;
+    f.out.flush();
+    f.room.local_participant().flow_byte_writes(true);
+    settle().await;
+
+    let streams = f.room.local_participant().byte_streams();
+    assert_eq!(streams.len(), 1);
+    assert!(streams[0].closed, "the dropped capture's stream was never closed");
+}
+
 // Catches: a playback report from a stranger accepted, or the avatar's report not reaching the
 // session's playback bookkeeping.
 #[tokio::test]

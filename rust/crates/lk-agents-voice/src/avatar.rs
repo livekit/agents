@@ -77,9 +77,17 @@ struct Inner {
     spawner: Arc<dyn Spawner>,
     /// `None` while starting, then whether the avatar became ready.
     started: watch::Sender<Option<std::result::Result<(), String>>>,
-    writer: Mutex<Option<Box<dyn ByteStreamWriter>>>,
+    /// The open segment. Its stream is opened, written and closed by tasks of their own, so a
+    /// capture the playout drops mid-write leaves the stream to the segment's close.
+    segment: Mutex<Option<Arc<Segment>>>,
     pushed: Mutex<f64>,
     clear_timer: Mutex<Option<AbortHandle>>,
+}
+
+/// One segment's byte stream: opened by its first frame, in order behind the async lock.
+#[derive(Default)]
+struct Segment {
+    writer: tokio::sync::Mutex<Option<Box<dyn ByteStreamWriter>>>,
 }
 
 impl Inner {
@@ -131,6 +139,33 @@ impl Inner {
         }
         log::debug!(target: LOG, identity = self.destination.as_str(); "remote participant ready");
         self.started.send_replace(Some(Ok(())));
+    }
+
+    /// One frame into `segment`, opening its stream on the first.
+    async fn write(&self, segment: &Segment, frame: &AudioFrame) -> Result<()> {
+        let mut writer = segment.writer.lock().await;
+        if writer.is_none() {
+            let opts = StreamBytesOptions {
+                name: stream_name(),
+                topic: AUDIO_STREAM_TOPIC.to_owned(),
+                destination_identities: vec![ParticipantIdentity(self.destination.clone())],
+                attributes: HashMap::from([
+                    ("sample_rate".to_owned(), frame.sample_rate.to_string()),
+                    ("num_channels".to_owned(), frame.num_channels.to_string()),
+                ]),
+            };
+            *writer = Some(self.room.local().stream_bytes(opts).await?);
+            *self.pushed.lock().unwrap_or_else(|p| p.into_inner()) = 0.0;
+            if !self.wait_playback_start {
+                // approximated: the avatar does not report lk.playback_started
+                self.tracker.report_started(unix_secs(self.clock.wall()));
+            }
+        }
+        if let Some(writer) = writer.as_ref() {
+            writer.write(&frame.data).await?;
+        }
+        *self.pushed.lock().unwrap_or_else(|p| p.into_inner()) += frame.duration();
+        Ok(())
     }
 
     /// `_handle_playback_finished`.
@@ -228,7 +263,7 @@ impl DataStreamAudioOutput {
             clock,
             spawner: Arc::clone(&spawner),
             started: watch::channel(None).0,
-            writer: Mutex::new(None),
+            segment: Mutex::new(None),
             pushed: Mutex::new(0.0),
             clear_timer: Mutex::new(None),
         });
@@ -314,33 +349,21 @@ impl AudioOutput for DataStreamAudioOutput {
             Some(Err(e)) => return Err(IoError::Rtc(e)),
             None => return Err(IoError::Rtc("the avatar output closed".into())),
         }
-        let writer = self.inner.writer.lock().unwrap_or_else(|p| p.into_inner()).take();
-        let writer = match writer {
-            Some(w) => w,
-            None => {
-                let opts = StreamBytesOptions {
-                    name: stream_name(),
-                    topic: AUDIO_STREAM_TOPIC.to_owned(),
-                    destination_identities: vec![ParticipantIdentity(self.inner.destination.clone())],
-                    attributes: HashMap::from([
-                        ("sample_rate".to_owned(), frame.sample_rate.to_string()),
-                        ("num_channels".to_owned(), frame.num_channels.to_string()),
-                    ]),
-                };
-                let w = self.inner.room.local().stream_bytes(opts).await?;
-                *self.inner.pushed.lock().unwrap_or_else(|p| p.into_inner()) = 0.0;
-                if !self.inner.wait_playback_start {
-                    // approximated: the avatar does not report lk.playback_started
-                    self.inner.tracker.report_started(unix_secs(self.inner.clock.wall()));
-                }
-                w
-            }
-        };
-        let written = writer.write(&frame.data).await;
-        *self.inner.writer.lock().unwrap_or_else(|p| p.into_inner()) = Some(writer);
-        written?;
-        *self.inner.pushed.lock().unwrap_or_else(|p| p.into_inner()) += frame.duration();
-        Ok(())
+        let segment = Arc::clone(
+            self.inner
+                .segment
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get_or_insert_with(Default::default),
+        );
+        // Spawned, so dropping this capture (an interruption) never drops the host's writer.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let inner = Arc::clone(&self.inner);
+        let frame = frame.clone();
+        self.inner.spawner.spawn_unboxed(async move {
+            let _ = tx.send(inner.write(&segment, &frame).await);
+        });
+        rx.await.unwrap_or_else(|_| Err(IoError::Rtc("the avatar output closed".into())))
     }
 
     /// `flush`: close the segment's stream, its trailer ending the segment on the avatar.
@@ -348,9 +371,12 @@ impl AudioOutput for DataStreamAudioOutput {
         if !self.inner.is_started() {
             return;
         }
-        if let Some(writer) = self.inner.writer.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        if let Some(segment) = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            // Behind any write still in flight, whose stream it then closes.
             self.inner.spawner.spawn_unboxed(async move {
-                let _ = writer.close().await;
+                if let Some(writer) = segment.writer.lock().await.take() {
+                    let _ = writer.close().await;
+                }
             });
         }
     }
