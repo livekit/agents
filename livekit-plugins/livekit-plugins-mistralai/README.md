@@ -99,9 +99,7 @@ tts = mistralai.TTS(phoneme_hints={"tomato": ["t", "ə", "m", "ɑ", "t", "oʊ"]}
 ##### Realtime websocket
 
 With `use_realtime=True` the speech is streamed over the realtime websocket api while the LLM generates the text,
-using a pool of connections reused between the requests. In our benchmarks it shortens the total time of long
-replies, but the speech starts later than with http when the text comes token by token from an LLM, and
-`phoneme_hints` isn't supported.
+using a pool of connections reused between the requests. `phoneme_hints` isn't supported in this mode.
 
 ```python
 tts = mistralai.TTS(use_realtime=True)

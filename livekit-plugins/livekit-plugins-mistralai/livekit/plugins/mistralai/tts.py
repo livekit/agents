@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal, get_args
 from urllib.parse import urlencode
 
-import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
+import httpx2  # mistralai raises httpx2.TimeoutException from its http client
 import numpy as np
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
@@ -327,7 +327,7 @@ class ChunkedStream(tts.ChunkedStream):
 
             output_emitter.flush()
 
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError() from e
         except (SDKError, HTTPValidationError) as e:
             raise APIStatusError(
@@ -405,13 +405,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             send = asyncio.create_task(self._send_text(ws, text, flushed))
             recv = asyncio.create_task(self._recv_audio(ws, flushed, output_emitter))
             try:
-                split, usage = await asyncio.gather(send, recv)
+                (split, rest), usage = await asyncio.gather(send, recv)
             finally:
                 await utils.aio.gracefully_cancel(send, recv)
 
             input_tokens += usage.get("prompt_tokens", 0)
             output_tokens += usage.get("completion_tokens", 0)
-            text = await self._next_text(until_flush=True) if split else None
+            if rest:
+                text = rest
+            else:
+                text = await self._next_text(until_flush=True) if split else None
 
         output_emitter.end_segment()
         self._set_token_usage(input_tokens=input_tokens, output_tokens=output_tokens)
@@ -427,33 +430,38 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return item
         return None
 
-    async def _send_text(self, ws: ClientConnection, text: str, flushed: asyncio.Event) -> bool:
-        """Send the text of a request up to the end of the segment. Returns True when the request
-        was cut short, and the segment goes on."""
+    async def _send_text(
+        self, ws: ClientConnection, text: str, flushed: asyncio.Event
+    ) -> tuple[bool, str]:
+        """Send the text of a request up to the end of the segment. Returns whether the request
+        was cut short, so that the segment goes on, and the part of the text which didn't fit in
+        it, to send first in the next request."""
         self._mark_started()
-        await ws.send(json.dumps({"type": "input_text.append", "text": text}))
-        sent = len(text)
-        split = False
+        head, rest = _cut(text, _MAX_REQUEST_CHARS, force=True)
+        await ws.send(json.dumps({"type": "input_text.append", "text": head}))
+        sent = len(head)
+        split = bool(rest)
 
-        _SPLIT_AFTER_CHARS = 1500
-        _MAX_REQUEST_CHARS = 2500
-        _SENTENCE_ENDS = (".", "!", "?", "…", "\n")
+        if not split:
+            async for item in self._input_ch:
+                if isinstance(item, self._FlushSentinel):
+                    break
 
-        async for item in self._input_ch:
-            if isinstance(item, self._FlushSentinel):
-                break
-
-            await ws.send(json.dumps({"type": "input_text.append", "text": item}))
-            sent += len(item)
-            if sent >= _MAX_REQUEST_CHARS or (
-                sent >= _SPLIT_AFTER_CHARS and item.rstrip(" ").endswith(_SENTENCE_ENDS)
-            ):
-                split = True
-                break
+                head, rest = _cut(item, _MAX_REQUEST_CHARS - sent, force=False)
+                if head:
+                    await ws.send(json.dumps({"type": "input_text.append", "text": head}))
+                    sent += len(head)
+                if (
+                    rest
+                    or sent >= _MAX_REQUEST_CHARS
+                    or (sent >= _SPLIT_AFTER_CHARS and head.rstrip(" ").endswith(_SENTENCE_ENDS))
+                ):
+                    split = True
+                    break
 
         await ws.send(json.dumps({"type": "input_text.flush"}))
         flushed.set()
-        return split
+        return split, rest
 
     async def _recv_audio(
         self, ws: ClientConnection, flushed: asyncio.Event, output_emitter: tts.AudioEmitter
@@ -532,3 +540,24 @@ def _check_realtime(
         raise ValueError("use_realtime and phoneme_hints are only supported by latest speech model")
     if use_realtime and phoneme_hints is not None:
         raise ValueError("phoneme_hints is not supported with use_realtime")
+
+
+_SPLIT_AFTER_CHARS = 1500
+_MAX_REQUEST_CHARS = 2500
+_SENTENCE_ENDS = (".", "!", "?", "…", "\n")
+
+
+def _cut(text: str, room: int, *, force: bool) -> tuple[str, str]:
+    """Cut `text` to at most `room` characters, at the last sentence end, else at the last
+    space. Without such a boundary the text is cut anywhere if `force` is set, and kept whole
+    for the next request otherwise."""
+    if len(text) <= room:
+        return text, ""
+    window = text[: max(room, 0)]
+    for i in range(len(window) - 1, -1, -1):
+        if window[i] in _SENTENCE_ENDS:
+            return text[: i + 1], text[i + 1 :]
+    i = window.rfind(" ")
+    if i > 0:
+        return text[:i], text[i:]
+    return (window, text[len(window) :]) if force else ("", text)
