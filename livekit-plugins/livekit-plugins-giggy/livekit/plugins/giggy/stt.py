@@ -31,6 +31,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.plugins import silero
 
 GIGGY_ORIGIN = "https://api.giggy.ai"
 SAMPLE_RATE = 16000
@@ -118,8 +119,6 @@ class STT(stt.STT):
             raise RuntimeError("Giggy STT provider is closed.")
         detector = self._vad
         if detector is None:
-            from livekit.plugins import silero
-
             detector = self._vad = silero.VAD.load(
                 min_speech_duration=0.2,
                 min_silence_duration=0.1,
