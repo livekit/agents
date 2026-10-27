@@ -195,6 +195,7 @@ class _Message:
     )
     transcript: str = ""
     played_transcript: str | None = None
+    retained_text: str | None = None
     discarded: bool = False
 
 
@@ -891,6 +892,13 @@ class RealtimeSession(llm.RealtimeSession):
                 self._active = None
             self._model.emit("response_ended", payload)
         elif isinstance(payload, r.ItemTruncated):
+            if payload.kept_text is not None and payload.content_index == 0:
+                for generation in self._generations.values():
+                    if not generation.ended and (
+                        truncated_message := generation.outputs.get(payload.item_id)
+                    ):
+                        truncated_message.retained_text = payload.kept_text
+                        break
             self._model.emit("item_truncated", payload)
         elif isinstance(payload, r.FaultEvent) and payload.error.request_id is None:
             self._emit_error(
@@ -907,9 +915,12 @@ class RealtimeSession(llm.RealtimeSession):
                 if message.played_transcript is None
                 else message.played_transcript
             )
-            if transcript:
+            if message.retained_text is not None:
+                transcript = message.retained_text
+            if transcript or message.retained_text is not None:
                 assert self._history is not None
                 self._history.record_assistant(item_id, transcript)
+            message.retained_text = None
             message.text.close()
             message.audio.close()
         generation.messages.close()

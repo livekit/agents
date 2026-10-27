@@ -74,6 +74,42 @@ async def test_unavailable_retained_text_during_generation_keeps_completion_fall
         assert session.chat_ctx.get_by_id(item_id).text_content == "Generated words"
 
 
+@pytest.mark.parametrize("kept_text", ["The full", ""])
+@pytest.mark.parametrize("played_text", [None, "The"])
+async def test_early_retained_text_survives_response_completion(kept_text, played_text):
+    async with peer_model() as (peer, model, _):
+        session = model.session()
+        await session.update_instructions("test")
+        events, ended = [], []
+        model.on("item_truncated", events.append)
+        model.on("response_ended", ended.append)
+        response_id = await peer.start()
+        item_id = await peer.message(response_id, text="The full generated answer")
+        await wait_until(
+            lambda: (
+                response_id in session._generations
+                and item_id in session._generations[response_id].outputs
+            )
+        )
+        if played_text is not None:
+            session.truncate(
+                message_id=item_id,
+                modalities=["audio"],
+                audio_end_ms=120,
+                audio_transcript=played_text,
+            )
+            await wait_until(lambda: events)
+            events.clear()
+        await acknowledge(peer, item_id, kept_text)
+        await wait_until(lambda: events)
+        # Missing text in a later acknowledgment must not erase a known value.
+        await acknowledge(peer, item_id, None)
+        await wait_until(lambda: len(events) == 2)
+        await peer.end(response_id)
+        await wait_until(lambda: ended)
+        assert session.chat_ctx.get_by_id(item_id).content == [kept_text]
+
+
 @pytest.mark.parametrize("edit", ["delete", "replace"])
 async def test_late_acknowledgment_cannot_restore_deleted_or_replaced_history(edit):
     async with peer_model() as (peer, model, _):
