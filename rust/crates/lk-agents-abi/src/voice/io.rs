@@ -188,6 +188,7 @@ impl PlaybackTracker {
     }
 
     /// `AudioOutput.capture_frame`'s `super()` half: the first frame after a flush opens a segment.
+    #[host(method)]
     pub fn note_capture(&self) {
         let mut s = self.state.lock().unwrap();
         if !s.capturing {
@@ -199,6 +200,7 @@ impl PlaybackTracker {
     }
 
     /// `AudioOutput.flush`'s `super()` half: the segment is closed; its playout is still owed.
+    #[host(method)]
     pub fn note_flush(&self) {
         self.state.lock().unwrap().capturing = false;
     }
@@ -254,6 +256,14 @@ impl PlaybackTracker {
         self.wake.notify_waiters();
         self.emit(PlaybackEvent::Finished(ev));
         true
+    }
+
+    /// `AudioOutput.wait_for_playout()`: [`wait_for_playout`](Self::wait_for_playout)'s event as
+    /// `(playback_position, interrupted, synchronized_transcript)`.
+    #[host(method(name = "wait_for_playout"))]
+    pub async fn wait_for_playout_for_host(&self) -> (f64, bool, Option<String>) {
+        let ev = self.wait_for_playout().await;
+        (ev.playback_position.as_secs_f64(), ev.interrupted, ev.synchronized_transcript)
     }
 
     /// Wait for every segment captured so far; returns the last event. The target is latched at

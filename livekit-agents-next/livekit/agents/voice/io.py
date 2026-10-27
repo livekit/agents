@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -154,8 +153,6 @@ class AudioOutput(
         self._next_in_chain = next_in_chain
         # the core's segment count and playout bookkeeping for this sink
         self._tracker = _core.PlaybackTracker()
-        self._finished = asyncio.Event()
-        self._last_finished = PlaybackFinishedEvent(playback_position=0, interrupted=False)
         if next_in_chain is not None:
             next_in_chain.on("playback_started", lambda ev: self.on_playback_started(**vars(ev)))
             next_in_chain.on(
@@ -199,31 +196,27 @@ class AudioOutput(
         synchronized_transcript: str | None = None,
     ) -> None:
         """Call when a segment (ended by ``flush()`` or ``clear_buffer()``) has played out."""
-        if not self._tracker.playback_finished(
-            playback_position, interrupted, synchronized_transcript
-        ):
-            return
-        self._last_finished = PlaybackFinishedEvent(
-            playback_position=playback_position,
-            interrupted=interrupted,
-            synchronized_transcript=synchronized_transcript,
-        )
-        self._finished.set()
-        self.emit("playback_finished", self._last_finished)
+        if self._tracker.playback_finished(playback_position, interrupted, synchronized_transcript):
+            self.emit(
+                "playback_finished",
+                PlaybackFinishedEvent(playback_position, interrupted, synchronized_transcript),
+            )
 
     async def wait_for_playout(self) -> PlaybackFinishedEvent:
-        """Wait for the next segment to finish playing out."""
-        self._finished.clear()
-        await self._finished.wait()
-        return self._last_finished
+        """Wait for the segments captured so far to finish playing out; returns the last one's
+        event."""
+        return PlaybackFinishedEvent(*await self._tracker.wait_for_playout())
 
     @abstractmethod
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        """Capture an audio frame for playback; frames can be pushed faster than real time."""
+        """Capture an audio frame for playback; frames can be pushed faster than real time.
+        Overrides call ``super()``: the first frame after a flush opens a segment."""
+        self._tracker.note_capture()
 
     @abstractmethod
     def flush(self) -> None:
-        """Mark the current segment complete."""
+        """Mark the current segment complete. Overrides call ``super()``."""
+        self._tracker.note_flush()
 
     @abstractmethod
     def clear_buffer(self) -> None:

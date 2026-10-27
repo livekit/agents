@@ -1436,6 +1436,25 @@ impl PlaybackTracker {
     pub fn playback_finished(&self, playback_position: f64, interrupted: bool, synchronized_transcript: Option<String>) -> bool {
         self.inner.report_finished(playback_position, interrupted, synchronized_transcript)
     }
+
+    #[napi(js_name = "noteCapture")]
+    pub fn note_capture(&self) {
+        self.inner.note_capture();
+    }
+
+    #[napi(js_name = "noteFlush")]
+    pub fn note_flush(&self) {
+        self.inner.note_flush();
+    }
+
+    #[napi(js_name = "waitForPlayout", ts_return_type = "Promise<unknown>")]
+    pub fn wait_for_playout<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, (f64, bool, Option<String>)>> {
+        let inner = std::sync::Arc::clone(&self.inner);
+        env.spawn_future_with_callback(async move { Ok(Ok::<_, crate::host_error::JsError>(inner.wait_for_playout_for_host().await)) }, |env, out| match out {
+            Ok(out) => Ok(out),
+            Err(e) => Err(e.into_napi(env)),
+        })
+    }
 }
 
 #[napi(js_name = "CoreTextOutput")]
