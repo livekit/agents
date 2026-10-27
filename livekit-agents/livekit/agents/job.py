@@ -23,6 +23,7 @@ import logging
 import multiprocessing as mp
 import os
 import tempfile
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
@@ -164,6 +165,14 @@ class RunningJobInfo:
     """The server's assignment (room token) arrived."""
     launched_at: float = 0.0
     """A process was acquired from the pool and handed the job."""
+    # the same instants on the host's monotonic clock, for durations a wall clock step
+    # cannot skew; time.monotonic() is system-wide, so comparable across job processes
+    received_mono: float = 0.0
+    accepted_mono: float = 0.0
+    assigned_mono: float = 0.0
+    launched_mono: float = 0.0
+    launched_warm: bool = False
+    """An idle warmed process took the job; False when one had to be spawned."""
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -258,6 +267,10 @@ class JobContext:
             self._session_directory = Path(self._tempdir.name)
 
         self._connected = False
+        # monotonic, the first connect() call: the end of the entrypoint's own work before it
+        self._connect_called_mono = 0.0
+        # monotonic, connect() returned: the SDK returns once the primary transport connected
+        self._connected_mono = 0.0
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
         self._recording_initialized = False
@@ -696,6 +709,7 @@ class JobContext:
         async with self._lock:
             if self._connected:
                 return
+            self._connect_called_mono = self._connect_called_mono or time.monotonic()
 
             encryption = encryption or e2ee
             room_options = rtc.RoomOptions(
@@ -716,6 +730,7 @@ class JobContext:
                 job_ctx=self,
             ) as connect_span:
                 await self._room.connect(self._info.url, self._info.token, options=room_options)
+                self._connected_mono = time.monotonic()
                 connect_span.set_attributes(
                     {
                         trace_types.ATTR_PARTICIPANT_ID: self._room.local_participant.sid,
