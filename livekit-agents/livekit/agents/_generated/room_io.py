@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from livekit import rtc
 
 from ..types import NOT_GIVEN
-from ..voice.room_io._text_input import _default_text_input_cb
+from ..voice.room_io import _default_text_input_cb
 
 
 @dataclass
@@ -24,7 +24,9 @@ class AudioInputOptions:
     """The frame size in milliseconds for the audio input."""
     noise_cancellation: rtc.NoiseCancellationOptions | NoiseCancellationSelector | rtc.FrameProcessor[rtc.AudioFrame] | None = None
     auto_gain_control: bool = True
-    """Enable automatic gain control (AGC) on the input audio. Enabled by default."""
+    """Enable automatic gain control (AGC) on the input audio. If not given, disabled when noise
+    cancellation is configured directly.
+    """
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0

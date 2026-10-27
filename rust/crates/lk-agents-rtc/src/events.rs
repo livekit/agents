@@ -15,8 +15,7 @@ pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
 /// One of the twelve.
 ///
-/// Handles rather than identifiers in the payloads: §1.5 chose an object graph over a flat session
-/// so that "which participant, which publication" and "this publication is gone" are expressible.
+/// Handles rather than identifiers in the payloads, so that "which participant, which publication" and "this publication is gone" are expressible.
 /// An event carrying only a `TrackSid` would send every consumer back to the room to look the
 /// handle up, and that lookup races the very disconnection the event reports.
 #[derive(Clone, lk_agents_abi::Vocabulary)]
@@ -75,8 +74,7 @@ pub enum RoomEvent {
     ConnectionStateChanged {
         state: ConnectionState,
     },
-    /// `rtc.Room`'s `disconnected` event. Named `close` in §1.5's list and in
-    /// `warm_transfer.WarmTransferTask._dial_human_agent`, which is the only reader.
+    /// `rtc.Room`'s `disconnected` event.
     Close {
         reason: DisconnectReason,
     },
@@ -240,7 +238,7 @@ impl RoomEventBus {
         self.emit(RoomEvent::ConnectionStateChanged { state });
     }
 
-    /// `rtc.Room`'s `disconnected(reason)`: §1.5 calls it `close`.
+    /// `rtc.Room`'s `disconnected(reason)`.
     #[host(method)]
     pub fn disconnected(&self, reason: DisconnectReason) {
         self.emit(RoomEvent::Close { reason });
@@ -382,7 +380,7 @@ impl TextChunks {
     }
 }
 
-/// Where a host track's audio stream delivers its frames, drop-oldest (§1.2d): the push half of a
+/// Where a host track's audio stream delivers its frames, drop-oldest: the push half of a
 /// [`BoundedLossy`](lk_agents_abi::BoundedLossy). The stream ends at [`close`](Self::close) or when
 /// the host drops this.
 #[lk_agents_abi::class]

@@ -30,7 +30,7 @@ pub trait RtcHost: Send + Sync {
 /// disconnected from reconnecting, and [`ConnectionState::is_connected`] recovers it exactly.
 #[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io.Room", live))]
 pub trait RtcRoom: Send + Sync {
-    /// Owned and asked every time: a room's name is `""` until it connects (N409).
+    /// Owned and asked every time: a room's name is `""` until it connects.
     fn name(&self) -> String;
     fn connection_state(&self) -> ConnectionState;
     /// Lent, so read once: the agent's participant object outlives its connection (the host's
@@ -42,14 +42,14 @@ pub trait RtcRoom: Send + Sync {
 
     /// Every remote participant.
     ///
-    /// Not in §1.5's sketch, and unavoidable: `RoomIO._init_task` replays
+    /// `RoomIO._init_task` replays
     /// `room.remote_participants.values()` through its `participant_connected` handler to catch
     /// anyone who joined before the handler was registered, and `set_participant` scans the same
     /// map. Without it, linking to a participant who was already in the room would depend on an
     /// event that has already fired.
     fn remote_participants(&self) -> Vec<Arc<dyn RemoteParticipant>>;
 
-    /// Where the room emits the eight events. `dyn RtcRoom::events` subscribes to it; a host
+    /// Where the room emits its events. `dyn RtcRoom::events` subscribes to it; a host
     /// room pushes into it from its own handlers.
     fn event_bus(&self) -> &Arc<RoomEventBus>;
 
@@ -65,7 +65,7 @@ pub trait RtcRoom: Send + Sync {
 }
 
 impl dyn RtcRoom + '_ {
-    /// A new, independent subscription to the eight events.
+    /// A new, independent subscription to the room's events.
     pub fn events(&self) -> Receiver<RoomEvent> {
         self.event_bus().subscribe()
     }
@@ -90,7 +90,7 @@ pub trait LocalParticipant: Send + Sync {
     /// Needed by three readers, all comparing against it: `_init_task` sets the agent transcript's
     /// participant to it, `_on_participant_connected` skips participants publishing *on behalf of*
     /// it, and `_on_local_track_published` gates on it. Owned and asked every time: before the room
-    /// connects it is `""`, which no reader can match (N409).
+    /// connects it is `""`, which no reader can match.
     fn identity(&self) -> ParticipantIdentity;
 
     /// The agent's own kind (`agent`), which `wait_for_participant(include_local=True)` filters.
@@ -123,8 +123,8 @@ pub trait LocalParticipant: Send + Sync {
 
     /// Open a text stream and return its **writer**.
     ///
-    /// §1.5 sketched this as `stream_text(topic, text) -> Result<()>`, which does not fit the
-    /// reference: `_ParticipantStreamTranscriptionOutput` opens one writer per transcript segment,
+    /// One writer per stream, not one call per text: `_ParticipantStreamTranscriptionOutput`
+    /// opens one writer per transcript segment,
     /// writes every delta into it, and closes it with `lk.transcription_final=true` plus the
     /// segment's expression attributes (`_output.py:_flush_task`). A per-call `stream_text` would
     /// open one stream per token, and frontends key rendering on the stream id per segment.
@@ -163,7 +163,7 @@ pub trait ByteStreamWriter: Send + Sync {
 /// An open text stream. `rtc.TextStreamWriter`.
 ///
 /// `close` takes `Box<Self>` so it can be called at most once and the type cannot be used
-/// afterwards. §1.6 #7: dropping a host stream does not close it, so the close must be explicit
+/// afterwards. Dropping a host stream does not close it, so the close must be explicit
 /// and structural rather than remembered -- the reference's own pattern is
 /// `writer = self._writer; self._writer = None; await writer.aclose()`.
 #[lk_agents_abi::host(proxy)]
@@ -174,7 +174,7 @@ pub trait TextStreamWriter: Send + Sync {
     async fn close(self: Box<Self>, attributes: HashMap<String, String>) -> Result<()>;
 }
 
-/// One published audio track's sink. **The load-bearing trait** (§1.5).
+/// One published audio track's sink.
 ///
 /// It is separate from [`LocalParticipant`] because "clear the buffer on *this* track" has to be
 /// expressible: the avatar path publishes its own source alongside `RoomIO`'s, and an interruption
@@ -186,7 +186,7 @@ pub trait AudioSource: Send + Sync {
     /// `queue_size_ms` bound is what paces the forwarding loop against real playout
     /// (`_forward_audio` awaits `capture_frame` for exactly this reason).
     ///
-    /// §1.5's sketch had this synchronous. It cannot be: without the block there is no
+    /// It cannot be synchronous: without the block there is no
     /// backpressure, the forwarding loop runs the whole utterance into an unbounded queue in one
     /// tick, and `clear_queue` would then have nothing left to truncate -- interruption would stop
     /// cutting audio.
@@ -194,7 +194,7 @@ pub trait AudioSource: Send + Sync {
 
     /// Discard everything queued but not yet played.
     ///
-    /// **Synchronous, deliberately** (§1.5): this is the interruption path and it must not await the
+    /// **Synchronous, deliberately**: this is the interruption path and it must not await the
     /// host loop. It is also why the trait exists -- the queue being cleared belongs to one track.
     fn clear_queue(&self);
 
@@ -297,7 +297,7 @@ pub trait TrackPublication: Send + Sync {
     /// Open a stream of the subscribed audio into `frames`, which ends when the track goes away
     /// (the sender dropped). `dyn TrackPublication::audio_stream` is the reader's form.
     ///
-    /// Drop-oldest: §1.2d makes audio-in lossy, so a stalled STT plugin loses the oldest second
+    /// Drop-oldest: audio-in is lossy, so a stalled STT plugin loses the oldest second
     /// rather than growing the process or blocking a host callback that holds the GIL.
     fn open_audio_stream(&self, opts: AudioStreamOptions, frames: AudioFrameSender);
 

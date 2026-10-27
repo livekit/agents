@@ -17,7 +17,7 @@ const _: () = ();
 // `voice/room_io/types.py`'s option dataclasses; a `///` is the reference's docstring verbatim,
 // Rust notes are `//`. `RoomOptions` itself stays hand-written: its resolvers are behaviour.
 
-// `AudioInputOptions`. Every key is required: the one producer, `RoomOptions._to_rust_config()`,
+// `AudioInputOptions`. Every key is required: the one producer, `RoomOptions._to_core()`,
 // writes them all, and a silent default once turned AGC off.
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 #[python(
@@ -43,9 +43,10 @@ pub struct AudioInputConfig {
     )]
     #[node(ty = "unknown")]
     pub noise_cancellation: Option<lk_agents_abi::HostRef>,
-    /// Enable automatic gain control (AGC) on the input audio. Enabled by default.
+    /// Enable automatic gain control (AGC) on the input audio. If not given, disabled when noise
+    /// cancellation is configured directly.
     //
-    // Honoured host-side (`rtc.AudioProcessingModule`), forwarded as
+    // Resolved by `_to_core`, applied host-side (`rtc.AudioProcessingModule`), forwarded as
     // [`AudioStreamOptions::auto_gain_control`](crate::voice::rtc::AudioStreamOptions).
     #[python(default = "True")]
     pub auto_gain_control: bool,
@@ -168,7 +169,7 @@ pub struct NoiseCancellationParams {
     pub track: crate::HostRef,
 }
 
-// `_default_text_input_cb` is host behaviour (`voice/room_io/_text_input.py`).
+// `_default_text_input_cb` is host behaviour (`voice/room_io.py`).
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 #[python(
     dataclass,
@@ -178,7 +179,7 @@ pub struct NoiseCancellationParams {
 pub struct TextInputOptions {
     #[python(
         ty = "TextInputCallback",
-        import = "..voice.room_io._text_input:_default_text_input_cb",
+        import = "..voice.room_io:_default_text_input_cb",
         default = "_default_text_input_cb"
     )]
     #[node(ty = "unknown")]

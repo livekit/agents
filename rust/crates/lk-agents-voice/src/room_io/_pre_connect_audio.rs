@@ -3,7 +3,7 @@ use lk_agents_abi::AbortHandle;
 use lk_agents_abi::voice::io::IoError;
 use lk_agents_abi::voice::io::Result;
 use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Spawner, SpawnerExt, Ts};
-use lk_agents_media::Decoder;
+use lk_agents_media::{Decoder, pcm_bytes};
 use lk_agents_rtc::{ByteStream, RtcRoom, TrackSid};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -210,13 +210,4 @@ impl PreConnectAudioHandler {
             h.abort();
         }
     }
-}
-
-/// Interleaved `i16` PCM as the little-endian bytes `AudioByteStream` frames.
-fn pcm_bytes(samples: &[i16]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(samples.len() * 2);
-    for s in samples {
-        out.extend_from_slice(&s.to_le_bytes());
-    }
-    out
 }
