@@ -20,7 +20,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [frontdesk, drive_thru]
+        include:
+          - example: frontdesk
+            run: uv run pytest examples/frontdesk/test_agent.py -s
+          # `uv run` puts the synced workspace venv on PATH so lk resolves the
+          # local livekit-agents checkout rather than a published SDK.
+          - example: drive_thru
+            run: >-
+              uv run lk agent simulate text examples/drive_thru/agent.py
+              --scenarios examples/drive_thru/scenarios.yaml
 
     runs-on: ubuntu-latest
     name: ${{ matrix.example }}
@@ -39,6 +47,12 @@ jobs:
 
       - name: Install the project
         run: uv sync --all-extras --dev
+
+      - name: Install LiveKit CLI
+        if: matrix.example == 'drive_thru'
+        run: |
+          curl -sSL https://get.livekit.io/cli | bash
+          lk --version
 
       - name: Setup Google credentials
         if: matrix.example == 'google'
@@ -80,4 +94,4 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
-        run: uv run pytest examples/${{matrix.example}}/test_agent.py -s
+        run: ${{ matrix.run }}
