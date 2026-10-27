@@ -2,8 +2,8 @@
 
 A delegate answers one request inside the caller's turn and the caller phrases the result.
 ``A2ADelegate`` (``a2a.py``) reaches an expert over A2A, an endpoint of this project or any A2A
-server; the interface is here for anything else that answers a request. The ``delegate`` tool
-of ``tool.py`` and ``LiveSession(delegate=)`` take any ``Delegate``.
+server; the interface is here for anything else that answers a request, with what a delegation
+leaves on the call that made it.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 
-from ..llm.chat_context import ChatContext, ChatItem, ChatMessage
+from ..llm.chat_context import ChatContext, ChatItem, ChatMessage, FunctionCall
 from ..voice.run_result import RunResult, RunUsage
 
 Progress = Callable[[str], Awaitable[None] | None]
@@ -28,8 +28,8 @@ class DelegationFailed(Exception):
 class DelegationResult(RunResult[object]):
     """What a delegate's ``run`` returns: a finished ``RunResult`` with the task behind it.
 
-    ``state`` is the A2A terminal state; ``task_id`` and ``context_id`` name the expert's task; ``endpoint``, ``transport``
-    and ``profile`` say where and how it was reached over A2A.
+    ``state`` is the A2A terminal state; ``task_id`` and ``context_id`` name the expert's task;
+    ``endpoint``, ``transport`` and ``profile`` say where and how it was reached over A2A.
     """
 
     def __init__(
@@ -63,6 +63,31 @@ class DelegationResult(RunResult[object]):
         self._run_history = list(new_messages or [])
         self._run_usage = usage if usage is not None else RunUsage()
         self._done_fut.set_result(None)
+
+
+TASK_ID_KEY = "lk.delegation.task_id"
+CONTEXT_ID_KEY = "lk.delegation.context_id"
+ENDPOINT_KEY = "lk.delegation.endpoint"
+TRANSPORT_KEY = "lk.delegation.transport"
+PROFILE_KEY = "lk.delegation.profile"
+"""``FunctionCall.extra``: the expert's task that answered the call and its context, where the
+expert was reached, over which binding, under which profile (``livekit`` or ``a2a``), so a
+dashboard joins the delegation to the call as it ran, and the next delegation to a stock expert
+goes back to the context it keeps."""
+
+
+def record_delegation(function_call: FunctionCall, result: DelegationResult) -> None:
+    """Writes the expert's task id and how it was reached on the call that delegated."""
+    recorded = (
+        (TASK_ID_KEY, result.task_id),
+        (CONTEXT_ID_KEY, result.context_id),
+        (ENDPOINT_KEY, result.endpoint),
+        (TRANSPORT_KEY, result.transport),
+        (PROFILE_KEY, result.profile),
+    )
+    for key, value in recorded:
+        if value:
+            function_call.extra[key] = value
 
 
 async def report(progress: Progress | None, text: str) -> None:
@@ -105,10 +130,16 @@ class Delegate(ABC):
 
 
 __all__ = [
+    "CONTEXT_ID_KEY",
+    "ENDPOINT_KEY",
+    "PROFILE_KEY",
+    "TASK_ID_KEY",
+    "TRANSPORT_KEY",
     "Delegate",
     "DelegationFailed",
     "DelegationResult",
     "Progress",
     "answer_message",
+    "record_delegation",
     "report",
 ]

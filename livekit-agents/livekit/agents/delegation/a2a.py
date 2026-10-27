@@ -37,19 +37,29 @@ from ..voice.agent_run import current_run_hooks
 from ..voice.events import RunContext
 from ..voice.run_result import RunUsage
 from .delegate import (
+    CONTEXT_ID_KEY,
+    ENDPOINT_KEY,
     Delegate,
     DelegationFailed,
     DelegationResult,
     Progress,
     answer_message,
+    record_delegation,
     report,
 )
-from .tool import CONTEXT_ID_KEY, DISPATCHED, ENDPOINT_KEY, record_delegation
 
 ASK = (
     "State the request in full, with everything the person said that bears on it; the "
     "answer, or the question it has for the person, is what you say next."
 )
+"""The second paragraph of the tool's description, after the card's own."""
+
+DISPATCHED = (
+    'Acknowledge in a few natural words, "one moment", "sure, let me check", "okay, looking '
+    'now", varying the wording, restating none of the request, asking nothing and promising '
+    "nothing about the outcome. The answer is a separate entry, not this one."
+)
+"""What the model reads on a call while the expert works: the line it acknowledges with."""
 
 if TYPE_CHECKING:
     from ..a2a.client import AgentClient, Reply

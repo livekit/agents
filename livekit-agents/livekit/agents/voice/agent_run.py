@@ -103,9 +103,9 @@ class RunHooks:
     ``on_update`` receives a tool's ``ctx.update(text)``: the door forwards it as progress, a
     ``working`` frame on the text door. ``on_say`` receives exact text said during the run, a
     ``ctx.say(text)`` or a verbatim result the model goes on from: the door sends it at once as
-    a flagged ``working`` frame. ``on_token`` receives the model's text
-    as it arrives, so the text door shows the reply as it is written. ``thread_id`` is the session the run
-    belongs to, what ``A2ADelegate`` sends as the expert's ``contextId`` (plan 7.5).
+    a flagged ``working`` frame. ``on_token`` receives the model's text as it arrives, so the
+    text door shows the reply as it is written. ``thread_id`` is the session the run belongs to,
+    what ``A2ADelegate`` sends as the expert's ``contextId`` (plan 7.5).
     ``agent_stack`` is the lane's stack as loaded and ``rebuild`` makes an agent of one entry,
     the server's registry; the run resolves them itself since only it knows the root.
     ``answer_tool`` names the tool the message is handed to before the model runs: the last
