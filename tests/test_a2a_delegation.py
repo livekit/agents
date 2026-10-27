@@ -25,6 +25,7 @@ from starlette.routing import Mount
 
 from livekit.agents import Agent, AgentServer, InputRequired, RunContext, _core, llm
 from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.a2a.codec import metadata_from_wire
 from livekit.agents.a2a.extension import KIND
 from livekit.agents.delegation import A2ADelegate, DelegationFailed
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
@@ -35,6 +36,7 @@ from livekit.agents.storage.resolve import Thread
 from .a2a_driver import (
     AGENT,
     ENDPOINT,
+    Door,
     Reply,
     ScriptedLLM,
     call,
@@ -810,3 +812,242 @@ async def test_a_dropped_answer_stream_is_read_again_and_the_answer_arrives(
     assert transport.drops == 0
     assert result.output == "the fare is 240 USD" and result.state == "completed"
     assert progress == ["checking the fare rules"]
+
+
+# ---------------------------------------------------------------------------------------------
+# exact text from the expert: a flagged progress part is said, a flagged answer is the answer
+# ---------------------------------------------------------------------------------------------
+
+NOTICE = "Calls are recorded for quality."
+NOT_YET = "exact text as status and artifact: not built yet"
+NO_STATE_YET = "the shared delegate and client keep no conversation: not built yet"
+
+
+def _flagged(text: str) -> pb.Part:
+    from livekit.agents.a2a.extension import struct, widen
+
+    part = pb.Part(text=text)
+    part.metadata.CopyFrom(struct({widen("livekit/verbatim"): True}))
+    return part
+
+
+def _agent_message(updater: TaskUpdater, *parts: pb.Part) -> pb.Message:
+    return updater.new_agent_message(list(parts))
+
+
+@pytest.mark.rule("R22", "R23")
+@pytest.mark.xfail(strict=True, reason=NOT_YET)
+async def test_an_experts_flagged_progress_is_said_by_the_front_desk(
+    door: Callable[..., Door],
+) -> None:
+    """A ``working`` status whose part is flagged is ``ctx.say`` on the front desk: in text, a
+    flagged ``working`` status of its own, sent before the answer."""
+
+    async def script(updater: TaskUpdater, context: RequestContext) -> None:
+        await updater.update_status(
+            pb.TaskState.TASK_STATE_WORKING, message=_agent_message(updater, _flagged(NOTICE))
+        )
+        await updater.add_artifact(
+            [pb.Part(text="forty dollars")], artifact_id="a1", name="answer", last_chunk=True
+        )
+        await updater.complete()
+
+    async with stock_server(_Scripted(script)) as app, stock_http(app) as http:
+        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
+        model = ScriptedLLM(
+            Reply(tool_calls=[call("ask", "c1", request="my balance")]),
+            Reply("You have forty dollars.", when=output_of("c1")),
+        )
+        front = Agent(instructions="front desk", tools=[delegate], llm=model)
+
+        async def desk(ctx: A2ASessionContext[Any]) -> object:
+            return (await front.run(ctx.message, message_history=ctx.message_history)).output
+
+        sent = await door(desk).send("what is my balance?")
+        await delegate.aclose()
+
+    statuses = [
+        f["statusUpdate"]["status"]
+        for f in sent.frames
+        if "statusUpdate" in f and f["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
+    ]
+    parts = [p for s in statuses for p in s.get("message", {}).get("parts", [])]
+    flags = [metadata_from_wire(p.get("metadata")).get("livekit/verbatim") for p in parts]
+    assert [p["text"] for p in parts] == [NOTICE] and flags == [True]
+    # the front desk's model phrases the answer, which is not exact
+    (output,) = [i for i in model.requests[-1].items if i.type == "function_call_output"]
+    assert output.output == "forty dollars"
+
+
+@pytest.mark.rule("R23", "B12")
+async def test_an_experts_flagged_answer_is_said_as_written_with_no_model_step() -> None:
+    """An answer artifact whose part is flagged reaches the person as written, and the front
+    desk's model does not word it."""
+
+    async def script(updater: TaskUpdater, context: RequestContext) -> None:
+        await updater.add_artifact(
+            [_flagged(NOTICE)], artifact_id="a1", name="answer", last_chunk=True
+        )
+        await updater.complete()
+
+    async with stock_server(_Scripted(script)) as app, stock_http(app) as http:
+        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
+        model = ScriptedLLM(Reply(tool_calls=[call("ask", "c1", request="the policy")]))
+        front = Agent(instructions="front desk", tools=[delegate], llm=model)
+        result = await front.run("is this recorded?")
+        await delegate.aclose()
+
+    assert result.output == NOTICE
+    assert result.verbatim == NOTICE
+    assert len(model.requests) == 1
+
+
+@pytest.mark.rule("R23")
+@pytest.mark.xfail(strict=True, reason=NOT_YET)
+async def test_an_experts_question_flagged_on_its_part_is_asked_as_written() -> None:
+    """An ``input-required`` status whose text part is flagged is asked as written, with no
+    ``livekit/verbatim`` in the metadata."""
+    question = "Which payer, and the member id?"
+
+    async def script(updater: TaskUpdater, context: RequestContext) -> None:
+        await updater.requires_input(message=_agent_message(updater, _flagged(question)))
+
+    async with stock_server(_Scripted(script)) as app, stock_http(app) as http:
+        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
+        model = ScriptedLLM(Reply(tool_calls=[call("ask", "c1", request="coverage")]))
+        front = Agent(instructions="front desk", tools=[delegate], llm=model)
+        result = await front.run("am I covered?")
+        await delegate.aclose()
+
+    assert result.input_required == question
+    assert result.verbatim == question
+    assert len(model.requests) == 1
+
+
+@pytest.mark.rule("R25")
+@pytest.mark.xfail(strict=True, reason=NOT_YET)
+async def test_an_expert_with_no_answer_gives_the_model_an_empty_output() -> None:
+    """A task that completes with no text is an empty answer, never a sentence of the
+    framework's own and never the last progress."""
+
+    async def script(updater: TaskUpdater, context: RequestContext) -> None:
+        await updater.update_status(
+            pb.TaskState.TASK_STATE_WORKING,
+            message=_agent_message(updater, pb.Part(text="checking the schedule")),
+        )
+        await updater.complete()
+
+    async with stock_server(_Scripted(script)) as app, stock_http(app) as http:
+        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
+        model = ScriptedLLM(
+            Reply(tool_calls=[call("ask", "c1", request="book a cleaning")]),
+            Reply("Done.", when=output_of("c1")),
+        )
+        front = Agent(instructions="front desk", tools=[delegate], llm=model)
+        await front.run("book a cleaning")
+        await delegate.aclose()
+
+    (output,) = [i for i in model.requests[-1].items if i.type == "function_call_output"]
+    assert output.output == ""
+
+
+@pytest.mark.rule("R20", "B7")
+@pytest.mark.xfail(strict=True, reason=NO_STATE_YET)
+async def test_a_stock_experts_context_is_read_from_the_conversation() -> None:
+    """One delegate shared by two conversations: each keeps the stock expert's context of its
+    own, recorded on the delegating call, and its next delegation goes back to it."""
+    from livekit.agents.llm import FunctionCall
+
+    plain = _Reasoner()
+    async with stock_server(plain) as app, stock_http(app) as http:
+        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
+
+        def front() -> Agent:
+            model = ScriptedLLM(
+                Reply(tool_calls=[call("ask", "c1", request="balance please")]),
+                Reply("Forty dollars.", when=output_of("c1")),
+            )
+            return Agent(instructions="front desk", tools=[delegate], llm=model)
+
+        first = await front().run("my balance?")
+        await front().run("my balance?")
+        await front().run("and again?", message_history=first.new_messages())
+        await delegate.aclose()
+
+    one, two, again = (m.context_id for m in plain.seen)
+    assert two != one
+    assert again == one
+    (delegated,) = [i for i in first.new_messages() if isinstance(i, FunctionCall)]
+    assert delegated.extra["lk.delegation.context_id"] == one
+
+
+@pytest.mark.rule("R27")
+@pytest.mark.xfail(strict=True, reason=NO_STATE_YET)
+@pytest.mark.parametrize(("drops", "answered"), [(1, True), (2, False)])
+async def test_the_resubscribes_follow_the_delegates_connect_options(
+    agentdb_storage: AgentDBStorage, drops: int, answered: bool
+) -> None:
+    """``conn_options.max_retry`` is how many times a dropped answer stream is read again."""
+    from livekit.agents.types import APIConnectOptions
+
+    server = AgentServer(storage=agentdb_storage, agent_name="expert")
+    server.a2a_session(endpoint="expert", description="Answers fares.")(fare_expert)
+    transport = _Dropping(server.http.app, drops=drops)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://experts.test", timeout=30.0
+    ) as http:
+        delegate = A2ADelegate(
+            "http://experts.test/expert",
+            httpx_client=http,
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+        )
+        thread_id = (await agentdb_storage.threads.create_thread()).thread_id
+        try:
+            result = await delegate.run("what is the fare", context_id=thread_id)
+        except DelegationFailed:
+            result = None
+        await delegate.aclose()
+
+    assert (result is not None) == answered
+
+
+@pytest.mark.rule("B32")
+@pytest.mark.xfail(strict=True, reason=NO_STATE_YET)
+async def test_the_shared_client_names_no_thread_it_was_not_given(
+    agentdb_storage: AgentDBStorage,
+) -> None:
+    """A client sends for many conversations: after a send in one thread, a cancel or a
+    resubscribe of another names no thread unless it is told one."""
+    from livekit.agents.a2a.client import AgentClient
+
+    server = AgentServer(storage=agentdb_storage, agent_name="expert")
+    server.a2a_session(endpoint="expert", description="Answers fares.")(fare_expert)
+    bodies: list[dict[str, Any]] = []
+
+    async def seen(request: httpx.Request) -> None:
+        if request.content:
+            bodies.append(json.loads(request.content))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server.http.app),
+        base_url="http://experts.test",
+        timeout=30.0,
+        event_hooks={"request": [seen]},
+    ) as http:
+        client = AgentClient("http://experts.test/expert", None, httpx_client=http)
+        first = (await agentdb_storage.threads.create_thread()).thread_id
+        second = (await agentdb_storage.threads.create_thread()).thread_id
+        reply = await client.send("what is the fare", thread_id=first)
+        async for _ in reply:
+            pass
+        async for _ in await client.send("what is the fare", thread_id=second):
+            pass
+        with contextlib.suppress(Exception):
+            await client.cancel(reply.task_id)
+        async for _ in client.resubscribe(reply.task_id):
+            pass
+        await client.aclose()
+
+    later = [b for b in bodies if b.get("method") in ("CancelTask", "SubscribeToTask")]
+    assert [b["method"] for b in later] == ["CancelTask", "SubscribeToTask"]
+    assert all("contextId" not in b["params"] for b in later)
