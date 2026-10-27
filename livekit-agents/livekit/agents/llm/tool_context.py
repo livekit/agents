@@ -78,6 +78,7 @@ class Toolset:
         self._id = id
         self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []
         self._tools.extend(find_function_tools(self))
+        self._tools_listeners: list[Callable[[], None]] = []
 
     @property
     def id(self) -> str:
@@ -96,6 +97,13 @@ class Toolset:
         if toolsets:
             await asyncio.gather(*(toolset.setup() for toolset in toolsets))
         return self
+
+    def _tools_changed(self) -> None:
+        """Called by a subclass after its ``tools`` changed, so whatever offers them to a model
+        offers them again; a listener only schedules its refresh and never waits on it."""
+        # TODO: MCPToolset should call it on the server's notifications/tools/list_changed
+        for listener in list(self._tools_listeners):
+            listener()
 
     async def aclose(self) -> None:
         """Close the toolset and release any held resources.
