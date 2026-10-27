@@ -84,13 +84,11 @@ ignored.
 
 ### Exact text
 
-What happens during a task is a status message, and the answer is the
-artifact. Exact text uses the same split, and the flag on the part is its
-only encoding. A `working` status whose text part is flagged is said to the
-person as written, at once; one without the flag is progress for the agent
-facing the person to word. The answer artifact is flagged only when the
-task ends on exact text; a question only when it is asked as written.
-
+The flag on a text part is the only encoding of exact text. A flagged
+`working` status is said to the person as written, at once; an unflagged
+one is progress the agent facing them words. The answer artifact is
+flagged only when the task ends on exact text, a question only when it is
+asked as written. A stock client reads the same text and ignores the flag.
 A tool says a notice, then the model answers in its own words:
 
 ```json
@@ -99,21 +97,6 @@ A tool says a notice, then the model answers in its own words:
 {"artifactUpdate": {"taskId": "AST_1", "contextId": "AT_x", "artifact": {"artifactId": "art_1", "name": "answer", "parts": [{"text": "Tuesday at 10 is free."}]}, "lastChunk": true}}
 {"statusUpdate": {"taskId": "AST_1", "contextId": "AT_x", "status": {"state": "TASK_STATE_COMPLETED"}}}
 ```
-
-The task ends on exact text, a confirmation code read as written:
-
-```json
-{"artifactUpdate": {"taskId": "AST_2", "contextId": "AT_x", "artifact": {"artifactId": "art_2", "name": "answer", "parts": [{"text": "Your code is HTL-7A3K.", "metadata": {"https://livekit.io/a2a/ext/agents/v1/verbatim": true}}]}, "lastChunk": true}}
-{"statusUpdate": {"taskId": "AST_2", "contextId": "AT_x", "status": {"state": "TASK_STATE_COMPLETED"}}}
-```
-
-A question asked as written:
-
-```json
-{"statusUpdate": {"taskId": "AST_3", "contextId": "AT_x", "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"role": "ROLE_AGENT", "parts": [{"text": "Which payer, and the member id?", "metadata": {"https://livekit.io/a2a/ext/agents/v1/verbatim": true}}]}}}}
-```
-
-A stock client reads the same text and ignores the flag.
 
 ## 5. Server-set keys, sent either way
 
@@ -277,8 +260,7 @@ only the task id, so a stock client that sends just the id gets
 `TaskNotFoundError`.
 
 The order of events on a stream is: the `Task` (state `submitted`), zero
-or more `working` status events each carrying a text message (progress, or
-exact text when its part is flagged),
+or more `working` status events each carrying a text message (progress or exact text),
 zero or more chunks of the artifact named `answer` (the last with
 `lastChunk: true`), then the final status event with the keys of section 5
 that apply.

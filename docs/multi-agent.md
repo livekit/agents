@@ -69,11 +69,9 @@ the toolset's `setup()`: the toolset's id is the card's name, the tool is
 `ask`, or `name=` when one agent has two experts, and its description is
 the card's description followed by one fixed sentence that says to state
 the request in full. The tool hands the request on with the
-run's thread and history, passes the expert's progress to `ctx.update()`
-and its exact text to `ctx.say()`, returns the answer, or the question the
-expert has for the person, and records the expert's task on the call. An
-answer the expert flagged `livekit/verbatim` reaches the person as written,
-with no model step; a task that ends with no text is an empty answer. On a call its first
+run's thread and history, speaks the expert's progress through
+`ctx.update()` and its exact text through `ctx.say()`, returns the answer, or the question the expert has for the
+person, and records the expert's task on the call. On a call its first
 update releases the turn with a line the model acknowledges while the
 expert works; `announce=False` turns that off.
 
@@ -92,9 +90,8 @@ the expert's task: `state` (`completed`, `input-required`, `canceled`),
 `profile` (`livekit` when the extension was in force, else `a2a`). A
 `failed` task raises `DelegationFailed` with what the expert said.
 `progress` takes each status message the expert sends while it works, and
-`say` the ones flagged `livekit/verbatim`, its exact text; without `say`
-they go to `progress`. `verbatim` is the answer or the question when the
-expert flagged it.
+`say` the flagged ones ([a2a-live-ext.md](a2a-live-ext.md#exact-text)), or
+`progress` without it; `verbatim` is the answer or question when flagged.
 `aclose()` releases what the delegate holds.
 
 ## A remote expert
@@ -121,17 +118,14 @@ the `contextId`, and the expert keeps its own lane in the caller's thread:
 its own history and state, beside the caller's. Inside `agent.run()` the
 delegate finds the run's thread by itself; `context_id=` names one
 explicitly. Any other A2A server gets the request as text and nothing else,
-and keeps a context of its own. That context is recorded on the delegating
-call as `lk.delegation.context_id`, next to the task id, and the next
-delegation to the same endpoint reads it from the latest such call in its
-history: one delegate serves every conversation in the process and keeps
-none of them. The caller depends on nothing coming back
+and keeps a context of its own, which the delegate reads back from the
+call that recorded it in the history, since one delegate serves every
+conversation. The caller depends on nothing coming back
 but core A2A: the working statuses are the progress, the artifact is the
 answer. See [a2a.md](a2a.md), "Writing an expert in another framework".
 
 `A2ADelegate(url, token=None, httpx_client=None, name=None, announce=True, conn_options=DEFAULT_API_CONNECT_OPTIONS)`.
-An answer stream that drops is read again with `tasks/resubscribe` up to
-`conn_options.max_retry` times, `retry_interval` apart. With no `token`, an
+A dropped answer stream is read again up to `conn_options.max_retry` times. With no `token`, an
 expert on the project's own host (the host of `LIVEKIT_URL`) gets a project
 token minted from `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`, which passes a
 `public=False` endpoint; an expert anywhere else gets none.
@@ -141,8 +135,8 @@ the question is the delegation's output. The next delegation in the thread, carr
 the answer to that question on the expert's lane; the waiting task ends
 `completed`, merged into the new one. The delegate's tool returns the
 question as `InputRequired(question, tool=)` naming itself, so the front
-desk asks it in its own words, or as written when the expert flagged its
-text part `livekit/verbatim`, and what the person says next is sent to the expert as the
+desk asks it in its own words, or as written when the expert flagged it
+`livekit/verbatim`, and what the person says next is sent to the expert as the
 tool's next request, as they said it, with no model turn in between: on a
 call the framework runs the tool on the turn's transcript, in text on the
 next message, on whichever worker gets it ([tools.md](tools.md)). A
@@ -152,11 +146,10 @@ caller-canceled`.
 
 `record_delegation(function_call, result)` writes the expert's task on the
 call that delegated, in `FunctionCall.extra`: `lk.delegation.task_id`,
-`lk.delegation.context_id`, `lk.delegation.endpoint`,
-`lk.delegation.transport` and `lk.delegation.profile`, so a dashboard joins
-the two lanes and the next delegation finds a stock expert's context. The
-delegate's own tool records it by itself; a tool of your own that calls
-`delegate.run` calls it and passes the history as `message_history`.
+`lk.delegation.context_id`, `lk.delegation.endpoint`, `lk.delegation.transport` and
+`lk.delegation.profile`, so a dashboard joins the two lanes. The delegate's
+own tool records it by itself; a tool of your own that calls `delegate.run`
+calls it and passes the history as `message_history`.
 
 ## Endpoints versus deployments
 

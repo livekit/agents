@@ -43,7 +43,7 @@ a module-level agent. A subclass declares its tools as methods with
 |---|---|
 | a value | the model reads it and continues |
 | `ToolResult(output, reply_required=False)` | the output is recorded; the call asks for no reply |
-| `ToolResult(text, verbatim=True)` | the person gets the text exactly as written when the tool returns, as `ctx.say(text)` does; the model reads that it was delivered and continues. With `reply_required=False` the turn ends on it, and it is the answer; see [human-in-the-loop.md](human-in-the-loop.md) |
+| `ToolResult(text, verbatim=True)` | the person gets the text exactly as written; the model reads that it was delivered and continues, or the turn ends there with `reply_required=False`; see [human-in-the-loop.md](human-in-the-loop.md) |
 | raise `ToolError(message)` | the model reads the message as an error output and continues |
 | raise `ModelRetry(reason)` | the model reads the reason and calls again; the same in `agent.run()` and on a call |
 | raise `StopResponse()` | the call is answered with nothing and asks for no reply; `run()` ends the turn with no output |
@@ -55,37 +55,20 @@ a module-level agent. A subclass declares its tools as methods with
 
 ## Progress and exact text
 
-```python
-@desk.tool
-async def book(ctx: RunContext[Deps, Patient], slot_id: str) -> str:
-    await ctx.update("holding the slot")
-    await ctx.say("Calls are recorded for quality.")
-    ...
-```
+`ctx.update(text)` is progress the model words; `ctx.say(text)` is exact
+text, said as written with no model step and recorded as the agent's
+message: spoken on a call, a flagged `working` status in text
+([a2a-live-ext.md](a2a-live-ext.md#exact-text)). On a call the first of
+them releases the tool to the background, and a first `say` is the turn's
+reply; later ones are delivered at idle in call order, consecutive updates
+as one reply, and a `say` cut off before it played is said again. A model
+that cannot say text as written is asked to, with a warning.
 
-`ctx.update(text)` is progress the model words: on a call a reply about
-it, in text a `working` status. `ctx.say(text)` is exact text, said to the
-person as written: spoken on a call with no model step, in text a
-`working` status with its part flagged `livekit/verbatim`
-([a2a-live-ext.md](a2a-live-ext.md)), and the agent's message in the
-history either way. On a call the first of them releases the tool to the
-background; a first `say` is the turn's whole reply. Later ones are
-delivered at idle in call order: consecutive updates as one reply, each
-`say` on its own, and a `say` the person cut off before any of it played
-is said at the next idle. A model with no TTS that cannot say text as
-written is asked to say it, with a warning that the wording is not
-guaranteed.
-
-The calls of one step run together, in text as on a call, and their
-outputs reach the model in call order once every call has returned; a
-cancel stops every call still running. Exact text a tool says, and a
-verbatim result that asks for a reply, go out when that tool returns. The
-verbatim results that end the turn are held: when nothing in the step asks
-for a reply, they are the answer, one text in call order with a blank line
-between them; when a result asks for a reply, or a tool hands off or asks a
-question, they are said in call order and the model goes on. On an agent
-whose `output_type` is not `str`, a verbatim result never ends the turn: it
-is said when its tool returns and the model goes on to the typed output.
+The calls of one step run together. A verbatim result the model goes on
+from is said when its tool returns. Those that end the turn are the
+answer, joined in call order with a blank line, unless another call asks
+for a reply: then they are said and the model goes on. On an agent whose
+`output_type` is not `str`, a verbatim result never ends the turn.
 
 ## Approval
 
@@ -168,13 +151,9 @@ activity starts, a call or a run, and `aclose()` when it ends. An
 `MCPToolset` connects to its server and lists its tools in `setup()`.
 Toolsets passed to `LiveSession(tools=)` live for the whole call.
 
-An agent is built once at import and shared by every conversation in the
-process ([agents.md](agents.md)), and so is every toolset on it. Nothing
-reachable from an agent holds per-conversation state: a toolset may hold
-process resources only, a client or a pool, and reads what belongs to a
-conversation from the `RunContext` and the history. `A2ADelegate` records
-the context a stock expert keeps on the delegating call and reads it back
-from the history ([multi-agent.md](multi-agent.md)).
+An agent and its toolsets are shared by every conversation in the
+process, so a toolset holds process resources only, a client or a pool,
+and reads a conversation's state from the `RunContext` and the history.
 
 The clients in `deps` are per run by design; see
 [state-and-deps.md](state-and-deps.md).
