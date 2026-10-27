@@ -401,6 +401,7 @@ pub struct SessionShared {
     pub gen_ids: std::sync::atomic::AtomicU64,
     pub session_id: String,
     pub activity: tokio::sync::watch::Sender<ActivitySnapshot>,
+    pub scheduling: tokio::sync::watch::Sender<SchedulingGate>,
     /// The providers by id.
     pub resources: lk_agents_abi::resources::Resources,
     /// `session.keyterms`: the last list pushed to the recogniser.
@@ -451,6 +452,27 @@ impl SessionShared {
     /// `output.transcription_enabled`.
     pub fn transcription_enabled(&self) -> bool {
         self.output.borrow().transcription_enabled
+    }
+}
+
+/// Whether a new speech would be refused now, published at the end of every cycle so the host's
+/// `say()` / `generate_reply()` raise the reference's `RuntimeError` synchronously.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SchedulingGate {
+    /// `_scheduling_paused`.
+    pub paused: bool,
+    /// A handoff drains outside a close: the host's own speech is held for the arriving agent.
+    pub handoff_draining: bool,
+    /// Past the close's edge: refused quietly (the reference logs and returns).
+    pub closing: bool,
+}
+
+impl SchedulingGate {
+    /// The refusal `_schedule_speech` raises for a speech asked from `origin`.
+    pub fn refusal(&self, origin: &Origin) -> Option<crate::agent_activity::scheduling::Rejected> {
+        let held = *origin == Origin::Host && self.handoff_draining;
+        (self.paused && !self.closing && !held)
+            .then_some(crate::agent_activity::scheduling::Rejected::Draining)
     }
 }
 

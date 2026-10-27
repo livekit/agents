@@ -758,6 +758,7 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<Arc<SpeechHandle>, CommandRefused> {
         let origin = origin_of(origin)?;
+        self.refuse_paused(&origin)?;
         // An empty toolset would tell the model about no tool at all; `None` keeps the agent's.
         let toolset =
             tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, tool_runner)));

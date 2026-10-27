@@ -138,6 +138,8 @@ pub struct SessionHandle {
     pub keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// The driving agent's context and state, as last published.
     pub activity: tokio::sync::watch::Receiver<crate::agent_session::ActivitySnapshot>,
+    /// Whether a new speech would be refused now.
+    pub scheduling: tokio::sync::watch::Receiver<crate::agent_session::SchedulingGate>,
     /// What a system runs on; the host starts the systems it configures on this after `start()`.
     pub peer: PeerHandle,
     pub ivr_detection: bool,

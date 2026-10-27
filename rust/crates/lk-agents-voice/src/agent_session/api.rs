@@ -185,8 +185,16 @@ impl SessionApi {
             builder.room_io_events = room_io.events();
 
             let (mut runtime, handle) = builder.start().await?;
-            let SessionHandle { api, events, answers, keyterms, activity, peer, ivr_detection } =
-                handle;
+            let SessionHandle {
+                api,
+                events,
+                answers,
+                keyterms,
+                activity,
+                scheduling,
+                peer,
+                ivr_detection,
+            } = handle;
             #[cfg(feature = "dst")]
             let (host_event, queue_owner) = probe.unzip();
             // The IVR navigator's task, subscribed before the opening cycle.
@@ -231,6 +239,7 @@ impl SessionApi {
                 calls,
                 keyterms,
                 activity,
+                scheduling,
                 peer,
                 amd: None,
                 tasks,
@@ -513,6 +522,7 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<Arc<SpeechHandle>, CommandRefused> {
         let origin = origin_of(origin)?;
+        self.refuse_paused(&origin)?;
         let (speech, call) = self.speech_call(allow_interruptions)?;
         let call = Some(call);
         self.send_from(
@@ -520,6 +530,19 @@ impl SessionApi {
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call },
         )?;
         Ok(speech)
+    }
+
+    /// `_schedule_speech`'s `RuntimeError` while scheduling drains, raised by the call itself. A
+    /// pause that lands after this check refuses the speech in the loop instead (interrupted).
+    fn refuse_paused(&self, origin: &Origin) -> Result<(), CommandRefused> {
+        let gate = match &*self.lock() {
+            Stage::Running(r) => *r.scheduling.borrow(),
+            Stage::Ready(_) | Stage::Closed => return Ok(()),
+        };
+        match gate.refusal(origin) {
+            Some(rejected) => Err(CommandRefused::Rejected(rejected)),
+            None => Ok(()),
+        }
     }
 
     /// A `say` of streamed words: the speech and its feeding end.
@@ -664,6 +687,7 @@ struct Running {
     keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
     activity: tokio::sync::watch::Receiver<crate::agent_session::ActivitySnapshot>,
+    scheduling: tokio::sync::watch::Receiver<crate::agent_session::SchedulingGate>,
     peer: PeerHandle,
     /// One per session.
     amd: Option<crate::amd::detector::AmdHandle>,
@@ -793,6 +817,9 @@ pub enum CommandRefused {
     Session(#[from] SessionRefused),
     #[error("{0}")]
     Invalid(String),
+    #[error(transparent)]
+    #[host(kind = "RuntimeError")]
+    Rejected(#[from] crate::agent_activity::scheduling::Rejected),
 }
 
 /// `interrupt()` refused by the current speech (`allow_interruptions=False`, no `force`).

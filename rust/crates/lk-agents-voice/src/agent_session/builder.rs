@@ -233,6 +233,7 @@ impl DriverBuilder {
         let ivr_detection = driver.session.config.effective.turn.ivr_detection();
         let keyterms_pushed = driver.shared.keyterms.subscribe();
         let activity = driver.shared.activity.subscribe();
+        let scheduling = driver.shared.scheduling.subscribe();
         let peer = PeerHandle {
             queue: queue.clone(),
             events: ev_tx,
@@ -252,6 +253,7 @@ impl DriverBuilder {
                 answers: answers_rx,
                 keyterms: keyterms_pushed,
                 activity,
+                scheduling,
                 peer,
                 ivr_detection,
             },
@@ -287,6 +289,7 @@ impl DriverBuilder {
             activity:
                 tokio::sync::watch::channel(crate::agent_session::ActivitySnapshot::default()).0,
             keyterms: tokio::sync::watch::channel(None).0,
+            scheduling: tokio::sync::watch::channel(Default::default()).0,
             journal: self.journal.clone(),
         })
     }

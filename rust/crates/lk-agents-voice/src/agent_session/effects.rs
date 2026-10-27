@@ -492,6 +492,12 @@ impl Driver {
                 break;
             }
         }
+        let gate = crate::agent_session::SchedulingGate {
+            paused: self.activity.speech_scheduler.is_paused(),
+            handoff_draining: self.activity.handoff.draining() && self.session.closing.is_none(),
+            closing: self.session.closing_past_edge(),
+        };
+        self.shared.scheduling.send_if_modified(|g| std::mem::replace(g, gate) != gate);
     }
 
     /// Speech boundaries move the user state, dated to the boundary's instant; a final transcript
