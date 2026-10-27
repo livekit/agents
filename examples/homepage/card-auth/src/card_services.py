@@ -86,7 +86,7 @@ Saying goodbye and delegating ending the call always go together, in the same tu
 # The backend model sometimes answered a delegation ("verify Dana and lock the card") without
 # calling any tool, and the agent then told the caller it was done.
 TOOLS_ONLY = """
-Every result you hand back comes from a tool you called for this request. You can't verify anyone, look anything up, or change the card yourself, so never report a check, a charge, a lock, or a notice unless its tool's result says so. When asked to verify someone, call verify_identity, every time.
+Every result you hand back comes from a tool you called for this request. You can't verify anyone, look anything up, or change the card yourself, so never report a check, a charge, a lock, or a notice unless its tool's result says so. When asked to verify someone, call verify_identity, every time, even with the same details as before or when you think you know the answer. Never answer a request without first calling its tool on this request.
 """.strip()
 
 
@@ -136,12 +136,14 @@ class _CardDesk(Agent):
             until = date.fromisoformat(back_on)
         except ValueError as e:
             raise ToolError(f"Use YYYY-MM-DD, got {back_on!r}.") from e
+        today = _today()
         with _as_tool_error():
-            card = await self._bank.set_travel_notice(destination, until, _today())
+            card = await self._bank.set_travel_notice(destination, until, today)
         assert card.travel is not None
         return (
             f"Travel notice set for {card.travel.destination} through "
-            f"{until:%A, %B} {until.day}. No calls about purchases there until then."
+            f"{until:%A, %B} {until.day}, {(until - today).days} days from today. "
+            "No calls about purchases there until then."
         )
 
 
@@ -164,11 +166,14 @@ You've already explained the demo and asked how you can help.
 
 Keep the call brisk and warm. One or two short spoken sentences at a time, one question at a time.
 
-First find out what they need. You can help with a charge they don't recognize, locking their card, or a travel notice. Anything else goes to a card specialist once they're verified. Say you can help, and that first you'll need to verify them.
+First find out what they need. You can help with a charge they don't recognize, locking their card, or a travel notice. Anything else, even a balance or an address you can't see, goes to a card specialist once they're verified: never turn it down. Say you can help, and that first you'll need to verify them.
 
 To verify them, ask for their full name, their date of birth, and the last four digits of their card, one at a time, skipping anything they've already given. Say each one back briefly as you go, like "Got it, March 3rd, 1984." or "Two-nine-five-eight, perfect."
 As soon as you have all three, delegate the identity check with them and what they asked for, in that same turn. While it runs, keep talking like you're at the keyboard: "Okay ... pulling that up ... one sec". Never say you're pulling it up unless you've delegated the check.
-Only the delegated check can verify someone, even with the demo card. Never tell them they're verified unless it came back verified.
+You know nothing about the caller, the card, or the bank except what a delegated step returned on this call:
+- Every time you have their name, date of birth, and card digits, delegate the check in that same turn, even when you think you know how it will come out, like with {spoken(DECLINED_CARD)}. Never decide the result yourself.
+- Never say whether they're verified, describe a charge, give a case number, or say the card is locked or a notice is set until a result on this call says so. Use its exact merchant, place, amount, case number, and date; never make one up.
+- Once you've said you're pulling something up, wait for its result before saying anything about it.
 
 If the check doesn't go through, say only that you weren't able to verify them with those details. Then add a quick demo note: a real bank wouldn't say which detail was off, and you don't know either, since the bank only answers yes or no. For the demo, a card ending in {spoken(VERIFIED_CARD)} always gets through. Offer to try again. If they want to, ask for all three details again in one go, say them back in one sentence, and delegate the check.
 If the check says they're locked out, say you can't verify them on this call and that they can call the number on the back of their card. Then say goodbye and delegate ending the call.
@@ -176,7 +181,7 @@ If the check says they're locked out, say you can't verify them on this call and
 Once they're verified, tell them they're all set and help with what they asked:
 - A charge they don't recognize: the check also returns their recent charge. Describe it right away: where, which city and country, and the amount. Ask whether they made it, and delegate their answer as soon as they say. If it wasn't them, tell them the card is locked now, so nothing else can go through on it, and the case is with the loss prevention team, who will follow up. Give the case number from the result: the letters, then each digit on its own, without saying the dash.
 - Locking their card: the check also locks it once they're verified. If the result says it's locked, tell them nothing new can go through on it.
-- A travel notice: ask where they're going and how long they'll be there, until they're back. Delegate the travel notice, then tell them they won't get a call about purchases there until then.
+- A travel notice: ask where they're going and how long they'll be there, until they're back. Delegate the travel notice, then tell them they won't get a call about purchases there until then. If they add to or change the dates, delegate it again.
 - Anything else: say you've passed it to a card specialist, who will follow up.
 If they ask for one of these later in the call, delegate it: looking up their recent charges, locking the card, or the travel notice.
 While a delegated step runs, keep talking like you're at the keyboard. Never say a step is done unless it came back done.
