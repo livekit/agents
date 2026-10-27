@@ -105,7 +105,11 @@ impl Driver {
             .best_alternative()
             .map_or(0, |a| crate::agent_activity::false_interruption::count_min_words(&a.text));
         let has_vad = self.input.sinks.contains_key(&AudioChannel::Vad);
+        let text = ev.best_alternative().map_or("", |a| a.text.as_str());
         match ev.kind {
+            // An empty final reaches no hook (`if not transcript: return`): it neither interrupts
+            // nor ends the pause, so a filler the STT heard as nothing stays a false interruption.
+            SpeechEventType::FinalTranscript if text.is_empty() => {}
             SpeechEventType::FinalTranscript => {
                 self.activity.live_speech_at_final =
                     self.activity.speech_scheduler.current_speech_uninterrupted();
