@@ -744,6 +744,10 @@ pub fn bind_host_provider(py: Python<'_>, obj: &Bound<'_, PyAny>, clock: &std::s
 // --------------------------------------------------------------------- a host coroutine from any thread
 
 /// From any thread, in the captured context. The guard cancels the Python task when dropped.
+///
+/// The context is entered through a copy: a `Context` is entered by one thread at a time, and the
+/// loop thread enters the captured one for each callback scheduled in it, so entering it here
+/// races those ("cannot enter context: ... is already entered").
 pub fn schedule_coroutine(
     py: Python<'_>,
     locals: &pyo3_async_runtimes::TaskLocals,
@@ -751,7 +755,7 @@ pub fn schedule_coroutine(
 ) -> PyResult<(CancelPythonTask, tokio::sync::oneshot::Receiver<PyResult<Py<PyAny>>>)> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let asyncio = py.import("asyncio")?;
-    let future = locals.context(py).call_method1(
+    let future = locals.context(py).call_method0("copy")?.call_method1(
         "run",
         (asyncio.getattr("run_coroutine_threadsafe")?, coro, locals.event_loop(py)),
     )?;

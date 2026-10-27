@@ -177,6 +177,50 @@ out = (loop, thread.ident, Detector())
         });
     }
 
+    // Catches: a host coroutine scheduled from a core thread while the loop thread runs a callback
+    // in the same captured context raising "cannot enter context: ... is already entered" (a
+    // worker's simulate_job failing at random beside its load reports).
+    #[test]
+    fn a_coroutine_is_scheduled_while_the_loop_is_inside_its_context() {
+        attach(|py| {
+            let out = eval_with_stubs(
+                py,
+                r#"
+import asyncio, contextvars, threading
+loop = asyncio.new_event_loop()
+ready = threading.Event()
+def run():
+    asyncio.set_event_loop(loop); loop.call_soon(ready.set); loop.run_forever()
+threading.Thread(target=run, daemon=True).start(); ready.wait()
+binding = contextvars.ContextVar("binding")
+context = contextvars.copy_context()
+context.run(binding.set, "agent")
+entered, release = threading.Event(), threading.Event()
+def hold():
+    entered.set(); release.wait(5)
+loop.call_soon_threadsafe(hold, context=context)
+async def read():
+    return binding.get()
+out = (loop, context, entered, release, read)
+"#,
+            );
+            let [event_loop, context, entered, release, read]: [Py<PyAny>; 5] =
+                out.extract(py).unwrap();
+            let waited = entered.bind(py).call_method1("wait", (5.0,)).unwrap();
+            assert!(waited.extract::<bool>().unwrap(), "the loop never ran the callback");
+            let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.bind(py).clone())
+                .with_context(context.bind(py).clone());
+            let coro = read.bind(py).call0().unwrap();
+            let scheduled = crate::python::schedule_coroutine(py, &locals, coro);
+            release.bind(py).call_method0("set").unwrap();
+            let (_guard, receiver) = scheduled.expect("scheduling raced the loop's callback");
+            let got = py.detach(|| receiver.blocking_recv()).unwrap().unwrap();
+            assert_eq!(got.extract::<String>(py).unwrap(), "agent", "not run in the captured context");
+            let stop = event_loop.bind(py).getattr("stop").unwrap();
+            event_loop.bind(py).call_method1("call_soon_threadsafe", (stop,)).unwrap();
+        });
+    }
+
     // Catches: a host stream whose task was cancelled under the core (at close) read as a provider
     // failure -- reported as `stt_error` with a `CancelledError`, which the reference never does --
     // instead of the end of the stream; and a real failure swallowed along with it.
