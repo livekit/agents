@@ -262,8 +262,14 @@ impl RealtimeMachine {
             self.stale_say.remove(id);
             self.say_tags.retain(|t| t != id);
             step.frames.push(wire::response_cancel(Some(&response_id)));
-            step.merge(self.close_generation());
-            self.generation = Generation::Discarded;
+            if matches!(self.generation, Generation::Active { .. }) {
+                // Created late, behind a reply the server opened meanwhile, which still generates:
+                // that one stays, and the discarded one's end is skipped.
+                self.discarded_responses.insert(response_id);
+            } else {
+                step.merge(self.close_generation());
+                self.generation = Generation::Discarded;
+            }
             // Created and cancelled: the server takes the next reply.
             let error = RealtimeError::new("generate_reply cancelled");
             step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed { req_id: id.clone(), error }));
@@ -434,6 +440,9 @@ impl RealtimeMachine {
     }
 
     fn on_response_done(&mut self, now: Ts, done: crate::realtime::wire::ResponseDone) -> Step {
+        if self.discarded_responses.remove(&done.response_id) {
+            return Step::default();
+        }
         if matches!(self.generation, Generation::Discarded) {
             self.generation = Generation::None;
             return Step::default();

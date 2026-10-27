@@ -64,6 +64,8 @@ pub struct RealtimeMachine {
     /// `_discarded_event_ids`: requests abandoned before the server created their response. The
     /// response is cancelled by id and its trailing events skipped when it finally arrives.
     discarded: HashSet<String>,
+    /// Discarded responses created while another generated: their `response.done` is skipped.
+    discarded_responses: HashSet<String>,
     /// xAI: `_pending_say_event_ids`. `force_message` gets a `response.created` with no
     /// `client_event_id`, so the oldest un-answered say claims it.
     say_tags: VecDeque<String>,
@@ -123,6 +125,7 @@ impl RealtimeMachine {
             deleted_calls: VecDeque::new(),
             pending_replies: HashSet::new(),
             discarded: HashSet::new(),
+            discarded_responses: HashSet::new(),
             say_tags: VecDeque::new(),
             stale_say: HashMap::new(),
             ctx_update: None,
@@ -345,6 +348,7 @@ impl RealtimeMachine {
             step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
         }
         self.say_tags.clear();
+        self.discarded_responses.clear();
         self.stale_say.clear();
         step.merge(self.close_generation());
         // A reply asked for and not yet created is asked for again, now that the conversation it
@@ -559,13 +563,9 @@ impl RealtimeMachine {
                 if !self.has_active_generation() {
                     return Step::default();
                 }
-                // Named, only the response it names: one already over, or another's, is left be.
-                let target = match response_id {
-                    Some(id) if self.response_id().as_deref() == Some(id.as_str()) => Some(id),
-                    Some(_) => return Step::default(),
-                    None => None,
-                };
-                let mut step = Step::frame(wire::response_cancel(target.as_deref()));
+                // Named, only the response it names, which may be one this session has moved past
+                // (a reply the server opened while another was being created).
+                let mut step = Step::frame(wire::response_cancel(response_id.as_deref()));
                 if self.dialect.discard_silent_responses {
                     step.merge(self.discard_abandoned());
                 }
