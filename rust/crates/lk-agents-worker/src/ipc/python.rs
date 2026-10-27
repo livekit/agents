@@ -1,10 +1,10 @@
 //! `_core.ipc_pair`, `_core.ProcSupervisor`, `_core.IpcClient`, `_core.ProcPool` and
 //! `_core.JobRun`: the job processes as `ipc/__init__.py` (the worker's side) and `ipc/child.py`
-//! (a process's) drive them; `_core.ipc_encode` and `_core.ipc_decode` for tests.
+//! (a process's) drive them.
 //!
-//! `ProcSupervisor(fd, host, ...)` takes over the parent's socket. `host` is the `SupervisedProc`:
-//! Rust calls its `_core_log(level, msg, extra, exc)`, `_core_is_alive()`, `_core_kill()`,
-//! `_sample_memory_mb()` and `_core_has_running_job()`, and drops it once the process exited.
+//! `ProcSupervisor(fd, host, ...)` takes over the parent's socket. `host` is the `JobExecutor`:
+//! Rust calls its `_core_log(level, msg, extra, exc)`, `_core_is_alive()`, `_core_kill()` and
+//! `_sample_memory_mb()`, and drops it once the process exited.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -16,81 +16,22 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 
 use lk_agents_abi::python::{CancellingHandle, HostBridge, HostHandle, check_pid, pyo3_async_runtimes};
-use pyo3::exceptions::{PyAssertionError, PyException, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
 
 use super::pool::{LaunchError, PoolEvent, PoolHost, PoolOptions, ProcPool};
 
 use super::{
-    Closed, ExtraValue, FieldKind, InitError, IpcClient, IpcMessage, Level, MESSAGES, MemoryError,
-    ProcHost, ProcSupervisor, SupervisorOptions, Value, lock, secs,
+    Closed, Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, IpcClient, Level, MemoryError,
+    PROTOCOL_VERSION, ProcHost, ProcSupervisor, StartJob, SupervisorOptions, ToChild, ToParent, lock,
+    secs,
 };
 
 /// The socket to the other process closed.
 fn closed(_: Closed) -> PyErr {
     pyo3::exceptions::PyConnectionError::new_err("the IPC socket is closed")
 }
-
-// ------------------------------------------------------------------------------------ codec
-
-/// A message's payload from its `MSG_ID` and its fields by name (a message dataclass's `vars`).
-#[pyfunction]
-fn ipc_encode<'py>(
-    py: Python<'py>,
-    msg_id: i32,
-    fields: &Bound<'py, PyDict>,
-) -> PyResult<Bound<'py, PyBytes>> {
-    let (_, schema) = usize::try_from(msg_id)
-        .ok()
-        .and_then(|i| MESSAGES.get(i))
-        .ok_or_else(|| PyValueError::new_err(format!("unknown IPC message id {msg_id}")))?;
-    let mut values = Vec::with_capacity(schema.len());
-    for (name, kind) in *schema {
-        let v = fields
-            .get_item(name)?
-            .ok_or_else(|| PyValueError::new_err(format!("IPC message field {name} is missing")))?;
-        values.push(match kind {
-            FieldKind::Bool => Value::Bool(v.extract()?),
-            FieldKind::Float => Value::Float(v.extract::<f64>()? as f32),
-            FieldKind::Double => Value::Double(v.extract()?),
-            FieldKind::Long => Value::Long(v.extract()?),
-            FieldKind::Str => Value::Str(v.extract()?),
-            FieldKind::Bytes => Value::Bytes(v.extract::<Cow<[u8]>>()?.into_owned()),
-            FieldKind::OptBytes if v.is_none() => Value::Absent,
-            FieldKind::OptBytes => Value::Bytes(v.extract::<Cow<[u8]>>()?.into_owned()),
-        });
-    }
-    let msg = IpcMessage::new(msg_id, values).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(PyBytes::new(py, &msg.encode()))
-}
-
-/// A payload's `MSG_ID` and its fields by name.
-#[pyfunction]
-fn ipc_decode<'py>(py: Python<'py>, data: &[u8]) -> PyResult<(i32, Bound<'py, PyDict>)> {
-    let msg = IpcMessage::decode(data).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok((msg.id(), fields_of(py, &msg)?))
-}
-
-/// A message's fields by name.
-fn fields_of<'py>(py: Python<'py>, msg: &IpcMessage) -> PyResult<Bound<'py, PyDict>> {
-    let fields = PyDict::new(py);
-    for (name, value) in msg.fields() {
-        match value {
-            Value::Bool(v) => fields.set_item(name, v)?,
-            Value::Float(v) => fields.set_item(name, f64::from(*v))?,
-            Value::Double(v) => fields.set_item(name, v)?,
-            Value::Long(v) => fields.set_item(name, v)?,
-            Value::Str(v) => fields.set_item(name, v)?,
-            Value::Bytes(v) => fields.set_item(name, PyBytes::new(py, v))?,
-            Value::Absent => fields.set_item(name, py.None())?,
-        }
-    }
-    Ok(fields)
-}
-
-lk_agents_abi::register_host!(fn ipc_encode);
-lk_agents_abi::register_host!(fn ipc_decode);
 
 // ------------------------------------------------------------------------------- supervisor
 
@@ -106,7 +47,7 @@ impl PyProcHost {
         })
     }
 
-    fn emit(&self, level: Level, msg: &str, extra: super::Extra, exc: Option<PyErr>) {
+    fn emit(&self, level: Level, msg: &str, extra: Extra, exc: Option<PyErr>) {
         self.call(|host| {
             let py = host.py();
             let fields = extra_dict(py, extra)?;
@@ -119,7 +60,7 @@ impl PyProcHost {
 impl ProcHost for PyProcHost {
     type Error = PyErr;
 
-    fn log(&self, level: Level, msg: &str, extra: super::Extra) {
+    fn log(&self, level: Level, msg: &str, extra: Extra) {
         self.emit(level, msg, extra, None);
     }
 
@@ -162,9 +103,6 @@ impl ProcHost for PyProcHost {
         })
     }
 
-    fn has_running_job(&self) -> bool {
-        self.call(|host| host.call_method0("_core_has_running_job")?.extract()).unwrap_or(false)
-    }
 
     fn release(&self) {
         let host = lock(&self.0).take();
@@ -224,16 +162,13 @@ fn ipc_pair() -> PyResult<(i64, i64)> {
 
 lk_agents_abi::register_host!(fn ipc_pair);
 
-/// A message with no fields, or with one string.
-fn message(id: i32, text: Option<String>) -> IpcMessage {
-    IpcMessage::new(id, text.map(Value::Str).into_iter().collect()).expect("the schema's fields")
-}
-
 /// The parent's side of one job process (`ipc/__init__.py`): its initialization, supervision
 /// and close, from the spawn the host made to the exit.
 #[pyclass(name = "ProcSupervisor", module = "livekit.agents._core", frozen)]
 pub struct PyProcSupervisor {
-    sup: ProcSupervisor<PyProcHost>,
+    sup: ProcSupervisor,
+    /// The child's health timeout, from the supervision's ping settings.
+    health_timeout_ms: Option<u64>,
     /// Whether the process initialized, once that settled (answered, failed, timed out, killed).
     initialized: watch::Sender<Option<bool>>,
     /// Set once `run` ended: the process exited and was reaped.
@@ -251,7 +186,7 @@ impl PyProcSupervisor {
 impl PyProcSupervisor {
     #[new]
     #[pyo3(signature = (
-        fd, host, *, pid, process_kind, initialize_timeout, close_timeout, memory_warn_mb,
+        fd, host, *, pid, initialize_timeout, close_timeout, memory_warn_mb,
         memory_limit_mb, ping_interval, ping_timeout, high_ping_threshold, killable = true,
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -259,7 +194,6 @@ impl PyProcSupervisor {
         fd: i64,
         host: Py<PyAny>,
         pid: u32,
-        process_kind: String,
         initialize_timeout: f64,
         close_timeout: f64,
         memory_warn_mb: f64,
@@ -273,7 +207,6 @@ impl PyProcSupervisor {
         let _rt = pyo3_async_runtimes::tokio::get_runtime().enter();
         let opts = SupervisorOptions {
             pid,
-            process_kind,
             initialize_timeout,
             close_timeout,
             memory_warn_mb,
@@ -283,28 +216,35 @@ impl PyProcSupervisor {
             high_ping_threshold,
             killable,
         };
+        // the child calls itself orphaned when the parent goes quiet past its pong deadline (+10 s);
+        // a job thread's parent has none
+        let health_timeout_ms = (ping_interval > 0.0 && ping_timeout > 0.0)
+            .then(|| secs(ping_timeout + HEALTH_CHECK_GRACE).as_millis() as u64);
         Ok(Self {
             sup: ProcSupervisor::new(socket(fd)?, PyProcHost(Mutex::new(Some(host))), opts),
+            health_timeout_ms,
             initialized: watch::channel(None).0,
             ran: watch::channel(false).0,
             killable,
         })
     }
 
-    /// Sends the process its InitializeRequest (the loop's debug mode, the HTTP proxy, the ping
-    /// settings) and returns the seconds it took to answer; raises `TimeoutError` when it did not
-    /// in time (a process is then killed).
+    /// Sends the process its `Hello` (the loop's debug mode, the HTTP proxy, the health timeout)
+    /// and returns the seconds it took to be ready; raises `TimeoutError` when it was not in time
+    /// (a process is then killed).
     #[pyo3(signature = (*, asyncio_debug, http_proxy))]
     fn initialize<'py>(slf: Bound<'py, Self>, asyncio_debug: bool, http_proxy: Option<String>) -> PyResult<Bound<'py, PyAny>> {
         let this = slf.clone().unbind();
         let sup = slf.get().sup.clone();
-        let request = sup.initialize_request(asyncio_debug, http_proxy.as_deref().unwrap_or_default());
+        let hello = Hello {
+            version: PROTOCOL_VERSION,
+            asyncio_debug,
+            http_proxy: http_proxy.filter(|p| !p.is_empty()),
+            health_timeout_ms: this.get().health_timeout_ms,
+        };
         let runner = if this.get().killable { "process" } else { "runner" };
         pyo3_async_runtimes::tokio::future_into_py(slf.py(), async move {
-            let outcome = match sup.send(&request.encode()).await {
-                Ok(()) => sup.initialize().await,
-                Err(Closed) => Err(InitError::Closed),
-            };
+            let outcome = sup.initialize(hello).await;
             this.get().settle(matches!(outcome, Ok(Some(_))));
             match outcome {
                 Ok(Some(elapsed)) => Ok(elapsed.as_secs_f64()),
@@ -314,11 +254,7 @@ impl PyProcSupervisor {
                 })
                 .unwrap_or_else(|e| e)),
                 Err(InitError::Closed) => Err(closed(Closed)),
-                Err(InitError::Unexpected) => {
-                    Err(PyAssertionError::new_err(InitError::Unexpected.to_string()))
-                }
-                Err(e @ InitError::Failed(_)) => Err(PyRuntimeError::new_err(e.to_string())),
-                Err(InitError::Codec(e)) => Err(PyValueError::new_err(e.to_string())),
+                Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
             }
         })
     }
@@ -341,7 +277,7 @@ impl PyProcSupervisor {
         let ran = this.ran.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let _ = initialized.wait_for(Option::is_some).await;
-            sup.supervise();
+            sup.supervise().await;
             let joined = host.await_call(|h| Ok(joined.bind(h.py()).clone())).await;
             let exitcode = joined.and_then(|_| {
                 Python::attach(|py| host.object().bind(py).call_method0("_core_reap")?.extract::<Option<i64>>())
@@ -386,11 +322,14 @@ impl PyProcSupervisor {
         })
     }
 
-    /// Hands the process its job: a StartJobRequest of `fields` (the message's, by name).
+    /// Hands the process its job, `fields` as `RunningJobInfo._to_wire()` gives them.
     fn start_job<'py>(&self, py: Python<'py>, fields: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyAny>> {
-        let data = ipc_encode(py, super::START_JOB_REQUEST, fields)?.as_bytes().to_vec();
+        let job = start_job_of(fields)?;
         let sup = self.sup.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move { sup.send(&data).await.map_err(closed) })
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            sup.start_job(job).await;
+            Ok(())
+        })
     }
 
     #[getter]
@@ -400,6 +339,53 @@ impl PyProcSupervisor {
 }
 
 lk_agents_abi::register_host!(class PyProcSupervisor);
+
+/// A job from its fields by name.
+fn start_job_of(fields: &Bound<'_, PyDict>) -> PyResult<StartJob> {
+    let get = |name: &str| -> PyResult<Bound<'_, PyAny>> {
+        fields.get_item(name)?.ok_or_else(|| PyValueError::new_err(format!("the job's {name} is missing")))
+    };
+    Ok(StartJob {
+        job: get("job")?.extract::<Cow<[u8]>>()?.into_owned(),
+        name: get("name")?.extract()?,
+        identity: get("identity")?.extract()?,
+        metadata: get("metadata")?.extract()?,
+        url: get("url")?.extract()?,
+        token: get("token")?.extract()?,
+        worker_id: get("worker_id")?.extract()?,
+        fake_job: get("fake_job")?.extract()?,
+        received_at: get("received_at")?.extract()?,
+        accepted_at: get("accepted_at")?.extract()?,
+        assigned_at: get("assigned_at")?.extract()?,
+        launched_at: get("launched_at")?.extract()?,
+    })
+}
+
+/// A job's fields by name, for `RunningJobInfo._from_wire`.
+fn fields_of_job<'py>(py: Python<'py>, job: &StartJob) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("job", PyBytes::new(py, &job.job))?;
+    for (name, value) in [
+        ("name", &job.name),
+        ("identity", &job.identity),
+        ("metadata", &job.metadata),
+        ("url", &job.url),
+        ("token", &job.token),
+        ("worker_id", &job.worker_id),
+    ] {
+        d.set_item(name, value)?;
+    }
+    d.set_item("fake_job", job.fake_job)?;
+    for (name, value) in [
+        ("received_at", job.received_at),
+        ("accepted_at", job.accepted_at),
+        ("assigned_at", job.assigned_at),
+        ("launched_at", job.launched_at),
+    ] {
+        d.set_item(name, value)?;
+    }
+    Ok(d)
+}
 
 // ----------------------------------------------------------------------------------- client
 
@@ -419,23 +405,19 @@ struct Child {
 }
 
 impl Child {
-    async fn send(&self, msg: IpcMessage) -> Result<(), Closed> {
-        self.client.queue(msg.encode())
+    async fn send(&self, msg: ToParent) -> Result<(), Closed> {
+        self.client.send(msg).await
     }
 
     /// One message from the parent; `false` ends the serving.
     async fn on_message(
         self: &Arc<Self>,
         host: &CancellingHandle,
-        msg: IpcMessage,
+        msg: ToChild,
     ) -> PyResult<bool> {
-        let str_of = |name: &str| msg.get_str(name).to_owned();
-        match msg.id() {
+        match msg {
             // answered once the loop ran a callback: the pong measures the loop's responsiveness
-            super::PING_REQUEST => {
-                let Some(Value::Long(timestamp)) = msg.get("timestamp").cloned() else {
-                    return Ok(true);
-                };
+            ToChild::Ping { sent_ms } => {
                 let loop_ran = HostHandle::from_parts(
                     Python::attach(|py| host.object().clone_ref(py)),
                     host.task_locals().clone(),
@@ -443,22 +425,16 @@ impl Child {
                 if loop_ran.run_on_loop(|_| Ok(())).await.is_err() {
                     return Ok(false);
                 }
-                let now = super::time_ms().max(0) as u64;
-                let pong = IpcMessage::new(
-                    super::PONG_RESPONSE,
-                    vec![Value::Long(timestamp), Value::Long(now)],
-                )
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                Ok(self.send(pong).await.is_ok())
+                Ok(self.send(ToParent::Pong { sent_ms }).await.is_ok())
             }
             // the job starts once: its run ends with the parent's shutdown
-            super::START_JOB_REQUEST => {
+            ToChild::StartJob(job) => {
                 if lock(&self.run).is_some() {
                     py_log(Level::Warning, "trying to start a new job while one is already running", None);
                     return Ok(true);
                 }
                 let run = host
-                    .await_call(|h| h.call_method1("_core_start_job", (fields_of(h.py(), &msg)?,)))
+                    .await_call(|h| h.call_method1("_core_start_job", (fields_of_job(h.py(), &job)?,)))
                     .await?;
                 let run: Py<PyJobRun> = Python::attach(|py| -> PyResult<_> { Ok(run.bind(py).cast::<PyJobRun>()?.clone().unbind()) })?;
                 let _ = run.get().0.parent.set(Arc::clone(self));
@@ -466,74 +442,58 @@ impl Child {
                 Ok(true)
             }
             // acked, then the process ends with its job (at once without one)
-            super::SHUTDOWN_REQUEST => {
-                let reason = str_of("reason");
-                if self.send(message(super::SHUTDOWN_REQUEST_ACK, None)).await.is_err() {
+            ToChild::Shutdown { reason } => {
+                if self.send(ToParent::ShutdownAck).await.is_err() {
                     return Ok(false);
                 }
                 let run = Python::attach(|py| lock(&self.run).as_ref().map(|r| r.clone_ref(py)));
                 let Some(run) = run else {
-                    let _ = self.send(message(super::SHUTTING_DOWN, None)).await;
+                    let _ = self.send(ToParent::ShuttingDown).await;
                     return Ok(false);
                 };
                 let reason = if reason.is_empty() { "parent process shutdown".into() } else { reason };
                 run.get().0.end(reason, false);
                 Ok(true)
             }
-            super::DUMP_STACK_TRACE_REQUEST => {
+            ToChild::DumpStacks => {
                 host.await_call(|h| h.call_method0("_core_dump_stacks")).await?;
                 Ok(true)
             }
-            _ => Ok(true),
+            ToChild::Hello(_) => Ok(true),
         }
     }
 }
 
 #[pymethods]
 impl PyIpcClient {
-    /// The handshake on the parent's socket `fd`, blocking: the parent's InitializeRequest, then
-    /// `initialize(http_proxy)` and the answer (the error it raised, re-raised here). Once initialized, the child calls itself orphaned when
-    /// the parent goes quiet past its `ping_timeout` (+10 s); a parent with no ping deadline (a
-    /// job thread's) never does.
+    /// The handshake on the parent's socket `fd`, blocking: the parent's `Hello`, then
+    /// `initialize(http_proxy)` and `Ready` (with the error it raised, re-raised here). Once
+    /// initialized, the child calls itself orphaned when the parent goes quiet past the health
+    /// timeout the `Hello` gave.
     #[new]
     fn new(py: Python<'_>, fd: i64, initialize: Bound<'_, PyAny>) -> PyResult<Self> {
         check_pid()?;
         let rt = pyo3_async_runtimes::tokio::get_runtime();
-        let client = {
+        let sock = {
             let _rt = rt.enter();
-            IpcClient::new(socket(fd)?)
+            socket(fd)?
         };
-        let closed = |_| PyRuntimeError::new_err("failed to initialize proc_client");
-        let frame = py.detach(|| rt.block_on(client.handshake())).map_err(closed)?;
-        let req = IpcMessage::decode(&frame).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        if req.id() != super::INITIALIZE_REQUEST {
-            return Err(PyAssertionError::new_err("first message must be proto.InitializeRequest"));
-        }
-        let http_proxy = Some(req.get_str("http_proxy")).filter(|p| !p.is_empty());
-        let initialized = initialize.call1((http_proxy,));
-        let error = initialized.as_ref().err().map(|e| e.value(py).to_string()).unwrap_or_default();
-        client.queue(message(super::INITIALIZE_RESPONSE, Some(error)).encode()).map_err(closed)?;
+        let failed = |e: super::WireError| PyRuntimeError::new_err(format!("failed to initialize: {e}"));
+        let (client, hello) = py.detach(|| rt.block_on(IpcClient::connect(sock))).map_err(failed)?;
+        let initialized = initialize.call1((hello.http_proxy.clone(),));
+        let error = initialized.as_ref().err().map(|e| e.value(py).to_string());
+        let ready = ToParent::Ready { version: PROTOCOL_VERSION, error };
+        let sent = py.detach(|| rt.block_on(client.send(ready)));
         if let Err(e) = initialized {
             py.detach(|| rt.block_on(client.close()));
             return Err(e);
         }
-
-        let float = |name: &str| match req.get(name) {
-            Some(Value::Float(v)) => f64::from(*v),
-            _ => 0.0,
-        };
-        let (ping_interval, ping_timeout) = (float("ping_interval"), float("ping_timeout"));
-        let health_timeout = (ping_interval > 0.0 && ping_timeout > 0.0)
-            .then(|| secs(ping_timeout + super::HEALTH_CHECK_GRACE));
-        {
-            let _rt = rt.enter();
-            client.serve(health_timeout);
-        }
+        sent.map_err(closed)?;
         Ok(Self(Arc::new(Child {
             client,
             stop: watch::channel(false).0,
             run: Mutex::new(None),
-            asyncio_debug: matches!(req.get("asyncio_debug"), Some(Value::Bool(true))),
+            asyncio_debug: hello.asyncio_debug,
         })))
     }
 
@@ -552,15 +512,7 @@ impl PyIpcClient {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut stop = child.stop.subscribe();
             let served = async {
-                while let Ok(data) = child.client.recv().await {
-                    let msg = match IpcMessage::decode(&data) {
-                        Ok(msg) => msg,
-                        // as the supervisor's reader: the stream is not trusted past a bad frame
-                        Err(e) => {
-                            log::error!(target: "livekit.agents", "invalid IPC message: {e}");
-                            break;
-                        }
-                    };
+                while let Some(msg) = child.client.recv().await {
                     if !child.on_message(&host, msg).await? {
                         break;
                     }
@@ -892,7 +844,7 @@ fn py_log(level: Level, msg: &str, exc: Option<PyErr>) {
 }
 
 /// A log record's `extra`.
-fn extra_dict(py: Python<'_>, extra: super::Extra) -> PyResult<Bound<'_, PyDict>> {
+fn extra_dict(py: Python<'_>, extra: Extra) -> PyResult<Bound<'_, PyDict>> {
     let fields = PyDict::new(py);
     for (key, value) in extra {
         match value {
@@ -906,7 +858,7 @@ fn extra_dict(py: Python<'_>, extra: super::Extra) -> PyResult<Bound<'_, PyDict>
 }
 
 /// `msg` on the `livekit.agents` logger, with `exc`'s traceback and the `extra` fields.
-fn py_log_extra(level: Level, msg: &str, exc: Option<PyErr>, extra: super::Extra) {
+fn py_log_extra(level: Level, msg: &str, exc: Option<PyErr>, extra: Extra) {
     Python::attach(|py| {
         let logged = (|| -> PyResult<()> {
             let logger = py.import("logging")?.call_method1("getLogger", ("livekit.agents",))?;
@@ -1135,12 +1087,12 @@ impl JobRunInner {
         self.spanned("session_end_upload", None, "_core_upload", None, "error in job_ctx._on_session_end").await;
         // the parent learns the job is ending, then why
         if let Some(parent) = self.parent.get() {
-            let _ = parent.send(message(super::SHUTTING_DOWN, None)).await;
+            let _ = parent.send(ToParent::ShuttingDown).await;
         }
         let extra = vec![("reason", ExtraValue::Str(reason.clone())), ("user_initiated", ExtraValue::Bool(user_initiated))];
         py_log_extra(Level::Debug, "shutting down job task", None, extra);
         if let Some(parent) = self.parent.get() {
-            let _ = parent.send(message(super::EXITING, Some(reason.clone()))).await;
+            let _ = parent.send(ToParent::Exiting { reason: reason.clone() }).await;
         }
         let disconnect = self.span("room_disconnect", None)?;
         let r = self

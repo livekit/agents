@@ -128,18 +128,12 @@ class ServerRuntime:
 
 # --- the job process IPC (worker ipc/) -----------------------------------------------------------
 
-def ipc_encode(msg_id: int, fields: dict[str, Any]) -> bytes:
-    """A message's payload from its ``MSG_ID`` and its fields by name."""
-
-def ipc_decode(data: bytes) -> tuple[int, dict[str, Any]]:
-    """A payload's ``MSG_ID`` and its fields by name."""
-
 def ipc_pair() -> tuple[int, int]:
     """One process's control socket: the parent's end and the child's, as descriptors the caller
     owns (the parent's for ``ProcSupervisor``, the child's for the process's ``IpcClient``)."""
 
 class ProcHostProtocol(Protocol):
-    """What ``ProcSupervisor`` calls back into: the ``SupervisedProc``, dropped once it exited."""
+    """What ``ProcSupervisor`` calls back into: the ``JobExecutor``, dropped once it exited."""
 
     def _core_log(
         self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
@@ -147,10 +141,9 @@ class ProcHostProtocol(Protocol):
     def _core_is_alive(self) -> bool: ...
     def _core_kill(self) -> None: ...
     def _sample_memory_mb(self) -> tuple[float, str]: ...
-    def _core_has_running_job(self) -> bool: ...
 
 class ProcSupervisor:
-    """The parent's side of one job or inference process, over the socket ``fd`` it owns."""
+    """The worker's side of one job process, over the socket ``fd`` it owns."""
 
     def __init__(
         self,
@@ -158,7 +151,6 @@ class ProcSupervisor:
         host: ProcHostProtocol,
         *,
         pid: int,
-        process_kind: str,
         initialize_timeout: float,
         close_timeout: float,
         memory_warn_mb: float,
@@ -169,7 +161,7 @@ class ProcSupervisor:
         killable: bool = True,
     ) -> None: ...
     def initialize(self, *, asyncio_debug: bool, http_proxy: str | None) -> Awaitable[float]:
-        """Sends the InitializeRequest; the seconds until its answer, ``asyncio.TimeoutError``
+        """Sends the ``Hello``; the seconds until the process was ready, ``asyncio.TimeoutError``
         when late (a process is then killed)."""
     @property
     def initialized(self) -> bool: ...

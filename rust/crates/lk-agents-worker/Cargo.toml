@@ -10,6 +10,9 @@ livekit-protocol.workspace = true
 prost.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi" }
 serde_json = { workspace = true, features = ["preserve_order"] }
+# The job process protocol (`ipc/wire.rs`): typed messages, postcard-encoded.
+serde.workspace = true
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 tokio = { workspace = true, features = ["net"] }
 thiserror.workspace = true
 async-trait.workspace = true

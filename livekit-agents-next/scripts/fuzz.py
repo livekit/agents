@@ -39,8 +39,6 @@ import gc
 import json
 import logging
 import random
-import socket
-import struct
 import sys
 import time
 from collections.abc import AsyncIterable
@@ -835,29 +833,47 @@ async def job_call(call: Call) -> None:
         session_end_timeout=5.0,
         executor_type=JobExecutorType.THREAD,
     )
-    # the parent's side of the socket, written and read by hand; the handshake's request is
-    # already there, so the client reads it at once
-    parent, child = socket.socketpair()
 
-    def frame(msg_id: int, fields: dict[str, Any]) -> bytes:
-        data = _core.ipc_encode(msg_id, fields)
-        return struct.pack(">I", len(data)) + data
+    class Parent:
+        """The worker's side, the core's supervisor's host, with what the supervisor logs."""
 
-    init = {"asyncio_debug": False, "http_proxy": ""}
-    init.update(ping_interval=0.0, ping_timeout=0.0, high_ping_threshold=0.0)
-    parent.sendall(frame(0, init))
-    runner._client = _core.IpcClient(child.detach(), runner.initialize)
-    reader, writer = await asyncio.open_connection(sock=parent)
+        logs: list[tuple[str, dict[str, Any]]] = []
 
-    async def received() -> str:
-        (size,) = struct.unpack(">I", await reader.readexactly(4))
-        msg_id, _ = _core.ipc_decode(await reader.readexactly(size))
-        return {1: "InitializeResponse", 6: "Exiting", 11: "ShuttingDown"}[msg_id]
+        def _core_log(self, level: int, msg: str, extra: dict[str, Any], exc: Any = None) -> None:
+            self.logs.append((msg, extra))
 
-    sent = [await received()]
+        def _core_is_alive(self) -> bool:
+            return True
+
+        def _core_kill(self) -> None:
+            pass
+
+        def _sample_memory_mb(self) -> tuple[float, str]:
+            return 0.0, "rss"
+
+    # the worker's side is the core's supervisor of a job thread: no pings, nothing killed
+    pch, cch = _core.ipc_pair()
+    sup = _core.ProcSupervisor(
+        pch,
+        Parent(),
+        pid=0,
+        initialize_timeout=30,
+        close_timeout=30,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        ping_interval=0,
+        ping_timeout=0,
+        high_ping_threshold=10,
+        killable=False,
+    )
+    initialized = asyncio.ensure_future(sup.initialize(asyncio_debug=False, http_proxy=None))
+    await asyncio.sleep(0)
+    client = _core.IpcClient(cch, runner.initialize)
+    await initialized
+    runner._client = client
     # the core's IPC client starts the job from its own task, whose context the steps it later
     # runs (the entrypoint, the callbacks) do not share
-    serving = contextvars.Context().run(asyncio.ensure_future, runner._client.serve(runner))
+    serving = contextvars.Context().run(asyncio.ensure_future, client.serve(runner))
     request = RunningJobInfo(
         accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
         job=agent_proto.Job(id="AJ_fuzz", room=models.Room(name="console", sid="RM_fuzz")),
@@ -866,20 +882,19 @@ async def job_call(call: Call) -> None:
         worker_id="fuzz",
         fake_job=True,
     )
-    writer.write(frame(4, request._to_wire()))
-    sent += [await asyncio.wait_for(received(), 60) for _ in range(2)]
+    await sup.start_job(request._to_wire())
     await asyncio.wait_for(serving, 60)
     assert runner._job_task is not None
     await asyncio.wait_for(runner._job_task, 60)
-    await runner._client.aclose()
-    writer.close()
+    await client.aclose()
     for where in ("entrypoint", "shutdown callback", "session end"):
         check(seen.get(where), f"the {where} ran without the job's context")
     check(seen.get("primary"), "the session on the job's room is not the job's primary session")
     check(seen.get("connects") == 1, f"the job's room was connected {seen.get('connects')} times")
     check(call.closes == 1, f"the job's session closed {call.closes} times")
-    told = ["InitializeResponse", "ShuttingDown", "Exiting"]
-    check(sent == told, f"the job told its parent {sent}")
+    check(
+        ("job exiting", {"reason": "done"}) in Parent.logs, f"the job told its parent {Parent.logs}"
+    )
 
 
 # ============================================================================ the runner

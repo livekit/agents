@@ -214,8 +214,6 @@
   "interruption_metrics",
   "interruption_min_frames",
   "interruption_timeout",
-  "ipc_decode",
-  "ipc_encode",
   "ipc_pair",
   "is_cloud",
   "job_timeline",
