@@ -133,11 +133,13 @@ class WireHost(Generic[S]):
         self._ack(self._task_id, self._context_id)
         return await self._host.handle(ctx, boundary)
 
-    async def on_update(self, task_id: str, text: str) -> None:
+    async def on_update(self, task_id: str, text: str, verbatim: bool = False) -> None:
         if task_id != self._task_id:
             return  # a batched turn's progress belongs to the task that answers (3.3.4)
 
-        self._pump.emit(working_event(task_id, self._context_id, text, exts=self._exts))
+        self._pump.emit(
+            working_event(task_id, self._context_id, text, exts=self._exts, verbatim=verbatim)
+        )
 
     async def on_token(self, task_id: str, delta: str) -> None:
         if task_id != self._task_id or not delta:
@@ -163,9 +165,14 @@ class WireHost(Generic[S]):
         record = outcome.result.task
         self._ack(record.id, outcome.context_id)
         artifacts = record.data.artifacts
-        if record.id == self._task_id and artifacts:
+        own = record.id == self._task_id
+        if own and artifacts:
             self._pump.emit(self._answer(outcome, str(artifacts[0]["artifactId"])))
-        self._pump.emit(final_event(record, outcome.context_id, exts=self._exts))
+        self._pump.emit(
+            final_event(
+                record, outcome.context_id, exts=self._exts, verbatim=own and self._host.verbatim
+            )
+        )
         self._mark("doneMs")
         logger.debug("a turn's timing", extra={"taskId": self._task_id, **self._marks})
 
@@ -183,14 +190,12 @@ class WireHost(Generic[S]):
 
     def _answer(self, outcome: TurnOutcome, artifact_id: str) -> pb.TaskArtifactUpdateEvent:
         """The answer artifact's last chunk: empty when the streamed tokens spelled the answer
-        already, the whole answer under the row's artifact id otherwise, in its pieces when a
-        verbatim result leads it."""
+        already, the whole answer under the row's artifact id otherwise, flagged when it
+        reaches the person as written."""
         output = outcome.result.output
         text = output if isinstance(output, str) else json.dumps(output, separators=(",", ":"))
-        pieces = self._host.segments or []
-        if "\n\n".join(piece for piece, _ in pieces) != text:
-            pieces = []  # the handler answered with text of its own, not the run's output
-        if self._streamed and "".join(self._streamed) == text:
+        verbatim = self._host.verbatim
+        if self._streamed and "".join(self._streamed) == text and not verbatim:
             return artifact_event(
                 self._task_id,
                 outcome.context_id,
@@ -209,7 +214,7 @@ class WireHost(Generic[S]):
             append=False,
             last_chunk=True,
             exts=self._exts,
-            segments=pieces,
+            verbatim=verbatim,
         )
 
 

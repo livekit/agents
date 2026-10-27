@@ -43,7 +43,7 @@ a module-level agent. A subclass declares its tools as methods with
 |---|---|
 | a value | the model reads it and continues |
 | `ToolResult(output, reply_required=False)` | the output is recorded; the call asks for no reply |
-| `ToolResult(text, verbatim=True)` | the person gets the text exactly as written; the model reads that it was delivered and continues, or the turn ends there with `reply_required=False`; see [human-in-the-loop.md](human-in-the-loop.md) |
+| `ToolResult(text, verbatim=True)` | the person gets the text exactly as written when the tool returns, as `ctx.say(text)` does; the model reads that it was delivered and continues. With `reply_required=False` the turn ends on it, and it is the answer; see [human-in-the-loop.md](human-in-the-loop.md) |
 | raise `ToolError(message)` | the model reads the message as an error output and continues |
 | raise `ModelRetry(reason)` | the model reads the reason and calls again; the same in `agent.run()` and on a call |
 | raise `StopResponse()` | the call is answered with nothing and asks for no reply; `run()` ends the turn with no output |
@@ -52,6 +52,30 @@ a module-level agent. A subclass declares its tools as methods with
 | `InputRequired(question)` | the turn waits for the person; see [human-in-the-loop.md](human-in-the-loop.md) |
 | `Failed(error)`, `Rejected(reason)` | the model reads the text as an error output and replies |
 | `Completed(value)` | the value is the call's output and the model continues; only a task's tool ends a task with it; see [agent-tasks.md](agent-tasks.md) |
+
+## Progress and exact text
+
+```python
+@desk.tool
+async def book(ctx: RunContext[Deps, Patient], slot_id: str) -> str:
+    await ctx.update("holding the slot")
+    await ctx.say("Calls are recorded for quality.")
+    ...
+```
+
+`ctx.update(text)` is progress the model words: on a call a reply about
+it, in text a `working` status. `ctx.say(text)` is exact text, said to the
+person as written: spoken on a call with no model step, in text a
+`working` status with its part flagged `livekit/verbatim`
+([a2a-live-ext.md](a2a-live-ext.md)), and the agent's message in the
+history either way. On a call the first of them releases the tool to the
+background; a first `say` is the turn's whole reply. Later ones are
+delivered at idle in call order: consecutive updates as one reply, each
+`say` on its own, and a `say` the person cut off before any of it played
+is said at the next idle. A model with no TTS that cannot say text as
+written is asked to say it, with a warning that the wording is not
+guaranteed. In one step, verbatim results go out in call order, and the
+last one is the answer when no result of the step asks for a reply.
 
 ## Approval
 

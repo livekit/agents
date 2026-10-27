@@ -27,7 +27,6 @@ from .test_realtime_agent_state_during_tool import _generation
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 NOTICE = "Calls are recorded for quality."
-NOT_YET = "ctx.say and the ordered queue: not built yet"
 SESSION_TIMEOUT = 60.0
 
 
@@ -60,7 +59,6 @@ def spoken(session: LiveSession) -> list[str]:
 
 
 @pytest.mark.rule("R22", "R23")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_updates_and_says_are_spoken_in_call_order_and_a_say_is_never_merged() -> None:
     """An update, a say, then an update and the result, queued while the agent speaks: at idle
     the first update is one reply, the say is spoken as written, and the rest one reply."""
@@ -110,7 +108,6 @@ async def test_updates_and_says_are_spoken_in_call_order_and_a_say_is_never_merg
 
 
 @pytest.mark.rule("R22", "R23")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_a_first_say_is_the_turns_reply_with_no_model_step() -> None:
     """A tool whose first progress call is a say goes to the background, and the turn's reply
     is the said text, with no model step on it."""
@@ -142,7 +139,6 @@ async def test_a_first_say_is_the_turns_reply_with_no_model_step() -> None:
 
 
 @pytest.mark.rule("R22", "R23")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_a_say_cut_off_before_it_played_is_spoken_at_the_next_idle() -> None:
     """The person speaks over a reply with a say queued behind it: the reply is cut, the say
     is not lost, and it is spoken once the agent is idle again."""
@@ -203,7 +199,6 @@ class _RecordingModel(FakeRealtimeModel):
 
 
 @pytest.mark.rule("B45", "R61")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_a_model_that_cannot_say_is_asked_to_speak_the_exact_text(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

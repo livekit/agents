@@ -164,8 +164,6 @@ class RunResult(Generic[Run_T]):
         self._pending_call: llm.FunctionCall | None = None
         self._answer_tool: str | None = None  # the tool the answer is handed to, if named
         self._verbatim: str | None = None
-        # the output in pieces, a verbatim one flagged, when a verbatim result leads it
-        self._segments: list[tuple[str, bool]] | None = None
         self._agent_stack: list[Ref] | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
@@ -195,9 +193,9 @@ class RunResult(Generic[Run_T]):
 
     @property
     def verbatim(self) -> str | None:
-        """The part of the answer, or of the question, that reaches the person exactly as
-        written: what verbatim results and questions delivered, in order; ``None`` when none
-        did. The rest is the agent's own, for the one facing the person to phrase."""
+        """The answer, or the question, when it reaches the person exactly as written: a verbatim
+        result the turn ended on, a question asked as written. ``None`` when the agent facing the
+        person words it; what was said as written before the end went out as it was said."""
         return self._verbatim
 
     @property

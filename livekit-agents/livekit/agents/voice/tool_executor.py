@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
+import itertools
 import json
 import weakref
 from collections.abc import Callable, Sequence
@@ -259,6 +261,8 @@ class _PendingUpdate:
     ctx: RunContext
     items: list[ChatItem]
     target: AgentActivity  # activity whose history received the eager insert
+    seq: int  # call order across the executor's tools
+    say: str | None = None  # exact text spoken as written, on its own
 
 
 class _ToolExecutor:
@@ -282,6 +286,7 @@ class _ToolExecutor:
 
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
+        self._seq = itertools.count()
 
         self._owning_activity: AgentActivity | None = owning_activity
         self._tool_options: AsyncToolOptions = _resolve_async_tool_options(async_tool_options)
@@ -380,10 +385,14 @@ class _ToolExecutor:
             except Exception as e:
                 output = e
 
+            said: str | None = None
             if isinstance(output, ToolResult) and output.verbatim:
-                # the person hears it as written; the model reads that it was said
-                if (activity := self._owning_activity) is not None:
-                    activity.say(str(output.output))
+                # the person hears it as written, now or in call order after the tool's updates;
+                # the model reads that it was said
+                said = str(output.output)
+                if not first_update_fut.done():
+                    self._speaker(run_ctx)._say_exactly(said)
+                    said = None
                 output = delivered(output)
 
             if not first_update_fut.done():
@@ -433,7 +442,7 @@ class _ToolExecutor:
                 await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
                 activity._apply_transition(output, fnc_call_out=pair[1])
                 return output
-            await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+            await self._enqueue_reply(run_ctx, [pair[0], pair[1]], say=said)
             return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
@@ -548,29 +557,39 @@ class _ToolExecutor:
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
-    async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
+    def _speaker(self, ctx: RunContext) -> AgentActivity:
+        """The activity that speaks for this executor's tools now."""
+        if self._owning_activity is not None:
+            return self._owning_activity
+        return ctx.session._current_activity_or_raise()
+
+    async def _enqueue_reply(
+        self, ctx: RunContext, items: list[ChatItem], *, say: str | None = None
+    ) -> None:
+        """Queue a tool's progress for the next idle, in call order: ``say`` is spoken as
+        written, the items' outputs that ask for a reply are worded by the model."""
         # eager insert so a reply firing before delivery sees the items
-        target = (
-            self._owning_activity
-            if self._owning_activity is not None
-            else ctx.session._current_activity_or_raise()
-        )
+        target = self._speaker(ctx)
         chat_ctx = target._chat_ctx.copy()
         chat_ctx.insert(items)
         await target.update_chat_ctx(chat_ctx)
         ctx.session.history.insert(items)
 
-        if not any(item.type == "function_call_output" and item.reply_required for item in items):
+        if say is None and not _asks_reply(items):
             return
 
-        self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
+        self._pending_updates.append(
+            _PendingUpdate(ctx=ctx, items=items, target=target, seq=next(self._seq), say=say)
+        )
+        self._schedule_delivery(ctx.session)
 
+    def _schedule_delivery(self, session: LiveSession) -> None:
         if self._reply_task is None or self._reply_task.done():
             self._reply_task = asyncio.create_task(
-                self._deliver_reply(ctx.session), name="tool_executor_deliver_reply"
+                self._deliver_reply(session), name="tool_executor_deliver_reply"
             )
             # let an active RunResult wait for the deferred reply to land
-            run_state = ctx.session._global_run_state
+            run_state = session._global_run_state
             if run_state is not None:
                 run_state._watch_handle(self._reply_task)
 
@@ -589,11 +608,38 @@ class _ToolExecutor:
             self._pending_updates.clear()
             return
 
-        # no await after this line
+        # no await after this line: the speeches of one delivery are scheduled back to back
 
         updates = self._pending_updates[:]
         self._pending_updates.clear()
 
+        # consecutive updates are one reply; a say is spoken on its own, and no reply merges
+        # updates from both sides of it
+        group: list[_PendingUpdate] = []
+        for update in updates:
+            if update.say is None:
+                group.append(update)
+                continue
+            if group:
+                self._reply(session, target_activity, group)
+                group = []
+            speech = target_activity._say_exactly(update.say)
+
+            def _on_say_done(speech: SpeechHandle, update: _PendingUpdate = update) -> None:
+                if speech.interrupted and not speech.chat_items:
+                    # cut off before any of it played: said at the next idle, in call order
+                    bisect.insort(self._pending_updates, update, key=lambda u: u.seq)
+                    self._schedule_delivery(session)
+
+            speech.add_done_callback(_on_say_done)
+            if _asks_reply(update.items):
+                group.append(update)
+        if group:
+            self._reply(session, target_activity, group)
+
+    def _reply(
+        self, session: LiveSession, target_activity: AgentActivity, updates: list[_PendingUpdate]
+    ) -> None:
         pending_items: list[ChatItem] = []
         for update in updates:
             pending_items.extend(update.items)
@@ -739,6 +785,10 @@ class _ToolExecutor:
                 return _render(self._tool_options["duplicate_confirm_template"], dict(args))
 
         return None
+
+
+def _asks_reply(items: Sequence[ChatItem]) -> bool:
+    return any(item.type == "function_call_output" and item.reply_required for item in items)
 
 
 def _build_executor_map(

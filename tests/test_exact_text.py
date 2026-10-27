@@ -34,7 +34,6 @@ NOTICE = "Calls are recorded for quality."
 QUESTION = "What email address should the confirmation go to?"
 VERBATIM = "livekit/verbatim"
 
-NOT_YET = "exact text as status and artifact: not built yet"
 RUST_ASK = (
     "rust ask HandlerOutput.messages/verbatim: the task row's history and flagged parts are "
     "written by the Rust commit"
@@ -89,7 +88,6 @@ def serving(agent: Agent) -> Callable[[A2ASessionContext[Any]], Any]:
 
 
 @pytest.mark.rule("R22", "R23")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_a_tool_says_exact_text_at_once_and_updates_in_words(
     door: Callable[..., Door],
 ) -> None:
@@ -119,7 +117,6 @@ async def test_a_tool_says_exact_text_at_once_and_updates_in_words(
 
 
 @pytest.mark.rule("R23", "B12")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_a_verbatim_result_the_model_goes_on_from_is_sent_at_once(
     door: Callable[..., Door],
 ) -> None:
@@ -146,7 +143,6 @@ async def test_a_verbatim_result_the_model_goes_on_from_is_sent_at_once(
 
 
 @pytest.mark.rule("R23", "B12")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_a_verbatim_result_that_ends_the_turn_is_the_flagged_answer(
     door: Callable[..., Door],
 ) -> None:
@@ -170,7 +166,6 @@ async def test_a_verbatim_result_that_ends_the_turn_is_the_flagged_answer(
 
 
 @pytest.mark.rule("R23")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_the_verbatim_results_of_one_step_go_out_in_call_order(
     door: Callable[..., Door],
 ) -> None:
@@ -209,7 +204,6 @@ async def test_the_verbatim_results_of_one_step_go_out_in_call_order(
 
 
 @pytest.mark.rule("R23")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_a_question_asked_as_written_is_a_flagged_status_part(
     door: Callable[..., Door],
 ) -> None:

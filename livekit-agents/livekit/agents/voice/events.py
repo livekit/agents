@@ -326,6 +326,48 @@ class RunContext(Generic[Deps_T, State_T]):
 
         await self._executor._enqueue_reply(self, [pair[0], pair[1]])
 
+    async def say(self, text: str) -> None:
+        """Say ``text`` to the person exactly as written, now: spoken on a call, a flagged
+        ``working`` status in text, and the agent's message in the history either way. The
+        counterpart of ``update``, whose text the model words.
+
+        On a call the first ``say`` or ``update`` releases the tool to the background, and a
+        first ``say`` is the turn's whole reply, with no model step; later ones are spoken at
+        idle in call order, each ``say`` on its own.
+        """
+        for s in self._filler_schedulers:
+            s.reset_dwell()
+
+        if self._executor is None:
+            if self._run is not None:
+                await self._run._say(text)
+            return
+
+        from ..llm.tool_context import DELIVERED, ToolResult
+
+        update_step = len(self._updates)
+        pair = self._make_update_pair(
+            ToolResult(DELIVERED.format(text=text), reply_required=False),
+            call_id_suffix=f"_update_{update_step}" if update_step > 0 else "",
+        )
+        self._updates.append(pair)
+        self.session._tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallUpdated(
+                    id=pair[0].call_id, call_id=self.function_call.call_id, message=text
+                )
+            ),
+        )
+
+        assert self._first_update_fut is not None
+        if not self._first_update_fut.done():
+            self._executor._speaker(self)._say_exactly(text)
+            self._first_update_fut.set_result(ToolResult(pair[1].output, reply_required=False))
+            self.function_call.extra["__livekit_agents_tool_non_blocking"] = True
+            return
+
+        await self._executor._enqueue_reply(self, [pair[0], pair[1]], say=text)
+
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]
     ) -> None:

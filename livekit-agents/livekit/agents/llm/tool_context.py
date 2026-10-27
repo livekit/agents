@@ -360,13 +360,15 @@ ASK_IN_OWN_WORDS = (
 DELIVERED = "delivered to the person as written: {text}"
 """What the model reads as the output of a verbatim result it did not write."""
 
+SAY_EXACTLY = (
+    "Say this to the person word for word, as your whole reply, and change or add nothing: {text}"
+)
+"""How a model that cannot speak text as written is asked to say exact text."""
+
 
 def delivered(result: ToolResult) -> ToolResult:
-    """A verbatim result as the model reads it once the person got it: that it was said, then
-    what the result carries for the model alone (``_more``, from a delegate)."""
-    text = DELIVERED.format(text=result.output)
-    more = getattr(result, "_more", None)
-    return ToolResult(f"{text}\n{more}" if more else text, reply_required=result.reply_required)
+    """A verbatim result as the model reads it once the person got it: that it was said."""
+    return ToolResult(DELIVERED.format(text=result.output), reply_required=result.reply_required)
 
 
 APPROVAL_ANSWERED = (

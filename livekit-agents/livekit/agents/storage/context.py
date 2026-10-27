@@ -31,8 +31,9 @@ Handler = Callable[["A2ASessionContext[S]"], "Awaitable[object] | AsyncIterable[
 """The developer's handler: the context in, the answer out, either returned whole or yielded as
 it is written (an async generator), in which case the answer is the last run's result."""
 
-UpdateHook = Callable[[str, str], Awaitable[None]]
-"""``(task_id, text)``: a progress message to the door's live response."""
+UpdateHook = Callable[[str, str, bool], Awaitable[None]]
+"""``(task_id, text, verbatim)``: progress, or with ``verbatim`` exact text, to the door's live
+response."""
 
 TokenHook = Callable[[str, str], Awaitable[None]]
 """``(task_id, delta)``: one streamed token to the door's live response."""
@@ -81,10 +82,18 @@ class A2ASessionContext(Generic[S]):
         self._on_token = on_token
 
     async def update(self, text: str) -> None:
-        """A ``working`` status frame to the client: progress, as the person hears it."""
+        """A ``working`` status frame to the client: progress, for the agent facing the person
+        to word."""
         self.events.append(_tool_event("update", text=text))
         if self._on_update is not None:
-            await self._on_update(self.task_id, text)
+            await self._on_update(self.task_id, text, False)
+
+    async def say(self, text: str) -> None:
+        """A ``working`` status frame with its text flagged: it reaches the person exactly as
+        written."""
+        self.events.append(_tool_event("say", text=text))
+        if self._on_update is not None:
+            await self._on_update(self.task_id, text, True)
 
     async def token(self, delta: str) -> None:
         """One piece of the reply as the model writes it, shown before the turn ends."""
@@ -133,9 +142,9 @@ class TurnHost(Generic[S]):
         self._agents = agents if agents is not None else AgentRegistry()
         self._on_update = on_update
         self._on_token = on_token
-        self.segments: list[tuple[str, bool]] | None = None
-        """The last run's output in pieces, a verbatim one flagged, when a verbatim result
-        leads it: the door sends each as a part of the answer artifact."""
+        self.verbatim = False
+        """The last turn's answer, or its question, reaches the person exactly as written: the
+        door flags its part."""
 
     async def handle(self, ctx: TurnContext, boundary: Boundary) -> HandlerOutput:
         """The developer's handler on one turn, the run hooks installed around it."""
@@ -152,6 +161,7 @@ class TurnHost(Generic[S]):
             boundary=boundary.check,
             on_result=results.append,
             on_update=context.update,
+            on_say=context.say,
             on_token=context.token,
             thread_id=self._thread.id,
             agent_stack=ctx.agent_stack,
@@ -187,9 +197,9 @@ class TurnHost(Generic[S]):
 
         return self._output(context, output, results)
 
-    async def on_update(self, task_id: str, text: str) -> None:
+    async def on_update(self, task_id: str, text: str, verbatim: bool = False) -> None:
         if self._on_update is not None:
-            await self._on_update(task_id, text)
+            await self._on_update(task_id, text, verbatim)
 
     async def on_token(self, task_id: str, delta: str) -> None:
         if self._on_token is not None:
@@ -208,15 +218,11 @@ class TurnHost(Generic[S]):
         if isinstance(output, RunResult):
             # a run returned as is answers with its question while it waits, else its output
             output = output.input_required if output.input_required is not None else output.output
-        from ..a2a.extension import VERBATIM
 
         asked = next((r for r in reversed(results) if r.input_required is not None), None)
-        metadata = dict(ctx.metadata)
         last = results[-1] if results else None
-        if last is not None and last.verbatim is not None:
-            # what must reach the person as written: the delegate relays it unchanged
-            metadata.setdefault(VERBATIM, last.verbatim)
-        self.segments = last._segments if last is not None else None
+        # exact when the handler answered with the last run's exact answer or question
+        self.verbatim = last is not None and last.verbatim is not None and output == last.verbatim
         pending = None
         if asked is not None and (call := asked.pending_call) is not None:
             pending = PendingCall(
@@ -233,7 +239,7 @@ class TurnHost(Generic[S]):
                 (r._agent_stack for r in reversed(results) if r._agent_stack is not None), None
             ),
             interrupted=ctx.interrupted or any(r.interrupted for r in results),
-            metadata=metadata,
+            metadata=dict(ctx.metadata),
             events=[*_tool_events(results), *ctx.events],
         )
 

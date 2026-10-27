@@ -101,7 +101,9 @@ class RunHooks:
     ran so far and no reply (the ``interrupt`` policy of plan 3.3.4). ``on_result`` receives every
     result, so the door can commit what the run added without the handler forwarding it.
     ``on_update`` receives a tool's ``ctx.update(text)``: the door forwards it as progress, a
-    ``working`` frame on the text door, speech on a call. ``on_token`` receives the model's text
+    ``working`` frame on the text door. ``on_say`` receives exact text said during the run, a
+    ``ctx.say(text)`` or a verbatim result the model goes on from: the door sends it at once as
+    a flagged ``working`` frame. ``on_token`` receives the model's text
     as it arrives, so the text door shows the reply as it is written. ``thread_id`` is the session the run
     belongs to, what ``A2ADelegate`` sends as the expert's ``contextId`` (plan 7.5).
     ``agent_stack`` is the lane's stack as loaded and ``rebuild`` makes an agent of one entry,
@@ -116,6 +118,7 @@ class RunHooks:
     boundary: Callable[[], Awaitable[bool]] | None = None
     on_result: Callable[[RunResult[Any]], None] | None = None
     on_update: Callable[[str], Any] | None = None
+    on_say: Callable[[str], Any] | None = None
     on_token: Callable[[str], Awaitable[None]] | None = None
     thread_id: str | None = None
     agent_stack: Sequence[Ref] = ()
@@ -191,6 +194,8 @@ class AgentRun(Generic[Run_T]):
         self._message = message
         self._result: RunResult[Run_T] | None = None
         self._on_token: Callable[[str], Awaitable[None]] | None = None
+        # exact text said since the last call output, recorded after it as the agent's message
+        self._said: list[ChatMessage] = []
 
     async def __aiter__(self) -> AsyncIterator[str]:
         if self._result is not None:
@@ -333,8 +338,8 @@ class AgentRun(Generic[Run_T]):
         self, result: Any, record: Callable[[ChatItem], None], *, verbatim: bool = False
     ) -> None:
         """The task on top ended: its value, or a ``ToolError``, is the pending call's output,
-        and the agent below speaks again from the next step. A verbatim value reached the
-        person as written; the agent below reads that it did."""
+        and the agent below speaks again from the next step. A verbatim value was said as
+        written; the agent below reads that it was."""
         task = self._stack.pop()
         assert isinstance(task, AgentTask)
         below = self._stack[-1] if self._stack else self._root
@@ -377,29 +382,28 @@ class AgentRun(Generic[Run_T]):
         def record(item: ChatItem) -> None:
             chat_ctx.insert(item)
             new_items.append(item)
+            if isinstance(item, FunctionCallOutput):
+                record_said()
 
-        # what reached the person exactly as written, in order: it leads the answer
-        verbatim: list[str] = []
+        def record_said() -> None:
+            said, self._said = self._said, []
+            for message in said:
+                record(message)
+
         hooks = None if self._nested else _run_hooks.get()
         # a run another agent asked does not phrase: the agent facing the person does
         facing_person = hooks is None or not hooks.delegated
 
-        def composed(text: str | None) -> str | None:
-            if not verbatim:
-                return text
-            return "\n\n".join([*verbatim, *([text] if text else [])])
-
         def finish(
-            output: Any, *, input_required: str | None = None, interrupted: bool = False
+            output: Any,
+            *,
+            input_required: str | None = None,
+            interrupted: bool = False,
+            verbatim: bool = False,
         ) -> RunResult[Run_T]:
-            if verbatim and (output is None or isinstance(output, str)) and not interrupted:
-                if input_required is not None:
-                    input_required = composed(input_required)
-                else:
-                    result._segments = [(text, True) for text in verbatim]
-                    result._segments += [(output, False)] if output else []
-                    output = composed(output)
-            result._verbatim = "\n\n".join(verbatim) if verbatim else None
+            record_said()
+            exact = input_required if input_required is not None else output
+            result._verbatim = exact if verbatim and isinstance(exact, str) else None
             result._run_output = output
             result._input_required = input_required
             result._interrupted = interrupted
@@ -415,13 +419,11 @@ class AgentRun(Generic[Run_T]):
             text = q.question
             if not q.verbatim and facing_person:
                 text = await self._phrase(chat_ctx, text)
+            record_said()
             record(ChatMessage(role="assistant", content=[text]))
             result._pending_call = fnc_call
             result._answer_tool = q.tool.info.name if q.tool else None
-            ended = finish(None, input_required=text)
-            if q.verbatim:
-                result._verbatim = ended.input_required  # the question is exact, as a whole
-            return ended
+            return finish(None, input_required=text, verbatim=q.verbatim)
 
         def finish_task_turn(text: str) -> RunResult[Run_T]:
             # a task holds the conversation: every reply of its model waits on the person
@@ -435,17 +437,15 @@ class AgentRun(Generic[Run_T]):
                 # the run's root is the task itself, as in a test: nothing below takes over, so
                 # its end is the run's end, with its value or its error as the output
                 if isinstance(transition, Completed):
-                    if transition.verbatim:
-                        verbatim.append(_tool_text(transition.value))
                     self._agent._complete(transition.value)
-                    return finish(transition.value)
+                    return finish(transition.value, verbatim=transition.verbatim)
                 if isinstance(transition, (Failed, Rejected)):
                     text = transition.error if isinstance(transition, Failed) else transition.reason
                     self._agent._complete(ToolError(text))
                     return finish(text)
             if isinstance(transition, Completed):
                 if transition.verbatim:
-                    verbatim.append(_tool_text(transition.value))
+                    await self._say(_tool_text(transition.value), record=False)
                 self._pop(transition.value, record, verbatim=transition.verbatim)
             elif isinstance(transition, (Failed, Rejected)):
                 text = transition.error if isinstance(transition, Failed) else transition.reason
@@ -458,6 +458,16 @@ class AgentRun(Generic[Run_T]):
                     extra={"agent": self._agent.id, "runId": self._id},
                 )
             return None
+
+        # a verbatim result that ends the turn: the answer, unless another verbatim result of
+        # its step follows it in call order or the step goes on to the model
+        held: str | None = None
+
+        async def release_held() -> None:
+            nonlocal held
+            if held is not None:
+                text, held = held, None
+                await self._say(text, record=False)
 
         record(self._message)
         # a task that answers the person itself, a waiting graph, does before any model
@@ -517,6 +527,7 @@ class AgentRun(Generic[Run_T]):
                     continue
                 return finish(text)
 
+            replies = False
             for i, fnc_call in enumerate(calls):
                 self._usage.tool_calls += 1
                 record(fnc_call)
@@ -540,6 +551,7 @@ class AgentRun(Generic[Run_T]):
                 tool = tool_ctx.get_function_tool(fnc_call.name)
                 out = await self._execute(tool, fnc_call)
                 if isinstance(out, AgentTask):
+                    await release_held()
                     # the call stays pending; the task takes the conversation from here
                     for skipped in calls[i + 1 :]:
                         record(skipped)
@@ -557,13 +569,18 @@ class AgentRun(Generic[Run_T]):
                     break
                 said = out.raw_output
                 if isinstance(said, ToolResult) and said.verbatim:
-                    # the person gets it as written; the model reads that they did
-                    verbatim.append(_tool_text(said.output))
+                    # the person gets it as written, in call order; the model reads that they did
+                    await release_held()
+                    if said.reply_required:
+                        await self._say(_tool_text(said.output), record=False)
+                    else:
+                        held = _tool_text(said.output)
                     out.fnc_call_out.output = delivered(said).output
                 record(out.fnc_call_out)
-                if isinstance(said, ToolResult) and said.verbatim and not said.reply_required:
-                    return finish(None)
+                replies = replies or out.fnc_call_out.reply_required
 
+                if out.transition is not None:
+                    await release_held()
                 if out.transition is not None and isinstance(agent, AgentTask):
                     if (ended := await act(out.transition, fnc_call)) is not None:
                         return ended
@@ -580,11 +597,27 @@ class AgentRun(Generic[Run_T]):
                 if out.agent_task is not None:
                     self._hand_off(out.agent_task, record)
                 if isinstance(out.raw_exception, StopResponse):
-                    return finish(None)
+                    return finish(held, verbatim=held is not None)
+
+            if held is not None and not replies:
+                return finish(held, verbatim=True)
+            await release_held()
 
         raise UnexpectedModelBehavior(
             f"run `{self._id}` did not finish within {self._max_steps} steps"
         )
+
+    async def _say(self, text: str, *, record: bool = True) -> None:
+        """Exact text to the person now: the door sends it as it is said. With ``record`` the
+        history keeps it as the agent's message, after the call output that said it; a verbatim
+        result is kept as its output instead."""
+        hooks = None if self._nested else _run_hooks.get()
+        if hooks is not None and hooks.on_say is not None:
+            out = hooks.on_say(text)
+            if inspect.isawaitable(out):
+                await out
+        if record:
+            self._said.append(ChatMessage(role="assistant", content=[text]))
 
     async def _phrase(self, chat_ctx: ChatContext, question: str) -> str:
         """A question in the agent's own words: one model request on the history, no tools.

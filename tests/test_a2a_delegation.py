@@ -546,11 +546,11 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
 
 
 @pytest.mark.rule("R23", "B12")
-async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
+async def test_an_experts_verbatim_result_reaches_the_person_as_written(
     agentdb_workers: tuple[AgentDBStorage, AgentDBStorage],
 ) -> None:
-    """A verbatim result leads the expert's answer, flagged ``livekit/verbatim``: the front desk
-    delivers it as written and phrases only the rest."""
+    """A verbatim result the expert's model goes on from is flagged progress: the front desk
+    says it as written, and its model words only the expert's answer."""
     from livekit.agents.llm.tool_context import DELIVERED
 
     clinic_storage, expert_storage = agentdb_workers
@@ -588,35 +588,20 @@ async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
     )
     async with http_client(expert_server) as http:
         delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
-        front = Agent(
-            instructions="front desk",
-            tools=[delegate],
-            llm=FakeLLM(
-                fake_responses=[
-                    FakeLLMResponse(
-                        input="am I covered?",
-                        content="",
-                        ttft=0,
-                        duration=0,
-                        tool_calls=[
-                            FunctionToolCall(
-                                name="ask", arguments='{"request": "check coverage"}', call_id="c1"
-                            )
-                        ],
-                    ),
-                    FakeLLMResponse(
-                        input=f"{DELIVERED.format(text=disclaimer)}\ncovered",
-                        content="Good news, you are covered.",
-                        ttft=0,
-                        duration=0,
-                    ),
-                ]
-            ),
+        model = ScriptedLLM(
+            Reply(tool_calls=[call("ask", "c1", request="check coverage")]),
+            Reply("Good news, you are covered."),
         )
+        front = Agent(instructions="front desk", tools=[delegate], llm=model)
         result = await front.run("am I covered?")
         await delegate.aclose()
-    assert result.output == f"{disclaimer}\n\nGood news, you are covered."
-    assert result.verbatim == disclaimer
+
+    assert result.output == "Good news, you are covered."
+    assert result.verbatim is None
+    said = [m.text_content for m in result.new_messages() if isinstance(m, ChatMessage)]
+    assert said == ["am I covered?", disclaimer, "Good news, you are covered."]
+    (output,) = [i for i in model.requests[-1].items if i.type == "function_call_output"]
+    assert output.output == "covered"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -677,47 +662,11 @@ async def test_the_answer_is_the_artifact_that_ended_last() -> None:
     assert result.output == "Your balance is forty dollars."
 
 
-@pytest.mark.rule("R23", "B12")
-async def test_a_verbatim_part_after_other_text_reaches_the_person_as_written() -> None:
-    """The verbatim part is a flagged part of the answer, wherever it sits: the person gets it
-    as written, and the model phrases the rest."""
-    from livekit.agents.a2a.extension import struct, widen
-
-    disclaimer = "This is not financial advice."
-
-    async def script(updater: TaskUpdater, context: RequestContext) -> None:
-        flagged = pb.Part(text=disclaimer)
-        flagged.metadata.CopyFrom(struct({widen("livekit/verbatim"): True}))
-        await updater.add_artifact(
-            [pb.Part(text="Your balance is forty dollars."), flagged],
-            artifact_id="a1",
-            name="answer",
-            last_chunk=True,
-        )
-        await updater.complete()
-
-    async with stock_server(_Scripted(script)) as app, stock_http(app) as http:
-        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
-        model = ScriptedLLM(
-            Reply(tool_calls=[call("ask", "c1", request="my balance")]),
-            Reply("You have forty dollars.", when=output_of("c1")),
-        )
-        front = Agent(instructions="front desk", tools=[delegate], llm=model)
-        result = await front.run("what is my balance?")
-        await delegate.aclose()
-
-    assert result.output == f"{disclaimer}\n\nYou have forty dollars."
-    assert result.verbatim == disclaimer
-    # the model reads that the disclaimer was delivered, and the rest to phrase
-    (tool_output,) = [i for i in model.requests[-1].items if i.type == "function_call_output"]
-    assert disclaimer in tool_output.output and "forty dollars" in tool_output.output
-
-
 @pytest.mark.rule("R25")
 async def test_an_expert_never_answers_with_its_progress(
     expert: Callable[..., A2ADelegate],
 ) -> None:
-    """An expert task that ends with no text answers that it had none, not its last progress."""
+    """An expert task that ends with no text answers with no text, not its last progress."""
 
     async def silent(ctx: A2ASessionContext[Any]) -> str:
         await ctx.update("checking the schedule")
@@ -727,7 +676,7 @@ async def test_an_expert_never_answers_with_its_progress(
     result = await expert(silent).run("book a cleaning", progress=progress.append)
     assert progress == ["checking the schedule"]
     assert result.state == "completed"
-    assert result.output and "checking the schedule" not in str(result.output)
+    assert result.output == ""
 
 
 @pytest.mark.rule("R20", "B7")
@@ -819,7 +768,6 @@ async def test_a_dropped_answer_stream_is_read_again_and_the_answer_arrives(
 # ---------------------------------------------------------------------------------------------
 
 NOTICE = "Calls are recorded for quality."
-NOT_YET = "exact text as status and artifact: not built yet"
 NO_STATE_YET = "the shared delegate and client keep no conversation: not built yet"
 
 
@@ -836,7 +784,6 @@ def _agent_message(updater: TaskUpdater, *parts: pb.Part) -> pb.Message:
 
 
 @pytest.mark.rule("R22", "R23")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_an_experts_flagged_progress_is_said_by_the_front_desk(
     door: Callable[..., Door],
 ) -> None:
@@ -903,7 +850,6 @@ async def test_an_experts_flagged_answer_is_said_as_written_with_no_model_step()
 
 
 @pytest.mark.rule("R23")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_an_experts_question_flagged_on_its_part_is_asked_as_written() -> None:
     """An ``input-required`` status whose text part is flagged is asked as written, with no
     ``livekit/verbatim`` in the metadata."""
@@ -925,7 +871,6 @@ async def test_an_experts_question_flagged_on_its_part_is_asked_as_written() -> 
 
 
 @pytest.mark.rule("R25")
-@pytest.mark.xfail(strict=True, reason=NOT_YET)
 async def test_an_expert_with_no_answer_gives_the_model_an_empty_output() -> None:
     """A task that completes with no text is an empty answer, never a sentence of the
     framework's own and never the last progress."""

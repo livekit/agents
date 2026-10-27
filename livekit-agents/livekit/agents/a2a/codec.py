@@ -10,7 +10,7 @@ alike. The server writes the extension's keys (``livekit/``) per request, when t
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,9 +37,6 @@ from .extension import (
 
 StoredMessage = dict[str, Any]  # typed by the _core stub: TaskRecord.status_message, history items
 """A message as the storage layer holds it; the codec reads and builds it, the stub owns it."""
-
-Segment = tuple[str, bool]
-"""A piece of an answer and whether it reaches the person exactly as written."""
 
 StoredPart = dict[str, Any]  # typed by the _core stub: one entry of a stored message's parts
 """One part of a stored message, tagged with ``kind``."""
@@ -237,6 +234,20 @@ def _text(parts: Iterable[pb.Part]) -> str:
     return "\n".join(part.text for part in parts if part.WhichOneof("content") == "text")
 
 
+def _exact(part: pb.Part) -> pb.Part:
+    """``part``, flagged to reach the person exactly as written."""
+    part.metadata.CopyFrom(struct(metadata_to_wire({VERBATIM: True})))
+    return part
+
+
+def _flagged(parts: Iterable[pb.Part]) -> bool:
+    """Whether the parts hold text and every text part is flagged ``livekit/verbatim``."""
+    texts = [part for part in parts if part.WhichOneof("content") == "text"]
+    return bool(texts) and all(
+        metadata_from_wire(as_dict(part.metadata)).get(VERBATIM) is True for part in texts
+    )
+
+
 # -- the conversation as a data part --
 
 
@@ -346,19 +357,23 @@ def working_event(
     text: str,
     *,
     exts: Extensions,
+    verbatim: bool = False,
 ) -> pb.TaskStatusUpdateEvent:
-    """``ctx.update(text)``: a ``working`` status with the progress as its message."""
+    """``ctx.update(text)``: a ``working`` status with the progress as its message; with
+    ``verbatim``, ``ctx.say(text)``, its text part flagged."""
     msg: StoredMessage = {"messageId": shortuuid("msg_"), "role": "agent", "parts": []}
     if text:
         msg["parts"].append({"kind": "text", "text": text})
 
+    message = message_to_pb(msg, exts=exts, context_id=context_id, task_id=task_id)
+    if verbatim:
+        for part in message.parts:
+            _exact(part)
     return pb.TaskStatusUpdateEvent(
         task_id=task_id,
         context_id=context_id,
         status=pb.TaskStatus(
-            state=pb.TaskState.TASK_STATE_WORKING,
-            message=message_to_pb(msg, exts=exts, context_id=context_id, task_id=task_id),
-            timestamp=_timestamp(None),
+            state=pb.TaskState.TASK_STATE_WORKING, message=message, timestamp=_timestamp(None)
         ),
     )
 
@@ -372,18 +387,14 @@ def artifact_event(
     append: bool,
     last_chunk: bool,
     exts: Extensions,
-    segments: Sequence[Segment] = (),
+    verbatim: bool = False,
 ) -> pb.TaskArtifactUpdateEvent:
-    """One chunk of the answer artifact; the final chunk sets ``lastChunk``. With ``segments``
-    the chunk is one text part per segment, a verbatim one flagged ``livekit/verbatim``."""
+    """One chunk of the answer artifact; the final chunk sets ``lastChunk``. A ``verbatim``
+    answer's part is flagged."""
     artifact = pb.Artifact(artifact_id=artifact_id, name=ANSWER_ARTIFACT_NAME)
-    for piece, exact in segments:
-        part = pb.Part(text=piece)
-        if exact:
-            part.metadata.CopyFrom(struct(metadata_to_wire({VERBATIM: True})))
-        artifact.parts.append(part)
-    if not segments and (text or not append):
-        artifact.parts.append(pb.Part(text=text))
+    if text or not append:
+        part = pb.Part(text=text)
+        artifact.parts.append(_exact(part) if verbatim else part)
 
     return pb.TaskArtifactUpdateEvent(
         task_id=task_id,
@@ -395,9 +406,10 @@ def artifact_event(
 
 
 def final_event(
-    record: TaskRecord, context_id: str, *, exts: Extensions
+    record: TaskRecord, context_id: str, *, exts: Extensions, verbatim: bool = False
 ) -> pb.TaskStatusUpdateEvent:
-    """The terminal status event, built from the committed row so a replay says the same."""
+    """The terminal status event, built from the committed row so a replay says the same; a
+    question asked ``verbatim`` has its text parts flagged."""
     event = pb.TaskStatusUpdateEvent(
         task_id=record.id,
         context_id=context_id,
@@ -411,6 +423,10 @@ def final_event(
     carries_message = record.status != "completed" or not record.data.artifacts
     status_message = _status_message_to_pb(record, context_id, exts) if carries_message else None
     if status_message is not None:
+        if verbatim and record.status == "input-required":
+            for part in status_message.parts:
+                if part.WhichOneof("content") == "text":
+                    _exact(part)
         event.status.message.CopyFrom(status_message)
 
     metadata = metadata_to_wire(record.data.metadata)
@@ -463,9 +479,8 @@ class TaskUpdate:
     task_id: str = ""
     context_id: str = ""
     metadata: Metadata = field(default_factory=dict)
-    segments: list[Segment] = field(default_factory=list)
-    """The answer artifact's text parts in order, a verbatim one flagged; appended chunks
-    continue the part before them."""
+    verbatim: bool = False
+    """The text reaches the person exactly as written: every text part of it is flagged."""
 
 
 @dataclass
@@ -474,26 +489,20 @@ class _Answer:
 
     bodies: dict[str, str] = field(default_factory=dict)
     names: dict[str, str] = field(default_factory=dict)
-    segments: dict[str, list[Segment]] = field(default_factory=dict)
+    exact: dict[str, bool] = field(default_factory=dict)
     last: str | None = None
     """The artifact whose last chunk arrived last: the whole answer, not a partial."""
 
     def collect(self, artifact: pb.Artifact, append: bool, last_chunk: bool = False) -> None:
         chunk = _text(artifact.parts)
+        exact = _flagged(artifact.parts)
         if append:
             chunk = self.bodies.get(artifact.artifact_id, "") + chunk
+        if append and artifact.artifact_id in self.exact:
+            # an empty closing chunk keeps what the chunks before it were
+            exact = self.exact[artifact.artifact_id] and (exact or not artifact.parts)
         self.bodies[artifact.artifact_id] = chunk
-
-        pieces = self.segments.get(artifact.artifact_id, []) if append else []
-        texts = [part for part in artifact.parts if part.WhichOneof("content") == "text"]
-        for i, part in enumerate(texts):
-            exact = metadata_from_wire(as_dict(part.metadata)).get(VERBATIM) is True
-            if i == 0 and append and pieces and pieces[-1][1] == exact:
-                # a streamed chunk continues the piece before it
-                pieces[-1] = (pieces[-1][0] + part.text, exact)
-            else:
-                pieces.append((part.text, exact))
-        self.segments[artifact.artifact_id] = pieces
+        self.exact[artifact.artifact_id] = exact
 
         if artifact.name:
             self.names[artifact.artifact_id] = artifact.name
@@ -512,9 +521,10 @@ class _Answer:
         """The answer's text."""
         return "\n".join(self.bodies[i] for i in self._answer_ids())
 
-    def pieces(self) -> list[Segment]:
-        """The answer's text parts, a verbatim one flagged."""
-        return [piece for i in self._answer_ids() for piece in self.segments.get(i, [])]
+    def verbatim(self) -> bool:
+        """Whether every part of the answer is flagged to reach the person as written."""
+        ids = self._answer_ids()
+        return bool(ids) and all(self.exact.get(i, False) for i in ids)
 
 
 @dataclass
@@ -560,6 +570,7 @@ def _status_update(
             task_id=ids.task_id,
             context_id=ids.context_id,
             metadata=metadata,
+            verbatim=_flagged(event.status.message.parts),
         )
 
     answer_text = answer.text()
@@ -569,7 +580,7 @@ def _status_update(
         task_id=ids.task_id,
         context_id=ids.context_id,
         metadata=metadata,
-        segments=answer.pieces() if answer_text else [],
+        verbatim=answer.verbatim() if answer_text else _flagged(event.status.message.parts),
     )
 
 
@@ -613,7 +624,6 @@ async def updates_from_events(
 
 
 __all__ = [
-    "Segment",
     "StoredMessage",
     "StoredPart",
     "StreamEvent",

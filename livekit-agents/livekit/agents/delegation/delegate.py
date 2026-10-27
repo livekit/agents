@@ -17,8 +17,8 @@ from ..llm.chat_context import ChatContext, ChatItem, ChatMessage
 from ..voice.run_result import RunResult, RunUsage
 
 Progress = Callable[[str], Awaitable[None] | None]
-"""``progress=``: takes the expert's status messages; ``ctx.update`` on a call, a print in a
-script."""
+"""``progress=`` and ``say=``: take the expert's status messages, worded by the caller or said
+as written; ``ctx.update`` and ``ctx.say`` in a tool, a print in a script."""
 
 
 class DelegationFailed(Exception):
@@ -29,8 +29,7 @@ class DelegationResult(RunResult[object]):
     """What a delegate's ``run`` returns: a finished ``RunResult`` with the task behind it.
 
     ``state`` is the A2A terminal state; ``task_id`` and ``context_id`` name the expert's task; ``endpoint``, ``transport``
-    and ``profile`` say where and how it was reached over A2A; ``segments`` the answer's pieces,
-    a verbatim one flagged.
+    and ``profile`` say where and how it was reached over A2A.
     """
 
     def __init__(
@@ -48,7 +47,6 @@ class DelegationResult(RunResult[object]):
         transport: str = "",
         profile: str = "",
         verbatim: str | None = None,
-        segments: Sequence[tuple[str, bool]] = (),
     ) -> None:
         super().__init__(output_type=None)
         self.state = state
@@ -60,7 +58,6 @@ class DelegationResult(RunResult[object]):
         self._run_output = output
         self._input_required = input_required
         self._verbatim = verbatim
-        self._segments = list(segments) or None
         self._interrupted = interrupted
         self._run_messages = list(new_messages or [])
         self._run_history = list(new_messages or [])
@@ -94,13 +91,14 @@ class Delegate(ABC):
         prompt: str,
         *,
         progress: Progress | None = None,
+        say: Progress | None = None,
         context_id: str | None = None,
         message_history: ChatContext | Sequence[ChatItem] | None = None,
         usage: RunUsage | None = None,
     ) -> DelegationResult:
         """One request, answered once. ``context_id`` is the caller's session, when it has one;
         ``message_history`` the conversation so far; ``progress`` takes the expert's status
-        messages."""
+        messages and ``say`` its exact text."""
 
     async def aclose(self) -> None:  # noqa: B027
         """Release what the delegate holds."""

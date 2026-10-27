@@ -48,9 +48,6 @@ from .tool import DISPATCHED, record_delegation
 RESUBSCRIBE_ATTEMPTS = 3
 """How many times a dropped answer stream is read again before the delegation fails."""
 
-NO_ANSWER = "the expert finished with no answer"
-"""The result of an expert task that ended with no text: that fact, never its last progress."""
-
 ASK = (
     "State the request in full, with everything the person said that bears on it; the "
     "answer, or the question it has for the person, is what you say next."
@@ -75,10 +72,12 @@ class A2ADelegate(Delegate, Toolset):
             return result.output
 
     As a toolset it is one tool, ``ask``, described by the card, read once in ``setup()``;
-    ``name=`` tells two experts on one agent apart. The tool hands the request on with the run's thread and
-    history, speaks the expert's progress through ``ctx.update()``, records the expert's task on
-    the call and returns the answer, or the question the expert has for the person. On a call
-    ``announce`` releases the turn with a line the model acknowledges while the expert works.
+    ``name=`` tells two experts on one agent apart. The tool hands the request on with the run's
+    thread and history, passes the expert's progress to ``ctx.update()`` and its exact text to
+    ``ctx.say()``, records the expert's task on the call and returns the answer, or the question
+    the expert has for the person; an answer or a question the expert flagged reaches the person
+    as written. On a call ``announce`` releases the turn with a line the model acknowledges
+    while the expert works.
 
     An expert whose card offers the Live extension gets the caller's session id as the
     ``contextId`` and the caller's lane as ``livekit/callerLane``, and writes its own lane of
@@ -143,6 +142,7 @@ class A2ADelegate(Delegate, Toolset):
             result = await self.run(
                 request,
                 progress=ctx.update,
+                say=ctx.say,
                 context_id=session.thread.id if session and session.thread else None,
                 message_history=_history_of(ctx),
                 usage=ctx.usage,
@@ -152,19 +152,14 @@ class A2ADelegate(Delegate, Toolset):
             raise ToolError(str(e) or "the delegation failed") from e
 
         record_delegation(ctx.function_call, result)
-        exact = result.verbatim
         if result.input_required:
             # the expert asked the person something: asked as it wrote it when it said so, and
             # what they say next is this tool's next request, as they said it
-            verbatim = exact is not None and exact.strip() == result.input_required.strip()
+            verbatim = result.verbatim is not None
             return InputRequired(result.input_required, tool=self._tool, verbatim=verbatim)
-        if exact:
-            # the person gets the flagged pieces as written; the rest is the model's to phrase
-            pieces = result._segments or []
-            rest = "\n\n".join(text.strip() for text, flagged in pieces if not flagged)
-            said = ToolResult(exact, verbatim=True, reply_required=bool(rest))
-            said._more = rest  # type: ignore[attr-defined]
-            return said
+        if result.verbatim is not None:
+            # the person gets the answer as written, and the model does not word it
+            return ToolResult(result.verbatim, verbatim=True, reply_required=False)
         return result.output if isinstance(result.output, str) else str(result.output or "")
 
     @property
@@ -183,13 +178,15 @@ class A2ADelegate(Delegate, Toolset):
         prompt: str,
         *,
         progress: Progress | None = None,
+        say: Progress | None = None,
         context_id: str | None = None,
         message_history: ChatContext | Sequence[ChatItem] | None = None,
         usage: RunUsage | None = None,
         caller_lane: str | None = None,
     ) -> DelegationResult:
         """One request; ``caller_lane`` is the caller's lane of ``context_id``, which an expert
-        of this project may read. Inside a turn both default to the turn's."""
+        of this project may read. Inside a turn both default to the turn's. ``say`` takes the
+        expert's exact text, ``progress`` when it is not given."""
         client = await self._connect()
         offers = client.offers_extension
         if context_id is None and (hooks := current_run_hooks()) is not None:
@@ -200,6 +197,7 @@ class A2ADelegate(Delegate, Toolset):
             update, text = await _answer(
                 reply,
                 progress,
+                say or progress,
                 lambda: client.resubscribe(reply.task_id, thread_id=reply.thread_id or None),
             )
         except asyncio.CancelledError:
@@ -209,10 +207,6 @@ class A2ADelegate(Delegate, Toolset):
         if update.state == "failed":
             raise DelegationFailed(text or "the delegation failed")
         asked = update.state == "input-required"
-        if not asked:
-            text = text or NO_ANSWER
-        # a question is exact as a whole; an answer in its flagged pieces
-        flagged = "\n\n".join(piece for piece, exact in update.segments if exact)
 
         return DelegationResult(
             output=text,
@@ -226,8 +220,7 @@ class A2ADelegate(Delegate, Toolset):
             endpoint=self._url,
             transport=client.transport or "",
             profile="livekit" if offers else "a2a",
-            verbatim=_verbatim(update.metadata) if asked else flagged or None,
-            segments=update.segments,
+            verbatim=text if update.verbatim and text else None,
         )
 
     async def _send(
@@ -345,19 +338,15 @@ def _conversation(
     )
 
 
-def _verbatim(metadata: object) -> str | None:
-    from ..a2a.extension import VERBATIM
-
-    exact = metadata.get(VERBATIM) if isinstance(metadata, dict) else None
-    return exact if isinstance(exact, str) and exact else None
-
-
 async def _answer(
-    reply: Reply, progress: Progress | None, resubscribe: Callable[[], Reply]
+    reply: Reply,
+    progress: Progress | None,
+    say: Progress | None,
+    resubscribe: Callable[[], Reply],
 ) -> tuple[TaskUpdate, str]:
-    """Reports the progress as it arrives; returns the terminal update and its own text, never
-    a progress line. A stream that drops is read again from the start with ``resubscribe``, and
-    the progress already reported is not reported twice."""
+    """Hands the progress to ``progress`` and the exact text to ``say`` as they arrive; returns
+    the terminal update and its own text, never a progress line. A stream that drops is read
+    again from the start with ``resubscribe``, and what was handed on is not handed on twice."""
     reported = 0
     updates = reply
     for attempt in range(RESUBSCRIBE_ATTEMPTS + 1):
@@ -373,7 +362,7 @@ async def _answer(
                     skip -= 1
                     continue
                 reported += 1
-                await report(progress, update.text)
+                await report(say if update.verbatim else progress, update.text)
         except (A2AClientError, httpx.HTTPError) as e:
             logger.info(
                 "an expert's answer stream dropped",

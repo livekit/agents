@@ -69,9 +69,11 @@ the toolset's `setup()`: the toolset's id is the card's name, the tool is
 `ask`, or `name=` when one agent has two experts, and its description is
 the card's description followed by one fixed sentence that says to state
 the request in full. The tool hands the request on with the
-run's thread and history, speaks the expert's progress through
-`ctx.update()`, returns the answer, or the question the expert has for the
-person, and records the expert's task on the call. On a call its first
+run's thread and history, passes the expert's progress to `ctx.update()`
+and its exact text to `ctx.say()`, returns the answer, or the question the
+expert has for the person, and records the expert's task on the call. An
+answer the expert flagged `livekit/verbatim` reaches the person as written,
+with no model step; a task that ends with no text is an empty answer. On a call its first
 update releases the turn with a line the model acknowledges while the
 expert works; `announce=False` turns that off.
 
@@ -80,7 +82,7 @@ expert agent, and never contends for the caller's lease.
 
 ```python
 result = await delegate.run(
-    prompt, progress=ctx.update, context_id=None, message_history=None, usage=None
+    prompt, progress=ctx.update, say=ctx.say, context_id=None, message_history=None, usage=None
 )
 ```
 
@@ -89,7 +91,10 @@ the expert's task: `state` (`completed`, `input-required`, `canceled`),
 `task_id`, `context_id`, and, over A2A, `endpoint`, `transport` and
 `profile` (`livekit` when the extension was in force, else `a2a`). A
 `failed` task raises `DelegationFailed` with what the expert said.
-`progress` takes each status message the expert sends while it works.
+`progress` takes each status message the expert sends while it works, and
+`say` the ones flagged `livekit/verbatim`, its exact text; without `say`
+they go to `progress`. `verbatim` is the answer or the question when the
+expert flagged it.
 `aclose()` releases what the delegate holds.
 
 ## A remote expert
@@ -130,8 +135,8 @@ the question is the delegation's output. The next delegation in the thread, carr
 the answer to that question on the expert's lane; the waiting task ends
 `completed`, merged into the new one. The delegate's tool returns the
 question as `InputRequired(question, tool=)` naming itself, so the front
-desk asks it in its own words, or as written when the expert flagged it
-`livekit/verbatim`, and what the person says next is sent to the expert as the
+desk asks it in its own words, or as written when the expert flagged its
+text part `livekit/verbatim`, and what the person says next is sent to the expert as the
 tool's next request, as they said it, with no model turn in between: on a
 call the framework runs the tool on the turn's transcript, in text on the
 next message, on whichever worker gets it ([tools.md](tools.md)). A
