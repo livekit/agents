@@ -296,6 +296,9 @@ class _VirtualTimeLoop(asyncio.SelectorEventLoop):
     real wall time would produce.
     """
 
+    # The core runs its tasks on this loop's clock only when the loop says so.
+    _lk_agents_virtual_time = True
+
     def __init__(self) -> None:
         self._virtual_clock = _VirtualClock()
         super().__init__(selector=_AutojumpSelector(self._virtual_clock))

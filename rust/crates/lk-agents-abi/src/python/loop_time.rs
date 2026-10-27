@@ -13,7 +13,8 @@
 //! changes.
 //!
 //! `LK_AGENTS_VIRTUAL_TIME` = `on` | `off` | `auto` (the default) picks the loops this applies to;
-//! `auto` is a loop whose clock is more than a second off `time.monotonic()`.
+//! `auto` is a loop that declares itself virtual ([`VIRTUAL_TIME_MARKER`]). Nothing is inferred from
+//! the loop's clock: a production loop whose cached time is stale must never land here.
 //!
 //! The GIL is held while the core runs, which is fine for tests. Nothing here blocks: a
 //! synchronous wait on the core from the loop thread would deadlock, since the core runs there.
@@ -37,6 +38,9 @@ use crate::{Clock, Ts};
 
 /// The env knob; see the module docs.
 pub const VIRTUAL_TIME_ENV: &str = "LK_AGENTS_VIRTUAL_TIME";
+
+/// The attribute a virtual-time loop sets to `True` (`tests/virtual_time.py`).
+pub const VIRTUAL_TIME_MARKER: &str = "_lk_agents_virtual_time";
 
 /// A pump runs at most this many tasks before yielding to the loop's other callbacks.
 const PUMP_BUDGET: usize = 256;
@@ -123,17 +127,15 @@ fn mode() -> Mode {
     }
 }
 
-/// A loop whose clock is more than a second away from `time.monotonic()` is not on real time.
-fn applies_to(py: Python<'_>, event_loop: &Bound<'_, PyAny>) -> bool {
+/// Only a loop that says it is virtual, unless the env forces it.
+fn applies_to(event_loop: &Bound<'_, PyAny>) -> bool {
     match mode() {
         Mode::On => true,
         Mode::Off => false,
-        Mode::Auto => (|| -> PyResult<bool> {
-            let loop_time: f64 = event_loop.call_method0("time")?.extract()?;
-            let monotonic: f64 = py.import("time")?.call_method0("monotonic")?.extract()?;
-            Ok((loop_time - monotonic).abs() > 1.0)
-        })()
-        .unwrap_or(false),
+        Mode::Auto => event_loop
+            .getattr(VIRTUAL_TIME_MARKER)
+            .and_then(|v| v.is_truthy())
+            .unwrap_or(false),
     }
 }
 
@@ -169,7 +171,7 @@ fn lookup(py: Python<'_>, event_loop: &Bound<'_, PyAny>) -> Option<Arc<LoopRunti
         return e.runtime.clone();
     }
     sweep(py);
-    let runtime = if applies_to(py, event_loop) {
+    let runtime = if applies_to(event_loop) {
         match LoopRuntime::new(py, event_loop) {
             Ok(rt) => Some(rt),
             Err(e) => {
