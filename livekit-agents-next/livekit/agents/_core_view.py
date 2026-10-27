@@ -28,7 +28,7 @@ from .llm.tool_context import (
     Toolset,
 )
 from .llm.utils import function_arguments_to_pydantic_model
-from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions
+from .types import NOT_GIVEN
 from .voice import io
 
 
@@ -45,17 +45,6 @@ def _identity(obj: Any) -> dict[str, str]:
 
 
 # --- providers --------------------------------------------------------------------------------
-
-
-class _Provider:
-    """A provider view; ``_core_with_conn_options`` binds the budget its calls carry."""
-
-    def __init__(self, obj: Any, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS) -> None:
-        self._obj = obj
-        self._conn = conn
-
-    def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
-        return type(self)(self._obj, APIConnectOptions(**conn))
 
 
 class _Vad:
@@ -103,36 +92,6 @@ class _InputStream:
     async def aclose(self) -> None:
         self._ended = True
         await self._stream.aclose()
-
-
-class _Llm(_Provider):
-    _obj: llm.LLM
-
-    def _core_label(self) -> str:
-        return self._obj.label
-
-    def _core_model(self) -> str:
-        return self._obj.model
-
-    def _core_id(self) -> dict[str, str]:
-        return _identity(self._obj)
-
-    def _core_prewarm(self) -> None:
-        self._obj.prewarm()
-
-    async def _core_chat(self, req: _core.ChatRequest) -> llm.LLMStream:
-        chat_ctx, tools = chat_request(req)
-        choice = req.tool_choice
-        return self._obj.chat(
-            chat_ctx=chat_ctx,
-            conn_options=self._conn,
-            tools=tools,
-            tool_choice=NOT_GIVEN if choice is None else choice,
-            parallel_tool_calls=(
-                NOT_GIVEN if req.parallel_tool_calls is None else req.parallel_tool_calls
-            ),
-            extra_kwargs=req.extra or NOT_GIVEN,
-        )
 
 
 def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
@@ -626,7 +585,6 @@ def _views() -> dict[type, Any]:
 
     return {
         vad.VAD: _Vad,
-        llm.LLM: _Llm,
         io.AudioInput: _AudioInput,
         io.VideoInput: _VideoInput,
         io.AudioOutput: _AudioOutput,

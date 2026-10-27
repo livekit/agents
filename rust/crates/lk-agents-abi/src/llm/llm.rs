@@ -207,39 +207,82 @@ impl ChatRequest {
     }
 }
 
-/// A language model. A host `llm.LLM` is this trait through its bare `#[host(proxy)]` (`PyLlm`); the
-/// request crosses as a `_core.ChatRequest` handle.
+// A host `llm.LLM` is this trait through its bare `#[host(proxy)]` (`PyLlm`), over the base class
+// `lk-agents-codegen` writes from the `#[python]` markers; the request crosses as a
+// `_core.ChatRequest` handle.
+/// A language model.
+///
+/// Plugins implement `chat()`, returning an `LLMStream` whose `_run` sends the provider's chunks.
 #[crate::host(proxy(host = "livekit.agents.llm.LLM", clock))]
+#[python(provider(
+    module = "llm",
+    path = "livekit.agents.llm.llm",
+    events = "metrics_collected, error",
+    error(name = "LLMError", kind = "llm_error")
+))]
 #[async_trait]
 pub trait Llm: Send + Sync {
+    /// The name logs and metrics give this instance: its class path.
+    #[python(label)]
     fn label(&self) -> String;
 
-    /// `LLM.model` (`llm/llm.py:120`): the model name, or `"unknown"`.
-    ///
-    /// Not derivable from [`label`](Self::label) (`f"{module}.{classname}"`); an implementor that
-    /// knows its model must override this.
+    // `LLM.model` (`llm/llm.py:120`): the model name, or `"unknown"`. Not derivable from
+    // [`label`](Self::label) (`f"{module}.{classname}"`); an implementor that knows its model must
+    // override this.
+    #[python(value = "self.model")]
     fn model(&self) -> String {
         "unknown".to_owned()
     }
 
-    /// `label`/`model`/`provider` as metrics and errors stamp them; `"unknown"` for missing names.
+    /// The model and provider labelling this instance's turn metrics.
+    // `label`/`model`/`provider` as metrics and errors stamp them; `"unknown"` for missing names.
+    #[python(identity)]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId { label: self.label(), model: self.model(), provider: "unknown".to_owned() }
     }
 
-    /// `LLM.prewarm()`: open the connection pool early; a provider with nothing to warm ignores it.
+    /// Pre-warm connection to the LLM service.
+    ///
+    /// Establishes DNS resolution and the TLS connection to the provider before the first
+    /// inference request, reducing time-to-first-token on the initial reply. It is called
+    /// automatically when a `LiveSession` is constructed and when an agent activity starts, but
+    /// can also be called directly.
+    ///
+    /// Non-blocking (fire-and-forget) and idempotent. Providers enable it by overriding
+    /// `_prewarm_impl`.
+    ///
+    /// Args:
+    /// - loop: Event loop to schedule the prewarm request on. Defaults to the running event loop.
+    #[python(hook = "prewarm", impl = "_prewarm_impl")]
     fn prewarm(&self) {}
 
-    /// A view of this provider whose calls carry `conn` (a host plugin's `conn_options`: the
-    /// request's own are the chain's). See [`Stt::with_conn_options`](crate::Stt::with_conn_options).
+    // A view of this provider whose calls carry `conn` (a host plugin's `conn_options`: the
+    // request's own are the chain's). See [`Stt::with_conn_options`](crate::Stt::with_conn_options).
+    #[python(conn)]
     fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn Llm>> {
         None
     }
 
-    /// Open a completion.
+    /// Open a completion of `chat_ctx`, in one attempt; inside a session the framework retries
+    /// it.
     ///
-    /// `Result`: a plugin's `chat()` can raise before any chunk, which `FallbackChain` treats as
-    /// retryable. `async` for the reason on [`Tts`](crate::Tts).
+    /// Args:
+    /// - chat_ctx: The conversation to complete.
+    /// - tools: The tools the model may call.
+    /// - conn_options: The timeout and retries of the request.
+    /// - parallel_tool_calls: Whether the model may call several tools at once.
+    /// - tool_choice: Whether and which tool the model must call.
+    /// - extra_kwargs: Provider-specific request options.
+    // `Result`: a plugin's `chat()` can raise before any chunk, which `FallbackChain` treats as
+    // retryable. `async` for the reason on [`Tts`](crate::Tts).
+    #[python(
+        chat,
+        stream(
+            name = "LLMStream",
+            kind = "chat",
+            doc = "One completion: ``ChatChunk`` out.\n\nPlugins implement ``_run``, sending the provider's chunks to ``_event_ch``; it runs one attempt, which the framework retries inside a session."
+        )
+    )]
     async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError>;
 }
 

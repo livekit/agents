@@ -80,6 +80,22 @@ pub struct ChoiceDelta {
     pub extra: Option<Extra>,
 }
 
+// What `LLMStream.collect()` gathers. Host only: the reference has no class docstring.
+#[derive(Debug, Clone, Default, PartialEq, Host)]
+#[python(pydantic, module = "llm", path = "livekit.agents.llm.llm", name = "CollectedResponse", with_bases)]
+pub struct CollectedResponse {
+    #[python(default = "\"\"")]
+    pub text: String,
+    #[python(default_factory = "list")]
+    pub tool_calls: Vec<FunctionToolCall>,
+    #[python(default = "None")]
+    pub usage: Option<CompletionUsage>,
+    /// Provider-specific extra data accumulated across chunks
+    /// (e.g., xAI encrypted reasoning, Google thought signatures).
+    #[python(ty = "dict[str, Any]", import = "typing:Any", default_factory = "dict")]
+    pub extra: Extra,
+}
+
 /// A `role` this build does not know reads as `None`.
 #[cfg(feature = "python")]
 impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ChoiceDelta {

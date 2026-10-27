@@ -2,18 +2,34 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
 #     rust/crates/lk-agents-abi/src/llm/events.rs
+#     rust/crates/lk-agents-abi/src/llm/llm.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+import asyncio
+import time
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, AsyncIterator
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, Field
+from livekit import rtc
+from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import Self
 
-from .. import _bindings
+from .. import _bindings, _core
+from .._exceptions import APIError, APIStatusError
 from ..llm.chat_context import ChatRole
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import aio
+from .chat_items import MetricsMetadata
+
+if TYPE_CHECKING:
+    from ..llm.chat_context import ChatContext
+    from ..llm.tool_context import Tool, ToolChoice
 
 
 class CompletionUsage(BaseModel):
@@ -58,6 +74,16 @@ class ChoiceDelta(BaseModel):
     """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
+class CollectedResponse(BaseModel):
+    text: str = ""
+    tool_calls: list[FunctionToolCall] = Field(default_factory=list)
+    usage: CompletionUsage | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Provider-specific extra data accumulated across chunks
+    (e.g., xAI encrypted reasoning, Google thought signatures).
+    """
+
+
 class ChatChunk(BaseModel):
     id: str
     delta: ChoiceDelta | None = None
@@ -73,6 +99,331 @@ class ChatChunk(BaseModel):
         return _bindings.chat_chunk_has_response(self)
 
 
+class LLMError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["llm_error"] = "llm_error"
+    timestamp: float
+    label: str
+    error: Exception = Field(..., exclude=True)
+    recoverable: bool
+
+
+TEvent = TypeVar("TEvent")
+
+
+class LLM(
+    ABC,
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
+    Generic[TEvent],
+):
+    """A language model.
+
+    Plugins implement ``chat()``, returning an ``LLMStream`` whose ``_run`` sends the provider's
+    chunks.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._prewarm_task: asyncio.Task[None] | None = None
+
+    @property
+    def label(self) -> str:
+        """The name logs and metrics give this instance: its class path."""
+        return self._label
+
+    @property
+    def model(self) -> str:
+        """The model name; ``"unknown"`` until a plugin overrides it."""
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        """The provider name; ``"unknown"`` until a plugin overrides it."""
+        return "unknown"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """The model and provider labelling this instance's turn metrics."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        """Pre-warm connection to the LLM service.
+
+        Establishes DNS resolution and the TLS connection to the provider before the first inference
+        request, reducing time-to-first-token on the initial reply. It is called automatically when
+        a ``LiveSession`` is constructed and when an agent activity starts, but can also be called
+        directly.
+
+        Non-blocking (fire-and-forget) and idempotent. Providers enable it by overriding
+        ``_prewarm_impl``.
+
+        Args:
+            loop: Event loop to schedule the prewarm request on. Defaults to the running event loop.
+        """
+        if type(self)._prewarm_impl is LLM._prewarm_impl:
+            return  # nothing to warm
+        if self._prewarm_task is not None:
+            return
+        if loop is None:
+            loop = asyncio.get_event_loop()
+
+        async def _run() -> None:
+            try:
+                await self._prewarm_impl()
+            except Exception:
+                pass
+
+        self._prewarm_task = loop.create_task(_run())
+
+    async def _prewarm_impl(self) -> None:
+        """The provider's own ``prewarm``: overriding it enables ``prewarm()``.
+
+        A cheap, token-free request (e.g. listing models) on the client that serves the
+        requests, so DNS and TLS are established and a connection is left in the pool. Its
+        exceptions are swallowed; a subclass overriding ``aclose`` must call
+        ``await super().aclose()`` to cancel one in flight.
+        """
+
+    @abstractmethod
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> LLMStream:
+        """Open a completion of ``chat_ctx``, in one attempt; inside a session the framework retries
+        it.
+
+        Args:
+            chat_ctx: The conversation to complete.
+            tools: The tools the model may call.
+            conn_options: The timeout and retries of the request.
+            parallel_tool_calls: Whether the model may call several tools at once.
+            tool_choice: Whether and which tool the model must call.
+            extra_kwargs: Provider-specific request options.
+        """
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        self.emit(
+            "error",
+            LLMError(
+                timestamp=time.time(),
+                label=self._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
+    async def aclose(self) -> None:
+        """Close the provider and everything it opened."""
+        if self._prewarm_task is not None:
+            await aio.cancel_and_wait(self._prewarm_task)
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    def _core_label(self) -> str:
+        return self.label
+
+    def _core_model(self) -> str:
+        return self.model
+
+    def _core_id(self) -> dict[str, str]:
+        return {"label": self.label, "model": self.model, "provider": self.provider}
+
+    def _core_prewarm(self) -> None:
+        self.prewarm()
+
+    def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
+        return _LLMConn(self, APIConnectOptions(**conn))
+
+    async def _core_chat(
+        self, req: _core.ChatRequest, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> LLMStream:
+        from .._core_view import chat_request
+
+        chat_ctx, tools = chat_request(req)
+        return self.chat(
+            chat_ctx=chat_ctx,
+            conn_options=conn,
+            tools=tools,
+            tool_choice=NOT_GIVEN if req.tool_choice is None else req.tool_choice,
+            parallel_tool_calls=(
+                NOT_GIVEN if req.parallel_tool_calls is None else req.parallel_tool_calls
+            ),
+            extra_kwargs=req.extra or NOT_GIVEN,
+        )
+
+
+class _LLMConn:
+    """``LLM`` as the framework holds it under one ``conn_options``."""
+
+    def __init__(self, provider: LLM, conn: APIConnectOptions) -> None:
+        self._provider = provider
+        self._conn = conn
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider, name)
+
+    async def _core_chat(self, req: _core.ChatRequest) -> LLMStream:
+        return await self._provider._core_chat(req, self._conn)
+
+
+class _LLMEventChannel(aio.Chan[ChatChunk]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.output_sent = False
+
+    def send_nowait(self, value: ChatChunk) -> None:
+        super().send_nowait(value)
+        # a provider can raise before the consumer reads the chunk
+        self.output_sent = self.output_sent or value.has_response()
+
+
+class LLMStream(ABC):
+    """One completion: ``ChatChunk`` out.
+
+    Plugins implement ``_run``, sending the provider's chunks to ``_event_ch``; it runs one attempt,
+    which the framework retries inside a session.
+    """
+
+    def __init__(
+        self,
+        llm: LLM,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool],
+        conn_options: APIConnectOptions,
+    ) -> None:
+        self._llm = llm
+        self._chat_ctx = chat_ctx
+        self._tools = tools
+        self._conn_options = conn_options
+        self._event_ch = _LLMEventChannel()
+        self._retry_on_chunk_sent = True
+        self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    @abstractmethod
+    async def _run(self) -> None: ...
+
+    async def _main_task(self) -> None:
+        try:
+            await self._run()
+        except APIError as e:
+            # 499 (Client Closed Request) - close gracefully without raising
+            if isinstance(e, APIStatusError) and e.status_code == 499:
+                return
+            if not self._retry_on_chunk_sent and self._event_ch.output_sent:
+                e.retryable = False
+            self._emit_error(e, recoverable=False)
+            raise
+        except Exception as e:
+            self._emit_error(e, recoverable=False)
+            raise
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        self._llm._emit_error(api_error, recoverable)
+
+    @property
+    def chat_ctx(self) -> ChatContext:
+        return self._chat_ctx
+
+    @property
+    def tools(self) -> list[Tool]:
+        return self._tools
+
+    async def aclose(self) -> None:
+        await aio.cancel_and_wait(self._task)
+        self._event_ch.close()
+
+    async def __anext__(self) -> ChatChunk:
+        try:
+            val = await self._event_ch.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+            raise StopAsyncIteration from None
+        return val
+
+    def __aiter__(self) -> AsyncIterator[ChatChunk]:
+        return self
+
+    def to_str_iterable(self) -> AsyncIterable[str]:
+        """The stream as its text, for a completion that calls no tool."""
+
+        async def _iterable() -> AsyncIterable[str]:
+            async with self:
+                async for chunk in self:
+                    if chunk.delta and chunk.delta.content:
+                        yield chunk.delta.content
+
+        return _iterable()
+
+    async def collect(self) -> CollectedResponse:
+        """Collect the entire stream into a single response.
+
+        Example:
+            ```python
+            from livekit.agents import llm
+
+            response = await my_llm.chat(chat_ctx=ctx, tools=tools).collect()
+
+            for tc in response.tool_calls:
+                result = await llm.execute_function_call(tc, tool_ctx)
+                ctx.insert(result.fnc_call)
+                ctx.insert(result.fnc_call_out)
+            ```
+        """
+        text_parts: list[str] = []
+        tool_calls: list[FunctionToolCall] = []
+        usage: CompletionUsage | None = None
+        extra: dict[str, Any] = {}
+
+        async with self:
+            async for chunk in self:
+                if chunk.delta:
+                    if chunk.delta.content:
+                        text_parts.append(chunk.delta.content)
+                    if chunk.delta.tool_calls:
+                        tool_calls.extend(chunk.delta.tool_calls)
+                    if chunk.delta.extra:
+                        extra.update(chunk.delta.extra)
+                if chunk.usage is not None:
+                    usage = chunk.usage
+
+        return CollectedResponse(
+            text="".join(text_parts).strip(),
+            tool_calls=tool_calls,
+            usage=usage,
+            extra=extra,
+        )
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+
 # --- the frozen public paths -----------------------------------------------------------------
 #
 # Assigned here rather than in each class body: pydantic resolves annotations against
@@ -83,4 +434,8 @@ class ChatChunk(BaseModel):
 CompletionUsage.__module__ = "livekit.agents.llm.llm"
 FunctionToolCall.__module__ = "livekit.agents.llm.llm"
 ChoiceDelta.__module__ = "livekit.agents.llm.llm"
+CollectedResponse.__module__ = "livekit.agents.llm.llm"
 ChatChunk.__module__ = "livekit.agents.llm.llm"
+LLMError.__module__ = "livekit.agents.llm.llm"
+LLM.__module__ = "livekit.agents.llm.llm"
+LLMStream.__module__ = "livekit.agents.llm.llm"

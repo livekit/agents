@@ -312,6 +312,13 @@ impl Writer<'_> {
                     lines.push(format!("self.{attr} = {default}"))
                 }
                 Role::Markup => lines.push("self._markup = self.Markup(self)".to_owned()),
+                Role::Hook { name, .. } if self.impl_is_task(m) => {
+                    self.need("", "asyncio");
+                    lines.push(format!(
+                        "self.{}: asyncio.Task[None] | None = None",
+                        self.task_attr(name)
+                    ));
+                }
                 _ => {}
             }
         }
@@ -721,6 +728,7 @@ impl Writer<'_> {
             "recognize" => self.recognize_stream(s)?,
             "chunked" => self.synthesis_stream(s, CHUNKED)?,
             "synthesize" => self.synthesis_stream(s, SYNTHESIZE)?,
+            "chat" => self.chat_stream(s)?,
             other => return Err(format!("{}: no stream idiom `{other}`", m.rust)),
         };
         b.push_str(&text);
@@ -761,18 +769,36 @@ impl Writer<'_> {
             .map(|s| s.name.clone())
     }
 
-    fn impl_is_task(&self, _m: &ProviderMethod) -> bool {
-        false
+    /// A plain hook calling an `impl`: the coroutine the hook schedules once.
+    fn impl_is_task(&self, m: &ProviderMethod) -> bool {
+        !m.is_async && matches!(&m.role, Role::Hook { implementation: Some(_), .. })
     }
 
+    /// The task idiom: `name()` schedules `imp()` once on the loop, fire and forget, unless the
+    /// plugin left `imp` as it is; `aclose` cancels it.
     fn task_hook(
         &mut self,
-        _b: &mut String,
+        b: &mut String,
         m: &ProviderMethod,
-        _name: &str,
-        _imp: &str,
+        name: &str,
+        imp: &str,
     ) -> Result<(), String> {
-        Err(format!("{}: a task hook is not written yet", m.rust))
+        self.need("", "asyncio");
+        let class = &self.p.class;
+        b.push_str(&format!(
+            "\n    def {name}(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:\n"
+        ));
+        docstring(b, &m.doc, 8);
+        b.push_str(&format!(
+            "        if type(self).{imp} is {class}.{imp}:\n            return  # nothing to warm\n        if self.{task} is not None:\n            return\n        if loop is None:\n            loop = asyncio.get_event_loop()\n\n        async def _run() -> None:\n            try:\n                await self.{imp}()\n            except Exception:\n                pass\n\n        self.{task} = loop.create_task(_run())\n\n    async def {imp}(self) -> None:\n        \"\"\"The provider's own ``{name}``: overriding it enables ``{name}()``.\n\n        A cheap, token-free request (e.g. listing models) on the client that serves the\n        requests, so DNS and TLS are established and a connection is left in the pool. Its\n        exceptions are swallowed; a subclass overriding ``aclose`` must call\n        ``await super().aclose()`` to cancel one in flight.\n        \"\"\"\n",
+            task = self.task_attr(name),
+        ));
+        Ok(())
+    }
+
+    /// The task a task hook keeps: `_<name>_task`.
+    fn task_attr(&self, name: &str) -> String {
+        format!("_{}_task", name.trim_start_matches('_'))
     }
 
     /// `markup`: the nested `Markup` class plugins override `_provider_key` on, forwarding the
@@ -833,20 +859,77 @@ impl Writer<'_> {
         Ok(())
     }
 
-    fn chat_hook(
-        &mut self,
-        _b: &mut String,
-        m: &ProviderMethod,
-        _name: &str,
-    ) -> Result<(), String> {
-        Err(format!("{}: chat is not written yet", m.rust))
+    /// `chat`: the abstract method a `_core.ChatRequest` is read into.
+    fn chat_hook(&mut self, b: &mut String, m: &ProviderMethod, name: &str) -> Result<(), String> {
+        for (module, n) in [
+            ("abc", "abstractmethod"),
+            ("typing", "Any"),
+            ("..types", "APIConnectOptions"),
+            ("..types", "DEFAULT_API_CONNECT_OPTIONS"),
+            ("..types", "NOT_GIVEN"),
+            ("..types", "NotGivenOr"),
+            ("?..llm.chat_context", "ChatContext"),
+            ("?..llm.tool_context", "Tool"),
+            ("?..llm.tool_context", "ToolChoice"),
+        ] {
+            self.need(module, n);
+        }
+        let ret = self.hook_ret(m)?;
+        b.push_str(&format!(
+            "\n    @abstractmethod\n    def {name}(\n        self,\n        *,\n        chat_ctx: ChatContext,\n        tools: list[Tool] | None = None,\n        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,\n        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,\n        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,\n        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,\n    ) -> {ret}:\n"
+        ));
+        docstring(b, &m.doc, 8);
+        Ok(())
     }
 
-    fn chat_core(&mut self, m: &ProviderMethod, _name: &str) -> Result<String, String> {
-        Err(format!("{}: chat is not written yet", m.rust))
+    /// The request's context, offered tools and options as the hook's keywords.
+    fn chat_core(&mut self, _m: &ProviderMethod, name: &str) -> Result<String, String> {
+        Ok(format!(
+            "from .._core_view import chat_request\n\n        chat_ctx, tools = chat_request(req)\n        return self.{name}(\n            chat_ctx=chat_ctx,\n            conn_options=conn,\n            tools=tools,\n            tool_choice=NOT_GIVEN if req.tool_choice is None else req.tool_choice,\n            parallel_tool_calls=(\n                NOT_GIVEN if req.parallel_tool_calls is None else req.parallel_tool_calls\n            ),\n            extra_kwargs=req.extra or NOT_GIVEN,\n        )"
+        ))
     }
 
     // ------------------------------------------------------------------- the stream idioms
+
+    /// `stream(kind = "chat")`: one completion's chunks, a failure after output marked final
+    /// unless the stream retries on sent chunks.
+    fn chat_stream(&mut self, s: &StreamClass) -> Result<String, String> {
+        for (m, n) in [
+            ("", "asyncio"),
+            ("abc", "abstractmethod"),
+            ("collections.abc", "AsyncIterable"),
+            ("collections.abc", "AsyncIterator"),
+            ("typing", "Any"),
+            (".._exceptions", "APIError"),
+            (".._exceptions", "APIStatusError"),
+            ("..types", "APIConnectOptions"),
+            ("..utils", "aio"),
+            ("?..llm.chat_context", "ChatContext"),
+            ("?..llm.tool_context", "Tool"),
+        ] {
+            self.need(m, n);
+        }
+        let chunk = self.record("LlmChunk").ok_or("LlmChunk is not declared")?;
+        let usage = self.record("CompletionUsage").ok_or("CompletionUsage is not declared")?;
+        let call = self.record("FunctionToolCall").ok_or("FunctionToolCall is not declared")?;
+        let collected =
+            self.record("CollectedResponse").ok_or("CollectedResponse is not declared")?;
+        let mut b = format!(
+            "class _{}EventChannel(aio.Chan[{chunk}]):\n    def __init__(self) -> None:\n        super().__init__()\n        self.output_sent = False\n\n    def send_nowait(self, value: {chunk}) -> None:\n        super().send_nowait(value)\n        # a provider can raise before the consumer reads the chunk\n        self.output_sent = self.output_sent or value.has_response()\n\n\nclass {}(ABC):\n",
+            self.p.class, s.name
+        );
+        docstring(&mut b, &s.doc, 4);
+        b.push_str(
+            &CHAT
+                .replace("{Stream}", &s.name)
+                .replace("{Provider}", &self.p.class)
+                .replace("{Chunk}", &chunk)
+                .replace("{Usage}", &usage)
+                .replace("{Call}", &call)
+                .replace("{Collected}", &collected),
+        );
+        Ok(b)
+    }
 
     /// `stream(kind = "chunked" | "synthesize")`: one attempt run against an `AudioEmitter`, its
     /// audio checked against the text it was given.
@@ -1326,4 +1409,119 @@ class _ChunkedStreamFromStream({Chunked}):
                 if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
                     output_emitter.push_timed_transcript(timed_transcripts)
         output_emitter.flush()
+"#;
+
+/// The completion's idiom.
+const CHAT: &str = r#"
+    def __init__(
+        self,
+        llm: {Provider},
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool],
+        conn_options: APIConnectOptions,
+    ) -> None:
+        self._llm = llm
+        self._chat_ctx = chat_ctx
+        self._tools = tools
+        self._conn_options = conn_options
+        self._event_ch = _{Provider}EventChannel()
+        self._retry_on_chunk_sent = True
+        self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    @abstractmethod
+    async def _run(self) -> None: ...
+
+    async def _main_task(self) -> None:
+        try:
+            await self._run()
+        except APIError as e:
+            # 499 (Client Closed Request) - close gracefully without raising
+            if isinstance(e, APIStatusError) and e.status_code == 499:
+                return
+            if not self._retry_on_chunk_sent and self._event_ch.output_sent:
+                e.retryable = False
+            self._emit_error(e, recoverable=False)
+            raise
+        except Exception as e:
+            self._emit_error(e, recoverable=False)
+            raise
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        self._llm._emit_error(api_error, recoverable)
+
+    @property
+    def chat_ctx(self) -> ChatContext:
+        return self._chat_ctx
+
+    @property
+    def tools(self) -> list[Tool]:
+        return self._tools
+
+    async def aclose(self) -> None:
+        await aio.cancel_and_wait(self._task)
+        self._event_ch.close()
+
+    async def __anext__(self) -> {Chunk}:
+        try:
+            val = await self._event_ch.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+            raise StopAsyncIteration from None
+        return val
+
+    def __aiter__(self) -> AsyncIterator[{Chunk}]:
+        return self
+
+    def to_str_iterable(self) -> AsyncIterable[str]:
+        """The stream as its text, for a completion that calls no tool."""
+
+        async def _iterable() -> AsyncIterable[str]:
+            async with self:
+                async for chunk in self:
+                    if chunk.delta and chunk.delta.content:
+                        yield chunk.delta.content
+
+        return _iterable()
+
+    async def collect(self) -> {Collected}:
+        """Collect the entire stream into a single response.
+
+        Example:
+            ```python
+            from livekit.agents import llm
+
+            response = await my_llm.chat(chat_ctx=ctx, tools=tools).collect()
+
+            for tc in response.tool_calls:
+                result = await llm.execute_function_call(tc, tool_ctx)
+                ctx.insert(result.fnc_call)
+                ctx.insert(result.fnc_call_out)
+            ```
+        """
+        text_parts: list[str] = []
+        tool_calls: list[{Call}] = []
+        usage: {Usage} | None = None
+        extra: dict[str, Any] = {}
+
+        async with self:
+            async for chunk in self:
+                if chunk.delta:
+                    if chunk.delta.content:
+                        text_parts.append(chunk.delta.content)
+                    if chunk.delta.tool_calls:
+                        tool_calls.extend(chunk.delta.tool_calls)
+                    if chunk.delta.extra:
+                        extra.update(chunk.delta.extra)
+                if chunk.usage is not None:
+                    usage = chunk.usage
+
+        return {Collected}(
+            text="".join(text_parts).strip(),
+            tool_calls=tool_calls,
+            usage=usage,
+            extra=extra,
+        )
 "#;
