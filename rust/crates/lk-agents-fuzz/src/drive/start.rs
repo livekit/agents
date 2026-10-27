@@ -499,7 +499,12 @@ pub(super) fn tool_specs(tools: &[String]) -> Vec<lk_agents_abi::ToolSpec> {
         .map(|name| lk_agents_abi::ToolSpec {
             name: name.clone(),
             description: format!("fixture tool {name}"),
-            json_schema: serde_json::json!({"type": "object", "properties": {}}),
+            // The shapes `ToolArgs` draws: a string first, which an `InputRequired(tool=)`
+            // hands the person's answer to.
+            json_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"label": {"type": "string"}, "seconds": {"type": "integer"}},
+            }),
             flags: Default::default(),
         })
         .collect()

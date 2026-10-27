@@ -68,7 +68,12 @@ impl HostToolRunner for FakeTools {
             let outcome = ToolOutcome::InputRequired { question, verbatim: true, tool: None };
             return Ok(ToolReport { outcome, approval: Some(Approval::Asked), transition: None });
         }
-        let outcome = self.answer(call, &handle).await;
+        let mut outcome = self.answer(call, &handle).await;
+        // A question asked as written names its own tool to take the answer
+        // (`InputRequired(question, tool=..., verbatim=True)`); one in the agent's words does not.
+        if let ToolOutcome::InputRequired { verbatim: true, tool, .. } = &mut outcome {
+            *tool = Some(call.name.clone());
+        }
         Ok(ToolReport { outcome, approval: granted.then_some(Approval::Granted), transition: None })
     }
 

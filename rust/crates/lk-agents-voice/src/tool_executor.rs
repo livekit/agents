@@ -39,6 +39,36 @@ pub(crate) struct Tools {
     pub(crate) handling: BTreeMap<HookId, Handling>,
     /// The call an `InputRequired` left open: the person's next message is its output.
     pub(crate) pending_input: Option<Ask>,
+    /// `InputRequired(tool=)`: the person's next turn is a call of this tool.
+    pub(crate) claim: Option<Claim>,
+}
+
+/// The tool an `InputRequired(tool=)` claimed the person's next turn for; once `after` (the speech
+/// asking in the agent's own words) is done, so the claim does not steer that reply.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Claim {
+    pub(crate) tool: String,
+    pub(crate) after: Option<SpeechId>,
+}
+
+/// A reply that answers an `InputRequired(tool=)`: its call of `tool` carries what the person
+/// said, as they said it, in place of the model's arguments (`_answer_arguments`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Answering {
+    pub tool: String,
+    pub said: String,
+}
+
+/// `answer_arguments`: the person's words as the tool's first string parameter; `None` for a tool
+/// without one (the model reads the answer and calls the tool itself).
+pub fn answer_arguments(spec: &lk_agents_abi::ToolSpec, said: &str) -> Option<String> {
+    let properties = spec.json_schema.get("properties")?.as_object()?;
+    let (name, _) = properties
+        .iter()
+        .find(|(_, p)| p.get("type").and_then(|t| t.as_str()) == Some("string"))?;
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(name.clone(), serde_json::Value::String(said.to_owned()));
+    Some(serde_json::Value::Object(arguments).to_string())
 }
 
 impl Tools {

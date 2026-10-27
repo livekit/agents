@@ -351,6 +351,7 @@ async fn follow_up(
         // A fresh id: this step commits its own assistant message.
         message_id: shared.mint_item_id(),
         speech: prev.speech,
+        answering: None,
     }
 }
 

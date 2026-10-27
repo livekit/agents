@@ -66,6 +66,8 @@ pub(crate) struct SpeechSpec {
     pub(crate) end_of_turn: Option<EndOfTurnInfo>,
     /// The handle a host's `say()` / `generate_reply()` answered: the speech is created over it.
     pub(crate) host_handle: Option<Arc<SpeechHandle>>,
+    /// The turn's reply answers an `InputRequired(tool=)`.
+    pub(crate) answering: Option<crate::tool_executor::Answering>,
 }
 
 impl SpeechSpec {
@@ -87,6 +89,7 @@ impl SpeechSpec {
             host_asked: false,
             end_of_turn: None,
             host_handle: None,
+            answering: None,
         }
     }
 }
@@ -435,9 +438,19 @@ impl Driver {
         {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
         }
+        // A tool claimed this turn (`InputRequired(tool=)`): the reply calls it, a different
+        // request from any guessed one.
+        let claimed = self.consume_claim();
+        if claimed.is_some() && self.activity.speech_scheduler.preemptive_generation().is_some() {
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+        }
         let adopted = self.adopt_preemptive_generation(now, &info.new_transcript, out);
         let TurnEdits { instructions, chat_ctx, user_text } = edits;
         let user = self.user_turn_item(info, user_text.as_deref());
+        let answering = claimed.map(|tool| crate::tool_executor::Answering {
+            tool,
+            said: user.text_content().unwrap_or_default(),
+        });
         if let Some(preemptive) = adopted {
             if let Some(handle) = self.activity.speech_scheduler.handle(preemptive) {
                 handle.set_user_metrics(user.metrics.clone());
@@ -461,6 +474,10 @@ impl Driver {
                 turn: Some(info.turn_id),
                 instructions_override: instructions,
                 end_of_turn: Some(info.clone()),
+                tool_choice: answering
+                    .as_ref()
+                    .map(|a| lk_agents_abi::ToolChoice::Named(a.tool.clone())),
+                answering,
                 ..SpeechSpec::new(
                     SpeechKind::TurnReply,
                     ReplySource::Llm,
@@ -643,6 +660,7 @@ impl Driver {
             user_metrics,
             message_id,
             speech: self.session.config.effective.speech,
+            answering: spec.answering,
         };
 
         // Past the close's hard edge no generation is started.

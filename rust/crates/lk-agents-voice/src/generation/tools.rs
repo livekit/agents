@@ -48,6 +48,14 @@ impl ToolStep {
         if let Some(repaired) = repaired_arguments(&call.arguments) {
             call.arguments = repaired;
         }
+        // A reply answering an `InputRequired(tool=)`: that tool takes the person's words, as
+        // they said them, and the history shows the call as it ran.
+        if let Some(answering) = ctx.answering.as_ref().filter(|a| a.tool == call.name)
+            && let Some(spec) = ctx.request.tools.iter().find(|t| t.name == call.name)
+            && let Some(arguments) = crate::tool_executor::answer_arguments(spec, &answering.said)
+        {
+            call.arguments = arguments;
+        }
         // Only advertised calls reach the speech; an invented tool is answered with an error.
         let advertised = ctx.request.tools.iter().any(|t| t.name == call.name);
         let names = vec![call.name.clone()];

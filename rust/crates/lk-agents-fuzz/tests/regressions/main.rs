@@ -23,6 +23,7 @@ mod hold_backlog_settles;
 mod idle_admitted_before_hold;
 mod idle_after_untranscribed_turn;
 mod idle_while_closing;
+mod input_required_tool_takes_the_answer;
 mod late_leg_open_closed;
 mod left_at_close;
 mod live_options;

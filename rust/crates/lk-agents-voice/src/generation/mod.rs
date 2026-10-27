@@ -654,6 +654,8 @@ pub struct ReplyContext {
     /// The speech options as of the reply's creation: a later `update_options` reaches the next
     /// reply, not this one.
     pub speech: crate::agent_activity::options::SpeechOptions,
+    /// This reply answers an `InputRequired(tool=)`: its call of that tool takes the person's words.
+    pub answering: Option<crate::tool_executor::Answering>,
 }
 
 /// The agent's `@agent.instructions` functions, rendered by the host for each model request of a

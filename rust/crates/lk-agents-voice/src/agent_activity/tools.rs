@@ -315,6 +315,13 @@ impl Driver {
                     );
                     self.reply_with_instructions(now, instructions, None, out)
                 };
+                // `InputRequired(tool=)`: the person's next turn is a call of that tool; asked in
+                // the agent's own words, once that reply is done.
+                if let Some(tool) = &ask.tool {
+                    let after = if ask.verbatim { None } else { asking };
+                    self.activity.tools.claim =
+                        Some(crate::tool_executor::Claim { tool: tool.clone(), after });
+                }
                 if let (Some(asking), Some(transition)) = (asking, &ask.transition) {
                     let output = crate::run_result::RunOutput::Value(transition.clone());
                     self.session.runs.outputs.insert(asking, output);
@@ -335,6 +342,19 @@ impl Driver {
         };
         output.output = crate::tool_executor::answered_text(&self.session.chat_ctx, &ask, text);
         self.replace_item(ChatItem::FunctionCallOutput(output), out);
+    }
+
+    /// The tool that claimed the person's turn, once (`_consume_next_turn`); not yet while the
+    /// question it waits behind is still being asked.
+    pub(crate) fn consume_claim(&mut self) -> Option<String> {
+        let claim = self.activity.tools.claim.as_ref()?;
+        let asking = claim.after.is_some_and(|s| {
+            self.activity.speech_scheduler.contains(s) && !self.activity.finished.contains(&s)
+        });
+        if asking {
+            return None;
+        }
+        self.activity.tools.claim.take().map(|c| c.tool)
     }
 
     /// `say(text)` from inside the driver: on a realtime session the model's, else a pipeline
