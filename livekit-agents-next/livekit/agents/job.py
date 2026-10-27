@@ -321,6 +321,12 @@ class JobContext:
 
         flush_turn_metrics(session.history)
 
+        if (finished := session._recording_finished) is not None:
+            try:
+                await finished
+            except Exception:
+                logger.exception("failed to finish the session recording")
+
         report = self.make_session_report(session)
 
         from .voice.remote_session import ConsoleCall
@@ -436,6 +442,10 @@ class JobContext:
             events=session._recorded_events,
             chat_history=session.history.copy(),
             model_usage=session.usage.model_usage,
+            audio_recording_path=session._recording_path,
+            audio_recording_started_at=(
+                session._recorder.started_at if session._recorder is not None else None
+            ),
         )
 
         return sr

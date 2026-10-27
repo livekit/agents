@@ -1757,6 +1757,31 @@ def job_logs() -> None:
             print(f"{style}: the job's line, stamped with its job")
 
 
+async def recording() -> None:
+    """The session's audio recording, as a recorded job attaches it: written while the call runs
+    and finished once the session closes."""
+    print("== recording")
+    import tempfile
+
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    await session.start(FrontDesk(), room=room)
+    with tempfile.TemporaryDirectory() as directory:
+        session._recording_path = Path(directory) / "audio.ogg"
+        session._recorder = _core.SessionRecorder(session._recording_path)
+        session._core.attach_recorder(session._recorder)
+        session.say("Let me say something.")
+        room.speak(frames=40)
+        await settle(room, 6)
+        await session.aclose()
+        assert session._recording_finished is not None, "the close left the recording open"
+        await session._recording_finished
+        size = session._recording_path.stat().st_size
+        assert size > 0 and session._recorder.started_at is not None, size
+        print("recording: written and finished at the close")
+
+
 async def noise_cancellation() -> None:
     """The room input's denoising, as the reference applies it: AGC is off when a processor is
     given directly, and the pre-connect head goes through the processor the live stream opened."""
@@ -1921,6 +1946,7 @@ async def main() -> int:
     await keyterms()
     await room_camera()
     await noise_cancellation()
+    await recording()
     await console()
     await job()
     await workflows()

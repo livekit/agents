@@ -416,7 +416,8 @@ pub trait AudioRecorder: Send + Sync {
     fn on_playback_started(&self, created_at: f64);
     fn on_playback_progressed(&self, started_at: f64, offset: f64, duration: f64);
     fn on_playback_finished(&self, now: f64, playback_position: f64);
-    /// Called on the driver's flush timer (`RecorderIO._write_task`'s 2.5 s).
+    /// Called on the driver's flush timer (`RecorderIO._write_task`'s 2.5 s), on the driver's
+    /// step: a recorder that encodes or writes a file does it on a thread of its own.
     fn flush(&self, now: f64) -> Result<(), RecorderError>;
 }
 
@@ -488,6 +489,8 @@ pub struct SessionRecorder<E: OggOpusEncoder> {
     path: PathBuf,
     file: Mutex<Option<std::fs::File>>,
     written: Mutex<u64>,
+    /// The `now` of the last drain: where a host that has no session clock finishes.
+    last: Mutex<Option<f64>>,
 }
 
 impl<E: OggOpusEncoder> SessionRecorder<E> {
@@ -514,6 +517,7 @@ impl<E: OggOpusEncoder> SessionRecorder<E> {
             path,
             file: Mutex::new(Some(file)),
             written: Mutex::new(0),
+            last: Mutex::new(None),
         })
     }
 
@@ -537,6 +541,11 @@ impl<E: OggOpusEncoder> SessionRecorder<E> {
         file.flush()?;
         *self.written.lock().expect("recorder written") += block.len() as u64;
         Ok(())
+    }
+
+    /// The `now` the last flush encoded up to, on the clock the session stamps with.
+    pub fn last_flushed(&self) -> Option<f64> {
+        *self.last.lock().expect("recorder last")
     }
 
     pub fn started_at(&self) -> Option<f64> {
@@ -569,7 +578,10 @@ impl<E: OggOpusEncoder> SessionRecorder<E> {
     }
 
     /// `pending_since` is read before the drain: a segment starting mid-encode belongs to the next block.
+    /// The encoder's lock is taken first, so two drains (a background flush, the finish) encode
+    /// their items in the order they were staged.
     fn drain_and_encode(&self, now: f64, final_block: bool) -> Result<(), RecorderError> {
+        let mut core = self.core.lock().expect("recorder");
         let (items, pending) = {
             let mut s = self.staging.lock().expect("recorder staging");
             (std::mem::take(&mut s.items), s.placer.pending_since())
@@ -577,8 +589,8 @@ impl<E: OggOpusEncoder> SessionRecorder<E> {
 
         self.anchor(now);
         let t0 = self.started_at().expect("anchored just above");
+        *self.last.lock().expect("recorder last") = Some(now);
 
-        let mut core = self.core.lock().expect("recorder");
         if let Core::Waiting(_) = &*core {
             let Core::Waiting(encoder) = std::mem::replace(&mut *core, Core::Done) else {
                 unreachable!("checked immediately above")
@@ -1071,12 +1083,80 @@ mod python {
     #[pyclass(frozen, name = "SessionRecorder", module = "livekit.agents._core")]
     pub struct PySessionRecorder {
         inner: Arc<SessionRecorder<crate::OggOpusEncoder>>,
+        /// Whether the tap's flush is writing; `finish` waits for it.
+        busy: Arc<Busy>,
+    }
+
+    #[derive(Default)]
+    struct Busy {
+        on: std::sync::Mutex<bool>,
+        idle: std::sync::Condvar,
+    }
+
+    impl Busy {
+        fn set(&self, on: bool) {
+            *self.on.lock().unwrap_or_else(|p| p.into_inner()) = on;
+            self.idle.notify_all();
+        }
+
+        fn wait_idle(&self) {
+            let on = self.on.lock().unwrap_or_else(|p| p.into_inner());
+            drop(self.idle.wait_while(on, |on| *on).unwrap_or_else(|p| p.into_inner()));
+        }
     }
 
     impl PySessionRecorder {
         /// The recorder as the room's audio path sees it.
         pub fn tap(&self) -> Arc<dyn AudioRecorder> {
-            self.inner.clone()
+            Arc::new(OffStep { recorder: self.inner.clone(), busy: self.busy.clone() })
+        }
+    }
+
+    /// The session's tap: the driver's flush timer starts an encode and its file write on a
+    /// thread of its own, never on the driver's step; one at a time, a failure logged.
+    struct OffStep {
+        recorder: Arc<SessionRecorder<crate::OggOpusEncoder>>,
+        busy: Arc<Busy>,
+    }
+
+    impl AudioRecorder for OffStep {
+        fn on_input_frame(&self, now: f64, frame: &lk_agents_abi::AudioFrame) {
+            AudioRecorder::on_input_frame(&*self.recorder, now, frame);
+        }
+
+        fn capture_frame(&self, now: f64, frame: &lk_agents_abi::AudioFrame) {
+            AudioRecorder::capture_frame(&*self.recorder, now, frame);
+        }
+
+        fn on_playback_started(&self, created_at: f64) {
+            self.recorder.playback_started(created_at);
+        }
+
+        fn on_playback_progressed(&self, started_at: f64, offset: f64, duration: f64) {
+            self.recorder.playback_progressed(started_at, offset, duration);
+        }
+
+        fn on_playback_finished(&self, now: f64, playback_position: f64) {
+            self.recorder.playback_finished(now, playback_position);
+        }
+
+        fn flush(&self, now: f64) -> Result<(), RecorderError> {
+            {
+                let mut on = self.busy.on.lock().unwrap_or_else(|p| p.into_inner());
+                if *on {
+                    // The last one is still writing; what settled since goes with the next.
+                    return Ok(());
+                }
+                *on = true;
+            }
+            let (recorder, busy) = (self.recorder.clone(), self.busy.clone());
+            std::thread::spawn(move || {
+                if let Err(e) = recorder.flush(now) {
+                    lk_agents_abi::python::log::warn!(error = e.to_string().as_str(); "failed to write the session recording");
+                }
+                busy.set(false);
+            });
+            Ok(())
         }
     }
 
@@ -1096,7 +1176,7 @@ mod python {
                 .map_err(|e| PyRuntimeError::new_err(format!("could not open the opus encoder: {e}")))?;
             let inner = SessionRecorder::new(encoder, sample_rate, t0, path)
                 .map_err(|e| PyOSError::new_err(format!("could not open the recording: {e}")))?;
-            Ok(PySessionRecorder { inner: Arc::new(inner) })
+            Ok(PySessionRecorder { inner: Arc::new(inner), busy: Arc::default() })
         }
 
         /// Bytes on disk so far; zero at first is normal (opus and the muxer buffer).
@@ -1158,10 +1238,18 @@ mod python {
             py.detach(|| self.inner.flush(now)).map_err(recorder_err)
         }
 
-        /// Write everything staged plus the trailer, and close the file.
-        fn finish(&self, py: Python<'_>, now: f64) -> PyResult<()> {
+        /// Write everything staged plus the trailer, and close the file. `now` defaults to where
+        /// the session's last flush ended (its close), on the session's own clock; a flush still
+        /// writing is waited for.
+        #[pyo3(signature = (now = None))]
+        fn finish(&self, py: Python<'_>, now: Option<f64>) -> PyResult<()> {
             check_pid()?;
-            py.detach(|| self.inner.finish(now)).map_err(recorder_err)
+            py.detach(|| {
+                self.busy.wait_idle();
+                let now = now.or_else(|| self.inner.last_flushed()).or(self.inner.started_at());
+                self.inner.finish(now.unwrap_or(0.0))
+            })
+            .map_err(recorder_err)
         }
 
         /// `(input, output)` samples that arrived after their place had been written.

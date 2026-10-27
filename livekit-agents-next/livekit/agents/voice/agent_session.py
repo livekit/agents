@@ -15,6 +15,7 @@ import inspect
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal
 
 import numpy as np
@@ -260,6 +261,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._session_start_context = None
         self._text_input_cb: TextInputCallback | None = None
         self._audio_input_options: AudioInputOptions | None = None
+        # the session's audio recording, written by the core; finished once it closes
+        self._recorder: _core.SessionRecorder | None = None
+        self._recording_path: Path | None = None
+        self._recording_finished: asyncio.Future[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
     # --- state ---------------------------------------------------------------------------
@@ -476,6 +481,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._started_at = time.time()
         if in_job:
             assert job_ctx is not None
+            if self._recording_options["audio"] or (console is not None and ConsoleCall.record):
+                self._recording_path = job_ctx.session_directory / "audio.ogg"
+                self._recorder = _core.SessionRecorder(self._recording_path)
+                self._core.attach_recorder(self._recorder)
             job_ctx.add_shutdown_callback(
                 lambda: self._core.aclose(reason=CloseReason.JOB_SHUTDOWN.value, drain=False)
             )
@@ -911,6 +920,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_close(self, wire: dict[str, Any]) -> None:
         self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=None))
+        if (recorder := self._recorder) is not None:
+            # the core flushed it at the close's edge; the trailer and the file's close are ours
+            self._recording_finished = asyncio.ensure_future(asyncio.to_thread(recorder.finish))
         # a frame processor given directly is the room input's for the session's life
         audio_in = self._audio_input_options
         if audio_in is not None and isinstance(audio_in.noise_cancellation, rtc.FrameProcessor):
