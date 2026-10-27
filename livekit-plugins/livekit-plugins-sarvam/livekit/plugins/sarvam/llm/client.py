@@ -164,7 +164,9 @@ class LLM(OpenAILLM):
     * ``sarvam-105b-conversations`` — multi-turn optimized, ``/v1`` endpoint
 
     The endpoint (``/v1`` vs ``/v2``) is resolved automatically from the model.
-    An explicit ``base_url`` always overrides automatic resolution.
+    An explicit ``base_url`` overrides automatic resolution. When ``update_options``
+    switches between a ``/v1`` and a ``/v2`` model, the trailing ``/v1`` or ``/v2`` of
+    the base URL follows the new model, and the rest of it is kept.
     """
 
     def __init__(
