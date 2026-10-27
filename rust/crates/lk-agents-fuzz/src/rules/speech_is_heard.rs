@@ -129,7 +129,12 @@ impl Rule for SpeechIsHeard {
             // refusal -- not a stale interruption meant for another.
             let unheard_cut = match ended {
                 Some(&(at, SpeechOutcome::Interrupted)) => Some(at),
-                Some(&(at, _)) if cancelled.contains(&speech.id) => Some(at),
+                // A failed one is `speech_error_is_injected`'s to judge (its voice gave up).
+                Some(&(at, outcome))
+                    if outcome != SpeechOutcome::Failed && cancelled.contains(&speech.id) =>
+                {
+                    Some(at)
+                }
                 _ => None,
             };
             if let (false, Some(at)) = (played, unheard_cut) {
