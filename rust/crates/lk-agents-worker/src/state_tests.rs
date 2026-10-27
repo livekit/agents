@@ -268,6 +268,30 @@ fn assignment_arriving_in_time_cancels_the_timer() {
     assert!(!logged("timed out"), "a launched job must not later time out: {out:?}");
 }
 
+// Catches: the dispatch timeline stamped at the wrong step (the request's arrival, its acceptance,
+// the assignment), or stamped without a wall anchor.
+#[test]
+fn a_launched_job_carries_when_it_was_offered_accepted_and_assigned() {
+    let mut r = Rig::new();
+    r.m = WorkerState::new(cfg()).with_wall(lk_agents_abi::WallAnchor { wall: 1000.0, at: r.now() });
+    r.m.start(r.now());
+    r.register();
+    let slot = slot_of(&r.offer("job-1", 0.0));
+    r.clock.advance(Duration::from_secs(2));
+    r.ev(WorkerStateInput::RequestDecision { slot, decision: accept() });
+    r.clock.advance(Duration::from_secs(3));
+    let out = r.ev(assignment("job-1", None));
+    let WorkerStateEffect::LaunchJob { info, .. } = &out[0] else { panic!("{out:?}") };
+    assert_eq!((info.received_at, info.accepted_at, info.assigned_at), (1000.0, 1002.0, 1005.0));
+
+    let mut r = Rig::new();
+    r.register();
+    r.accept("job-1");
+    let out = r.ev(assignment("job-1", None));
+    let WorkerStateEffect::LaunchJob { info, .. } = &out[0] else { panic!("{out:?}") };
+    assert_eq!((info.received_at, info.assigned_at), (0.0, 0.0), "no anchor, no timeline");
+}
+
 // Catches: building RunningJobInfo from the assignment's job instead of the availability request's.
 #[test]
 fn running_job_uses_the_availability_job_not_the_assignment_job() {

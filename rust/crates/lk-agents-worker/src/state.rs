@@ -9,7 +9,7 @@ use crate::protocol::{
 };
 use crate::worker::{HostError, JobId};
 use crate::{AcceptArguments, JobDecision, JobRequest, RunningJobInfo};
-use lk_agents_abi::{TimerSet, Ts};
+use lk_agents_abi::{TimerSet, Ts, WallAnchor};
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -103,6 +103,9 @@ struct Pending {
     resuming: bool,
     state: PendingState,
     early_status: Option<JobStatus>,
+    /// When the request arrived, and when it was accepted.
+    received: Ts,
+    accepted: Ts,
 }
 
 #[derive(Debug)]
@@ -121,6 +124,8 @@ pub struct WorkerState {
     drain_reported: bool,
     previous_status: Option<WorkerStatus>,
     out: Vec<WorkerStateEffect>,
+    /// Places the dispatch timeline in unix time; without one it reads 0.0.
+    wall: Option<WallAnchor>,
 }
 
 impl WorkerState {
@@ -139,7 +144,14 @@ impl WorkerState {
             drain_reported: false,
             previous_status: None,
             out: Vec::new(),
+            wall: None,
         }
+    }
+
+    /// Stamps launched jobs' dispatch timeline against `wall`.
+    pub fn with_wall(mut self, wall: WallAnchor) -> Self {
+        self.wall = Some(wall);
+        self
     }
 
 
@@ -315,8 +327,8 @@ impl WorkerState {
     fn on_server(&mut self, now: Ts, msg: ServerMessage) {
         use livekit_protocol::server_message::Message as M;
         match msg.message {
-            Some(M::Availability(req)) => self.on_availability(req),
-            Some(M::Assignment(a)) => self.on_assignment(a),
+            Some(M::Availability(req)) => self.on_availability(now, req),
+            Some(M::Assignment(a)) => self.on_assignment(now, a),
             Some(M::Termination(t)) => {
                 // "safe to ignore" when we do not hold the job.
                 if self.active.iter().any(|j| j.job.id == t.job_id) {
@@ -331,7 +343,7 @@ impl WorkerState {
     }
 
     /// Parked until a fresh load sample ([`Self::on_load`]), so a burst is not judged on stale load.
-    fn on_availability(&mut self, req: AvailabilityRequest) {
+    fn on_availability(&mut self, now: Ts, req: AvailabilityRequest) {
         let Some(job) = req.job else { return };
         let slot = self.alloc_slot();
         self.pending.push(Pending {
@@ -340,6 +352,8 @@ impl WorkerState {
             resuming: req.resuming,
             state: PendingState::AwaitingLoad,
             early_status: None,
+            received: now,
+            accepted: now,
         });
         self.awaiting_load.push_back(slot);
         self.push(WorkerStateEffect::SampleLoad);
@@ -376,7 +390,7 @@ impl WorkerState {
         self.push(WorkerStateEffect::AskUser { slot, request });
     }
 
-    fn on_decision(&mut self, _now: Ts, slot: Slot, decision: JobDecision) {
+    fn on_decision(&mut self, now: Ts, slot: Slot, decision: JobDecision) {
         let Some(p) = self.pending.iter().find(|p| p.slot == slot) else { return };
         let job_id = p.job.id.clone();
         match decision {
@@ -384,6 +398,7 @@ impl WorkerState {
                 let msg = protocol::availability_accept(&job_id, &self.cfg.agent_name, &args);
                 if let Some(p) = self.pending.iter_mut().find(|p| p.slot == slot) {
                     p.state = PendingState::AwaitingAssignment(args);
+                    p.accepted = now;
                 }
                 self.queue(msg);
             }
@@ -409,7 +424,7 @@ impl WorkerState {
     }
 
     /// An unset or empty assignment URL falls back to the worker URL.
-    fn on_assignment(&mut self, a: JobAssignment) {
+    fn on_assignment(&mut self, now: Ts, a: JobAssignment) {
         let job_id = a.job.as_ref().map_or(String::new(), |j| j.id.clone());
         let found = self.pending.iter().position(|p| {
             p.job.id == job_id && matches!(p.state, PendingState::AwaitingAssignment(_))
@@ -429,13 +444,18 @@ impl WorkerState {
             Some(u) if !u.is_empty() => u,
             _ => self.cfg.ws_url.clone(),
         };
+        let unix = |ts: Ts| self.wall.map_or(0.0, |w| w.wall(ts));
+        let p = &self.pending[idx];
         let info = RunningJobInfo {
             accept_arguments: args,
-            job: protocol::job_info(&self.pending[idx].job),
+            job: protocol::job_info(&p.job),
             url,
             token: a.token,
             worker_id: self.worker_id.clone(),
             fake_job: false,
+            received_at: unix(p.received),
+            accepted_at: unix(p.accepted),
+            assigned_at: unix(now),
         };
         self.pending[idx].state = PendingState::Launching(Box::new(info.clone()));
         self.push(WorkerStateEffect::LaunchJob { slot, info: Box::new(info) });

@@ -37,7 +37,8 @@ class ServerHostProtocol(Protocol):
     """What ``ServerRuntime`` calls back into, in the generator's ``open(kind, args)`` shape: the
     worker's callbacks (``job_request``, ``launch_job``, ``terminate_job``, ``load``, ``endpoint``)
     and the server's (``start``: the job processes from the resolved options; ``started``,
-    ``registered``, ``idle_processes``, ``worker_load``, ``health``, ``close_websockets``,
+    ``registered``, ``idle_processes``, ``worker_load``, ``health``, ``metrics``,
+    ``close_websockets``,
     ``join_jobs``, ``close``). The awaitable runs on the loop that constructed the runtime and is
     cancelled when Rust drops the operation.
     """
@@ -109,6 +110,7 @@ class ServerRuntime:
         publisher: bool,
         routes: list[dict[str, Any]],
         has_load_fnc: bool,
+        has_on_request: bool,
     ) -> Awaitable[None]: ...
     def drain(self, timeout: float | None = None) -> Awaitable[None]: ...
     def aclose(self) -> Awaitable[None]: ...

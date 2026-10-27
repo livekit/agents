@@ -13,6 +13,7 @@ import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import timedelta
+from typing import TypedDict
 
 from a2a.server.jsonrpc_models import (
     InternalError as RpcInternalError,
@@ -26,7 +27,9 @@ from starlette.applications import Starlette
 from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+from typing_extensions import Unpack
 
+from .._core import ServerConfig, endpoint_url_base
 from .._generated.storage_turn import Policy, TurnOptions
 from ..storage.agentdb import AgentDBStorage
 from ..storage.context import Handler
@@ -41,37 +44,38 @@ RPC_PATH = "/v1"
 AuthCallable = Callable[[HTTPConnection], "bool | Awaitable[bool]"]
 
 
+class A2ASessionOptions(TypedDict, total=False):
+    """``a2a_session``'s optional parameters (docs/text-endpoints.md)."""
+
+    public: bool
+    """``True`` by default: reachable without a LiveKit token."""
+    auth: AuthCallable | None
+    """The developer's own check, a callable taking the request."""
+    inbox: Policy | Mapping[str, Policy] | None
+    """The turn policy for a message that arrives while one runs, or a map by channel."""
+    debounce: timedelta | Mapping[str, timedelta] | None
+    """How long to wait for more of a burst, or a map by channel."""
+    storage: AgentDBStorage | None
+    """This endpoint's storage when it is not the server's."""
+    version: str | None
+    """The card's version; ``LIVEKIT_AGENT_VERSION`` by default."""
+
+
 def a2a_session(
     *,
     endpoint: str,
     description: str,
-    public: bool = True,
-    auth: AuthCallable | None = None,
-    inbox: Policy | Mapping[str, Policy] | None = None,
-    debounce: timedelta | Mapping[str, timedelta] | None = None,
-    storage: AgentDBStorage | None = None,
-    version: str | None = None,
     lane: str | None = None,
+    **options: Unpack[A2ASessionOptions],
 ) -> Callable[[Handler], A2AEndpoint]:
-    """The text door as a decorator with no server: the door is an object a module defines and
-    ``AgentServer.add()`` serves (``server.a2a_session(...)`` does both). ``lane`` names the lane
-    it writes when that is not the worker's own (docs/lanes.md)."""
-
-    def decorator(handler: Handler) -> A2AEndpoint:
-        return A2AEndpoint(
-            handler,
-            endpoint=endpoint,
-            description=description,
-            public=public,
-            auth=auth,
-            inbox=inbox,
-            debounce=debounce,
-            storage=storage,
-            version=version or os.environ.get("LIVEKIT_AGENT_VERSION") or "1.0.0",
-            lane=lane,
-        )
-
-    return decorator
+    """The text door as a decorator with no handler: the door is an object a module defines and
+    ``AgentServer.add()`` serves (``server.a2a_session(...)`` does both). ``endpoint`` is the
+    last path segment of its URL and ``description`` what another agent reads to decide whether
+    to call; ``lane`` names the lane it writes when that is not the worker's own
+    (docs/lanes.md)."""
+    return lambda handler: A2AEndpoint(
+        handler, endpoint=endpoint, description=description, lane=lane, **options
+    )
 
 
 class A2AEndpoint:
@@ -89,7 +93,7 @@ class A2AEndpoint:
         inbox: Policy | Mapping[str, Policy] | None = None,
         debounce: timedelta | Mapping[str, timedelta] | None = None,
         storage: AgentDBStorage | None = None,
-        version: str = "1.0.0",
+        version: str | None = None,
         lane: str | None = None,
     ) -> None:
         if not endpoint or "/" in endpoint:
@@ -103,7 +107,7 @@ class A2AEndpoint:
             policy=dict(inbox) if isinstance(inbox, Mapping) else inbox,
             debounce=_seconds(debounce),
         )
-        self.version = version
+        self.version = version or os.environ.get("LIVEKIT_AGENT_VERSION") or "1.0.0"
         self.lane = lane
         self._storage = storage
         self._service: A2AService | None = None
@@ -113,17 +117,9 @@ class A2AEndpoint:
 
     # -- binding to a server --
 
-    def bind(
-        self,
-        *,
-        storage: AgentDBStorage | None,
-        agent_name: Callable[[], str] | str,
-        credentials: Credentials | None,
-        url_base: Callable[[], str | None] | None = None,
-        lane: Callable[[], str] | None = None,
-    ) -> A2AService:
-        """Attach the endpoint to a server's storage, agent name and credentials;
-        ``lane`` when the door writes a lane other than the worker's."""
+    def bind(self, *, storage: AgentDBStorage | None, config: ServerConfig) -> A2AService:
+        """Attach the endpoint to a server's storage and options: its agent name (the lane,
+        unless the door writes its own), credentials and URL."""
         chosen = self._storage or storage
         if chosen is None:
             raise ValueError(
@@ -131,16 +127,21 @@ class A2AEndpoint:
                 "or a2a_session(storage=...)"
             )
 
-        name_fn = (lambda: agent_name) if isinstance(agent_name, str) else agent_name
         own = self.lane
         self._service = A2AService(
             self,
             storage=chosen,
-            agent_name=name_fn,
-            credentials=credentials,
-            lane=lane or ((lambda: own) if own else None),
+            agent_name=lambda: config.agent_name,
+            credentials=(
+                Credentials(config.api_key, config.api_secret)
+                if config.api_key and config.api_secret
+                else None
+            ),
+            lane=(lambda: own) if own else None,
         )
-        self._url_base = url_base
+        self._url_base = lambda: endpoint_url_base(
+            config.ws_url, config.agent_name, config.deployment
+        )
         return self._service
 
     @property

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
@@ -13,8 +15,12 @@ from .._generated.storage import EventRow
 from .._generated.storage_run import TaskPage, TaskRow
 from .._generated.storage_threads import ThreadInfo
 from ..llm import ChatContext
+from ..log import logger
 from .agentdb import AgentDBStorage
-from .protocol import history_of
+from .protocol import StorageError, history_of
+
+if TYPE_CHECKING:
+    from ..job import JobContext
 
 
 @dataclass
@@ -151,7 +157,37 @@ class Thread:
         return await self._storage.open(self._id)
 
 
+@dataclass(frozen=True)
+class CallThreadEntrypoint:
+    """The ``rtc_session`` entrypoint of a server with storage: the call's thread is resolved
+    first, the ``thread_id`` of the dispatch metadata, else a new thread, as ``ctx.thread``.
+    A storage failure is logged and the call runs with no thread."""
+
+    entrypoint: Callable[[JobContext], Awaitable[None]]
+    storage: AgentDBStorage
+
+    async def __call__(self, ctx: JobContext) -> None:
+        if not self.storage.holder:
+            self.storage.holder = ctx.worker_id
+        try:
+            metadata = json.loads(ctx.job.metadata or "{}")
+        except ValueError:
+            metadata = None
+        thread_id = metadata.get("thread_id") if isinstance(metadata, dict) else None
+        try:
+            if not isinstance(thread_id, str) or not thread_id:
+                thread_id = (await resolve_thread(self.storage.threads)).id
+            ctx._thread = Thread(self.storage, thread_id, agent_name=ctx.job.agent_name)
+        except StorageError as e:
+            logger.warning(
+                "the call's thread could not be resolved; the call is kept in memory",
+                extra={"threadId": thread_id, "error": str(e)},
+            )
+        await self.entrypoint(ctx)
+
+
 __all__ = [
+    "CallThreadEntrypoint",
     "ResolvedThread",
     "Thread",
     "resolve_thread",

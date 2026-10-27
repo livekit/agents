@@ -107,6 +107,13 @@ pub struct RunningJobInfo {
     pub token: String,
     pub worker_id: String,
     pub fake_job: bool,
+    /// The dispatch timeline in unix seconds, 0.0 for a job no dispatch offered (simulated):
+    /// the `AvailabilityRequest` arrived,
+    pub received_at: f64,
+    /// the request was accepted,
+    pub accepted_at: f64,
+    /// and the `JobAssignment` arrived.
+    pub assigned_at: f64,
 }
 
 /// Acceptance returns before assignment and launch; the worker owns the assignment deadline.

@@ -10,8 +10,8 @@ use livekit_protocol as proto;
 use prost::Message as _;
 
 use crate::{
-    AcceptArguments, EnvOption, LOG, RunningJobInfo, ServerType, WORKER_PROTOCOL_VERSION,
-    WorkerPermissions,
+    AcceptArguments, EnvOption, JobDecision, JobRequest, LOG, RunningJobInfo, ServerType,
+    WORKER_PROTOCOL_VERSION, WorkerPermissions,
 };
 
 /// `load_threshold`'s default, to which a hosted (Cloud) worker is held.
@@ -302,6 +302,28 @@ pub fn simulated_job(
         token,
         worker_id: worker_id.to_owned(),
         fake_job,
+        received_at: 0.0,
+        accepted_at: 0.0,
+        assigned_at: 0.0,
+    })
+}
+
+// --------------------------------------------------------------------- job requests
+
+/// The answer to a job request when the host's `on_request` is not needed: a server with no
+/// voice door rejects it (without terminating, so another worker may take it) and one whose door
+/// has no `on_request` accepts it as `JobRequest.accept()` does. `None`: ask the host.
+pub fn own_decision(req: &JobRequest, has_rtc: bool, has_on_request: bool) -> Option<JobDecision> {
+    if !has_rtc {
+        log::warn!(target: LOG, job_id = req.job.id.as_str(), room = req.room_name();
+            "a job reached a server with no rtc_session; rejecting it");
+        return Some(JobDecision::Reject { terminate: false });
+    }
+    (!has_on_request).then(|| {
+        JobDecision::Accept(AcceptArguments {
+            identity: format!("agent-{}", req.job.id),
+            ..AcceptArguments::default()
+        })
     })
 }
 
@@ -310,14 +332,15 @@ pub fn decode_room(bytes: &[u8]) -> Result<proto::Room, String> {
     proto::Room::decode(bytes).map_err(|e| format!("room_info: {e}"))
 }
 
-// --------------------------------------------------------------------- the health listener
+// --------------------------------------------------------------------- the listeners
 
-/// What the health listener reads, beside the server's own state: the host's inference process
-/// and job count.
+/// What the health and metrics listeners read from the host, beside the server's own state.
 #[async_trait::async_trait]
 pub trait HealthProbe: Send + Sync {
     /// `(inference process alive or absent, active jobs)`.
     async fn health(&self) -> (bool, usize);
+    /// The Prometheus exposition, `(content type, body)`; `None` when it cannot be rendered.
+    async fn metrics(&self) -> Option<(String, String)>;
 }
 
 /// The server state the listener and `/worker` read.
@@ -357,12 +380,16 @@ pub fn worker_info_json(info: &proto::WorkerInfo) -> String {
 }
 
 /// One response: status line, content type, body.
-type Response = (u16, &'static str, &'static str, String);
+type Response = (u16, &'static str, String, String);
 
 const TEXT: &str = "text/plain; charset=utf-8";
 
+fn text(code: u16, reason: &'static str, body: &str) -> Response {
+    (code, reason, TEXT.into(), body.into())
+}
+
 /// `/` answers whether the worker is serving, `/worker` what it is.
-async fn route(
+async fn health_route(
     method: &str,
     path: &str,
     settings: &ServerSettings,
@@ -372,20 +399,20 @@ async fn route(
 ) -> Response {
     let path = path.split('?').next().unwrap_or_default();
     if path != "/" && path != "/worker" {
-        return (404, "Not Found", TEXT, "404: Not Found".into());
+        return text(404, "Not Found", "404: Not Found");
     }
     if method != "GET" && method != "HEAD" {
-        return (405, "Method Not Allowed", TEXT, "405: Method Not Allowed".into());
+        return text(405, "Method Not Allowed", "405: Method Not Allowed");
     }
     let (inference_alive, active_jobs) = probe.health().await;
     if path == "/" {
         if !inference_alive {
-            return (503, "Service Unavailable", TEXT, "inference process not running".into());
+            return text(503, "Service Unavailable", "inference process not running");
         }
         if status.connection_failed.load(Ordering::Relaxed) {
-            return (503, "Service Unavailable", TEXT, "failed to connect to livekit".into());
+            return text(503, "Service Unavailable", "failed to connect to livekit");
         }
-        return (200, "OK", TEXT, "OK".into());
+        return text(200, "OK", "OK");
     }
     let info = proto::WorkerInfo {
         worker_type: match server_type {
@@ -399,10 +426,24 @@ async fn route(
         worker_load: status.load(),
         protocol_version: WORKER_PROTOCOL_VERSION as i32,
     };
-    (200, "OK", "application/json", worker_info_json(&info))
+    (200, "OK", "application/json".into(), worker_info_json(&info))
 }
 
-/// Serves `listener` until dropped: one request per connection, then closed.
+/// `/metrics`: the host's Prometheus exposition.
+async fn metrics_route(method: &str, path: &str, probe: &dyn HealthProbe) -> Response {
+    if path.split('?').next().unwrap_or_default() != "/metrics" {
+        return text(404, "Not Found", "404: Not Found");
+    }
+    if method != "GET" && method != "HEAD" {
+        return text(405, "Method Not Allowed", "405: Method Not Allowed");
+    }
+    match probe.metrics().await {
+        Some((content_type, body)) => (200, "OK", content_type, body),
+        None => text(500, "Internal Server Error", "metrics unavailable"),
+    }
+}
+
+/// The health listener on `listener` until dropped.
 pub async fn serve_health(
     listener: tokio::net::TcpListener,
     settings: Arc<ServerSettings>,
@@ -410,9 +451,33 @@ pub async fn serve_health(
     status: Arc<ServerStatus>,
     probe: Arc<dyn HealthProbe>,
 ) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    while let Ok((mut socket, _)) = listener.accept().await {
+    serve(listener, move |method, path| {
         let (settings, status, probe) = (settings.clone(), status.clone(), probe.clone());
+        async move { health_route(&method, &path, &settings, server_type, &status, &*probe).await }
+    })
+    .await
+}
+
+/// The Prometheus listener (`prometheus_port`) on `listener` until dropped.
+pub async fn serve_metrics(listener: tokio::net::TcpListener, probe: Arc<dyn HealthProbe>) {
+    serve(listener, move |method, path| {
+        let probe = probe.clone();
+        async move { metrics_route(&method, &path, &*probe).await }
+    })
+    .await
+}
+
+/// Serves `listener` until dropped: one request per connection, answered by
+/// `respond(method, path)`, then closed.
+async fn serve<F, R>(listener: tokio::net::TcpListener, respond: F)
+where
+    F: Fn(String, String) -> R + Send + Sync + 'static,
+    R: std::future::Future<Output = Response> + Send + 'static,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let respond = Arc::new(respond);
+    while let Ok((mut socket, _)) = listener.accept().await {
+        let respond = respond.clone();
         tokio::spawn(async move {
             let mut buf = Vec::with_capacity(1024);
             let mut chunk = [0u8; 1024];
@@ -435,8 +500,7 @@ pub async fn serve_health(
                     Err(_) => return,
                 }
             };
-            let (code, reason, content_type, body) =
-                route(&method, &path, &settings, server_type, &status, &*probe).await;
+            let (code, reason, content_type, body) = respond(method.clone(), path).await;
             let head = format!(
                 "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
                  Connection: close\r\n\r\n",
@@ -451,9 +515,8 @@ pub async fn serve_health(
     }
 }
 
-/// The health listener's socket on `host:port` (`host` empty: every interface) and the port it
-/// got.
-pub async fn bind_health(host: &str, port: u16) -> std::io::Result<(tokio::net::TcpListener, u16)> {
+/// A listener's socket on `host:port` (`host` empty: every interface) and the port it got.
+pub async fn bind_listener(host: &str, port: u16) -> std::io::Result<(tokio::net::TcpListener, u16)> {
     let host = if host.is_empty() { "0.0.0.0" } else { host };
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     let port = listener.local_addr()?.port();
@@ -510,6 +573,29 @@ mod tests {
         assert!(s.check_registration(true).unwrap_err().contains("agent_name"));
     }
 
+    struct Probe;
+
+    #[async_trait::async_trait]
+    impl HealthProbe for Probe {
+        async fn health(&self) -> (bool, usize) {
+            (true, 0)
+        }
+
+        async fn metrics(&self) -> Option<(String, String)> {
+            Some(("text/plain; version=0.0.4".into(), "lk_agents_worker_load 0.5\n".into()))
+        }
+    }
+
+    // Catches: the metrics listener answering another path, or losing the host's content type.
+    #[tokio::test]
+    async fn the_metrics_listener_serves_the_host_exposition_at_metrics() {
+        let (code, _, content_type, body) = metrics_route("GET", "/metrics", &Probe).await;
+        assert_eq!((code, content_type.as_str()), (200, "text/plain; version=0.0.4"));
+        assert_eq!(body, "lk_agents_worker_load 0.5\n");
+        assert_eq!(metrics_route("GET", "/", &Probe).await.0, 404);
+        assert_eq!(metrics_route("POST", "/metrics", &Probe).await.0, 405);
+    }
+
     // Catches: `/worker` printing zero fields, out of order, or without the protobuf's indent.
     #[test]
     fn the_worker_record_prints_as_message_to_json() {
@@ -525,6 +611,20 @@ mod tests {
             worker_info_json(&info),
             "{\n  \"worker_type\": \"JT_ROOM\",\n  \"active_jobs\": 1.0,\n  \"sdk_version\": \"2.0.0\",\n  \"protocol_version\": 1\n}"
         );
+    }
+
+    // Catches: a text-only server launching a process for a job, a default accept that differs
+    // from `JobRequest.accept()`, or the host skipped when it has an `on_request`.
+    #[test]
+    fn a_server_answers_a_job_request_alone_unless_its_door_has_on_request() {
+        let job = proto::Job { id: "AJ_1".into(), ..Default::default() };
+        let req = JobRequest { job: crate::protocol::job_info(&job), resuming: false };
+        assert_eq!(own_decision(&req, false, true), Some(JobDecision::Reject { terminate: false }));
+        let Some(JobDecision::Accept(args)) = own_decision(&req, true, false) else {
+            panic!("a door without on_request accepts")
+        };
+        assert_eq!((args.identity.as_str(), args.name.as_str()), ("agent-AJ_1", ""));
+        assert_eq!(own_decision(&req, true, true), None);
     }
 
     // Catches: a fake job without credentials refused, a real one without its room accepted, or the

@@ -6,10 +6,10 @@
 //!
 //! | kind              | args                                   | result                      |
 //! |-------------------|----------------------------------------|-----------------------------|
-//! | `"job_request"`   | a `JobRequest` dict                    | a decision dict             |
+//! | `"job_request"`   | a `JobRequest` dict, for `on_request`  | a decision dict             |
 //! | `"launch_job"`    | a `RunningJobInfo` dict                | the LiveKit job id          |
 //! | `"terminate_job"` | `{"job_id"}`                           | ignored                     |
-//! | `"load"`          | `{}`                                   | a float, or `None` for CPU  |
+//! | `"load"`          | `{}`, for a `load_fnc`                 | a float                     |
 //! | `"endpoint"`      | the preamble fields and an `EndpointStream` | ignored; serve to completion |
 //!
 //! Python owns process supervision, signals and the ASGI bridge; Rust owns every socket.
@@ -479,6 +479,9 @@ struct PyWorkerHost {
     locals: TaskLocals,
     /// The user gave a `load_fnc` the worker may call (not on Cloud).
     user_load: bool,
+    /// The server has a voice door, and that door an `on_request`.
+    has_rtc: bool,
+    has_on_request: bool,
 }
 
 impl PyWorkerHost {
@@ -503,6 +506,9 @@ impl PyWorkerHost {
 #[async_trait]
 impl WorkerHost for PyWorkerHost {
     async fn on_job_request(&self, req: crate::JobRequest) -> JobDecision {
+        if let Some(decision) = server::own_decision(&req, self.has_rtc, self.has_on_request) {
+            return decision;
+        }
         let job_id = req.job.id.clone();
         // `resuming` is set when a call migrates off a draining worker.
         let res = self.open("job_request", |py| Ok((&req).into_pyobject(py)?.into_any())).await;
@@ -796,6 +802,7 @@ struct Life {
     conn: Option<tokio::task::JoinHandle<()>>,
     load: Option<tokio::task::AbortHandle>,
     health: Option<tokio::task::AbortHandle>,
+    metrics: Option<tokio::task::AbortHandle>,
 }
 
 /// How a run ended: `Ok` once closed, the connection's error when it failed.
@@ -811,6 +818,11 @@ impl server::HealthProbe for HostHealth {
             Ok(v) => Python::attach(|py| v.extract::<(bool, usize)>(py)).unwrap_or((true, 0)),
             Err(_) => (true, 0),
         }
+    }
+
+    async fn metrics(&self) -> Option<(String, String)> {
+        let v = self.0.open("metrics", |py| Ok(PyDict::new(py).into_any())).await.ok()?;
+        Python::attach(|py| v.extract::<(String, String)>(py).ok())
     }
 }
 
@@ -835,6 +847,8 @@ pub struct PyServer {
     outcome: Arc<Outcome>,
     /// The registered worker, for the job statuses the host reports.
     worker: Arc<std::sync::Mutex<Option<WorkerHandle>>>,
+    /// Set by `run()`: only a voice door runs jobs.
+    has_rtc: Arc<AtomicBool>,
 }
 
 impl PyServer {
@@ -860,13 +874,21 @@ impl PyServer {
         Ok(PyServer {
             settings: config.settings.clone(),
             running: config.running.clone(),
-            host: PyWorkerHost { obj: Arc::new(host), locals, user_load: true },
+            host: PyWorkerHost {
+                obj: Arc::new(host),
+                locals,
+                user_load: true,
+                has_rtc: false,
+                has_on_request: false,
+            },
+            has_rtc: Arc::default(),
             life: Arc::new(tokio::sync::Mutex::new(Life {
                 phase: Phase::Idle,
                 worker: None,
                 conn: None,
                 load: None,
                 health: None,
+                metrics: None,
             })),
             status: Arc::default(),
             worker_id: Arc::new(std::sync::Mutex::new("unregistered".into())),
@@ -895,8 +917,10 @@ impl PyServer {
 
     /// Start the job processes (the host's `start`), the health listener and the load loop,
     /// register unless `unregistered`, and serve until `aclose()`; raises when the connection fails
-    /// for good. `routes` is the endpoint manifest; `publisher` the voice door's job type.
-    #[pyo3(signature = (*, devmode, unregistered, has_rtc, has_text_doors, publisher, routes, has_load_fnc))]
+    /// for good. `routes` is the endpoint manifest; `publisher` the voice door's job type. Job
+    /// processes start only for a voice door; the host is asked about a job request only when
+    /// that door has an `on_request` (`server::own_decision`).
+    #[pyo3(signature = (*, devmode, unregistered, has_rtc, has_text_doors, publisher, routes, has_load_fnc, has_on_request))]
     #[allow(clippy::too_many_arguments)]
     fn run<'py>(
         &self,
@@ -908,6 +932,7 @@ impl PyServer {
         publisher: bool,
         routes: &Bound<'py, PyList>,
         has_load_fnc: bool,
+        has_on_request: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let endpoints =
@@ -918,6 +943,12 @@ impl PyServer {
         let (status, worker_id, http_port) =
             (self.status.clone(), self.worker_id.clone(), self.http_port.clone());
         let mut host = self.host.clone();
+        host.has_rtc = has_rtc;
+        host.has_on_request = has_on_request;
+        self.has_rtc.store(has_rtc, Ordering::Release);
+        if !has_rtc {
+            s.num_idle_processes = EnvOption::Fixed(0);
+        }
         let reporting = self.worker.clone();
         let server_type = if publisher { ServerType::Publisher } else { ServerType::Room };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -957,26 +988,27 @@ impl PyServer {
             host.open("start", move |py| {
                 let d = PyDict::new(py);
                 d.set_item("devmode", devmode)?;
-                d.set_item("text_only", !has_rtc)?;
+                d.set_item("job_processes", has_rtc)?;
                 d.set_item("env", start.child_env().into_py_dict(py)?)?;
-                d.set_item("num_idle_processes", start.num_idle_processes.get(devmode))?;
                 d.set_item("job_executor_type", &start.job_executor_type)?;
                 d.set_item("multiprocessing_context", &start.multiprocessing_context)?;
-                d.set_item("initialize_process_timeout", start.initialize_process_timeout)?;
-                d.set_item("shutdown_process_timeout", start.shutdown_process_timeout)?;
-                d.set_item("session_end_timeout", start.session_end_timeout)?;
-                d.set_item("job_memory_warn_mb", start.job_memory_warn_mb)?;
-                d.set_item("job_memory_limit_mb", start.job_memory_limit_mb)?;
-                d.set_item("http_proxy", &start.http_proxy)?;
-                d.set_item("host", &start.host)?;
-                d.set_item("prometheus_port", start.prometheus_port)?;
+                // `ProcPool`'s keyword arguments
+                let pool = PyDict::new(py);
+                pool.set_item("num_idle_processes", start.num_idle_processes.get(devmode))?;
+                pool.set_item("initialize_timeout", start.initialize_process_timeout)?;
+                pool.set_item("close_timeout", start.shutdown_process_timeout)?;
+                pool.set_item("session_end_timeout", start.session_end_timeout)?;
+                pool.set_item("memory_warn_mb", start.job_memory_warn_mb)?;
+                pool.set_item("memory_limit_mb", start.job_memory_limit_mb)?;
+                pool.set_item("http_proxy", start.http_proxy.as_deref().filter(|p| !p.is_empty()))?;
+                d.set_item("pool", pool)?;
                 Ok(d.into_any())
             })
             .await
             .map_err(lk_agents_abi::python::raise_host_error)?;
             let settings = Arc::new(s.clone());
             if !s.simulation {
-                let (listener, port) = server::bind_health(&s.host, s.port.get(devmode))
+                let (listener, port) = server::bind_listener(&s.host, s.port.get(devmode))
                     .await
                     .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
                 http_port.store(port, Ordering::Release);
@@ -985,6 +1017,14 @@ impl PyServer {
                 let serve =
                     server::serve_health(listener, settings.clone(), server_type, status.clone(), probe);
                 guard.health = Some(tokio::spawn(serve).abort_handle());
+            }
+            if let Some(port) = s.prometheus_port {
+                let (listener, port) = server::bind_listener(&s.host, port)
+                    .await
+                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                log::info!(target: LOG, "Prometheus metrics exposed at http://{}:{port}/metrics", s.host);
+                let serve = server::serve_metrics(listener, Arc::new(HostHealth(host.clone())));
+                guard.metrics = Some(tokio::spawn(serve).abort_handle());
             }
             if !unregistered {
                 let worker_url = std::env::var("LIVEKIT_WORKER_URL").ok().filter(|u| !u.is_empty());
@@ -1126,8 +1166,8 @@ impl PyServer {
                 load.abort();
             }
             let closed = host.open("close", empty).await;
-            if let Some(health) = guard.health.take() {
-                health.abort();
+            for listener in [guard.health.take(), guard.metrics.take()].into_iter().flatten() {
+                listener.abort();
             }
             running.store(false, Ordering::Release);
             outcome.send_if_modified(|o| o.is_none().then(|| *o = Some(Ok(()))).is_some());
@@ -1161,6 +1201,9 @@ impl PyServer {
         token: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
+        if !self.has_rtc.load(Ordering::Acquire) {
+            return Err(PyRuntimeError::new_err("a server with no rtc_session runs no job"));
+        }
         let room_info = room_info.map(|b| server::decode_room(&b)).transpose().map_err(PyValueError::new_err)?;
         let info = server::simulated_job(
             &self.settings(),

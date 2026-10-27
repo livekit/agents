@@ -2,6 +2,7 @@ import os
 
 import prometheus_client
 import psutil
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, multiprocess
 
 from .. import utils
 
@@ -61,3 +62,13 @@ def job_ended() -> None:
 
 def proc_initialized(*, time_elapsed: float) -> None:
     PROC_INITIALIZE_TIME.labels(nodename=utils.nodename()).observe(time_elapsed)
+
+
+def exposition() -> tuple[str, str]:
+    """The Prometheus exposition the core's metrics listener serves, ``(content type, body)``:
+    every process's metrics in multiprocess mode (``PROMETHEUS_MULTIPROC_DIR``), else this one's."""
+    registry = prometheus_client.REGISTRY
+    if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+        registry = prometheus_client.CollectorRegistry(auto_describe=True)
+        multiprocess.MultiProcessCollector(registry)  # type: ignore[no-untyped-call]
+    return CONTENT_TYPE_LATEST, generate_latest(registry).decode()

@@ -16,16 +16,16 @@ class InferenceProcExecutor(SupervisedProc):
         self,
         *,
         runners: _RunnersDict,
-        initialize_timeout: float,
-        close_timeout: float,
-        memory_warn_mb: float,
-        memory_limit_mb: float,
-        ping_interval: float,
-        ping_timeout: float,
-        high_ping_threshold: float,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
         http_proxy: str | None,
+        initialize_timeout: float = 5 * 60,
+        close_timeout: float = 5,
+        memory_warn_mb: float = 2000,
+        memory_limit_mb: float = 0,  # no limit
+        ping_interval: float = 5,
+        ping_timeout: float = 60,
+        high_ping_threshold: float = 2.5,
     ) -> None:
         super().__init__(
             initialize_timeout=initialize_timeout,

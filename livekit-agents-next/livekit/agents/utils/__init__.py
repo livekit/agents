@@ -1,7 +1,7 @@
 from livekit import rtc
 
 from .. import _core
-from . import aio, audio, codecs, http_context, http_server, images
+from . import aio, audio, codecs, http_context, images
 from .audio import AudioArrayBuffer, AudioBuffer, combine_frames, merge_frames
 from .bounded_dict import BoundedDict
 from .connection_pool import ConnectionPool
@@ -23,7 +23,6 @@ __all__ = [
     "nodename",
     "shortuuid",
     "http_context",
-    "http_server",
     "ExpFilter",
     "MovingAverage",
     "BoundedDict",

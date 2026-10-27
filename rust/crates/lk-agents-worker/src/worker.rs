@@ -15,7 +15,7 @@ use crate::{JobDecision, JobRequest, RunningJobInfo};
 use async_trait::async_trait;
 use futures_util::future::{AbortHandle, Abortable};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
-use lk_agents_abi::{Clock, RealClock};
+use lk_agents_abi::{Clock, RealClock, WallAnchor};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
@@ -449,7 +449,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
             Self {
                 transport: Arc::new(transport),
                 cfg,
-                state,
+                state: state.with_wall(WallAnchor::of(&clock)),
                 host: Arc::new(host),
                 clock,
                 default_load: DefaultLoadCalc::new(),

@@ -1,6 +1,5 @@
 from . import (
     gen_ai,
-    http_server,
     loop_monitor,
     metrics,
     otel_metrics,
@@ -26,7 +25,6 @@ __all__ = [
     "metrics",
     "otel_metrics",
     "trace_types",
-    "http_server",
     "loop_monitor",
     "session_context",
     "rpc",
