@@ -339,7 +339,16 @@ class AvatarSession(BaseAvatarSession):
                 error.__cause__ = e
             self._launch_error = error
             # Nobody awaits this task, so log here; wait_until_ready() re-raises it.
-            logger.error("avatar failed to start", exc_info=error)
+            # The message can echo the API's response, so log only its fields.
+            logger.error(
+                "avatar failed to start",
+                extra={
+                    "error": type(e).__name__,
+                    "type": error.type.value if error.type else None,
+                    "status": error.status,
+                    "request_id": error.request_id,
+                },
+            )
             await self.aclose()
             await self._discard_partial_start()
 

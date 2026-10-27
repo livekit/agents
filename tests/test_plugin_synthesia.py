@@ -1522,6 +1522,24 @@ class TestAvatarSession:
             await session.swap_avatar("default")
         await session.aclose()
 
+    async def test_background_start_failure_log_omits_the_message(
+        self, api_recorder, instant_join, caplog
+    ):
+        api_recorder.error = SynthesiaError(
+            "echoed: lk-token-secret", type=ErrorType.AUTH, status=401, request_id="req_1"
+        )
+        session = self._session()
+        with caplog.at_level(logging.ERROR, logger="livekit.plugins.synthesia"):
+            await self._start_in_background(session, self._FakeRoom())
+            with pytest.raises(SynthesiaError, match="echoed"):
+                await session.wait_until_ready()
+
+        [record] = [r for r in caplog.records if r.getMessage() == "avatar failed to start"]
+        assert "lk-token-secret" not in caplog.text
+        assert record.exc_info is None
+        assert (record.type, record.status, record.request_id) == ("auth", 401, "req_1")
+        await session.aclose()
+
     async def test_background_start_wraps_unexpected_errors(self, api_recorder, instant_join):
         api_recorder.error = RuntimeError("socket closed")
         room = self._FakeRoom()
