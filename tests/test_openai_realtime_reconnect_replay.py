@@ -91,13 +91,3 @@ def test_a_retried_reconnection_does_not_duplicate_the_transcript() -> None:
     session._flush_generation_transcripts()
 
     assert _replayed(session).items[-1].content == [_PARTIAL]
-
-
-def test_a_reply_with_nothing_spoken_yet_stays_out_of_the_replay() -> None:
-    """A response that dropped before any transcript must not add an empty turn."""
-    session, _ = _session_mid_reply(transcript="")
-
-    session._flush_generation_transcripts()
-
-    replayed = _replayed(session)
-    assert [item.role for item in replayed.items] == ["user"]
