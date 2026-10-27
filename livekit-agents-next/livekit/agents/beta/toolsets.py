@@ -24,7 +24,7 @@ from ..llm.tool_context import (
     Toolset,
     function_tool,
 )
-from ..llm.utils import function_arguments_to_pydantic_model, prepare_function_arguments
+from ..llm.utils import prepare_function_arguments, tool_schema
 from ..types import NOT_GIVEN, NotGivenOr
 from ..voice.events import RunContext
 
@@ -138,11 +138,16 @@ class ToolSearchToolset(Toolset):
                     for tool in tool_ctx.flatten():
                         _index_tool(tool, source)
                 elif isinstance(tool, (FunctionTool, RawFunctionTool)):
+                    _, description, schema = tool_schema(tool)
+                    properties = schema.get("properties", {})
                     self._search_items.append(
                         SearchItem(
                             name=tool.id,
-                            description=_get_tool_description(tool),
-                            parameters=_get_tool_params(tool),
+                            description=description,
+                            parameters={
+                                n: p.get("description", "") if isinstance(p, dict) else ""
+                                for n, p in properties.items()
+                            },
                             source=source,
                         )
                     )
@@ -186,24 +191,6 @@ class ToolSearchToolset(Toolset):
         result = self._strategy.cleanup()
         if inspect.isawaitable(result):
             await result
-
-
-def _get_tool_description(tool: FunctionTool | RawFunctionTool) -> str:
-    if isinstance(tool, FunctionTool):
-        return tool.info.description or ""
-    return str(tool.info.raw_schema.get("description", ""))
-
-
-def _get_tool_params(tool: FunctionTool | RawFunctionTool) -> dict[str, str]:
-    if isinstance(tool, FunctionTool):
-        model = function_arguments_to_pydantic_model(tool)
-        return {name: field.description or "" for name, field in model.model_fields.items()}
-
-    props = tool.info.raw_schema.get("parameters", {}).get("properties", {})
-    return {
-        name: prop.get("description", "") if isinstance(prop, dict) else ""
-        for name, prop in props.items()
-    }
 
 
 def _document(item: SearchItem) -> _core.SearchDocument:
@@ -345,8 +332,10 @@ class ToolProxyToolset(ToolSearchToolset):
         tools = await self._search_tools(query)
         _core.tool_search_loaded(query, len(tools))
 
-        tool_ctx = ToolContext(tools)
-        schemas = [_build_tool_schema(tool) for tool in tool_ctx.function_tools.values()]
+        schemas = []
+        for tool in ToolContext(tools).function_tools.values():
+            name, description, parameters = tool_schema(tool)
+            schemas.append({"name": name, "description": description, "parameters": parameters})
         return "\n".join(json.dumps(schema) for schema in schemas)
 
     async def _handle_call(self, ctx: RunContext[Any], raw_arguments: dict[str, object]) -> Any:
@@ -363,22 +352,3 @@ class ToolProxyToolset(ToolSearchToolset):
             call_ctx=ctx,
         )
         return await fnc_tool(*fnc_args, **fnc_kwargs)
-
-
-def _build_tool_schema(tool: FunctionTool | RawFunctionTool) -> dict[str, Any]:
-    """Build a JSON-serializable tool schema with full parameter type info."""
-    if isinstance(tool, FunctionTool):
-        model = function_arguments_to_pydantic_model(tool)
-        return {
-            "name": tool.info.name,
-            "description": tool.info.description or "",
-            "parameters": model.model_json_schema(),
-        }
-
-    # RawFunctionTool — use raw_schema directly
-    raw = tool.info.raw_schema
-    return {
-        "name": raw.get("name", tool.id),
-        "description": raw.get("description", ""),
-        "parameters": raw.get("parameters", {}),
-    }

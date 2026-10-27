@@ -119,50 +119,31 @@ def serialize_image(image: ImageContent, *, use_cache: bool = True) -> Serialize
     return serialized
 
 
+def tool_schema(tool: FunctionTool | RawFunctionTool) -> tuple[str, str, dict[str, Any]]:
+    """A tool's name, description and parameters' JSON schema: what every form of its schema
+    (the providers', the tool search's) is built from."""
+    if isinstance(tool, RawFunctionTool):
+        raw = tool.info.raw_schema
+        return raw["name"], raw.get("description", ""), raw.get("parameters", {})
+    parameters = function_arguments_to_pydantic_model(tool).model_json_schema()
+    return tool.info.name, tool.info.description or "", parameters
+
+
 def build_legacy_openai_schema(
     function_tool: FunctionTool, *, internally_tagged: bool = False
 ) -> dict[str, Any]:
     """non-strict mode tool description
     see https://serde.rs/enum-representations.html for the internally tagged representation"""
-    model = function_arguments_to_pydantic_model(function_tool)
-    info = function_tool.info
-    schema = model.model_json_schema()
-
-    if internally_tagged:
-        return {
-            "name": info.name,
-            "description": info.description or "",
-            "parameters": schema,
-            "type": "function",
-        }
-    else:
-        return {
-            "type": "function",
-            "function": {
-                "name": info.name,
-                "description": info.description or "",
-                "parameters": schema,
-            },
-        }
+    return _core.build_legacy_openai_schema(  # type: ignore[no-any-return]
+        *tool_schema(function_tool), internally_tagged=internally_tagged
+    )
 
 
 def build_strict_openai_schema(
     function_tool: FunctionTool,
 ) -> dict[str, Any]:
     """strict mode tool description"""
-    model = function_arguments_to_pydantic_model(function_tool)
-    info = function_tool.info
-    schema = _core.to_strict_json_schema(model.model_json_schema(), null_sentinel_for_defaults=True)
-
-    return {
-        "type": "function",
-        "function": {
-            "name": info.name,
-            "strict": True,
-            "description": info.description or "",
-            "parameters": schema,
-        },
-    }
+    return _core.build_strict_openai_schema(*tool_schema(function_tool))  # type: ignore[no-any-return]
 
 
 ResponseFormatT = TypeVar("ResponseFormatT", default=None)
@@ -180,13 +161,7 @@ def to_response_format_param(
     response_format: type | dict[str, Any],
 ) -> tuple[str, type[BaseModel] | TypeAdapter[Any]]:
     if isinstance(response_format, dict):
-        # TODO(theomonnom): better type validation, copy TypedDict from OpenAI
-        if response_format.get("type", "") not in ("text", "json_schema", "json_object"):
-            raise TypeError("Unsupported response_format type")
-
-        # TODO(long): fix return value
         raise TypeError("Unsupported response_format type")
-        return response_format
 
     # add support for TypedDict
     if is_typed_dict(response_format):
@@ -211,24 +186,12 @@ def to_response_format_param(
 
 def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[str, Any]:
     name, json_schema_type = to_response_format_param(response_format)
-
-    # No null sentinel here: nothing resolves it on the decode side (users validate
-    # the raw payload themselves), so the schema must be exactly what validation
-    # accepts. Defaulted fields stay required; the model produces their values.
     raw = (
         json_schema_type.json_schema()
         if isinstance(json_schema_type, TypeAdapter)
         else json_schema_type.model_json_schema()
     )
-    schema = _core.to_strict_json_schema(raw)
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "schema": schema,
-            "name": name,
-            "strict": True,
-        },
-    }
+    return _core.to_openai_response_format(name, raw)  # type: ignore[no-any-return]
 
 
 def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseModel]:
@@ -500,93 +463,45 @@ def make_function_call_output(
     output: Any,
     exception: BaseException | None,
 ) -> FunctionCallResult:
-    """Create a FunctionCallResult, handling ToolError, StopResponse, and validation."""
+    """Create a FunctionCallResult, handling ToolError, StopResponse, and validation. The
+    output each outcome gives the model is the core's (``_core.tool_call_output_shape``)."""
     from .chat_context import FunctionCallOutput
     from .tool_context import StopResponse, ToolError, ToolResult
 
     if isinstance(output, BaseException):
-        exception = output
-        output = None
-
+        exception, output = output, None
+    raw_output, reply_required = output, True
     if isinstance(exception, ToolError):
-        return FunctionCallResult(
-            fnc_call=fnc_call,
-            fnc_call_out=FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output=exception.message,
-                is_error=True,
-            ),
-            raw_output=output,
-            raw_exception=exception,
-        )
-
-    if isinstance(exception, StopResponse):
-        # StopResponse asks for silence, not for the call to go unanswered
-        return FunctionCallResult(
-            fnc_call=fnc_call,
-            fnc_call_out=FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output="",
-                is_error=False,
-                reply_required=False,
-            ),
-            raw_output=output,
-            raw_exception=exception,
-        )
-
-    if exception is not None:
-        return FunctionCallResult(
-            fnc_call=fnc_call,
-            fnc_call_out=FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output="An internal error occurred",
-                is_error=True,
-            ),
-            raw_output=output,
-            raw_exception=exception,
-        )
-
-    raw_output = output
-    reply_required = True
-    if isinstance(output, ToolResult):
-        reply_required = output.reply_required
-        output = output.output
-    if not _is_valid_function_output(output):
-        # dataclasses and models, alone or in lists and dicts, reach the model as their JSON
-        with contextlib.suppress(PydanticSerializationError):
-            output = to_json(output).decode()
-
-    if not _is_valid_function_output(output):
-        logger.error(
-            f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
-        )
-        return FunctionCallResult(
-            fnc_call=fnc_call,
-            fnc_call_out=FunctionCallOutput(
-                name=fnc_call.name,
-                call_id=fnc_call.call_id,
-                output="the tool returned an invalid output",
-                is_error=True,
-            ),
-            raw_output=raw_output,
-            raw_exception=None,
-        )
-
+        outcome, output = "tool_error", exception.message
+    elif isinstance(exception, StopResponse):
+        outcome = "stop"  # silence, not a call left unanswered
+    elif exception is not None:
+        outcome = "internal"
+    else:
+        if isinstance(output, ToolResult):
+            reply_required, output = output.reply_required, output.output
+        if not _is_valid_function_output(output):
+            # dataclasses and models, alone or in lists and dicts, reach the model as their JSON
+            with contextlib.suppress(PydanticSerializationError):
+                output = to_json(output).decode()
+        outcome = "ok" if _is_valid_function_output(output) else "invalid"
+        if outcome == "invalid":
+            logger.error(
+                f"AI function `{fnc_call.name}` returned an invalid output",
+                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
+            )
+    text, is_error, reply = _core.tool_call_output_shape(outcome)
     return FunctionCallResult(
         fnc_call=fnc_call,
         fnc_call_out=FunctionCallOutput(
             name=fnc_call.name,
             call_id=fnc_call.call_id,
-            output="" if output is None else str(output),
-            is_error=False,
-            reply_required=reply_required,
+            output=text if text is not None else "" if output is None else str(output),
+            is_error=is_error,
+            reply_required=reply and reply_required,
         ),
         raw_output=raw_output,
-        raw_exception=None,
+        raw_exception=exception,
     )
 
 
@@ -609,11 +524,7 @@ async def execute_function_call(
     function_tool = tool_ctx.function_tools.get(tool_call.name)
     if function_tool is None:
         logger.warning(f"unknown AI function `{tool_call.name}`")
-        # Name the available tools so the model can self-correct
-        msg = (
-            f"Unknown function: {tool_call.name} - available tools: "
-            f"{', '.join(tool_ctx.function_tools.keys())}"
-        )
+        msg = _core.unknown_tool_message(tool_call.name, list(tool_ctx.function_tools))
         return FunctionCallResult(
             fnc_call=fnc_call,
             fnc_call_out=FunctionCallOutput(
