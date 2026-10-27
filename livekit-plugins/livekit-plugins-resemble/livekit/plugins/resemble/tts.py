@@ -124,6 +124,9 @@ class TTS(tts.TTS):
             self._ensure_session().ws_connect(
                 RESEMBLE_WEBSOCKET_URL,
                 headers={"Authorization": f"Bearer {self._api_key}"},
+                # the monitor sends its own pings and handles the pongs, so aiohttp
+                # must not answer them itself or they stop counting as activity.
+                autoping=False,
             ),
             timeout,
         )
@@ -336,8 +339,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             input_ended = True
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,

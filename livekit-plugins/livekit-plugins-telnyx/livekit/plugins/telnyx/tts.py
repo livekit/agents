@@ -161,7 +161,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps({"text": ""}))
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async for msg in ws:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
+            while True:
+                msg = await monitor.receive()
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
@@ -191,7 +195,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._tts._session_manager.ensure_session().ws_connect(url, headers=headers),
+                self._tts._session_manager.ensure_session().ws_connect(
+                    url,
+                    headers=headers,
+                    # the monitor sends its own pings and handles the pongs, so aiohttp
+                    # must not answer them itself or they stop counting as activity.
+                    autoping=False,
+                ),
                 self._conn_options.timeout,
             )
             async with ws:
