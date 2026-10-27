@@ -56,6 +56,8 @@ class ProcStartArgs:
 
 
 def proc_main(args: ProcStartArgs) -> None:
+    # a process forked from the forkserver inherits its core: this one is a job process
+    _core.init(_core.Role.Job)
     job_proc = _JobProc(
         args.initialize_process_fnc,
         args.job_entrypoint_fnc,

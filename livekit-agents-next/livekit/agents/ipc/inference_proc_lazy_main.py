@@ -36,6 +36,7 @@ class ProcStartArgs:
 
 
 def proc_main(args: ProcStartArgs) -> None:
+    _core.init(_core.Role.Inference)
     log_to_stdout(args.log_config, {}, {"pid": os.getpid(), "inference": True})
     serve_parent(args.mp_cch, _InferenceProc(args.runners), job=False)
 
