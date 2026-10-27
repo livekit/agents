@@ -355,7 +355,6 @@ pub enum ToolStep {
     Finished {
         speech: SpeechId,
         committed: usize,
-        handoff: bool,
     },
     ToolsetUpdated {
         tools: usize,
@@ -558,7 +557,6 @@ pub enum HandoffStep {
         agent: Option<String>,
         speech: Option<SpeechId>,
         turn: Option<crate::audio_recognition::TurnId>,
-        at_tail: Option<bool>,
     },
     /// A hook's lifetime ended, and how; the turn hook's `Returned{edits}` counts its edits.
     HookFinished {

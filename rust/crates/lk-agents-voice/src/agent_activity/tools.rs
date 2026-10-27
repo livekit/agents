@@ -12,7 +12,7 @@ use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle,
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::{ReplySource, TurnInstructions};
 use crate::tool_executor::{
-    Batch, Delivery, FillerRun, Pending, Rendering, Reply, Running, ToolEnd, ToolExecution,
+    Batch, Delivery, FillerRun, Pending, Reply, Running, ToolEnd, ToolExecution,
     ToolOutcome, answer, default_reply_instructions, emit_ended, pair_for,
 };
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
@@ -399,7 +399,7 @@ impl Driver {
     /// before idle waiters are answered, so a `foreground()` waits behind it.
     pub(crate) fn try_deliver_tool_reply(&mut self, now: Ts, out: &mut Out) {
         let tools = &self.activity.tools;
-        if tools.pending.is_empty() || tools.reply.is_some() || tools.rendering.is_some() {
+        if tools.pending.is_empty() || tools.reply.is_some() {
             return;
         }
         if self.session.closing_past_edge() || self.session.idle.held() || !self.is_idle() {
@@ -410,36 +410,7 @@ impl Driver {
         let last_pending = batch.last_item_id();
         let last_record = self.session.chat_ctx.last_agent_item_id().map(str::to_owned);
         let at_tail = last_pending.is_some() && last_pending == last_record;
-        let call_ids = batch.update_ids();
-        let id = self.activity.hooks.mint();
-        let call = HookCall::RenderToolReply {
-            id,
-            agent: self.activity.agent.clone(),
-            call_ids: call_ids.clone(),
-            at_tail,
-        };
-        let wait = self.hook_wait();
-        if self.issue_hook(now, call, Some(wait), out) {
-            self.activity.tools.rendering = Some(Rendering { hook: id, batch, at_tail });
-        } else {
-            let text = default_reply_instructions(&call_ids, at_tail);
-            self.schedule_tool_reply(now, batch, at_tail, text, out);
-        }
-    }
-
-    pub(crate) fn on_tool_reply_rendered(
-        &mut self,
-        now: Ts,
-        hook: HookId,
-        text: Option<String>,
-        out: &mut Out,
-    ) {
-        let rendering = &mut self.activity.tools.rendering;
-        let Some(Rendering { batch, at_tail, .. }) = rendering.take_if(|r| r.hook == hook) else {
-            return;
-        };
-        let call_ids = batch.update_ids();
-        let text = text.unwrap_or_else(|| default_reply_instructions(&call_ids, at_tail));
+        let text = default_reply_instructions(&batch.update_ids(), at_tail);
         self.schedule_tool_reply(now, batch, at_tail, text, out);
     }
 

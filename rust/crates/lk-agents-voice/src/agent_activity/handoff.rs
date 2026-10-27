@@ -269,7 +269,6 @@ impl Driver {
         self.activity.on_exit.abandon();
         // Nothing pending is delivered, a render in flight is dropped.
         self.activity.tools.pending.clear();
-        self.activity.tools.rendering = None;
         self.abandon_hooks(out);
     }
 

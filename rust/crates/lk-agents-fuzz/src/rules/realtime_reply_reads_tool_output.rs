@@ -79,7 +79,6 @@ fn committed() -> Step {
     Step::Tool(ToolStep::Finished {
         speech: lk_agents_voice::agent_activity::scheduling::SpeechId(1),
         committed: 2,
-        handoff: false,
     })
 }
 

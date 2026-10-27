@@ -411,7 +411,7 @@ plain_enum! {
 plain_enum! {
     /// What the host answers a hook call with. Any answer may go to any hook; the driver decides
     /// what a mismatched one means and the journal says so.
-    HookAnswer { Returned, Failed, TurnInstructions, TurnStop, Rendered, Filler }
+    HookAnswer { Returned, Failed, TurnInstructions, TurnStop, Filler }
 }
 plain_enum! {
     /// One field of the live session configuration, changed alone so a finding names it.

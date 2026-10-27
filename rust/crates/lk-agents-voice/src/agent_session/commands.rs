@@ -67,17 +67,13 @@ pub enum HookOutcome {
     Returned,
     /// `StopResponse` is one of them.
     Turn(Vec<crate::agent::TurnEdit>),
-    Rendered(String),
     Filler {
         text: Option<String>,
         spoke: bool,
     },
-    /// `function_tools_executed` handled: each output's `reply_required`, in order, and the event's
-    /// `handoff_required`, as the handlers left them.
-    FunctionToolsExecuted {
-        reply_required: Vec<bool>,
-        handoff_required: bool,
-    },
+    /// `function_tools_executed` handled: each output's `reply_required`, in order, as the
+    /// handlers left them.
+    FunctionToolsExecuted { reply_required: Vec<bool> },
     /// `on_user_turn_completed` skips the reply.
     Failed,
 }

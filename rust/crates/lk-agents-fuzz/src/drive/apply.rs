@@ -654,7 +654,6 @@ impl Run {
                 HookOutcome::Turn(vec![TurnEdit::UpdateInstructions(text)])
             }
             HookAnswer::TurnStop => HookOutcome::Turn(vec![TurnEdit::StopResponse]),
-            HookAnswer::Rendered => HookOutcome::Rendered(text),
             HookAnswer::Filler => HookOutcome::Filler { text: Some(text), spoke: false },
         };
         self.api.send(Command::HookDone { id, outcome }).is_ok()

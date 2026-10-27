@@ -11,7 +11,6 @@ pub enum HookKind {
     OnEnter,
     OnExit,
     OnUserTurnCompleted,
-    RenderToolReply,
     FillerSource,
     FunctionToolsExecuted,
 }
@@ -22,7 +21,6 @@ impl HookKind {
             HookKind::OnEnter => "on_enter",
             HookKind::OnExit => "on_exit",
             HookKind::OnUserTurnCompleted => "on_user_turn_completed",
-            HookKind::RenderToolReply => "render_tool_reply",
             HookKind::FillerSource => "filler_source",
             HookKind::FunctionToolsExecuted => "function_tools_executed",
         }
@@ -53,13 +51,6 @@ pub enum HookCall {
         new_transcript: String,
         transcript_confidence: f64,
     },
-    /// Unanswered, the reference's defaults are used.
-    RenderToolReply {
-        id: HookId,
-        agent: String,
-        call_ids: Vec<String>,
-        at_tail: bool,
-    },
     FillerSource {
         id: HookId,
         filler: FillerId,
@@ -82,7 +73,6 @@ impl HookCall {
             HookCall::OnEnter { id, .. }
             | HookCall::OnExit { id, .. }
             | HookCall::OnUserTurnCompleted { id, .. }
-            | HookCall::RenderToolReply { id, .. }
             | HookCall::FillerSource { id, .. }
             | HookCall::FunctionToolsExecuted { id, .. } => *id,
         }
@@ -93,7 +83,6 @@ impl HookCall {
             HookCall::OnEnter { .. } => HookKind::OnEnter,
             HookCall::OnExit { .. } => HookKind::OnExit,
             HookCall::OnUserTurnCompleted { .. } => HookKind::OnUserTurnCompleted,
-            HookCall::RenderToolReply { .. } => HookKind::RenderToolReply,
             HookCall::FillerSource { .. } => HookKind::FillerSource,
             HookCall::FunctionToolsExecuted { .. } => HookKind::FunctionToolsExecuted,
         }

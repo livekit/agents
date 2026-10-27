@@ -121,7 +121,6 @@ fn exit_issued(hook: u64) -> Step {
         agent: Some("agent".into()),
         speech: None,
         turn: None,
-        at_tail: None,
     })
 }
 

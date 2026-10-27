@@ -63,7 +63,6 @@ fn on_exit(hook: u64, agent: &str) -> Step {
         agent: Some(agent.into()),
         speech: None,
         turn: None,
-        at_tail: None,
     })
 }
 

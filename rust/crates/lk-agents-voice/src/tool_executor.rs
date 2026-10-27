@@ -34,8 +34,6 @@ pub(crate) struct Tools {
     /// Update pairs batched for the next deferred reply.
     pub(crate) pending: Vec<Pending>,
     pub(crate) reply: Option<Reply>,
-    /// A batch handed to the host for rendering, kept until the answer or the bound.
-    pub(crate) rendering: Option<Rendering>,
     pub(crate) fillers: BTreeMap<FillerId, FillerRun>,
     /// The steps whose `function_tools_executed` handlers the host runs, until they answer.
     pub(crate) handling: BTreeMap<HookId, Handling>,
@@ -213,13 +211,6 @@ impl Batch {
 pub(crate) struct Reply {
     pub(crate) speech: SpeechId,
     pub(crate) update_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct Rendering {
-    pub(crate) hook: HookId,
-    pub(crate) batch: Batch,
-    pub(crate) at_tail: bool,
 }
 
 /// One open `with_filler` scope (`voice/filler_scheduler.py`).
@@ -882,11 +873,11 @@ fn interrupted_tool_output(out: &ToolExecution) -> FunctionCallOutput {
 
 impl Driver {
     /// The host's `function_tools_executed` handlers answered under `hook` (`left`: each output's
-    /// `reply_required` and `handoff_required`), or will not (`None`): the step goes on.
+    /// `reply_required`), or will not (`None`): the step goes on.
     pub(crate) fn on_tools_executed_handled(
         &mut self,
         hook: crate::agent_session::HookId,
-        left: Option<(Vec<bool>, bool)>,
+        left: Option<Vec<bool>>,
         out: &mut Out,
     ) {
         let Some(Handling { speech, step, mut tools, verdict }) =
@@ -894,8 +885,7 @@ impl Driver {
         else {
             return;
         };
-        if let (Some((reply_required, handoff_required)), Some(event)) = (left, &mut tools.executed)
-        {
+        if let (Some(reply_required), Some(event)) = (left, &mut tools.executed) {
             if reply_required.len() == event.function_call_outputs.len() {
                 for (out, required) in event.function_call_outputs.iter_mut().zip(reply_required) {
                     out.reply_required = required;
@@ -905,8 +895,6 @@ impl Driver {
                     "function_tools_executed answered for a different number of outputs",
                 ));
             }
-            // A handler can cancel the handoff, not ask for one.
-            event.handoff_required &= handoff_required;
         }
         self.finish_tools(speech, step, tools, Some(verdict), true, out);
     }
@@ -996,7 +984,6 @@ impl Driver {
         out.trace(ToolStep::Finished {
             speech,
             committed: n,
-            handoff: executed.as_ref().is_some_and(|e| e.handoff_required),
         });
         let Some(executed) = executed else { return };
         // Not the host's to emit: after the commit, as before any hook existed for it.

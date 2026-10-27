@@ -56,16 +56,15 @@ impl Driver {
     ) -> bool {
         let id = call.id();
         let kind = call.kind();
-        let (agent, speech, turn, at_tail) = match &call {
+        let (agent, speech, turn) = match &call {
             HookCall::OnEnter { agent, .. } | HookCall::OnExit { agent, .. } => {
-                (Some(agent.clone()), None, None, None)
+                (Some(agent.clone()), None, None)
             }
-            HookCall::OnUserTurnCompleted { turn, .. } => (None, None, Some(*turn), None),
-            HookCall::RenderToolReply { at_tail, .. } => (None, None, None, Some(*at_tail)),
-            HookCall::FillerSource { .. } => (None, None, None, None),
-            HookCall::FunctionToolsExecuted { speech, .. } => (None, Some(*speech), None, None),
+            HookCall::OnUserTurnCompleted { turn, .. } => (None, None, Some(*turn)),
+            HookCall::FillerSource { .. } => (None, None, None),
+            HookCall::FunctionToolsExecuted { speech, .. } => (None, Some(*speech), None),
         };
-        out.trace(HandoffStep::HookIssued { hook: id, kind, agent, speech, turn, at_tail });
+        out.trace(HandoffStep::HookIssued { hook: id, kind, agent, speech, turn });
         let hosted =
             self.activity.hook_bound.is_some() && self.events.send(HostEvent::Hook(call)).is_ok();
         if !hosted {
@@ -81,7 +80,6 @@ impl Driver {
             HookKind::OnEnter => self.run_own(Owned::Hook(id), out),
             HookKind::OnExit
             | HookKind::OnUserTurnCompleted
-            | HookKind::RenderToolReply
             | HookKind::FillerSource
             | HookKind::FunctionToolsExecuted => {}
         }
@@ -133,7 +131,6 @@ impl Driver {
             HookOutcome::Failed => HookEnd::Failed,
             HookOutcome::Turn(edits) => HookEnd::Returned { edits: edits.len() },
             HookOutcome::Returned
-            | HookOutcome::Rendered(_)
             | HookOutcome::Filler { .. }
             | HookOutcome::FunctionToolsExecuted { .. } => HookEnd::Returned { edits: 0 },
         };
@@ -162,12 +159,11 @@ impl Driver {
         outcome: HookOutcome,
         out: &mut Out,
     ) {
-        use HookOutcome::{Failed, Filler, FunctionToolsExecuted, Rendered, Returned, Turn};
+        use HookOutcome::{Failed, Filler, FunctionToolsExecuted, Returned, Turn};
         let fits = matches!(
             (kind, &outcome),
             (HookKind::OnExit | HookKind::OnEnter, Returned | Failed)
                 | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed)
-                | (HookKind::RenderToolReply, Rendered(_) | Returned | Failed)
                 | (HookKind::FillerSource, Filler { .. } | Returned | Failed)
                 | (
                     HookKind::FunctionToolsExecuted,
@@ -186,11 +182,7 @@ impl Driver {
                 let edits = match outcome {
                     Turn(edits) => edits,
                     Failed if fits => vec![TurnEdit::StopResponse],
-                    Failed
-                    | Returned
-                    | Rendered(_)
-                    | Filler { .. }
-                    | FunctionToolsExecuted { .. } => Vec::new(),
+                    Failed | Returned | Filler { .. } | FunctionToolsExecuted { .. } => Vec::new(),
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
@@ -198,23 +190,13 @@ impl Driver {
                     self.next_turn(now, out);
                 }
             }
-            // The deferred tool reply's instructions, or the defaults when rendering failed.
-            HookKind::RenderToolReply => {
-                let text = match outcome {
-                    Rendered(text) => Some(text),
-                    Failed | Returned | Turn(_) | Filler { .. } | FunctionToolsExecuted { .. } => {
-                        None
-                    }
-                };
-                self.on_tool_reply_rendered(now, id, text, out)
-            }
             // The filler's callable: text, a speech it made itself, or nothing; `None` when it
             // raised or its bound passed.
             HookKind::FillerSource => {
                 let answered = match outcome {
                     Filler { text, spoke } => Some((text, spoke)),
                     Failed => None,
-                    Returned | Turn(_) | Rendered(_) | FunctionToolsExecuted { .. } => {
+                    Returned | Turn(_) | FunctionToolsExecuted { .. } => {
                         Some((None, false))
                     }
                 };
@@ -223,10 +205,8 @@ impl Driver {
             // What the handlers left; unanswered, the event stands as issued.
             HookKind::FunctionToolsExecuted => {
                 let left = match outcome {
-                    FunctionToolsExecuted { reply_required, handoff_required } => {
-                        Some((reply_required, handoff_required))
-                    }
-                    Failed | Returned | Turn(_) | Rendered(_) | Filler { .. } => None,
+                    FunctionToolsExecuted { reply_required } => Some(reply_required),
+                    Failed | Returned | Turn(_) | Filler { .. } => None,
                 };
                 self.on_tools_executed_handled(id, left, out)
             }

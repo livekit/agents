@@ -885,14 +885,13 @@ pub trait SessionHooks: Send + Sync {
         new_transcript: &str,
         transcript_confidence: f64,
     ) -> Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError>;
-    /// The `function_tools_executed` event emitted: each output's `reply_required` and the event's
-    /// `handoff_required`, as its handlers left them.
+    /// The `function_tools_executed` event emitted: each output's `reply_required` as its
+    /// handlers left it.
     async fn function_tools_executed(
         &self,
         function_calls: Vec<lk_agents_abi::ChatItem>,
         function_call_outputs: Vec<lk_agents_abi::ChatItem>,
-        handoff_required: bool,
-    ) -> Result<(Vec<bool>, bool), HostError>;
+    ) -> Result<Vec<bool>, HostError>;
     /// A filler's callable `source` called for `step`, awaited when it returns an awaitable.
     async fn filler_source(
         &self,
@@ -981,12 +980,10 @@ async fn answer_hook(
             let calls = event.function_calls.into_iter().map(ChatItem::FunctionCall).collect();
             let outputs =
                 event.function_call_outputs.into_iter().map(ChatItem::FunctionCallOutput).collect();
-            hooks.function_tools_executed(calls, outputs, event.handoff_required).await.map(
-                |(reply_required, handoff_required)| HookOutcome::FunctionToolsExecuted {
-                    reply_required,
-                    handoff_required,
-                },
-            )
+            hooks
+                .function_tools_executed(calls, outputs)
+                .await
+                .map(|reply_required| HookOutcome::FunctionToolsExecuted { reply_required })
         }
         HookCall::FillerSource { source: None, .. } => {
             Ok(HookOutcome::Filler { text: None, spoke: false })
@@ -999,7 +996,6 @@ async fn answer_hook(
             })
         }
         // Unanswered: the reference's templates.
-        HookCall::RenderToolReply { .. } => Ok(HookOutcome::Failed),
     };
     let outcome = outcome.unwrap_or_else(|e| {
         hooks.hook_failed(kind.as_str(), e.host_ref.clone());

@@ -49,7 +49,6 @@ fn finished(how: HookEnd) -> Recording {
             agent: None,
             speech: None,
             turn: None,
-            at_tail: None,
         }))
         .journal(Step::Handoff(HandoffStep::HookFinished {
             hook,

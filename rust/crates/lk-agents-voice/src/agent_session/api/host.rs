@@ -584,9 +584,16 @@ impl SessionApi {
         // The new agent's toolsets set up first, in call order: the turn is taken now.
         let api = self.running(|r| Ok(r.api.clone()))?;
         let resources = self.resources.clone();
-        let turn = Arc::clone(&self.host.handoffs).lock_owned();
-        let mut handoff = Box::pin(async move {
-            let _turn = turn.await;
+        // The turn is queued for now, in call order: the lock's waiter list is entered by this
+        // first poll (a tokio lock takes the real waker at the next one). Only the lock is polled
+        // here; the setup's host bridge runs in the task, with its own waker.
+        let mut turn = Box::pin(Arc::clone(&self.host.handoffs).lock_owned());
+        let held = turn.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
+        let handoff = async move {
+            let _turn = match held {
+                std::task::Poll::Ready(guard) => guard,
+                std::task::Poll::Pending => turn.await,
+            };
             update.toolset.specs = hooks.setup_tools(&tools).await.unwrap_or_else(|e| {
                 hooks.hook_failed("setup_tools", e.host_ref.clone());
                 Vec::new()
@@ -596,11 +603,8 @@ impl SessionApi {
             if api.send_from(Origin::Host, cmd).is_err() {
                 handed.into_iter().for_each(|id| resources.release(id));
             }
-        });
-        let waker = std::task::Waker::noop();
-        if handoff.as_mut().poll(&mut std::task::Context::from_waker(waker)).is_pending() {
-            self.spawner.spawn(handoff);
-        }
+        };
+        self.spawner.spawn(Box::pin(handoff));
         Ok(answer)
     }
 

@@ -242,6 +242,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._amd: AMD | None = None
         self._agent: Agent | None = None
         self._chat_ctx = ChatContext.empty()
+        self._turn_exceeded_task: asyncio.Future[None] | None = None
         self._agent_state: AgentState = "initializing"
         self._user_state: UserState = "listening"
         self._input = io.AgentInput(self)
@@ -714,6 +715,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _frame(self, agent: Agent) -> dict[str, Any]:
         """``agent`` as the core installs it (``update_agent``'s keywords); the core has its
         toolsets set up (``_AgentHooks._core_setup_tools``) and reads their tools then."""
+        # its tools, instructions and hooks are what the core runs from now on
+        agent._frozen = True
         pool = self._pool(agent)
         frame: dict[str, Any] = {
             "instructions": _instructions(agent.instructions),
@@ -778,10 +781,27 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if (attr := MIRRORED_STATES.get(kind)) is not None:
                 setattr(self, attr, ev.new_state)
             self.emit(name, ev)
+            if name == "user_turn_exceeded":
+                self._on_user_turn_exceeded(ev)
             return
         handler = _HANDLERS.get(kind)
         if handler is not None:
             handler(self, wire)
+
+    def _on_user_turn_exceeded(self, ev: Any) -> None:
+        """The agent's ``on_user_turn_exceeded``, one at a time: a turn exceeded again while
+        it runs is not handed over twice."""
+        if self._turn_exceeded_task is not None and not self._turn_exceeded_task.done():
+            return
+        agent = self.current_agent
+
+        async def _run() -> None:
+            try:
+                await agent.on_user_turn_exceeded(ev)
+            except Exception:
+                logger.exception("error in on_user_turn_exceeded callback")
+
+        self._turn_exceeded_task = asyncio.ensure_future(_run())
 
     def _on_speech_created(self, wire: dict[str, Any]) -> None:
         handle = SpeechHandle._of(wire["speech_handle"])
@@ -1046,15 +1066,13 @@ class _AgentHooks:
         self,
         function_calls: list[_core.ChatItem],
         function_call_outputs: list[_core.ChatItem],
-        handoff_required: bool,
-    ) -> tuple[list[bool], bool]:
+    ) -> list[bool]:
         ev = FunctionToolsExecutedEvent(
             function_calls=[from_core_item(c) for c in function_calls],
             function_call_outputs=[from_core_item(o) for o in function_call_outputs],
         )
-        ev._handoff_required = handoff_required
         self._session.emit("function_tools_executed", ev)
-        return [o.reply_required for o in ev.function_call_outputs], ev.has_agent_handoff
+        return [o.reply_required for o in ev.function_call_outputs]
 
     async def _core_filler_source(self, source: Callable[[int], Any], step: int) -> Any:
         out = source(step)
