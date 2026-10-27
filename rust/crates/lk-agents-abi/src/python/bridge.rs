@@ -34,7 +34,8 @@ pub trait HostBridge: Send + Sync + 'static {
     }
 
     /// `Ok` means handed over, not run (see `HostHandle::call_in_loop`). Arguments are converted
-    /// off the loop.
+    /// off the loop. In the captured context, as `submit` runs an awaitable: a handler that
+    /// reads the job's context variables (`get_job_context()`) sees them.
     fn call_soon(
         &self,
         method: &str,
@@ -45,7 +46,9 @@ pub trait HostBridge: Send + Sync + 'static {
             let args = args(py)?;
             let call: Vec<Bound<'_, PyAny>> = std::iter::once(method).chain(args.iter()).collect();
             let call = pyo3::types::PyTuple::new(py, call)?;
-            self.task_locals().event_loop(py).call_method1("call_soon_threadsafe", call)?;
+            let kwargs = pyo3::types::PyDict::new(py);
+            kwargs.set_item("context", self.task_locals().context(py))?;
+            self.task_locals().event_loop(py).call_method("call_soon_threadsafe", call, Some(&kwargs))?;
             Ok(())
         })
     }
