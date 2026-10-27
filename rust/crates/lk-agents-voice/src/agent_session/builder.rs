@@ -424,9 +424,7 @@ impl DriverBuilder {
             toolset: Arc::new(std::mem::take(&mut self.toolset)),
             tools: Default::default(),
             audio_recognition,
-            speech_scheduler: SpeechScheduler::new(
-                effective.speech.min_consecutive_speech_delay(),
-            ),
+            speech_scheduler: SpeechScheduler::new(),
             paused_speech,
             speech_agents: Default::default(),
             finished: Default::default(),

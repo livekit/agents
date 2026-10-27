@@ -691,6 +691,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "turn_handling": agent._turn_handling or None,
             "expressive": agent.expressive,
         }
+        if is_given(agent._min_consecutive_speech_delay):
+            frame["min_consecutive_speech_delay"] = agent._min_consecutive_speech_delay
+        if is_given(agent._use_tts_aligned_transcript):
+            frame["use_tts_aligned_transcript"] = agent._use_tts_aligned_transcript
         if is_given(agent._vad):
             frame["vad"] = _core_leg(agent._vad)
         # every leg a node may wrap is given, so the previous frame's node never stays on it

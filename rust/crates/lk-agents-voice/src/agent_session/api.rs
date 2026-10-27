@@ -473,13 +473,19 @@ impl SessionApi {
             stt,
             vad,
             turn_handling,
+            min_consecutive_speech_delay,
+            use_tts_aligned_transcript,
             expressive,
             llm_node,
             tts_node,
             stt_node,
         } = frame;
         self.agents.install(&agent, agent_host);
-        let options = turn_handling.as_ref().map(crate::turn::agent_layer).unwrap_or_default();
+        let mut options =
+            turn_handling.as_ref().map(crate::turn::agent_layer).unwrap_or_default();
+        options.speech.min_consecutive_speech_delay = min_consecutive_speech_delay
+            .and_then(|s| std::time::Duration::try_from_secs_f64(s).ok());
+        options.speech.use_tts_aligned_transcript = use_tts_aligned_transcript;
         self.set_agent_layer(Some(options));
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
         let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);
@@ -1172,6 +1178,12 @@ pub struct UpdateAgentArgs {
     pub vad: Maybe<Option<Arc<dyn Vad>>>,
     #[host(kwarg(default = None))]
     pub turn_handling: Option<crate::agent_activity::options::TurnHandlingKwargs>,
+    /// The agent's `min_consecutive_speech_delay` in seconds; `None` defers to the session's.
+    #[host(kwarg(default = None))]
+    pub min_consecutive_speech_delay: Option<f64>,
+    /// The agent's `use_tts_aligned_transcript`; `None` defers to the session's.
+    #[host(kwarg(default = None))]
+    pub use_tts_aligned_transcript: Option<bool>,
     /// The agent's `expressive`; `NOT_GIVEN` defers to the session's.
     pub expressive: Maybe<crate::agent_activity::options::Expressive>,
     #[host(kwarg(default = None))]

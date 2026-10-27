@@ -110,12 +110,16 @@ mod speech_scheduler {
         /// that creates it.
         pub(crate) preflight: Option<String>,
         preemptive_generation_count: u32,
-        min_consecutive_speech_delay: Duration,
+    }
+
+    impl Default for SpeechScheduler {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl SpeechScheduler {
-        /// `min_consecutive_speech_delay` is `Duration::ZERO` to disable the gap.
-        pub fn new(min_consecutive_speech_delay: Duration) -> Self {
+        pub fn new() -> Self {
             SpeechScheduler {
                 speeches: BTreeMap::new(),
                 speech_q: VecDeque::new(),
@@ -126,7 +130,6 @@ mod speech_scheduler {
                 preemptive_generation: None,
                 preflight: None,
                 preemptive_generation_count: 0,
-                min_consecutive_speech_delay,
             }
         }
 
@@ -188,12 +191,13 @@ mod speech_scheduler {
             self.speeches.get(&speech).is_none_or(|e| e.add_to_chat_ctx)
         }
 
-        fn consecutive_speech_delay(&self, now: Ts) -> Option<Duration> {
-            if self.min_consecutive_speech_delay.is_zero() {
+        /// What is left of `min_delay` (`Duration::ZERO` disables the gap) since the last playout.
+        fn consecutive_speech_delay(&self, now: Ts, min_delay: Duration) -> Option<Duration> {
+            if min_delay.is_zero() {
                 return None;
             }
             let elapsed = now.saturating_duration_since(self.last_playout?);
-            self.min_consecutive_speech_delay.checked_sub(elapsed).filter(|d| !d.is_zero())
+            min_delay.checked_sub(elapsed).filter(|d| !d.is_zero())
         }
 
         pub fn is_paused(&self) -> bool {
@@ -260,7 +264,14 @@ mod speech_scheduler {
 
         /// `_scheduling_task`'s pass: the owed gap expires where it is read, and the head is
         /// authorized, armed behind the gap, or held for AMD.
-        pub(super) fn scheduling_pass(&mut self, now: Ts, gap_elapsed: bool) -> SchedulingPass {
+        /// `min_delay` is the effective `min_consecutive_speech_delay` (the driving agent's, else
+        /// the session's), read at each pass.
+        pub(super) fn scheduling_pass(
+            &mut self,
+            now: Ts,
+            gap_elapsed: bool,
+            min_delay: Duration,
+        ) -> SchedulingPass {
             let mut released = false;
             let candidate = loop {
                 let candidate = match self.step {
@@ -294,7 +305,7 @@ mod speech_scheduler {
                 // Gone, interrupted or discarded while it waited: forget it and look again.
                 self.step = SchedulingStep::Idle;
             };
-            if let Some(delay) = self.consecutive_speech_delay(now) {
+            if let Some(delay) = self.consecutive_speech_delay(now, min_delay) {
                 let until = now.saturating_add(delay);
                 self.step = SchedulingStep::Delaying { next: Some(candidate) };
                 return SchedulingPass { released, next: NextSpeech::Delayed { until } };
@@ -785,8 +796,9 @@ impl Driver {
             return;
         }
         let gap_elapsed = self.pop_due(now, out, |t| t == Timer::ConsecutiveSpeechDelay).is_some();
+        let min_delay = self.session.config.effective.speech.min_consecutive_speech_delay();
         let SchedulingPass { released, next } =
-            self.activity.speech_scheduler.scheduling_pass(now, gap_elapsed);
+            self.activity.speech_scheduler.scheduling_pass(now, gap_elapsed, min_delay);
         if released {
             out.trace(SpeechStep::FloorReleased);
         }

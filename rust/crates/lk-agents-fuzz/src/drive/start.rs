@@ -571,6 +571,8 @@ fn plain_frame(
         stt: Maybe::NotGiven,
         vad: Maybe::NotGiven,
         turn_handling: None,
+        min_consecutive_speech_delay: None,
+        use_tts_aligned_transcript: None,
         expressive: Maybe::NotGiven,
         llm_node: None,
         tts_node: None,
