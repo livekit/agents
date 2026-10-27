@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import types
 from collections.abc import Callable
+from typing import Any
 
 import httpx2 as httpx
 import pytest
@@ -27,22 +28,35 @@ class _FakeConversations:
     def __init__(self, handler: Callable[[int], object]) -> None:
         self._handler = handler
         self.calls = 0
+        self.requests: list[dict[str, object]] = []
 
     async def start_stream_async(self, **kwargs: object) -> object:
         self.calls += 1
+        self.requests.append(kwargs)
         result = self._handler(self.calls)
         if isinstance(result, BaseException):
             raise result
         return result
 
 
-def _model(conversations: _FakeConversations | None = None) -> LLM:
+def _model(conversations: _FakeConversations | None = None, **kwargs: Any) -> LLM:
     client = types.SimpleNamespace(
         beta=types.SimpleNamespace(
             conversations=conversations or _FakeConversations(lambda _: (_ for _ in ())),
         ),
     )
-    return LLM(client=client, model="test-model")  # type: ignore[arg-type]
+    return LLM(client=client, model="test-model", **kwargs)  # type: ignore[arg-type]
+
+
+async def _no_events():
+    return
+    yield
+
+
+async def _run(model: LLM, **chat_kwargs: Any) -> None:
+    async with model.chat(chat_ctx=llm.ChatContext.empty(), **chat_kwargs) as stream:
+        async for _ in stream:
+            pass
 
 
 def _sdk_error(status_code: int) -> SDKError:
@@ -146,5 +160,54 @@ class TestLLMErrorHandling:
             assert excinfo.value.retryable is False
             assert len(errors) == 1
             assert errors[0].recoverable is False
+        finally:
+            await model.aclose()
+
+
+class TestStore:
+    @pytest.mark.asyncio
+    async def test_store_is_not_sent_by_default(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations)
+
+        try:
+            await _run(model)
+            assert "store" not in conversations.requests[0]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_store_is_sent_with_each_request(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, store=False)
+
+        try:
+            await _run(model)
+            assert conversations.requests[0]["store"] is False
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_update_options_changes_store(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations)
+
+        try:
+            model.update_options(store=False)
+            await _run(model)
+            model.update_options(store=True)
+            await _run(model)
+            assert [request["store"] for request in conversations.requests] == [False, True]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_override_store(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, store=False)
+
+        try:
+            await _run(model, extra_kwargs={"store": True})
+            assert conversations.requests[0]["store"] is True
         finally:
             await model.aclose()
