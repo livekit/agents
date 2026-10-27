@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import aiohttp
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, utils
+from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.beta.translation import (
     InputTranscript,
     OutputSpeechStopped,
@@ -51,6 +51,12 @@ from openai.types.realtime import NoiseReductionType
 TranslationModels = Literal["gpt-realtime-translate"]
 
 DEFAULT_TRANSLATION_MODEL = "gpt-realtime-translate"
+
+# the endpoint streams its silence as GPT-Live does (see llm/_realtime/gpt_live.py, whose
+# measurement this is): all zeros bar a tick at connect, with speech an order of magnitude above
+_OUTPUT_SILENCE_RMS = 0.0006
+# long enough that a pause between sentences does not split a translation in two
+_MIN_OUTPUT_SILENCE_DURATION = 0.8
 DEFAULT_INPUT_TRANSCRIPTION_MODEL = "gpt-realtime-whisper"
 # the server sends deltas only; a transcript ends once they have been quiet this long
 DEFAULT_TRANSCRIPT_SEGMENT_TIMEOUT = 1.0
@@ -164,6 +170,9 @@ class RealtimeTranslationModel(TranslationModel):
     def update_options(self, *, target_language: str) -> None:
         super().update_options(target_language=target_language)
         self._opts.target_language = target_language
+
+    def audio_gate(self) -> llm.AudioGate:
+        return llm.FixedGate(_OUTPUT_SILENCE_RMS, min_silence_duration=_MIN_OUTPUT_SILENCE_DURATION)
 
     def session(self) -> RealtimeTranslationSession:
         return RealtimeTranslationSession(self)

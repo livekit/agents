@@ -442,3 +442,27 @@ async def test_punctuation_that_is_the_transcripts_own_is_kept(
         ]
     finally:
         await session.aclose()
+
+
+def test_the_model_gates_its_output_as_gpt_live_does() -> None:
+    import numpy as np
+
+    from livekit.agents import llm
+
+    gate = _model().audio_gate()
+    assert isinstance(gate, llm.FixedGate)
+
+    def _chunk(peak: int) -> rtc.AudioFrame:
+        # 400 ms at 24 kHz, as the endpoint sends it
+        samples = (np.sin(np.linspace(0, 400, 9600)) * peak).astype(np.int16)
+        return rtc.AudioFrame(
+            data=samples.tobytes(), sample_rate=24000, num_channels=1, samples_per_channel=9600
+        )
+
+    # the tick at connect (peak ~28 in a real run) and the zeros after it stay shut
+    assert not gate.update(_chunk(28))
+    assert not gate.update(_chunk(0))
+    # speech opens it, and a pause shorter than GPT-Live's 0.8 s does not close it
+    assert gate.update(_chunk(5000))
+    assert gate.update(_chunk(0))
+    assert not gate.update(_chunk(0))
