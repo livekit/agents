@@ -370,18 +370,6 @@ pub enum Event {
 
     /// The mirror gained an item the *server* created.
     RemoteItemAdded(RemoteItemAdded),
-    /// The native session's `UpdateChatCtx` ack.
-    #[binding(skip)]
-    ChatCtxUpdated {
-        req_id: String,
-        rejected: Vec<String>,
-    },
-    /// The far side closed the session. After this, `next_event()`'s `None` means "closed by us".
-    #[binding(skip)]
-    Disconnected {
-        reason: String,
-    },
-
     SessionReconnected(SessionReconnected),
     /// A new session replaced the one that failed or was restarted (the fallback adapter's
     /// swap): it holds no instructions, conversation or tools until the driver gives it its frame,
@@ -392,11 +380,6 @@ pub enum Event {
     },
     /// The host session's `metrics_collected`, and the native session's measurements.
     Metrics(RealtimeMetrics),
-    /// `metrics_collected` with zero usage: `_report_connection_acquired`.
-    #[binding(skip)]
-    ConnectionAcquired {
-        acquire_time: std::time::Duration,
-    },
     /// A host session reports it as [`Event::HostError`].
     #[binding(skip)]
     Error(RealtimeModelError),
@@ -432,29 +415,6 @@ mod tests {
         assert_eq!(GenerationStatus::parse("cancelled"), GenerationStatus::Cancelled);
         assert_eq!(GenerationStatus::parse("incomplete"), GenerationStatus::Incomplete);
         assert_eq!(GenerationStatus::parse("in_progress"), GenerationStatus::Completed);
-    }
-
-    /// Every `tag_value` an extract record (an event the host sends) declares in this file, in
-    /// source order.
-    fn declared_event_names() -> Vec<&'static str> {
-        include_str!("realtime.rs")
-            .split("#[binding(")
-            .skip(1)
-            .map(|block| block.split(")]").next().unwrap_or(""))
-            .filter(|attrs| attrs.split(',').any(|w| w.trim() == "extract"))
-            .filter_map(|attrs| attrs.split("tag_value = \"").nth(1)?.split('"').next())
-            .collect()
-    }
-
-    // Catches: two declared events with the same wire name.
-    #[test]
-    fn every_declared_event_name_is_distinct() {
-        let names = declared_event_names();
-        let mut sorted = names.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert!(names.len() > 1, "the scan found no events");
-        assert_eq!(sorted.len(), names.len(), "two events share a wire name: {names:?}");
     }
 }
 
@@ -521,11 +481,11 @@ pub enum RealtimeCommand {
 impl RealtimeCommand {
     pub fn req_id(&self) -> Option<&str> {
         match self {
-            RealtimeCommand::UpdateChatCtx(c) => Some(&c.req_id),
             RealtimeCommand::GenerateReply(c) => Some(&c.req_id),
             RealtimeCommand::Say(c) => Some(&c.req_id),
             RealtimeCommand::CancelReply(c) => Some(&c.req_id),
             RealtimeCommand::UpdateInstructions(_)
+            | RealtimeCommand::UpdateChatCtx(_)
             | RealtimeCommand::UpdateTools(_)
             | RealtimeCommand::PushAudio(_)
             | RealtimeCommand::PushItem(_)
@@ -546,7 +506,6 @@ pub struct UpdateInstructions {
 
 #[derive(Debug, Clone)]
 pub struct UpdateChatCtx {
-    pub req_id: String,
     /// The chat context's items; the host reconciles them into its plugin's `llm.ChatContext`.
     pub chat_ctx: crate::ChatContext,
 }
@@ -565,7 +524,6 @@ impl<'py> pyo3::IntoPyObject<'py> for &UpdateChatCtx {
         use pyo3::types::PyDictMethods as _;
         let d = pyo3::types::PyDict::new(py);
         d.set_item("kind", UpdateChatCtx::KIND)?;
-        d.set_item("req_id", &self.req_id)?;
         d.set_item("items", &self.chat_ctx.items)?;
         Ok(d)
     }

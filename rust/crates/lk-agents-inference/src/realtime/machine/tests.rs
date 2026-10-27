@@ -84,25 +84,19 @@ fn generate_reply_correlation_survives_an_out_of_order_response() {
     );
 }
 
-// Catches: forgetting the request id after its timeout (a late turn surfaces as spontaneous),
-// or an untargeted `response.cancel`.
+// Catches: forgetting the request id after the caller gave up on it (a late turn surfaces as
+// spontaneous), an untargeted `response.cancel`, or the caller told the request ended before the
+// server is free of it (its next request is refused).
 #[test]
-fn a_reply_abandoned_at_its_deadline_is_cancelled_by_id_when_it_arrives_anyway() {
+fn a_reply_abandoned_is_cancelled_by_id_when_it_arrives_anyway() {
     let clock = VirtualClock::new();
     let mut m = machine(OPENAI);
     m.open(clock.now());
     m.command(clock.now(), reply("response_create_1"));
-
-    assert_eq!(m.next_deadline(), Some(at(10)), "the 10 s generate_reply timeout");
-    clock.advance_to(at(10));
-    let step = m.tick(clock.now());
-    assert_eq!(
-        step.events,
-        [Event::GenerateReplyFailed (GenerateReplyFailed {
-            req_id: "response_create_1".into(),
-            error: RealtimeError::new("generate_reply timed out."),
-        })]
-    );
+    // The driver's timeout gives up on it: nothing is said until the server answers.
+    let cancel = lk_agents_abi::llm::realtime::CancelReply { req_id: "response_create_1".into() };
+    let step = m.command(at(10), Command::CancelReply(cancel));
+    assert!(step.frames.is_empty() && step.events.is_empty(), "{step:?}");
 
     clock.advance_to(at(11));
     let step =
@@ -114,6 +108,10 @@ fn a_reply_abandoned_at_its_deadline_is_cancelled_by_id_when_it_arrives_anyway()
             .iter()
             .any(|e| matches!(e, Event::GenerationCreated(GenerationCreated { .. }))),
         "a turn the caller gave up on must not be surfaced"
+    );
+    assert!(
+        step.events.iter().any(|e| matches!(e, Event::GenerateReplyFailed(f) if f.req_id == "response_create_1")),
+        "the caller hears the end once the server is free of it"
     );
 
     // and its trailing deltas are skipped rather than delivered to nobody
@@ -209,7 +207,6 @@ fn a_context_update_becomes_the_delete_and_create_ops_its_diff_implies() {
     let step = m.command(
         at(1),
         Command::UpdateChatCtx(UpdateChatCtx {
-            req_id: "u1".into(),
             chat_ctx: ChatContext::new(vec![msg("a", "first"), msg("c", "third")]),
         }),
     );
@@ -227,39 +224,10 @@ fn a_context_update_becomes_the_delete_and_create_ops_its_diff_implies() {
     let step =
         recv(&mut m, at(2), json!({"type": "conversation.item.deleted", "item_id": "b"}));
     assert!(step.events.is_empty(), "one of two");
-    let step = recv(&mut m, at(2), item_added(Some("a"), "c", "third"));
-    assert!(
-        step.events.contains(&Event::ChatCtxUpdated { req_id: "u1".into(), rejected: vec![] })
-    );
+    assert!(m.ctx_update.is_some(), "one ack still owed");
+    recv(&mut m, at(2), item_added(Some("a"), "c", "third"));
+    assert!(m.ctx_update.is_none(), "settled once the server acked both");
     assert_eq!(m.chat_ctx().items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["a", "c"]);
-}
-
-// Catches: an unacked update hanging forever instead of the reference's 5 s bound.
-#[test]
-fn an_unacknowledged_context_update_gives_up_after_five_seconds() {
-    let clock = VirtualClock::new();
-    let mut m = machine(OPENAI);
-    m.open(clock.now());
-    recv(&mut m, clock.now(), item_added(None, "a", "first"));
-    m.command(
-        clock.now(),
-        Command::UpdateChatCtx(UpdateChatCtx {
-            req_id: "u1".into(),
-            chat_ctx: ChatContext::new(vec![msg("a", "first"), msg("b", "new")]),
-        }),
-    );
-
-    assert_eq!(m.next_deadline(), Some(at(5)), "5 s, ahead of the 20 min recycle timer");
-    clock.advance_to(at(5));
-    let step = m.tick(clock.now());
-    assert_eq!(
-        step.events,
-        [Event::ChatCtxUpdated {
-            req_id: "u1".into(),
-            rejected: vec!["update_chat_ctx timed out.".into()],
-        }]
-    );
-    assert_eq!(m.next_deadline(), Some(at(20 * 60)), "only the recycle timer is left");
 }
 
 // Catches: treating `item_create_duplicate_item_id` as a rejection.
@@ -271,12 +239,11 @@ fn a_duplicate_item_id_rejection_counts_as_success() {
     m.command(
         at(0),
         Command::UpdateChatCtx(UpdateChatCtx {
-            req_id: "u1".into(),
             chat_ctx: ChatContext::new(vec![msg("a", "first"), msg("b", "new")]),
         }),
     );
 
-    let step = recv(
+    recv(
         &mut m,
         at(1),
         json!({"type": "error", "error": {
@@ -285,11 +252,7 @@ fn a_duplicate_item_id_rejection_counts_as_success() {
             "message": "Item with that id already exists",
         }}),
     );
-    assert_eq!(
-        step.events,
-        [Event::ChatCtxUpdated { req_id: "u1".into(), rejected: vec![] }],
-        "already-there is not a rejection"
-    );
+    assert!(m.ctx_update.is_none(), "already-there settles the create");
 }
 
 // Catches: dropping or head-inserting an item anchored to one just deleted (the reference
@@ -449,17 +412,12 @@ fn xai_resolves_the_empty_item_id_on_a_delete_ack() {
     m.command(
         at(1),
         Command::UpdateChatCtx(UpdateChatCtx {
-            req_id: "u1".into(),
             chat_ctx: ChatContext::new(vec![msg("a", "first")]),
         }),
     );
 
-    let step = recv(&mut m, at(2), json!({"type": "conversation.item.deleted", "item_id": ""}));
-    assert_eq!(
-        step.events,
-        [Event::ChatCtxUpdated { req_id: "u1".into(), rejected: vec![] }],
-        "the empty ack answered the delete of `b`"
-    );
+    recv(&mut m, at(2), json!({"type": "conversation.item.deleted", "item_id": ""}));
+    assert!(m.ctx_update.is_none(), "the empty ack answered the delete of `b`");
     assert_eq!(m.chat_ctx().items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["a"]);
 
     // and OpenAI must NOT do this: an empty id there is a bug, not a convention
@@ -468,7 +426,7 @@ fn xai_resolves_the_empty_item_id_on_a_delete_ack() {
     recv(&mut m, at(0), item_added(None, "a", "first"));
     m.command(
         at(1),
-        Command::UpdateChatCtx(UpdateChatCtx { req_id: "u1".into(), chat_ctx: ChatContext::empty() }),
+        Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: ChatContext::empty() }),
     );
     let step = recv(&mut m, at(2), json!({"type": "conversation.item.deleted", "item_id": ""}));
     assert!(step.events.is_empty());
@@ -588,9 +546,7 @@ fn a_reconnect_replays_the_conversation_and_asks_again_for_the_pending_reply() {
         step.events
     );
     assert_eq!(step.events.last(), Some(&Event::SessionReconnected(lk_agents_abi::llm::realtime::SessionReconnected {})));
-    // a fresh 10 s from the reconnection; the replay is awaited first
-    assert_eq!(m.pending_replies.get("response_create_2"), Some(&at(12)));
-    assert_eq!(m.next_deadline(), Some(at(2).saturating_add(super::UPDATE_CHAT_CTX_TIMEOUT)));
+    assert!(m.pending_replies.contains("response_create_2"));
     let step = recv(&mut m, at(3), response_created("resp_2", Some("response_create_2")));
     assert!(step.events.contains(&Event::GenerationCreated(GenerationCreated {
         response_id: "resp_2".into(),

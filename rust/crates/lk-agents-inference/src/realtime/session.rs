@@ -527,7 +527,6 @@ impl Pump {
             }
         };
         let acquire_time = self.clock.now().saturating_duration_since(t0);
-        let _ = self.events.send(Event::ConnectionAcquired { acquire_time });
         let metrics = self.shared.machine.lock().await.connection_metrics(self.clock.now(), acquire_time);
         let _ = self.events.send(metrics);
 

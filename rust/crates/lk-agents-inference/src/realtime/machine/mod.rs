@@ -28,10 +28,8 @@ mod incoming;
 #[cfg(test)]
 mod tests;
 
-/// `asyncio.get_event_loop().call_later(10.0, _on_timeout)` in `generate_reply`.
-pub const GENERATE_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
-/// `asyncio.wait_for(..., timeout=5.0)` in `update_chat_ctx`.
-pub const UPDATE_CHAT_CTX_TIMEOUT: Duration = Duration::from_secs(5);
+/// How many calls a context update deleted are remembered.
+const DELETED_CALLS_REMEMBERED: usize = 64;
 /// `_schedule_stale_say_cleanup`'s `call_later(10.0, ...)`.
 pub const STALE_SAY_CLEANUP: Duration = Duration::from_secs(10);
 
@@ -58,9 +56,11 @@ pub struct RealtimeMachine {
     closed_messages: HashSet<String>,
     /// The calls a context update deleted from the conversation: an output for one names a call
     /// the server no longer holds, and is refused (`invalid_tool_call_id`).
-    deleted_calls: HashSet<String>,
-    /// `_response_created_futures`, reduced to its deadline.
-    pending_replies: HashMap<String, Ts>,
+    /// The last few: an output answers a call the model just made.
+    deleted_calls: VecDeque<String>,
+    /// `_response_created_futures`: the requests whose response is not created yet. How long one
+    /// may wait is the driver's to say (it times out with `CancelReply`).
+    pending_replies: HashSet<String>,
     /// `_discarded_event_ids`: requests abandoned before the server created their response. The
     /// response is cancelled by id and its trailing events skipped when it finally arrives.
     discarded: HashSet<String>,
@@ -81,6 +81,8 @@ pub struct RealtimeMachine {
     held: Option<TranscriptionCompleted>,
     /// xAI: whether the response in flight has produced any output at all.
     response_spoke: bool,
+    /// The server's VAD heard the person start and not yet stop.
+    user_speaking: bool,
 
     bstream: AudioByteStream,
     /// `_resample_audio`: built for the first frame that is not 24 kHz mono.
@@ -118,8 +120,8 @@ impl RealtimeMachine {
             tools: Vec::new(),
             generation: Generation::None,
             closed_messages: HashSet::new(),
-            deleted_calls: HashSet::new(),
-            pending_replies: HashMap::new(),
+            deleted_calls: VecDeque::new(),
+            pending_replies: HashSet::new(),
             discarded: HashSet::new(),
             say_tags: VecDeque::new(),
             stale_say: HashMap::new(),
@@ -128,6 +130,7 @@ impl RealtimeMachine {
             speech_started_at: HashMap::new(),
             held: None,
             response_spoke: false,
+            user_speaking: false,
             // 100 ms chunks: `samples_per_channel=None` is the reference's `SAMPLE_RATE // 10`.
             bstream: AudioByteStream::new(SAMPLE_RATE, NUM_CHANNELS, None, false),
             resampler: FrameResampler::new(SAMPLE_RATE, Quality::Medium, OnChange::Discard),
@@ -308,6 +311,13 @@ impl RealtimeMachine {
         }
 
         step.merge(self.reset_input_turn_state());
+        // The new connection's VAD heard no onset: the person's speech the old one opened is
+        // over as far as the session can tell, or nothing would ever end it.
+        if std::mem::take(&mut self.user_speaking) {
+            step.events.push(Event::InputSpeechStopped(lk_agents_abi::llm::realtime::InputSpeechStopped {
+                user_transcription_enabled: self.opts.transcription.is_some(),
+            }));
+        }
         // The new connection's buffer holds none of the audio sent to the old one: a commit now
         // would name nothing and be refused (`input_audio_buffer_commit_empty`).
         self.pushed = Duration::ZERO;
@@ -317,44 +327,31 @@ impl RealtimeMachine {
         // frames after the replay re-created what the replay had just restored (an item it
         // deletes and creates again under the same id), and the server refused it.
         let replay = self.expected_ctx();
-        let unconfirmed = self.ctx_update.take();
         self.remote = RemoteChatContext::new();
-        let (frames, mut update) = self.chat_ctx_events(&replay);
+        let (frames, update) = self.chat_ctx_events(&replay);
         step.frames.extend(frames);
         // The replay is tracked as an update until confirmed, so what is sent meanwhile is diffed
         // against what the server is being brought to (an update diffed against the empty mirror
-        // re-created every replayed item); its confirmations settle the update the lost
-        // connection left unconfirmed.
-        match unconfirmed {
-            Some(old) if update.pending() => {
-                update.req_id = old.req_id;
-                update.deadline = old.deadline;
-                self.ctx_update = Some(update);
-            }
-            Some(old) => {
-                step.events.push(Event::ChatCtxUpdated { req_id: old.req_id, rejected: old.rejected });
-            }
-            None if update.pending() => {
-                update.deadline = now.saturating_add(UPDATE_CHAT_CTX_TIMEOUT);
-                self.ctx_update = Some(update);
-            }
-            None => {}
-        }
+        // re-created every replayed item).
+        self.ctx_update = update.pending().then_some(update);
 
-        self.discarded.clear();
+        // A cancelled request's response will never come now.
+        let mut discarded: Vec<String> = self.discarded.drain().collect();
+        discarded.sort();
+        for req_id in discarded {
+            let error = RealtimeError::new("generate_reply cancelled");
+            step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
+        }
         self.say_tags.clear();
         self.stale_say.clear();
         step.merge(self.close_generation());
         // A reply asked for and not yet created is asked for again, now that the conversation it
         // answers is back; a `say()` (no `response.create` to resend) is failed.
-        let mut pending: Vec<String> = self.pending_replies.keys().cloned().collect();
+        let mut pending: Vec<String> = self.pending_replies.iter().cloned().collect();
         pending.sort();
         for req_id in pending {
             match self.reply_frames.get(&req_id) {
-                Some(frame) => {
-                    self.pending_replies.insert(req_id, now.saturating_add(GENERATE_REPLY_TIMEOUT));
-                    step.frames.push(frame.clone());
-                }
+                Some(frame) => step.frames.push(frame.clone()),
                 None => {
                     self.pending_replies.remove(&req_id);
                     step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed {
@@ -374,15 +371,13 @@ impl RealtimeMachine {
         self.closing = true;
         let mut step = self.flush_held_transcript(now);
         step.merge(self.close_generation());
-        for req_id in std::mem::take(&mut self.pending_replies).into_keys() {
+        for req_id in std::mem::take(&mut self.pending_replies) {
             step.events.push(Event::GenerateReplyFailed (GenerateReplyFailed {
                 req_id,
                 error: RealtimeError::new("realtime session closed"),
             }));
         }
-        if let Some(ctx) = self.ctx_update.take() {
-            step.events.push(Event::ChatCtxUpdated { req_id: ctx.req_id, rejected: ctx.rejected });
-        }
+        self.ctx_update = None;
         step
     }
 
@@ -401,37 +396,11 @@ impl RealtimeMachine {
     }
 
     pub fn next_deadline(&self) -> Option<Ts> {
-        self.pending_replies
-            .values()
-            .chain(self.stale_say.values())
-            .chain(self.ctx_update.iter().map(|c| &c.deadline))
-            .chain(self.session_deadline.iter())
-            .copied()
-            .min()
+        self.stale_say.values().chain(self.session_deadline.iter()).copied().min()
     }
 
     pub fn tick(&mut self, now: Ts) -> Step {
         let mut step = Step::default();
-
-        let timed_out: Vec<String> = self
-            .pending_replies
-            .iter()
-            .filter(|&(_, &at)| at <= now)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for req_id in timed_out {
-            self.pending_replies.remove(&req_id);
-            // `response.create` is already on the wire; remember the id so a late response is
-            // cancelled and skipped rather than surfacing as an unsolicited turn.
-            self.discarded.insert(req_id.clone());
-            if self.dialect.force_message_say {
-                self.stale_say.insert(req_id.clone(), now.saturating_add(STALE_SAY_CLEANUP));
-            }
-            step.events.push(Event::GenerateReplyFailed (GenerateReplyFailed {
-                req_id,
-                error: RealtimeError::new("generate_reply timed out."),
-            }));
-        }
 
         let stale: Vec<String> =
             self.stale_say.iter().filter(|&(_, &at)| at <= now).map(|(k, _)| k.clone()).collect();
@@ -441,16 +410,6 @@ impl RealtimeMachine {
             // drop a live correlation.
             if self.discarded.remove(&req_id) {
                 self.say_tags.retain(|t| t != &req_id);
-            }
-        }
-
-        if self.ctx_update.as_ref().is_some_and(|c| c.deadline <= now) {
-            let ctx = self.ctx_update.take().expect("just checked");
-            if !ctx.req_id.is_empty() {
-                step.events.push(Event::ChatCtxUpdated {
-                req_id: ctx.req_id,
-                    rejected: vec!["update_chat_ctx timed out.".to_owned()],
-                });
             }
         }
 
@@ -484,32 +443,17 @@ impl RealtimeMachine {
                 Step::frame(self.tools_update_frame())
             }
 
-            Command::UpdateChatCtx(lk_agents_abi::llm::realtime::UpdateChatCtx { req_id, chat_ctx }) => {
+            Command::UpdateChatCtx(lk_agents_abi::llm::realtime::UpdateChatCtx { chat_ctx }) => {
                 let (frames, mut update) = self.chat_ctx_events(&chat_ctx);
-                if !update.pending() {
-                    // Empty `futs`: the reference returns immediately rather than waiting 5 s.
-                    return Step {
-                        frames,
-                        events: vec![Event::ChatCtxUpdated { req_id, rejected: vec![] }],
-                        ..Default::default()
-                    };
-                }
-                update.req_id = req_id;
-                update.deadline = now.saturating_add(UPDATE_CHAT_CTX_TIMEOUT);
-                // An update still unconfirmed is superseded: its confirmations still settle, its
-                // caller is answered now.
-                let mut events = Vec::new();
+                // An update still unconfirmed is superseded: its confirmations still settle.
                 if let Some(old) = self.ctx_update.take() {
                     update.awaiting_create.extend(old.awaiting_create);
                     update.awaiting_delete.extend(old.awaiting_delete);
                     update.by_event_id.extend(old.by_event_id);
                     update.touched.extend(old.touched);
-                    if !old.req_id.is_empty() {
-                        events.push(Event::ChatCtxUpdated { req_id: old.req_id, rejected: old.rejected });
-                    }
                 }
-                self.ctx_update = Some(update);
-                Step { frames, events, ..Default::default() }
+                self.ctx_update = update.pending().then_some(update);
+                Step { frames, ..Default::default() }
             }
 
             Command::PushAudio(lk_agents_abi::llm::realtime::PushAudio { frame }) => {
@@ -560,8 +504,7 @@ impl RealtimeMachine {
             }
 
             Command::GenerateReply(lk_agents_abi::llm::realtime::GenerateReply { req_id, instructions, tool_choice }) => {
-                self.pending_replies
-                    .insert(req_id.clone(), now.saturating_add(GENERATE_REPLY_TIMEOUT));
+                self.pending_replies.insert(req_id.clone());
                 // OpenAI replaces session instructions with per-response ones, so concatenate;
                 // sending the extra alone drops the system prompt for that turn.
                 let merged = match (&self.opts.instructions, instructions) {
@@ -576,31 +519,27 @@ impl RealtimeMachine {
                         .filter(|_| self.caps.per_response_tool_choice)
                         .map(|tc| wire::tool_choice(Some(&tc))),
                 );
-                self.reply_frames.retain(|id, _| self.pending_replies.contains_key(id));
+                self.reply_frames.retain(|id, _| self.pending_replies.contains(id));
                 self.reply_frames.insert(req_id, frame.clone());
                 Step::frame(frame)
             }
 
             Command::CancelReply(lk_agents_abi::llm::realtime::CancelReply { req_id }) => {
-                if self.pending_replies.remove(&req_id).is_none() {
+                if !self.pending_replies.remove(&req_id) {
                     return Step::default();
                 }
                 // Nothing is cancelled now: an untargeted cancel hits whatever is in flight, a
                 // reply the server opened itself among them. The id discards the response when it
-                // is created, and cancels it by id.
-                let mut step = Step::default();
+                // is created, and cancels it by id; the caller hears of the end then, the server
+                // being busy with it until it is created.
                 self.discarded.insert(req_id.clone());
                 if self.dialect.force_message_say {
                     self.stale_say.insert(req_id.clone(), now.saturating_add(STALE_SAY_CLEANUP));
                     if !self.say_tags.contains(&req_id) {
-                        self.say_tags.push_back(req_id.clone());
+                        self.say_tags.push_back(req_id);
                     }
                 }
-                step.events.push(Event::GenerateReplyFailed (GenerateReplyFailed {
-                    req_id,
-                    error: RealtimeError::new("generate_reply cancelled"),
-                }));
-                step
+                Step::default()
             }
 
             Command::Say(lk_agents_abi::llm::realtime::Say { req_id, text, .. }) => {
@@ -613,7 +552,7 @@ impl RealtimeMachine {
                         )),
                     }));
                 }
-                self.pending_replies.insert(req_id.clone(), now.saturating_add(GENERATE_REPLY_TIMEOUT));
+                self.pending_replies.insert(req_id.clone());
                 let frame = wire::force_message(&req_id, &text);
                 // Tag only after the frame is sent, so a say whose send failed cannot claim the
                 // next unrelated response.
@@ -881,24 +820,24 @@ impl RealtimeMachine {
         let diff = compute_chat_ctx_diff(&remote_ctx, &filtered);
         for id in &diff.to_remove {
             if let Some(ChatItem::FunctionCall(c)) = remote_ctx.get_by_id(id) {
-                self.deleted_calls.insert(c.call_id.clone());
+                if self.deleted_calls.len() == DELETED_CALLS_REMEMBERED {
+                    self.deleted_calls.pop_front();
+                }
+                self.deleted_calls.push_back(c.call_id.clone());
             }
         }
         for (_, id) in &diff.to_create {
             if let Some(ChatItem::FunctionCall(c)) = filtered.get_by_id(id) {
-                self.deleted_calls.remove(&c.call_id);
+                self.deleted_calls.retain(|id| *id != c.call_id);
             }
         }
         let mut frames = Vec::new();
         let mut update = CtxUpdate {
-            req_id: String::new(),
-            deadline: Ts::ZERO,
             awaiting_create: HashSet::new(),
             awaiting_delete: HashSet::new(),
             by_event_id: HashMap::new(),
             target: filtered.clone(),
             touched: HashSet::new(),
-            rejected: Vec::new(),
         };
 
         let delete = |frames: &mut Vec<Value>, update: &mut CtxUpdate, id: &str| {
@@ -1061,12 +1000,8 @@ impl RealtimeMachine {
         if update.pending() {
             return Step::default();
         }
-        let update = self.ctx_update.take().expect("just checked");
-        // A reconnection's own replay has no caller to answer.
-        if update.req_id.is_empty() {
-            return Step::default();
-        }
-        Step::event(Event::ChatCtxUpdated { req_id: update.req_id, rejected: update.rejected })
+        self.ctx_update = None;
+        Step::default()
     }
 
     fn take_accumulated(&mut self, item_id: &str, content_index: usize) -> Option<String> {
@@ -1237,8 +1172,6 @@ enum Generation {
 
 #[derive(Debug)]
 struct CtxUpdate {
-    req_id: String,
-    deadline: Ts,
     /// `_item_create_future` / `_item_delete_future`, keyed by item id.
     awaiting_create: HashSet<String>,
     awaiting_delete: HashSet<String>,
@@ -1249,7 +1182,6 @@ struct CtxUpdate {
     /// reconnection replays when the lost connection had not confirmed it.
     target: ChatContext,
     touched: HashSet<String>,
-    rejected: Vec<String>,
 }
 
 impl CtxUpdate {

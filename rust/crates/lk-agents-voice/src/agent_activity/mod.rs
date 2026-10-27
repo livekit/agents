@@ -429,10 +429,7 @@ impl Driver {
                     let ctx = self.session.chat_ctx.for_realtime();
                     self.rt_send(
                         lk_agents_abi::RealtimeCommand::UpdateChatCtx(
-                            lk_agents_abi::UpdateChatCtx {
-                                req_id: self.shared.mint_item_id(),
-                                chat_ctx: ctx,
-                            },
+                            lk_agents_abi::UpdateChatCtx { chat_ctx: ctx },
                         ),
                         out,
                     );
@@ -542,10 +539,7 @@ impl Driver {
         );
         if let Some(chat_ctx) = chat_ctx {
             self.rt_send(
-                lk_agents_abi::RealtimeCommand::UpdateChatCtx(lk_agents_abi::UpdateChatCtx {
-                    req_id: self.shared.mint_item_id(),
-                    chat_ctx,
-                }),
+                lk_agents_abi::RealtimeCommand::UpdateChatCtx(lk_agents_abi::UpdateChatCtx { chat_ctx }),
                 out,
             );
         }

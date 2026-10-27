@@ -36,13 +36,17 @@ impl RealtimeMachine {
                     // xAI re-announces onset for an item; keep the original start time.
                     self.speech_started_at.entry(id).or_insert(now);
                 }
+                self.user_speaking = true;
                 step.events.push(Event::InputSpeechStarted(lk_agents_abi::llm::realtime::InputSpeechStarted {}));
                 step
             }
 
-            Incoming::SpeechStopped => Step::event(Event::InputSpeechStopped(InputSpeechStopped {
-                user_transcription_enabled: self.opts.transcription.is_some(),
-            })),
+            Incoming::SpeechStopped => {
+                self.user_speaking = false;
+                Step::event(Event::InputSpeechStopped(InputSpeechStopped {
+                    user_transcription_enabled: self.opts.transcription.is_some(),
+                }))
+            }
 
             Incoming::ResponseCreated { response_id, client_event_id } => {
                 let step = self.on_response_created(response_id, client_event_id);
@@ -260,6 +264,9 @@ impl RealtimeMachine {
             step.frames.push(wire::response_cancel(Some(&response_id)));
             step.merge(self.close_generation());
             self.generation = Generation::Discarded;
+            // Created and cancelled: the server takes the next reply.
+            let error = RealtimeError::new("generate_reply cancelled");
+            step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed { req_id: id.clone(), error }));
             return step;
         }
 
@@ -276,7 +283,7 @@ impl RealtimeMachine {
 
         // A still-pending `req_id` asked for this turn; a settled one timed out, and the turn is
         // surfaced but not as user-initiated.
-        let req_id = client_event_id.filter(|id| self.pending_replies.remove(id).is_some());
+        let req_id = client_event_id.filter(|id| self.pending_replies.remove(id));
         if let Some(id) = &req_id {
             self.stale_say.remove(id);
         }
@@ -503,15 +510,11 @@ impl RealtimeMachine {
             if let Some(update) = &mut self.ctx_update
                 && let Some((is_delete, item_id)) = update.by_event_id.remove(event_id)
             {
-                // A duplicate id means the item is already there: success.
-                if err.code.as_deref() != Some("item_create_duplicate_item_id") {
-                    update.rejected.push(err.message.clone());
-                }
                 step.merge(self.settle_ctx_item(is_delete, &item_id));
                 if !fatal {
                     return step;
                 }
-            } else if self.pending_replies.remove(event_id).is_some() {
+            } else if self.pending_replies.remove(event_id) {
                 // A rejected `response.create` never gets `response.created`; fail it now rather
                 // than at the 10 s timeout.
                 self.say_tags.retain(|t| t != event_id);

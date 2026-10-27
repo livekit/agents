@@ -882,7 +882,6 @@ if not hasattr(rtc, 'AudioFrame'):
                     instructions: "be brief".into(),
                 }),
                 RealtimeCommand::UpdateChatCtx(rt::UpdateChatCtx {
-                    req_id: "r1".into(),
                     chat_ctx: crate::ChatContext::new(vec![chat_item()]),
                 }),
                 RealtimeCommand::UpdateTools(rt::UpdateTools { tools: Vec::new() }),
@@ -926,7 +925,7 @@ if not hasattr(rtc, 'AudioFrame'):
                 shapes,
                 vec![
                     (k("update_instructions"), vec![k("instructions"), k("kind")]),
-                    (k("update_chat_ctx"), vec![k("items"), k("kind"), k("req_id")]),
+                    (k("update_chat_ctx"), vec![k("items"), k("kind")]),
                     (k("update_tools"), vec![k("kind"), k("names")]),
                     (k("push_audio"), vec![k("frame"), k("kind")]),
                     (k("push_item"), vec![k("item"), k("kind"), k("reply_required")]),
