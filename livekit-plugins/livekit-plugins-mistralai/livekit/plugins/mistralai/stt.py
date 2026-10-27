@@ -655,8 +655,7 @@ class SpeechStream(stt.RecognizeStream):
             else None
         )
 
-        # the server also sends a last, empty one when the audio ends: it only carries the usage
-        if event.get("text") or segments:
+        if event.get("text") or segments or not self._audio_ended:
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
