@@ -429,8 +429,8 @@ class _LocalTransport:
         self._num_samples += self._buf.push_frame(frame)
 
     def on_start_of_turn(self, started_at: float) -> None:
-        turn_duration = max(0.0, time.time() - started_at)
-        self._turn_start = max(0, self._num_samples - int(turn_duration * DEFAULT_SAMPLE_RATE))
+        elapsed = max(0.0, time.time() - started_at)
+        self._turn_start = max(0, self._num_samples - int(elapsed * DEFAULT_SAMPLE_RATE))
 
     def flush(self) -> None:
         if len(self._buf) > 0:
