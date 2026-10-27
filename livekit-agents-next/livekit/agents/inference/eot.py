@@ -10,8 +10,7 @@ from livekit import rtc
 from .. import _core, utils
 from ..language import LanguageCode
 from ..log import logger
-from ..metrics import EOTInferenceMetrics
-from ..metrics.base import Metadata
+from ..metrics import EOTInferenceMetrics, Metadata
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from ._utils import get_default_inference_url, get_inference_headers

@@ -18,7 +18,7 @@ fn emitter_error_to_py(e: EmitterError) -> PyErr {
     lk_agents_abi::python::HostException::to_py_err(&e)
 }
 
-/// Resolved lazily: `livekit.agents.tts.tts` imports `_core`, so resolving at module init is a cycle.
+/// Resolved lazily: `livekit.agents.tts` imports `_core`, so resolving at module init is a cycle.
 fn cached<'py>(
     slot: &'static PyOnceLock<Py<PyType>>,
     py: Python<'py>,
@@ -50,7 +50,7 @@ fn dump_default() -> bool {
 
 fn synthesized_audio_type(py: Python<'_>) -> PyResult<&Bound<'_, PyType>> {
     static T: PyOnceLock<Py<PyType>> = PyOnceLock::new();
-    cached(&T, py, "livekit.agents.tts.tts", "SynthesizedAudio")
+    cached(&T, py, "livekit.agents.tts", "SynthesizedAudio")
 }
 
 fn timed_string_type(py: Python<'_>) -> Option<&Bound<'_, PyType>> {
@@ -62,7 +62,7 @@ fn logger(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     py.import("livekit.agents.log")?.getattr("logger")
 }
 
-#[pyclass(frozen, subclass, name = "AudioEmitter", module = "livekit.agents.tts.tts")]
+#[pyclass(frozen, subclass, name = "AudioEmitter", module = "livekit.agents.tts")]
 pub struct AudioEmitter {
     /// Effects come back through [`PyHost`] with no lock held.
     driver: EmitterDriver,
@@ -525,8 +525,7 @@ ag = sys.modules.get('livekit.agents') or _mod('livekit.agents'); lk.agents = ag
 rtc = sys.modules.get('livekit.rtc') or _mod('livekit.rtc'); lk.rtc = rtc
 tp = sys.modules.get('livekit.agents.types') or _mod('livekit.agents.types'); ag.types = tp
 log = sys.modules.get('livekit.agents.log') or _mod('livekit.agents.log'); ag.log = log
-tts_pkg = _mod('livekit.agents.tts'); ag.tts = tts_pkg
-tts_mod = _mod('livekit.agents.tts.tts'); tts_pkg.tts = tts_mod
+tts_mod = _mod('livekit.agents.tts'); ag.tts = tts_mod
 
 import logging
 log.logger = logging.getLogger('livekit.agents')

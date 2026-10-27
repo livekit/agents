@@ -23,7 +23,7 @@ from typing_extensions import TypedDict, TypeVar
 
 from livekit import rtc
 
-from .. import _core, inference, llm, stt, tts, vad
+from .. import _core, inference, llm, stt, tts
 from .._core_view import (
     TurnDetector,
     chat_request,
@@ -35,13 +35,13 @@ from .._core_view import (
 from .._generated.amd import AMDPredictionEvent
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
 from .._generated.session_dispatch import IGNORED_EVENTS, MIRRORED_STATES, PUBLIC_EVENTS
+from .._generated.vad import VAD
 from ..inference.interruption import OverlappingSpeechEvent
 from ..job import get_job_context
 from ..llm import ChatContext, RealtimeModel, StopResponse
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..metrics import AgentMetrics, AgentSessionUsage
-from ..metrics.usage import _MODEL_USAGE
+from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
 from ..telemetry import otel_metrics
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -161,7 +161,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         stt: NotGivenOr[stt.STT | str] = NOT_GIVEN,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | str] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -294,7 +294,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._tts
 
     @property
-    def vad(self) -> vad.VAD | None:
+    def vad(self) -> VAD | None:
         return self._vad
 
     @property

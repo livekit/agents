@@ -522,11 +522,11 @@ SpeechStream = RecognizeStream
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-STTCapabilities.__module__ = "livekit.agents.stt.stt"
-SpeechEventType.__module__ = "livekit.agents.stt.stt"
-SpeechData.__module__ = "livekit.agents.stt.stt"
-RecognitionUsage.__module__ = "livekit.agents.stt.stt"
-SpeechEvent.__module__ = "livekit.agents.stt.stt"
-STTError.__module__ = "livekit.agents.stt.stt"
-STT.__module__ = "livekit.agents.stt.stt"
-RecognizeStream.__module__ = "livekit.agents.stt.stt"
+STTCapabilities.__module__ = "livekit.agents.stt"
+SpeechEventType.__module__ = "livekit.agents.stt"
+SpeechData.__module__ = "livekit.agents.stt"
+RecognitionUsage.__module__ = "livekit.agents.stt"
+SpeechEvent.__module__ = "livekit.agents.stt"
+STTError.__module__ = "livekit.agents.stt"
+STT.__module__ = "livekit.agents.stt"
+RecognizeStream.__module__ = "livekit.agents.stt"

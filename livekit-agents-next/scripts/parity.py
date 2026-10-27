@@ -579,24 +579,27 @@ def _models() -> Any:
         async def _run(self, output_emitter: tts.AudioEmitter) -> None:
             raise APIConnectionError("scripted tts failure", retryable=False)
 
-    from livekit.agents import vad
+    if _stack_name() == "next":
+        from livekit.agents import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
+    else:
+        from livekit.agents.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
 
-    class ScriptedVAD(vad.VAD):
+    class ScriptedVAD(VAD):
         """Hears each utterance the STT hears: start of speech on its first frame, an inference
         per frame, end of speech on its last."""
 
         def __init__(self, call: Call) -> None:
-            super().__init__(capabilities=vad.VADCapabilities(update_interval=0.02))
+            super().__init__(capabilities=VADCapabilities(update_interval=0.02))
             self.call = call
 
         @property
         def model(self) -> str:
             return "scripted"
 
-        def stream(self) -> vad.VADStream:
+        def stream(self) -> VADStream:
             return _VadStream(self)
 
-    class _VadStream(vad.VADStream):
+    class _VadStream(VADStream):
         async def _main_task(self) -> None:
             call: Call = self._vad.call  # type: ignore[attr-defined]
             heard, index, samples = 0.0, 0, 0
@@ -605,17 +608,17 @@ def _models() -> Any:
                     continue
                 samples += frame.samples_per_channel
                 if heard == 0.0:
-                    self._emit(vad.VADEventType.START_OF_SPEECH, samples, 0.0, True)
+                    self._emit(VADEventType.START_OF_SPEECH, samples, 0.0, True)
                 heard += frame.duration
                 done = heard + 1e-6 >= call.vad_bursts[index]
-                self._emit(vad.VADEventType.INFERENCE_DONE, samples, heard, not done)
+                self._emit(VADEventType.INFERENCE_DONE, samples, heard, not done)
                 if done:
-                    self._emit(vad.VADEventType.END_OF_SPEECH, samples, heard, False)
+                    self._emit(VADEventType.END_OF_SPEECH, samples, heard, False)
                     heard, index = 0.0, index + 1
 
         def _emit(self, kind: Any, samples: int, speech: float, speaking: bool) -> None:
             self._event_ch.send_nowait(
-                vad.VADEvent(
+                VADEvent(
                     type=kind,
                     samples_index=samples,
                     timestamp=0.0,

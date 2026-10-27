@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 from livekit import api, rtc
 
-from .. import _core, llm, stt, tts, utils, vad
+from .. import _core, llm, stt, tts, utils
+from .._generated.vad import VAD
 from .._generated.workflows import (
     GetAddressResult,
     GetCardNumberResult,
@@ -167,7 +168,7 @@ class WarmTransfer:
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:
@@ -247,7 +248,7 @@ class TwilioConnectorWarmTransfer(WarmTransfer):
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
         stt: NotGivenOr[stt.STT | None] = NOT_GIVEN,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | None] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
     ) -> None:

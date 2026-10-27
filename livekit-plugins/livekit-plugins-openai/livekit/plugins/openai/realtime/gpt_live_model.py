@@ -15,8 +15,7 @@ import aiohttp
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
-from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
-from livekit.agents.metrics.base import Metadata
+from livekit.agents.metrics import LLMMetrics, Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,

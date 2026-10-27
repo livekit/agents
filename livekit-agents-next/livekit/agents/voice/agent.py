@@ -26,8 +26,9 @@ from typing_extensions import ParamSpec, TypeVar
 
 from livekit import rtc
 
-from .. import _core, inference, llm, stt, tts, vad
+from .. import _core, inference, llm, stt, tts
 from .._generated.tool_executor import ToolHandlingOptions
+from .._generated.vad import VAD
 from ..llm import (
     LLM,
     DuplexModel,
@@ -87,7 +88,7 @@ class _VoiceBinding(NamedTuple):
         return self.agent._stt if is_given(self.agent._stt) else self.session.stt
 
     @property
-    def vad(self) -> vad.VAD | None:
+    def vad(self) -> VAD | None:
         return self.agent._vad if is_given(self.agent._vad) else self.session.vad
 
     @property
@@ -156,7 +157,7 @@ class Agent(Generic[Context_T, Output_T]):
         tools: list[llm.Tool | llm.Toolset] | None = None,
         output_type: type[Output_T] | None = None,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[
@@ -730,7 +731,7 @@ class Agent(Generic[Context_T, Output_T]):
         return self._expressive
 
     @property
-    def vad(self) -> NotGivenOr[vad.VAD | None]:
+    def vad(self) -> NotGivenOr[VAD | None]:
         """
         Retrieves the Voice Activity Detection component for the agent.
 

@@ -10,7 +10,7 @@ use crate::utils::stream::{StreamSink, StreamSource};
 
 // `vad.py:71`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
-#[python(dataclass, module = "vad", path = "livekit.agents.vad", name = "VADCapabilities")]
+#[python(dataclass, module = "vad", path = "livekit.agents", name = "VADCapabilities")]
 #[node(interface)]
 #[binding(extract)]
 pub struct VadCapabilities {
@@ -29,7 +29,7 @@ pub type VadSource = Box<dyn StreamSource<VadEvent>>;
 /// Plugins implement `stream()`, returning a `VADStream` whose `_main_task` turns the pushed
 /// audio into `VADEvent`s.
 #[crate::host(proxy(host = "livekit.agents.vad.VAD", clock))]
-#[python(provider(module = "vad", path = "livekit.agents.vad", events = "metrics_collected"))]
+#[python(provider(module = "vad", path = "livekit.agents", events = "metrics_collected"))]
 #[async_trait]
 pub trait Vad: Send + Sync {
     /// The name logs and metrics give this instance: its class path.

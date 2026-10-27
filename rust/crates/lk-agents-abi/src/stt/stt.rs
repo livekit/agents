@@ -53,7 +53,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AlignedTranscript {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
 // The extract direction reads a plugin's `stt.STTCapabilities` attribute by attribute.
 #[binding(emit, extract)]
-#[python(dataclass, module = "stt", path = "livekit.agents.stt.stt", name = "STTCapabilities")]
+#[python(dataclass, module = "stt", path = "livekit.agents.stt", name = "STTCapabilities")]
 pub struct SttCapabilities {
     pub streaming: bool,
     pub interim_results: bool,
@@ -107,7 +107,7 @@ pub type SttSource = Box<dyn StreamSource<SpeechEvent>>;
 #[crate::host(proxy(host = "livekit.agents.stt.STT", clock))]
 #[python(provider(
     module = "stt",
-    path = "livekit.agents.stt.stt",
+    path = "livekit.agents.stt",
     events = "metrics_collected, error",
     error(name = "STTError", kind = "stt_error")
 ))]

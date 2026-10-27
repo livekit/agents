@@ -33,16 +33,18 @@ import openai
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    VAD,
     APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    VADEventType,
+    VADStream,
     inference,
     stt,
     utils,
-    vad,
 )
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -200,7 +202,7 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
         use_realtime: NotGivenOr[bool] = NOT_GIVEN,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
     ):
         """
         Create a new instance of OpenAI STT.
@@ -355,7 +357,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         use_realtime: NotGivenOr[bool] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
     ) -> STT:
         """
         Create a new instance of Azure OpenAI STT.
@@ -678,7 +680,7 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
         opts: _STTOptions,
-        vad_instance: vad.VAD | None = None,
+        vad_instance: VAD | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
 
@@ -762,7 +764,7 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def send_task(
-            ws: aiohttp.ClientWebSocketResponse, vad_stream: vad.VADStream | None
+            ws: aiohttp.ClientWebSocketResponse, vad_stream: VADStream | None
         ) -> None:
             nonlocal closing_ws
 
@@ -802,12 +804,12 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = True
 
         @utils.log_exceptions(logger=logger)
-        async def vad_task(ws: aiohttp.ClientWebSocketResponse, vad_stream: vad.VADStream) -> None:
+        async def vad_task(ws: aiohttp.ClientWebSocketResponse, vad_stream: VADStream) -> None:
             try:
                 async for ev in vad_stream:
-                    if ev.type == vad.VADEventType.START_OF_SPEECH:
+                    if ev.type == VADEventType.START_OF_SPEECH:
                         self._start_speaking()
-                    elif ev.type == vad.VADEventType.END_OF_SPEECH:
+                    elif ev.type == VADEventType.END_OF_SPEECH:
                         self._stop_speaking()
                         # a server-endpointed model closes the segment itself; this would cut it twice
                         if _is_realtime_only(self._opts.model):

@@ -5,7 +5,8 @@ from concurrent.futures import Executor
 
 from livekit.local_inference import VAD as SileroModel
 
-from .. import _core, vad
+from .. import _core
+from .._generated import vad
 from .._generated.inference_vad import VADModels
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr

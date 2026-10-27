@@ -4,7 +4,7 @@
 use lk_agents_host_derive::Host;
 
 // The Python `module` and `path` of every record here that names none of its own.
-#[crate::host(file(module = "metrics", path = "livekit.agents.metrics.base"))]
+#[crate::host(file(module = "metrics", path = "livekit.agents.metrics"))]
 const _: () = ();
 
 // `metrics/base.py:8`. `Some("")` and `None` differ under `model_dump(exclude_none=True)`, so the

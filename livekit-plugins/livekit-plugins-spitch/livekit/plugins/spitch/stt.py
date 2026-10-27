@@ -15,8 +15,8 @@ from livekit.agents import (
     APITimeoutError,
     LanguageCode,
     NotGivenOr,
+    stt,
 )
-from livekit.agents.stt import stt
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.voice.io import TimedString
 from spitch import AsyncSpitch

@@ -263,8 +263,8 @@ class VADStream(ABC):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-VADEventType.__module__ = "livekit.agents.vad"
-VADEvent.__module__ = "livekit.agents.vad"
-VADCapabilities.__module__ = "livekit.agents.vad"
-VAD.__module__ = "livekit.agents.vad"
-VADStream.__module__ = "livekit.agents.vad"
+VADEventType.__module__ = "livekit.agents"
+VADEvent.__module__ = "livekit.agents"
+VADCapabilities.__module__ = "livekit.agents"
+VAD.__module__ = "livekit.agents"
+VADStream.__module__ = "livekit.agents"

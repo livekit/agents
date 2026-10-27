@@ -4,7 +4,7 @@
 use lk_agents_host_derive::Host;
 
 // The Python `module` and `path` of every record here that names none of its own.
-#[crate::host(file(module = "usage", path = "livekit.agents.metrics.usage"))]
+#[crate::host(file(module = "usage", path = "livekit.agents.metrics"))]
 const _: () = ();
 
 // `_BaseModelUsage`. Python-only: a zero-eliding `__repr__`, and the base the gate records.

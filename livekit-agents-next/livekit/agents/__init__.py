@@ -20,7 +20,7 @@ documentation, and examples.
 
 import typing
 
-from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
+from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, voice
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -30,6 +30,7 @@ from ._exceptions import (
     UnexpectedModelBehavior,
     create_api_error_from_http,
 )
+from ._generated.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
 from .job import (
     AutoSubscribe,
     JobContext,
@@ -280,8 +281,12 @@ __all__ = [
     "tokenize",
     "tts",
     "utils",
-    "vad",
     "voice",
+    "VAD",
+    "VADCapabilities",
+    "VADEvent",
+    "VADEventType",
+    "VADStream",
     # run_result
     "mock_tools",
     "EventAssert",

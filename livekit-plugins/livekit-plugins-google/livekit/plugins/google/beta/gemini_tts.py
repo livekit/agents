@@ -8,7 +8,7 @@ from typing import Any, Literal
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, tts, utils
-from livekit.agents.tts._provider_format import split_expr_markup
+from livekit.agents.tts import split_expr_markup
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,

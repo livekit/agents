@@ -53,8 +53,7 @@ from livekit.agents import (
     llm,
     utils,
 )
-from livekit.agents.metrics import RealtimeModelMetrics
-from livekit.agents.metrics.base import Metadata
+from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker

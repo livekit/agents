@@ -28,6 +28,7 @@ from aiohttp import web
 from livekit import rtc
 from livekit.agents import (
     AMD,
+    VAD,
     Agent,
     AMDCategory,
     APIConnectOptions,
@@ -37,6 +38,10 @@ from livekit.agents import (
     FlushSentinel,
     ModelSettings,
     RunContext,
+    VADCapabilities,
+    VADEvent,
+    VADEventType,
+    VADStream,
     VoiceSession,
     _core,
     function_tool,
@@ -44,7 +49,6 @@ from livekit.agents import (
     room_io,
     stt,
     tts,
-    vad,
 )
 from livekit.agents.llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -138,39 +142,39 @@ class BatchSTT(stt.STT):
         return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[said])
 
 
-class ScriptedVAD(vad.VAD):
+class ScriptedVAD(VAD):
     """Speech starts with the first frame and ends after half a second, its frames attached."""
 
     def __init__(self) -> None:
-        super().__init__(capabilities=vad.VADCapabilities(update_interval=0.032))
+        super().__init__(capabilities=VADCapabilities(update_interval=0.032))
 
-    def stream(self) -> vad.VADStream:
+    def stream(self) -> VADStream:
         return _Detect(self)
 
 
-class _Detect(vad.VADStream):
+class _Detect(VADStream):
     async def _main_task(self) -> None:
         speech: list[rtc.AudioFrame] = []
         ended = False
         async for frame in self.input:
             if not isinstance(frame, rtc.AudioFrame) or ended:
                 continue
-            kind = vad.VADEventType.START_OF_SPEECH if not speech else None
+            kind = VADEventType.START_OF_SPEECH if not speech else None
             speech.append(frame)
             if sum(f.duration for f in speech) >= 0.5:
-                kind = vad.VADEventType.END_OF_SPEECH
+                kind = VADEventType.END_OF_SPEECH
             if kind is not None:
                 self.send(
-                    vad.VADEvent(
+                    VADEvent(
                         type=kind,
                         samples_index=0,
                         timestamp=0.0,
                         speech_duration=0.0,
                         silence_duration=0.0,
-                        frames=list(speech) if kind == vad.VADEventType.END_OF_SPEECH else [],
+                        frames=list(speech) if kind == VADEventType.END_OF_SPEECH else [],
                     )
                 )
-            ended = kind == vad.VADEventType.END_OF_SPEECH
+            ended = kind == VADEventType.END_OF_SPEECH
 
 
 class SilentTTS(tts.TTS):

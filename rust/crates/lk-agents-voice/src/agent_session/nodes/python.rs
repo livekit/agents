@@ -208,7 +208,7 @@ fn audio_frame(py: Python<'_>, audio: &SynthesizedAudio) -> PyResult<Py<PyAny>> 
 
 /// A speech event as the reference's `stt.SpeechEvent`.
 fn speech_event(py: Python<'_>, ev: &SpeechEvent) -> PyResult<Py<PyAny>> {
-    let convert = py.import("livekit.agents.stt.adapters")?.getattr("_speech_event_from_core")?;
+    let convert = py.import("livekit.agents.stt")?.getattr("_speech_event_from_core")?;
     Ok(convert.call1((ev.clone().into_pyobject(py)?,))?.unbind())
 }
 

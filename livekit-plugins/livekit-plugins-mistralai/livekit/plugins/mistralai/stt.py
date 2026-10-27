@@ -9,14 +9,16 @@ import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
 
 from livekit import rtc
 from livekit.agents import (
+    VAD,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    VADEventType,
+    VADStream,
     stt,
     utils,
-    vad,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -67,7 +69,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         context_bias: NotGivenOr[list[str]] = NOT_GIVEN,
         target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
-        vad: vad.VAD | None = None,
+        vad: VAD | None = None,
     ):
         """
         Create a new instance of MistralAI STT.
@@ -273,7 +275,7 @@ class SpeechStream(stt.RecognizeStream):
         pool: utils.ConnectionPool[RealtimeConnection],
         conn_options: APIConnectOptions,
         language: NotGivenOr[str] = NOT_GIVEN,
-        vad_instance: vad.VAD | None = None,
+        vad_instance: VAD | None = None,
     ) -> None:
         super().__init__(
             stt=stt,
@@ -292,7 +294,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _send_task(
         self,
         connection: RealtimeConnection,
-        vad_stream: vad.VADStream | None,
+        vad_stream: VADStream | None,
     ) -> None:
         samples_per_chunk = SAMPLE_RATE // 20  # 50ms chunks
         audio_bstream = utils.audio.AudioByteStream(
@@ -322,15 +324,15 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _vad_task(
         self,
-        vad_stream: vad.VADStream,
+        vad_stream: VADStream,
         connection: RealtimeConnection,
     ) -> None:
         async for ev in vad_stream:
-            if ev.type == vad.VADEventType.START_OF_SPEECH:
+            if ev.type == VADEventType.START_OF_SPEECH:
                 if not self._speaking:
                     self._speaking = True
                     self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-            elif ev.type == vad.VADEventType.END_OF_SPEECH:
+            elif ev.type == VADEventType.END_OF_SPEECH:
                 # force Mistral to finalize the current speech segment
                 await connection.flush_audio()
                 if self._speaking:

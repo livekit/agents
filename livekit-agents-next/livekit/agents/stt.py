@@ -1,34 +1,57 @@
-"""The STT adapters: the fallback chain is the core's (``_core.FallbackStt``)."""
+"""Speech to text: the base classes a provider subclasses (generated from the core's
+declarations) and the adapters, whose fallback chain is the core's (``_core.FallbackStt``)."""
 
 from __future__ import annotations
 
 import asyncio
 import functools
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
-from .. import _core, utils
-from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..vad import VAD
-from .stt import (
+from . import _core, utils
+from ._generated.stt import (
     STT,
     RecognitionUsage,
     RecognizeStream,
     SpeechData,
     SpeechEvent,
+    SpeechEventType,
+    SpeechStream,
     STTCapabilities,
+    STTError,
 )
+from ._generated.vad import VAD
+from .log import logger
+from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 
 if TYPE_CHECKING:
-    from ..llm.chat_context import MetricsMetadata
+    from .llm.chat_context import MetricsMetadata
 
 __all__ = [
-    "AvailabilityChangedEvent",
-    "FallbackAdapter",
+    "SpeechEventType",
+    "SpeechEvent",
+    "SpeechData",
+    "RecognizeStream",
+    "SpeechStream",
+    "STT",
+    "STTCapabilities",
     "StreamAdapter",
     "StreamAdapterWrapper",
+    "RecognitionUsage",
+    "FallbackAdapter",
+    "AvailabilityChangedEvent",
+    "STTError",
+    "SpeakerContext",
 ]
+
+
+# A structural type, which has no core counterpart to be generated from.
+@runtime_checkable
+class SpeakerContext(Protocol):
+    """A speaker model an STT context provides, which the expressive system turns into LLM
+    instructions."""
+
+    def to_instructions(self) -> str: ...
 
 
 def _speech_event_from_core(ev: dict[str, Any], *, offset: float = 0.0) -> SpeechEvent:

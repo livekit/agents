@@ -5,7 +5,8 @@ import dataclasses
 import functools
 from typing import Any
 
-from .. import _core, stt, vad as vad_mod
+from .. import _core, stt
+from .._generated import vad as vad_mod
 from .._generated.inference_stt import (
     AssemblyAIModels,
     AssemblyaiOptions,
@@ -269,7 +270,7 @@ class SpeechStream(stt.SpeechStream):
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
-                self.send(stt.adapters._speech_event_from_core(ev))
+                self.send(stt._speech_event_from_core(ev))
         finally:
             self._native = None
             await aio.cancel_and_wait(push)

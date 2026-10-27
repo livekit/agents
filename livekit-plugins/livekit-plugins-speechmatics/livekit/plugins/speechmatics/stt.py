@@ -24,13 +24,15 @@ from urllib.parse import urlparse
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    VAD,
     APIConnectionError,
     APIConnectOptions,
     APIError,
     LanguageCode,
+    VADEventType,
+    VADStream,
     stt,
     utils,
-    vad,
 )
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -182,7 +184,7 @@ class STT(stt.STT):
         known_speakers: NotGivenOr[list[SpeakerIdentifier]] = NOT_GIVEN,
         sample_rate: int = 16000,
         audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
-        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         **kwargs: Any,
     ):
         """Create a new instance of Speechmatics STT using Agent STT SDK.
@@ -542,7 +544,7 @@ class SpeechStream(stt.RecognizeStream):
         config: TranscriptionConfig,
         turn_detection_mode: TurnDetectionMode,
         id: int,
-        vad_instance: vad.VAD | None = None,
+        vad_instance: VAD | None = None,
     ) -> None:
         super().__init__(
             stt=stt,
@@ -558,8 +560,8 @@ class SpeechStream(stt.RecognizeStream):
         self._msg_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._speech_duration: float = 0
 
-        self._vad: vad.VAD | None = vad_instance
-        self._vad_stream: vad.VADStream | None = None
+        self._vad: VAD | None = vad_instance
+        self._vad_stream: VADStream | None = None
 
         self._tasks: list[asyncio.Task] = []
 
@@ -741,11 +743,11 @@ class SpeechStream(stt.RecognizeStream):
         except asyncio.CancelledError:
             pass
 
-    async def _process_vad(self, vad_stream: vad.VADStream) -> None:
+    async def _process_vad(self, vad_stream: VADStream) -> None:
         """Call `client.finalize()` whenever the external VAD reports end of speech."""
         try:
             async for ev in vad_stream:
-                if ev.type == vad.VADEventType.END_OF_SPEECH:
+                if ev.type == VADEventType.END_OF_SPEECH:
                     if self._client and self._client.is_connected:
                         self._client.finalize()
         except asyncio.CancelledError:
@@ -931,7 +933,7 @@ _DEPRECATED_TURN_DETECTION_MODES = frozenset(
 )
 
 
-def _load_default_vad() -> vad.VAD | None:
+def _load_default_vad() -> VAD | None:
     """Load a local VAD to drive `finalize()` in `EXTERNAL` mode, or `None` if unavailable.
 
     The pre-Agent-STT plugin loaded Silero here and raised `ImportError` when it was

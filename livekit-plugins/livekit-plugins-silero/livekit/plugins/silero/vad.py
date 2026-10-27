@@ -49,7 +49,7 @@ class _VADOptions:
     sample_rate: int
 
 
-class VAD(agents.vad.VAD):
+class VAD(agents.VAD):
     """
     Silero Voice Activity Detection (VAD) class.
 
@@ -71,7 +71,7 @@ class VAD(agents.vad.VAD):
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
-    ) -> agents.vad.VAD:
+    ) -> agents.VAD:
         """
         Load and initialize the Silero VAD model.
 
@@ -146,7 +146,7 @@ class VAD(agents.vad.VAD):
         session: onnxruntime.InferenceSession,
         opts: _VADOptions,
     ) -> None:
-        super().__init__(capabilities=agents.vad.VADCapabilities(update_interval=0.032))
+        super().__init__(capabilities=agents.VADCapabilities(update_interval=0.032))
         self._onnx_session = session
         self._opts = opts
         self._streams = weakref.WeakSet[VADStream]()
@@ -226,7 +226,7 @@ class VAD(agents.vad.VAD):
         return self._opts.min_silence_duration
 
 
-class VADStream(agents.vad.VADStream):
+class VADStream(agents.VADStream):
     def __init__(self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
         super().__init__(vad)
         self._opts, self._model = opts, model
@@ -493,8 +493,8 @@ class VADStream(agents.vad.VADStream):
                     pub_silence_duration += window_duration
 
                 self.send(
-                    agents.vad.VADEvent(
-                        type=agents.vad.VADEventType.INFERENCE_DONE,
+                    agents.VADEvent(
+                        type=agents.VADEventType.INFERENCE_DONE,
                         samples_index=pub_current_sample,
                         timestamp=pub_timestamp,
                         silence_duration=pub_silence_duration,
@@ -528,8 +528,8 @@ class VADStream(agents.vad.VADStream):
                             pub_speech_duration = speech_threshold_duration
 
                             self.send(
-                                agents.vad.VADEvent(
-                                    type=agents.vad.VADEventType.START_OF_SPEECH,
+                                agents.VADEvent(
+                                    type=agents.VADEventType.START_OF_SPEECH,
                                     samples_index=pub_current_sample,
                                     timestamp=pub_timestamp,
                                     silence_duration=pub_silence_duration,
@@ -554,8 +554,8 @@ class VADStream(agents.vad.VADStream):
                         pub_silence_duration = silence_threshold_duration
 
                         self.send(
-                            agents.vad.VADEvent(
-                                type=agents.vad.VADEventType.END_OF_SPEECH,
+                            agents.VADEvent(
+                                type=agents.VADEventType.END_OF_SPEECH,
                                 samples_index=pub_current_sample,
                                 timestamp=pub_timestamp,
                                 silence_duration=pub_silence_duration,

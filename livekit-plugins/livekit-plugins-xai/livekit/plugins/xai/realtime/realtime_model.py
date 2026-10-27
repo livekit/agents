@@ -32,8 +32,7 @@ from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 from openai.types.realtime.session_update_event import SessionUpdateEvent
 
 from livekit.agents import llm, utils
-from livekit.agents.metrics import RealtimeModelMetrics
-from livekit.agents.metrics.base import Metadata
+from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,

@@ -22,7 +22,7 @@ import sphn  # type: ignore[import-untyped]
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
-from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
+from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from .log import logger

@@ -134,10 +134,10 @@ class AgentSessionUsage:
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-_BaseModelUsage.__module__ = "livekit.agents.metrics.usage"
-LLMModelUsage.__module__ = "livekit.agents.metrics.usage"
-TTSModelUsage.__module__ = "livekit.agents.metrics.usage"
-STTModelUsage.__module__ = "livekit.agents.metrics.usage"
-InterruptionModelUsage.__module__ = "livekit.agents.metrics.usage"
-EOTModelUsage.__module__ = "livekit.agents.metrics.usage"
-AgentSessionUsage.__module__ = "livekit.agents.metrics.usage"
+_BaseModelUsage.__module__ = "livekit.agents.metrics"
+LLMModelUsage.__module__ = "livekit.agents.metrics"
+TTSModelUsage.__module__ = "livekit.agents.metrics"
+STTModelUsage.__module__ = "livekit.agents.metrics"
+InterruptionModelUsage.__module__ = "livekit.agents.metrics"
+EOTModelUsage.__module__ = "livekit.agents.metrics"
+AgentSessionUsage.__module__ = "livekit.agents.metrics"

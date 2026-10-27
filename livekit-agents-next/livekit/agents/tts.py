@@ -1,4 +1,6 @@
-"""The TTS adapters: their engines are the core's (``_core.FallbackTts``,
+"""Text to speech: the base classes a provider subclasses (generated from the core's
+declarations), the expressive markup helpers over the core's per-provider tables
+(``_core.Markup``), and the adapters, whose engines are the core's (``_core.FallbackTts``,
 ``_core.tts_adapter_stream``, ``_core.SentencePacer``)."""
 
 from __future__ import annotations
@@ -6,34 +8,90 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
-from .. import _core, tokenize, utils
-from ..log import logger
-from ..tokenize import SentenceStream, TokenData
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from .tts import (
+from . import _core, tokenize, utils
+from ._generated.tts import (
     TTS,
-    AudioEmitter,
     ChunkedStream,
+    MarkupInfo,
+    SynthesizedAudio,
     SynthesizeStream,
     TTSCapabilities,
+    TTSError,
 )
+from .log import logger
+from .tokenize import SentenceStream, TokenData
+from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 
 if TYPE_CHECKING:
-    from ..llm.chat_context import MetricsMetadata
+    from .llm.chat_context import MetricsMetadata
 
 __all__ = [
+    "TTS",
+    "SynthesizedAudio",
+    "SynthesizeStream",
+    "TTSCapabilities",
+    "MarkupInfo",
+    "StreamAdapterWrapper",
+    "StreamAdapter",
+    "ChunkedStream",
     "AvailabilityChangedEvent",
     "FallbackAdapter",
     "FallbackChunkedStream",
     "FallbackSynthesizeStream",
+    "AudioEmitter",
+    "TTSError",
     "SentenceStreamPacer",
-    "StreamAdapter",
-    "StreamAdapterWrapper",
 ]
+
+
+# The core's class under its public name: `audio/pcm` is framed as it is, any other container
+# decoded (ffmpeg) as it arrives.
+AudioEmitter = _core.AudioEmitter
+
+
+class ExpressiveTag(TypedDict):
+    """An expressive markup tag stripped from a transcript: the tag name (or the expr marker's
+    type) and its payload (the ``value`` attribute, the expr ``label`` or the inner text)."""
+
+    type: str
+    value: str
+
+
+_EXPR_MARKER_RE = re.compile(r"<expr\b([^>]*?)/?\s*>")
+_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
+
+
+def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+    """Strip every provider's expressive XML markup; brackets are prose and stay."""
+    clean, tags = _core.split_all_markup(text)
+    return clean, [ExpressiveTag(type=t["type"], value=t["value"]) for t in tags]
+
+
+def strip_all_markup(text: str) -> str:
+    return _core.strip_all_markup(text)  # type: ignore[no-any-return]
+
+
+def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
+    """Strip only the ``<expr/>`` dialect, returning the clean text and its markers; the
+    provider-native tags stay in the words."""
+    tags = [
+        ExpressiveTag(type=attrs.get("type", ""), value=attrs.get("label", ""))
+        for attrs in (dict(_ATTR_RE.findall(m)) for m in _EXPR_MARKER_RE.findall(text))
+    ]
+    if not tags:
+        return text, tags
+    clean = _core.strip_expr_markup(text).rstrip(" \t")
+    # a marker heading the text takes the space after it along
+    return (clean.lstrip(" \t") if text.lstrip().startswith("<expr") else clean), tags
+
+
+def strip_expr_markup(text: str) -> str:
+    return split_expr_markup(text)[0]
 
 
 async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bool) -> None:

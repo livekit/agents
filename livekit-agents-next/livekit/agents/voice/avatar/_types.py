@@ -12,7 +12,7 @@ from livekit.api import TwirpError
 from ... import utils
 from ...job import get_job_context
 from ...log import logger
-from ...metrics.base import AvatarMetrics, Metadata
+from ...metrics import AvatarMetrics, Metadata
 from ..events import ConversationItemAddedEvent
 
 if TYPE_CHECKING:

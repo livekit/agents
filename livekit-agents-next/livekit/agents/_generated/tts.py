@@ -546,10 +546,10 @@ class _ChunkedStreamFromStream(ChunkedStream):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-TTSCapabilities.__module__ = "livekit.agents.tts.tts"
-MarkupInfo.__module__ = "livekit.agents.tts.tts"
-SynthesizedAudio.__module__ = "livekit.agents.tts.tts"
-TTSError.__module__ = "livekit.agents.tts.tts"
-TTS.__module__ = "livekit.agents.tts.tts"
-ChunkedStream.__module__ = "livekit.agents.tts.tts"
-SynthesizeStream.__module__ = "livekit.agents.tts.tts"
+TTSCapabilities.__module__ = "livekit.agents.tts"
+MarkupInfo.__module__ = "livekit.agents.tts"
+SynthesizedAudio.__module__ = "livekit.agents.tts"
+TTSError.__module__ = "livekit.agents.tts"
+TTS.__module__ = "livekit.agents.tts"
+ChunkedStream.__module__ = "livekit.agents.tts"
+SynthesizeStream.__module__ = "livekit.agents.tts"

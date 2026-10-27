@@ -10,7 +10,7 @@ use lk_agents_host_derive::Host;
 // `stt/stt.py`, a `(str, Enum)`: users write `ev.type == "final_transcript"`, so the wire strings
 // are public API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, lk_agents_host_derive::Vocabulary)]
-#[python(enum, module = "stt", path = "livekit.agents.stt.stt", name = "SpeechEventType")]
+#[python(enum, module = "stt", path = "livekit.agents.stt", name = "SpeechEventType")]
 #[node(enum)]
 #[host(wire(
     err = crate::llm::chat_context::UnknownLiteral,
@@ -49,7 +49,7 @@ pub enum SpeechEventType {
     dataclass,
     zero_defaults,
     module = "stt",
-    path = "livekit.agents.stt.stt",
+    path = "livekit.agents.stt",
     name = "SpeechData",
     post_init = "speech_data_post_init"
 )]
@@ -120,7 +120,7 @@ impl SpeechData {
 
 // `stt/stt.py:106`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
-#[python(dataclass, module = "stt", path = "livekit.agents.stt.stt", name = "RecognitionUsage")]
+#[python(dataclass, module = "stt", path = "livekit.agents.stt", name = "RecognitionUsage")]
 #[node(interface)]
 #[binding(emit, extract)]
 pub struct RecognitionUsage {
@@ -138,7 +138,7 @@ pub struct RecognitionUsage {
     dataclass,
     zero_defaults,
     module = "stt",
-    path = "livekit.agents.stt.stt",
+    path = "livekit.agents.stt",
     name = "SpeechEvent",
     // Wall-clock times the host stamps; the core has no wall clock.
     host_field(

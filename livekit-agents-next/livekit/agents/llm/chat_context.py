@@ -376,7 +376,7 @@ class ChatMessage(_ChatItemBase):
         if raw is None or self.role != "assistant":
             return raw
 
-        from ..tts._provider_format import strip_expr_markup
+        from ..tts import strip_expr_markup
 
         return strip_expr_markup(raw)
 
@@ -665,7 +665,7 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
                 # only strip the <expr/> dialect, and only in assistant messages
                 if strip_markup and item.role == "assistant":
-                    from ..tts._provider_format import strip_expr_markup
+                    from ..tts import strip_expr_markup
 
                     item.content = [
                         strip_expr_markup(c) if isinstance(c, str) else c for c in item.content

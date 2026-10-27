@@ -1747,7 +1747,7 @@ class {Stream}(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):
 
     def _report_connection_acquired(self, acquire_time: float) -> None:
         """Report connection timing as a RealtimeModelMetrics event with zero usage."""
-        from ..metrics.base import Metadata, RealtimeModelMetrics
+        from ..metrics import Metadata, RealtimeModelMetrics
 
         self.emit(
             "metrics_collected",

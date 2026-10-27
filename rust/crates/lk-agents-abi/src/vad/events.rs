@@ -7,7 +7,7 @@ use lk_agents_host_derive::Host;
 
 // `vad.py:19`, a `(str, Enum)`: the wire strings are public API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, lk_agents_host_derive::Vocabulary)]
-#[python(enum, module = "vad", path = "livekit.agents.vad", name = "VADEventType")]
+#[python(enum, module = "vad", path = "livekit.agents", name = "VADEventType")]
 #[node(enum)]
 #[host(wire(
     err = crate::llm::chat_context::UnknownLiteral,
@@ -28,7 +28,7 @@ pub enum VadEventType {
 // The `///` above is the reference's docstring, blank first line included. Fires ~every 32 ms per
 // stream, so the audio is one [`MediaRef`] rather than a `Vec` of frames; `None` is an empty list.
 #[derive(Debug, Clone, PartialEq, Host)]
-#[python(dataclass, module = "vad", path = "livekit.agents.vad", name = "VADEvent")]
+#[python(dataclass, module = "vad", path = "livekit.agents", name = "VADEvent")]
 #[node(interface)]
 // Read by hand (`FromPyObject` below): `frames` is interned only when it holds audio.
 #[binding(emit)]

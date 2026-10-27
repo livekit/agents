@@ -32,14 +32,16 @@ import aiohttp
 
 from livekit import rtc
 from livekit.agents import (
+    VAD,
     APIConnectionError,
     APIConnectOptions,
     APIError,
     APITimeoutError,
     LanguageCode,
+    VADEvent,
+    VADEventType,
     stt,
     utils,
-    vad,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 
@@ -158,7 +160,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        vad: vad.VAD | None,
+        vad: VAD | None,
         url: str | None = None,
         model: str | None = None,
         api_key: str | None = None,
@@ -447,7 +449,7 @@ class SpeechStream(stt.RecognizeStream):
         self,
         ws: _WebSocket,
         buffer: utils.audio.AudioByteStream,
-        detector: vad.VAD,
+        detector: VAD,
     ) -> None:
         vad_stream = detector.stream()
         pending = bytearray()
@@ -490,7 +492,7 @@ class SpeechStream(stt.RecognizeStream):
             else:
                 self._processed_samples += size // 2
 
-        async def send_prefix(event: vad.VADEvent, position: int) -> None:
+        async def send_prefix(event: VADEvent, position: int) -> None:
             if not event.frames or any(
                 frame.sample_rate != SAMPLE_RATE
                 or frame.num_channels != NUM_CHANNELS
@@ -532,7 +534,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 position = round(event.timestamp * SAMPLE_RATE)
                 await drain(position)
-                if event.type == vad.VADEventType.START_OF_SPEECH:
+                if event.type == VADEventType.START_OF_SPEECH:
                     if speaking:
                         raise APIError(
                             "Microsoft AI STT received overlapping VAD speech starts",
@@ -541,7 +543,7 @@ class SpeechStream(stt.RecognizeStream):
                     await send_prefix(event, position)
                     speaking = True
                     self._start_speaking()
-                elif event.type == vad.VADEventType.END_OF_SPEECH:
+                elif event.type == VADEventType.END_OF_SPEECH:
                     if not speaking:
                         raise APIError(
                             "Microsoft AI STT received a VAD end without a speech start",

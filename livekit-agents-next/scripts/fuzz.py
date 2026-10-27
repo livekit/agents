@@ -124,7 +124,17 @@ class Call:
 
 def providers(call: Call) -> Any:
     from livekit import rtc
-    from livekit.agents import APIConnectOptions, llm, stt, tts, vad
+    from livekit.agents import (
+        VAD,
+        APIConnectOptions,
+        VADCapabilities,
+        VADEvent,
+        VADEventType,
+        VADStream,
+        llm,
+        stt,
+        tts,
+    )
     from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
     draw = call.draw
@@ -254,35 +264,35 @@ def providers(call: Call) -> Any:
             said = stt.SpeechData(language="en", text="tell me a story", confidence=1.0)
             return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[said])
 
-    class FuzzVAD(vad.VAD):
+    class FuzzVAD(VAD):
         """Speech from the first frame of a burst until half a second of it."""
 
         def __init__(self) -> None:
-            super().__init__(capabilities=vad.VADCapabilities(update_interval=0.02))
+            super().__init__(capabilities=VADCapabilities(update_interval=0.02))
 
         @property
         def model(self) -> str:
             return "fuzz-vad"
 
-        def stream(self) -> vad.VADStream:
+        def stream(self) -> VADStream:
             return _Detect(self)
 
-    class _Detect(vad.VADStream):
+    class _Detect(VADStream):
         async def _main_task(self) -> None:
             speech: list[rtc.AudioFrame] = []
             async for frame in self.input:
                 if not isinstance(frame, rtc.AudioFrame) or speech is None:
                     continue
                 if not speech:
-                    self._emit(vad.VADEventType.START_OF_SPEECH, [], True)
+                    self._emit(VADEventType.START_OF_SPEECH, [], True)
                 speech.append(frame)
                 if sum(f.duration for f in speech) >= 0.5:
-                    self._emit(vad.VADEventType.END_OF_SPEECH, list(speech), False)
+                    self._emit(VADEventType.END_OF_SPEECH, list(speech), False)
                     speech = None  # type: ignore[assignment]
 
         def _emit(self, kind: Any, frames: list[Any], speaking: bool) -> None:
             self.send(
-                vad.VADEvent(
+                VADEvent(
                     type=kind,
                     samples_index=0,
                     timestamp=0.0,
