@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import httpx2  # mistralai raises httpx2.TimeoutException from its http client
@@ -20,6 +21,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given, shortuuid
+from livekit.agents.utils.deprecation import deprecate_params
 from mistralai.client import Mistral
 from mistralai.client.errors import HTTPValidationError, SDKError
 from mistralai.client.models import (
@@ -65,7 +67,21 @@ class _PendingFunctionCall:
     arguments: str = ""
 
 
+class ApiMode(str, Enum):
+    """Deprecated: the LLM always uses the Conversations API."""
+
+    CONVERSATIONS = "conversations"
+    CHAT_COMPLETIONS = "chat_completions"
+
+
+_API_MODE_DEPRECATION = (
+    "The LLM always uses the Conversations API, including with 'chat_completions', "
+    "so this has no effect."
+)
+
+
 class LLM(llm.LLM):
+    @deprecate_params({"api_mode": _API_MODE_DEPRECATION})
     def __init__(
         self,
         *,
@@ -79,6 +95,7 @@ class LLM(llm.LLM):
         random_seed: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
     ) -> None:
         """Create a new instance of MistralAI LLM.
 
@@ -99,6 +116,7 @@ class LLM(llm.LLM):
                 (``"auto"``, ``"required"``, ``"none"``).
             max_completion_tokens: The max. number of tokens the LLM can
                 output.
+            api_mode: Deprecated and ignored, the LLM always uses the Conversations API.
         """
         super().__init__()
         self._opts = _LLMOptions(
@@ -131,6 +149,7 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return "MistralAI"
 
+    @deprecate_params({"api_mode": _API_MODE_DEPRECATION})
     def update_options(
         self,
         *,
@@ -142,6 +161,7 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         random_seed: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
             self._opts.model = model
