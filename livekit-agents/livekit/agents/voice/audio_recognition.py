@@ -58,6 +58,9 @@ _NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
 _EOU_MAX_HISTORY_TURNS = 6
 # backoff before recreating the stt stream after an unrecoverable error
 _STT_RECONNECT_INTERVAL = 0.5
+# A commit that already holds a final covering the pushed audio waits this long for a second final a
+# streaming STT may still emit for audio it accepted earlier, instead of the full transcript_timeout.
+_PARTIAL_FINAL_GRACE = 1.0
 
 
 @dataclass
@@ -1100,9 +1103,11 @@ class AudioRecognition:
 
         async def _commit_user_turn() -> None:
             can_flush = self._stt_pipeline is not None and self._stt_pipeline.manual_flush
-            # A final that already covers every frame pushed so far is this turn's transcript. Flushing
-            # again asks STT for a final it will never send for audio it already closed, and the wait then
-            # runs to transcript_timeout even though nothing is pending.
+            # A final that already covers every frame pushed so far is very likely this turn's transcript,
+            # but not certainly: a streaming STT can still be decoding audio it already accepted and
+            # finalize it separately (one phrase finalized, the next still in flight). So the commit keeps
+            # waiting for a possible second final, just for a short grace window instead of the full
+            # transcript_timeout, which is what made an already-finalized turn stall for 10s.
             final_covers_audio = (
                 self._last_final_transcript_time is not None
                 and not self._audio_interim_transcript
@@ -1112,13 +1117,10 @@ class AudioRecognition:
                 )
             )
             # A manual-flush pipeline needs the explicit flush on every commit to keep its turn
-            # boundaries, so the short-circuit only applies to pipelines that finalize on their own.
+            # boundaries, so the shorter wait only applies to pipelines that finalize on their own.
             flush_and_wait = can_flush or (
-                not final_covers_audio
-                and (
-                    self._last_final_transcript_time is None
-                    or (time.time() - self._last_final_transcript_time > 0.5)
-                )
+                self._last_final_transcript_time is None
+                or (time.time() - self._last_final_transcript_time > 0.5)
             )
             if flush_and_wait:
                 self._final_transcript_received.clear()
@@ -1131,11 +1133,16 @@ class AudioRecognition:
                     for _ in range(num_frames):
                         self._push_audio(silence)
 
+                wait_timeout = (
+                    min(transcript_timeout, _PARTIAL_FINAL_GRACE)
+                    if final_covers_audio and not can_flush
+                    else transcript_timeout
+                )
                 # wait for the final transcript to be available
                 try:
                     await asyncio.wait_for(
                         self._final_transcript_received.wait(),
-                        timeout=transcript_timeout,
+                        timeout=wait_timeout,
                     )
                 except asyncio.TimeoutError:
                     if self._audio_interim_transcript:
