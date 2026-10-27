@@ -371,6 +371,8 @@ pub const MEMORY_MONITOR_INTERVAL: Duration = Duration::from_secs(5);
 pub const MEMORY_WARN_COOLDOWN: Duration = Duration::from_secs(120);
 /// Warn again before the cooldown when usage grew this much since the last warning.
 pub const MEMORY_WARN_RESET_DELTA_MB: f64 = 50.0;
+/// How long a closing client writes what is still queued for the parent.
+pub const FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 /// Between SIGUSR1 (the child dumps its stacks) and SIGKILL, and after a DumpStackTraceRequest.
 pub const KILL_GRACE: Duration = Duration::from_millis(500);
 
@@ -529,6 +531,19 @@ impl<H: ProcHost> ProcSupervisor<H> {
     /// message was received.
     pub async fn recv(&self) -> Result<Vec<u8>, Closed> {
         self.inner.messages.lock().await.recv().await.ok_or(Closed)
+    }
+
+    /// The InitializeRequest to send the process: the supervision's ping settings.
+    pub fn initialize_request(&self, asyncio_debug: bool, http_proxy: &str) -> IpcMessage {
+        let opts = &self.inner.opts;
+        let fields = vec![
+            Value::Bool(asyncio_debug),
+            Value::Float(opts.ping_interval as f32),
+            Value::Float(opts.ping_timeout as f32),
+            Value::Float(opts.high_ping_threshold as f32),
+            Value::Str(http_proxy.to_owned()),
+        ];
+        IpcMessage::new(INITIALIZE_REQUEST, fields).expect("the schema's fields")
     }
 
     /// Waits for the InitializeResponse to the InitializeRequest the host sent. `None` when it
@@ -889,44 +904,88 @@ async fn memory_loop<H: ProcHost>(inner: Arc<Inner<H>>) {
 /// The child's grace on top of the parent's `ping_timeout` before it calls itself orphaned.
 pub const HEALTH_CHECK_GRACE: f64 = 10.0;
 
-/// The child's side of the socket after the initialize handshake. With a health timeout, it
-/// prints to stderr and closes when the parent sends nothing for that long, whatever the state
-/// of the child's event loop.
+/// The child's side of the socket: the initialize handshake ([`handshake`](Self::handshake)),
+/// then the parent's messages, read once [`serve`](Self::serve)d. What the child sends, its log
+/// records included, goes out in order through one queue ([`queue`](Self::queue)), so a sender on
+/// any thread never waits. With a health timeout, it prints to stderr and stops reading when the
+/// parent sends nothing for that long, whatever the state of the child's event loop.
 pub struct IpcClient {
-    writer: Writer,
+    outbox: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
+    writer: Mutex<Option<JoinHandle<()>>>,
+    /// The reading half until it is served.
+    unread: tokio::sync::Mutex<Option<BoxRead>>,
+    forward: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
     messages: tokio::sync::Mutex<mpsc::UnboundedReceiver<Vec<u8>>>,
     reader: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl IpcClient {
     /// Needs a runtime context.
-    pub fn new<S>(stream: S, health_timeout: Option<Duration>) -> Self
+    pub fn new<S>(stream: S) -> Self
     where
         S: AsyncRead + AsyncWrite + Send + 'static,
     {
-        let (reader, writer) = tokio::io::split(stream);
+        let (reader, mut writer) = tokio::io::split(stream);
+        let (outbox, mut queued) = mpsc::unbounded_channel::<Vec<u8>>();
+        let writer = tokio::spawn(async move {
+            while let Some(data) = queued.recv().await {
+                if write_frame(&mut writer, &data).await.is_err() {
+                    return;
+                }
+            }
+            let _ = writer.shutdown().await;
+        });
         let (forward, messages) = mpsc::unbounded_channel();
-        let reader = tokio::spawn(client_read_loop(Box::new(reader), forward, health_timeout));
         Self {
-            writer: Writer(tokio::sync::Mutex::new(Some(Box::new(writer)))),
+            outbox: Mutex::new(Some(outbox)),
+            writer: Mutex::new(Some(writer)),
+            unread: tokio::sync::Mutex::new(Some(Box::new(reader))),
+            forward: Mutex::new(Some(forward)),
             messages: tokio::sync::Mutex::new(messages),
-            reader: Mutex::new(Some(reader)),
+            reader: Mutex::new(None),
         }
     }
 
+    /// The parent's first message, its InitializeRequest.
+    pub async fn handshake(&self) -> Result<Vec<u8>, Closed> {
+        let mut unread = self.unread.lock().await;
+        read_frame(unread.as_mut().ok_or(Closed)?).await.map_err(|_| Closed)
+    }
+
+    /// Reads the parent's messages from now on, for [`recv`](Self::recv). Needs a runtime context.
+    pub fn serve(&self, health_timeout: Option<Duration>) {
+        let reader = self.unread.try_lock().ok().and_then(|mut r| r.take());
+        let forward = lock(&self.forward).take();
+        if let (Some(reader), Some(forward)) = (reader, forward) {
+            *lock(&self.reader) = Some(tokio::spawn(client_read_loop(reader, forward, health_timeout)));
+        }
+    }
+
+    /// Queues a message for the parent.
+    pub fn queue(&self, data: Vec<u8>) -> Result<(), Closed> {
+        lock(&self.outbox).as_ref().ok_or(Closed)?.send(data).map_err(|_| Closed)
+    }
+
     pub async fn send(&self, data: &[u8]) -> Result<(), Closed> {
-        self.writer.send(data).await
+        self.queue(data.to_vec())
     }
 
     pub async fn recv(&self) -> Result<Vec<u8>, Closed> {
         self.messages.lock().await.recv().await.ok_or(Closed)
     }
 
+    /// Stops reading, writes what is queued (for up to [`FLUSH_TIMEOUT`]) and closes the socket.
     pub async fn close(&self) {
         if let Some(reader) = lock(&self.reader).take() {
             reader.abort();
         }
-        self.writer.close().await;
+        lock(&self.outbox).take();
+        let writer = lock(&self.writer).take();
+        if let Some(mut writer) = writer {
+            if tokio::time::timeout(FLUSH_TIMEOUT, &mut writer).await.is_err() {
+                writer.abort();
+            }
+        }
     }
 }
 

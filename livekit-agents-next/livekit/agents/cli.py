@@ -144,8 +144,15 @@ class _LogFormatter(logging.Formatter):
         )
 
 
-def setup_logging(log_level: str, style: str) -> None:
-    """Log to stdout in ``style``, at ``log_level`` for the agents' and the plugins' loggers."""
+# what the worker logs with, for the job processes it starts: each writes its own lines
+_log_config: tuple[str, str] | None = None
+
+
+def setup_logging(log_level: str, style: str) -> logging.Handler:
+    """Log to stdout in ``style``, at ``log_level`` for the agents' and the plugins' loggers. A
+    job process logs the same way, to the stdout it inherits; returns the handler."""
+    global _log_config
+    _log_config = (log_level, style)
     reconfigure = getattr(sys.stdout, "reconfigure", None)
     if callable(reconfigure):
         reconfigure(errors="backslashreplace")
@@ -170,6 +177,7 @@ def setup_logging(log_level: str, style: str) -> None:
     for plugin in Plugin.registered_plugins:
         _plugin_level(plugin)
     Plugin.emitter.on("plugin_registered", _plugin_level)
+    return handler
 
 
 # --- the worker --------------------------------------------------------------------------------

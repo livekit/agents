@@ -12,7 +12,6 @@ from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
 from ..utils import shortuuid
-from . import channel, proto
 from .inference_executor import InferenceExecutor
 from .job_executor import JobStatus
 from .job_proc_lazy_main import ProcStartArgs, proc_main
@@ -91,12 +90,11 @@ class ProcJobExecutor(SupervisedProc):
     def running_job(self) -> RunningJobInfo | None:
         return self._running_job
 
-    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
-        levels = {}
-        root = logging.getLogger()
-        levels["root"] = root.level
-        children = logging.Logger.manager.loggerDict.values()
-        for child in children:
+    def _create_process(self, cch: socket.socket) -> mp.Process:
+        from ..cli import _log_config
+
+        levels = {"root": logging.getLogger().level}
+        for child in logging.Logger.manager.loggerDict.values():
             if isinstance(child, logging.Logger):
                 levels[child.name] = child.level
 
@@ -106,9 +104,9 @@ class ProcJobExecutor(SupervisedProc):
             session_end_fnc=self._session_end_fnc,
             simulation_end_fnc=self._simulation_end_fnc,
             session_end_timeout=self._session_end_timeout,
-            log_cch=log_cch,
             mp_cch=cch,
             user_arguments=self._user_args,
+            log_config=_log_config,
             logger_levels=levels,
         )
 
@@ -142,10 +140,8 @@ class ProcJobExecutor(SupervisedProc):
         self._job_status = JobStatus.RUNNING
         self._running_job = info
 
-        start_req = proto.StartJobRequest()
-        start_req.running_job = info
         try:
-            await channel.asend_message(self._pch, start_req)
+            await self._pch.start_job(info._to_wire())
         except Exception:
             self._running_job = None
             self._job_status = None

@@ -16,6 +16,7 @@ if current_process().name == "job_proc":
 
 import asyncio
 import contextvars
+import os
 import socket
 import time
 from collections.abc import Awaitable, Callable, Coroutine
@@ -28,11 +29,10 @@ from livekit import rtc
 
 from .. import _core
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
-from ..log import _add_global_log_fields, logger
+from ..log import logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..utils import aio, http_context, log_exceptions
-from .proc_client import _dump_stack_traces_impl, serve_parent
-from .proto import StartJobRequest
+from .proc_client import _dump_stack_traces_impl, log_to_stdout, serve_parent
 
 # The core's bound on VoiceSession.aclose() during the job shutdown, a guardrail against close
 # paths that hang: past it the rest of the shutdown (on_session_end, ShuttingDown,
@@ -50,25 +50,12 @@ class ProcStartArgs:
     session_end_timeout: float
     user_arguments: Any | None
     mp_cch: socket.socket
-    log_cch: socket.socket
+    log_config: tuple[str, str] | None
     logger_levels: dict[str, int]
     simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
 def proc_main(args: ProcStartArgs) -> None:
-    import logging
-
-    from .log_queue import LogQueueHandler
-
-    root_logger = logging.getLogger()
-    for name, level in args.logger_levels.items():
-        logging.getLogger(name).setLevel(level)
-
-    log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
-    log_handler = LogQueueHandler(log_cch)
-    _add_global_log_fields(log_handler)
-    root_logger.addHandler(log_handler)
-
     job_proc = _JobProc(
         args.initialize_process_fnc,
         args.job_entrypoint_fnc,
@@ -78,7 +65,7 @@ def proc_main(args: ProcStartArgs) -> None:
         user_arguments=args.user_arguments,
         simulation_end_fnc=args.simulation_end_fnc,
     )
-
+    log_to_stdout(args.log_config, args.logger_levels, job_proc.log_fields)
     serve_parent(args.mp_cch, job_proc, job=True)
 
     import sys
@@ -90,9 +77,6 @@ def proc_main(args: ProcStartArgs) -> None:
             continue
 
         if threading.current_thread() == t:
-            continue
-
-        if t == log_handler.thread:
             continue
 
         if t.daemon:
@@ -115,8 +99,6 @@ def proc_main(args: ProcStartArgs) -> None:
 
         if frame is not None:
             logger.warning("stack for `%s`:\n%s", t.name, "".join(traceback.format_stack(frame)))
-
-    log_handler.close()
 
 
 class _JobProc:
@@ -143,6 +125,8 @@ class _JobProc:
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
+        # stamped on the process's log lines
+        self.log_fields: dict[str, Any] = {"pid": os.getpid()}
         # the parent's socket, set once initialized
         self._client: _core.IpcClient
 
@@ -160,7 +144,7 @@ class _JobProc:
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
     async def _core_start_job(self, fields: dict[str, Any]) -> _core.JobRun:
-        return self._start_job(StartJobRequest._from_wire(fields))
+        return self._start_job(RunningJobInfo._from_wire(fields))
 
     async def _core_dump_stacks(self) -> None:
         _dump_stack_traces_impl()
@@ -170,8 +154,9 @@ class _JobProc:
         if self._job_task is not None:
             await aio.cancel_and_wait(self._job_task)
 
-    def _start_job(self, msg: StartJobRequest) -> _core.JobRun:
-        info = msg.running_job
+    def _start_job(self, info: RunningJobInfo) -> _core.JobRun:
+        job = info.job
+        self.log_fields.update(job_id=job.id, room=job.room.name, room_id=job.room.sid)
         if info.fake_job:
             from .mock_room import create_mock_room
 

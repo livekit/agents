@@ -46,12 +46,10 @@ class InferenceProcExecutor(SupervisedProc):
     def process_kind(self) -> SupervisedProcKind:
         return SupervisedProcKind.INFERENCE
 
-    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
-        proc_args = ProcStartArgs(
-            log_cch=log_cch,
-            mp_cch=cch,
-            runners=self._runners,
-        )
+    def _create_process(self, cch: socket.socket) -> mp.Process:
+        from ..cli import _log_config
+
+        proc_args = ProcStartArgs(mp_cch=cch, runners=self._runners, log_config=_log_config)
 
         return self._mp_ctx.Process(  # type: ignore
             target=proc_main,

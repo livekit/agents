@@ -1,5 +1,5 @@
 """asyncio helpers: channels, intervals and sleeps, task sets and wait groups, async tees and the
-slow-callback hook; ``duplex_unix`` is the Unix socket the job processes talk over."""
+slow-callback hook; ``duplex_unix``, a blocking Unix socket, stays for livekit-browser."""
 
 from __future__ import annotations
 

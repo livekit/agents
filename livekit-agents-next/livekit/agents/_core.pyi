@@ -134,6 +134,10 @@ def ipc_encode(msg_id: int, fields: dict[str, Any]) -> bytes:
 def ipc_decode(data: bytes) -> tuple[int, dict[str, Any]]:
     """A payload's ``MSG_ID`` and its fields by name."""
 
+def ipc_pair() -> tuple[int, int]:
+    """One process's control socket: the parent's end and the child's, as descriptors the caller
+    owns (the parent's for ``ProcSupervisor``, the child's for the process's ``IpcClient``)."""
+
 class ProcHostProtocol(Protocol):
     """What ``ProcSupervisor`` calls back into: the ``SupervisedProc``, dropped once it exited."""
 
@@ -164,8 +168,9 @@ class ProcSupervisor:
         high_ping_threshold: float,
         killable: bool = True,
     ) -> None: ...
-    def initialize(self) -> Awaitable[float | None]:
-        """Seconds until the InitializeResponse; ``None`` on timeout (the process was killed)."""
+    def initialize(self, *, asyncio_debug: bool, http_proxy: str | None) -> Awaitable[float]:
+        """Sends the InitializeRequest; the seconds until its answer, ``asyncio.TimeoutError``
+        when late (a process is then killed)."""
     @property
     def initialized(self) -> bool: ...
     def run(self, joined: Awaitable[None], host: Any) -> asyncio.Future[None]:
@@ -175,7 +180,8 @@ class ProcSupervisor:
     def aclose(self) -> Awaitable[None]: ...
     def kill(self) -> Awaitable[None]: ...
     def do_inference(self, method: str, data: bytes) -> Awaitable[bytes | None]: ...
-    def send_bytes(self, data: bytes) -> Awaitable[None]: ...
+    def start_job(self, fields: dict[str, Any]) -> Awaitable[None]:
+        """Sends the StartJobRequest of ``fields`` (``RunningJobInfo._to_wire()``)."""
     @property
     def killed(self) -> bool: ...
 

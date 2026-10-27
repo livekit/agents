@@ -166,6 +166,33 @@ class RunningJobInfo:
     launched_at: float = 0.0
     """A process was acquired from the pool and handed the job."""
 
+    def _to_wire(self) -> dict[str, Any]:
+        """The fields of the StartJobRequest that hands the job to a process."""
+        return {
+            "job": self.job.SerializeToString(),
+            "name": self.accept_arguments.name,
+            "identity": self.accept_arguments.identity,
+            "metadata": self.accept_arguments.metadata,
+            "url": self.url,
+            "token": self.token,
+            "worker_id": self.worker_id,
+            "fake_job": self.fake_job,
+            "received_at": self.received_at,
+            "accepted_at": self.accepted_at,
+            "assigned_at": self.assigned_at,
+            "launched_at": self.launched_at,
+        }
+
+    @staticmethod
+    def _from_wire(fields: dict[str, Any]) -> RunningJobInfo:
+        job = agent.Job.FromString(fields.pop("job"))
+        args = JobAcceptArguments(
+            name=fields.pop("name"),
+            identity=fields.pop("identity"),
+            metadata=fields.pop("metadata"),
+        )
+        return RunningJobInfo(accept_arguments=args, job=job, **fields)
+
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
     rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,

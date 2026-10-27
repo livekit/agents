@@ -16,6 +16,7 @@ if current_process().name == "agents_inference_process":
 
 import asyncio
 import math
+import os
 import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -24,17 +25,18 @@ from dataclasses import dataclass
 from .. import _core
 from ..inference_runner import _RunnersDict
 from ..log import logger
-from .proc_client import _dump_stack_traces_impl, serve_parent
+from .proc_client import _dump_stack_traces_impl, log_to_stdout, serve_parent
 
 
 @dataclass
 class ProcStartArgs:
-    log_cch: socket.socket
     mp_cch: socket.socket
     runners: _RunnersDict
+    log_config: tuple[str, str] | None
 
 
 def proc_main(args: ProcStartArgs) -> None:
+    log_to_stdout(args.log_config, {}, {"pid": os.getpid(), "inference": True})
     serve_parent(args.mp_cch, _InferenceProc(args.runners), job=False)
 
 

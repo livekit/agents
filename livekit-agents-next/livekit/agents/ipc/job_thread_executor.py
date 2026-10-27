@@ -49,7 +49,6 @@ class ThreadJobExecutor(ProcJobExecutor):
     initialization, ack or exit is reported and waited for."""
 
     _killable = False
-    _runner = "runner"
     # thread jobs are not counted in the job metrics
     _metered = False
 
@@ -91,7 +90,7 @@ class ThreadJobExecutor(ProcJobExecutor):
         self._id = shortuuid("THEXEC_")
         self._thread: _JobThread | None = None
 
-    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> Any:
+    def _create_process(self, cch: socket.socket) -> Any:
         # the thread shares this process's logging, and keeps its own copy of the socket the
         # parent closes once started
         self._thread = _JobThread(

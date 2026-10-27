@@ -27,17 +27,9 @@ use super::{
     ProcHost, ProcSupervisor, SupervisorOptions, Value, lock, secs,
 };
 
-/// `duplex_unix.DuplexClosed`, what the duplex the supervisor and client replace raised.
-fn duplex_closed(_: Closed) -> PyErr {
-    Python::attach(|py| {
-        match py
-            .import("livekit.agents.utils.aio.duplex_unix")
-            .and_then(|m| m.getattr("DuplexClosed"))
-        {
-            Ok(cls) => cls.call0().map(PyErr::from_value).unwrap_or_else(|e| e),
-            Err(e) => e,
-        }
-    })
+/// The socket to the other process closed.
+fn closed(_: Closed) -> PyErr {
+    pyo3::exceptions::PyConnectionError::new_err("the IPC socket is closed")
 }
 
 // ------------------------------------------------------------------------------------ codec
@@ -189,51 +181,48 @@ type StdSocket = std::os::unix::net::UnixStream;
 #[cfg(windows)]
 type StdSocket = std::net::TcpStream;
 
-/// Takes ownership of a connected socket (`socket.detach()`), blocking.
-fn std_socket(fd: i64) -> PyResult<StdSocket> {
+/// Takes ownership of a connected socket (an fd of `ipc_pair`'s, or `socket.detach()`). Needs a
+/// runtime context.
+fn socket(fd: i64) -> PyResult<Socket> {
     #[cfg(unix)]
-    {
+    let std = {
         use std::os::fd::FromRawFd;
         let fd = i32::try_from(fd).map_err(|_| PyValueError::new_err("bad socket fd"))?;
-        // SAFETY: the caller detached the descriptor and hands its ownership over.
-        Ok(unsafe { StdSocket::from_raw_fd(fd) })
-    }
+        // SAFETY: the caller hands the descriptor's ownership over.
+        unsafe { StdSocket::from_raw_fd(fd) }
+    };
     #[cfg(windows)]
-    {
+    let std = {
         use std::os::windows::io::FromRawSocket;
-        // SAFETY: the caller detached the socket and hands its ownership over.
-        Ok(unsafe { StdSocket::from_raw_socket(fd as u64) })
-    }
-}
-
-/// The async side of a blocking socket. Needs a runtime context.
-fn into_async(std: StdSocket) -> PyResult<Socket> {
+        // SAFETY: the caller hands the socket's ownership over.
+        unsafe { StdSocket::from_raw_socket(fd as u64) }
+    };
     std.set_nonblocking(true)?;
     Ok(Socket::from_std(std)?)
 }
 
-/// Takes ownership of a connected socket (`socket.detach()`). Needs a runtime context.
-fn socket(fd: i64) -> PyResult<Socket> {
-    into_async(std_socket(fd)?)
+/// The control socket of one process: the parent's end and the child's, as descriptors the caller
+/// owns (the parent's goes to `ProcSupervisor`, the child's to the process, then `IpcClient`).
+/// Both are closed on exec.
+#[pyfunction]
+fn ipc_pair() -> PyResult<(i64, i64)> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::IntoRawFd;
+        let (parent, child) = StdSocket::pair()?;
+        Ok((parent.into_raw_fd().into(), child.into_raw_fd().into()))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::IntoRawSocket;
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let child = StdSocket::connect(listener.local_addr()?)?;
+        let (parent, _) = listener.accept()?;
+        Ok((parent.into_raw_socket() as i64, child.into_raw_socket() as i64))
+    }
 }
 
-/// One message off a blocking socket, in `read_frame`'s framing.
-fn recv_blocking(r: &mut impl std::io::Read) -> std::io::Result<Vec<u8>> {
-    let mut len = [0u8; 4];
-    r.read_exact(&mut len)?;
-    let mut buf = vec![0; u32::from_be_bytes(len) as usize];
-    r.read_exact(&mut buf)?;
-    Ok(buf)
-}
-
-/// One message on a blocking socket, in `write_frame`'s framing.
-fn send_blocking(w: &mut impl std::io::Write, msg: &IpcMessage) -> std::io::Result<()> {
-    let data = msg.encode();
-    let len = u32::try_from(data.len()).map_err(|_| std::io::ErrorKind::InvalidInput)?;
-    w.write_all(&len.to_be_bytes())?;
-    w.write_all(&data)?;
-    w.flush()
-}
+lk_agents_abi::register_host!(fn ipc_pair);
 
 /// A message with no fields, or with one string.
 fn message(id: i32, text: Option<String>) -> IpcMessage {
@@ -250,6 +239,7 @@ pub struct PyProcSupervisor {
     /// Set once `run` ended: the process exited and was reaped.
     ran: watch::Sender<bool>,
     inferences: Arc<Inferences>,
+    killable: bool,
 }
 
 impl PyProcSupervisor {
@@ -346,20 +336,33 @@ impl PyProcSupervisor {
             initialized: watch::channel(None).0,
             ran: watch::channel(false).0,
             inferences: Arc::default(),
+            killable,
         })
     }
 
-    /// Seconds the process took to answer the InitializeRequest the host sent, or `None` when it
-    /// timed out (the process was killed).
-    fn initialize<'py>(slf: Bound<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
+    /// Sends the process its InitializeRequest (the loop's debug mode, the HTTP proxy, the ping
+    /// settings) and returns the seconds it took to answer; raises `TimeoutError` when it did not
+    /// in time (a process is then killed).
+    #[pyo3(signature = (*, asyncio_debug, http_proxy))]
+    fn initialize<'py>(slf: Bound<'py, Self>, asyncio_debug: bool, http_proxy: Option<String>) -> PyResult<Bound<'py, PyAny>> {
         let this = slf.clone().unbind();
         let sup = slf.get().sup.clone();
+        let request = sup.initialize_request(asyncio_debug, http_proxy.as_deref().unwrap_or_default());
+        let runner = if this.get().killable { "process" } else { "runner" };
         pyo3_async_runtimes::tokio::future_into_py(slf.py(), async move {
-            let outcome = sup.initialize().await;
+            let outcome = match sup.send(&request.encode()).await {
+                Ok(()) => sup.initialize().await,
+                Err(Closed) => Err(InitError::Closed),
+            };
             this.get().settle(matches!(outcome, Ok(Some(_))));
             match outcome {
-                Ok(elapsed) => Ok(elapsed.map(|d| d.as_secs_f64())),
-                Err(InitError::Closed) => Err(duplex_closed(Closed)),
+                Ok(Some(elapsed)) => Ok(elapsed.as_secs_f64()),
+                Ok(None) => Err(Python::attach(|py| -> PyResult<PyErr> {
+                    let timeout = py.import("asyncio")?.getattr("TimeoutError")?;
+                    Ok(PyErr::from_value(timeout.call1((format!("{runner} initialization timed out"),))?))
+                })
+                .unwrap_or_else(|e| e)),
+                Err(InitError::Closed) => Err(closed(Closed)),
                 Err(InitError::Unexpected) => {
                     Err(PyAssertionError::new_err(InitError::Unexpected.to_string()))
                 }
@@ -457,12 +460,11 @@ impl PyProcSupervisor {
         })
     }
 
-    fn send_bytes<'py>(&self, py: Python<'py>, data: Cow<[u8]>) -> PyResult<Bound<'py, PyAny>> {
+    /// Hands the process its job: a StartJobRequest of `fields` (the message's, by name).
+    fn start_job<'py>(&self, py: Python<'py>, fields: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyAny>> {
+        let data = ipc_encode(py, super::START_JOB_REQUEST, fields)?.as_bytes().to_vec();
         let sup = self.sup.clone();
-        let data = data.into_owned();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            sup.send(&data).await.map_err(duplex_closed)
-        })
+        pyo3_async_runtimes::tokio::future_into_py(py, async move { sup.send(&data).await.map_err(closed) })
     }
 
     #[getter]
@@ -551,7 +553,7 @@ impl Inferences {
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
         if let Err(e) = send(request).await {
             lock(&self.pending).remove(&request_id);
-            return Err(duplex_closed(e));
+            return Err(closed(e));
         }
         let Ok((data, error)) = rx.await else {
             return Err(pyo3::exceptions::asyncio::CancelledError::new_err(()));
@@ -680,9 +682,13 @@ impl PyIpcClient {
     #[pyo3(signature = (fd, initialize, *, job))]
     fn new(py: Python<'_>, fd: i64, initialize: Bound<'_, PyAny>, job: bool) -> PyResult<Self> {
         check_pid()?;
-        let mut sock = std_socket(fd)?;
+        let rt = pyo3_async_runtimes::tokio::get_runtime();
+        let client = {
+            let _rt = rt.enter();
+            IpcClient::new(socket(fd)?)
+        };
         let closed = |_| PyRuntimeError::new_err("failed to initialize proc_client");
-        let frame = py.detach(|| recv_blocking(&mut sock)).map_err(closed)?;
+        let frame = py.detach(|| rt.block_on(client.handshake())).map_err(closed)?;
         let req = IpcMessage::decode(&frame).map_err(|e| PyValueError::new_err(e.to_string()))?;
         if req.id() != super::INITIALIZE_REQUEST {
             return Err(PyAssertionError::new_err("first message must be proto.InitializeRequest"));
@@ -690,9 +696,11 @@ impl PyIpcClient {
         let http_proxy = Some(req.get_str("http_proxy")).filter(|p| !p.is_empty());
         let initialized = initialize.call1((http_proxy,));
         let error = initialized.as_ref().err().map(|e| e.value(py).to_string()).unwrap_or_default();
-        let answer = message(super::INITIALIZE_RESPONSE, Some(error));
-        py.detach(|| send_blocking(&mut sock, &answer)).map_err(closed)?;
-        initialized?;
+        client.queue(message(super::INITIALIZE_RESPONSE, Some(error)).encode()).map_err(closed)?;
+        if let Err(e) = initialized {
+            py.detach(|| rt.block_on(client.close()));
+            return Err(e);
+        }
 
         let float = |name: &str| match req.get(name) {
             Some(Value::Float(v)) => f64::from(*v),
@@ -701,9 +709,12 @@ impl PyIpcClient {
         let (ping_interval, ping_timeout) = (float("ping_interval"), float("ping_timeout"));
         let health_timeout = (ping_interval > 0.0 && ping_timeout > 0.0)
             .then(|| secs(ping_timeout + super::HEALTH_CHECK_GRACE));
-        let _rt = pyo3_async_runtimes::tokio::get_runtime().enter();
+        {
+            let _rt = rt.enter();
+            client.serve(health_timeout);
+        }
         Ok(Self(Arc::new(Child {
-            client: IpcClient::new(into_async(sock)?, health_timeout),
+            client,
             inferences: Inferences::default(),
             stop: watch::channel(false).0,
             job,

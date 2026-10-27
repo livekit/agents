@@ -787,7 +787,6 @@ async def room_call_body(call: Call) -> None:
 async def job_call(call: Call) -> None:
     """A console job, as a job process runs it, whose entrypoint starts a session on its room."""
     from livekit.agents import _core, get_job_context
-    from livekit.agents.ipc import proto
     from livekit.agents.ipc.job_proc_lazy_main import _JobProc
     from livekit.agents.job import (
         JobAcceptArguments,
@@ -841,26 +840,26 @@ async def job_call(call: Call) -> None:
     # already there, so the client reads it at once
     parent, child = socket.socketpair()
 
-    def frame(msg: Any) -> bytes:
-        fields = msg._to_wire() if isinstance(msg, proto.StartJobRequest) else vars(msg)
-        data = _core.ipc_encode(msg.MSG_ID, fields)
+    def frame(msg_id: int, fields: dict[str, Any]) -> bytes:
+        data = _core.ipc_encode(msg_id, fields)
         return struct.pack(">I", len(data)) + data
 
-    parent.sendall(frame(proto.InitializeRequest()))
+    init = {"asyncio_debug": False, "http_proxy": ""}
+    init.update(ping_interval=0.0, ping_timeout=0.0, high_ping_threshold=0.0)
+    parent.sendall(frame(0, init))
     runner._client = _core.IpcClient(child.detach(), runner.initialize, job=True)
     reader, writer = await asyncio.open_connection(sock=parent)
 
     async def received() -> str:
         (size,) = struct.unpack(">I", await reader.readexactly(4))
         msg_id, _ = _core.ipc_decode(await reader.readexactly(size))
-        return proto.IPC_MESSAGES[msg_id].__name__
+        return {1: "InitializeResponse", 6: "Exiting", 11: "ShuttingDown"}[msg_id]
 
     sent = [await received()]
     # the core's IPC client starts the job from its own task, whose context the steps it later
     # runs (the entrypoint, the callbacks) do not share
     serving = contextvars.Context().run(asyncio.ensure_future, runner._client.serve(runner))
-    request = proto.StartJobRequest()
-    request.running_job = RunningJobInfo(
+    request = RunningJobInfo(
         accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
         job=agent_proto.Job(id="AJ_fuzz", room=models.Room(name="console", sid="RM_fuzz")),
         url="",
@@ -868,7 +867,7 @@ async def job_call(call: Call) -> None:
         worker_id="fuzz",
         fake_job=True,
     )
-    writer.write(frame(request))
+    writer.write(frame(4, request._to_wire()))
     sent += [await asyncio.wait_for(received(), 60) for _ in range(2)]
     await asyncio.wait_for(serving, 60)
     assert runner._job_task is not None

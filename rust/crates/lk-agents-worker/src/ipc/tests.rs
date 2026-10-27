@@ -554,11 +554,42 @@ async fn kill_sends_sigusr1_then_kills() {
 
 // ----------------------------------------------------------------------------------- client
 
+fn served<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static>(
+    stream: S,
+    health_timeout: Option<Duration>,
+) -> IpcClient {
+    let client = IpcClient::new(stream);
+    client.serve(health_timeout);
+    client
+}
+
+// Catches: the handshake's request read by the reader instead, or the answers to it and what
+// follows sent out of order, or lost on close.
+#[tokio::test]
+async fn client_handshakes_then_sends_in_order_and_flushes_on_close() {
+    let (mut parent, child) = UnixStream::pair().unwrap();
+    let client = IpcClient::new(child);
+    write_frame(&mut parent, b"init").await.unwrap();
+    write_frame(&mut parent, b"next").await.unwrap();
+    assert_eq!(client.handshake().await.unwrap(), b"init");
+    for i in 0..100u8 {
+        client.queue(vec![i]).unwrap();
+    }
+    client.serve(None);
+    assert_eq!(client.recv().await.unwrap(), b"next");
+    client.close().await;
+    for i in 0..100u8 {
+        assert_eq!(read_frame(&mut parent).await.unwrap(), vec![i]);
+    }
+    assert!(read_frame(&mut parent).await.is_err(), "the socket closed after the queue");
+    assert!(client.queue(vec![0]).is_err());
+}
+
 // Catches: an orphaned child (the parent stopped talking) never noticing.
 #[tokio::test(start_paused = true)]
 async fn client_health_check_closes_when_the_parent_goes_quiet() {
     let (mut parent, child) = tokio::io::duplex(1 << 16);
-    let client = IpcClient::new(child, Some(Duration::from_secs(100)));
+    let client = served(child, Some(Duration::from_secs(100)));
     let start = Instant::now();
     tokio::time::sleep(Duration::from_secs(60)).await;
     write_frame(&mut parent, &IpcMessage::ping(1).encode()).await.unwrap();
@@ -568,7 +599,7 @@ async fn client_health_check_closes_when_the_parent_goes_quiet() {
     assert!(quiet >= Duration::from_secs(160) && quiet < Duration::from_secs(161), "{quiet:?}");
 
     let (_parent, child) = tokio::io::duplex(1 << 16);
-    let client = IpcClient::new(child, None);
+    let client = served(child, None);
     let pending = tokio::time::timeout(Duration::from_secs(10_000), client.recv()).await;
     assert!(pending.is_err(), "no health check without a ping interval");
 }
@@ -576,7 +607,7 @@ async fn client_health_check_closes_when_the_parent_goes_quiet() {
 #[tokio::test]
 async fn client_sends_and_closes() {
     let (mut parent, child) = UnixStream::pair().unwrap();
-    let client = IpcClient::new(child, None);
+    let client = served(child, None);
     client.send(b"abc").await.unwrap();
     assert_eq!(read_frame(&mut parent).await.unwrap(), b"abc");
     drop(parent);

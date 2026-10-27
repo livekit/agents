@@ -1116,7 +1116,6 @@ async def job() -> None:
     waits for the participant in the room, for whom a participant entrypoint runs, an API call is
     skipped, the
     shutdown it asks for runs the shutdown callback and tells the parent."""
-    from livekit.agents.ipc import proto
     from livekit.agents.ipc.job_proc_lazy_main import _JobProc
     from livekit.agents.job import (
         JobAcceptArguments,
@@ -1159,12 +1158,13 @@ async def job() -> None:
     # the parent's side of the socket, written and read by hand
     parent, child = socket.socketpair()
 
-    def frame(msg: Any) -> bytes:
-        fields = msg._to_wire() if isinstance(msg, proto.StartJobRequest) else vars(msg)
-        data = _core.ipc_encode(msg.MSG_ID, fields)
+    def frame(msg_id: int, fields: dict[str, Any]) -> bytes:
+        data = _core.ipc_encode(msg_id, fields)
         return struct.pack(">I", len(data)) + data
 
-    parent.sendall(frame(proto.InitializeRequest()))
+    init = {"asyncio_debug": False, "http_proxy": ""}
+    init.update(ping_interval=0.0, ping_timeout=0.0, high_ping_threshold=0.0)
+    parent.sendall(frame(0, init))
     client = await asyncio.to_thread(_core.IpcClient, child.detach(), runner.initialize, job=True)
     runner._client = client
     reader, writer = await asyncio.open_connection(sock=parent)
@@ -1172,12 +1172,11 @@ async def job() -> None:
     async def received() -> str:
         (size,) = struct.unpack(">I", await reader.readexactly(4))
         msg_id, _ = _core.ipc_decode(await reader.readexactly(size))
-        return proto.IPC_MESSAGES[msg_id].__name__
+        return {1: "InitializeResponse", 6: "Exiting", 11: "ShuttingDown"}[msg_id]
 
     assert await received() == "InitializeResponse"
     serving = asyncio.ensure_future(client.serve(runner))
-    request = proto.StartJobRequest()
-    request.running_job = RunningJobInfo(
+    request = RunningJobInfo(
         accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
         job=agent_proto.Job(id="AJ_smoke", room=models.Room(name="console", sid="RM_smoke")),
         url="",
@@ -1185,7 +1184,7 @@ async def job() -> None:
         worker_id="smoke",
         fake_job=True,
     )
-    writer.write(frame(request))
+    writer.write(frame(4, request._to_wire()))
     sent = [await asyncio.wait_for(received(), 30) for _ in range(2)]
     await asyncio.wait_for(serving, 30)
     assert runner._job_task is not None
@@ -1631,37 +1630,78 @@ def agent_name(session: VoiceSession) -> str:
     return type(session.current_agent).__name__
 
 
-def log_transport() -> None:
-    """A job process's log record whose ``extra`` holds an object pickle refuses (an ``Agent``)
-    reaches the supervisor with that field as its ``repr``, and no logging error."""
-    print("== log transport, a non-picklable extra")
-    import pickle
-    import socket
+_JOB_LOGS = """
+import asyncio, logging, multiprocessing as mp, sys
+from livekit.agents import Agent, cli
+from livekit.agents.ipc.job_proc_executor import ProcJobExecutor
+from livekit.agents.job import JobAcceptArguments, RunningJobInfo
+from livekit.protocol import agent, models
 
-    from livekit.agents.ipc.log_queue import LogQueueHandler
-    from livekit.agents.utils.aio import duplex_unix
 
-    child, parent = socket.socketpair()
-    parent.settimeout(5)  # a record never sent fails rather than hangs
-    handler = LogQueueHandler(duplex_unix._Duplex.open(child))
-    errors: list[logging.LogRecord] = []
-    handler.handleError = errors.append  # type: ignore[method-assign]
+def setup(proc):
+    pass
 
-    @function_tool
-    async def local_tool() -> str:
-        """A tool pickle cannot reach (a local function)."""
-        return ""
 
-    agent = Agent(instructions="x", name="pii", tools=[local_tool])
-    record = logging.LogRecord("livekit.agents", logging.WARNING, __file__, 1, "rejected", (), None)
-    record.__dict__["lk.pii.output"] = agent
-    handler.emit(record)
-    received = pickle.loads(duplex_unix._Duplex.open(parent).recv_bytes())
-    handler.close()
-    handler.thread.join()
-    assert not errors, errors
-    assert received.__dict__["lk.pii.output"] == repr(agent), received.__dict__
-    print("record received, extra as its repr")
+async def entrypoint(ctx):
+    pii = Agent(instructions="x", name="pii")
+    logging.getLogger("livekit.agents").warning("from the job", extra={"lk.pii.output": pii})
+    ctx.shutdown("done")
+
+
+async def main(style):
+    cli.setup_logging("INFO", style)
+    proc = ProcJobExecutor(
+        initialize_process_fnc=setup, job_entrypoint_fnc=entrypoint, session_end_fnc=None,
+        simulation_end_fnc=None, inference_executor=None, initialize_timeout=60,
+        close_timeout=10, session_end_timeout=10, memory_warn_mb=0, memory_limit_mb=0,
+        ping_interval=2.5, ping_timeout=60, high_ping_threshold=1, http_proxy=None,
+        mp_ctx=mp.get_context("spawn"), loop=asyncio.get_running_loop(),
+    )
+    await proc.start()
+    await proc.initialize()
+    room = models.Room(name="logs", sid="RM_logs")
+    await proc.launch_job(RunningJobInfo(
+        accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
+        job=agent.Job(id="AJ_logs", room=room), url="", token="", worker_id="smoke",
+        fake_job=True,
+    ))
+    await proc.join()
+
+
+if __name__ == "__main__":
+    asyncio.run(main(sys.argv[1]))
+"""
+
+
+def job_logs() -> None:
+    """A job process writes its own log lines to the stdout it inherits, as the worker does
+    (JSON, and the dev layout), stamped with its pid and its job; an extra no JSON holds (an
+    ``Agent``) as its string."""
+    import os
+    import tempfile
+
+    from livekit.agents import Agent
+
+    print("== a job process's own log lines")
+    pii = str(Agent(instructions="x", name="pii")).split(" object at ")[0]
+    with tempfile.TemporaryDirectory() as root:
+        script = Path(root, "job_logs.py")
+        script.write_text(_JOB_LOGS)
+        for style in ("json", "dev"):
+            run = subprocess.run(
+                [sys.executable, str(script), style], capture_output=True, text=True, timeout=120
+            )
+            lines = [line for line in run.stdout.splitlines() if "from the job" in line]
+            assert run.returncode == 0 and len(lines) == 1, (run.stdout, run.stderr)
+            line = lines[0]
+            if style == "json":
+                record = json.loads(line)
+                assert record["job_id"] == "AJ_logs" and record["room"] == "logs", record
+                assert record["pid"] not in (os.getpid(), None), record
+                assert record["lk.pii.output"].startswith(pii), record
+            else:
+                assert "AJ_logs" in line and pii in line, line
+            print(f"{style}: the job's line, stamped with its job")
 
 
 async def main() -> int:
@@ -1785,7 +1825,7 @@ async def main() -> int:
     await cli()
     await decoder()
     await llm_prewarm()
-    log_transport()
+    job_logs()
     return 0
 
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import multiprocessing as mp
 import os
 import signal
@@ -11,7 +10,6 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
-from dataclasses import dataclass
 from enum import Enum
 from multiprocessing.context import BaseContext
 from types import FrameType
@@ -22,9 +20,6 @@ import psutil
 from .. import _core
 from ..log import logger
 from ..telemetry import metrics
-from ..utils.aio import duplex_unix
-from . import channel, proto
-from .log_queue import LogQueueListener
 
 _mask_ctrl_c_refcount = 0
 _mask_ctrl_c_original: Callable[[int, FrameType | None], Any] | int | None = signal.SIG_DFL
@@ -69,18 +64,6 @@ def _mask_ctrl_c() -> Generator[None, None, None]:
             signal.signal(signal.SIGINT, _mask_ctrl_c_original)
 
 
-@dataclass
-class _ProcOpts:
-    initialize_timeout: float
-    close_timeout: float
-    memory_warn_mb: float
-    memory_limit_mb: float
-    ping_interval: float
-    ping_timeout: float
-    high_ping_threshold: float
-    http_proxy: str | None
-
-
 class SupervisedProc(ABC):
     """A spawned process (or job thread) the core supervises (``_core.ProcSupervisor``): its
     initialization, pings, memory, messages and close, until it exited. The ``_core_*`` methods
@@ -90,7 +73,6 @@ class SupervisedProc(ABC):
     # a process; the thread executor's runner can't be killed, nor is it in the metrics
     _killable = True
     _metered = True
-    _runner = "process"
 
     def __init__(
         self,
@@ -108,16 +90,17 @@ class SupervisedProc(ABC):
     ) -> None:
         self._loop = loop
         self._mp_ctx = mp_ctx
-        self._opts = _ProcOpts(
-            initialize_timeout=initialize_timeout,
-            close_timeout=close_timeout,
-            memory_warn_mb=memory_warn_mb,
-            memory_limit_mb=memory_limit_mb,
-            ping_interval=ping_interval,
-            ping_timeout=ping_timeout,
-            high_ping_threshold=high_ping_threshold,
-            http_proxy=http_proxy,
-        )
+        # the core's supervision of the process
+        self._opts = {
+            "initialize_timeout": initialize_timeout,
+            "close_timeout": close_timeout,
+            "memory_warn_mb": memory_warn_mb,
+            "memory_limit_mb": memory_limit_mb,
+            "ping_interval": ping_interval,
+            "ping_timeout": ping_timeout,
+            "high_ping_threshold": high_ping_threshold,
+        }
+        self._http_proxy = http_proxy
 
         self._exitcode: int | None = None
         self._pid: int | None = None
@@ -131,7 +114,7 @@ class SupervisedProc(ABC):
         self._closing = False
 
     @abstractmethod
-    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process: ...
+    def _create_process(self, cch: socket.socket) -> mp.Process: ...
 
     @property
     def enabled_stack_trace_dump(self) -> bool:
@@ -177,63 +160,37 @@ class SupervisedProc(ABC):
         await asyncio.shield(self._start_atask)
 
     async def _start(self) -> None:
-        def _add_proc_ctx_log(record: logging.LogRecord) -> None:
-            extra = self.logging_extra()
-            for key, value in extra.items():
-                setattr(record, key, value)
-
-        mp_pch, mp_cch = socket.socketpair()
-        mp_log_pch, mp_log_cch = socket.socketpair()
-
-        sockets = (mp_pch, mp_cch, mp_log_pch, mp_log_cch)
-        log_listener: LogQueueListener | None = None
+        # the control socket: the child's end goes to the process, the parent's to the core
+        pch, cch = _core.ipc_pair()
+        child = socket.socket(fileno=cch)
         try:
-            log_pch = duplex_unix._Duplex.open(mp_log_pch)
-            log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
-            log_listener.start()
-
-            self._proc = self._create_process(mp_cch, mp_log_cch)
-
+            self._proc = self._create_process(child)
             # Set SIG_IGN process-wide before forking so the child inherits it
             # (SIG_IGN is preserved across exec per POSIX). This prevents
             # KeyboardInterrupt during the child's bootstrap phase before
             # it can install its own signal handlers.
             with _mask_ctrl_c():
                 await self._loop.run_in_executor(None, self._proc.start)
-        except Exception:
-            for s in sockets:
-                with contextlib.suppress(OSError):
-                    s.close()
-
-            if log_listener is not None:
-                with contextlib.suppress(duplex_unix.DuplexClosed):
-                    log_listener.stop()
+        except BaseException:
+            socket.socket(fileno=pch).close()
             raise
-
-        mp_log_cch.close()
-        mp_cch.close()
+        finally:
+            child.close()
 
         self._pid = self._proc.pid
         self._spawn_time = time.monotonic()
         self._pch = _core.ProcSupervisor(
-            mp_pch.detach(),
+            pch,
             self,
             pid=self._pid or 0,
             process_kind=str(self.process_kind),
-            initialize_timeout=self._opts.initialize_timeout,
-            close_timeout=self._opts.close_timeout,
-            memory_warn_mb=self._opts.memory_warn_mb,
-            memory_limit_mb=self._opts.memory_limit_mb,
-            ping_interval=self._opts.ping_interval,
-            ping_timeout=self._opts.ping_timeout,
-            high_ping_threshold=self._opts.high_ping_threshold,
             killable=self._killable,
+            **self._opts,
         )
         joined = asyncio.Future[None]()
 
         def _sync_run() -> None:
             self._proc.join()
-            log_listener.stop()
             with contextlib.suppress(RuntimeError):
                 self._loop.call_soon_threadsafe(joined.set_result, None)
 
@@ -248,24 +205,11 @@ class SupervisedProc(ABC):
         await asyncio.shield(self._supervise_atask)
 
     async def initialize(self) -> None:
-        """initialize the process, this is sending a InitializeRequest message and waiting for a
-        InitializeResponse with a timeout"""
-        await channel.asend_message(
-            self._pch,
-            proto.InitializeRequest(
-                asyncio_debug=self._loop.get_debug(),
-                ping_interval=self._opts.ping_interval,
-                ping_timeout=self._opts.ping_timeout,
-                high_ping_threshold=self._opts.high_ping_threshold,
-                http_proxy=self._opts.http_proxy or "",
-            ),
+        """initialize the process: the core sends it an InitializeRequest and waits for its
+        answer, killing it when late (``asyncio.TimeoutError``)"""
+        elapsed_time = await self._pch.initialize(
+            asyncio_debug=self._loop.get_debug(), http_proxy=self._http_proxy
         )
-
-        # should be channel.ChannelClosed most of the time when it raises (or init_res error)
-        elapsed_time = await self._pch.initialize()
-        if elapsed_time is None:
-            # the core killed the process
-            raise asyncio.TimeoutError(f"{self._runner} initialization timed out")
         if self._metered:
             metrics.proc_initialized(time_elapsed=elapsed_time)
 

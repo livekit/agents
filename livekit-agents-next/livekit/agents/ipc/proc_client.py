@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import socket
 from types import FrameType
 from typing import Any
@@ -10,6 +11,30 @@ from .. import _core
 from ..log import logger
 from ..telemetry import loop_monitor
 from ..utils import log_exceptions
+
+
+def log_to_stdout(
+    config: tuple[str, str] | None, levels: dict[str, int], fields: dict[str, Any]
+) -> None:
+    """A child process writes its own log lines, as the worker does (``config``: its level and
+    line style, none when the worker set up no logging), to the stdout it inherits; each record
+    stamped with ``fields``, the process's (its pid, the job's ids once one runs)."""
+    from ..cli import setup_logging
+
+    if config is not None:
+        setup_logging(*config).addFilter(_Stamp(fields))
+    for name, level in levels.items():
+        logging.getLogger(name).setLevel(level)
+
+
+class _Stamp(logging.Filter):
+    def __init__(self, fields: dict[str, Any]) -> None:
+        super().__init__()
+        self._fields = fields
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.__dict__.update(self._fields)
+        return True
 
 
 def serve_parent(mp_cch: socket.socket, host: Any, *, job: bool) -> None:
@@ -33,7 +58,7 @@ def serve_parent(mp_cch: socket.socket, host: Any, *, job: bool) -> None:
     try:
         task = loop.create_task(_serve(client, host), name="proc_client_main")
         while not task.done():
-            # the parent handles the process's shutdown (see proto.ShutdownRequest)
+            # the parent handles the process's shutdown (its ShutdownRequest)
             with contextlib.suppress(KeyboardInterrupt):
                 loop.run_until_complete(task)
     finally:
