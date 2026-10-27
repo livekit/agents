@@ -247,6 +247,7 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal closing_ws
             samples_per_buffer = 1920
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -271,6 +272,7 @@ class SpeechStream(stt.SpeechStream):
                         "audio": audio_data,
                     }
                     await ws.send_str(json.dumps(audio_msg))
+            closing_ws = True
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
@@ -284,8 +286,6 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                 except asyncio.TimeoutError:
-                    if closing_ws:
-                        break
                     continue
 
                 if msg.type in (

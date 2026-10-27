@@ -1017,6 +1017,10 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     self._emit_local_usage_fallback()
                     break
                 if close_code in (1000, 1001, None) and not _looks_like_error_text(close_reason):
+                    if not self._input_ch.closed and not self._session.closed:
+                        raise APIConnectionError(
+                            "Sarvam realtime STT connection closed unexpectedly"
+                        )
                     self._flush_terminal_utterance()
                     self._emit_local_usage_fallback()
                     break

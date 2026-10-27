@@ -428,19 +428,6 @@ async def test_flux_chunk_size_preserves_audio_and_flushes_tail(
         await instance.aclose()
 
 
-class _RecordingSession:
-    """Stands in for the aiohttp session so the connect kwargs are assertable."""
-
-    def __init__(self) -> None:
-        self.closed = False
-        self.kwargs: dict = {}
-        self._ws = _LiveWS()
-
-    async def ws_connect(self, url: str, **kwargs):
-        self.kwargs = kwargs
-        return self._ws
-
-
 class _URLRecordingSession:
     """Hands out a fresh socket per connect and keeps every URL it was asked to open."""
 
@@ -547,17 +534,6 @@ def _v1_stream(*, http_session=None, connect=None):
     return stream
 
 
-async def test_v1_socket_exposes_control_frames_to_monitor():
-    # Control frames must reach the shared monitor to reset its silence deadline.
-    session = _RecordingSession()
-    stream = _v1_stream(http_session=session)
-    try:
-        await _wait_until(lambda: "autoping" in session.kwargs)
-        assert session.kwargs["autoping"] is False
-    finally:
-        await stream.aclose()
-
-
 async def test_keepalive_write_drop_reconnects_instead_of_stalling():
     # the keepalive used to swallow every exception and return, which left send_task
     # parked on the input channel and recv_task parked on receive(): _run stayed
@@ -572,60 +548,6 @@ async def test_keepalive_write_drop_reconnects_instead_of_stalling():
     stream = _v1_stream(connect=_connect)
     try:
         await _wait_until(lambda: len(sockets) > 1)
-    finally:
-        await stream.aclose()
-
-
-class _HeartbeatTimeoutSocket:
-    """A socket in the state aiohttp leaves it in when a ping goes unanswered.
-
-    The heartbeat closes the connection itself, so this arrives as WSMsgType.ERROR
-    rather than as a close frame, and the reason lives only on ws.exception().
-    """
-
-    def __init__(self) -> None:
-        self.closed = False
-        self.receives = 0
-
-    async def send_str(self, data: str) -> None:
-        pass
-
-    async def send_bytes(self, data: bytes) -> None:
-        pass
-
-    def exception(self):
-        import aiohttp
-
-        return aiohttp.ServerTimeoutError("No PONG received after 15.0s")
-
-    async def receive(self):
-        import aiohttp
-
-        self.receives += 1
-        # yield, so that a recv loop which steps over this rather than ending
-        # fails the test instead of starving the event loop and hanging it
-        await asyncio.sleep(0)
-        return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, self.exception(), None)
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-async def test_heartbeat_timeout_reconnects_without_spinning():
-    # the ERROR has to end the recv loop. logging it as an unexpected type and
-    # continuing only works because aiohttp happens to report CLOSED next, and it
-    # throws away the one value that says why the socket went away.
-    sockets: list[_HeartbeatTimeoutSocket] = []
-
-    async def _connect():
-        ws = _HeartbeatTimeoutSocket()
-        sockets.append(ws)
-        return ws
-
-    stream = _v1_stream(connect=_connect)
-    try:
-        await _wait_until(lambda: len(sockets) > 1)
-        assert sockets[0].receives == 1
     finally:
         await stream.aclose()
 

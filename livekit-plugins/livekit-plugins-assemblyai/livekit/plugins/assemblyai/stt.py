@@ -725,8 +725,6 @@ class SpeechStream(stt.SpeechStream):
                     msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                     consecutive_timeouts = 0
                 except asyncio.TimeoutError:
-                    if closing_ws:
-                        break
                     consecutive_timeouts += 1
                     # First warning at 15s, then every 15s while silence continues.
                     # `session=None` here means WS connected but AAI never sent `Begin`.

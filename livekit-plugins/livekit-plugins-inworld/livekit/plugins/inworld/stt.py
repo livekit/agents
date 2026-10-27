@@ -227,6 +227,7 @@ class SpeechStream(stt.SpeechStream):
         self._stt: STT = stt
         self._language = language
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._closing_ws = False
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._request_id = ""
@@ -290,6 +291,7 @@ class SpeechStream(stt.SpeechStream):
             try:
                 ws = await self._connect_ws()
                 self._ws = ws
+                self._closing_ws = False
 
                 tasks = [
                     asyncio.create_task(self._send_audio_task()),
@@ -317,6 +319,8 @@ class SpeechStream(stt.SpeechStream):
                     tasks_group.cancel()
                     tasks_group.exception()
 
+            except APIConnectionError:
+                raise
             except asyncio.TimeoutError as e:
                 logger.error(f"Timeout during Inworld STT connection: {e}")
                 raise APITimeoutError("Timeout connecting to Inworld STT API") from e
@@ -347,7 +351,7 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.send_str(json.dumps({"endTurn": {}}))
                 except Exception as e:
                     logger.error(f"Error sending endTurn: {e}")
-                    break
+                    raise APIConnectionError("Inworld STT connection closed unexpectedly") from e
             elif isinstance(data, rtc.AudioFrame):
                 self._audio_duration_collector.push(data.duration)
                 pcm_bytes = data.data.tobytes()
@@ -356,15 +360,18 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.send_str(json.dumps({"audioChunk": {"content": audio_b64}}))
                 except Exception as e:
                     logger.error(f"Error sending audio chunk: {e}")
-                    break
+                    raise APIConnectionError("Inworld STT connection closed unexpectedly") from e
 
         self._audio_duration_collector.flush()
         # Input channel closed — tell the server to close the stream
         if self._ws:
+            self._closing_ws = True
             try:
                 await self._ws.send_str(json.dumps({"closeStream": {}}))
-            except Exception:
-                pass
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if self._ensure_session().closed:
+                    return
+                raise APIConnectionError("Inworld STT connection closed unexpectedly") from e
 
     def _on_audio_duration_report(self, duration: float) -> None:
         self._event_ch.send_nowait(
@@ -393,12 +400,12 @@ class SpeechStream(stt.SpeechStream):
                     result = data.get("result", {})
                     if "speechStarted" in result or "transcription" in result:
                         self._mark_provider_progress()
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    return
+            if not (
+                self._closing_ws or self._ensure_session().closed or self._reconnect_event.is_set()
+            ):
+                raise APIConnectionError("Inworld STT connection closed unexpectedly")
+        except APIConnectionError:
+            raise
         except aiohttp.ClientError as e:
             logger.error(f"WebSocket error while receiving: {e}")
             raise

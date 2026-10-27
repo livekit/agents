@@ -1472,6 +1472,7 @@ async def test_session_end_commits_final_buffered_without_speech_end() -> None:
 @pytest.mark.asyncio
 async def test_clean_close_commits_final_buffered_without_speech_end() -> None:
     stream = _make_stream()
+    stream._input_ch = SimpleNamespace(closed=True)
     stream._audio_position = 2.0
     ws = SimpleNamespace(
         receive=lambda: asyncio.sleep(

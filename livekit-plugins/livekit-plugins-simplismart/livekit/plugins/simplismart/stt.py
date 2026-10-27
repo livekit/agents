@@ -19,7 +19,6 @@ This module provides an STT implementation that uses the SimpliSmart API.
 
 import asyncio
 import base64
-import contextlib
 import json
 import os
 import traceback
@@ -342,7 +341,6 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=self._SAMPLE_RATE)
         self._api_key = api_key
         self._session = http_session
-        self._reconnect_event = asyncio.Event()
         self._request_id = str(id(self))
         self.ws_url = stt._base_url
 
@@ -386,12 +384,9 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     # close is expected, see SpeechStream.aclose
                     # or when the agent session ends, the http session is closed
-                    if self._session.closed:
+                    if self._session.closed or self._input_ch.closed:
                         return
-
-                    # this will trigger a reconnection, see the _run loop
-                    self._reconnect_event.set()
-                    return
+                    raise APIConnectionError("Simplismart connection closed unexpectedly")
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
                     logger.warning("unexpected simplismart message type %s", msg.type)
@@ -403,41 +398,19 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("failed to process simplismart message")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
+        ws = await self._connect_ws()
+        try:
+            await self._send_initial_config(ws)
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
             try:
-                ws = await self._connect_ws()
-                await self._send_initial_config(ws)
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    # propagate exceptions from completed tasks
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        tasks_group.exception()  # retrieve the exception
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(*tasks)
+        finally:
+            await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         try:
@@ -445,10 +418,7 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     self.ws_url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
-                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-                    # is never noticed: recv_task parks on ws.receive() forever, and the
-                    # reconnect in _run is only ever triggered by that task ending.
-                    # Matches the Deepgram and Muse STT plugins.
+                    # Let the shared monitor handle control frames and connection failures.
                     autoping=False,
                 ),
                 self._conn_options.timeout,

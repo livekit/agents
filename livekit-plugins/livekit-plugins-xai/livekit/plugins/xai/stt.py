@@ -368,7 +368,7 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     msg = await monitor.receive()
                 except APIConnectionError:
-                    if closing_ws or self._session.closed:
+                    if self._session.closed:
                         return
                     raise
                 if msg.type in (
@@ -389,7 +389,6 @@ class SpeechStream(stt.RecognizeStream):
                     data = json.loads(msg.data)
                     self._process_stream_event(data)
                     if data.get("type") in (
-                        "transcript.created",
                         "transcript.partial",
                         "transcript.done",
                     ):

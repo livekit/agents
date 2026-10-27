@@ -519,7 +519,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 try:
                     msg = await monitor.receive()
                 except APIConnectionError:
-                    if closing_ws or self._session.closed:
+                    if self._session.closed:
                         return
                     raise
                 if msg.type in (

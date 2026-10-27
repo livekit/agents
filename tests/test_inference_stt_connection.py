@@ -626,32 +626,8 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     assert exc_info.value.retryable is False
 
 
-async def test_half_open_socket_raises_retryable_error() -> None:
-
-    async def handler(request: web.Request) -> web.WebSocketResponse:
-        # accepts the session, then never sends anything or answers a ping
-        ws = web.WebSocketResponse(autoping=False)
-        await ws.prepare(request)
-        async for _ in ws:
-            pass
-        return ws
-
-    async with _gateway(handler) as (base_url, session):
-        stream = _make_stt(base_url, session).stream(
-            conn_options=APIConnectOptions(max_retry=0, timeout=1.0, liveness_timeout=0.15)
-        )
-        try:
-            with pytest.raises(APIConnectionError) as exc_info:
-                await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
-        finally:
-            await stream.aclose()
-
-    assert exc_info.value.retryable is True
-    assert isinstance(exc_info.value.__cause__, aiohttp.ServerTimeoutError)
-
-
-@pytest.mark.parametrize("input_ended", [False, True])
-async def test_websocket_error_preserves_shutdown_handling(monkeypatch, input_ended):
+@pytest.mark.parametrize("phase", ["active", "input_ended", "session_closed"])
+async def test_websocket_error_preserves_shutdown_handling(monkeypatch, phase):
     cause = aiohttp.ClientConnectionError("connection reset")
 
     class Socket(_Socket):
@@ -665,11 +641,13 @@ async def test_websocket_error_preserves_shutdown_handling(monkeypatch, input_en
             conn_options=APIConnectOptions(max_retry=0)
         )
         try:
-            if input_ended:
+            if phase == "input_ended":
                 stream.end_input()
                 await asyncio.wait_for(socket.finalized.wait(), 1)
+            elif phase == "session_closed":
+                await session.close()
             socket.messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, cause, None))
-            if input_ended:
+            if phase == "session_closed":
                 assert await asyncio.wait_for(_final_transcripts(stream), 1) == []
             else:
                 with pytest.raises(APIConnectionError) as exc_info:

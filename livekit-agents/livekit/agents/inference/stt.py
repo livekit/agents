@@ -1193,7 +1193,7 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     msg = await monitor.receive()
                 except APIConnectionError:
-                    if input_ended.is_set() or http_session.closed:
+                    if http_session.closed:
                         return
                     raise
                 if msg.type in (

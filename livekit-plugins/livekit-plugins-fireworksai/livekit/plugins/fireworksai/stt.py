@@ -357,8 +357,6 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                 except asyncio.TimeoutError:
-                    if closing_ws:
-                        break
                     continue
 
                 if msg.type in (

@@ -215,12 +215,7 @@ class SpeechStream(stt.RecognizeStream):
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                try:
-                    msg = await monitor.receive()
-                except APIConnectionError:
-                    if closing_ws:
-                        return
-                    raise
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,

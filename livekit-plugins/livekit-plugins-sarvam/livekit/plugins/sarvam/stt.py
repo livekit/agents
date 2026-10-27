@@ -1501,6 +1501,8 @@ class SpeechStream(stt.SpeechStream):
                             status_code=int(close_code) if isinstance(close_code, int) else -1,
                             body=raw_close,
                         )
+                    if not self._input_ch.closed and not self._session.closed:
+                        raise APIConnectionError("Sarvam STT connection closed unexpectedly")
                     self._logger.info(
                         f"WebSocket closed: {msg.type}",
                         extra={

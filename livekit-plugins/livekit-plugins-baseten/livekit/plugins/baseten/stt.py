@@ -438,6 +438,7 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal closing_ws
             samples_per_buffer = 512
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -459,6 +460,7 @@ class SpeechStream(stt.SpeechStream):
 
                         int16_array = np.frombuffer(frame.data, dtype=np.int16)
                         await ws.send_bytes(int16_array.tobytes())
+                closing_ws = True
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws or self._session.closed:
                     return
@@ -473,8 +475,6 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                 except asyncio.TimeoutError:
-                    if closing_ws:
-                        break
                     continue
 
                 if msg.type in (
