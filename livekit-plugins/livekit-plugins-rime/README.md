@@ -157,7 +157,6 @@ Use `endpoint=` for a custom deployment and `voice=` if it has no default voice.
 The endpoint must accept the SDK's Bearer API-key handshake. Local endpoints can
 use `ws://localhost/...`. An injected `client=Rime(...)` remains caller-owned.
 Create one model per AgentSession and close it when the application finishes.
-See `examples/voice_agents/rime_prism.py` for a room agent.
 
 Use the ordinary `livekit.agents.AgentSession` and
 `livekit.agents.llm.RealtimeModelFallbackAdapter`. The plugin has no replacement
@@ -330,7 +329,7 @@ text replies.
 Run the Rime regression tests from the repository root:
 
 ```sh
-uv run pytest tests/test_plugin_rime_*.py --unit
+uv run pytest tests/test_plugin_rime.py --unit
 ```
 
 The tests include response settings revisions, completed tool history rebuilds,

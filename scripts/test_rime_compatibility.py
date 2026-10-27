@@ -36,7 +36,7 @@ class RequiredChecks:
     def __init__(self, core_version: str) -> None:
         self.expected_xfails = (
             {
-                "tests/test_plugin_rime_realtime.py::"
+                "tests/test_plugin_rime.py::TestRealtime::"
                 "test_standard_session_tool_limit_produces_final_reply_and_restores_tools"
                 f"[{steps}]"
                 for steps in (0, 1, 2)
@@ -94,7 +94,7 @@ def main() -> int:
     print(f"Published core {args.core_version}: {agents.__file__}")
     print(f"Rime source: {rime.__file__}")
     print(f"Rime SDK: {version('rimelabs-sdk')}")
-    files = sorted((ROOT / "tests").glob("test_plugin_rime_*.py"))
+    files = [ROOT / "tests/test_plugin_rime.py"]
     command = ["-c", str(ROOT / "pyproject.toml"), "--unit", "--no-concurrent", "-q", "-rx"]
     if args.junitxml:
         command.extend(["--junitxml", args.junitxml])
