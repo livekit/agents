@@ -30,6 +30,12 @@ use tokio::sync::mpsc;
 
 const WHAT: &str = "LiveKit Inference STT";
 
+/// Once the input ended, how long the stream waits for the gateway's transcripts before it ends:
+/// `FINALIZATION_TIMEOUT` with none yet or after an interim, `FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT`
+/// after a final. The gateway does not close the socket on `session.finalize`.
+const FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
+const FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// `_MAX_AGENT_CONTEXT_CHARS`: AssemblyAI caps `agent_context`, so the tail is kept.
 const MAX_AGENT_CONTEXT_CHARS: usize = 1750;
 
@@ -637,6 +643,8 @@ impl Pump {
             self.opts.language.as_deref(),
         )));
         let closing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (drain, drain_rx) =
+            tokio::sync::watch::channel(self.clock.now().saturating_add(FINALIZATION_TIMEOUT));
 
         let send = Self::send_loop(
             sender.clone(),
@@ -646,6 +654,7 @@ impl Pump {
             self.opts.sample_rate,
             machine.clone(),
             closing.clone(),
+            (drain_rx, self.clock.clone()),
         );
         let recv = Self::recv_loop(
             receiver.as_mut(),
@@ -658,6 +667,7 @@ impl Pump {
                 clock: self.clock.clone(),
                 first_message_timeout: timeout,
                 offset: self.offset,
+                drain,
             },
         );
         let finalize = Self::vad_finalize_loop(sender.clone(), vad_source);
@@ -680,6 +690,7 @@ impl Pump {
         sample_rate: u32,
         machine: Arc<Mutex<TranscriptMachine>>,
         closing: Arc<std::sync::atomic::AtomicBool>,
+        (mut drain, clock): (tokio::sync::watch::Receiver<lk_agents_abi::Ts>, Arc<dyn Clock>),
     ) -> Result<(), ApiError> {
         // 50 ms frames: `samples_per_channel=self._opts.sample_rate // 20`.
         let mut bstream = AudioByteStream::new(sample_rate, 1, Some(sample_rate / 20), false);
@@ -748,9 +759,19 @@ impl Pump {
         }
         closing.store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = sender.send_text(wire::session_finalize().to_string()).await;
-        // The gateway still owes transcripts for audio already sent; park until recv is done.
-        std::future::pending::<()>().await;
-        Ok(())
+        // The gateway still owes transcripts for audio already sent: the stream ends once they
+        // stop coming (recv moves the deadline on each one).
+        loop {
+            let at = *drain.borrow_and_update();
+            if clock.now() >= at {
+                return Ok(());
+            }
+            tokio::select! {
+                () = clock.wait_until(at) => {}
+                // a moved deadline; recv gone means the stream is ending anyway
+                changed = drain.changed() => if changed.is_err() { return Ok(()) },
+            }
+        }
     }
 
     async fn recv_loop(
@@ -758,8 +779,16 @@ impl Pump {
         machine: Arc<Mutex<TranscriptMachine>>,
         ctx: RecvCtx,
     ) -> Result<(), ApiError> {
-        let RecvCtx { event_tx, closing, deferred, update_tx, clock, first_message_timeout, offset } =
-            ctx;
+        let RecvCtx {
+            event_tx,
+            closing,
+            deferred,
+            update_tx,
+            clock,
+            first_message_timeout,
+            offset,
+            drain,
+        } = ctx;
         // Only the first read (the `session.create` ack) is bounded; later silence is the user's.
         let mut awaiting_first = true;
         loop {
@@ -791,6 +820,17 @@ impl Pump {
                 WsMessage::Other => continue,
                 WsMessage::Text(text) => {
                     let Some(incoming) = wire::decode(&text) else { continue };
+                    let quiet_for = match incoming {
+                        wire::Incoming::FinalTranscript(_) => {
+                            Some(FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT)
+                        }
+                        wire::Incoming::InterimTranscript(_)
+                        | wire::Incoming::PreflightTranscript(_) => Some(FINALIZATION_TIMEOUT),
+                        _ => None,
+                    };
+                    if let Some(quiet_for) = quiet_for {
+                        drain.send_replace(clock.now().saturating_add(quiet_for));
+                    }
                     let processed = {
                         let mut machine = machine.lock().unwrap();
                         let processed = machine.process(incoming);
@@ -853,6 +893,8 @@ struct RecvCtx {
     clock: Arc<dyn Clock>,
     first_message_timeout: Duration,
     offset: f64,
+    /// When the stream ends once the input did: moved by each transcript.
+    drain: tokio::sync::watch::Sender<lk_agents_abi::Ts>,
 }
 
 /// The event on the caller's timeline: every alternative's and word's times moved by `offset`.
@@ -1187,6 +1229,31 @@ mod tests {
         let events = drain_until(source.as_mut(), SpeechEventType::EndOfSpeech).await;
         let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
         assert!(kinds.contains(&SpeechEventType::FinalTranscript), "got {kinds:?}");
+    }
+
+    // Catches: a stream whose input ended never ending, since the gateway keeps the socket open
+    // after `session.finalize` (a `stt.stream()` read to its end hung forever against the real
+    // gateway): it ends once no transcript came for the inactivity timeout after the last final.
+    #[tokio::test]
+    async fn the_stream_ends_once_the_transcripts_stop_after_the_input_ended() {
+        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+        let stt = stt_once(ws.clone()).with_clock(clock.clone());
+        let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
+        sink.push(frame(800)).unwrap();
+        sink.end_input();
+        ws.feed(text(json!({"type": "final_transcript", "transcript": "bye"})));
+        let events = drain_until(source.as_mut(), SpeechEventType::EndOfSpeech).await;
+        assert!(events.iter().any(|e| e.kind == SpeechEventType::FinalTranscript));
+
+        crate::testkit::arm_then_advance(&clock, FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT / 2).await;
+        let early = tokio::time::timeout(Duration::from_millis(50), source.next()).await;
+        assert!(early.is_err(), "ended before the inactivity timeout: {early:?}");
+        crate::testkit::arm_then_advance(&clock, FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT).await;
+        let end = tokio::time::timeout(Duration::from_secs(1), source.next())
+            .await
+            .expect("the stream never ended after its input did");
+        assert!(matches!(end, Ok(None)), "{end:?}");
     }
 
     // Catches: finalizing on the wrong VAD event (only END_OF_SPEECH), or on none.
