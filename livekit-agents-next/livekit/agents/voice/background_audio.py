@@ -15,7 +15,6 @@ from .. import _core
 from ..job import get_job_context
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
 from .agent_session import VoiceSession
 from .events import AgentStateChangedEvent
 from .room_io._core_rtc import _SOURCES, _name
@@ -95,10 +94,11 @@ class _Random:
 
 
 def _sounds(
-    source: AudioSource | AudioConfig | list[AudioConfig],
+    source: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None],
 ) -> tuple[list[_core.Sound], bool]:
-    """The core's candidates, and whether to draw one by probability (a list)."""
-    configs = source if isinstance(source, list) else [source]
+    """The core's candidates (none for an unset sound), and whether to draw one by probability
+    (a list)."""
+    configs = source if isinstance(source, list) else [source] if source else []
     sounds = []
     for cfg in configs:
         if not isinstance(cfg, AudioConfig):
@@ -151,14 +151,11 @@ class BackgroundAudioPlayer:
 
         """  # noqa: E501
 
-        self._ambient_sound = ambient_sound if is_given(ambient_sound) else None
-        self._thinking_sound = thinking_sound if is_given(thinking_sound) else None
+        self._ambient = _sounds(ambient_sound)
+        self._thinking = _sounds(thinking_sound)
         self._player = _core.BackgroundAudioPlayer(stream_timeout_ms=stream_timeout_ms)
         self.publication: rtc.LocalTrackPublication | None = None
-        self._lock = asyncio.Lock()
-        self._started = False
         self._agent_session: VoiceSession | None = None
-        self._ambient_handle: PlayHandle | None = None
 
     def play(
         self,
@@ -216,55 +213,37 @@ class BackgroundAudioPlayer:
                 Options used when publishing the audio track. If not given, defaults will
                 be used.
         """
-        async with self._lock:
-            self._agent_session = agent_session or None
-            try:
-                if get_job_context().is_fake_job():
-                    logger.warning(
-                        "Background audio is not supported in console mode. Audio will not be played."
-                    )
-            except RuntimeError:
-                pass
-
-            options = track_publish_options or rtc.TrackPublishOptions()
-            source = _name(_SOURCES, options.source, "unknown")
-            sid = await self._player.start(room, source=source)
-            if isinstance(room, rtc.Room):
-                self.publication = room.local_participant.track_publications.get(sid)
-            self._started = True
-
-            if self._agent_session:
-                self._agent_session.on("agent_state_changed", self._agent_state_changed)
-
-            if self._ambient_sound:
-                sounds, choose = _sounds(self._ambient_sound)
-                self._ambient_handle = PlayHandle(
-                    _state=self._player.play(sounds, _Random, ambient=True, choose=choose)
+        with contextlib.suppress(RuntimeError):
+            if get_job_context().is_fake_job():
+                logger.warning(
+                    "Background audio is not supported in console mode. Audio will not be played."
                 )
+        options = track_publish_options or rtc.TrackPublishOptions()
+        ambient, choose = self._ambient
+        sid = await self._player.start(
+            room,
+            _Random,
+            ambient=ambient,
+            choose=choose,
+            source=_name(_SOURCES, options.source, "unknown"),
+        )
+        if isinstance(room, rtc.Room):
+            self.publication = room.local_participant.track_publications.get(sid)
+        if agent_session:
+            self._agent_session = agent_session
+            agent_session.on("agent_state_changed", self._agent_state_changed)
 
     async def aclose(self) -> None:
         """
         Gracefully closes the background audio system, canceling all ongoing
         playback tasks and unpublishing the audio track.
         """
-        async with self._lock:
-            if not self._started:
-                return
-            if self._agent_session:
-                self._agent_session.off("agent_state_changed", self._agent_state_changed)
-            try:
-                await self._player.aclose()
-            except asyncio.CancelledError:
-                # cancelled before the output stopped: thinking sounds keep working
-                if self._agent_session and not self._player.closed:
-                    self._agent_session.on("agent_state_changed", self._agent_state_changed)
-                raise
-            self._started = False
+        await self._player.aclose()
+        if self._agent_session:
+            self._agent_session.off("agent_state_changed", self._agent_state_changed)
 
     def _agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
-        if not self._thinking_sound:
-            return
-        sounds, choose = _sounds(self._thinking_sound)
+        sounds, choose = self._thinking
         self._player.on_agent_state(sounds, _Random, ev.new_state == "thinking", choose=choose)
 
 

@@ -571,7 +571,15 @@ class BackgroundAudioPlayer:
         blocksize: int = 4800,
         stream_timeout_ms: int = 200,
     ) -> None: ...
-    async def start(self, room: Any, *, source: str | None = None) -> str: ...
+    async def start(
+        self,
+        room: Any,
+        rand: Any,
+        *,
+        ambient: list[Sound],
+        choose: bool,
+        source: str | None = None,
+    ) -> str: ...
     def play(
         self,
         sounds: list[Sound],

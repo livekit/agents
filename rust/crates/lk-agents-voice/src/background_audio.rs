@@ -352,6 +352,9 @@ pub struct BackgroundAudioPlayer {
     output: tokio::sync::Mutex<Option<PublishedOutput>>,
     thinking: Mutex<Option<Arc<PlaybackHandle>>>,
     closed: AtomicBool,
+    /// `aclose()` is stopping the sounds: agent states no longer start a thinking sound. Cleared
+    /// if that close is cancelled, as the reference re-attaches its listener.
+    closing: AtomicBool,
     started: AtomicBool,
     /// Woken by `play` and `close`: an idle mixer waits on it rather than polling.
     wake: tokio::sync::Notify,
@@ -395,6 +398,7 @@ impl BackgroundAudioPlayer {
             output: tokio::sync::Mutex::new(None),
             thinking: Mutex::new(None),
             closed: AtomicBool::new(false),
+            closing: AtomicBool::new(false),
             started: AtomicBool::new(false),
             wake: tokio::sync::Notify::new(),
             sample_rate,
@@ -404,13 +408,17 @@ impl BackgroundAudioPlayer {
         }
     }
 
-    /// `start(room)`: publishes the track on the room's local participant and returns its sid,
-    /// which the host resolves to its own `rtc.LocalTrackPublication`.
-    /// `source` is `track_publish_options.source`.
-    #[host(method(name = "start", kw_only = "source", defaults(source = None)))]
+    /// `start(room)`: publishes the track on the room's local participant, starts the `ambient`
+    /// sound (drawn by probability with `choose`; a file loops), and returns the track's sid,
+    /// which the host resolves to its own `rtc.LocalTrackPublication`. A second start returns the
+    /// same sid. `source` is `track_publish_options.source`.
+    #[host(method(name = "start", kw_only = "ambient", defaults(source = None)))]
     pub async fn start_for_host(
         self: &Arc<Self>,
         room: Arc<dyn crate::agent_session::SessionRoom>,
+        rand: Arc<dyn RandomDraw>,
+        ambient: Vec<Sound>,
+        choose: bool,
         source: Option<TrackSource>,
     ) -> Result<lk_agents_rtc::TrackSid, RtcError> {
         let participant = room.rtc().local().clone();
@@ -450,6 +458,10 @@ impl BackgroundAudioPlayer {
                 pump,
             });
             this.started.store(true, Ordering::Release);
+            if !ambient.is_empty() {
+                // Open and started: `play` cannot refuse.
+                let _ = this.play(ambient, choose, false, true, &mut || rand.draw());
+            }
             Ok(publication.sid().clone())
         })
         .await
@@ -479,8 +491,13 @@ impl BackgroundAudioPlayer {
         choose: bool,
     ) -> Result<(), PlaybackError> {
         // `_agent_state_changed`. Re-entering "thinking" while the clip still plays must not layer
-        // a second copy; `stop()` on a finished handle is a no-op.
-        if sounds.is_empty() {
+        // a second copy; `stop()` on a finished handle is a no-op. Unstarted or closing, the
+        // reference is not listening yet or any more.
+        if sounds.is_empty()
+            || !self.started.load(Ordering::Acquire)
+            || self.closing.load(Ordering::Acquire)
+            || self.closed.load(Ordering::Acquire)
+        {
             return Ok(());
         }
         let mut handle = self.thinking.lock().unwrap();
@@ -587,8 +604,25 @@ impl BackgroundAudioPlayer {
     /// keeps its mixer; past that, the close runs to its end.
     #[host(method(name = "aclose"))]
     pub async fn close(self: &Arc<Self>) {
+        // Never started (or already closed): nothing to close, and a later `start()` still works.
+        // A start in flight holds the output: its outcome is waited for.
+        if self.closed.load(Ordering::Acquire) || self.output.lock().await.is_none() {
+            return;
+        }
+        /// Clears `closing` unless the close got past stopping the sounds.
+        struct Reopen<'a>(&'a AtomicBool, bool);
+        impl Drop for Reopen<'_> {
+            fn drop(&mut self) {
+                if !self.1 {
+                    self.0.store(false, Ordering::Release);
+                }
+            }
+        }
+        self.closing.store(true, Ordering::Release);
+        let mut reopen = Reopen(&self.closing, false);
         let this = self.clone();
         let _ = tokio::spawn(async move { this.stop_sounds().await }).await;
+        reopen.1 = true;
         self.closed.store(true, Ordering::Release);
         self.wake.notify_one();
         let this = self.clone();
