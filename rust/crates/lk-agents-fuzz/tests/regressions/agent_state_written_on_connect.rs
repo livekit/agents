@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use lk_agents_abi::{ATTRIBUTE_AGENT_STATE, TokioSpawner};
 use lk_agents_rtc::{ConnectionState, FakeRtc, RtcRoom};
-use lk_agents_voice::room_io::_output::transcription::CountingSegmentIds;
+use lk_agents_voice::room_io::_output::transcription::SegmentIds;
 use lk_agents_voice::room_io::RoomIo;
 use lk_agents_voice::room_io::RoomIoConfig;
 
@@ -21,7 +21,7 @@ async fn a_state_taken_before_the_connect_is_written_on_it() {
         room.clone() as Arc<dyn RtcRoom>,
         clock,
         spawner,
-        Arc::new(CountingSegmentIds::default()),
+        Arc::new(SegmentIds::default()),
         RoomIoConfig::default(),
         None,
     );

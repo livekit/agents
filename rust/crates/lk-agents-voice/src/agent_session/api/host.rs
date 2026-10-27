@@ -229,7 +229,7 @@ impl SessionApi {
             Arc::clone(&room),
             clock.clone(),
             spawner.clone(),
-            Arc::new(crate::room_io::_output::transcription::CountingSegmentIds::default()),
+            Arc::new(crate::room_io::_output::transcription::SegmentIds::default()),
             config,
             None,
         );

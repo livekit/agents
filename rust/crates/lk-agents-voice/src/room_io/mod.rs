@@ -7,7 +7,7 @@ use crate::agent_session::effects::{Out, StreamKind};
 use crate::agent_session::{Close, Driver, HostEvent};
 use crate::room_io::_input::{ParticipantAudioInput, ParticipantVideoInput};
 use crate::room_io::_output::ParticipantAudioOutput;
-use crate::room_io::_output::transcription::{CountingSegmentIds, ParticipantTranscriptionOutput};
+use crate::room_io::_output::transcription::{SegmentIds, ParticipantTranscriptionOutput};
 use crate::room_io::_pre_connect_audio::PreConnectAudioHandler;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::voice::io::Result;
@@ -139,7 +139,7 @@ impl RoomIo {
         room: Arc<dyn RtcRoom>,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
-        ids: Arc<CountingSegmentIds>,
+        ids: Arc<SegmentIds>,
         config: RoomIoConfig,
         text_next_in_chain: Option<Arc<dyn TextOutput>>,
     ) -> Arc<Self> {

@@ -24,11 +24,7 @@ const LOG: &str = "livekit.agents";
 
 /// `utils.shortuuid("AUDIO_")`.
 fn stream_name() -> String {
-    use std::hash::BuildHasher;
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = std::collections::hash_map::RandomState::new()
-        .hash_one(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    format!("AUDIO_{:012x}", n & 0xffff_ffff_ffff)
+    lk_agents_abi::utils::strings::shortuuid("AUDIO_")
 }
 
 // ----------------------------------------------------------------------------- the RPC routes

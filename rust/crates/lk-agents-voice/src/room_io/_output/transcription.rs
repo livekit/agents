@@ -24,13 +24,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
-/// Deterministic, for tests and for a host that has no reason to care.
+/// Transcript segment ids: `utils.shortuuid("SG_")`, unique across sessions in one room (a
+/// frontend keys its transcript rows on them), or counted for a test that compares them.
 #[derive(Debug, Default)]
-pub struct CountingSegmentIds(AtomicU64);
+pub struct SegmentIds(Option<AtomicU64>);
 
-impl CountingSegmentIds {
+impl SegmentIds {
+    pub fn counting() -> Self {
+        SegmentIds(Some(AtomicU64::new(0)))
+    }
+
     fn next_segment_id(&self) -> String {
-        format!("SG_{}", self.0.fetch_add(1, Ordering::Relaxed))
+        match &self.0 {
+            Some(n) => format!("SG_{}", n.fetch_add(1, Ordering::Relaxed)),
+            None => lk_agents_abi::utils::strings::shortuuid("SG_"),
+        }
     }
 }
 
@@ -134,7 +142,7 @@ impl Writer {
         &mut self,
         visible: Visible,
         timing: Option<&TimedString>,
-        ids: &CountingSegmentIds,
+        ids: &SegmentIds,
     ) {
         if self.writing == Writing::Closed {
             return;
@@ -171,7 +179,7 @@ impl Writer {
     }
 
     /// The segment's text is complete: whatever the stripper held is visible now, then the end.
-    fn end_segment(&mut self, ids: &CountingSegmentIds) {
+    fn end_segment(&mut self, ids: &SegmentIds) {
         if self.is_delta_stream {
             let held = self.visible.flush();
             if !held.is_blank() {
@@ -409,7 +417,7 @@ impl Performer {
 /// performed in order by one task, off the caller.
 pub struct ParticipantTranscriptionOutput {
     room: Arc<dyn RtcRoom>,
-    ids: Arc<CountingSegmentIds>,
+    ids: Arc<SegmentIds>,
     writer: Mutex<Writer>,
     subject: Arc<Mutex<Subject>>,
     performer_done: Monotone<bool>,
@@ -422,7 +430,7 @@ impl ParticipantTranscriptionOutput {
     pub fn new(
         room: Arc<dyn RtcRoom>,
         spawner: Arc<dyn Spawner>,
-        ids: Arc<CountingSegmentIds>,
+        ids: Arc<SegmentIds>,
         is_delta_stream: bool,
         json_format: bool,
         next_in_chain: Option<Arc<dyn TextOutput>>,
@@ -551,5 +559,22 @@ impl TextOutput for ParticipantTranscriptionOutput {
         if let Some(next) = &self.next_in_chain {
             next.flush();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SegmentIds;
+
+    // Catches: per-session counters in production. A second session in the same room (a warm
+    // transfer, a restarted worker) would reuse `SG_0`, and a frontend keying its transcript rows
+    // on the segment id overwrites the first session's lines.
+    #[test]
+    fn two_sessions_never_share_a_segment_id() {
+        let (a, b) = (SegmentIds::default(), SegmentIds::default());
+        let first: Vec<String> = (0..4).map(|_| a.next_segment_id()).collect();
+        let second: Vec<String> = (0..4).map(|_| b.next_segment_id()).collect();
+        assert!(first.iter().all(|id| id.starts_with("SG_") && id.len() == 15), "{first:?}");
+        assert!(first.iter().all(|id| !second.contains(id)), "{first:?} {second:?}");
     }
 }
