@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 import weakref
 from dataclasses import dataclass
@@ -47,6 +48,11 @@ class _VADOptions:
     activation_threshold: float
     deactivation_threshold: float
     sample_rate: int
+
+
+def _default_deactivation_threshold(activation_threshold: float) -> float:
+    # the hysteresis band that keeps a state from flapping around the activation threshold
+    return max(activation_threshold - 0.15, 0.01)
 
 
 class VAD(agents.vad.VAD):
@@ -135,10 +141,113 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration=prefix_padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
-            deactivation_threshold=deactivation_threshold or max(activation_threshold - 0.15, 0.01),
+            deactivation_threshold=deactivation_threshold
+            or _default_deactivation_threshold(activation_threshold),
             sample_rate=sample_rate,
         )
         return cls(session=session, opts=opts)
+
+    def with_options(
+        self,
+        *,
+        min_speech_duration: NotGivenOr[float] = NOT_GIVEN,
+        min_silence_duration: NotGivenOr[float] = NOT_GIVEN,
+        prefix_padding_duration: NotGivenOr[float] = NOT_GIVEN,
+        max_buffered_speech: NotGivenOr[float] = NOT_GIVEN,
+        activation_threshold: NotGivenOr[float] = NOT_GIVEN,
+        deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
+        sample_rate: NotGivenOr[Literal[8000, 16000]] = NOT_GIVEN,
+    ) -> VAD:
+        """
+        Create another VAD on this instance's ONNX session, with different options.
+
+        Building the ONNX session is the expensive half of `load`: it takes about 15 ms and
+        holds the GIL, so on a worker that runs jobs in threads it stalls every other job's
+        event loop for that long. A session can be shared -- `InferenceSession.run` is
+        thread-safe and each stream keeps its own model state, so stream state does not leak
+        between instances -- which makes a per-session VAD with its own threshold nearly free.
+
+        Options that are not passed are inherited from this instance. A `deactivation_threshold`
+        the caller chose is kept; the one `load` derived from the activation threshold follows a
+        new `activation_threshold` the way it would in `load`.
+
+        **Example:**
+
+            ```python
+            def prewarm(proc: JobProcess):
+                proc.userdata["vad"] = silero.VAD.load()
+
+
+            async def entrypoint(ctx: JobContext):
+                shared = ctx.proc.userdata["vad"]
+                # same ONNX session, this session's own threshold
+                vad = shared.with_options(activation_threshold=0.6)
+            ```
+
+        Args:
+            min_speech_duration (float): Minimum duration of speech to start a new speech chunk.
+            min_silence_duration (float): At the end of each speech, wait this duration before ending the speech.
+            prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
+            max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
+            activation_threshold (float): Threshold to consider a frame as speech.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Default is max(activation_threshold - 0.15, 0.01).
+            sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
+
+        Returns:
+            VAD: A new instance that shares this instance's ONNX session.
+
+        Raises:
+            ValueError: If an unsupported sample rate or a non-positive deactivation threshold is provided.
+        """  # noqa: E501
+        resolved_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
+        if resolved_sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
+            raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
+
+        resolved_activation = (
+            activation_threshold
+            if is_given(activation_threshold)
+            else self._opts.activation_threshold
+        )
+        if is_given(deactivation_threshold):
+            if deactivation_threshold <= 0:
+                raise ValueError("deactivation_threshold must be greater than 0")
+            resolved_deactivation = deactivation_threshold
+        elif is_given(activation_threshold) and math.isclose(
+            self._opts.deactivation_threshold,
+            _default_deactivation_threshold(self._opts.activation_threshold),
+        ):
+            # the hysteresis band was still the derived one, so it follows the new threshold;
+            # a band the caller chose is theirs and stays, which is what a copy must do
+            resolved_deactivation = _default_deactivation_threshold(resolved_activation)
+        else:
+            resolved_deactivation = self._opts.deactivation_threshold
+
+        opts = _VADOptions(
+            min_speech_duration=(
+                min_speech_duration
+                if is_given(min_speech_duration)
+                else self._opts.min_speech_duration
+            ),
+            min_silence_duration=(
+                min_silence_duration
+                if is_given(min_silence_duration)
+                else self._opts.min_silence_duration
+            ),
+            prefix_padding_duration=(
+                prefix_padding_duration
+                if is_given(prefix_padding_duration)
+                else self._opts.prefix_padding_duration
+            ),
+            max_buffered_speech=(
+                max_buffered_speech
+                if is_given(max_buffered_speech)
+                else self._opts.max_buffered_speech
+            ),
+            activation_threshold=resolved_activation,
+            deactivation_threshold=resolved_deactivation,
+            sample_rate=resolved_sample_rate,
+        )
+        return type(self)(session=self._onnx_session, opts=opts)
 
     def __init__(
         self,
