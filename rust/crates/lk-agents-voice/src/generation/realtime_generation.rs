@@ -11,7 +11,8 @@ use crate::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
 use crate::io::RealtimeAudioNode;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{NextStep, StepDecision};
-use lk_agents_abi::llm::realtime::Event;
+use lk_agents_abi::llm::realtime::{Event, Modalities};
+use std::time::Duration;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, TextOutput};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, llm::realtime as rt};
@@ -40,6 +41,21 @@ pub(crate) async fn realtime_generation_task(
             && let Some(node) = &shared.realtime_audio
         {
             node.end();
+        }
+        // Nothing of it was heard: what the server already said of it is deleted.
+        let mut unheard = Vec::new();
+        while let Ok(ev) = events.lock().await.try_recv() {
+            if let Event::MessageStarted(m) = ev {
+                unheard.push(rt::Truncate {
+                    message_id: m.message_id,
+                    has_audio: true,
+                    audio_end_ms: 0,
+                    audio_transcript: None,
+                });
+            }
+        }
+        if !unheard.is_empty() {
+            let _ = wake.send(RealtimeWake::Heard { cuts: unheard });
         }
         return Ok(StepOutcome::Released);
     }
@@ -74,9 +90,12 @@ pub(crate) async fn realtime_generation_task(
         tools: &mut tools,
         response_id: None,
         message_id: None,
+        messages: Vec::new(),
+        audio: Duration::ZERO,
         received: false,
         text_out: text_out.as_deref(),
         speaks_text: out.is_none(),
+        plays_audio: out.is_some(),
         leg: None,
     };
     let played = perform_audio_forwarding(shared, handle, out, &mut generation).await;
@@ -86,8 +105,17 @@ pub(crate) async fn realtime_generation_task(
     }
     // `Generation::next` fails only on the speech's own request failing: nothing was generated.
     let heard = played.map_err(|failed| failed.error)?;
-    let Generation { segments, received, response_id, message_id, .. } = generation;
     let interrupted = !heard.complete || handle.interrupted();
+    if interrupted {
+        // What the server holds of its reply is cut to what the caller heard; a message they heard
+        // none of is gone (`truncate`, after `_realtime_generation_task`'s playout).
+        generation.drain_started();
+        let cuts = generation.cuts(&heard);
+        if !cuts.is_empty() {
+            let _ = wake.send(RealtimeWake::Heard { cuts });
+        }
+    }
+    let Generation { segments, received, response_id, message_id, .. } = generation;
     drop(rx);
     // An empty follow-up round: the reply ends on the step already spoken.
     if !received && handle.num_steps() > 0 {
@@ -171,14 +199,32 @@ struct Generation<'a> {
     response_id: Option<String>,
     /// The server's id of the generation's first message.
     message_id: Option<String>,
+    /// Every message, in order: where its audio starts in the generation's, and how long it is.
+    messages: Vec<Message>,
+    /// The generation's audio so far.
+    audio: Duration,
     /// An empty round means released or interrupted.
     received: bool,
     /// The transcription output, and whether the words are what starts the agent speaking (no
     /// audio output).
     text_out: Option<&'a dyn TextOutput>,
     speaks_text: bool,
+    /// An audio output plays the generation: a message whose modality is unsettled is audio.
+    plays_audio: bool,
     /// The open message's transcript leg, flushed at its `MessageDone`.
     leg: Option<TextLeg<'a>>,
+}
+
+/// One message of the generation, as the server holds it.
+struct Message {
+    id: String,
+    /// Where its audio starts in the generation's audio, and how much it has.
+    start: Duration,
+    audio: Duration,
+    /// Its modality, once the server settled it.
+    modalities: Option<Modalities>,
+    /// `MessageDone` came: the server will add no more to it.
+    done: bool,
 }
 
 impl Generation<'_> {
@@ -187,6 +233,89 @@ impl Generation<'_> {
             leg.flush();
         }
     }
+
+    fn message_started(&mut self, id: String) {
+        let start = self.audio;
+        self.messages.push(Message { id, start, audio: Duration::ZERO, modalities: None, done: false });
+    }
+
+    /// What was already sent to this speech when it was cut: the server holds it too.
+    fn drain_started(&mut self) {
+        while let Ok(ev) = self.events.try_recv() {
+            match ev {
+                Event::MessageStarted(m) => self.message_started(m.message_id),
+                Event::MessageModalities(m) => self.settle(&m.message_id, m.modalities),
+                Event::AudioDelta(d) => self.add_audio(&d.frame),
+                Event::MessageDone(m) => self.message_done(&m.message_id),
+                _ => {}
+            }
+        }
+    }
+
+    fn add_audio(&mut self, frame: &lk_agents_abi::AudioFrame) {
+        let len = lk_agents_rtc::frame_duration(frame);
+        self.audio += len;
+        if let Some(m) = self.messages.last_mut() {
+            m.audio += len;
+        }
+    }
+
+    fn message_done(&mut self, id: &str) {
+        if let Some(m) = self.messages.iter_mut().find(|m| m.id == id) {
+            m.done = true;
+        }
+    }
+
+    fn settle(&mut self, id: &str, modalities: Modalities) {
+        if let Some(m) = self.messages.iter_mut().find(|m| m.id == id) {
+            m.modalities = Some(modalities);
+        }
+    }
+
+    /// The truncations that leave the server holding what the caller heard (`heard.played` of the
+    /// generation's audio): a message heard in part is cut there, one heard none of is deleted
+    /// (cut at 0), one heard whole is left. A message with no audio is cut to the words heard.
+    fn cuts(&self, heard: &crate::transcription::Heard) -> Vec<rt::Truncate> {
+        let mut words = heard.text.as_str();
+        let mut cuts = Vec::new();
+        for (i, m) in self.messages.iter().enumerate() {
+            let text = self.segments.get(i).map_or("", String::as_str);
+            let (said, rest) = split_chars(words, text.chars().count());
+            words = rest;
+            let has_audio = m.modalities.map_or(m.audio > Duration::ZERO || self.plays_audio, |
+                modalities| modalities == Modalities::AudioAndText);
+            if has_audio {
+                let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+                let heard_ms = ms(heard.played.saturating_sub(m.start).min(m.audio));
+                // Complete, and heard to within a millisecond of its end: heard whole.
+                if m.done && m.audio > Duration::ZERO && heard_ms + 1 >= ms(m.audio) {
+                    continue;
+                }
+                let cut = rt::Truncate {
+                    message_id: m.id.clone(),
+                    has_audio: true,
+                    audio_end_ms: heard_ms,
+                    audio_transcript: None,
+                };
+                cuts.push(cut);
+            } else if said.len() < text.len() {
+                let cut = rt::Truncate {
+                    message_id: m.id.clone(),
+                    has_audio: false,
+                    audio_end_ms: 0,
+                    audio_transcript: Some(said.to_owned()),
+                };
+                cuts.push(cut);
+            }
+        }
+        cuts
+    }
+}
+
+/// The first `n` characters of `s`, and the rest.
+fn split_chars(s: &str, n: usize) -> (&str, &str) {
+    let at = s.char_indices().nth(n).map_or(s.len(), |(i, _)| i);
+    s.split_at(at)
 }
 
 impl Segment for Generation<'_> {
@@ -209,6 +338,7 @@ impl Segment for Generation<'_> {
             }
             match ev {
                 Event::MessageStarted(m) => {
+                    self.message_started(m.message_id.clone());
                     self.message_id.get_or_insert(m.message_id);
                     self.end_message();
                     self.current = Some(self.segments.len());
@@ -231,9 +361,14 @@ impl Segment for Generation<'_> {
                         first_text_started_speaking(self.shared, self.handle, self.acc);
                     }
                 }
-                Event::AudioDelta(rt::AudioDelta { frame, .. }) => return Ok(Next::Frame(frame)),
+                Event::AudioDelta(rt::AudioDelta { frame, .. }) => {
+                    self.add_audio(&frame);
+                    return Ok(Next::Frame(frame));
+                }
+                Event::MessageModalities(m) => self.settle(&m.message_id, m.modalities),
                 // A boundary, so `wait_for_playout` can finish this message while the next arrives.
-                Event::MessageDone(_) => {
+                Event::MessageDone(m) => {
+                    self.message_done(&m.message_id);
                     self.current = None;
                     self.end_message();
                     return Ok(Next::Boundary);

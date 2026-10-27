@@ -106,6 +106,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         pushed: 0,
         pushed_len: Duration::ZERO,
         played: Duration::ZERO,
+        completed: Duration::ZERO,
         reported: 0,
         batch: 0,
     };
@@ -192,6 +193,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
                 position: ev.playback_position,
                 complete: !ev.interrupted,
                 frames: playing.pushed,
+                played: playing.completed.max(ev.playback_position),
             })
         }
     }
@@ -256,7 +258,7 @@ impl OutputChain {
 }
 
 pub(super) fn silent(text: String, complete: bool) -> Heard {
-    Heard { text, position: Duration::ZERO, complete, frames: 0 }
+    Heard { text, position: Duration::ZERO, complete, frames: 0, played: Duration::ZERO }
 }
 
 pub(super) fn unheard() -> Heard {
@@ -317,6 +319,9 @@ struct Playing<'a> {
     pushed: u64,
     pushed_len: Duration,
     played: Duration,
+    /// What the segments the sink reported played out held: the forwarding's heard audio before
+    /// the segment now playing.
+    completed: Duration,
     reported: u64,
     /// Pushed since the last boundary: one `SinkCall::Push` record per stretch.
     batch: u64,
@@ -383,6 +388,9 @@ impl Playing<'_> {
                     self.start(self.shared.time.wall_secs());
                 }
                 self.played = self.played.max(f.playback_position);
+                if !f.interrupted {
+                    self.completed += f.playback_position;
+                }
                 self.report_played();
             }
         }
@@ -491,23 +499,38 @@ impl Playing<'_> {
             // Nothing reached the sink, so no position (the tracker's would be another segment's).
             return unheard();
         }
+        let mut report = None;
         for _ in 0..CUT_REPORT_HOPS {
             let ev = self.shared.time.timeout(Duration::ZERO, self.out.wait_for_playout()).await;
             if let Ok(ev) = ev {
-                let text = synchronized(ev.synchronized_transcript, text);
-                return Heard { text, position: ev.playback_position, complete: false, frames };
+                report = Some(ev);
+                break;
             }
             tokio::task::yield_now().await;
         }
         // A host output reports from its own loop, later than the hops: wait for it on the clock,
         // which runs unless the session is closing.
-        if !*self.shared.closing.borrow()
-            && let Ok(ev) =
-                self.shared.time.timeout(CUT_REPORT_WAIT, self.out.wait_for_playout()).await
-        {
-            let text = synchronized(ev.synchronized_transcript, text);
-            return Heard { text, position: ev.playback_position, complete: false, frames };
+        if report.is_none() && !*self.shared.closing.borrow() {
+            report = self.shared.time.timeout(CUT_REPORT_WAIT, self.out.wait_for_playout()).await.ok();
         }
-        Heard { text, position: self.out.tracker().position(), complete: false, frames }
+        let Some(ev) = report else {
+            let position = self.out.tracker().position();
+            let played = self.completed + position;
+            return Heard { text, position, complete: false, frames, played };
+        };
+        // The segments before were counted as they finished; a report that is not the cut is one
+        // of them (nothing was captured since), already counted.
+        self.drain_reports();
+        let cut = if ev.interrupted { ev.playback_position } else { Duration::ZERO };
+        let text = synchronized(ev.synchronized_transcript, text);
+        let played = self.completed + cut;
+        Heard { text, position: ev.playback_position, complete: false, frames, played }
+    }
+
+    /// The sink's reports so far, folded without settling the segment (a cut has nothing owed).
+    fn drain_reports(&mut self) {
+        while let Ok(ev) = self.events.try_recv() {
+            self.on_event(ev);
+        }
     }
 }

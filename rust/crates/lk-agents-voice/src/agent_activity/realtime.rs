@@ -17,7 +17,6 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::realtime::{
     Event, PushAudio, RealtimeCapabilities, RealtimeCommand, RealtimeError, RealtimeSession,
 };
-use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
     AudioFrame, ChatMessage, Role, Spawner, StreamSink, ToolChoice, Ts,
     llm::realtime as rt,
@@ -62,9 +61,6 @@ pub(crate) mod realtime_state {
         pub(super) cancelled_requests: BTreeSet<String>,
         /// A generation answering a request already settled: its `GenerationDone` is dropped.
         pub(super) discarded: Option<String>,
-        /// The playing speech's message, truncated to what was heard once its cleared buffer
-        /// reports where playback stopped.
-        pub(super) truncate_on_clear: Option<(SpeechId, String)>,
         /// The generation whose foreign deltas were warned about; reset when a generation opens.
         foreign: Option<String>,
         pub(super) closing: bool,
@@ -149,7 +145,6 @@ pub(crate) mod realtime_state {
         response_id: String,
         /// `None` until the generation's speech is started, in the same cycle.
         speech: Option<SpeechId>,
-        message_id: Option<String>,
         /// `Interrupt` was sent for this response; a second stop sends nothing more.
         cancelled: bool,
     }
@@ -207,28 +202,6 @@ pub(crate) mod realtime_state {
             }
             self.auto_follow_up = None;
             self.cancelled_requests.clear();
-        }
-
-        pub(super) fn message_started(&mut self, response_id: Option<&str>, message_id: &str) {
-            if let Some(open) = self.find_mut(response_id) {
-                open.message_id = Some(message_id.to_owned());
-            }
-        }
-
-        pub(super) fn message_done(&mut self, response_id: Option<&str>, message_id: &str) {
-            if let Some(open) = self.find_mut(response_id)
-                && open.message_id.as_deref() == Some(message_id)
-            {
-                open.message_id = None;
-            }
-        }
-
-        /// The generation `response_id` names, or the newest when it names none.
-        fn find_mut(&mut self, response_id: Option<&str>) -> Option<&mut Open> {
-            match response_id {
-                Some(id) => self.open.iter_mut().find(|o| o.response_id == id),
-                None => self.open.last_mut(),
-            }
         }
 
         /// A request: pending under `req_id` until answered, its timer keyed by the returned key.
@@ -368,7 +341,7 @@ pub(crate) mod realtime_state {
         pub(super) fn open_generation(&mut self, response_id: String, speech: Option<SpeechId>) {
             self.foreign = None;
             self.auto_reply_expected = false;
-            self.open.push(Open { response_id, speech, message_id: None, cancelled: false });
+            self.open.push(Open { response_id, speech, cancelled: false });
         }
 
         pub(super) fn set_open_speech(&mut self, response_id: &str, speech: SpeechId) {
@@ -414,12 +387,11 @@ pub(crate) mod realtime_state {
         }
 
         /// One `Interrupt` per generation still generating whose speech `stops` (or that has
-        /// none), once each; with its message when it had one. The cancel is session-wide on the
-        /// provider, so a generation whose speech carries on is spared.
+        /// none), once each. A generation whose speech carries on is spared.
         pub(super) fn cancel_where(
             &mut self,
             stops: impl Fn(Option<SpeechId>) -> bool,
-        ) -> Vec<(RealtimeCommand, Option<SpeechId>, Option<String>)> {
+        ) -> Vec<RealtimeCommand> {
             if self.auto_follow_up.is_some_and(|(reuse, _)| stops(Some(reuse.speech))) {
                 self.auto_follow_up = None;
             }
@@ -430,8 +402,7 @@ pub(crate) mod realtime_state {
             for open in self.open.iter_mut().filter(|o| !o.cancelled && stops(o.speech)) {
                 open.cancelled = true;
                 let response_id = Some(open.response_id.clone());
-                let cmd = RealtimeCommand::Interrupt(rt::Interrupt { response_id });
-                out.push((cmd, open.speech, open.message_id.clone()));
+                out.push(RealtimeCommand::Interrupt(rt::Interrupt { response_id }));
             }
             out
         }
@@ -497,6 +468,10 @@ pub enum RealtimeWake {
         /// The follow-up's `tool_choice`, as the step decided it.
         tool_choice: Option<lk_agents_abi::ToolChoice>,
     },
+    /// A cut reply's messages, truncated to what the caller heard of each.
+    Heard {
+        cuts: Vec<rt::Truncate>,
+    },
 }
 
 pub(crate) fn spawn_event_pump(
@@ -557,6 +532,15 @@ impl Driver {
                     out.signal(crate::agent_session::effects::Signal::CloseProgress);
                 }
             }
+            // Not past the close's edge: the socket is going away with what it holds.
+            RealtimeWake::Heard { cuts } => {
+                let t = &self.activity.realtime_state;
+                if t.caps.message_truncation && !t.ended() && !self.session.closing_past_edge() {
+                    for cut in cuts {
+                        self.rt_send(RealtimeCommand::Truncate(cut), out);
+                    }
+                }
+            }
             RealtimeWake::ToolsDone { speech, step, ask, tool_choice } => {
                 // Minted here whether asked or not: the id sequence does not depend on the answer.
                 let req_id = self.shared.mint_item_id();
@@ -602,17 +586,9 @@ impl Driver {
             Event::GenerateReplyFailed(rt::GenerateReplyFailed { req_id, error }) => {
                 self.fail_request(&req_id, error, out)
             }
-            Event::MessageStarted(m) => {
-                let t = &mut self.activity.realtime_state;
-                t.message_started(m.response_id.as_deref(), &m.message_id);
-                self.deliver(Event::MessageStarted(m), out);
-            }
-            Event::MessageDone(m) => {
-                let t = &mut self.activity.realtime_state;
-                t.message_done(m.response_id.as_deref(), &m.message_id);
-                self.deliver(Event::MessageDone(m), out);
-            }
-            ev @ (Event::TextDelta(_)
+            ev @ (Event::MessageStarted(_)
+            | Event::MessageDone(_)
+            | Event::TextDelta(_)
             | Event::AudioDelta(_)
             | Event::MessageModalities(_)
             | Event::FunctionCall(_)) => self.deliver(ev, out),
@@ -1109,7 +1085,7 @@ impl Driver {
         let pending = std::mem::take(&mut t.pending);
         let close = t.begin_closing();
         self.report_error(now, source, false, reported, None, out);
-        for (cmd, ..) in interrupts {
+        for cmd in interrupts {
             self.rt_send(cmd, out);
         }
         for (_, pending) in pending {
@@ -1347,11 +1323,9 @@ impl Driver {
         if self.activity.realtime_state.ended() {
             return self.settle_all(Settled::Ended, false, out);
         }
-        // What the user heard is only known while speaking.
-        let speaking = self.session.states.agent_state() == AgentState::Speaking;
         // Only a generation whose speech stopped: the cancel is session-wide, and a speech that
-        // plays on keeps its response.
-        let current = self.activity.speech_scheduler.current_speech();
+        // plays on keeps its response. What was heard of it is truncated once its playout says
+        // (`RealtimeWake::Heard`).
         let playing_on: BTreeSet<SpeechId> = {
             let tasks = &self.activity.speech_scheduler;
             let open = self.activity.realtime_state.open_speeches();
@@ -1363,40 +1337,10 @@ impl Driver {
             .activity
             .realtime_state
             .cancel_where(|speech| speech.is_none_or(|s| !playing_on.contains(&s)));
-        let truncation = self.activity.realtime_state.caps.message_truncation;
-        for (cmd, speech, message_id) in interrupts {
+        for cmd in interrupts {
             self.rt_send(cmd, out);
-            // Only the playing speech's message, once its clear says what was heard.
-            if let Some(message_id) = message_id.filter(|_| speaking && truncation)
-                && let Some(speech) = speech.filter(|s| Some(*s) == current)
-            {
-                self.activity.realtime_state.truncate_on_clear = Some((speech, message_id));
-            }
         }
         self.settle_all(Settled::Interrupted(cause), true, out);
-    }
-
-    /// The cleared buffer reports where playback stopped: the interrupted message is truncated to
-    /// it, when something was heard.
-    pub(crate) fn on_playback_cleared(
-        &mut self,
-        speech: SpeechId,
-        finished: lk_agents_abi::voice::io::PlaybackFinished,
-        out: &mut Out,
-    ) {
-        let pending = &mut self.activity.realtime_state.truncate_on_clear;
-        let Some((_, message_id)) = pending.take_if(|(s, _)| *s == speech) else { return };
-        let played = finished.playback_position;
-        if played.is_zero() || self.session.closing_past_edge() {
-            return;
-        }
-        let truncate = rt::Truncate {
-            message_id,
-            has_audio: true,
-            audio_end_ms: u64::try_from(played.as_millis()).unwrap_or(u64::MAX),
-            audio_transcript: None,
-        };
-        self.rt_send(RealtimeCommand::Truncate(truncate), out);
     }
 
     /// The session-level `interrupt()`'s `self._rt_session.interrupt()`, unconditional: with no
@@ -1413,7 +1357,7 @@ impl Driver {
     /// cancelled.
     pub(crate) fn realtime_on_close(&mut self, out: &mut Out) {
         self.activity.realtime_state.closing = true;
-        for (cmd, ..) in self.activity.realtime_state.cancel_where(|_| true) {
+        for cmd in self.activity.realtime_state.cancel_where(|_| true) {
             self.rt_send(cmd, out);
         }
         self.settle_all(Settled::Interrupted(InterruptCause::Closing), true, out);

@@ -13,16 +13,19 @@ pub struct Heard {
     pub complete: bool,
     /// Zero for a segment with no audio.
     pub frames: u64,
+    /// The audio heard over every segment of a forwarding, the cut one up to the cut: where a
+    /// realtime reply's messages are truncated. `position` alone is the last segment's.
+    pub played: Duration,
 }
 
 impl Heard {
     pub fn complete(text: impl Into<String>, position: Duration, frames: u64) -> Heard {
-        Heard { text: text.into(), position, complete: true, frames }
+        Heard { text: text.into(), position, complete: true, frames, played: position }
     }
 
     /// A segment cut at `position`; `text` is what was heard up to there.
     pub fn cut(text: impl Into<String>, position: Duration, frames: u64) -> Heard {
-        Heard { text: text.into(), position, complete: false, frames }
+        Heard { text: text.into(), position, complete: false, frames, played: position }
     }
 }
 

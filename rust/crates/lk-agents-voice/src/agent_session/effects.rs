@@ -794,22 +794,14 @@ impl Driver {
                     leg.close();
                 }
             }
-            E::Audio(AudioOp::Gate { speech, op, cause: _, output }) => {
+            E::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
                 let Some(sink) = self.shared.resources.audio_output(output) else { return };
                 match op {
                     GateOp::Pause => sink.pause(),
                     GateOp::Resume => sink.resume(),
                     // `cut`, never a bare `clear_buffer`: the flush closes the segment in the
                     // trackers, or the next speech's wait resolves on this clear's event.
-                    GateOp::ClearBuffer => {
-                        sink.cut();
-                        let finished = lk_agents_abi::voice::io::PlaybackFinished {
-                            playback_position: sink.tracker().position(),
-                            interrupted: true,
-                            synchronized_transcript: None,
-                        };
-                        let _ = self.queue.send((speech, finished));
-                    }
+                    GateOp::ClearBuffer => sink.cut(),
                 }
             }
             // A synchroniser left behind would otherwise keep pacing into the old leaf. The same

@@ -214,8 +214,6 @@ queue_events! {
     ChannelEnd => |end| Event::Input(Input::ChannelEnded(end));
     StreamOpened => |opened| Event::Input(Input::StreamOpened(opened));
     lk_agents_rtc::VideoFrameRef => |frame| Event::Input(Input::Video(frame));
-    (SpeechId, lk_agents_abi::voice::io::PlaybackFinished) =>
-        |(speech, finished)| Event::Input(Input::PlaybackFinished(speech, finished));
 }
 
 /// `Closed` is the pump's own end.
@@ -260,8 +258,6 @@ pub enum Input {
     SttRetried(lk_agents_abi::errors::ProviderError),
     StreamOpened(crate::room_io::StreamOpened),
     Video(lk_agents_rtc::VideoFrameRef),
-    /// A cleared buffer's answer: where playback stopped.
-    PlaybackFinished(SpeechId, lk_agents_abi::voice::io::PlaybackFinished),
     /// The data plane's reports. The source's first frame forwarded (`input_started_at`).
     InputStarted {
         at: Ts,
@@ -492,9 +488,6 @@ impl Driver {
             }
             Some(Input::StreamOpened(opened)) => self.on_leg_opened(now, opened, &mut out),
             Some(Input::Video(frame)) => self.on_video_frame(now, frame, &mut out),
-            Some(Input::PlaybackFinished(speech, finished)) => {
-                self.on_playback_cleared(speech, finished, &mut out)
-            }
             Some(Input::InputStarted { at }) => self.input.first_input_at = Some(at),
             Some(Input::GateSilenced(silenced)) => {
                 for (leg, frames) in silenced {
