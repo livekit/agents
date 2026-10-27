@@ -182,11 +182,19 @@ def test_with_options_rejects_a_non_positive_deactivation_threshold() -> None:
 
 
 async def test_streams_on_two_instances_share_the_session() -> None:
-    """Sharing a session must keep per-stream model state separate."""
-    vad = VAD.load(min_silence_duration=0.032)
+    """Both instances hand the very same session object to their streams."""
+    vad = _vad()
     derived = vad.with_options(activation_threshold=0.6)
+    handed_over: list[object] = []
 
-    streams = [vad.stream(), derived.stream()]
+    def fake_model(*, onnx_session: object, sample_rate: int) -> _FakeModel:
+        handed_over.append(onnx_session)
+        return _FakeModel()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(silero_vad.onnx_model, "OnnxModel", fake_model)
+        streams = [vad.stream(), derived.stream()]
+
     try:
         for stream, value in zip(streams, (1, 0), strict=True):
             events = await _push_window(stream, value)
@@ -194,6 +202,8 @@ async def test_streams_on_two_instances_share_the_session() -> None:
     finally:
         for stream in streams:
             await stream.aclose()
+
+    assert handed_over == [vad._onnx_session, vad._onnx_session]
 
 
 async def _push_window(stream: agents_vad.VADStream, value: int) -> list[agents_vad.VADEvent]:
