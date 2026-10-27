@@ -90,10 +90,7 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     assert!(lost.interrupted_for_host());
     lost.answered(false);
     assert_eq!(lost.wait_for_interrupted_for_host().await, Err(CreationError::Ended.into()));
-    assert_eq!(
-        lost.wait_for_generation_for_host(None).await,
-        Err(CreationError::Ended.into())
-    );
+    assert_eq!(lost.wait_for_generation_for_host(None).await, Err(CreationError::Ended.into()));
     tokio::task::yield_now().await;
 }
 
@@ -126,7 +123,8 @@ async fn host_calls_on_a_created_speech_reach_it() {
 #[test]
 fn a_speech_is_itself_across_handles() {
     assert_eq!(created(true), created(false));
-    let (a, b) = (SpeechHandle::detached(String::new(), true), SpeechHandle::detached(String::new(), true));
+    let (a, b) =
+        (SpeechHandle::detached(String::new(), true), SpeechHandle::detached(String::new(), true));
     assert_ne!(a, b);
     assert_eq!(a, a);
 }

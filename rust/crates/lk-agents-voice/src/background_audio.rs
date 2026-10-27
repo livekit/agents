@@ -905,3 +905,7 @@ impl FileInput {
     }
 }
 
+
+#[cfg(test)]
+#[path = "background_audio_tests.rs"]
+mod tests;

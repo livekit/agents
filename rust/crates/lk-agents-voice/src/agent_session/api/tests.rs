@@ -585,3 +585,228 @@ async fn a_session_without_options_resolves_none() {
     let api = running(unobserved(fake_room("no-options").1, None)).await;
     assert!(api.resolved_options().is_none());
 }
+
+// Catches: a second session in one job recording, or hosting the remote session, or a requested
+// recording on it silently dropped instead of refused.
+#[test]
+fn only_the_primary_session_records_or_hosts() {
+    let plan = |requested, primary_taken, text_only| {
+        plan_session_start(requested, true, true, primary_taken, None, text_only)
+    };
+    let first = plan(None, false, false).unwrap();
+    assert!(first.is_primary && first.hosting && first.records && first.recording.audio);
+    assert!(!plan(None, false, true).unwrap().recording.audio, "a text-only session records audio");
+    let second = plan(None, true, false).unwrap();
+    assert!(!second.is_primary && !second.hosting && !second.records);
+    assert!(plan(Some(RecordingRequest::All(true)), true, false).is_err());
+    assert!(plan(Some(RecordingRequest::All(false)), true, false).is_ok());
+    let declined = plan_session_start(None, true, true, false, Some(false), false).unwrap();
+    assert!(declined.is_primary && !declined.hosting);
+}
+
+struct NoRegistry;
+
+impl lk_agents_abi::RefRegistry for NoRegistry {
+    fn release(&self, _id: u64) {}
+}
+
+fn host_ref(id: u64) -> lk_agents_abi::HostRef {
+    let registry: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRegistry);
+    lk_agents_abi::HostRef::new(id, &registry)
+}
+
+/// Hooks that answer as configured, and record what failed.
+#[derive(Default)]
+struct ScriptedHooks {
+    raise: bool,
+    user_text: Option<String>,
+    stop: bool,
+    failed: Mutex<Vec<String>>,
+    toolsets_closed: Mutex<usize>,
+}
+
+impl ScriptedHooks {
+    fn result<T>(&self, value: T) -> Result<T, HostError> {
+        if self.raise {
+            Err(HostError {
+                kind: "ValueError".into(),
+                message: "the hook raised".into(),
+                host_ref: None,
+            })
+        } else {
+            Ok(value)
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionHooks for ScriptedHooks {
+    async fn on_enter(&self, _: &lk_agents_abi::HostRef) -> Result<(), HostError> {
+        self.result(())
+    }
+    async fn on_exit(&self, _: &lk_agents_abi::HostRef) -> Result<(), HostError> {
+        self.result(())
+    }
+    async fn close_toolsets(&self, _: Option<&lk_agents_abi::HostRef>) {
+        *self.toolsets_closed.lock().unwrap() += 1;
+    }
+    async fn setup_tools(
+        &self,
+        _: &lk_agents_abi::HostRef,
+    ) -> Result<Vec<lk_agents_abi::ToolSpec>, HostError> {
+        self.result(Vec::new())
+    }
+    async fn closing(&self) -> Result<(), HostError> {
+        self.result(())
+    }
+    async fn on_user_turn_completed(
+        &self,
+        _: &lk_agents_abi::HostRef,
+        _: Vec<lk_agents_abi::ChatItem>,
+        _: &str,
+        _: f64,
+    ) -> Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError> {
+        self.result((self.user_text.clone(), Some(Vec::new()), self.stop))
+    }
+    async fn function_tools_executed(
+        &self,
+        _: Vec<lk_agents_abi::ChatItem>,
+        outputs: Vec<lk_agents_abi::ChatItem>,
+    ) -> Result<Vec<bool>, HostError> {
+        self.result(vec![false; outputs.len()])
+    }
+    async fn filler_source(
+        &self,
+        _: &lk_agents_abi::HostRef,
+        step: u32,
+    ) -> Result<FillerReply, HostError> {
+        self.result(match step {
+            0 => FillerReply::Text("one moment".into()),
+            1 => FillerReply::Spoke,
+            _ => FillerReply::Declined,
+        })
+    }
+    fn hook_failed(&self, hook: &str, _: Option<lk_agents_abi::errors::CapturedError>) {
+        self.failed.lock().unwrap().push(hook.to_owned());
+    }
+}
+
+/// What `answer_hook` sends back for `call`.
+async fn answered(hooks: &Arc<ScriptedHooks>, call: HookCall) -> HookOutcome {
+    use crate::agent_session::commands::Sent;
+    use crate::agent_session::driver::{Event, Input, Tx};
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let agents = HostAgents::default();
+    agents.install("agent", Some(host_ref(1)));
+    let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
+    let hooks: Arc<dyn SessionHooks> = hooks.clone();
+    super::answer_hook(hooks, call, agents, Tx::new(tx), spawner).await;
+    match rx.recv().await {
+        Some(Event::Input(Input::Host(Sent {
+            command: Command::HookDone { outcome, .. },
+            ..
+        }))) => outcome,
+        _ => panic!("the hook was not answered"),
+    }
+}
+
+// Catches: a hook's answer translated wrongly for the driver: a `StopResponse` lost, an unchanged
+// transcript sent as an edit, an `on_exit` that leaves the agent's toolsets open, a filler's
+// reply misread, or a raising hook not reported as failed.
+#[tokio::test]
+async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
+    use crate::agent::TurnEdit;
+    let hooks = Arc::new(ScriptedHooks {
+        stop: true,
+        user_text: Some("edited".into()),
+        ..Default::default()
+    });
+    let (id, agent) = (HookId(1), "agent".to_owned());
+    assert!(matches!(
+        answered(&hooks, HookCall::OnEnter { id, agent: agent.clone() }).await,
+        HookOutcome::Returned
+    ));
+    assert!(matches!(
+        answered(&hooks, HookCall::OnEnter { id, agent: "unknown".into() }).await,
+        HookOutcome::Failed
+    ));
+    assert!(matches!(
+        answered(&hooks, HookCall::OnExit { id, agent: agent.clone() }).await,
+        HookOutcome::Returned
+    ));
+    assert!(matches!(
+        answered(&hooks, HookCall::OnExit { id, agent: "unknown".into() }).await,
+        HookOutcome::Failed
+    ));
+    settle().await;
+    assert_eq!(*hooks.toolsets_closed.lock().unwrap(), 1, "on_exit left the agent's toolsets open");
+
+    let turn = |text: &str| HookCall::OnUserTurnCompleted {
+        id,
+        agent: "agent".into(),
+        chat_ctx: Vec::new(),
+        turn: crate::audio_recognition::TurnId(1),
+        new_transcript: text.into(),
+        transcript_confidence: 0.9,
+    };
+    let HookOutcome::Turn(edits) = answered(&hooks, turn("original")).await else {
+        panic!("not a turn")
+    };
+    assert!(matches!(
+        edits[..],
+        [TurnEdit::StopResponse, TurnEdit::UpdateUserMessage(_), TurnEdit::ReplaceItems(_)]
+    ));
+    let HookOutcome::Turn(edits) = answered(&hooks, turn("edited")).await else {
+        panic!("not a turn")
+    };
+    assert!(
+        !edits.iter().any(|e| matches!(e, TurnEdit::UpdateUserMessage(_))),
+        "an unchanged text sent as an edit"
+    );
+
+    let event = lk_agents_abi::voice::events::ToolsExecutedEvent {
+        function_calls: Vec::new(),
+        function_call_outputs: vec![lk_agents_abi::FunctionCallOutput::new(
+            "item_1",
+            "call_1",
+            "done",
+            false,
+            std::time::UNIX_EPOCH,
+        )],
+        handoff_required: false,
+    };
+    let executed =
+        HookCall::FunctionToolsExecuted { id, speech: SpeechId(1), event: Box::new(event) };
+    assert!(matches!(
+        answered(&hooks, executed).await,
+        HookOutcome::FunctionToolsExecuted { reply_required } if reply_required == [false]
+    ));
+
+    let filler = |step, source| HookCall::FillerSource {
+        id,
+        filler: crate::filler_scheduler::FillerId(1),
+        step,
+        source,
+    };
+    assert!(matches!(
+        answered(&hooks, filler(0, Some(host_ref(2)))).await,
+        HookOutcome::Filler { text: Some(_), spoke: false }
+    ));
+    assert!(matches!(
+        answered(&hooks, filler(1, Some(host_ref(2)))).await,
+        HookOutcome::Filler { text: None, spoke: true }
+    ));
+    assert!(matches!(
+        answered(&hooks, filler(2, Some(host_ref(2)))).await,
+        HookOutcome::Filler { text: None, spoke: false }
+    ));
+    assert!(matches!(
+        answered(&hooks, filler(0, None)).await,
+        HookOutcome::Filler { text: None, spoke: false }
+    ));
+    assert!(hooks.failed.lock().unwrap().is_empty());
+
+    let raising = Arc::new(ScriptedHooks { raise: true, ..Default::default() });
+    assert!(matches!(answered(&raising, turn("x")).await, HookOutcome::Failed));
+    assert_eq!(*raising.failed.lock().unwrap(), ["on_user_turn_completed"]);
+}

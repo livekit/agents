@@ -71,9 +71,11 @@ fn an_unhonourable_mode_falls_as_auto() {
 // nothing.
 #[test]
 fn a_granular_record_merges_onto_all_on() {
-    let traces_off = resolve_recording_options_for_host(RecordingRequest::Granular(
-        RecordingOverrides { traces: Some(false), ..Default::default() },
-    ));
+    let traces_off =
+        resolve_recording_options_for_host(RecordingRequest::Granular(RecordingOverrides {
+            traces: Some(false),
+            ..Default::default()
+        }));
     assert!(!traces_off.traces && traces_off.audio && traces_off.logs && traces_off.transcript);
     assert!(records_anything(&traces_off));
     assert!(!records_anything(&resolve_recording_options(RecordingRequest::All(false))));
@@ -120,7 +122,17 @@ fn the_interruption_gate_names_its_reason() {
     // No aligned streaming STT: adaptive asked for is warned about, unasked is silent.
     let cannot = |asked| {
         resolve_interruption_detector_for_host(
-            None, None, false, false, true, Some("vad"), true, asked, None, false, true,
+            None,
+            None,
+            false,
+            false,
+            true,
+            Some("vad"),
+            true,
+            asked,
+            None,
+            false,
+            true,
         )
     };
     let warned = cannot(Some(InterruptionMode::Adaptive));
