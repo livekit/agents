@@ -33,7 +33,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
     stt,
     utils,
@@ -602,38 +601,14 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                send = asyncio.create_task(send_task(ws))
-                recv = asyncio.create_task(recv_task(ws))
-                tasks = [send, recv]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (*tasks, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if send in done and recv not in done and wait_reconnect_task not in done:
-                        # Audio sending has finished. Bound only the final drain.
-                        done, _ = await asyncio.wait(
-                            (recv, wait_reconnect_task),
-                            timeout=self._conn_options.timeout,
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        if not done:
-                            raise APITimeoutError("Baseten STT final response timed out")
-                        if recv in done:
-                            recv.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                reconnect = await self._run_connection_tasks(
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                    reconnect=self._reconnect_event,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
             finally:
                 if ws is not None:
                     await ws.close()

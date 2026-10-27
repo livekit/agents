@@ -785,14 +785,10 @@ class RealtimeSpeechStream(stt.SpeechStream):
         try:
             ws = await self._connect_ws()
             self._ws = ws
-            tasks = [
+            await self._run_connection_tasks(
                 asyncio.create_task(self._process_audio(ws)),
                 asyncio.create_task(self._process_messages(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
+            )
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Timed out connecting to Sarvam realtime STT") from e
         except aiohttp.ClientResponseError as e:

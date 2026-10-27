@@ -1246,69 +1246,16 @@ class SpeechStream(stt.SpeechStream):
         self._audio_task = asyncio.create_task(self._process_audio(ws))
         self._message_task = asyncio.create_task(self._process_messages(ws))
 
-        # Wait for both tasks to complete or reconnection event
         tasks = [self._audio_task, self._message_task]
-        reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
         try:
-            done, pending = await asyncio.wait(
-                tasks + [reconnect_task],
-                return_when=asyncio.FIRST_COMPLETED,
+            reconnect = await self._run_connection_tasks(
+                self._audio_task, self._message_task, reconnect=self._reconnect_event
             )
-
-            # Check if reconnection was requested
-            if reconnect_task in done:
-                self._logger.info(
-                    "Reconnection requested, closing current connection",
-                    extra=self._build_log_context(),
-                )
+            if reconnect:
                 self._reconnect_event.clear()
-                return
-
-            # Keep listening for server-side terminal errors when audio finishes first.
-            if self._audio_task in done and self._message_task in pending:
-                audio_exc = self._audio_task.exception()
-                if audio_exc is not None:
-                    raise audio_exc
-
-                done2, pending2 = await asyncio.wait(
-                    [self._message_task, reconnect_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                    timeout=self._conn_options.timeout,
-                )
-                done |= done2
-                pending = pending2
-
-                if reconnect_task in done2:
-                    self._logger.info(
-                        "Reconnection requested, closing current connection",
-                        extra=self._build_log_context(),
-                    )
-                    self._reconnect_event.clear()
-                    return
-
-                if not done2:
-                    raise APITimeoutError(
-                        "Timed out waiting for STT server response after audio input ended"
-                    )
-
-            # Cancel remaining tasks using LiveKit's utility
-            if pending:
-                await utils.aio.cancel_and_wait(*pending)
-
-            # Check for exceptions in completed tasks
-            for task in done:
-                if task != reconnect_task:
-                    exc = task.exception()
-                    if exc is not None:
-                        if isinstance(exc, BaseException):
-                            raise exc
-                        else:
-                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
-
         finally:
             # Clean up tasks
-            all_tasks = tasks + [reconnect_task]
+            all_tasks = tasks
             fallback_task = self._cancel_eos_fallback()
             if fallback_task is not None:
                 all_tasks.append(fallback_task)

@@ -425,12 +425,10 @@ class SpeechStream(stt.RecognizeStream):
         self._end_stream_sent = False
         self._last_audio_processed_ms = 0.0
         ws: aiohttp.ClientWebSocketResponse | None = None
-        tasks: list[asyncio.Task[None]] = []
         try:
             ws = await self._connect_ws()
             sender = asyncio.create_task(self._send_audio(ws), name="meta-stt-send")
             receiver = asyncio.create_task(self._receive_events(ws), name="meta-stt-receive")
-            tasks = [sender, receiver]
             await self._drive_tasks(sender, receiver)
         except asyncio.CancelledError:
             raise
@@ -448,8 +446,6 @@ class SpeechStream(stt.RecognizeStream):
                 retryable=not self._audio_consumed,
             ) from None
         finally:
-            if tasks:
-                await utils.aio.gracefully_cancel(*tasks)
             self._flush_usage()
             if ws is not None:
                 await _close_quietly(ws)
@@ -536,25 +532,7 @@ class SpeechStream(stt.RecognizeStream):
         self._session_id = session_id
 
     async def _drive_tasks(self, sender: asyncio.Task[None], receiver: asyncio.Task[None]) -> None:
-        done, _ = await asyncio.wait((sender, receiver), return_when=asyncio.FIRST_COMPLETED)
-        if receiver in done:
-            receiver.result()
-            if not self._end_stream_sent:
-                raise APIConnectionError(
-                    "Meta Muse realtime ASR closed before input ended",
-                    retryable=not self._audio_consumed,
-                )
-            if not sender.done():
-                await sender
-        else:
-            sender.result()
-            try:
-                await asyncio.wait_for(receiver, timeout=self._conn_options.timeout)
-            except asyncio.TimeoutError:
-                raise APITimeoutError(
-                    "Meta Muse realtime ASR timed out while draining final events",
-                    retryable=not self._audio_consumed,
-                ) from None
+        await self._run_connection_tasks(sender, receiver)
         self._validate_clean_close()
 
     async def _send_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:

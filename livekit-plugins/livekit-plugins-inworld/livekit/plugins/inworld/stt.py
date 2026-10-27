@@ -20,7 +20,6 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Any
 
 import aiohttp
 
@@ -293,31 +292,14 @@ class SpeechStream(stt.SpeechStream):
                 self._ws = ws
                 self._closing_ws = False
 
-                tasks = [
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(self._send_audio_task()),
                     asyncio.create_task(self._recv_messages_task()),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
-                try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
+                    reconnect=self._reconnect_event,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
 
             except APIConnectionError:
                 raise

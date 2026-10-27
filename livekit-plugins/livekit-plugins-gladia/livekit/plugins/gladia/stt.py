@@ -900,47 +900,20 @@ class SpeechStream(stt.SpeechStream):
                     self._session_time_offset = self._pushed_audio_duration
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
-                    send_task = asyncio.create_task(self._send_audio_task())
-                    recv_task = asyncio.create_task(self._recv_messages_task())
-
-                    wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
                     try:
-                        done, _ = await asyncio.wait(
-                            [send_task, recv_task, wait_reconnect_task],
-                            return_when=asyncio.FIRST_COMPLETED,
+                        reconnect = await self._run_connection_tasks(
+                            asyncio.create_task(self._send_audio_task()),
+                            asyncio.create_task(self._recv_messages_task()),
+                            reconnect=self._reconnect_event,
                         )
-
-                        for task in done:
-                            if task != wait_reconnect_task:
-                                task.result()
-
-                        if (
-                            send_task in done
-                            and recv_task not in done
-                            and wait_reconnect_task not in done
-                        ):
-                            # Audio sending has finished. Bound only the final drain.
-                            done, _ = await asyncio.wait(
-                                [recv_task, wait_reconnect_task],
-                                timeout=self._conn_options.timeout,
-                                return_when=asyncio.FIRST_COMPLETED,
-                            )
-                            if not done:
-                                raise APITimeoutError("Gladia STT final response timed out")
-                            if recv_task in done:
-                                recv_task.result()
-
-                        if wait_reconnect_task not in done:
+                        if not reconnect:
                             if self._input_ch.closed and self._input_ch.empty():
                                 break
                             # A segment stop ends the provider connection, not the public stream.
                             continue
-
                         self._reconnect_event.clear()
                         logger.info("Reconnecting Gladia session due to options change")
                     finally:
-                        await utils.aio.gracefully_cancel(send_task, recv_task, wait_reconnect_task)
                         self._ws = None
             except APIStatusError as e:
                 if e.status_code == 429:

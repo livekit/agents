@@ -242,14 +242,10 @@ class SpeechStream(stt.RecognizeStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
             ws = await self._connect_ws()
-            tasks = [
+            await self._run_connection_tasks(
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
+            )
         finally:
             if ws is not None:
                 await ws.close()

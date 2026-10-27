@@ -54,6 +54,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
+    APITimeoutError,
     stt,
     utils,
 )
@@ -356,10 +357,10 @@ class SpeechStream(stt.SpeechStream):
             send_task = asyncio.create_task(self._send_task(ws))
             recv_task = asyncio.create_task(self._recv_task(ws))
             try:
-                await asyncio.gather(send_task, recv_task)
+                await self._run_connection_tasks(send_task, recv_task, background=[watchdog_task])
+            except APITimeoutError:
+                raise self._stream_failure("nabrah STT final response timed out") from None
             finally:
-                watchdog_task.cancel()
-                await utils.aio.gracefully_cancel(send_task, recv_task, watchdog_task)
                 if (
                     self._current_text()
                     or self._is_speaking

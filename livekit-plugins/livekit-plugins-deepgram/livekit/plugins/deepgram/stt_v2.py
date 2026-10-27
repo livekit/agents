@@ -564,31 +564,14 @@ class SpeechStreamv2(stt.SpeechStream):
                 ws = await self._connect_ws()
                 # expose the connection for in-band Configure updates
                 self._ws = ws
-                tasks = [
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    # propagate exceptions from completed tasks
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
+                    reconnect=self._reconnect_event,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
             finally:
                 self._ws = None
                 if self._reconfigure_atask is not None:

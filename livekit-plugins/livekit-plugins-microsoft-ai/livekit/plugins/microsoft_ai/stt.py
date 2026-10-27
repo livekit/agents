@@ -315,19 +315,12 @@ class SpeechStream(stt.RecognizeStream):
                 await asyncio.sleep(self._connect_options._interval_for_retry(attempt))
 
     async def _attempt(self) -> None:
-        tasks: list[asyncio.Task[None]] = []
         try:
             monitor = await asyncio.wait_for(self._handshake(), self._conn_options.timeout)
             assert self._ws is not None
             sender = asyncio.create_task(self._send(self._ws))
             receiver = asyncio.create_task(self._receive(monitor))
-            tasks = [sender, receiver]
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if sender in done:
-                await sender
-            else:
-                await receiver
-                raise APIConnectionError("Microsoft AI STT receiver stopped unexpectedly")
+            await self._run_connection_tasks(sender, receiver, sender_completes=True)
         except aiohttp.WSServerHandshakeError as error:
             raise status_error("STT", error.status) from None
         except asyncio.TimeoutError:
@@ -335,7 +328,6 @@ class SpeechStream(stt.RecognizeStream):
         except (aiohttp.ClientError, ConnectionError, OSError):
             raise APIConnectionError("Microsoft AI STT transport failed") from None
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
             if self._commit_future is not None:
                 self._commit_future.cancel()
                 self._commit_future = None

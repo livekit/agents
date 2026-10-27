@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
-from .._exceptions import APIConnectionError, APIError
+from .._exceptions import APIConnectionError, APIError, APITimeoutError
 from ..language import LanguageCode
 from ..log import logger
 from ..metrics import STTMetrics
@@ -469,6 +469,58 @@ class RecognizeStream(ABC):
                 metadata=Metadata(model_name=self._stt.model, model_provider=self._stt.provider),
             ),
         )
+
+    async def _run_connection_tasks(
+        self,
+        sender: asyncio.Future[Any],
+        receiver: asyncio.Future[Any],
+        *,
+        reconnect: asyncio.Event | None = None,
+        background: Sequence[asyncio.Future[Any]] = (),
+        sender_completes: bool = False,
+    ) -> bool:
+        """Run one provider connection; return True when a reconnect is requested.
+
+        The provider defines normal completion in its receive loop. Once audio
+        sending finishes, allow at most conn_options.timeout for final results.
+        Transport activity and provider progress do not extend this deadline.
+        Set sender_completes when the sender also waits for the final acknowledgement.
+        All supplied tasks are cancelled and awaited on exit.
+        """
+        reconnect_task = asyncio.create_task(reconnect.wait()) if reconnect is not None else None
+        tasks = {sender, receiver, *background}
+        if reconnect_task is not None:
+            tasks.add(reconnect_task)
+        pending = set(tasks)
+        deadline: float | None = None
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                timeout = None if deadline is None else max(0.0, deadline - loop.time())
+                done, _ = await asyncio.wait(
+                    pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                )
+                if not done:
+                    # An exhausted input cannot supply audio to a new attempt.
+                    raise APITimeoutError(
+                        "STT final response timed out",
+                        retryable=not (self._input_ch.closed and self._input_ch.empty()),
+                    )
+                for task in done:
+                    task.result()
+                if reconnect_task in done:
+                    return True
+                if receiver in done:
+                    return False
+                if sender in done:
+                    if sender_completes:
+                        return False
+                    deadline = loop.time() + self._conn_options.timeout
+                pending.difference_update(done)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     @abstractmethod
     async def _run(self) -> None: ...

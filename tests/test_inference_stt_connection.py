@@ -98,7 +98,7 @@ async def test_input_end_preserves_delayed_final_after_session_finalized() -> No
 
     async with _gateway(handler) as (base_url, session):
         stt = _make_stt(base_url, session)
-        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
         try:
             stream.end_input()
             transcripts = await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
@@ -469,7 +469,7 @@ async def test_input_end_waits_for_transcript_inactivity(
     monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
     async with aiohttp.ClientSession() as session:
         stream = _make_stt("http://unused", session).stream(
-            conn_options=APIConnectOptions(max_retry=0)
+            conn_options=APIConnectOptions(max_retry=0, timeout=45.0)
         )
 
         async def send_events() -> None:

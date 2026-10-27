@@ -1269,26 +1269,31 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await self._connect_ws(http_session)
             self._ws = ws
-            receiver = asyncio.create_task(recv_task(ws))
-            inactivity = asyncio.create_task(wait_for_inactivity())
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                receiver,
-                inactivity,
-            ]
-            if vad_stream is not None:
-                tasks.append(asyncio.create_task(self._vad_finalize_task(ws, vad_stream)))
-            try:
-                pending = set(tasks)
-                while True:
-                    done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+
+            async def receive_until_complete() -> None:
+                receiver = asyncio.create_task(recv_task(ws))
+                inactivity = asyncio.create_task(wait_for_inactivity())
+                try:
+                    done, _ = await asyncio.wait(
+                        (receiver, inactivity), return_when=asyncio.FIRST_COMPLETED
+                    )
                     for task in done:
                         task.result()
-                    if receiver in done or inactivity in done:
-                        break
+                finally:
+                    await utils.aio.gracefully_cancel(receiver, inactivity)
+
+            background = []
+            if vad_stream is not None:
+                background.append(asyncio.create_task(self._vad_finalize_task(ws, vad_stream)))
+            try:
+                await self._run_connection_tasks(
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(receive_until_complete()),
+                    background=background,
+                )
             finally:
                 transcript_timeout.cancel()
-                await utils.aio.gracefully_cancel(*tasks)
+
         finally:
             self._ws = None
             if self._session_update_tasks:

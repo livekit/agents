@@ -142,6 +142,9 @@ class APIConnectOptions:
     timeout: float = 10.0
     """
     Timeout for connecting to the API in seconds.
+
+    Streaming STT providers also use this to bound the final-response wait after
+    audio sending finishes.
     """
 
     liveness_timeout: float = 6.0

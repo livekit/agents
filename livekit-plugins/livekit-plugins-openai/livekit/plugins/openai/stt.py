@@ -1005,33 +1005,20 @@ class SpeechStream(stt.SpeechStream):
                         "OpenAI Realtime STT connection closed unexpectedly"
                     ) from e
                 vad_stream = self._vad.stream() if self._vad is not None else None
-                tasks = [
-                    asyncio.create_task(send_task(ws, vad_stream)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
+                background = []
                 if vad_stream is not None:
-                    tasks.append(asyncio.create_task(vad_task(ws, vad_stream)))
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                    background.append(asyncio.create_task(vad_task(ws, vad_stream)))
                 try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
+                    reconnect = await self._run_connection_tasks(
+                        asyncio.create_task(send_task(ws, vad_stream)),
+                        asyncio.create_task(recv_task(ws)),
+                        reconnect=self._reconnect_event,
+                        background=background,
                     )
-
-                    # propagate exceptions from completed tasks
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
+                    if not reconnect:
                         break
-
                     self._reconnect_event.clear()
                 finally:
                     self._ws = None
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
                     if vad_stream is not None:
                         await vad_stream.aclose()

@@ -797,15 +797,11 @@ class SpeechStream(stt.SpeechStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
             ws = await self._connect_ws()
-            config_task = asyncio.create_task(send_config_task(ws))
-            tasks = [
+            await self._run_connection_tasks(
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(config_task, *tasks)
+                background=[asyncio.create_task(send_config_task(ws))],
+            )
         finally:
             if ws is not None:
                 await ws.close()

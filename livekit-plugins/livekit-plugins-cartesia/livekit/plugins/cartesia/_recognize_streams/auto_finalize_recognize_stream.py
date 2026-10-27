@@ -245,9 +245,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._current_transcript = ""
 
     async def _run(self) -> None:
-        if self._input_ch.closed:
-            return
-
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
                 while not self._closing_ws:
@@ -348,18 +345,13 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
 
         try:
             ws = await self._connect_ws()
-            send = asyncio.create_task(send_task(ws))
-            recv = asyncio.create_task(recv_task(ws))
-            keepalive = asyncio.create_task(keepalive_task(ws))
-            tasks = [send, recv, keepalive]
             try:
-                # Only wait on send/recv. keepalive_task sleeps up to 30s
-                # between pings, so awaiting it here would keep gather() (and
-                # the teardown/finalization below) blocked for up to 30s after
-                # send/recv have already finished.
-                await asyncio.gather(send, recv)
+                await self._run_connection_tasks(
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                    background=[asyncio.create_task(keepalive_task(ws))],
+                )
             finally:
-                await utils.aio.gracefully_cancel(*tasks)
                 self._send_recognition_usage_event()
                 # If the websocket dropped mid-turn, flush the partial
                 # transcript as a FINAL_TRANSCRIPT so the consumer can finalize

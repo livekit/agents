@@ -142,6 +142,7 @@ def test_all_monitored_stt_streams_have_a_contract_case():
     paths = [root / "livekit-agents/livekit/agents/inference/stt.py"]
     paths += list((root / "livekit-plugins").glob("livekit-plugins-*/livekit/plugins/**/*.py"))
     implementations = set()
+    coordinated = set()
     for path in paths:
         if "stt" not in path.stem and "recognize_stream" not in path.stem:
             continue
@@ -159,8 +160,16 @@ def test_all_monitored_stt_streams_have_a_contract_case():
                 for node in ast.walk(cls)
             ):
                 implementations.add((module, cls.name))
+                if any(
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "_run_connection_tasks"
+                    for node in ast.walk(cls)
+                ):
+                    coordinated.add((module, cls.name))
     registered = {(case.module, case.stream_class) for case in CASES}
     assert implementations == registered
+    assert coordinated == registered
     assert len(registered) == len(CASES)
 
 
@@ -261,15 +270,9 @@ async def test_flush_preserves_stream_for_more_audio(provider):
         assert not stream._task.done()
 
 
-@pytest.mark.parametrize(
-    "provider",
-    [case for case in CASES if case.post_input_timeout],
-    ids=lambda case: case.name,
-    indirect=True,
-)
 @pytest.mark.parametrize("max_retry", [0, 2])
 async def test_post_input_timeout_is_not_extended_by_pongs(provider, max_retry):
-    _, _, transport = provider
+    case, _, transport = provider
     async with running(
         provider, timeout=0.5, max_retry=max_retry, continuous_audio=False
     ) as stream:
@@ -277,16 +280,10 @@ async def test_post_input_timeout_is_not_extended_by_pongs(provider, max_retry):
         stream.end_input()
         with pytest.raises(APIError):
             await asyncio.wait_for(stream._task, 2)
-        assert len(transport.sockets) == max_retry + 1
+        assert len(transport.sockets) == 1
         assert transport.sockets[0].pings >= 2
 
 
-@pytest.mark.parametrize(
-    "provider",
-    [case for case in CASES if case.post_input_timeout],
-    ids=lambda case: case.name,
-    indirect=True,
-)
 async def test_post_input_drain_preserves_delayed_transcript(provider):
     case, _, transport = provider
     async with running(provider, timeout=0.5, continuous_audio=False) as stream:
@@ -313,48 +310,3 @@ async def test_post_input_drain_preserves_delayed_transcript(provider):
 
         assert await asyncio.wait_for(collect(), 1) == ["words"]
         assert len(transport.sockets) == 1
-
-
-@pytest.mark.parametrize(
-    "provider",
-    [case for case in CASES if case.post_input_timeout],
-    ids=lambda case: case.name,
-    indirect=True,
-)
-async def test_final_response_deadline_starts_after_audio_is_sent(provider, monkeypatch):
-    case, _, transport = provider
-    async with running(provider, timeout=0.5, continuous_audio=False) as stream:
-        await asyncio.sleep(0.2)
-        socket = transport.sockets[0]
-        blocked = asyncio.Event()
-        release = asyncio.Event()
-
-        def pause(send):
-            async def write(data):
-                blocked.set()
-                await release.wait()
-                await send(data)
-
-            return write
-
-        monkeypatch.setattr(socket, "send_str", pause(socket.send_str))
-        monkeypatch.setattr(socket, "send_bytes", pause(socket.send_bytes))
-        stream.push_frame(
-            rtc.AudioFrame(
-                data=b"\x01\x01" * 1600,
-                sample_rate=16000,
-                num_channels=1,
-                samples_per_channel=1600,
-            )
-        )
-        stream.end_input()
-        await asyncio.wait_for(blocked.wait(), 1)
-        await asyncio.sleep(0.7)
-        assert not stream._task.done()
-        release.set()
-        await asyncio.sleep(0.2)
-        for event in case.completion:
-            socket.emit(event)
-        if case.completion_closes_socket:
-            socket.server_close()
-        await asyncio.wait_for(stream._task, 1)

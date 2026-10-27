@@ -391,12 +391,10 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
 
         try:
             await ws.send_str(json.dumps(self._opts.handshake()))
-            send_task = asyncio.create_task(_send(), name="qwen3-stt-send")
-            recv_task = asyncio.create_task(_recv(), name="qwen3-stt-recv")
-            try:
-                await asyncio.gather(send_task, recv_task)
-            finally:
-                await utils.aio.gracefully_cancel(send_task, recv_task)
+            await self._run_connection_tasks(
+                asyncio.create_task(_send(), name="qwen3-stt-send"),
+                asyncio.create_task(_recv(), name="qwen3-stt-recv"),
+            )
         except (APIConnectionError, APIStatusError, APITimeoutError):
             raise
         except Exception as e:

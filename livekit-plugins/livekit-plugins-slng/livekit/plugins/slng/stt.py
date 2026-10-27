@@ -31,6 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     stt,
     utils,
@@ -772,6 +773,7 @@ class SpeechStream(stt.SpeechStream):
                 if (
                     exc is not None
                     and not is_non_retryable_client_error(exc)
+                    and not (isinstance(exc, APIError) and not exc.retryable)
                     and buffered_audio
                     and same_endpoint_replays < self._candidate_max_retry
                 ):
@@ -1140,6 +1142,7 @@ class SpeechStream(stt.SpeechStream):
             pending_failover = None
             send = None
             recv = None
+            connection: asyncio.Task[bool] | None = None
             keepalive: asyncio.Task[None] | None = None
             wait_switch = None
             wait_reconnect = None
@@ -1195,6 +1198,7 @@ class SpeechStream(stt.SpeechStream):
                 recv.add_done_callback(retrieve_task_exception)
                 if keepalive is not None:
                     keepalive.add_done_callback(retrieve_task_exception)
+                connection = asyncio.create_task(self._run_connection_tasks(send, recv))
                 wait_switch = asyncio.create_task(switch_event.wait())
                 wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
                 wait_user_state = asyncio.create_task(self._user_state_event.wait())
@@ -1205,8 +1209,7 @@ class SpeechStream(stt.SpeechStream):
                     active_tasks = [
                         task
                         for task in (
-                            send,
-                            recv,
+                            connection,
                             keepalive,
                             wait_switch,
                             wait_reconnect,
@@ -1258,6 +1261,7 @@ class SpeechStream(stt.SpeechStream):
                                 for task in (
                                     send,
                                     recv,
+                                    connection,
                                     keepalive,
                                     wait_switch,
                                     wait_reconnect,
@@ -1278,6 +1282,7 @@ class SpeechStream(stt.SpeechStream):
                                 for task in (
                                     send,
                                     recv,
+                                    connection,
                                     keepalive,
                                     wait_switch,
                                     wait_reconnect,
@@ -1297,12 +1302,8 @@ class SpeechStream(stt.SpeechStream):
                         keepalive = None
                         continue
 
-                    if send is not None and send in done:
-                        send.result()
-                        send = None
-                        continue
-
-                    if recv is not None and recv in done:
+                    if connection in done:
+                        connection.result()
                         input_exhausted = recv.result()
                         await utils.aio.gracefully_cancel(
                             *[
@@ -1336,6 +1337,7 @@ class SpeechStream(stt.SpeechStream):
                             for task in (
                                 send,
                                 recv,
+                                connection,
                                 keepalive,
                                 wait_switch,
                                 wait_reconnect,
@@ -1356,6 +1358,7 @@ class SpeechStream(stt.SpeechStream):
                     for t in (
                         send,
                         recv,
+                        connection,
                         keepalive,
                         wait_switch,
                         wait_reconnect,
@@ -1375,6 +1378,7 @@ class SpeechStream(stt.SpeechStream):
                     for t in (
                         send,
                         recv,
+                        connection,
                         keepalive,
                         wait_switch,
                         wait_reconnect,
@@ -1388,6 +1392,7 @@ class SpeechStream(stt.SpeechStream):
                         await utils.aio.gracefully_cancel(*tasks)
                 if (
                     not is_non_retryable_client_error(exc)
+                    and not (isinstance(exc, APIError) and not exc.retryable)
                     and candidate_attempts < self._candidate_max_retry
                     and not awaiting_final
                     and not buffered_audio

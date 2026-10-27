@@ -44,7 +44,6 @@ from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient
 
 _DEFAULT_CHUNK_MS = 100
 _IDLE_TIMEOUT_SECONDS = 25.0
-_RECV_COMPLETION_TIMEOUT = 5.0
 _IDLE_CHECK_INTERVAL = 1.0
 
 
@@ -292,10 +291,9 @@ class SpeechStream(stt.SpeechStream):
     async def _await_recv_completion(self) -> None:
         if self._recv_task:
             try:
-                await asyncio.wait_for(self._recv_task, timeout=_RECV_COMPLETION_TIMEOUT)
-            except asyncio.TimeoutError as e:
-                await utils.aio.gracefully_cancel(self._recv_task)
-                raise APIConnectionError("RTZR STT final response timed out") from e
+                await self._run_connection_tasks(
+                    asyncio.create_task(asyncio.sleep(0)), self._recv_task
+                )
             finally:
                 self._recv_task = None
 

@@ -634,32 +634,16 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                tasks = [
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                ]
-                # Not in the gather: recv_task ends on is_last before the socket closes, and the
-                # session must not wait on a keepalive loop. Its failure still ends the session.
-                keepalive = asyncio.create_task(keepalive_task(ws))
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task, keepalive),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
+                    reconnect=self._reconnect_event,
+                    background=[asyncio.create_task(keepalive_task(ws))],
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
 
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task, keepalive)
-                    tasks_group.cancel()
-                    tasks_group.exception()
             finally:
                 if ws is not None:
                     await ws.close()

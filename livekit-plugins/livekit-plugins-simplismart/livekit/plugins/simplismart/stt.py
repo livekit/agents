@@ -401,14 +401,10 @@ class SpeechStream(stt.SpeechStream):
         ws = await self._connect_ws()
         try:
             await self._send_initial_config(ws)
-            tasks = [
+            await self._run_connection_tasks(
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
+            )
         finally:
             await ws.close()
 

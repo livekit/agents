@@ -341,40 +341,23 @@ class SpeechStream(stt.SpeechStream):
             try:
                 ws = await self._connect_ws()
                 self._ws = ws
-                # Create task for audio processing, voice turn detection and message handling.
-                tasks: list[asyncio.Task[None]] = [
-                    asyncio.create_task(self._prepare_audio_task()),
-                    asyncio.create_task(self._send_audio_task()),
+                prepare = asyncio.create_task(self._prepare_audio_task())
+                send = asyncio.create_task(self._send_audio_task())
+                reconnect = await self._run_connection_tasks(
+                    asyncio.gather(prepare, send),
                     asyncio.create_task(self._recv_messages_task()),
-                    asyncio.create_task(self._keepalive_task()),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
-                try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                    if ws.closed:
-                        if self._input_ch.closed:
-                            return
-                        raise APIConnectionError(
-                            "Soniox STT connection closed unexpectedly"
-                        ) from ws.exception()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
+                    reconnect=self._reconnect_event,
+                    background=[prepare, send, asyncio.create_task(self._keepalive_task())],
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
+                if ws.closed:
+                    if self._input_ch.closed:
+                        return
+                    raise APIConnectionError(
+                        "Soniox STT connection closed unexpectedly"
+                    ) from ws.exception()
 
             except APIError:
                 raise
@@ -433,6 +416,7 @@ class SpeechStream(stt.SpeechStream):
                 # Get the raw bytes from the audio frame.
                 pcm_data = data.data.tobytes()
                 self.audio_queue.put_nowait(pcm_data)
+        self.audio_queue.put_nowait("")
 
     async def _send_audio_task(self) -> None:
         """Take queued audio data and transmit it over the WebSocket."""
@@ -448,6 +432,8 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.send_bytes(data)
                 else:
                     await self._ws.send_str(data)
+                    if data == "":
+                        return
             except asyncio.CancelledError:
                 raise
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -664,6 +650,7 @@ class SpeechStream(stt.SpeechStream):
 
                     if content.get("finished"):
                         logger.debug("Transcription finished")
+                        return
 
                 except APIError:
                     raise
