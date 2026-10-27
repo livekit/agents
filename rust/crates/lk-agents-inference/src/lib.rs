@@ -21,6 +21,9 @@ pub mod fallback;
 // AMD has no socket of its own: it classifies a greeting with this crate's LLM and STT.
 pub mod amd;
 
+// The avatar sessions the gateway provisions: one create and one terminate over HTTPS.
+pub mod avatar;
+
 pub mod llm;
 pub mod stt;
 pub mod testkit;

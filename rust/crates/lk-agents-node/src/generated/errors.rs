@@ -50,6 +50,19 @@ pub fn transfer_failed_to_node(e: lk_agents_voice::workflows::warm_transfer::Tra
     JsError::new(kind, e.to_string())
 }
 
+/// `AvatarError` as a host error (`#[host(error)]` in `rust/crates/lk-agents-inference/src/avatar.rs`).
+#[allow(unreachable_patterns)]
+pub fn avatar_error_to_node(e: lk_agents_inference::avatar::AvatarError) -> JsError {
+    let kind = match &e {
+        lk_agents_inference::avatar::AvatarError::InvalidModel(..) => "ValueError",
+        lk_agents_inference::avatar::AvatarError::CatalogIdAndImage(..) => "ValueError",
+        lk_agents_inference::avatar::AvatarError::MissingUrl => "ValueError",
+        lk_agents_inference::avatar::AvatarError::Api(inner) => "=ProviderError",
+        _ => "RuntimeError",
+    };
+    JsError::new(kind, e.to_string())
+}
+
 /// `OpenRefused` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/agent_session/api.rs`).
 pub fn open_refused_to_node(e: lk_agents_voice::agent_session::OpenRefused) -> JsError {
     JsError::new("RuntimeError", e.to_string())

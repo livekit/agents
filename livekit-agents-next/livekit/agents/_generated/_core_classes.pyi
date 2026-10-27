@@ -210,12 +210,6 @@ async def receive_dtmf(
 WARM_TRANSFER_IDENTITY: str
 TWILIO_RINGING_TIMEOUT: float
 END_CALL_DESCRIPTION: str
-def avatar_model(model: str) -> tuple[str, str | None]: ...
-def avatar_payload(
-    fields: dict[str, Any],
-    avatar_id: str | None,
-    options: dict[str, Any],
-) -> Any: ...
 def llm_unsupported_params(
     model: str,
     *,
@@ -698,6 +692,42 @@ class GetDOBResult:
     def format_time(self) -> str | None: ...
     def __eq__(self, other: GetDOBResult) -> bool: ...
     def __repr__(self) -> str: ...
+
+
+class InferenceAvatar:
+    def __init__(
+        self,
+        model: str,
+        *,
+        avatar_identity: str | None,
+        avatar_name: str | None,
+        extra_kwargs: dict[str, Any],
+        base_url: str,
+        api_key: str,
+        api_secret: str,
+        timeout: float,
+        max_retry: int,
+        retry_interval: float,
+    ) -> None: ...
+    @property
+    def provider(self) -> str: ...
+    @property
+    def avatar_identity(self) -> str: ...
+    @property
+    def session_id(self) -> str | None: ...
+    @property
+    def provider_session_id(self) -> str | None: ...
+    def check_unstarted(self) -> None: ...
+    async def create(
+        self,
+        *,
+        room_name: str,
+        room_sid: str,
+        livekit_url: str | None,
+        agent_identity: str,
+        headers: list[tuple[str, str]],
+    ) -> int: ...
+    async def terminate(self, headers: list[tuple[str, str]]) -> None: ...
 
 
 class LlmResponseState:

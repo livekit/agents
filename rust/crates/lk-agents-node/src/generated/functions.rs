@@ -335,19 +335,6 @@ pub fn END_CALL_DESCRIPTION() -> String {
     lk_agents_voice::workflows::prompts::END_CALL_DESCRIPTION.to_string()
 }
 
-/// `"provider"` or `"provider/<id>"`, trimmed; anything else is refused naming the string.
-#[napi(js_name = "avatarModel")]
-pub fn avatar_model(env: Env, model: String) -> napi::Result<(String, Option<String>)> {
-    crate::host_error::run(&env, || {
-        lk_agents_abi::voice::host_policy::avatar_model_for_host(&model).map_err(|e| crate::host_error::JsError::new("ValueError", e.to_string()))
-    })
-}
-
-#[napi(js_name = "avatarPayload")]
-pub fn avatar_payload(fields: serde_json::Map<String, serde_json::Value>, avatar_id: Option<String>, options: serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
-    lk_agents_abi::voice::host_policy::avatar_payload(fields, avatar_id.as_deref(), options)
-}
-
 /// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort` is
 /// the request's `reasoning_effort` and `reasoning` the effort of its Responses `reasoning`.
 #[napi(js_name = "llmUnsupportedParams")]

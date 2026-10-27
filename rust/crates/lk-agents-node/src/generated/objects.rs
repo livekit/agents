@@ -514,6 +514,73 @@ impl GetDOBResult {
     }
 }
 
+#[napi(js_name = "InferenceAvatar")]
+pub struct InferenceAvatar {
+    pub(crate) inner: std::sync::Arc<lk_agents_inference::avatar::InferenceAvatar>,
+}
+
+#[napi]
+impl InferenceAvatar {
+    #[napi(constructor)]
+    pub fn new(env: Env, model: String, avatar_identity: Option<String>, avatar_name: Option<String>, extra_kwargs: serde_json::Map<String, serde_json::Value>, base_url: String, api_key: String, api_secret: String, timeout: f64, max_retry: u32, retry_interval: f64) -> napi::Result<Self> {
+        crate::host_error::run(&env, || {
+            Ok(InferenceAvatar { inner: std::sync::Arc::new(lk_agents_inference::avatar::InferenceAvatar::new(&model, avatar_identity, avatar_name, extra_kwargs, base_url, api_key, api_secret, timeout, max_retry, retry_interval).map_err(crate::generated::errors::avatar_error_to_node)?) })
+        })
+    }
+
+    #[napi(getter, js_name = "provider")]
+    pub fn provider(&self) -> String {
+        self.inner.provider()
+    }
+
+    #[napi(getter, js_name = "avatarIdentity")]
+    pub fn avatar_identity(&self) -> String {
+        self.inner.avatar_identity()
+    }
+
+    #[napi(getter, js_name = "sessionId")]
+    pub fn session_id(&self) -> Option<String> {
+        self.inner.session_id()
+    }
+
+    #[napi(getter, js_name = "providerSessionId")]
+    pub fn provider_session_id(&self) -> Option<String> {
+        self.inner.provider_session_id()
+    }
+
+    #[napi(js_name = "checkUnstarted")]
+    pub fn check_unstarted(&self, env: Env) -> napi::Result<()> {
+        crate::host_error::run(&env, || {
+            self.inner.check_unstarted().map_err(crate::generated::errors::avatar_error_to_node)?;
+            Ok(())
+        })
+    }
+
+    #[napi(js_name = "create", ts_return_type = "Promise<number>")]
+    pub fn create<'env>(&self, env: &'env Env, room_name: String, room_sid: String, livekit_url: Option<String>, agent_identity: String, headers: Vec<(String, String)>) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, u32>> {
+        let (room_name, room_sid, livekit_url, agent_identity, headers,) = crate::host_error::run(env, || {
+            Ok((room_name, room_sid, livekit_url, agent_identity, headers,))
+        })?;
+        let inner = std::sync::Arc::clone(&self.inner);
+        env.spawn_future_with_callback(async move { Ok(inner.create(room_name, room_sid, livekit_url, agent_identity, headers).await.map_err(crate::generated::errors::avatar_error_to_node)) }, |env, out| match out {
+            Ok(out) => Ok(out),
+            Err(e) => Err(e.into_napi(env)),
+        })
+    }
+
+    #[napi(js_name = "terminate", ts_return_type = "Promise<void>")]
+    pub fn terminate<'env>(&self, env: &'env Env, headers: Vec<(String, String)>) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+        let (headers,) = crate::host_error::run(env, || {
+            Ok((headers,))
+        })?;
+        let inner = std::sync::Arc::clone(&self.inner);
+        env.spawn_future_with_callback(async move { Ok(Ok::<_, crate::host_error::JsError>(inner.terminate(headers).await)) }, |env, out| match out {
+            Ok(out) => Ok(()),
+            Err(e) => Err(e.into_napi(env)),
+        })
+    }
+}
+
 #[napi(js_name = "LlmResponseState")]
 pub struct LlmResponseState {
     pub(crate) inner: lk_agents_inference::llm::ResponseState,

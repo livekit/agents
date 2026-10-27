@@ -1,24 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-import os
-import uuid
 from typing import TYPE_CHECKING, Any
-
-import aiohttp
 
 from livekit import rtc
 
 from .. import _core
-from .._exceptions import (
-    APIConnectionError,
-    APIError,
-    APITimeoutError,
-    create_api_error_from_http,
-)
 from .._generated.inference_avatar import LemonSliceOptions
 from ..job import get_job_context
-from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -27,25 +15,10 @@ from ..types import (
 )
 from ..utils import is_given
 from ..voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
-from ._utils import (
-    HEADER_INFERENCE_PROVIDER,
-    Credentials,
-    create_access_token,
-    get_inference_headers,
-)
+from ._utils import Credentials, get_inference_headers
 
 if TYPE_CHECKING:
     from ..voice import VoiceSession
-
-# Fallback audio sample rate when the gateway response omits one. The gateway
-# is authoritative (it returns the per-provider rate) so this is only a
-# fallback for older gateways.
-_DEFAULT_SAMPLE_RATE = 16000
-# Total request timeout for gateway calls. sock_connect (conn_options.timeout)
-# bounds the TCP connect; this bounds the whole request so a gateway that
-# accepts the connection but never responds can't hang start()/aclose()
-# indefinitely. Matches the BYOK lemonslice plugin's request timeout.
-_REQUEST_TIMEOUT = 60.0
 
 
 class AvatarSession(BaseAvatarSession):
@@ -92,7 +65,7 @@ class AvatarSession(BaseAvatarSession):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
+        http_session: Any = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """
@@ -118,66 +91,41 @@ class AvatarSession(BaseAvatarSession):
                 gateway (see ``get_default_inference_url``).
             api_key: Gateway API key (see the class docstring for resolution).
             api_secret: Gateway API secret (see the class docstring).
-            http_session: Optional aiohttp session; one is created per call if
-                omitted.
+            http_session: Unused; the core owns the connection.
             conn_options: Retry/timeout options for the create call.
         """
         super().__init__()
-
-        try:
-            self._provider, self._avatar_id = _core.avatar_model(model)
-        except RuntimeError as e:
-            raise ValueError(str(e)) from None
-        # a copy, so a later change to the caller's dict does not reach the request
-        self._extra_kwargs: dict[str, Any] = dict(extra_kwargs) if is_given(extra_kwargs) else {}
-        if self._avatar_id and "image_url" in self._extra_kwargs:
-            raise ValueError(
-                "pass either a catalog id in the model string "
-                f"('{self._provider}/<avatar_id>') or image_url, not both"
-            )
-        self._conn_options = conn_options
-        self._http_session = http_session
         creds = Credentials.resolve(base_url, api_key, api_secret)
-        self._base_url, self._api_key, self._api_secret = (
-            creds.base_url,
-            creds.api_key,
-            creds.api_secret,
+        self._native = _core.InferenceAvatar(
+            model,
+            avatar_identity=avatar_participant_identity or None,
+            avatar_name=avatar_participant_name or None,
+            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
+            base_url=creds.base_url,
+            api_key=creds.api_key,
+            api_secret=creds.api_secret,
+            timeout=conn_options.timeout,
+            max_retry=conn_options.max_retry,
+            retry_interval=conn_options.retry_interval,
         )
-
-        self._avatar_participant_identity = (
-            avatar_participant_identity
-            if is_given(avatar_participant_identity)
-            else f"{self._provider}-inference-avatar"
-        )
-        self._avatar_participant_name = (
-            avatar_participant_name
-            if is_given(avatar_participant_name)
-            else self._avatar_participant_identity
-        )
-
-        self._session_id: str | None = None
-        self._provider_session_id: str | None = None
-        # HMAC issued by the gateway alongside provider_session_id; required by
-        # /avatar/sessions/terminate to prove this project owns the session.
-        self._terminate_token: str | None = None
 
     @property
     def avatar_identity(self) -> str:
-        return self._avatar_participant_identity
+        return self._native.avatar_identity
 
     @property
     def provider(self) -> str:
-        return self._provider
+        return self._native.provider
 
     @property
     def session_id(self) -> str | None:
         """The gateway-generated avatar session id (available after start())."""
-        return self._session_id
+        return self._native.session_id
 
     @property
     def provider_session_id(self) -> str | None:
         """The provider's own session id (available after start())."""
-        return self._provider_session_id
+        return self._native.provider_session_id
 
     async def start(
         self,
@@ -186,31 +134,20 @@ class AvatarSession(BaseAvatarSession):
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        if self._session_id is not None or self._provider_session_id is not None:
-            raise RuntimeError(
-                "AvatarSession.start() may only be called once per instance; "
-                "create a new AvatarSession to start another avatar"
-            )
+        """Create the avatar through the gateway and stream the agent's audio to it.
 
+        ``livekit_url`` (else ``LIVEKIT_URL``) is the URL the provider dials with the token the
+        gateway mints. Usable inside an agent job or standalone with a connected room.
+        """
+        self._native.check_unstarted()
         await super().start(agent_session, room)
 
-        # Only the URL is needed: the provider dials it with the token the
-        # gateway mints, so no room-project key/secret is resolved here.
-        lk_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
-        if not lk_url:
-            raise ValueError(
-                "livekit_url must be set by argument or the LIVEKIT_URL environment variable"
-            )
-
-        # Usable inside an agent job or standalone (scripts/tests). The base
-        # class already tolerates a missing job context; derive the same values
-        # from the connected room when there is none.
         job_ctx = get_job_context(required=False)
         if job_ctx is not None:
-            local_participant_identity = job_ctx.local_participant_identity
+            agent_identity = job_ctx.local_participant_identity
             room_sid = job_ctx.job.room.sid or await room.sid
         elif room.isconnected():
-            local_participant_identity = room.local_participant.identity
+            agent_identity = room.local_participant.identity
             room_sid = await room.sid
         else:
             raise RuntimeError(
@@ -218,52 +155,19 @@ class AvatarSession(BaseAvatarSession):
                 "connect the room before calling start()"
             )
 
-        create_resp = await self._create_session(
+        sample_rate = await self._native.create(
             room_name=room.name,
             room_sid=room_sid,
-            livekit_url=lk_url,
-            agent_identity=local_participant_identity,
+            livekit_url=livekit_url or None,
+            agent_identity=agent_identity,
+            headers=list(get_inference_headers().items()),
         )
-
-        self._session_id = create_resp.get("session_id")
-        self._provider_session_id = create_resp.get("provider_session_id")
-        self._terminate_token = create_resp.get("terminate_token")
-        sample_rate = create_resp.get("sample_rate") or _DEFAULT_SAMPLE_RATE
-
-        if not self._provider_session_id:
-            # Without it aclose() has nothing to terminate; the provider session
-            # runs to its own idle timeout instead of being stopped explicitly.
-            logger.warning(
-                "avatar gateway create response had no provider_session_id; this "
-                "session cannot be explicitly terminated and will bill until its "
-                "provider idle timeout",
-                extra={"provider": self._provider, "session_id": self._session_id},
-            )
-        elif not self._terminate_token:
-            # aclose() cannot terminate without this; the provider session will
-            # run to its own idle timeout instead of being stopped explicitly.
-            logger.warning(
-                "avatar gateway create response had no terminate_token; this "
-                "session cannot be explicitly terminated and will bill until "
-                "its provider idle timeout",
-                extra={
-                    "provider": self._provider,
-                    "session_id": self._session_id,
-                    "provider_session_id": self._provider_session_id,
-                },
-            )
-
-        # Rebind the audio tail to the avatar worker using the gateway-reported
-        # sample rate. Done after the create response (the lemonslice BYOK plugin
-        # instead hardcodes the rate and rebinds first): in the canonical flow
-        # avatar.start() runs before session.start(), so no audio has flowed yet
-        # and nothing is lost. wait_remote_track buffers until the video track
-        # appears; replace_audio_tail keeps the TranscriptSynchronizer /
-        # RecorderAudioOutput chain intact.
+        # The audio tail goes to the avatar worker at the gateway's rate: in the canonical flow
+        # avatar.start() runs before session.start(), so no audio has flowed yet.
         agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
                 room=room,
-                destination_identity=self._avatar_participant_identity,
+                destination_identity=self.avatar_identity,
                 sample_rate=sample_rate,
                 wait_remote_track=rtc.TrackKind.KIND_VIDEO,
                 clear_buffer_timeout=None,
@@ -271,177 +175,9 @@ class AvatarSession(BaseAvatarSession):
             ),
         )
 
-        logger.debug(
-            "inference avatar session created",
-            extra={
-                "provider": self._provider,
-                "session_id": self._session_id,
-                "provider_session_id": self._provider_session_id,
-            },
-        )
-
     async def aclose(self) -> None:
-        # Terminate the provider session through the gateway so it stops billing
-        # immediately instead of lingering until its idle timeout. Best-effort:
-        # a failure must not block participant cleanup in the base class, so
-        # base cleanup runs in `finally` even if terminate raises or is
-        # cancelled (e.g. job-shutdown deadline). The ids are cleared only on
-        # a confirmed terminate so a second aclose() call can still retry.
-        provider_session_id = self._provider_session_id
-        terminate_token = self._terminate_token
+        """Terminate the provider session (best effort, so it stops billing now), then leave."""
         try:
-            if provider_session_id and terminate_token:
-                try:
-                    await self._terminate_session(provider_session_id, terminate_token)
-                except Exception:
-                    logger.warning(
-                        "failed to terminate inference avatar session; it will "
-                        "keep billing until its provider idle timeout unless "
-                        "aclose() is called again",
-                        extra={
-                            "provider": self._provider,
-                            "provider_session_id": provider_session_id,
-                        },
-                        exc_info=True,
-                    )
-                else:
-                    self._provider_session_id = None
-                    self._terminate_token = None
-            elif provider_session_id:
-                logger.debug(
-                    "no terminate_token for this avatar session; skipping explicit terminate",
-                    extra={
-                        "provider": self._provider,
-                        "provider_session_id": provider_session_id,
-                    },
-                )
+            await self._native.terminate(list(get_inference_headers().items()))
         finally:
             await super().aclose()
-
-    def _auth_headers(self) -> dict[str, str]:
-        # Minted fresh on each call: callers inside the create retry loop re-mint
-        # per attempt rather than reusing a token that may expire between tries.
-        return {
-            **get_inference_headers(),
-            "Authorization": f"Bearer {create_access_token(self._api_key, self._api_secret)}",
-            HEADER_INFERENCE_PROVIDER: self._provider,
-            "Content-Type": "application/json",
-        }
-
-    async def _create_session(
-        self,
-        *,
-        room_name: str,
-        room_sid: str,
-        livekit_url: str,
-        agent_identity: str,
-    ) -> dict[str, Any]:
-        # room_name / avatar_identity / agent_identity are the inputs the
-        # gateway mints the worker room token from, not just attribution: it
-        # scopes the roomJoin grant to room_name, joins as avatar_identity, and
-        # sets lk.publish_on_behalf to agent_identity.
-        payload = _core.avatar_payload(
-            {
-                "provider": self._provider,
-                "livekit_url": livekit_url,
-                "room_name": room_name,
-                "room_sid": room_sid,
-                "avatar_identity": self._avatar_participant_identity,
-                "avatar_name": self._avatar_participant_name,
-                "agent_identity": agent_identity,
-            },
-            self._avatar_id,
-            self._extra_kwargs,
-        )
-
-        # One idempotency key per start(), stable across retries, so a retried
-        # create replays the first result on the gateway instead of paying for a
-        # second provider session.
-        idempotency_key = uuid.uuid4().hex
-        url = f"{self._base_url.rstrip('/')}/avatar/sessions"
-
-        session = self._http_session or aiohttp.ClientSession()
-        try:
-            last_exc: Exception | None = None
-            for i in range(self._conn_options.max_retry + 1):
-                headers = {**self._auth_headers(), "Idempotency-Key": idempotency_key}
-                try:
-                    async with session.post(
-                        url,
-                        headers=headers,
-                        json=payload,
-                        timeout=aiohttp.ClientTimeout(
-                            total=_REQUEST_TIMEOUT,
-                            sock_connect=self._conn_options.timeout,
-                        ),
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise create_api_error_from_http(
-                                f"avatar gateway returned an error: {text}",
-                                status=response.status,
-                                body=text,
-                            )
-                        return await response.json()  # type: ignore[no-any-return]
-                except asyncio.TimeoutError:
-                    last_exc = APITimeoutError(
-                        f"avatar gateway create timed out after attempt {i + 1}"
-                    )
-                    logger.warning(
-                        "avatar gateway request timed out",
-                        extra={"provider": self._provider, "attempt": i},
-                    )
-                except aiohttp.ClientError as e:
-                    last_exc = APIConnectionError(str(e))
-                    logger.warning(
-                        "failed to call avatar gateway",
-                        extra={"provider": self._provider, "error": str(e)},
-                    )
-                except APIError as e:
-                    last_exc = e
-                    if not e.retryable:
-                        raise
-                    logger.warning(
-                        "avatar gateway returned a retryable error",
-                        extra={"provider": self._provider, "error": str(e)},
-                    )
-
-                if i < self._conn_options.max_retry:
-                    await asyncio.sleep(self._conn_options._interval_for_retry(i))
-
-            if last_exc is not None:
-                raise last_exc
-            raise APIConnectionError("failed to create avatar session after all retries")
-        finally:
-            if self._http_session is None:
-                await session.close()
-
-    async def _terminate_session(self, provider_session_id: str, terminate_token: str) -> None:
-        url = f"{self._base_url.rstrip('/')}/avatar/sessions/terminate"
-        headers = self._auth_headers()
-        payload = {
-            "provider": self._provider,
-            "provider_session_id": provider_session_id,
-            "terminate_token": terminate_token,
-        }
-
-        session = self._http_session or aiohttp.ClientSession()
-        try:
-            async with session.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(
-                    total=_REQUEST_TIMEOUT, sock_connect=self._conn_options.timeout
-                ),
-            ) as response:
-                if not response.ok:
-                    text = await response.text()
-                    raise create_api_error_from_http(
-                        f"avatar gateway returned an error: {text}",
-                        status=response.status,
-                        body=text,
-                    )
-        finally:
-            if self._http_session is None:
-                await session.close()

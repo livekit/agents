@@ -66,6 +66,14 @@ impl ProviderError {
         }
     }
 
+    /// The class it raises as, for an error type wrapping it (`#[host(delegate)]`).
+    pub fn host_kind(&self) -> &str {
+        match self {
+            ProviderError::Host { .. } => "=HostError",
+            ProviderError::Local(err) => err.kind.class_name(),
+        }
+    }
+
     pub fn message(&self) -> &str {
         match self {
             ProviderError::Host { error, .. } => &error.message,
