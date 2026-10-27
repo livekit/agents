@@ -200,18 +200,6 @@ pub struct AgentFalseInterruption {
     #[binding(skip, extract_skip)]
     #[python(default_factory = "time.time")]
     pub created_at: f64,
-    // Deprecated, always `None` here; `#[python(deprecated)]` emits the warning shim.
-    #[binding(skip, extract_skip)]
-    #[python(
-        ty = "ChatMessage | None",
-        import = "..llm:ChatMessage",
-        default = "None",
-        deprecated
-    )]
-    pub message: (),
-    #[binding(skip, extract_skip)]
-    #[python(default = "None", deprecated)]
-    pub extra_instructions: Option<String>,
 }
 
 /// Emitted after a batch of function tools finishes executing.

@@ -428,7 +428,7 @@ _ITEM = TypeAdapter(ChatItem)
 
 
 def to_core_item(item: ChatItem) -> _core.ChatItem:
-    fields = item.model_dump(exclude={"type", "hash"})
+    fields = item.model_dump(exclude={"type"})
     match item.type:
         case "message":
             fields["content"] = [_to_core_content(c) for c in item.content]

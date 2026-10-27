@@ -210,29 +210,6 @@ fn a_default_factory_that_is_an_expression_is_not_read_as_a_module_path() {
     assert!(dotted.contains("import time"), "{dotted}");
 }
 
-// Catches: pydantic's own `Field(deprecated="..")` being confused with `#[python(deprecated)]`,
-// which is a different mechanism -- a module-level `__getattr__` with a fixed sentence. This is
-// the argument pydantic itself takes, and it is what `ChatMessage.hash` carries, so a caller
-// reading the field gets a `DeprecationWarning` rather than nothing.
-#[test]
-fn a_deprecated_msg_composes_with_the_fields_own_default() {
-    let out = generate_python(
-        r#"
-        #[derive(Host)]
-        #[python(pydantic, module = "m", name = "Msg")]
-        pub struct Msg {
-            #[python(default = "None", deprecated_msg = "hash is deprecated")]
-            pub hash: Option<String>,
-        }
-        "#,
-    );
-    assert!(
-        out.contains(r#"hash: str | None = Field(default=None, deprecated="hash is deprecated")"#),
-        "{out}"
-    );
-    assert!(out.contains("from pydantic import"), "{out}");
-}
-
 // Catches: the discriminant always leading the class. That is right for every `voice/events.py`
 // model and wrong for `chat_context.py`'s, which write `id` then `type` -- and pydantic field
 // order is `model_dump()` key order and `repr` order, so it is user-visible rather than cosmetic.

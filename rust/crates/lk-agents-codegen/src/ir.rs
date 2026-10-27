@@ -99,8 +99,6 @@ pub struct Field {
     pub imports: Vec<String>,
     /// Same, under `if TYPE_CHECKING:`.
     pub type_imports: Vec<String>,
-    /// pydantic's `Field(deprecated="..")` (`ChatMessage.hash`). Not [`Field::deprecated`].
-    pub deprecated_msg: Option<String>,
     /// `#[binding(skip)]`: a host-supplied field the emit struct omits (`created_at`: the core has
     /// no wall clock, and a zero would date every event to 1970).
     pub emit_skip: bool,
@@ -113,8 +111,6 @@ pub struct Field {
     /// Verbatim: [`Ty`] loses integer width, and extracting a `u32` as `u64` would truncate
     /// silently instead of range-checking.
     pub rust_ty: String,
-    /// `#[python(deprecated)]`: reading it warns (a generated `__getattribute__` shim).
-    pub deprecated: bool,
 }
 
 /// A field's type, resolved as far as the parser can and no further.
@@ -163,7 +159,6 @@ pub struct HostField {
     pub ty: String,
     /// `None` emits a required field.
     pub default: Option<String>,
-    pub deprecated_msg: Option<String>,
     pub default_factory: Option<String>,
     /// A `PrivateAttr` (`ImageContent._cache`).
     pub private: bool,
@@ -205,7 +200,7 @@ pub struct Target {
     /// Type-level, not a `kind: ()` marker field every Rust construction site would have to write.
     pub tag: Option<(String, String)>,
     /// `#[python(host_field(..))]`: fields only the host class has, emitted after the declared
-    /// ones (`ChatMessage.hash`: deprecated, dropped by `to_core`, still public).
+    /// ones.
     pub host_fields: Vec<HostField>,
     /// `#[python(tag_after = "id")]`: pydantic field order is `model_dump()` and `repr` order, and
     /// `chat_context.py` puts `id` before `type`.

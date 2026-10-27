@@ -32,7 +32,6 @@ from ..llm import (
     RealtimeModel,
     RealtimeModelError,
 )
-from ..log import logger
 from ..metrics import AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
@@ -126,15 +125,6 @@ class AgentFalseInterruptionEvent(BaseModel):
     resumed: bool
     """Whether the false interruption was resumed automatically."""
     created_at: float = Field(default_factory=time.time)
-    message: ChatMessage | None = None
-    extra_instructions: str | None = None
-
-    def __getattribute__(self, name: str) -> Any:
-        if name in ["message", "extra_instructions"]:
-            logger.warning(
-                f"AgentFalseInterruptionEvent.{name} is deprecated, automatic resume is now supported"
-            )
-        return super().__getattribute__(name)
 
 
 class FunctionToolsExecutedEvent(BaseModel):

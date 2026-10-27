@@ -220,8 +220,6 @@ impl SessionEvent {
                 HostWire::AgentFalseInterruption(w::AgentFalseInterruption {
                     resumed: *resumed,
                     created_at: host_stamp,
-                    message: (),
-                    extra_instructions: None,
                 })
             }
             SessionEvent::AmdResult { verdict } => HostWire::AmdResult(verdict.clone()),
