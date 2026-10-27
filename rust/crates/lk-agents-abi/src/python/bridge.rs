@@ -758,10 +758,24 @@ pub fn schedule_coroutine(
 ) -> PyResult<(CancelPythonTask, tokio::sync::oneshot::Receiver<PyResult<Py<PyAny>>>)> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let asyncio = py.import("asyncio")?;
-    let future = locals.context(py).call_method0("copy")?.call_method1(
-        "run",
-        (asyncio.getattr("run_coroutine_threadsafe")?, coro, locals.event_loop(py)),
-    )?;
+    let event_loop = locals.event_loop(py);
+    // A loop that stopped runs nothing more: the coroutine is closed here, not left to the
+    // collector's "coroutine ... was never awaited" (the worker's periodic calls at shutdown).
+    let scheduled = if event_loop.call_method0("is_running")?.is_truthy()? {
+        locals.context(py).call_method0("copy")?.call_method1(
+            "run",
+            (asyncio.getattr("run_coroutine_threadsafe")?, &coro, event_loop),
+        )
+    } else {
+        Err(pyo3::exceptions::PyRuntimeError::new_err("the event loop is not running"))
+    };
+    let future = match scheduled {
+        Ok(future) => future,
+        Err(e) => {
+            let _ = coro.call_method0("close");
+            return Err(e);
+        }
+    };
     let sender = std::sync::Mutex::new(Some(sender));
     let callback = pyo3::types::PyCFunction::new_closure(py, None, None, move |args, _kwargs| {
         let result = args.get_item(0)?.call_method0("result").map(Bound::unbind);
