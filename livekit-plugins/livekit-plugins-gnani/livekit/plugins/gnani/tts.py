@@ -534,10 +534,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         text_parts: list[str] = []
-        async for data in self._input_ch:
+        async for data in self.input:
             if isinstance(data, str):
                 text_parts.append(data)
-            elif isinstance(data, self._FlushSentinel):
+            elif isinstance(data, self.Flush):
                 break
 
         full_text = "".join(text_parts).strip()
@@ -559,7 +559,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 request_body = _build_payload(self._opts, full_text)
                 await ws.send(json.dumps(request_body))
 
-                self._mark_started()
+                self.mark_started()
 
                 async for msg in ws:
                     if isinstance(msg, bytes):

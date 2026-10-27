@@ -1025,7 +1025,7 @@ class SpeechStream(stt.SpeechStream):
             end_time=self._positive_time(transcript_data.get("speech_end")) or 0.0,
             confidence=_extract_confidence(transcript_data, self._logger),
         )
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 request_id=request_id,
@@ -1053,7 +1053,7 @@ class SpeechStream(stt.SpeechStream):
 
         # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events. The
         # speech-end timing lives on the FINAL_TRANSCRIPT's end_time, not here.
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.END_OF_SPEECH,
                 request_id=self._server_request_id or "",
@@ -1349,7 +1349,7 @@ class SpeechStream(stt.SpeechStream):
         )
 
         try:
-            async for frame in self._input_ch:
+            async for frame in self.input:
                 if isinstance(frame, rtc.AudioFrame):
                     try:
                         # Convert audio frame to Int16 data
@@ -1395,7 +1395,7 @@ class SpeechStream(stt.SpeechStream):
                         )
                         raise
 
-                elif isinstance(frame, self._FlushSentinel):
+                elif isinstance(frame, self.Flush):
                     # LiveKit VAD FlushSentinel - handles stream termination
                     self._logger.debug(
                         "Received FlushSentinel, sending end of stream",
@@ -1608,7 +1608,7 @@ class SpeechStream(stt.SpeechStream):
                     audio_duration=metrics.get("audio_duration", 0.0),
                 ),
             )
-            self._event_ch.send_nowait(usage_event)
+            self.send(usage_event)
 
             if self._pending_eos:
                 self._pending_final_data = transcript_data
@@ -1666,7 +1666,7 @@ class SpeechStream(stt.SpeechStream):
                         request_id=self._server_request_id or "",
                         speech_start_time=self._utterance_speech_start_wall,
                     )
-                    self._event_ch.send_nowait(start_event)
+                    self.send(start_event)
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":

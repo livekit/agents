@@ -107,8 +107,8 @@ class _VADStream(vad.VADStream):
         native = self._native
 
         async def _push() -> None:
-            async for item in self._input_ch:
-                if isinstance(item, self._FlushSentinel):
+            async for item in self.input:
+                if isinstance(item, self.Flush):
                     native.flush()
                 else:
                     native.push(item)
@@ -124,7 +124,7 @@ class _VADStream(vad.VADStream):
                     )
                 del ev["extra_inference_time"]
                 ev["type"] = vad.VADEventType(ev["type"])
-                self._event_ch.send_nowait(vad.VADEvent(**ev))
+                self.send(vad.VADEvent(**ev))
         finally:
             await aio.cancel_and_wait(push)
             await native.aclose()

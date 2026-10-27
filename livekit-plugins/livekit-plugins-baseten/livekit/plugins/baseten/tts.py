@@ -343,10 +343,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     continue
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(data)
             await ws.send_str(_END_SENTINEL)
 

@@ -265,7 +265,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["context_id"] = asyncai_context_id
                 token_pkt["force"] = True
                 sent_tokens.append(ev.token + " ")
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(json.dumps(token_pkt))
                 input_sent_event.set()
 
@@ -276,8 +276,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             input_sent_event.set()
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sent_tokenizer_stream.flush()
                     continue
 
@@ -332,8 +332,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         async_context_id = str(uuid.uuid4())
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                self._acquire_time = self._tts._pool.last_acquire_time
-                self._connection_reused = self._tts._pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, async_context_id)),

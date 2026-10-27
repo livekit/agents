@@ -136,6 +136,6 @@ class FallbackLLMStream(LLMStream):
         )
         try:
             while (chunk := await native.recv()) is not None:
-                self._event_ch.send_nowait(ChatChunk.model_validate(chunk))
+                self.send(ChatChunk.model_validate(chunk))
         finally:
             await native.aclose()

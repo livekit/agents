@@ -280,13 +280,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _tokenize_input() -> None:
             input_stream = None
-            async for input in self._input_ch:
+            async for input in self.input:
                 if isinstance(input, str):
                     if input_stream is None:
                         input_stream = self._opts.tokenizer.stream()
                         segments_ch.send_nowait(input_stream)
                     input_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
+                elif isinstance(input, self.Flush):
                     if input_stream:
                         input_stream.end_input()
                     input_stream = None
@@ -328,7 +328,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal input_ended
 
             async for word in input_stream:
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(json.dumps({"type": "text.delta", "delta": word.token}))
             await ws.send_str(json.dumps({"type": "text.done"}))
             input_ended = True
@@ -369,8 +369,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected xAI message", extra={"lk.pii.data": data})
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-            self._acquire_time = self._tts._pool.last_acquire_time
-            self._connection_reused = self._tts._pool.last_connection_reused
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),

@@ -614,7 +614,7 @@ class LLMStream(llm.LLMStream):
         if isinstance(event, ResponseIncompleteEvent):
             self._handle_response_incomplete(event)
         if chunk is not None:
-            self._event_ch.send_nowait(chunk)
+            self.send(chunk)
         return chunk
 
     def _handle_error(self, event: ResponseErrorEvent) -> None:

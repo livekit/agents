@@ -367,6 +367,11 @@ def _models() -> Any:
 
     m = Models()
 
+    def _input(stream: Any) -> Any:
+        """The audio a scripted stream reads: the copy's public ``input``, the reference's
+        private channel."""
+        return stream.input if hasattr(stream, "input") else stream._input_ch
+
     class ScriptedLLM(llm.LLM):
         """Answers by `respond(texts, tools)`; every request is logged as the model saw it."""
 
@@ -463,7 +468,7 @@ def _models() -> Any:
         async def _run(self) -> None:
             script: list[Utterance] = self._stt.call.utterances  # type: ignore[attr-defined]
             heard, speaking = 0.0, False
-            async for frame in self._input_ch:
+            async for frame in _input(self):
                 if not isinstance(frame, rtc.AudioFrame) or not script:
                     continue
                 if not speaking:
@@ -595,7 +600,7 @@ def _models() -> Any:
         async def _main_task(self) -> None:
             call: Call = self._vad.call  # type: ignore[attr-defined]
             heard, index, samples = 0.0, 0, 0
-            async for frame in self._input_ch:
+            async for frame in _input(self):
                 if not isinstance(frame, rtc.AudioFrame) or index >= len(call.vad_bursts):
                     continue
                 samples += frame.samples_per_channel

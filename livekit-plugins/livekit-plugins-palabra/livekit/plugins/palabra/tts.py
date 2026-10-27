@@ -366,8 +366,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         pending_gens: set[str] = set()
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sent_tokenizer_stream.flush()
                     continue
                 sent_tokenizer_stream.push_text(data)
@@ -388,7 +388,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     my_gens.add(gen_id)
                     pending_gens.add(gen_id)
                     self._tts._routes[gen_id] = mailbox
-                    self._mark_started()
+                    self.mark_started()
                     try:
                         async with self._tts._send_lock:
                             delay = self._tts._last_send + _MIN_SEND_INTERVAL - loop.time()

@@ -311,10 +311,6 @@ class ChunkedStream(ABC):
         # the full text is submitted to the provider at creation time
         self._started_time: float = time.perf_counter()
         self._event_ch = aio.Chan[SynthesizedAudio]()
-        self._input_tokens = 0
-        self._output_tokens = 0
-        self._acquire_time: float = 0.0
-        self._connection_reused: bool = False
         self._synthesize_task = asyncio.create_task(self._attempt(), name="TTS._synthesize_task")
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -329,10 +325,6 @@ class ChunkedStream(ABC):
     @property
     def exception(self) -> BaseException | None:
         return self._synthesize_task.exception()
-
-    def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
-        self._input_tokens = input_tokens
-        self._output_tokens = output_tokens
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._tts._emit_error(api_error, recoverable)
@@ -398,38 +390,26 @@ class ChunkedStream(ABC):
 class SynthesizeStream(ABC):
     """A live synthesis: text in through ``push_text``, ``SynthesizedAudio`` out.
 
-    Plugins implement ``_run``, reading ``_input_ch`` and pushing the provider's audio into the
+    Plugins implement ``_run``, reading ``input`` and pushing the provider's audio into the
     ``AudioEmitter`` it is given; it runs one attempt, which the framework retries inside a session.
     """
 
-    class _FlushSentinel:
-        """Marks the end of a segment in ``_input_ch``."""
+    class Flush:
+        """Marks the end of a segment in ``input``."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[str | SynthesizeStream._FlushSentinel]()
+        self.input = aio.Chan[str | SynthesizeStream.Flush]()
+        """The text ``_run`` reads, a ``Flush`` at the end of each segment."""
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._task = asyncio.create_task(self._attempt(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._started_time: float = 0
         self._pushed_text: str = ""
-        # driven by plugins that manage their own segments (Rime)
-        self._input_buffer: list[str | SynthesizeStream._FlushSentinel] = []
-        self._mtc_text = ""
-        self._mtc_pending_texts: list[str] = []
-        self._input_ended = False
         self._segment_open = False
         self._num_segments = 0
-        self._input_tokens = 0
-        self._output_tokens = 0
-        self._acquire_time: float = 0.0
-        self._connection_reused: bool = False
-
-    def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
-        self._input_tokens = input_tokens
-        self._output_tokens = output_tokens
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._tts._emit_error(api_error, recoverable)
@@ -462,13 +442,14 @@ class SynthesizeStream(ABC):
             (self._num_segments, output_emitter.num_segments),
         )
 
-    def _mark_started(self) -> None:
+    def mark_started(self) -> None:
+        """Note that the first text went to the provider: the time its audio is measured from."""
         if self._started_time == 0:
             self._started_time = time.perf_counter()
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
-        if not token or self._input_ch.closed:
+        if not token or self.input.closed:
             return
         if not self._segment_open:
             if self._num_segments >= 1:
@@ -480,25 +461,25 @@ class SynthesizeStream(ABC):
             self._segment_open = True
             self._num_segments += 1
         self._pushed_text += token
-        self._input_ch.send_nowait(token)
+        self.input.send_nowait(token)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
-        if self._input_ch.closed:
+        if self.input.closed:
             return
         self._segment_open = False
-        self._input_ch.send_nowait(self._FlushSentinel())
+        self.input.send_nowait(self.Flush())
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
         self.flush()
-        self._input_ch.close()
+        self.input.close()
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
-        self._input_ch.close()
+        self.input.close()
 
     async def __anext__(self) -> SynthesizedAudio:
         try:
@@ -529,11 +510,11 @@ class SynthesizeStream(ABC):
         self.push_text(token)
 
     def _core_flush(self) -> None:
-        if not self._input_ch.closed:
+        if not self.input.closed:
             self.flush()
 
     def _core_end_input(self) -> None:
-        if not self._input_ch.closed:
+        if not self.input.closed:
             self.end_input()
 
 

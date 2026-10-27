@@ -169,7 +169,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self._last_speech_end_time: float = 0
 
     async def _run(self) -> None:
-        if self._input_ch.closed:
+        if self.input.closed:
             return
 
         closing_ws = False
@@ -199,16 +199,16 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             )
 
             try:
-                async for data in self._input_ch:
-                    frames: list[rtc.AudioFrame | LegacyRecognizeStream._FlushSentinel] = []
+                async for data in self.input:
+                    frames: list[rtc.AudioFrame | LegacyRecognizeStream.Flush] = []
                     if isinstance(data, rtc.AudioFrame):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self._FlushSentinel):
+                    elif isinstance(data, self.Flush):
                         frames.extend(audio_bstream.flush())
                         frames.append(data)
 
                     for frame in frames:
-                        if isinstance(frame, self._FlushSentinel):
+                        if isinstance(frame, self.Flush):
                             await ws.send_str("finalize")
                         else:
                             self._speech_duration += frame.duration
@@ -353,7 +353,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             self._request_id = request_id
 
         if data["type"] == "transcript":
-            if self._event_ch.closed:
+            if self.closed:
                 return
 
             text = data["text"]
@@ -384,7 +384,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             if not self._speaking:
                 self._speaking = True
                 start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                self._event_ch.send_nowait(start_event)
+                self.send(start_event)
 
             speech_data = stt.SpeechData(
                 language=self._language or LanguageCode("en"),
@@ -396,7 +396,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
             if is_final:
                 if self._speech_duration > 0:
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.RECOGNITION_USAGE,
                             request_id=self._request_id,
@@ -412,19 +412,19 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     request_id=self._request_id,
                     alternatives=[speech_data],
                 )
-                self._event_ch.send_nowait(event)
+                self.send(event)
 
                 if self._speaking:
                     self._speaking = False
                     end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    self._event_ch.send_nowait(end_event)
+                    self.send(end_event)
             else:
                 event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     request_id=self._request_id,
                     alternatives=[speech_data],
                 )
-                self._event_ch.send_nowait(event)
+                self.send(event)
 
         elif data["type"] == "flush_done":
             logger.debug("Received flush_done acknowledgment from Cartesia STT")

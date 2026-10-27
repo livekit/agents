@@ -335,8 +335,8 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     frames = audio_bstream.flush()
                 else:
                     frames = audio_bstream.write(data.data.tobytes())
@@ -411,7 +411,7 @@ class SpeechStream(stt.SpeechStream):
                 if self._speaking:
                     self._speaking = False
                     end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    self._event_ch.send_nowait(end_event)
+                    self.send(end_event)
 
                 if ws is not None:
                     await ws.close()
@@ -484,7 +484,7 @@ class SpeechStream(stt.SpeechStream):
             if not self._speaking:
                 self._speaking = True
                 start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                self._event_ch.send_nowait(start_event)
+                self.send(start_event)
 
             is_final = False
             words = latest_segment.get("words")
@@ -502,7 +502,7 @@ class SpeechStream(stt.SpeechStream):
                         )
                     ],
                 )
-                self._event_ch.send_nowait(final_event)
+                self.send(final_event)
                 self._transcript_state.clear()
                 self._last_final_segment_id = max_segment_id
                 words = latest_segment.get("words")
@@ -517,11 +517,11 @@ class SpeechStream(stt.SpeechStream):
                         )
                     ],
                 )
-                self._event_ch.send_nowait(interim_event)
+                self.send(interim_event)
 
     def _on_audio_duration_report(self, duration: float) -> None:
         usage_event = stt.SpeechEvent(
             type=stt.SpeechEventType.RECOGNITION_USAGE,
             recognition_usage=stt.RecognitionUsage(audio_duration=duration),
         )
-        self._event_ch.send_nowait(usage_event)
+        self.send(usage_event)

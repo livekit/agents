@@ -957,7 +957,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             logger.debug("[TTS] _tokenize_input starting, waiting for input...")
             word_stream = None
             text_count = 0
-            async for the_input in self._input_ch:
+            async for the_input in self.input:
                 if isinstance(the_input, str):
                     text_count += 1
                     if text_count == 1:
@@ -967,7 +967,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._segments_ch.send_nowait(word_stream)
                         logger.debug("[TTS] New word_stream created")
                     word_stream.push_text(the_input)
-                elif isinstance(the_input, self._FlushSentinel):
+                elif isinstance(the_input, self.Flush):
                     logger.debug(f"[TTS] Flush sentinel received after {text_count} texts")
                     if word_stream:
                         word_stream.end_input()
@@ -1099,7 +1099,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             async def _emit_text(text: str) -> None:
                 # SLNG: Use "text" type instead of "Speak"
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(json.dumps({"type": "text", "text": text}))
                 mark_first_text_sent()
                 request_standby_replenish()

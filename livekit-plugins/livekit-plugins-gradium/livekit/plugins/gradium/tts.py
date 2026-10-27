@@ -286,13 +286,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _tokenize_input() -> None:
             # Converts incoming text into WordStreams and sends them into _segments_ch
             word_stream = None
-            async for input in self._input_ch:
+            async for input in self.input:
                 if isinstance(input, str):
                     if word_stream is None:
                         word_stream = self._opts.word_tokenizer.stream()
                         segments_ch.send_nowait(word_stream)
                     word_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
+                elif isinstance(input, self.Flush):
                     if word_stream:
                         word_stream.end_input()
                     word_stream = None
@@ -345,7 +345,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             async for word in word_stream:
                 text_msg = {"type": "text", "text": f"{word.token} "}
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(json.dumps(text_msg))
 
             flush_msg = {"type": "end_of_stream"}

@@ -338,6 +338,10 @@ class LLMStream(ABC):
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._llm._emit_error(api_error, recoverable)
 
+    def send(self, chunk: ChatChunk) -> None:
+        """Hand ``chunk`` to the reader."""
+        self._event_ch.send_nowait(chunk)
+
     @property
     def chat_ctx(self) -> ChatContext:
         return self._chat_ctx

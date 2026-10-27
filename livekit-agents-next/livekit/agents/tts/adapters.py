@@ -171,7 +171,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
     async def _run(self, output_emitter: AudioEmitter) -> None:
         _initialize(output_emitter, self._tts, stream=True)
         native = await self._tts._native.stream()
-        await _duplex(self, native, output_emitter, self._input_ch, lambda text: text)
+        await _duplex(self, native, output_emitter, self.input, lambda text: text)
 
 
 async def _duplex(
@@ -185,10 +185,10 @@ async def _duplex(
 
     async def _send() -> None:
         async for text in texts:
-            if isinstance(text, SynthesizeStream._FlushSentinel):
+            if isinstance(text, SynthesizeStream.Flush):
                 native.flush()
             elif text := lower(text):
-                stream._mark_started()
+                stream.mark_started()
                 native.push_text(text)
         native.end_input()
 
@@ -284,8 +284,8 @@ class StreamAdapterWrapper(SynthesizeStream):
         )
 
         async def _forward() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sentences.flush()
                 else:
                     sentences.push_text(markup.normalize(data) if lowering else data)

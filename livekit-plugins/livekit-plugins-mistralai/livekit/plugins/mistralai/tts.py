@@ -177,11 +177,6 @@ class ChunkedStream(tts.ChunkedStream):
                     if self._opts.response_format == "pcm":
                         data = _f32le_to_s16le(data)
                     output_emitter.push(data)
-                elif ev.event == "speech.audio.done":
-                    self._set_token_usage(
-                        input_tokens=ev.data.usage.prompt_tokens,
-                        output_tokens=ev.data.usage.completion_tokens,
-                    )
 
             output_emitter.flush()
 

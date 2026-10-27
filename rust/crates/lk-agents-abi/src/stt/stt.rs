@@ -147,15 +147,10 @@ pub trait Stt: Send + Sync {
     /// capability override it.
     ///
     /// Args:
-    /// - ev: The turn, as the session announced it.
-    // The default drops it; an adapter forwards it. A host provider takes the session's event.
-    #[python(
-        hook = "_push_conversation_item",
-        params = "ev: ConversationItemAddedEvent",
-        call = "ConversationItemAddedEvent(item=ChatMessage(role=role, content=[text]))",
-        import = "..voice.events:ConversationItemAddedEvent",
-        import = "..llm:ChatMessage"
-    )]
+    /// - role: Who spoke the turn: ``"user"`` or ``"assistant"``.
+    /// - text: What was said.
+    // The default drops it; an adapter forwards it.
+    #[python(hook = "_push_conversation_item")]
     fn push_conversation_item(&self, _role: &str, _text: &str) {}
 
     // A view of this provider whose calls carry `conn` -- how a fallback chain gives each entry
@@ -200,7 +195,7 @@ pub trait Stt: Send + Sync {
             name = "RecognizeStream",
             kind = "recognize",
             alias = "SpeechStream",
-            doc = "A live recognition: audio in through ``push_frame``, ``SpeechEvent`` out.\n\nPlugins implement ``_run``, reading ``_input_ch`` and sending to ``_event_ch``."
+            doc = "A live recognition: audio in through ``push_frame``, ``SpeechEvent`` out.\n\nPlugins implement ``_run``, reading ``input`` and handing each event to ``send``."
         )
     )]
     async fn stream(

@@ -140,8 +140,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         done_fut = asyncio.Future()
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sent_tokenizer_stream.flush()
                     continue
                 sent_tokenizer_stream.push_text(data)

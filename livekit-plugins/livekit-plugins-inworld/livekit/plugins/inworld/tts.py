@@ -1287,8 +1287,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sent_tokenizer_stream.flush()
                     continue
                 sent_tokenizer_stream.push_text(data)
@@ -1300,7 +1300,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # Chunk to stay within Inworld's 1000 char limit
                 for i in range(0, len(text), 1000):
                     connection.send_text(context_id, text[i : i + 1000])
-                    self._mark_started()
+                    self.mark_started()
             connection.flush_context(context_id)
             connection.close_context(context_id)
 

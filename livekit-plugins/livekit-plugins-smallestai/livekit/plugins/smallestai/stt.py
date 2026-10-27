@@ -531,12 +531,12 @@ class SpeechStream(stt.SpeechStream):
             )
 
             try:
-                async for data in self._input_ch:
+                async for data in self.input:
                     frames: list[rtc.AudioFrame] = []
                     flushed = False
                     if isinstance(data, rtc.AudioFrame):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self._FlushSentinel):
+                    elif isinstance(data, self.Flush):
                         frames.extend(audio_bstream.flush())
                         flushed = True
 
@@ -698,7 +698,6 @@ class SpeechStream(stt.SpeechStream):
         return f"{base.rstrip('/')}{self._opts.stream_path}?{urlencode(self._stream_params())}"
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        t0 = time.perf_counter()
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -727,12 +726,11 @@ class SpeechStream(stt.SpeechStream):
                 f"failed to connect to Smallest AI STT ({type(e).__name__})"
             ) from None
 
-        self._report_connection_acquired(time.perf_counter() - t0, False)
         logger.debug("established Smallest AI STT WebSocket connection")
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
                 request_id=self._session_id,
@@ -744,12 +742,12 @@ class SpeechStream(stt.SpeechStream):
     def _start_speech(self) -> None:
         if not self._speaking:
             self._speaking = True
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _end_speech(self) -> None:
         if self._speaking:
             self._speaking = False
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     def _process_stream_event(self, data: dict[str, Any]) -> None:
         session_id = data.get("session_id", "")
@@ -782,7 +780,7 @@ class SpeechStream(stt.SpeechStream):
                 start_time_offset=self.start_time_offset,
                 diarize=self._opts.diarize,
             )
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=(
                         stt.SpeechEventType.FINAL_TRANSCRIPT

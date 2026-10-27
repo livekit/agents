@@ -470,15 +470,15 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
         async def _send() -> None:
             buffered = False
             try:
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
+                async for data in self.input:
+                    if isinstance(data, self.Flush):
                         if not buffered:
                             continue
                         await ws.send_str(json.dumps({"type": "input.done"}))
                         state.flushes_sent += 1
                         buffered = False
                         continue
-                    self._mark_started()
+                    self.mark_started()
                     await ws.send_str(json.dumps({"type": "input.text", "text": data}))
                     buffered = True
                 if buffered:

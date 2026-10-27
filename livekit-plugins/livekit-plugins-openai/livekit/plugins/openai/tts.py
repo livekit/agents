@@ -314,17 +314,6 @@ class ChunkedStream(tts.ChunkedStream):
                                 audio_data = base64.b64decode(audio_b64)
                                 output_emitter.push(audio_data)
 
-                        elif event_type == "speech.audio.done":
-                            # Extract token usage from the done event
-                            usage = event.get("usage", {})
-                            input_tokens = usage.get("input_tokens", 0)
-                            output_tokens = usage.get("output_tokens", 0)
-                            if input_tokens or output_tokens:
-                                self._set_token_usage(
-                                    input_tokens=input_tokens,
-                                    output_tokens=output_tokens,
-                                )
-
             output_emitter.flush()
 
         except openai.APITimeoutError:

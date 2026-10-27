@@ -204,12 +204,12 @@ class SpeechStream(stt.SpeechStream):
         )
 
     async def _collect_audio(self) -> None:
-        async for data in self._input_ch:
+        async for data in self.input:
             if isinstance(data, rtc.AudioFrame):
                 audio_bytes = data.data.tobytes()
                 if audio_bytes:
                     self._audio_queue.put(audio_bytes)
-            elif isinstance(data, self._FlushSentinel):
+            elif isinstance(data, self.Flush):
                 break
 
     def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
@@ -262,7 +262,7 @@ class SpeechStream(stt.SpeechStream):
                 if not self._speaking and transcript.strip():
                     self._speaking = True
                     self._event_loop.call_soon_threadsafe(
-                        self._event_ch.send_nowait,
+                        self.send,
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
                     )
 
@@ -270,7 +270,7 @@ class SpeechStream(stt.SpeechStream):
 
                 if is_final:
                     self._event_loop.call_soon_threadsafe(
-                        self._event_ch.send_nowait,
+                        self.send,
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                             request_id=self._request_id,
@@ -280,12 +280,12 @@ class SpeechStream(stt.SpeechStream):
 
                     if self._speaking:
                         self._event_loop.call_soon_threadsafe(
-                            self._event_ch.send_nowait,
+                            self.send,
                             stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
                         )
                 else:
                     self._event_loop.call_soon_threadsafe(
-                        self._event_ch.send_nowait,
+                        self.send,
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                             request_id=self._request_id,

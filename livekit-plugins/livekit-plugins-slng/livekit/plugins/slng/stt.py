@@ -640,7 +640,7 @@ class SpeechStream(stt.SpeechStream):
         def emit_recognition_usage() -> None:
             if self._speech_duration <= 0:
                 return
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
                     alternatives=[],
@@ -731,7 +731,7 @@ class SpeechStream(stt.SpeechStream):
             elif state == "listening":
                 if not awaiting_final:
                     try:
-                        self._input_ch.send_nowait(self._FlushSentinel())
+                        self.input.send_nowait(self.Flush())
                     except utils.aio.ChanClosed:
                         # Input stream already closing; nothing to finalize.
                         pending_user_state_finalize = False
@@ -848,8 +848,8 @@ class SpeechStream(stt.SpeechStream):
             return True
 
         async def next_audio_frame() -> Any | None:
-            async for item in self._input_ch:
-                if isinstance(item, self._FlushSentinel):
+            async for item in self.input:
+                if isinstance(item, self.Flush):
                     continue
                 return item
             return None
@@ -895,8 +895,8 @@ class SpeechStream(stt.SpeechStream):
                         excess = len(buffered_audio) - max_buffer_bytes
                         del buffered_audio[:excess]
 
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     frames = audio_bstream.flush()
                 else:
                     frames = audio_bstream.write(data.data.tobytes())
@@ -913,7 +913,7 @@ class SpeechStream(stt.SpeechStream):
                         excess = len(buffered_audio) - max_buffer_bytes
                         del buffered_audio[:excess]
 
-                if isinstance(data, self._FlushSentinel):
+                if isinstance(data, self.Flush):
                     reason = "user_state_listening" if pending_user_state_finalize else "flush"
                     pending_user_state_finalize = False
                     finalized = await send_finalize_if_needed(ws, reason=reason)
@@ -1064,9 +1064,7 @@ class SpeechStream(stt.SpeechStream):
                                 # Close the bracket opened by an earlier interim so
                                 # clients never see a dangling START_OF_SPEECH.
                                 speech_started = False
-                                self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                                )
+                                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                             emit_recognition_usage()
                             recover_primary_if_ready()
                         continue
@@ -1098,9 +1096,7 @@ class SpeechStream(stt.SpeechStream):
 
                     if not speech_started:
                         speech_started = True
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                        )
+                        self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
                     event = stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT
@@ -1120,12 +1116,10 @@ class SpeechStream(stt.SpeechStream):
                     # (same_endpoint_replays resets only on a final, below.)
                     silent_reconnects = 0
                     connection_had_transcript = True
-                    self._event_ch.send_nowait(event)
+                    self.send(event)
                     if is_final:
                         speech_started = False
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                        )
+                        self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                         emit_recognition_usage()
                         recover_primary_if_ready()
 
@@ -1243,9 +1237,7 @@ class SpeechStream(stt.SpeechStream):
                         # the next utterance opens a fresh one.
                         if speech_started:
                             speech_started = False
-                            self._event_ch.send_nowait(
-                                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                            )
+                            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                         await utils.aio.gracefully_cancel(
                             *[
                                 task

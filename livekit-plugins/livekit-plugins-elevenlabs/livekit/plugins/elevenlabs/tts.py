@@ -20,7 +20,6 @@ import contextlib
 import dataclasses
 import json
 import os
-import time
 import weakref
 from dataclasses import dataclass, replace
 from functools import cached_property
@@ -324,22 +323,17 @@ class TTS(tts.TTS):
                 self.__current_connection.mark_non_current()
                 self.__current_connection = None
 
-    async def _current_connection(self) -> tuple[_Connection | _DialogueConnection, float, bool]:
-        """Get the current connection, creating one if needed.
-
-        Returns:
-            Tuple of (connection, acquire_time, connection_reused)
-        """
+    async def _current_connection(self) -> _Connection | _DialogueConnection:
+        """Get the current connection, creating one if needed."""
         async with self._connection_lock:
             session = self._ensure_session()
-            t0 = time.perf_counter()
             while True:
                 if (
                     self.__current_connection
                     and self.__current_connection.is_current
                     and not self.__current_connection._closed
                 ):
-                    return self.__current_connection, 0.0, True
+                    return self.__current_connection
 
                 opts_revision = self._opts_revision
                 opts = replace(self._opts)
@@ -354,9 +348,8 @@ class TTS(tts.TTS):
                     await conn.aclose()
                     continue
 
-                acquire_time = time.perf_counter() - t0
                 self.__current_connection = conn
-                return conn, acquire_time, False
+                return conn
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -382,7 +375,7 @@ class TTS(tts.TTS):
         try:
             while True:
                 try:
-                    conn, _, _ = await self._current_connection()
+                    conn = await self._current_connection()
                     retry_delay = 1.0
 
                     if not is_dialogue_model(self._opts.model) or conn._recv_task is None:
@@ -527,7 +520,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         connection: _Connection | _DialogueConnection
         try:
-            connection, self._acquire_time, self._connection_reused = await asyncio.wait_for(
+            connection = await asyncio.wait_for(
                 self._tts._current_connection(), self._conn_options.timeout
             )
         except asyncio.TimeoutError as e:
@@ -546,8 +539,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         context_closed = False
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sent_tokenizer_stream.flush()
                     continue
                 sent_tokenizer_stream.push_text(data)
@@ -590,7 +583,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 connection.send_content(
                     _SynthesizeContent(self._context_id, formatted_text, flush=flush_on_chunk)
                 )
-                self._mark_started()
+                self.mark_started()
 
             if xml_content:
                 logger.warning("ElevenLabs stream ended with incomplete xml content")

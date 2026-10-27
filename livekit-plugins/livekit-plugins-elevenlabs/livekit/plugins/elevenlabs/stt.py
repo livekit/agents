@@ -500,7 +500,7 @@ class SpeechStream(stt.SpeechStream):
             alternatives=[],
             recognition_usage=stt.RecognitionUsage(audio_duration=duration),
         )
-        self._event_ch.send_nowait(usage_event)
+        self.send(usage_event)
 
     @property
     def _server_vad(self) -> VADOptions | None:
@@ -565,12 +565,12 @@ class SpeechStream(stt.SpeechStream):
 
             has_ended = False
             try:
-                async for data in self._input_ch:
+                async for data in self.input:
                     # Write audio bytes to the buffer and get complete chunks
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self._FlushSentinel):
+                    elif isinstance(data, self.Flush):
                         frames.extend(audio_bstream.flush())
                         has_ended = True
 
@@ -795,9 +795,7 @@ class SpeechStream(stt.SpeechStream):
 
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
-                    )
+                    self.send(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
                     self._speaking = True
 
                 # Send INTERIM_TRANSCRIPT
@@ -805,7 +803,7 @@ class SpeechStream(stt.SpeechStream):
                     type=SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=[speech_data],
                 )
-                self._event_ch.send_nowait(interim_event)
+                self.send(interim_event)
 
         # 11labs sends every commit twice; _final_message_type picks the copy this session reads
         elif message_type == self._final_message_type:
@@ -816,9 +814,7 @@ class SpeechStream(stt.SpeechStream):
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
-                    )
+                    self.send(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
                     self._speaking = True
 
                 # Send FINAL_TRANSCRIPT but keep speaking=True
@@ -827,15 +823,15 @@ class SpeechStream(stt.SpeechStream):
                     type=SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[speech_data],
                 )
-                self._event_ch.send_nowait(final_event)
+                self.send(final_event)
                 if self._server_vad is not None:
-                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                    self.send(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
                     self._speaking = False
             else:
                 # Empty commit signals end of speech segment (similar to Cartesia's is_final flag)
                 # This groups multiple committed transcripts into one speech segment
                 if self._speaking:
-                    self._event_ch.send_nowait(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+                    self.send(stt.SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
                     self._speaking = False
 
         elif message_type in ("committed_transcript", "committed_transcript_with_timestamps"):

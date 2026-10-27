@@ -675,14 +675,6 @@ pub struct ProviderMethod {
     pub has_default: bool,
     /// `when = "cap"`: the `_core_` method answers `None` unless `capabilities.<cap>`.
     pub when: Option<String>,
-    /// `params = ".."`: the hook's parameters, when they are not the core's (verbatim Python).
-    pub py_params: Option<String>,
-    /// `call = ".."`: what the `_core_` method passes the hook, built from the core's parameters.
-    pub py_call: Option<String>,
-    /// `import = "module:Name"`, repeatable: what `params` and `call` name; imported in the
-    /// `_core_` method (a module-level import of the session would be a cycle), and under
-    /// `TYPE_CHECKING` for an annotation.
-    pub imports: Vec<String>,
     /// `stream(..)`: the class this method returns, generated after the provider.
     pub stream: Option<StreamClass>,
 }

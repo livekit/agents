@@ -706,9 +706,9 @@ class SpeechStream(stt.RecognizeStream):
             )
 
             # Process input audio
-            async for data in self._input_ch:
+            async for data in self.input:
                 # Handle flush sentinel
-                if isinstance(data, self._FlushSentinel):
+                if isinstance(data, self.Flush):
                     frames = audio_bstream.flush()
                 else:
                     # Forward the original frame to the VAD before resampling/repacking
@@ -843,17 +843,17 @@ class SpeechStream(stt.RecognizeStream):
         )
 
         # Send the event
-        self._event_ch.send_nowait(stt.SpeechEvent(type=event_type, alternatives=[speech_data]))
+        self.send(stt.SpeechEvent(type=event_type, alternatives=[speech_data]))
 
     def _handle_start_of_turn(self, message: dict[str, Any]) -> None:
         """Handle StartOfTurn events."""
         logger.debug("StartOfTurn received")
-        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+        self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _handle_end_of_turn(self, message: dict[str, Any]) -> None:
         """Handle EndOfTurn events."""
         logger.debug("EndOfTurn received")
-        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+        self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         if self._speech_duration > 0.0:
             usage_event = stt.SpeechEvent(
@@ -861,7 +861,7 @@ class SpeechStream(stt.RecognizeStream):
                 alternatives=[],
                 recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
             )
-            self._event_ch.send_nowait(usage_event)
+            self.send(usage_event)
             self._speech_duration = 0
 
     def _handle_speakers_result(self, message: dict[str, Any]) -> None:

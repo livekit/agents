@@ -58,7 +58,7 @@ pub trait Vad: Send + Sync {
         stream(
             name = "VADStream",
             kind = "vad",
-            doc = "A live detection: audio in through ``push_frame``, ``VADEvent`` out.\n\nPlugins implement ``_main_task``, reading ``_input_ch`` and sending to ``_event_ch``."
+            doc = "A live detection: audio in through ``push_frame``, ``VADEvent`` out.\n\nPlugins implement ``_main_task``, reading ``input`` and handing each event to ``send``."
         )
     )]
     async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError>;

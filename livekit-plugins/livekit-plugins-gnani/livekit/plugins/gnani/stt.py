@@ -379,8 +379,8 @@ class SpeechStream(stt.RecognizeStream):
     async def _send_audio(self, ws: Any) -> None:
         audio_buffer = bytearray()
 
-        async for data in self._input_ch:
-            if isinstance(data, self._FlushSentinel):
+        async for data in self.input:
+            if isinstance(data, self.Flush):
                 if audio_buffer:
                     await ws.send(bytes(audio_buffer))
                     audio_buffer.clear()
@@ -412,7 +412,7 @@ class SpeechStream(stt.RecognizeStream):
                     if not text:
                         continue
 
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                             request_id=data.get("segment_id", ""),
@@ -427,14 +427,14 @@ class SpeechStream(stt.RecognizeStream):
                     )
 
                 elif msg_type in ("speech_start", "vad_start"):
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.START_OF_SPEECH,
                         )
                     )
 
                 elif msg_type in ("speech_end", "vad_end"):
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.END_OF_SPEECH,
                         )

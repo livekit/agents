@@ -330,7 +330,7 @@ class SpeechStream(stt.SpeechStream):
                 audio_duration=to_report_ms / 1000,
             ),
         )
-        self._event_ch.send_nowait(usage_event)
+        self.send(usage_event)
         self._reported_duration_ms = int(total_audio_proc_ms)
 
     async def _run(self) -> None:
@@ -432,7 +432,7 @@ class SpeechStream(stt.SpeechStream):
             logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
             return
 
-        async for data in self._input_ch:
+        async for data in self.input:
             if isinstance(data, rtc.AudioFrame):
                 # Get the raw bytes from the audio frame.
                 pcm_data = data.data.tobytes()
@@ -491,7 +491,7 @@ class SpeechStream(stt.SpeechStream):
                 )
                 source_languages, source_texts = _lang_segments_to_fields(src_segs)
                 target_languages, target_texts = _lang_segments_to_fields(tgt_segs)
-                self._event_ch.send_nowait(
+                self.send(
                     stt.SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,
                         alternatives=[
@@ -505,7 +505,7 @@ class SpeechStream(stt.SpeechStream):
                         ],
                     )
                 )
-                self._event_ch.send_nowait(
+                self.send(
                     stt.SpeechEvent(
                         type=SpeechEventType.END_OF_SPEECH,
                     )
@@ -578,9 +578,7 @@ class SpeechStream(stt.SpeechStream):
                     if final.text or non_final.text:
                         if not is_speaking:
                             is_speaking = True
-                            self._event_ch.send_nowait(
-                                stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
-                            )
+                            self.send(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
                         # Same source/target classification as in
                         # `send_endpoint_transcript`: in translation mode the
                         # `_original` buckets carry the source side and `final` /
@@ -615,7 +613,7 @@ class SpeechStream(stt.SpeechStream):
                             if final.text and not non_final.text
                             else SpeechEventType.INTERIM_TRANSCRIPT
                         )
-                        self._event_ch.send_nowait(
+                        self.send(
                             stt.SpeechEvent(
                                 type=event_type,
                                 alternatives=[

@@ -301,8 +301,8 @@ class SpeechStream(stt.RecognizeStream):
             samples_per_channel=samples_per_chunk,
         )
 
-        async for data in self._input_ch:
-            if isinstance(data, self._FlushSentinel):
+        async for data in self.input:
+            if isinstance(data, self.Flush):
                 for frame in audio_bstream.flush():
                     await connection.send_audio(frame.data.tobytes())
                 await connection.flush_audio()
@@ -329,17 +329,13 @@ class SpeechStream(stt.RecognizeStream):
             if ev.type == vad.VADEventType.START_OF_SPEECH:
                 if not self._speaking:
                     self._speaking = True
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                    )
+                    self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
             elif ev.type == vad.VADEventType.END_OF_SPEECH:
                 # force Mistral to finalize the current speech segment
                 await connection.flush_audio()
                 if self._speaking:
                     self._speaking = False
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    )
+                    self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
         current_text = ""
@@ -355,7 +351,7 @@ class SpeechStream(stt.RecognizeStream):
 
             elif isinstance(event, TranscriptionStreamTextDelta):
                 current_text += event.text
-                self._event_ch.send_nowait(
+                self.send(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                         request_id=self._request_id,
@@ -383,7 +379,7 @@ class SpeechStream(stt.RecognizeStream):
                     else None
                 )
 
-                self._event_ch.send_nowait(
+                self.send(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=self._request_id,
@@ -399,7 +395,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 )
 
-                self._event_ch.send_nowait(
+                self.send(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.RECOGNITION_USAGE,
                         request_id=self._request_id,

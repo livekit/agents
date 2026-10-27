@@ -177,8 +177,8 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         empty_input = False
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sent_stream.flush()
                     continue
                 sent_stream.push_text(data)
@@ -189,7 +189,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
             sent_count = 0
             async for event in sent_stream:
                 packet = {"text": event.token + " ", "contextId": context_id}
-                self._mark_started()
+                self.mark_started()
                 await websocket.send_str(json.dumps(packet))
                 input_sent_event.set()
                 sent_count += 1

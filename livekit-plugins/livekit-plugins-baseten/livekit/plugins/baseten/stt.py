@@ -447,8 +447,8 @@ class SpeechStream(stt.SpeechStream):
             )
 
             try:
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
+                async for data in self.input:
+                    if isinstance(data, self.Flush):
                         frames = audio_bstream.flush()
                     else:
                         frames = audio_bstream.write(data.data.tobytes())
@@ -565,7 +565,7 @@ class SpeechStream(stt.SpeechStream):
                                     )
                                 ],
                             )
-                            self._event_ch.send_nowait(event)
+                            self.send(event)
 
                     elif is_final:
                         language = LanguageCode(data.get("language_code", self._opts.language))
@@ -585,7 +585,7 @@ class SpeechStream(stt.SpeechStream):
                                 ],
                             )
                             self._final_events.append(event)
-                            self._event_ch.send_nowait(event)
+                            self.send(event)
 
                 except Exception:
                     logger.exception("Failed to process message from Baseten")

@@ -305,10 +305,10 @@ class LLMStream(llm.LLMStream):
                 chunks = self._parse_event(ev, pending_fnc_calls)
                 for chat_chunk in chunks:
                     retryable = False
-                    self._event_ch.send_nowait(chat_chunk)
+                    self.send(chat_chunk)
 
             for chat_chunk in self._flush_pending_fnc_calls(pending_fnc_calls):
-                self._event_ch.send_nowait(chat_chunk)
+                self.send(chat_chunk)
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
@@ -395,10 +395,10 @@ class LLMStream(llm.LLMStream):
                     )
                     for cc in chat_chunks:
                         retryable = False
-                        self._event_ch.send_nowait(cc)
+                        self.send(cc)
 
                 if chunk.usage is not None:
-                    self._event_ch.send_nowait(
+                    self.send(
                         ChatChunk(
                             id=chunk.id,
                             usage=llm.CompletionUsage(
@@ -410,7 +410,7 @@ class LLMStream(llm.LLMStream):
                     )
 
             for cc in _flush_pending_by_index(pending_fnc_calls):
-                self._event_ch.send_nowait(cc)
+                self.send(cc)
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None

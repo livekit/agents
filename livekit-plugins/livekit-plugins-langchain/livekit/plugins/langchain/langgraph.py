@@ -146,7 +146,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                         # data = payload (str, dict, object)
                         chat_chunk = _to_chat_chunk(data)
                         if chat_chunk:
-                            self._event_ch.send_nowait(chat_chunk)
+                            self.send(chat_chunk)
                         continue
                     elif mode == "messages":
                         # data = (token, metadata)
@@ -155,7 +155,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                             continue
                         chat_chunk = _to_chat_chunk(token_like)
                         if chat_chunk:
-                            self._event_ch.send_nowait(chat_chunk)
+                            self.send(chat_chunk)
                         continue
 
             # Single-mode: item is data directly (no tuple wrapper)
@@ -163,7 +163,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                 # item = payload (str, dict, object)
                 chat_chunk = _to_chat_chunk(item)
                 if chat_chunk:
-                    self._event_ch.send_nowait(chat_chunk)
+                    self.send(chat_chunk)
             elif self._stream_mode == "messages":
                 # item = (token, metadata)
                 token_like = _extract_message_chunk(item)
@@ -171,7 +171,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                     continue
                 chat_chunk = _to_chat_chunk(token_like)
                 if chat_chunk:
-                    self._event_ch.send_nowait(chat_chunk)
+                    self.send(chat_chunk)
 
     def _chat_ctx_to_state(self) -> dict[str, Any]:
         """Convert chat context to langgraph input"""

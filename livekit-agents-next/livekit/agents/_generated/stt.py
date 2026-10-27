@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from livekit import rtc
 from pydantic import BaseModel, ConfigDict, Field
@@ -33,9 +33,6 @@ from ..types import (
 )
 from ..utils import AudioBuffer, aio, is_given
 from .chat_items import MetricsMetadata
-
-if TYPE_CHECKING:
-    from ..voice.events import ConversationItemAddedEvent
 
 
 @dataclass
@@ -204,12 +201,13 @@ class STT(
             keyterms: Every keyterm the session holds now.
         """
 
-    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+    def _push_conversation_item(self, role: str, text: str) -> None:
         """Feed a conversation turn to bias recognition. Providers with the ``chat_context``
         capability override it.
 
         Args:
-            ev: The turn, as the session announced it.
+            role: Who spoke the turn: ``"user"`` or ``"assistant"``.
+            text: What was said.
         """
 
     @abstractmethod
@@ -295,12 +293,7 @@ class STT(
         self._update_session_keyterms(keyterms)
 
     def _core_push_conversation_item(self, role: str, text: str) -> None:
-        from ..llm import ChatMessage
-        from ..voice.events import ConversationItemAddedEvent
-
-        self._push_conversation_item(
-            ConversationItemAddedEvent(item=ChatMessage(role=role, content=[text]))
-        )
+        self._push_conversation_item(role, text)
 
     def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
         return _core.RetryingStt(_STTConn(self, APIConnectOptions(**conn)), self, **conn)
@@ -356,11 +349,11 @@ class _STTConn:
 class RecognizeStream(ABC):
     """A live recognition: audio in through ``push_frame``, ``SpeechEvent`` out.
 
-    Plugins implement ``_run``, reading ``_input_ch`` and sending to ``_event_ch``.
+    Plugins implement ``_run``, reading ``input`` and handing each event to ``send``.
     """
 
-    class _FlushSentinel:
-        """Marks the end of a segment in ``_input_ch``."""
+    class Flush:
+        """Marks the end of a segment in ``input``."""
 
     def __init__(
         self,
@@ -379,7 +372,8 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
+        self.input = aio.Chan[rtc.AudioFrame | RecognizeStream.Flush]()
+        """The audio ``_run`` reads, a ``Flush`` at the end of each segment."""
         self._event_ch = aio.Chan[SpeechEvent]()
         self._start_time = time.time()
         self._start_time_offset = 0.0
@@ -422,10 +416,6 @@ class RecognizeStream(ABC):
             raise ValueError("start_time must be non-negative")
         self._start_time = value
 
-    def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
-        """Connection timing; kept on the stream, the framework measures its own."""
-        self._acquire_time, self._connection_reused = acquire_time, connection_reused
-
     @abstractmethod
     async def _run(self) -> None: ...
 
@@ -447,7 +437,7 @@ class RecognizeStream(ABC):
                 frame.sample_rate, self._needed_sr, quality=rtc.AudioResamplerQuality.HIGH
             )
         for f in self._resampler.push(frame) if self._resampler else [frame]:
-            self._input_ch.send_nowait(f)
+            self.input.send_nowait(f)
 
     def flush(self) -> None:
         """Mark the end of the current segment."""
@@ -455,17 +445,17 @@ class RecognizeStream(ABC):
         self._check_not_closed()
         if self._resampler:
             for frame in self._resampler.flush():
-                self._input_ch.send_nowait(frame)
-        self._input_ch.send_nowait(self._FlushSentinel())
+                self.input.send_nowait(frame)
+        self.input.send_nowait(self.Flush())
 
     def end_input(self) -> None:
         """Mark the end of input: no more audio will be pushed."""
         self.flush()
-        self._input_ch.close()
+        self.input.close()
 
     async def aclose(self) -> None:
         """Close the stream immediately."""
-        self._input_ch.close()
+        self.input.close()
         await aio.cancel_and_wait(self._task)
 
     async def __anext__(self) -> SpeechEvent:
@@ -480,13 +470,22 @@ class RecognizeStream(ABC):
     def __aiter__(self) -> AsyncIterator[SpeechEvent]:
         return self
 
+    def send(self, event: SpeechEvent) -> None:
+        """Hand ``event`` to the reader."""
+        self._event_ch.send_nowait(event)
+
+    @property
+    def closed(self) -> bool:
+        """Whether the stream is closed: its reader takes nothing more."""
+        return self._event_ch.closed
+
     def _check_not_closed(self) -> None:
-        if self._event_ch.closed:
+        if self.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
     def _check_input_not_ended(self) -> None:
-        if self._input_ch.closed:
+        if self.input.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
@@ -505,11 +504,11 @@ class RecognizeStream(ABC):
         self.push_frame(frame)
 
     def _core_flush(self) -> None:
-        if not self._input_ch.closed:
+        if not self.input.closed:
             self.flush()
 
     def _core_end_input(self) -> None:
-        if not self._input_ch.closed:
+        if not self.input.closed:
             self.end_input()
 
 

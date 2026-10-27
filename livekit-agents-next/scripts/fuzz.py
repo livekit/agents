@@ -177,7 +177,7 @@ def providers(call: Call) -> Any:
             if tool is not None:
                 arguments = json.dumps({"city": "Paris"} if tool == "get_weather" else {})
                 c = llm.FunctionToolCall(name=tool, arguments=arguments, call_id=f"call_{id(self)}")
-                self._event_ch.send_nowait(
+                self.send(
                     llm.ChatChunk(id="c", delta=llm.ChoiceDelta(role="assistant", tool_calls=[c]))
                 )
                 return
@@ -185,7 +185,7 @@ def providers(call: Call) -> Any:
                 if i:
                     await asyncio.sleep(0.01)
                 delta = llm.ChoiceDelta(role="assistant", content=(" " if i else "") + word)
-                self._event_ch.send_nowait(llm.ChatChunk(id="c", delta=delta))
+                self.send(llm.ChatChunk(id="c", delta=delta))
 
     class StreamingSTT(stt.STT):
         """Hears "<utterance>" in each burst of half a second or more."""
@@ -209,7 +209,7 @@ def providers(call: Call) -> Any:
     class _Recognize(stt.RecognizeStream):
         async def _run(self) -> None:
             heard = 0.0
-            async for frame in self._input_ch:
+            async for frame in self.input:
                 if not isinstance(frame, rtc.AudioFrame):
                     continue
                 if heard == 0.0:
@@ -222,7 +222,7 @@ def providers(call: Call) -> Any:
 
         def _emit(self, kind: Any, text: str | None = None) -> None:
             alts = [stt.SpeechData(language="en", text=text, confidence=1.0)] if text else []
-            self._event_ch.send_nowait(stt.SpeechEvent(type=kind, alternatives=alts))
+            self.send(stt.SpeechEvent(type=kind, alternatives=alts))
 
     class BatchSTT(stt.STT):
         """Recognize-only: it hears "tell me a story" in any utterance the VAD ends."""
@@ -256,7 +256,7 @@ def providers(call: Call) -> Any:
     class _Detect(vad.VADStream):
         async def _main_task(self) -> None:
             speech: list[rtc.AudioFrame] = []
-            async for frame in self._input_ch:
+            async for frame in self.input:
                 if not isinstance(frame, rtc.AudioFrame) or speech is None:
                     continue
                 if not speech:
@@ -267,7 +267,7 @@ def providers(call: Call) -> Any:
                     speech = None  # type: ignore[assignment]
 
         def _emit(self, kind: Any, frames: list[Any], speaking: bool) -> None:
-            self._event_ch.send_nowait(
+            self.send(
                 vad.VADEvent(
                     type=kind,
                     samples_index=0,
@@ -360,8 +360,8 @@ def providers(call: Call) -> Any:
                 stream=True,
             )
             text, segment, first = "", 0, True
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     if not text:
                         continue
                     output_emitter.start_segment(segment_id=f"seg_{segment}")

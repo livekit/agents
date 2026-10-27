@@ -954,7 +954,7 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         try:
-            async for data in self._input_ch:
+            async for data in self.input:
                 if not self._ws:
                     break
 
@@ -974,7 +974,7 @@ class SpeechStream(stt.SpeechStream):
                         has_ended = True
                     elif state == AudioEnergyFilter.State.SILENCE:
                         last_frame = data
-                elif isinstance(data, self._FlushSentinel):
+                elif isinstance(data, self.Flush):
                     frames = audio_bstream.flush()
                     has_ended = True
 
@@ -1030,7 +1030,7 @@ class SpeechStream(stt.SpeechStream):
 
             if not self._speaking and text:
                 self._speaking = True
-                self._event_ch.send_nowait(
+                self.send(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.START_OF_SPEECH, request_id=self._request_id
                     )
@@ -1072,12 +1072,12 @@ class SpeechStream(stt.SpeechStream):
                             request_id=self._request_id,
                             alternatives=[speech_data],
                         )
-                        self._event_ch.send_nowait(event)
+                        self.send(event)
 
                         # End of speech after final original transcript only if not translating
                         if self._speaking:
                             self._speaking = False
-                            self._event_ch.send_nowait(
+                            self.send(
                                 stt.SpeechEvent(
                                     type=stt.SpeechEventType.END_OF_SPEECH,
                                     request_id=self._request_id,
@@ -1092,7 +1092,7 @@ class SpeechStream(stt.SpeechStream):
                         request_id=self._request_id,
                         alternatives=[speech_data],
                     )
-                    self._event_ch.send_nowait(event)
+                    self.send(event)
 
         elif data["type"] == "translation":
             # Process translation messages according to Gladia's documentation:
@@ -1151,12 +1151,12 @@ class SpeechStream(stt.SpeechStream):
                         request_id=self._request_id,
                         alternatives=[speech_data],  # Now contains translated data
                     )
-                    self._event_ch.send_nowait(event)
+                    self.send(event)
 
                     # Emit END_OF_SPEECH after the final *translated* transcript
                     if self._speaking:
                         self._speaking = False
-                        self._event_ch.send_nowait(
+                        self.send(
                             stt.SpeechEvent(
                                 type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id
                             )
@@ -1185,4 +1185,4 @@ class SpeechStream(stt.SpeechStream):
             alternatives=[],
             recognition_usage=stt.RecognitionUsage(audio_duration=duration),
         )
-        self._event_ch.send_nowait(usage_event)
+        self.send(usage_event)

@@ -380,12 +380,12 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal text_sent
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     continue
 
                 text_sent = True
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(
                     json.dumps({"type": "speak", "context_id": context_id, "text": data})
                 )
@@ -484,8 +484,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         cancelled: asyncio.CancelledError | None = None
         try:
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
-                self._acquire_time = self._pool.last_acquire_time
-                self._connection_reused = self._pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),

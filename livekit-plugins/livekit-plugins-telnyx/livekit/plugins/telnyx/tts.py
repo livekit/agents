@@ -107,10 +107,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _collect_segments() -> None:
             segment_text = ""
-            async for input_data in self._input_ch:
+            async for input_data in self.input:
                 if isinstance(input_data, str):
                     segment_text += input_data
-                elif isinstance(input_data, self._FlushSentinel):
+                elif isinstance(input_data, self.Flush):
                     if segment_text:
                         self._segments_ch.send_nowait(segment_text)
                         segment_text = ""
@@ -156,7 +156,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             await ws.send_str(json.dumps({"text": " "}))
-            self._mark_started()
+            self.mark_started()
             await ws.send_str(json.dumps({"text": text}))
             await ws.send_str(json.dumps({"text": ""}))
 

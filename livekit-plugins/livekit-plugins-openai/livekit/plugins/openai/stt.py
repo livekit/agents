@@ -748,13 +748,13 @@ class SpeechStream(stt.SpeechStream):
         if self._speaking:
             return
         self._speaking = True
-        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+        self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _stop_speaking(self) -> None:
         if not self._speaking:
             return
         self._speaking = False
-        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+        self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
@@ -774,13 +774,13 @@ class SpeechStream(stt.SpeechStream):
             )
 
             try:
-                async for data in self._input_ch:
+                async for data in self.input:
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
                         if vad_stream is not None:
                             vad_stream.push_frame(data)
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self._FlushSentinel):
+                    elif isinstance(data, self.Flush):
                         frames.extend(audio_bstream.flush())
 
                     for frame in frames:
@@ -875,7 +875,7 @@ class SpeechStream(stt.SpeechStream):
                         if delta:
                             current_text += delta
                             if time.time() - last_interim_at > _delta_transcript_interval:
-                                self._event_ch.send_nowait(
+                                self.send(
                                     stt.SpeechEvent(
                                         type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                                         request_id=current_item_id,
@@ -901,7 +901,7 @@ class SpeechStream(stt.SpeechStream):
                         ]
 
                         if transcript:
-                            self._event_ch.send_nowait(
+                            self.send(
                                 stt.SpeechEvent(
                                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                                     request_id=item_id,
@@ -928,7 +928,7 @@ class SpeechStream(stt.SpeechStream):
                         input_tokens = usage.get("input_tokens", 0)
                         output_tokens = usage.get("output_tokens", 0)
 
-                        self._event_ch.send_nowait(
+                        self.send(
                             stt.SpeechEvent(
                                 type=stt.SpeechEventType.RECOGNITION_USAGE,
                                 alternatives=[],
@@ -969,9 +969,6 @@ class SpeechStream(stt.SpeechStream):
                     # pooled socket carries whatever the stream before it set
                     self._pool.remove(ws)
                     continue
-                self._report_connection_acquired(
-                    self._pool.last_acquire_time, self._pool.last_connection_reused
-                )
                 # published before the config is sent, so a change made during the send lands
                 # after it rather than finding no live connection
                 self._ws = ws

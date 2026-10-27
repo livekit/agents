@@ -218,7 +218,7 @@ class _GatewayStream(llm.LLMStream):
         )
         try:
             while (chunk := await native.recv()) is not None:
-                self._event_ch.send_nowait(llm.ChatChunk.model_validate(chunk))
+                self.send(llm.ChatChunk.model_validate(chunk))
         finally:
             await native.aclose()
 
@@ -279,11 +279,11 @@ class LLMStream(llm.LLMStream):
                         if (out := parser.parse(chunk.id, choice.model_dump())) is not None:
                             parsed = llm.ChatChunk.model_validate(out)
                             retryable = retryable and not parsed.has_response()
-                            self._event_ch.send_nowait(parsed)
+                            self.send(parsed)
                     if chunk.usage is not None and (
                         usage := _core.llm_usage_chunk(chunk.model_dump())
                     ):
-                        self._event_ch.send_nowait(llm.ChatChunk.model_validate(usage))
+                        self.send(llm.ChatChunk.model_validate(usage))
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
         except httpx.TimeoutException as e:

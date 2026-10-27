@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .. import _core, stt, vad as vad_mod
 from .._generated.inference_stt import (
@@ -34,9 +34,6 @@ from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio, is_given
 from ._utils import Credentials, get_inference_headers
-
-if TYPE_CHECKING:
-    from ..voice.events import ConversationItemAddedEvent
 
 __all__ = [
     "STT",
@@ -226,9 +223,8 @@ class STT(stt.STT):
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         self._native.update_keyterms(keyterms)
 
-    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
-        if ev.item.type == "message" and (text := ev.item.text_content):
-            self._native.push_conversation_item(ev.item.role, text)
+    def _push_conversation_item(self, role: str, text: str) -> None:
+        self._native.push_conversation_item(role, text)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -263,8 +259,8 @@ class SpeechStream(stt.SpeechStream):
         )
 
         async def _push() -> None:
-            async for item in self._input_ch:
-                if isinstance(item, self._FlushSentinel):
+            async for item in self.input:
+                if isinstance(item, self.Flush):
                     native.flush()
                 else:
                     native.push(item)
@@ -273,7 +269,7 @@ class SpeechStream(stt.SpeechStream):
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
-                self._event_ch.send_nowait(stt.adapters._speech_event_from_core(ev))
+                self.send(stt.adapters._speech_event_from_core(ev))
         finally:
             self._native = None
             await aio.cancel_and_wait(push)

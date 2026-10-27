@@ -198,9 +198,6 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
         is_async: f.sig.asyncness.is_some(),
         has_default: f.default.is_some(),
         when: meta_str(&m, "when"),
-        py_params: meta_str(&m, "params"),
-        py_call: meta_str(&m, "call"),
-        imports: m.iter().filter(|x| x.key == "import").filter_map(|x| x.value.clone()).collect(),
         stream,
     })
 }

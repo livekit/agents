@@ -546,7 +546,7 @@ class LLMStream(llm.LLMStream):
 
                 if response.usage_metadata is not None:
                     usage = response.usage_metadata
-                    self._event_ch.send_nowait(
+                    self.send(
                         llm.ChatChunk(
                             id=request_id,
                             usage=llm.CompletionUsage(
@@ -589,7 +589,7 @@ class LLMStream(llm.LLMStream):
                         # be treated as successful and skip the retry below.
                         response_generated = True
                         retryable = False
-                        self._event_ch.send_nowait(chat_chunk)
+                        self.send(chat_chunk)
 
             if not response_generated:
                 raise APIStatusError(

@@ -388,7 +388,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:
-            async for data in self._input_ch:
+            async for data in self.input:
                 if isinstance(data, rtc.AudioFrame):
                     audio_bytes = data.data.tobytes()
                     if audio_bytes:
@@ -429,7 +429,7 @@ class SpeechStream(stt.SpeechStream):
                 logger.warning("nabrah STT returned malformed data")
 
     def _emit(self, event: stt.SpeechEvent) -> None:
-        self._event_ch.send_nowait(event)
+        self.send(event)
 
     def _audio_clock(self) -> float:
         """Audio-stream position for this connection, in seconds.

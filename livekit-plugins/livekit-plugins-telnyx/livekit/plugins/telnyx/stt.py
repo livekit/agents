@@ -193,11 +193,11 @@ class SpeechStream(stt.RecognizeStream):
                 samples_per_channel=samples_per_chunk,
             )
 
-            async for data in self._input_ch:
+            async for data in self.input:
                 if isinstance(data, rtc.AudioFrame):
                     for frame in audio_bstream.write(data.data.tobytes()):
                         await ws.send_bytes(frame.data.tobytes())
-                elif isinstance(data, self._FlushSentinel):
+                elif isinstance(data, self.Flush):
                     for frame in audio_bstream.flush():
                         await ws.send_bytes(frame.data.tobytes())
 
@@ -296,7 +296,7 @@ class SpeechStream(stt.RecognizeStream):
 
         if not self._speaking:
             self._speaking = True
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
         alternatives = [
             stt.SpeechData(
@@ -307,16 +307,16 @@ class SpeechStream(stt.RecognizeStream):
         ]
 
         if is_final:
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=alternatives,
                 )
             )
             self._speaking = False
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
         else:
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=alternatives,

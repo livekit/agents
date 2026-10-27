@@ -896,9 +896,9 @@ class SpeechStream(stt.SpeechStream):
                 while True:
                     # Race the next-frame await against should_stop so this generator
                     # can exit even when no audio is flowing. Without this, on reconnect
-                    # the generator stays parked on _input_ch and pins the previous
+                    # the generator stays parked on input and pins the previous
                     # gRPC streaming call, leaking it across iterations.
-                    frame_task = asyncio.create_task(self._input_ch.recv())
+                    frame_task = asyncio.create_task(self.input.recv())
                     done, _ = await asyncio.wait(
                         [frame_task, stop_task], return_when=asyncio.FIRST_COMPLETED
                     )
@@ -938,9 +938,7 @@ class SpeechStream(stt.SpeechStream):
                     if self._config.version == 2
                     else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
                 ):
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                    )
+                    self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
                     self._speaking = True
 
                 if (
@@ -962,14 +960,14 @@ class SpeechStream(stt.SpeechStream):
                         continue
 
                     if not result.is_final:
-                        self._event_ch.send_nowait(
+                        self.send(
                             stt.SpeechEvent(
                                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                                 alternatives=[speech_data],
                             )
                         )
                     else:
-                        self._event_ch.send_nowait(
+                        self.send(
                             stt.SpeechEvent(
                                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                                 alternatives=[speech_data],
@@ -981,9 +979,7 @@ class SpeechStream(stt.SpeechStream):
                             )
                             self._pool.remove(client)
                             if self._speaking:
-                                self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                                )
+                                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                                 self._speaking = False
                                 self._on_end_of_speech()
                             self._reconnect_event.set()
@@ -994,14 +990,12 @@ class SpeechStream(stt.SpeechStream):
                     if self._config.version == 2
                     else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
                 ):
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    )
+                    self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                     self._speaking = False
                     self._on_end_of_speech()
 
                 if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.RECOGNITION_USAGE,
                             request_id=_get_request_id(resp),
@@ -1014,9 +1008,6 @@ class SpeechStream(stt.SpeechStream):
             audio_pushed = False
             try:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as client:
-                    self._report_connection_acquired(
-                        self._pool.last_acquire_time, self._pool.last_connection_reused
-                    )
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()

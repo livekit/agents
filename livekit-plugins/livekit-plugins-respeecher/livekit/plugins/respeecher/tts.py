@@ -328,8 +328,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             return voice
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sent_tokenizer_stream.flush()
                     continue
                 sent_tokenizer_stream.push_text(data)
@@ -342,7 +342,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 "sample_rate": self._opts.sample_rate,
             }
             async for sent in sent_tokenizer_stream:
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(
                     json.dumps(
                         {

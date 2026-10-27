@@ -503,8 +503,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_stream = self._tts._tokenizer.stream()
 
         async def _forward_input() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sent_stream.flush()
                     continue
                 sent_stream.push_text(data)
@@ -515,7 +515,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for ev in sent_stream:
                 if not (text := ev.token.strip()):
                     continue
-                self._mark_started()
+                self.mark_started()
                 sentence_bytes = await _synthesize_text(
                     self._tts._client,
                     text,

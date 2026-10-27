@@ -183,10 +183,9 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         self._sentence_tokenizer = sentence_tokenizer
         self._end_input_sentinel: object | None = None
 
-    def _enqueue_tokenizer_drain(self) -> tts.SynthesizeStream._FlushSentinel:
-        sentinel = self._FlushSentinel()
-        self._input_ch.send_nowait(sentinel)
-        self._input_buffer.append(sentinel)
+    def _enqueue_tokenizer_drain(self) -> tts.SynthesizeStream.Flush:
+        sentinel = self.Flush()
+        self.input.send_nowait(sentinel)
         return sentinel
 
     def flush(self) -> None:
@@ -197,7 +196,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         Any released text is sent through the current context as a normal ``text``
         message. The stream accepts more text after this call.
         """
-        if self._input_ch.closed:
+        if self.input.closed:
             return
 
         # Do not call super().flush(), which records a LiveKit segment boundary. Keep
@@ -207,16 +206,11 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
 
     def end_input(self) -> None:
         """Finalize Rime input and let the stream wait for the provider ``done`` event."""
-        if self._input_ch.closed:
+        if self.input.closed:
             return
 
-        if self._mtc_text:
-            self._mtc_pending_texts.append(self._mtc_text)
-            self._mtc_text = ""
-
         self._end_input_sentinel = self._enqueue_tokenizer_drain()
-        self._input_ch.close()
-        self._input_ended = True
+        self.input.close()
 
     async def aclose(self) -> None:
         """Cancel the active Rime context when synthesis has not finished."""
@@ -224,8 +218,8 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         async def _raw_input_events() -> AsyncIterable[str | _DrainTokenizer]:
-            async for event in self._input_ch:
-                if isinstance(event, self._FlushSentinel):
+            async for event in self.input:
+                if isinstance(event, self.Flush):
                     if event is not self._end_input_sentinel:
                         yield _DrainTokenizer()
                 else:
@@ -238,8 +232,6 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         )
 
         connection = await self._pool.get(timeout=self._conn_options.timeout)
-        self._acquire_time = self._pool.last_acquire_time
-        self._connection_reused = self._pool.last_connection_reused
         reusable = False
         try:
             result = await _websocket_v1.run_context(
@@ -250,7 +242,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
                 input_events=input_events,
                 output_emitter=output_emitter,
                 timeout=self._conn_options.timeout,
-                mark_started=self._mark_started,
+                mark_started=self.mark_started,
             )
             reusable = result.reusable
         except _websocket_v1._ContextCancelled as error:

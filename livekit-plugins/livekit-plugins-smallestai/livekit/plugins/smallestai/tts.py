@@ -356,9 +356,6 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                self._acquire_time = self._tts._pool.last_acquire_time
-                self._connection_reused = self._tts._pool.last_connection_reused
-
                 send_task = asyncio.create_task(self._send_task(ws, context_id, ctx_state))
                 recv_task = asyncio.create_task(self._recv_task(ws, output_emitter, ctx_state))
                 # Whether recv_task ended on a protocol-confirmed signal (legacy's
@@ -448,15 +445,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         # complete. The flush sentinel (or end of input) closes the segment. Returns
         # whether any non-whitespace text was actually sent.
         sent_any = False
-        async for data in self._input_ch:
-            if isinstance(data, self._FlushSentinel):
+        async for data in self.input:
+            if isinstance(data, self.Flush):
                 break
             if not data.strip():
                 continue
             token_pkt = {**self._base_payload(context_id), "text": data, "continue": True}
             if not self._opts.use_continuations:
                 token_pkt["flush"] = False
-            self._mark_started()
+            self.mark_started()
             await ws.send_str(json.dumps(token_pkt))
             sent_any = True
             ctx_state["opened"] = True

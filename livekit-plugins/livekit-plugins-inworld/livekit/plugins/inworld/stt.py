@@ -339,8 +339,8 @@ class SpeechStream(stt.SpeechStream):
         if not self._ws:
             return
 
-        async for data in self._input_ch:
-            if isinstance(data, self._FlushSentinel):
+        async for data in self.input:
+            if isinstance(data, self.Flush):
                 self._audio_duration_collector.flush()
                 try:
                     await self._ws.send_str(json.dumps({"endTurn": {}}))
@@ -366,7 +366,7 @@ class SpeechStream(stt.SpeechStream):
                 pass
 
     def _on_audio_duration_report(self, duration: float) -> None:
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=SpeechEventType.RECOGNITION_USAGE,
                 request_id=self._request_id,
@@ -408,7 +408,7 @@ class SpeechStream(stt.SpeechStream):
 
         if "speechStarted" in result and not self._speaking:
             self._speaking = True
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=SpeechEventType.START_OF_SPEECH,
                     request_id=self._request_id,
@@ -441,7 +441,7 @@ class SpeechStream(stt.SpeechStream):
                 if is_final:
                     logger.info(f"Inworld voice profile: {voice_profile}")
 
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=event_type,
                     request_id=self._request_id,
@@ -457,7 +457,7 @@ class SpeechStream(stt.SpeechStream):
 
         if is_final and self._speaking:
             self._speaking = False
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=SpeechEventType.END_OF_SPEECH,
                     request_id=self._request_id,

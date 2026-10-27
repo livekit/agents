@@ -516,17 +516,7 @@ impl Writer<'_> {
                     b.push_str(&format!("        return {aw}self.{imp}({args})\n"));
                     return Ok(());
                 }
-                let params = match &m.py_params {
-                    Some(params) => {
-                        for (module, name) in m.imports.iter().filter_map(|i| i.split_once(':')) {
-                            if params.contains(name) {
-                                self.need(&format!("?{module}"), name);
-                            }
-                        }
-                        params.clone()
-                    }
-                    None => self.hook_params(m, false)?,
-                };
+                let params = self.hook_params(m, false)?;
                 let sep = if params.is_empty() { "" } else { ", " };
                 let abstract_ = !m.has_default && unsupported.is_none() && store.is_none();
                 if abstract_ {
@@ -664,7 +654,7 @@ impl Writer<'_> {
             }
             Role::Hook { name, .. } => {
                 let aw = if m.is_async && m.stream.is_none() { "await " } else { "" };
-                let args = m.py_call.clone().unwrap_or_else(|| self.hook_args(m, "conn"));
+                let args = self.hook_args(m, "conn");
                 let call = format!("self.{name}({args})");
                 let guard = m.when.as_ref().map(|cap| {
                     format!("if not self.capabilities.{cap}:\n            return None\n        ")
@@ -674,16 +664,6 @@ impl Writer<'_> {
                 let attach = m.stream.as_ref().is_some_and(|x| x.kind == "realtime");
                 if attach {
                     attrs.clear();
-                }
-                if m.py_call.is_some() {
-                    let mut local: Vec<(&str, &str)> =
-                        m.imports.iter().filter_map(|i| i.split_once(':')).collect();
-                    local.sort();
-                    for (module, name) in local {
-                        s.push_str(&format!("from {module} import {name}\n        "));
-                    }
-                    s.truncate(s.len() - 8);
-                    s.push_str("\n        ");
                 }
                 if attach {
                     s.push_str(&wrap_call(&format!("out = {aw}"), &call, 8));
@@ -789,7 +769,7 @@ impl Writer<'_> {
             _ => None,
         } {
             b.push_str(&format!(
-                "\n    def _core_push(self, {arg}: {ty}) -> None:\n        self.{push}({arg})\n\n    def _core_flush(self) -> None:\n        if not self._input_ch.closed:\n            self.flush()\n\n    def _core_end_input(self) -> None:\n        if not self._input_ch.closed:\n            self.end_input()\n"
+                "\n    def _core_push(self, {arg}: {ty}) -> None:\n        self.{push}({arg})\n\n    def _core_flush(self) -> None:\n        if not self.input.closed:\n            self.flush()\n\n    def _core_end_input(self) -> None:\n        if not self.input.closed:\n            self.end_input()\n"
             ));
         }
         if let Some(alias) = &s.alias {
@@ -1231,8 +1211,8 @@ const ACONTEXT: &str = r#"
 
 /// The recognition stream's idiom. `{Stream}`, `{Provider}` and `{Event}` are filled in.
 const RECOGNIZE: &str = r#"
-    class _FlushSentinel:
-        """Marks the end of a segment in ``_input_ch``."""
+    class Flush:
+        """Marks the end of a segment in ``input``."""
 
     def __init__(
         self,
@@ -1251,7 +1231,8 @@ const RECOGNIZE: &str = r#"
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[rtc.AudioFrame | {Stream}._FlushSentinel]()
+        self.input = aio.Chan[rtc.AudioFrame | {Stream}.Flush]()
+        """The audio ``_run`` reads, a ``Flush`` at the end of each segment."""
         self._event_ch = aio.Chan[{Event}]()
         self._start_time = time.time()
         self._start_time_offset = 0.0
@@ -1294,10 +1275,6 @@ const RECOGNIZE: &str = r#"
             raise ValueError("start_time must be non-negative")
         self._start_time = value
 
-    def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
-        """Connection timing; kept on the stream, the framework measures its own."""
-        self._acquire_time, self._connection_reused = acquire_time, connection_reused
-
     @abstractmethod
     async def _run(self) -> None: ...
 
@@ -1319,7 +1296,7 @@ const RECOGNIZE: &str = r#"
                 frame.sample_rate, self._needed_sr, quality=rtc.AudioResamplerQuality.HIGH
             )
         for f in self._resampler.push(frame) if self._resampler else [frame]:
-            self._input_ch.send_nowait(f)
+            self.input.send_nowait(f)
 
     def flush(self) -> None:
         """Mark the end of the current segment."""
@@ -1327,17 +1304,17 @@ const RECOGNIZE: &str = r#"
         self._check_not_closed()
         if self._resampler:
             for frame in self._resampler.flush():
-                self._input_ch.send_nowait(frame)
-        self._input_ch.send_nowait(self._FlushSentinel())
+                self.input.send_nowait(frame)
+        self.input.send_nowait(self.Flush())
 
     def end_input(self) -> None:
         """Mark the end of input: no more audio will be pushed."""
         self.flush()
-        self._input_ch.close()
+        self.input.close()
 
     async def aclose(self) -> None:
         """Close the stream immediately."""
-        self._input_ch.close()
+        self.input.close()
         await aio.cancel_and_wait(self._task)
 
     async def __anext__(self) -> {Event}:
@@ -1352,23 +1329,28 @@ const RECOGNIZE: &str = r#"
     def __aiter__(self) -> AsyncIterator[{Event}]:
         return self
 
+    def send(self, event: {Event}) -> None:
+        """Hand ``event`` to the reader."""
+        self._event_ch.send_nowait(event)
+
+    @property
+    def closed(self) -> bool:
+        """Whether the stream is closed: its reader takes nothing more."""
+        return self._event_ch.closed
+
     def _check_not_closed(self) -> None:
-        if self._event_ch.closed:
+        if self.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
     def _check_input_not_ended(self) -> None:
-        if self._input_ch.closed:
+        if self.input.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 "#;
 
 /// What both syntheses share: one attempt run against an `AudioEmitter`; retries are the core's.
 const SYNTHESIS: &str = r#"
-    def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
-        self._input_tokens = input_tokens
-        self._output_tokens = output_tokens
-
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._tts._emit_error(api_error, recoverable)
 
@@ -1403,10 +1385,6 @@ const CHUNKED: &str = r#"
         # the full text is submitted to the provider at creation time
         self._started_time: float = time.perf_counter()
         self._event_ch = aio.Chan[{Audio}]()
-        self._input_tokens = 0
-        self._output_tokens = 0
-        self._acquire_time: float = 0.0
-        self._connection_reused: bool = False
         self._synthesize_task = asyncio.create_task(self._attempt(), name="TTS._synthesize_task")
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -1450,30 +1428,22 @@ const CHUNKED: &str = r#"
 
 /// The live synthesis's idiom.
 const SYNTHESIZE: &str = r#"
-    class _FlushSentinel:
-        """Marks the end of a segment in ``_input_ch``."""
+    class Flush:
+        """Marks the end of a segment in ``input``."""
 
     def __init__(self, *, tts: {Provider}, conn_options: APIConnectOptions) -> None:
         super().__init__()
         self._tts = tts
         self._conn_options = conn_options
-        self._input_ch = aio.Chan[str | {Stream}._FlushSentinel]()
+        self.input = aio.Chan[str | {Stream}.Flush]()
+        """The text ``_run`` reads, a ``Flush`` at the end of each segment."""
         self._event_ch = aio.Chan[{Audio}]()
         self._task = asyncio.create_task(self._attempt(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._started_time: float = 0
         self._pushed_text: str = ""
-        # driven by plugins that manage their own segments (Rime)
-        self._input_buffer: list[str | {Stream}._FlushSentinel] = []
-        self._mtc_text = ""
-        self._mtc_pending_texts: list[str] = []
-        self._input_ended = False
         self._segment_open = False
         self._num_segments = 0
-        self._input_tokens = 0
-        self._output_tokens = 0
-        self._acquire_time: float = 0.0
-        self._connection_reused: bool = False
 {SYNTHESIS}
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
         return _core.validate_synthesis(  # type: ignore[no-any-return]
@@ -1482,13 +1452,14 @@ const SYNTHESIZE: &str = r#"
             (self._num_segments, output_emitter.num_segments),
         )
 
-    def _mark_started(self) -> None:
+    def mark_started(self) -> None:
+        """Note that the first text went to the provider: the time its audio is measured from."""
         if self._started_time == 0:
             self._started_time = time.perf_counter()
 
     def push_text(self, token: str) -> None:
         """Push some text to be synthesized"""
-        if not token or self._input_ch.closed:
+        if not token or self.input.closed:
             return
         if not self._segment_open:
             if self._num_segments >= 1:
@@ -1500,25 +1471,25 @@ const SYNTHESIZE: &str = r#"
             self._segment_open = True
             self._num_segments += 1
         self._pushed_text += token
-        self._input_ch.send_nowait(token)
+        self.input.send_nowait(token)
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
-        if self._input_ch.closed:
+        if self.input.closed:
             return
         self._segment_open = False
-        self._input_ch.send_nowait(self._FlushSentinel())
+        self.input.send_nowait(self.Flush())
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
         self.flush()
-        self._input_ch.close()
+        self.input.close()
 
     async def aclose(self) -> None:
         """Close ths stream immediately"""
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
-        self._input_ch.close()
+        self.input.close()
 
     async def __anext__(self) -> {Audio}:
         try:
@@ -1599,6 +1570,10 @@ const CHAT: &str = r#"
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._llm._emit_error(api_error, recoverable)
 
+    def send(self, chunk: {Chunk}) -> None:
+        """Hand ``chunk`` to the reader."""
+        self._event_ch.send_nowait(chunk)
+
     @property
     def chat_ctx(self) -> ChatContext:
         return self._chat_ctx
@@ -1676,12 +1651,13 @@ const CHAT: &str = r#"
 
 /// The detection stream's idiom.
 const VAD: &str = r#"
-    class _FlushSentinel:
-        """Marks the end of a segment in ``_input_ch``."""
+    class Flush:
+        """Marks the end of a segment in ``input``."""
 
     def __init__(self, vad: {Provider}) -> None:
         self._vad = vad
-        self._input_ch = aio.Chan[rtc.AudioFrame | {Stream}._FlushSentinel]()
+        self.input = aio.Chan[rtc.AudioFrame | {Stream}.Flush]()
+        """The audio ``_main_task`` reads, a ``Flush`` at the end of each segment."""
         self._event_ch = aio.Chan[{Event}]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -1693,7 +1669,7 @@ const VAD: &str = r#"
         """Push some audio frame to be analyzed"""
         self._check_input_not_ended()
         self._check_not_closed()
-        self._input_ch.send_nowait(frame)
+        self.input.send_nowait(frame)
 
     def flush(self) -> None:
         """Mark the end of the current segment.
@@ -1705,16 +1681,16 @@ const VAD: &str = r#"
         """
         self._check_input_not_ended()
         self._check_not_closed()
-        self._input_ch.send_nowait(self._FlushSentinel())
+        self.input.send_nowait(self.Flush())
 
     def end_input(self) -> None:
         """Mark the end of input, no more audio will be pushed"""
         self.flush()
-        self._input_ch.close()
+        self.input.close()
 
     async def aclose(self) -> None:
         """Close the stream immediately"""
-        self._input_ch.close()
+        self.input.close()
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
 
@@ -1730,13 +1706,22 @@ const VAD: &str = r#"
     def __aiter__(self) -> AsyncIterator[{Event}]:
         return self
 
+    def send(self, event: {Event}) -> None:
+        """Hand ``event`` to the reader."""
+        self._event_ch.send_nowait(event)
+
+    @property
+    def closed(self) -> bool:
+        """Whether the stream is closed: its reader takes nothing more."""
+        return self._event_ch.closed
+
     def _check_not_closed(self) -> None:
-        if self._event_ch.closed:
+        if self.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
     def _check_input_not_ended(self) -> None:
-        if self._input_ch.closed:
+        if self.input.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 "#;

@@ -343,11 +343,11 @@ class SpeechStream(stt.RecognizeStream):
                 samples_per_channel=samples_50ms,
             )
 
-            async for data in self._input_ch:
+            async for data in self.input:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
                     frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
+                elif isinstance(data, self.Flush):
                     frames.extend(audio_bstream.flush())
 
                 for frame in frames:
@@ -472,7 +472,7 @@ class SpeechStream(stt.RecognizeStream):
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
                 request_id=self._request_id,
@@ -498,14 +498,12 @@ class SpeechStream(stt.RecognizeStream):
 
             if not self._speaking:
                 self._speaking = True
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                )
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
             if is_final:
                 if not speech_final:
                     self._emitted_chunk_final = True
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                             request_id=self._request_id,
@@ -521,7 +519,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 else:
                     if not self._emitted_chunk_final:
-                        self._event_ch.send_nowait(
+                        self.send(
                             stt.SpeechEvent(
                                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                                 request_id=self._request_id,
@@ -537,12 +535,10 @@ class SpeechStream(stt.RecognizeStream):
                         )
                     self._emitted_chunk_final = False
                     self._speaking = False
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    )
+                    self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
             else:
                 if self._opts.enable_interim_results:
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                             request_id=self._request_id,
@@ -557,7 +553,7 @@ class SpeechStream(stt.RecognizeStream):
             words = data.get("words", [])
             language = data.get("language", "")
             if text:
-                self._event_ch.send_nowait(
+                self.send(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=self._request_id,
@@ -573,7 +569,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
             if self._speaking:
                 self._speaking = False
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif msg_type == "error":
             logger.error("xAI STT error: %s", data.get("message", "unknown error"))

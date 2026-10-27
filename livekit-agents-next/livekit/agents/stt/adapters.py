@@ -22,7 +22,6 @@ from .stt import (
 
 if TYPE_CHECKING:
     from ..llm.chat_context import MetricsMetadata
-    from ..voice.events import ConversationItemAddedEvent
 
 __all__ = [
     "AvailabilityChangedEvent",
@@ -142,9 +141,9 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         for stt in self._stt_instances:
             stt._update_session_keyterms(keyterms)
 
-    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+    def _push_conversation_item(self, role: str, text: str) -> None:
         for stt in self._stt_instances:
-            stt._push_conversation_item(ev)
+            stt._push_conversation_item(role, text)
 
     async def _recognize_impl(
         self,
@@ -188,8 +187,8 @@ class StreamAdapterWrapper(RecognizeStream):
         native = await self._native.stream(self._language, self.start_time_offset)
 
         async def _push() -> None:
-            async for item in self._input_ch:
-                if isinstance(item, self._FlushSentinel):
+            async for item in self.input:
+                if isinstance(item, self.Flush):
                     native.flush()
                 else:
                     native.push_frame(item)
@@ -198,7 +197,7 @@ class StreamAdapterWrapper(RecognizeStream):
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
-                self._event_ch.send_nowait(_speech_event_from_core(ev))
+                self.send(_speech_event_from_core(ev))
         finally:
             await utils.aio.cancel_and_wait(push)
             await native.aclose()
@@ -241,8 +240,8 @@ class StreamAdapter(STT):
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         self._stt._update_session_keyterms(keyterms)
 
-    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
-        self._stt._push_conversation_item(ev)
+    def _push_conversation_item(self, role: str, text: str) -> None:
+        self._stt._push_conversation_item(role, text)
 
     async def _recognize_impl(
         self,

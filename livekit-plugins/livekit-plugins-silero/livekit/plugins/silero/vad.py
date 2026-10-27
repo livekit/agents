@@ -353,8 +353,8 @@ class VADStream(agents.vad.VADStream):
             else:
                 resampler = None
 
-        async for input_frame in self._input_ch:
-            if isinstance(input_frame, self._FlushSentinel):
+        async for input_frame in self.input:
+            if isinstance(input_frame, self.Flush):
                 _reset_state()
                 continue
 
@@ -492,7 +492,7 @@ class VADStream(agents.vad.VADStream):
                 else:
                     pub_silence_duration += window_duration
 
-                self._event_ch.send_nowait(
+                self.send(
                     agents.vad.VADEvent(
                         type=agents.vad.VADEventType.INFERENCE_DONE,
                         samples_index=pub_current_sample,
@@ -527,7 +527,7 @@ class VADStream(agents.vad.VADStream):
                             pub_silence_duration = 0.0
                             pub_speech_duration = speech_threshold_duration
 
-                            self._event_ch.send_nowait(
+                            self.send(
                                 agents.vad.VADEvent(
                                     type=agents.vad.VADEventType.START_OF_SPEECH,
                                     samples_index=pub_current_sample,
@@ -553,7 +553,7 @@ class VADStream(agents.vad.VADStream):
                         pub_speaking = False
                         pub_silence_duration = silence_threshold_duration
 
-                        self._event_ch.send_nowait(
+                        self.send(
                             agents.vad.VADEvent(
                                 type=agents.vad.VADEventType.END_OF_SPEECH,
                                 samples_index=pub_current_sample,

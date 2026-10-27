@@ -354,7 +354,7 @@ class LLMStream(llm.LLMStream):
                     chat_chunk = self._parse_chunk(request_id, chunk)
                     if chat_chunk is not None:
                         retryable = False
-                        self._event_ch.send_nowait(chat_chunk)
+                        self.send(chat_chunk)
 
         except APIStatusError:
             raise

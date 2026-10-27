@@ -18,7 +18,6 @@ import asyncio
 import json
 import math
 import os
-import time
 import weakref
 from collections import OrderedDict, deque
 from dataclasses import dataclass
@@ -446,7 +445,6 @@ class SpeechStream(stt.RecognizeStream):
                 await _close_quietly(ws)
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        started_at = time.perf_counter()
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -494,7 +492,6 @@ class SpeechStream(stt.RecognizeStream):
                 f"Meta Muse realtime ASR handshake failed ({type(exc).__name__})"
             ) from None
 
-        self._report_connection_acquired(time.perf_counter() - started_at, False)
         return ws
 
     def _handshake(self) -> dict[str, object]:
@@ -571,8 +568,8 @@ class SpeechStream(stt.RecognizeStream):
             duration = len(packet) / (_SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH_BYTES)
             sent_duration += duration
 
-        async for item in self._input_ch:
-            if isinstance(item, self._FlushSentinel):
+        async for item in self.input:
+            if isinstance(item, self.Flush):
                 if pending:
                     await send_packet(bytes(pending))
                     pending.clear()
@@ -757,14 +754,12 @@ class SpeechStream(stt.RecognizeStream):
         alternatives: list[stt.SpeechData] = []
         if text is not None:
             alternatives.append(stt.SpeechData(language=LanguageCode(""), text=text))
-        self._event_ch.send_nowait(
-            stt.SpeechEvent(type=event_type, request_id=turn_id, alternatives=alternatives)
-        )
+        self.send(stt.SpeechEvent(type=event_type, request_id=turn_id, alternatives=alternatives))
 
     def _emit_usage(self, duration: float) -> None:
         if duration <= 0:
             return
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
                 request_id=self._session_id,

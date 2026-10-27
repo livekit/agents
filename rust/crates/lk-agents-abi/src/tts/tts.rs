@@ -263,7 +263,7 @@ pub trait Tts: Send + Sync {
         stream(
             name = "SynthesizeStream",
             kind = "synthesize",
-            doc = "A live synthesis: text in through ``push_text``, ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, reading ``_input_ch`` and pushing the provider's audio into the ``AudioEmitter`` it is given; it runs one attempt, which the framework retries inside a session."
+            doc = "A live synthesis: text in through ``push_text``, ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, reading ``input`` and pushing the provider's audio into the ``AudioEmitter`` it is given; it runs one attempt, which the framework retries inside a session."
         )
     )]
     async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError>;

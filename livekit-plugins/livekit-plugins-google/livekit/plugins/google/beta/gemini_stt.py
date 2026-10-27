@@ -318,7 +318,7 @@ class RecognizeStream(stt.RecognizeStream):
     async def _send_loop(self, session: Any) -> None:
         sample_rate = self._opts.sample_rate
 
-        async for data in self._input_ch:
+        async for data in self.input:
             if isinstance(data, rtc.AudioFrame):
                 pcm_data = data.data.tobytes()
                 if pcm_data:
@@ -328,7 +328,7 @@ class RecognizeStream(stt.RecognizeStream):
                             mime_type=f"audio/pcm;rate={sample_rate}",
                         )
                     )
-            elif isinstance(data, self._FlushSentinel):
+            elif isinstance(data, self.Flush):
                 pass
 
         # Tell Gemini the audio stream ended so it finalizes the pending transcript
@@ -374,7 +374,7 @@ class RecognizeStream(stt.RecognizeStream):
                         lang = LanguageCode(code)
                     if text := (interim.text or "").strip():
                         pending_interim = text
-                        self._event_ch.send_nowait(
+                        self.send(
                             self._speech_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, text, lang)
                         )
 
@@ -384,7 +384,7 @@ class RecognizeStream(stt.RecognizeStream):
                         lang = LanguageCode(code)
                     if text := (transcription.text or "").strip():
                         pending_interim = ""
-                        self._event_ch.send_nowait(
+                        self.send(
                             self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, text, lang)
                         )
                         lang = default_lang
@@ -392,7 +392,7 @@ class RecognizeStream(stt.RecognizeStream):
                 # a turn that produced only interims would otherwise be dropped
                 if getattr(sc, "generation_complete", False) or getattr(sc, "turn_complete", False):
                     if pending_interim:
-                        self._event_ch.send_nowait(
+                        self.send(
                             self._speech_event(
                                 stt.SpeechEventType.FINAL_TRANSCRIPT, pending_interim, lang
                             )

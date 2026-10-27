@@ -472,11 +472,11 @@ class SpeechStreamv2(stt.SpeechStream):
 
             has_ended = False
             try:
-                async for data in self._input_ch:
+                async for data in self.input:
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self._FlushSentinel):
+                    elif isinstance(data, self.Flush):
                         frames.extend(audio_bstream.flush())
                         has_ended = True
 
@@ -658,7 +658,7 @@ class SpeechStreamv2(stt.SpeechStream):
             alternatives=[],
             recognition_usage=stt.RecognitionUsage(audio_duration=duration),
         )
-        self._event_ch.send_nowait(usage_event)
+        self.send(usage_event)
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict) -> None:
         alts = _parse_transcription(self._opts.language, data, self.start_time_offset)
@@ -668,7 +668,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 request_id=self._request_id,
                 alternatives=alts,
             )
-            self._event_ch.send_nowait(event)
+            self.send(event)
 
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None
@@ -685,7 +685,7 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 self._speaking = True
                 start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                self._event_ch.send_nowait(start_event)
+                self.send(start_event)
 
                 self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)
 
@@ -717,7 +717,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, data)
 
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                self._event_ch.send_nowait(end_event)
+                self.send(end_event)
 
         elif data["type"] == "ConfigureSuccess":
             logger.debug("deepgram applied Configure update", extra={"lk.pii.data": data})

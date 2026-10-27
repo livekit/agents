@@ -156,15 +156,16 @@ class VAD(
 class VADStream(ABC):
     """A live detection: audio in through ``push_frame``, ``VADEvent`` out.
 
-    Plugins implement ``_main_task``, reading ``_input_ch`` and sending to ``_event_ch``.
+    Plugins implement ``_main_task``, reading ``input`` and handing each event to ``send``.
     """
 
-    class _FlushSentinel:
-        """Marks the end of a segment in ``_input_ch``."""
+    class Flush:
+        """Marks the end of a segment in ``input``."""
 
     def __init__(self, vad: VAD) -> None:
         self._vad = vad
-        self._input_ch = aio.Chan[rtc.AudioFrame | VADStream._FlushSentinel]()
+        self.input = aio.Chan[rtc.AudioFrame | VADStream.Flush]()
+        """The audio ``_main_task`` reads, a ``Flush`` at the end of each segment."""
         self._event_ch = aio.Chan[VADEvent]()
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -176,7 +177,7 @@ class VADStream(ABC):
         """Push some audio frame to be analyzed"""
         self._check_input_not_ended()
         self._check_not_closed()
-        self._input_ch.send_nowait(frame)
+        self.input.send_nowait(frame)
 
     def flush(self) -> None:
         """Mark the end of the current segment.
@@ -188,16 +189,16 @@ class VADStream(ABC):
         """
         self._check_input_not_ended()
         self._check_not_closed()
-        self._input_ch.send_nowait(self._FlushSentinel())
+        self.input.send_nowait(self.Flush())
 
     def end_input(self) -> None:
         """Mark the end of input, no more audio will be pushed"""
         self.flush()
-        self._input_ch.close()
+        self.input.close()
 
     async def aclose(self) -> None:
         """Close the stream immediately"""
-        self._input_ch.close()
+        self.input.close()
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
 
@@ -213,13 +214,22 @@ class VADStream(ABC):
     def __aiter__(self) -> AsyncIterator[VADEvent]:
         return self
 
+    def send(self, event: VADEvent) -> None:
+        """Hand ``event`` to the reader."""
+        self._event_ch.send_nowait(event)
+
+    @property
+    def closed(self) -> bool:
+        """Whether the stream is closed: its reader takes nothing more."""
+        return self._event_ch.closed
+
     def _check_not_closed(self) -> None:
-        if self._event_ch.closed:
+        if self.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
 
     def _check_input_not_ended(self) -> None:
-        if self._input_ch.closed:
+        if self.input.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 
@@ -238,11 +248,11 @@ class VADStream(ABC):
         self.push_frame(frame)
 
     def _core_flush(self) -> None:
-        if not self._input_ch.closed:
+        if not self.input.closed:
             self.flush()
 
     def _core_end_input(self) -> None:
-        if not self._input_ch.closed:
+        if not self.input.closed:
             self.end_input()
 
 

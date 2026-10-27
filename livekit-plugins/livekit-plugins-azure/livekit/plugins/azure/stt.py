@@ -283,12 +283,12 @@ class SpeechStream(stt.SpeechStream):
                 )
 
                 async def process_input() -> None:
-                    async for input in self._input_ch:
+                    async for input in self.input:
                         if isinstance(input, rtc.AudioFrame):
                             self._audio_duration += input.duration
                             self._maybe_emit_recognition_usage()
                             self._stream.write(input.data.tobytes())
-                        elif isinstance(input, self._FlushSentinel):
+                        elif isinstance(input, self.Flush):
                             self._emit_recognition_usage()
                     self._emit_recognition_usage()
 
@@ -360,7 +360,7 @@ class SpeechStream(stt.SpeechStream):
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
+                self.send,
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
                 ),
@@ -378,7 +378,7 @@ class SpeechStream(stt.SpeechStream):
         self._audio_duration = 0.0
         self._last_audio_duration_report_time = time.monotonic()
         with contextlib.suppress(RuntimeError):
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
                     recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
@@ -405,7 +405,7 @@ class SpeechStream(stt.SpeechStream):
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
+                self.send,
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                     alternatives=[interim_data],
@@ -420,7 +420,7 @@ class SpeechStream(stt.SpeechStream):
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
+                self.send,
                 stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
             )
 
@@ -432,7 +432,7 @@ class SpeechStream(stt.SpeechStream):
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
+                self.send,
                 stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
             )
 

@@ -287,12 +287,12 @@ class SpeechStream(stt.SpeechStream):
         )
 
         has_ended = False
-        async for data in self._input_ch:
+        async for data in self.input:
             frames: list[rtc.AudioFrame] = []
 
             if isinstance(data, rtc.AudioFrame):
                 frames.extend(audio_bstream.write(data.data.tobytes()))
-            elif isinstance(data, self._FlushSentinel):
+            elif isinstance(data, self.Flush):
                 frames.extend(audio_bstream.flush())
                 has_ended = True
 
@@ -431,7 +431,7 @@ class SpeechStream(stt.SpeechStream):
                     data, in_speech, speech_started_at
                 )
                 for event in events:
-                    self._event_ch.send_nowait(event)
+                    self.send(event)
 
             elif msg.type in (
                 aiohttp.WSMsgType.CLOSE,

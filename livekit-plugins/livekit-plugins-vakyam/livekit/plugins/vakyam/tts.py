@@ -411,13 +411,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _tokenize_input() -> None:
             sentence_stream: tokenize.SentenceStream | None = None
-            async for data in self._input_ch:
+            async for data in self.input:
                 if isinstance(data, str):
                     if sentence_stream is None:
                         sentence_stream = self._tts._sentence_tokenizer.stream()
                         segments_ch.send_nowait(sentence_stream)
                     sentence_stream.push_text(data)
-                elif isinstance(data, self._FlushSentinel):
+                elif isinstance(data, self.Flush):
                     if sentence_stream is not None:
                         sentence_stream.end_input()
                         sentence_stream = None
@@ -455,8 +455,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         cancelled = False
 
         async with pool.connection(timeout=self._conn_options.timeout) as session:
-            self._acquire_time = pool.last_acquire_time
-            self._connection_reused = pool.last_connection_reused
             await self._tts._stop_keepalive(session)
             reusable = False
             try:
@@ -464,7 +462,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 async for sentence in sentence_stream:
                     for text in split_text(sentence.token):
                         if not started:
-                            self._mark_started()
+                            self.mark_started()
                             started = True
 
                         async for chunk in session.synthesize_stream(

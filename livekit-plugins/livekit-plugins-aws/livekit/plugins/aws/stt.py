@@ -338,7 +338,7 @@ class SpeechStream(stt.SpeechStream):
                     audio_stream: EventPublisher[AudioStream],
                 ) -> None:
                     try:
-                        async for frame in self._input_ch:
+                        async for frame in self.input:
                             if isinstance(frame, rtc.AudioFrame):
                                 await audio_stream.send(
                                     AudioStreamAudioEvent(
@@ -347,7 +347,7 @@ class SpeechStream(stt.SpeechStream):
                                 )
                                 self._audio_duration += frame.duration
                                 self._maybe_emit_recognition_usage()
-                            elif isinstance(frame, self._FlushSentinel):
+                            elif isinstance(frame, self.Flush):
                                 self._emit_recognition_usage()
                     finally:
                         self._emit_recognition_usage()
@@ -434,7 +434,7 @@ class SpeechStream(stt.SpeechStream):
         self._audio_duration = 0.0
         self._last_audio_duration_report_time = time.monotonic()
         with contextlib.suppress(utils.aio.ChanClosed):
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
                     recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
@@ -448,13 +448,11 @@ class SpeechStream(stt.SpeechStream):
         stream = transcript_event.transcript.results
         for resp in stream:
             if resp.start_time is not None and resp.start_time == 0.0:
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                )
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
             if resp.end_time is not None and resp.end_time > 0.0:
                 if resp.is_partial:
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                             alternatives=[self._streaming_recognize_response_to_speech_data(resp)],
@@ -462,7 +460,7 @@ class SpeechStream(stt.SpeechStream):
                     )
 
                 else:
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                             alternatives=[self._streaming_recognize_response_to_speech_data(resp)],
@@ -470,7 +468,7 @@ class SpeechStream(stt.SpeechStream):
                     )
 
             if not resp.is_partial:
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     def _streaming_recognize_response_to_speech_data(self, resp: Result) -> stt.SpeechData:
         confidence = 0.0

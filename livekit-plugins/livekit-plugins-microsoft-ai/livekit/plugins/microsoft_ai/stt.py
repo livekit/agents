@@ -271,25 +271,22 @@ class SpeechStream(stt.RecognizeStream):
         if frame.samples_per_channel <= 0 or frame.sample_rate <= 0:
             raise ValueError("Microsoft AI STT requires nonempty audio frames")
         buffered = self._input_duration - self._processed_samples / SAMPLE_RATE
-        if (
-            buffered + frame.duration > self._stt._max_buffered_audio
-            or self._input_ch.qsize() >= 1024
-        ):
+        if buffered + frame.duration > self._stt._max_buffered_audio or self.input.qsize() >= 1024:
             self._input_error = APIConnectionError(
                 "Microsoft AI STT audio buffer is full; pace input or raise max_buffered_audio",
                 retryable=False,
             )
-            self._input_ch.close()
+            self.input.close()
             raise self._input_error
         super().push_frame(frame)
         self._input_duration += frame.duration
 
     def flush(self) -> None:
-        if self._input_ch.qsize() >= 1024:
+        if self.input.qsize() >= 1024:
             self._input_error = APIConnectionError(
                 "Microsoft AI STT input queue is full", retryable=False
             )
-            self._input_ch.close()
+            self.input.close()
             raise self._input_error
         super().flush()
 
@@ -429,10 +426,10 @@ class SpeechStream(stt.RecognizeStream):
             sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS, samples_per_channel=800
         )
         if self._stt._vad is None:
-            async for data in self._input_ch:
+            async for data in self.input:
                 if self._input_error is not None:
                     raise self._input_error
-                if isinstance(data, self._FlushSentinel):
+                if isinstance(data, self.Flush):
                     await self._commit(ws, buffer)
                 else:
                     self._input_consumed = True
@@ -441,7 +438,7 @@ class SpeechStream(stt.RecognizeStream):
         else:
             while True:
                 await self._send_vad_segment(ws, buffer, self._stt._vad)
-                if self._input_ch.closed and self._input_ch.empty():
+                if self.input.closed and self.input.empty():
                     break
         if self._input_error is not None:
             raise self._input_error
@@ -462,10 +459,10 @@ class SpeechStream(stt.RecognizeStream):
 
         async def feed() -> None:
             nonlocal fed_samples, feed_ended
-            async for data in self._input_ch:
+            async for data in self.input:
                 if self._input_error is not None:
                     raise self._input_error
-                if isinstance(data, self._FlushSentinel):
+                if isinstance(data, self.Flush):
                     break
                 self._input_consumed = True
                 pending.extend(data.data.cast("B"))
@@ -578,11 +575,11 @@ class SpeechStream(stt.RecognizeStream):
     def _start_speaking(self) -> None:
         if not self._speaking:
             self._speaking = True
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _speech_event(self, type: stt.SpeechEventType, item: _Item, text: str) -> None:
         self._start_speaking()
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=type,
                 request_id=item.id,
@@ -655,7 +652,7 @@ class SpeechStream(stt.RecognizeStream):
         # A completion can legitimately retract the revisable interim hypothesis.
         if transcript:
             self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, item, transcript)
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
                 request_id=item.id,
@@ -666,9 +663,7 @@ class SpeechStream(stt.RecognizeStream):
         )
         if self._speaking:
             self._speaking = False
-            self._event_ch.send_nowait(
-                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=item.id)
-            )
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=item.id))
         self._finished_items.append(item.id)
         self._item = None
         self._commit_future.set_result(None)

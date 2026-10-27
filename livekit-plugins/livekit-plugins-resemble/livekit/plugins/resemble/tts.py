@@ -269,14 +269,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _tokenize_input() -> None:
             """tokenize text from the input_ch to words"""
             input_stream = None
-            async for text in self._input_ch:
+            async for text in self.input:
                 if isinstance(text, str):
                     if input_stream is None:
                         # new segment (after flush for e.g)
                         input_stream = self._opts.tokenizer.stream()
                         segments_ch.send_nowait(input_stream)
                     input_stream.push_text(text)
-                elif isinstance(text, self._FlushSentinel):
+                elif isinstance(text, self.Flush):
                     if input_stream is not None:
                         input_stream.end_input()
                     input_stream = None
@@ -330,7 +330,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 }
                 if self._opts.model is not None:
                     payload["model"] = self._opts.model
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(json.dumps(payload))
 
             input_ended = True
@@ -368,8 +368,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.error("Unexpected Resemble message", extra={"lk.pii.data": data})
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-            self._acquire_time = self._tts._pool.last_acquire_time
-            self._connection_reused = self._tts._pool.last_connection_reused
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),

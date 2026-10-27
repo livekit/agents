@@ -245,7 +245,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._current_transcript = ""
 
     async def _run(self) -> None:
-        if self._input_ch.closed:
+        if self.input.closed:
             return
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -266,13 +266,13 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
             )
 
             try:
-                async for data in self._input_ch:
+                async for data in self.input:
                     if isinstance(data, rtc.AudioFrame):
                         for frame in audio_bstream.write(data.data.tobytes()):
                             self._speech_duration += frame.duration
                             await ws.send_bytes(frame.data.tobytes())
-                    elif isinstance(data, self._FlushSentinel):
-                        if not self._input_ch.closed:
+                    elif isinstance(data, self.Flush):
+                        if not self.input.closed:
                             logger.warning(
                                 "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
                             )
@@ -355,14 +355,12 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 # the turn instead of losing it. In the normal close path the
                 # server sends turn.end first and _speaking is already False.
                 if self._speaking:
-                    if not self._event_ch.closed:
+                    if not self.closed:
                         if self._current_transcript:
                             self._send_transcript_event(
                                 stt.SpeechEventType.FINAL_TRANSCRIPT, self._current_transcript
                             )
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                        )
+                        self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                     self._speaking = False
                     self._current_transcript = ""
         finally:
@@ -422,14 +420,14 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         return ws
 
     def _send_transcript_event(self, event_type: stt.SpeechEventType, transcript: str) -> None:
-        if self._event_ch.closed:
+        if self.closed:
             return
 
         speech_data = stt.SpeechData(
             text=transcript,
             language=self._language,
         )
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=event_type,
                 request_id=self._request_id,
@@ -438,8 +436,8 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         )
 
     def _send_recognition_usage_event(self) -> None:
-        if self._speech_duration > 0 and not self._event_ch.closed:
-            self._event_ch.send_nowait(
+        if self._speech_duration > 0 and not self.closed:
+            self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.RECOGNITION_USAGE,
                     request_id=self._request_id,
@@ -462,10 +460,8 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 return
             self._speaking = True
             self._current_transcript = ""
-            if not self._event_ch.closed:
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                )
+            if not self.closed:
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
             return
 
         if data["type"] == "turn.update":
@@ -509,8 +505,8 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
 
             self._send_recognition_usage_event()
             self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, transcript)
-            if not self._event_ch.closed:
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            if not self.closed:
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
             self._speaking = False
             self._current_transcript = ""

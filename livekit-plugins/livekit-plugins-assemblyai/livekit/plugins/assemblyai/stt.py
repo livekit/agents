@@ -41,7 +41,6 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
@@ -521,12 +520,8 @@ class STT(stt.STT):
         for stream in self._streams:
             stream.update_options(keyterms_prompt=merged)
 
-    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
-        if (
-            (chat_item := ev.item).type == "message"
-            and chat_item.role == "assistant"
-            and (text := chat_item.text_content)
-        ):
+    def _push_conversation_item(self, role: str, text: str) -> None:
+        if role == "assistant" and text:
             if len(text) > _MAX_AGENT_CONTEXT_CHARS:
                 # Keep the tail: the end of the reply (the question posed to
                 # the user) has the most biasing value for their next utterance.
@@ -688,8 +683,8 @@ class SpeechStream(stt.SpeechStream):
             # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
             try:
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
+                async for data in self.input:
+                    if isinstance(data, self.Flush):
                         frames = audio_bstream.flush()
                     else:
                         frames = audio_bstream.write(data.data.tobytes())
@@ -930,7 +925,7 @@ class SpeechStream(stt.SpeechStream):
             speech_start_time: float | None = None
             if timestamp_ms is not None:
                 speech_start_time = self.start_time + timestamp_ms / 1000
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.START_OF_SPEECH,
                     speech_start_time=speech_start_time,
@@ -1034,7 +1029,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                 ],
             )
-            self._event_ch.send_nowait(interim_event)
+            self.send(interim_event)
             logger.debug(
                 "interim transcript session=%s end_of_turn_confidence=%s",
                 self._session_id,
@@ -1071,7 +1066,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                 ],
             )
-            self._event_ch.send_nowait(final_event)
+            self.send(final_event)
             logger.debug(
                 "preflight transcript session=%s end_of_turn_confidence=%s",
                 self._session_id,
@@ -1097,7 +1092,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                 ],
             )
-            self._event_ch.send_nowait(final_event)
+            self.send(final_event)
             logger.debug(
                 "final transcript session=%s end_of_turn_confidence=%s",
                 self._session_id,
@@ -1113,7 +1108,7 @@ class SpeechStream(stt.SpeechStream):
                     self._session_id,
                 )
 
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
             if self._speech_duration > 0.0:
                 usage_event = stt.SpeechEvent(
@@ -1121,6 +1116,6 @@ class SpeechStream(stt.SpeechStream):
                     alternatives=[],
                     recognition_usage=stt.RecognitionUsage(audio_duration=self._speech_duration),
                 )
-                self._event_ch.send_nowait(usage_event)
+                self.send(usage_event)
                 self._speech_duration = 0
                 self._last_preflight_start_time = 0.0

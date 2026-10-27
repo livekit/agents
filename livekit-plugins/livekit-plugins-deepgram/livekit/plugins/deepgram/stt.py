@@ -626,11 +626,11 @@ class SpeechStream(stt.SpeechStream):
 
             has_ended = False
             try:
-                async for data in self._input_ch:
+                async for data in self.input:
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self._FlushSentinel):
+                    elif isinstance(data, self.Flush):
                         frames.extend(audio_bstream.flush())
                         has_ended = True
 
@@ -784,7 +784,6 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
-        t0 = time.perf_counter()
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -811,7 +810,6 @@ class SpeechStream(stt.SpeechStream):
                 f"failed to connect to deepgram ({type(e).__name__})"
             ) from None
 
-        self._report_connection_acquired(time.perf_counter() - t0, False)
         ws_headers = {
             k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
         }
@@ -829,7 +827,7 @@ class SpeechStream(stt.SpeechStream):
             alternatives=[],
             recognition_usage=stt.RecognitionUsage(audio_duration=duration),
         )
-        self._event_ch.send_nowait(usage_event)
+        self.send(usage_event)
 
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None
@@ -844,7 +842,7 @@ class SpeechStream(stt.SpeechStream):
 
             self._speaking = True
             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            self._event_ch.send_nowait(start_event)
+            self.send(start_event)
 
         # see this page:
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
@@ -870,7 +868,7 @@ class SpeechStream(stt.SpeechStream):
                 if not self._speaking:
                     self._speaking = True
                     start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                    self._event_ch.send_nowait(start_event)
+                    self.send(start_event)
 
                 if is_final_transcript:
                     final_event = stt.SpeechEvent(
@@ -878,21 +876,21 @@ class SpeechStream(stt.SpeechStream):
                         request_id=request_id,
                         alternatives=alts,
                     )
-                    self._event_ch.send_nowait(final_event)
+                    self.send(final_event)
                 else:
                     interim_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                         request_id=request_id,
                         alternatives=alts,
                     )
-                    self._event_ch.send_nowait(interim_event)
+                    self.send(interim_event)
 
             # if we receive an endpoint, only end the speech if
             # we either had a SpeechStarted event or we have a seen
             # a non-empty transcript (deepgram doesn't have a SpeechEnded event)
             if is_endpoint and self._speaking:
                 self._speaking = False
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                 self._on_end_of_speech()
 
         elif data["type"] == "UtteranceEnd":
@@ -900,7 +898,7 @@ class SpeechStream(stt.SpeechStream):
             # https://developers.deepgram.com/docs/understand-endpointing-interim-results
             if self._speaking:
                 self._speaking = False
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                 self._on_end_of_speech()
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy

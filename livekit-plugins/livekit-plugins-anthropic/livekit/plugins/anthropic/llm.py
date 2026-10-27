@@ -322,14 +322,14 @@ class LLMStream(llm.LLMStream):
                 async for event in stream:
                     chat_chunk = self._parse_event(event)
                     if chat_chunk is not None:
-                        self._event_ch.send_nowait(chat_chunk)
+                        self.send(chat_chunk)
                         retryable = False
 
                 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
                 prompt_token = (
                     self._input_tokens + self._cache_creation_tokens + self._cache_read_tokens
                 )
-                self._event_ch.send_nowait(
+                self.send(
                     llm.ChatChunk(
                         id=self._request_id,
                         usage=llm.CompletionUsage(

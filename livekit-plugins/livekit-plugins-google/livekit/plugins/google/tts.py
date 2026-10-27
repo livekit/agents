@@ -397,13 +397,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _tokenize_input() -> None:
             input_stream = None
-            async for input in self._input_ch:
+            async for input in self.input:
                 if isinstance(input, str):
                     if input_stream is None:
                         input_stream = self._opts.tokenizer.stream()
                         segments_ch.send_nowait(input_stream)
                     input_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
+                elif isinstance(input, self.Flush):
                     if input_stream:
                         input_stream.end_input()
                     input_stream = None
@@ -438,7 +438,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 is_first_input = True
                 async for input in input_stream:
-                    self._mark_started()
+                    self.mark_started()
                     # prompt is only supported in the first input chunk (for Gemini TTS)
                     synthesis_input = texttospeech.StreamingSynthesisInput(
                         markup=input.token if self._opts.use_markup else None,

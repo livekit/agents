@@ -522,14 +522,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def input_task() -> None:
             try:
                 first_token = True
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
+                async for data in self.input:
+                    if isinstance(data, self.Flush):
                         sent_stream.flush()
                         continue
                     if not data:
                         continue
                     if first_token:
-                        self._mark_started()
+                        self.mark_started()
                         first_token = False
                     sent_stream.push_text(data)
             finally:

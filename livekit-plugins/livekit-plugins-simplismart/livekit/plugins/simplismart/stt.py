@@ -357,11 +357,11 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_50ms,
             )
 
-            async for data in self._input_ch:
+            async for data in self.input:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
                     frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
+                elif isinstance(data, self.Flush):
                     frames.extend(audio_bstream.flush())
 
                 for frame in frames:
@@ -514,7 +514,7 @@ class SpeechStream(stt.SpeechStream):
                     audio_duration=metrics.get("audio_duration", 0.0),
                 ),
             )
-            self._event_ch.send_nowait(usage_event)
+            self.send(usage_event)
 
             # Create speech data
             speech_data = stt.SpeechData(
@@ -528,7 +528,7 @@ class SpeechStream(stt.SpeechStream):
                 request_id=request_id,
                 alternatives=[speech_data],
             )
-            self._event_ch.send_nowait(speech_event)
+            self.send(speech_event)
 
             logger.debug(
                 "Transcript processed successfully",

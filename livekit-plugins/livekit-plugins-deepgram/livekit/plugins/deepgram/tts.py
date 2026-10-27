@@ -327,13 +327,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _tokenize_input() -> None:
             # Converts incoming text into WordStreams and sends them into segments_ch
             word_stream = None
-            async for input in self._input_ch:
+            async for input in self.input:
                 if isinstance(input, str):
                     if word_stream is None:
                         word_stream = self._opts.word_tokenizer.stream()
                         segments_ch.send_nowait(word_stream)
                     word_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
+                elif isinstance(input, self.Flush):
                     if word_stream:
                         word_stream.end_input()
                     word_stream = None
@@ -373,7 +373,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for word in word_stream:
                 speak_msg = {"type": "Speak", "text": f"{word.token} "}
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(json.dumps(speak_msg))
                 input_sent_event.set()
 
@@ -415,8 +415,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         logger.warning("Unknown Deepgram message type", extra={"lk.pii.data": resp})
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-            self._acquire_time = self._tts._pool.last_acquire_time
-            self._connection_reused = self._tts._pool.last_connection_reused
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

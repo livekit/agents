@@ -416,8 +416,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         task_started = asyncio.Future[None]()
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     sentence_stream.flush()
                     continue
 
@@ -435,7 +435,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise APITimeoutError("task_start timed out") from e
 
             async for sentence in sentence_stream:
-                self._mark_started()
+                self.mark_started()
                 await ws.send_str(json.dumps({"event": "task_continue", "text": sentence.token}))
 
             await ws.send_str(json.dumps({"event": "task_finish"}))

@@ -309,8 +309,8 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
             # answers an extra, empty turn.
             committed = False
             try:
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
+                async for data in self.input:
+                    if isinstance(data, self.Flush):
                         await append(chunker.flush())
                         await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
                         committed = True
@@ -361,12 +361,12 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                 # the user's turn so the agent answers silence.
                 if not speaking and text:
                     speaking = True
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt_module.SpeechEvent(type=stt_module.SpeechEventType.START_OF_SPEECH)
                     )
 
                 if text:
-                    self._event_ch.send_nowait(
+                    self.send(
                         stt_module.SpeechEvent(
                             type=stt_module.SpeechEventType.FINAL_TRANSCRIPT
                             if is_final
@@ -377,7 +377,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
 
                 if is_final:
                     if speaking:
-                        self._event_ch.send_nowait(
+                        self.send(
                             stt_module.SpeechEvent(type=stt_module.SpeechEventType.END_OF_SPEECH)
                         )
                         speaking = False

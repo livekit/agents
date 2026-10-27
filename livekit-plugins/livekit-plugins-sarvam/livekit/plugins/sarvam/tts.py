@@ -923,7 +923,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _tokenize_input() -> None:
             """tokenize text from the input_ch to sentences"""
             word_stream = None
-            async for input in self._input_ch:
+            async for input in self.input:
                 if isinstance(input, str):
                     if word_stream is None:
                         tokenizer_instance: tokenize.tokenizer.SentenceTokenizer
@@ -935,7 +935,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         word_stream = tokenizer_instance.stream()
                         self._segments_ch.send_nowait(word_stream)
                     word_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
+                elif isinstance(input, self.Flush):
                     if word_stream:
                         word_stream.end_input()
                     word_stream = None
@@ -1010,7 +1010,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 text_chunks_sent = 0
                 async for word in word_stream:
                     if not started:
-                        self._mark_started()
+                        self.mark_started()
                         started = True
                     text_msg = {"type": "text", "data": {"text": word.token}}
                     await ws.send_str(json.dumps(text_msg))
@@ -1149,8 +1149,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     speech_sample_rate=self._opts.speech_sample_rate,
                     output_audio_codec=self._opts.output_audio_codec,
                 )
-                self._acquire_time = self._tts._pool.last_acquire_time
-                self._connection_reused = self._tts._pool.last_connection_reused
                 # Pause the keepalive while this stream holds the socket so its pings don't
                 # interleave with config, text and flush frames. It was started by
                 # _connect_ws for a fresh socket, or by the stream that last returned it.

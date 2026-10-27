@@ -243,8 +243,8 @@ class SpeechStream(stt.RecognizeStream):
                 num_channels=1,
                 samples_per_channel=samples_per_chunk,
             )
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     frames = audio_bstream.flush()
                 else:
                     frames = audio_bstream.push(data.data.tobytes())
@@ -289,11 +289,11 @@ class SpeechStream(stt.RecognizeStream):
 
             if not utt.started:
                 utt.started = True
-                self._event_ch.send_nowait(
+                self.send(
                     stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH, request_id=request_id)
                 )
             if not ev.is_eos:
-                self._event_ch.send_nowait(
+                self.send(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                         request_id=request_id,
@@ -303,14 +303,14 @@ class SpeechStream(stt.RecognizeStream):
                 return
 
             utt.done = True
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     request_id=request_id,
                     alternatives=[_speech_data(ev)],
                 )
             )
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=request_id)
             )
             # Keep the finished entry on purpose.

@@ -190,27 +190,22 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _current_connection(self, *, timeout: float) -> tuple[_Connection, float, bool]:
-        """Return the live connection, creating one if needed.
-
-        Returns ``(connection, acquire_time, reused)`` — matches the
-        ``ConnectionPool`` surface used by other plugins' metrics.
-        """
+    async def _current_connection(self, *, timeout: float) -> _Connection:
+        """Return the live connection, creating one if needed."""
         async with self.__conn_lock:
             conn = self.__current_connection
             if conn is not None and conn.is_current and not conn.closed:
-                return conn, 0.0, True
+                return conn
 
             # Discard any stale connection reference so it can drain and close
             # itself once any outstanding streams finish.
             if conn is not None and not conn.closed:
                 conn.mark_non_current()
 
-            t0 = time.perf_counter()
             new_conn = _Connection(self._opts, self._ensure_session())
             await asyncio.wait_for(new_conn.connect(), timeout=timeout)
             self.__current_connection = new_conn
-            return new_conn, time.perf_counter() - t0, False
+            return new_conn
 
     def update_options(
         self,
@@ -376,10 +371,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_stream = self._tts._sentence_tokenizer.stream()
 
         async def _input_task() -> None:
-            async for data in self._input_ch:
+            async for data in self.input:
                 if self._cancelled.is_set():
                     break
-                if isinstance(data, self._FlushSentinel):
+                if isinstance(data, self.Flush):
                     sent_stream.flush()
                     continue
                 sent_stream.push_text(data)
@@ -426,7 +421,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if not ev.token.strip():
                     continue
 
-                self._mark_started()
+                self.mark_started()
 
                 # rotate to a new stream before the fixed 2-minute stream lifespan
                 if active is not None and time.monotonic() - active.opened_at > MAX_STREAM_AGE:
@@ -455,11 +450,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self, output_emitter: tts.AudioEmitter, request_id: str, *, attempt: int = 0
     ) -> _ActiveStream:
         try:
-            (
-                connection,
-                self._acquire_time,
-                self._connection_reused,
-            ) = await self._tts._current_connection(timeout=self._conn_options.timeout)
+            connection = await self._tts._current_connection(timeout=self._conn_options.timeout)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:

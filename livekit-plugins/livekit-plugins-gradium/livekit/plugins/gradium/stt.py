@@ -254,8 +254,8 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+            async for data in self.input:
+                if isinstance(data, self.Flush):
                     frames = audio_bstream.flush()
                 else:
                     frames = audio_bstream.write(data.data.tobytes())
@@ -310,7 +310,7 @@ class SpeechStream(stt.SpeechStream):
                         if speaking is False:
                             speaking = True
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-                            self._event_ch.send_nowait(start_event)
+                            self.send(start_event)
                         buffered_text.append(data["text"])
                         event = stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -322,7 +322,7 @@ class SpeechStream(stt.SpeechStream):
                                 )
                             ],
                         )
-                        self._event_ch.send_nowait(event)
+                        self.send(event)
 
                     elif type_ == "step":
                         if not speaking:
@@ -342,7 +342,7 @@ class SpeechStream(stt.SpeechStream):
                                             num_channels=1,
                                             samples_per_channel=samples_per_channel,
                                         )
-                                        await self._input_ch.send(zeros)
+                                        await self.input.send(zeros)
                                 else:
                                     remaining_vad_steps -= 1
                                     if remaining_vad_steps <= 0:
@@ -357,10 +357,10 @@ class SpeechStream(stt.SpeechStream):
                                                 )
                                             ],
                                         )
-                                        self._event_ch.send_nowait(event)
+                                        self.send(event)
 
                                         buffered_text = []
-                                        self._event_ch.send_nowait(
+                                        self.send(
                                             stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                                         )
                             else:

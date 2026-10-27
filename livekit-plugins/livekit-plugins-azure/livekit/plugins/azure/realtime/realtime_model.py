@@ -62,7 +62,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.generation import remove_instructions
+from livekit.agents.voice.tool_output import remove_instructions
 
 from ..log import logger
 from .utils import (

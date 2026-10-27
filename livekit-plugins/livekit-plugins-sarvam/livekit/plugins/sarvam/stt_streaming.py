@@ -767,7 +767,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         deliver usage metrics.
         """
         try:
-            if not self._event_ch.closed:
+            if not self.closed:
                 self._emit_local_usage_fallback()
                 # Give the metrics monitor a chance to consume the usage event before
                 # super().aclose() cancels it.
@@ -828,7 +828,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         """
         self._reset_utterance_state()
         self._utterance_in_progress = True
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.START_OF_SPEECH,
                 request_id=self._request_id,
@@ -940,7 +940,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             samples_per_channel=samples_per_channel,
         )
 
-        async for data in self._input_ch:
+        async for data in self.input:
             # The server is done reading, so stop the pump instead of writing into a
             # socket whose reset would fail the whole stream (max_retry is forced to 0).
             if self._session_ended or ws.closed:
@@ -950,7 +950,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             frames: list[rtc.AudioFrame] = []
             if isinstance(data, rtc.AudioFrame):
                 frames.extend(audio_bstream.write(data.data.tobytes()))
-            if isinstance(data, self._FlushSentinel):
+            if isinstance(data, self.Flush):
                 self._flush_observed = True
                 frames.extend(audio_bstream.flush())
 
@@ -966,7 +966,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     ws, _encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes())
                 )
 
-            if isinstance(data, self._FlushSentinel):
+            if isinstance(data, self.Flush):
                 self._audio_duration_collector.flush()
                 if self._active_endpointing == "manual" and self._manual_speech_started:
                     await self._safe_send_str(ws, {"event": "speech_end"})
@@ -1076,7 +1076,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             self._utterance_in_progress = True
             utterance_idx = data.get("utterance_idx")
             self._utterance_idx = utterance_idx if isinstance(utterance_idx, int) else None
-            self._event_ch.send_nowait(
+            self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.START_OF_SPEECH,
                     request_id=self._request_id,
@@ -1228,7 +1228,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         # Emitted without alternatives so the agent pipeline treats it as a sentinel
         # it can hold and release with a concrete transcript. The speech-end timing
         # travels on the FINAL_TRANSCRIPT event instead.
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.END_OF_SPEECH,
                 request_id=self._request_id,
@@ -1291,7 +1291,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             confidence=float(confidence),
             metadata=metadata or None,
         )
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=event_type,
                 request_id=self._request_id,
@@ -1368,7 +1368,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
     def _emit_usage(self, duration: float) -> None:
         self._total_reported_audio_duration += duration
-        self._event_ch.send_nowait(
+        self.send(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
                 request_id=self._request_id,

@@ -444,14 +444,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _tokenize_input() -> None:
             """Tokenize input text"""
             word_stream = None
-            async for input in self._input_ch:
+            async for input in self.input:
                 if isinstance(input, str):
                     if word_stream is None:
                         word_stream = self._tts._opts.word_tokenizer.stream()
                         segments_ch.send_nowait(word_stream)
 
                     word_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
+                elif isinstance(input, self.Flush):
                     if word_stream is not None:
                         word_stream.end_input()
                     word_stream = None
@@ -508,7 +508,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             else:
                 full_text = " ".join(text_parts)
 
-            self._mark_started()
+            self.mark_started()
 
             # Synthesize
             audio_queue = await self._tts._client.synthesize(full_text, segment_id)

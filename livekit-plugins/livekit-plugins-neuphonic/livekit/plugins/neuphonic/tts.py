@@ -359,13 +359,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _tokenize_input() -> None:
             chunks_stream = None
-            async for input in self._input_ch:
+            async for input in self.input:
                 if isinstance(input, str):
                     if chunks_stream is None:
                         chunks_stream = self._tts._sentence_tokenizer.stream()
                         self._segments_ch.send_nowait(chunks_stream)
                     chunks_stream.push_text(input)
-                elif isinstance(input, self._FlushSentinel):
+                elif isinstance(input, self.Flush):
                     if chunks_stream:
                         chunks_stream.end_input()
                     chunks_stream = None
@@ -402,7 +402,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for sentence in chunks_stream:
-                self._mark_started()
+                self.mark_started()
 
                 nonlocal chunks
                 chunks += 1
@@ -458,8 +458,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-            self._acquire_time = self._tts._pool.last_acquire_time
-            self._connection_reused = self._tts._pool.last_connection_reused
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

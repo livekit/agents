@@ -90,7 +90,7 @@ class _Stream(llm.LLMStream):
                 )
                 delta = llm.ChoiceDelta(role="assistant", tool_calls=[call])
                 break
-        self._event_ch.send_nowait(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
+        self.send(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
 
 
 class ScriptedSTT(stt.STT):
@@ -109,7 +109,7 @@ class ScriptedSTT(stt.STT):
 class _Recognize(stt.RecognizeStream):
     async def _run(self) -> None:
         heard = 0.0
-        async for frame in self._input_ch:
+        async for frame in self.input:
             if not isinstance(frame, rtc.AudioFrame) or heard < 0:
                 continue
             heard += frame.duration
@@ -121,9 +121,7 @@ class _Recognize(stt.RecognizeStream):
                     (stt.SpeechEventType.FINAL_TRANSCRIPT, [said]),
                     (stt.SpeechEventType.END_OF_SPEECH, []),
                 ):
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=kind, alternatives=alternatives)
-                    )
+                    self.send(stt.SpeechEvent(type=kind, alternatives=alternatives))
 
 
 class BatchSTT(stt.STT):
@@ -154,7 +152,7 @@ class _Detect(vad.VADStream):
     async def _main_task(self) -> None:
         speech: list[rtc.AudioFrame] = []
         ended = False
-        async for frame in self._input_ch:
+        async for frame in self.input:
             if not isinstance(frame, rtc.AudioFrame) or ended:
                 continue
             kind = vad.VADEventType.START_OF_SPEECH if not speech else None
@@ -162,7 +160,7 @@ class _Detect(vad.VADStream):
             if sum(f.duration for f in speech) >= 0.5:
                 kind = vad.VADEventType.END_OF_SPEECH
             if kind is not None:
-                self._event_ch.send_nowait(
+                self.send(
                     vad.VADEvent(
                         type=kind,
                         samples_index=0,
@@ -871,7 +869,7 @@ class _Classify(llm.LLMStream):
                 call_id=shortuuid("call_"),
             )
             delta = llm.ChoiceDelta(role="assistant", tool_calls=[call])
-            self._event_ch.send_nowait(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
+            self.send(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
         finally:
             self._llm.classifying -= 1
 
@@ -979,7 +977,7 @@ class _Keyterms(llm.LLMStream):
             name="record_keyterms", arguments=json.dumps(update), call_id=shortuuid("call_")
         )
         delta = llm.ChoiceDelta(role="assistant", tool_calls=[call])
-        self._event_ch.send_nowait(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
+        self.send(llm.ChatChunk(id=shortuuid("chunk_"), delta=delta))
 
 
 async def keyterms() -> None:
