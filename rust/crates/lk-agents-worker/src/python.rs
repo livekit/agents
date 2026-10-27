@@ -826,6 +826,28 @@ impl server::HealthProbe for HostHealth {
     }
 }
 
+/// Whatever `run()` started, stopped: the connection, the load loop, the host's job processes
+/// (`close`) and the listeners; `run()` returns.
+async fn shut_down(life: &mut Life, host: &PyWorkerHost, running: &AtomicBool, outcome: &Outcome) -> PyResult<()> {
+    life.phase = Phase::Closed;
+    if let Some(worker) = life.worker.take() {
+        let _ = worker.send(WorkerCommand::Close);
+    }
+    if let Some(conn) = life.conn.take() {
+        let _ = conn.await;
+    }
+    if let Some(load) = life.load.take() {
+        load.abort();
+    }
+    let closed = host.open("close", empty).await;
+    for listener in [life.health.take(), life.metrics.take()].into_iter().flatten() {
+        listener.abort();
+    }
+    running.store(false, Ordering::Release);
+    outcome.send_if_modified(|o| o.is_none().then(|| *o = Some(Ok(()))).is_some());
+    closed.map(|_| ()).map_err(lk_agents_abi::python::raise_host_error)
+}
+
 fn empty(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     Ok(PyDict::new(py).into_any())
 }
@@ -982,49 +1004,61 @@ impl PyServer {
                 s.check_registration(!endpoints.is_empty()).map_err(PyValueError::new_err)?;
             }
             running.store(true, Ordering::Release);
-            s.prometheus_multiproc_dir =
-                server::prepare_prometheus_dir(s.prometheus_multiproc_dir.as_deref());
-            let start = s.clone();
-            host.open("start", move |py| {
-                let d = PyDict::new(py);
-                d.set_item("devmode", devmode)?;
-                d.set_item("job_processes", has_rtc)?;
-                d.set_item("env", start.child_env().into_py_dict(py)?)?;
-                d.set_item("job_executor_type", &start.job_executor_type)?;
-                d.set_item("multiprocessing_context", &start.multiprocessing_context)?;
-                // `ProcPool`'s keyword arguments
-                let pool = PyDict::new(py);
-                pool.set_item("num_idle_processes", start.num_idle_processes.get(devmode))?;
-                pool.set_item("initialize_timeout", start.initialize_process_timeout)?;
-                pool.set_item("close_timeout", start.shutdown_process_timeout)?;
-                pool.set_item("session_end_timeout", start.session_end_timeout)?;
-                pool.set_item("memory_warn_mb", start.job_memory_warn_mb)?;
-                pool.set_item("memory_limit_mb", start.job_memory_limit_mb)?;
-                pool.set_item("http_proxy", start.http_proxy.as_deref().filter(|p| !p.is_empty()))?;
-                d.set_item("pool", pool)?;
-                Ok(d.into_any())
-            })
-            .await
-            .map_err(lk_agents_abi::python::raise_host_error)?;
-            let settings = Arc::new(s.clone());
-            if !s.simulation {
-                let (listener, port) = server::bind_listener(&s.host, s.port.get(devmode))
-                    .await
-                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                http_port.store(port, Ordering::Release);
-                log::info!(target: LOG, "HTTP server listening on {}:{port}", s.host);
-                let probe = Arc::new(HostHealth(host.clone()));
-                let serve =
-                    server::serve_health(listener, settings.clone(), server_type, status.clone(), probe);
-                guard.health = Some(tokio::spawn(serve).abort_handle());
+            // from here `aclose()` shuts down whatever started, and so does a failure
+            guard.phase = Phase::Running;
+            let started = async {
+                s.prometheus_multiproc_dir =
+                    server::prepare_prometheus_dir(s.prometheus_multiproc_dir.as_deref());
+                // the listeners before the job processes, as the reference: a port in use fails
+                // the start before any process is spawned
+                let settings = Arc::new(s.clone());
+                if !s.simulation {
+                    let (listener, port) = server::bind_listener(&s.host, s.port.get(devmode))
+                        .await
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    http_port.store(port, Ordering::Release);
+                    log::info!(target: LOG, "HTTP server listening on {}:{port}", s.host);
+                    let probe = Arc::new(HostHealth(host.clone()));
+                    let serve =
+                        server::serve_health(listener, settings.clone(), server_type, status.clone(), probe);
+                    guard.health = Some(tokio::spawn(serve).abort_handle());
+                }
+                if let Some(port) = s.prometheus_port {
+                    let (listener, port) = server::bind_listener(&s.host, port)
+                        .await
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    log::info!(target: LOG, "Prometheus metrics exposed at http://{}:{port}/metrics", s.host);
+                    let serve = server::serve_metrics(listener, Arc::new(HostHealth(host.clone())));
+                    guard.metrics = Some(tokio::spawn(serve).abort_handle());
+                }
+                let start = s.clone();
+                host.open("start", move |py| {
+                    let d = PyDict::new(py);
+                    d.set_item("devmode", devmode)?;
+                    d.set_item("job_processes", has_rtc)?;
+                    d.set_item("env", start.child_env().into_py_dict(py)?)?;
+                    d.set_item("job_executor_type", &start.job_executor_type)?;
+                    d.set_item("multiprocessing_context", &start.multiprocessing_context)?;
+                    // `ProcPool`'s keyword arguments
+                    let pool = PyDict::new(py);
+                    pool.set_item("num_idle_processes", start.num_idle_processes.get(devmode))?;
+                    pool.set_item("initialize_timeout", start.initialize_process_timeout)?;
+                    pool.set_item("close_timeout", start.shutdown_process_timeout)?;
+                    pool.set_item("session_end_timeout", start.session_end_timeout)?;
+                    pool.set_item("memory_warn_mb", start.job_memory_warn_mb)?;
+                    pool.set_item("memory_limit_mb", start.job_memory_limit_mb)?;
+                    pool.set_item("http_proxy", start.http_proxy.as_deref().filter(|p| !p.is_empty()))?;
+                    d.set_item("pool", pool)?;
+                    Ok(d.into_any())
+                })
+                .await
+                .map_err(lk_agents_abi::python::raise_host_error)?;
+                PyResult::Ok(())
             }
-            if let Some(port) = s.prometheus_port {
-                let (listener, port) = server::bind_listener(&s.host, port)
-                    .await
-                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-                log::info!(target: LOG, "Prometheus metrics exposed at http://{}:{port}/metrics", s.host);
-                let serve = server::serve_metrics(listener, Arc::new(HostHealth(host.clone())));
-                guard.metrics = Some(tokio::spawn(serve).abort_handle());
+            .await;
+            if let Err(e) = started {
+                let _ = shut_down(&mut guard, &host, &running, &outcome).await;
+                return Err(e);
             }
             if !unregistered {
                 let worker_url = std::env::var("LIVEKIT_WORKER_URL").ok().filter(|u| !u.is_empty());
@@ -1091,7 +1125,6 @@ impl PyServer {
                 })
                 .abort_handle(),
             );
-            guard.phase = Phase::Running;
             let _ = host.open("started", empty).await;
             drop(guard);
             let mut ended = outcome.subscribe();
@@ -1154,24 +1187,8 @@ impl PyServer {
             if guard.phase != Phase::Running {
                 return Ok(());
             }
-            guard.phase = Phase::Closed;
             log::info!(target: LOG, id = id.as_str(); "shutting down worker");
-            if let Some(worker) = guard.worker.take() {
-                let _ = worker.send(WorkerCommand::Close);
-            }
-            if let Some(conn) = guard.conn.take() {
-                let _ = conn.await;
-            }
-            if let Some(load) = guard.load.take() {
-                load.abort();
-            }
-            let closed = host.open("close", empty).await;
-            for listener in [guard.health.take(), guard.metrics.take()].into_iter().flatten() {
-                listener.abort();
-            }
-            running.store(false, Ordering::Release);
-            outcome.send_if_modified(|o| o.is_none().then(|| *o = Some(Ok(()))).is_some());
-            closed.map(|_| ()).map_err(lk_agents_abi::python::raise_host_error)
+            shut_down(&mut guard, &host, &running, &outcome).await
         })
     }
 
