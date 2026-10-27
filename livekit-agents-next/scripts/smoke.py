@@ -1996,7 +1996,8 @@ async def entrypoint(ctx):
 
 
 async def main(style):
-    cli.setup_logging("INFO", style)
+    if style != "none":
+        cli.setup_logging("INFO", style)
     proc = JobExecutor(
         job_entrypoint_fnc=entrypoint, session_end_fnc=None,
         simulation_end_fnc=None, inference_executor=None, initialize_timeout=60,
@@ -2034,14 +2035,15 @@ def job_logs() -> None:
     with tempfile.TemporaryDirectory() as root:
         script = Path(root, "job_logs.py")
         script.write_text(_JOB_LOGS)
-        for style in ("json", "dev"):
+        # "none": a worker that set up no logging, its processes still log (JSON off a terminal)
+        for style in ("json", "dev", "none"):
             run = subprocess.run(
                 [sys.executable, str(script), style], capture_output=True, text=True, timeout=120
             )
             lines = [line for line in run.stdout.splitlines() if "from the job" in line]
             assert run.returncode == 0 and len(lines) == 1, (run.stdout, run.stderr)
             line = lines[0]
-            if style == "json":
+            if style in ("json", "none"):
                 record = json.loads(line)
                 assert record["job_id"] == "AJ_logs" and record["room"] == "logs", record
                 assert record["pid"] not in (os.getpid(), None), record

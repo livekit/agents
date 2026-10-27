@@ -144,6 +144,35 @@ class _LogFormatter(logging.Formatter):
         )
 
 
+class _LineHandler(logging.StreamHandler):  # type: ignore[type-arg]
+    """Writes each record to stdout in one ``write(2)``: the job processes share the worker's
+    stdout, and lines written whole do not interleave (atomically up to the pipe's buffer, and
+    in practice beyond it on Linux and macOS for a single write)."""
+
+    def __init__(self) -> None:
+        super().__init__(sys.stdout)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            line = (self.format(record) + self.terminator).encode(
+                getattr(self.stream, "encoding", None) or "utf-8", "backslashreplace"
+            )
+            try:
+                fd = self.stream.fileno()
+            except (AttributeError, OSError, ValueError):
+                # not a file (a captured stdout): written as a stream
+                self.stream.write(line.decode("utf-8", "replace"))
+                self.flush()
+                return
+            self.flush()  # what print() buffered goes first
+            while line:
+                line = line[os.write(fd, line) :]
+        except RecursionError:
+            raise
+        except Exception:
+            self.handleError(record)
+
+
 # what the worker logs with, for the job processes it starts: each writes its own lines
 _log_config: tuple[str, str] | None = None
 
@@ -157,7 +186,7 @@ def setup_logging(log_level: str, style: str) -> logging.Handler:
     if callable(reconfigure):
         reconfigure(errors="backslashreplace")
     encoding = (getattr(sys.stdout, "encoding", None) or "").lower().replace("_", "-")
-    handler = logging.StreamHandler(sys.stdout)
+    handler = _LineHandler()
     handler.setFormatter(_LogFormatter(style, ensure_ascii=encoding not in ("utf-8", "utf8")))
     _add_global_log_fields(handler)
     root = logging.getLogger()

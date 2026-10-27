@@ -422,12 +422,17 @@ def log_to_stdout(
     config: tuple[str, str] | None, levels: dict[str, int], fields: dict[str, Any]
 ) -> None:
     """A child process writes its own log lines, as the worker does (``config``: its level and
-    line style, none when the worker set up no logging), to the stdout it inherits; each record
-    stamped with ``fields``, the process's (its pid, the job's ids once one runs)."""
+    line style), to the stdout it inherits; each record stamped with ``fields``, the process's
+    (its pid, the job's ids once one runs). A worker that set up no logging (``server.run()``
+    from the user's code) has its processes log at its root level, colored on a terminal."""
+    import sys
+
     from ..cli import setup_logging
 
-    if config is not None:
-        setup_logging(*config).addFilter(_Stamp(fields))
+    if config is None:
+        level = logging.getLevelName(levels.get("root", logging.WARNING))
+        config = (level, "dev" if sys.stdout.isatty() else "json")
+    setup_logging(*config).addFilter(_Stamp(fields))
     for name, level in levels.items():
         logging.getLogger(name).setLevel(level)
 
@@ -438,7 +443,9 @@ class _Stamp(logging.Filter):
         self._fields = fields
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.__dict__.update(self._fields)
+        # a record's own extra wins
+        for key, value in self._fields.items():
+            record.__dict__.setdefault(key, value)
         return True
 
 
