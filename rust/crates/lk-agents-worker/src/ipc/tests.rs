@@ -608,10 +608,10 @@ async fn client_health_check_closes_when_the_parent_goes_quiet() {
 async fn client_sends_and_closes() {
     let (mut parent, child) = UnixStream::pair().unwrap();
     let client = served(child, None);
-    client.send(b"abc").await.unwrap();
+    client.queue(b"abc".to_vec()).unwrap();
     assert_eq!(read_frame(&mut parent).await.unwrap(), b"abc");
     drop(parent);
     assert!(client.recv().await.is_err());
     client.close().await;
-    assert!(client.send(b"x").await.is_err());
+    assert!(client.queue(b"x".to_vec()).is_err());
 }

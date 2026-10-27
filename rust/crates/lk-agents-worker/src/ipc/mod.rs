@@ -1,11 +1,10 @@
-//! The job process IPC, as the reference's `ipc/channel.py`, `ipc/proto.py`,
-//! `ipc/supervised_proc.py` and `ipc/proc_client.py` define it.
+//! The job process IPC: the worker and each job or inference process over one socket.
 //!
 //! - The codec: a frame is a 4-byte big-endian length, then the message: a big-endian `i32`
-//!   `MSG_ID`, then its fields in [`MESSAGES`] order.
+//!   `MSG_ID`, then its fields in [`MESSAGES`] order (the reference's `ipc/proto.py` wire).
 //! - [`ProcSupervisor`]: the parent's side of one job or inference process. It runs the
 //!   initialize handshake, the ping/pong and memory monitoring, the graceful shutdown and the kill
-//!   sequence. Spawning the process and its log queue stay with the host language.
+//!   sequence. Spawning the process stays with the host language.
 //! - [`IpcClient`]: the child's side of the socket, with the self health check. The child answers
 //!   pings from its own event loop, so a pong still measures that loop's responsiveness.
 
@@ -762,7 +761,7 @@ async fn read_loop<H: ProcHost>(inner: Arc<Inner<H>>, pong_deadline: watch::Send
         let msg = match IpcMessage::decode(&frame) {
             Ok(msg) => msg,
             Err(e) => {
-                let msg = format!("Error in _read_ipc_task: {e}");
+                let msg = format!("invalid IPC message: {e}");
                 inner.host.log(Level::Error, &msg, Vec::new());
                 break;
             }
@@ -908,9 +907,8 @@ async fn memory_loop<H: ProcHost>(inner: Arc<Inner<H>>) {
 pub const HEALTH_CHECK_GRACE: f64 = 10.0;
 
 /// The child's side of the socket: the initialize handshake ([`handshake`](Self::handshake)),
-/// then the parent's messages, read once [`serve`](Self::serve)d. What the child sends, its log
-/// records included, goes out in order through one queue ([`queue`](Self::queue)), so a sender on
-/// any thread never waits. With a health timeout, it prints to stderr and stops reading when the
+/// then the parent's messages, read once [`serve`](Self::serve)d. What the child sends goes out in
+/// order through one queue ([`queue`](Self::queue)). With a health timeout, it prints to stderr and stops reading when the
 /// parent sends nothing for that long, whatever the state of the child's event loop.
 pub struct IpcClient {
     outbox: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
@@ -967,10 +965,6 @@ impl IpcClient {
     /// Queues a message for the parent.
     pub fn queue(&self, data: Vec<u8>) -> Result<(), Closed> {
         lock(&self.outbox).as_ref().ok_or(Closed)?.send(data).map_err(|_| Closed)
-    }
-
-    pub async fn send(&self, data: &[u8]) -> Result<(), Closed> {
-        self.queue(data.to_vec())
     }
 
     pub async fn recv(&self) -> Result<Vec<u8>, Closed> {

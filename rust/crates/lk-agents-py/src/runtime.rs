@@ -46,8 +46,7 @@ pub enum Role {
 #[pyfunction]
 pub fn init(role: Role) -> PyResult<()> {
     let _ = role;
-    // Routes Rust `log` lines to the Python logger of the same name; a forked child inherits it.
-    let _ = pyo3_log::try_init();
+    // the Rust `log` lines' route to Python (installed at import) survives a fork
     lk_agents_abi::python::declare()
 }
 

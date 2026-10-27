@@ -1,5 +1,6 @@
-//! `_core.ipc_encode`, `_core.ipc_decode`, `_core.ProcSupervisor` and `_core.IpcClient`: the job
-//! process IPC as `ipc/channel.py`, `ipc/supervised_proc.py` and `ipc/proc_client.py` drive it.
+//! `_core.ipc_pair`, `_core.ProcSupervisor`, `_core.IpcClient`, `_core.ProcPool` and
+//! `_core.JobRun`: the job processes as `ipc/__init__.py` (the worker's side) and `ipc/child.py`
+//! (a process's) drive them; `_core.ipc_encode` and `_core.ipc_decode` for tests.
 //!
 //! `ProcSupervisor(fd, host, ...)` takes over the parent's socket. `host` is the `SupervisedProc`:
 //! Rust calls its `_core_log(level, msg, extra, exc)`, `_core_is_alive()`, `_core_kill()`,
@@ -283,7 +284,7 @@ async fn on_proc_message(
 ) {
     let msg = match IpcMessage::decode(&data) {
         Ok(msg) => msg,
-        Err(e) => return log::error!(target: "livekit.agents", "Error in _read_ipc_task: {e}"),
+        Err(e) => return log::error!(target: "livekit.agents", "invalid IPC message: {e}"),
     };
     match msg.id() {
         super::INFERENCE_RESPONSE => inferences.answered(&msg),
@@ -575,7 +576,7 @@ impl Inferences {
 
 impl Child {
     async fn send(&self, msg: IpcMessage) -> Result<(), Closed> {
-        self.client.send(&msg.encode()).await
+        self.client.queue(msg.encode())
     }
 
     /// One message from the parent; `false` ends the serving.
@@ -741,9 +742,10 @@ impl PyIpcClient {
                 while let Ok(data) = child.client.recv().await {
                     let msg = match IpcMessage::decode(&data) {
                         Ok(msg) => msg,
+                        // as the supervisor's reader: the stream is not trusted past a bad frame
                         Err(e) => {
-                            log::error!(target: "livekit.agents", "Error in _read_ipc_task: {e}");
-                            continue;
+                            log::error!(target: "livekit.agents", "invalid IPC message: {e}");
+                            break;
                         }
                     };
                     if !child.on_message(&host, &queue, msg).await? {
