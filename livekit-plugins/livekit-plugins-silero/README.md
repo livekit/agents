@@ -10,4 +10,4 @@ See [https://docs.livekit.io/agents/build/turns/vad/](https://docs.livekit.io/ag
 pip install livekit-plugins-silero
 ```
 
-This plugin contains model files that would need to be downloaded prior to use.
+The model is the agents core's local Silero model: nothing to download.

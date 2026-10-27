@@ -103,20 +103,7 @@ def _httpx_client() -> None:
     httpx2.AsyncClient()
 
 
-def _plugin_models() -> bool:
-    # the plugins' models (the turn-detector plugin's end-of-turn models, 0.2-0.9 GB each):
-    # loaded where every job shares them copy-on-write, else by each job that uses one
-    if not _shared():
-        return False
-    from ..plugin import Plugin
-
-    for plugin in Plugin.registered_plugins:
-        plugin.preload()
-    return True
-
-
 _step("the local inference models", _local_inference_models)
-_step("the plugins' models", _plugin_models)
 _step("the livekit-rtc native library", _rtc_native_library)
 _step("the openai SDK resources", _openai_resources)
 _step("the httpx client", _httpx_client)

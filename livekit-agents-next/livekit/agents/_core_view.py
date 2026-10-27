@@ -211,13 +211,19 @@ _DUPLEX_UPDATES: dict[str, Callable[[_DuplexSession, dict[str, Any]], Awaitable[
 
 
 class TurnDetector:
-    """A ``turn_detection`` object as the core's end-of-turn detector: a streaming one
-    (``stream()``) hears the user's audio, a batch one scores the conversation."""
+    """A ``turn_detection`` object as the core's end-of-turn detector: its ``stream()`` hears
+    the user's audio and predicts the end of their turn."""
+
+    streaming = True
 
     def __init__(self, detector: Any) -> None:
+        if not hasattr(detector, "stream"):
+            raise TypeError(
+                f"turn_detection={detector!r} is not an audio turn detector (one with stream()); "
+                "use livekit.agents.inference.TurnDetector"
+            )
         self._detector = detector
-        self.streaming = hasattr(detector, "stream")
-        self._stream = detector.stream() if self.streaming else None
+        self._stream = detector.stream()
 
     def _core_id(self) -> dict[str, str]:
         cls = type(self._detector)
@@ -225,36 +231,28 @@ class TurnDetector:
         return {"label": label, "model": self._detector.model, "provider": self._detector.provider}
 
     def _core_push_audio(self, frame: Any) -> None:
-        if self._stream is not None:
-            self._stream.push_audio(frame)
+        self._stream.push_audio(frame)
 
     def _core_cancel(self, timed_out: bool) -> None:
-        if self._stream is not None:
-            self._stream.cancel_inference(timed_out=timed_out)
+        self._stream.cancel_inference(timed_out=timed_out)
 
     def _core_flush(self, reason: str) -> None:
-        if self._stream is not None:
-            self._stream.flush(reason)
+        self._stream.flush(reason)
 
     async def _core_predict(
         self, chat_ctx: _core.TurnContext, timeout: float | None
     ) -> dict[str, Any]:
-        if self._stream is not None:
-            ev = await self._stream.predict()
-            return {
-                "end_of_turn_probability": ev.end_of_turn_probability,
-                "last_speaking_time": ev.last_speaking_time,
-                "detection_delay": ev.detection_delay,
-                "inference_duration": ev.inference_duration,
-                "backchannel_probability": ev.backchannel_probability,
-            }
-        ctx = llm.ChatContext.from_dict(chat_ctx.to_host_dict())
-        probability = await self._detector.predict_end_of_turn(ctx, timeout=timeout)
-        return {"end_of_turn_probability": probability}
+        ev = await self._stream.predict()
+        return {
+            "end_of_turn_probability": ev.end_of_turn_probability,
+            "last_speaking_time": ev.last_speaking_time,
+            "detection_delay": ev.detection_delay,
+            "inference_duration": ev.inference_duration,
+            "backchannel_probability": ev.backchannel_probability,
+        }
 
     async def _core_aclose(self) -> None:
-        if self._stream is not None:
-            await self._stream.aclose()
+        await self._stream.aclose()
 
 
 # --- io legs ----------------------------------------------------------------------------------

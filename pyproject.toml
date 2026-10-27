@@ -1,5 +1,4 @@
 [tool.uv]
-constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
 # `livekit.agents` is livekit-agents-next here; the published livekit-agents that the plugins
 # depend on would install the same files over it.
 override-dependencies = ["livekit-agents; sys_platform == 'never'"]
@@ -86,7 +85,6 @@ livekit-plugins-synthesia = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
 livekit-plugins-telnyx = { workspace = true }
 livekit-plugins-trugen = { workspace = true }
-livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-vakyam = { workspace = true }

@@ -14,7 +14,6 @@ from .._generated.turn import (
     UserTurnLimitOptions,
 )
 from ..language import LanguageCode
-from ..llm import ChatContext
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 
@@ -30,24 +29,6 @@ class TurnDetectionEvent:
     backchannel_probability: float | None = None
     """How appropriate it is for the agent to backchannel at this pause.
     ``None`` when the detector does not produce one (e.g. the local mini model)."""
-
-
-class _TurnDetector(Protocol):
-    @property
-    def model(self) -> str:
-        return "unknown"
-
-    @property
-    def provider(self) -> str:
-        return "unknown"
-
-    # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
-    async def supports_language(self, language: LanguageCode | None) -> bool: ...
-
-    async def predict_end_of_turn(
-        self, chat_ctx: ChatContext, *, timeout: float | None = None
-    ) -> float: ...
 
 
 @runtime_checkable
@@ -91,9 +72,7 @@ class _StreamingTurnDetector(Protocol):
     ) -> _StreamingTurnDetectorStream: ...
 
 
-TurnDetectionMode = (
-    Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector | _StreamingTurnDetector
-)
+TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _StreamingTurnDetector
 """
 The mode of turn detection to use.
 
@@ -101,7 +80,8 @@ The mode of turn detection to use.
 - "vad": use VAD to detect the start and end of the user's turn
 - "realtime_llm": use server-side turn detection provided by the realtime LLM
 - "manual": manually manage the turn detection
-- _TurnDetector: use the default mode with the provided turn detector
+- a turn detector (``inference.TurnDetector`` by default): the default mode, the end of the
+  user's turn predicted on their audio
 
 (default) If not provided, automatically choose the best mode based on
     available models (realtime_llm -> vad -> stt -> manual)

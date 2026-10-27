@@ -53,7 +53,7 @@ def get_packages(repo_root: Path) -> list[str]:
     for plugin_dir in sorted(plugins_dir.glob("livekit-plugins-*")):
         if plugin_dir.is_dir():
             # livekit-plugins-openai -> openai
-            # livekit-plugins-turn-detector -> turn_detector
+            # livekit-plugins-microsoft-ai -> microsoft_ai
             plugin_name = plugin_dir.name.replace("livekit-plugins-", "").replace("-", "_")
             if plugin_name in EXCLUDED_PLUGINS:
                 continue

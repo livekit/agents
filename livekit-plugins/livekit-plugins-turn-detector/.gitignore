@@ -1,5 +1,0 @@
-# Setuptools build outputs
-/build/
-*.egg-info/
-*.egg
-dist/
