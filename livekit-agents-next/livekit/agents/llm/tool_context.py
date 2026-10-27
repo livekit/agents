@@ -42,7 +42,6 @@ from pydantic import Field
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict
 
 from .. import _core
-from ..log import logger
 from . import _provider_format
 
 if TYPE_CHECKING:
@@ -491,21 +490,9 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
 class FunctionTool(_BaseFunctionTool[FunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool"""
 
-    def __init__(
-        self, func: Callable[_P, _R], info: FunctionToolInfo, instance: Any = None
-    ) -> None:
-        super().__init__(func, info, instance)
-        setattr(self, "__livekit_tool_info", self._info)
-
 
 class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
-
-    def __init__(
-        self, func: Callable[_P, _R], info: RawFunctionToolInfo, instance: Any = None
-    ) -> None:
-        super().__init__(func, info, instance)
-        setattr(self, "__livekit_raw_tool_info", self._info)
 
 
 @overload
@@ -717,59 +704,11 @@ def _wrap_with_approval(
 
 
 def is_function_tool(f: Any) -> TypeGuard[FunctionTool]:
-    # TODO(long): for backward compatibility, deprecate in future versions?
     return isinstance(f, FunctionTool)
-
-
-def get_function_info(f: FunctionTool) -> FunctionToolInfo:
-    return f.info
 
 
 def is_raw_function_tool(f: Any) -> TypeGuard[RawFunctionTool]:
     return isinstance(f, RawFunctionTool)
-
-
-def get_raw_function_info(f: RawFunctionTool) -> RawFunctionToolInfo:
-    return f.info
-
-
-def _resolve_wrapped_tool(tool: Any) -> FunctionTool | RawFunctionTool | None:
-    """Convert a wrapped tool to a FunctionTool or RawFunctionTool with a warning."""
-    if not callable(tool):
-        return None
-
-    if isinstance(tool, (FunctionTool, RawFunctionTool)):
-        return tool
-
-    resolved_tool: FunctionTool | RawFunctionTool | None = None
-    if (
-        hasattr(tool, "__wrapped__")  # automatically added by functools.wraps
-        and isinstance(tool.__wrapped__, (FunctionTool, RawFunctionTool))
-    ):
-        wrapped = tool.__wrapped__
-        resolved_tool = wrapped.__class__(tool, wrapped.info)  # type: ignore
-
-    elif (info := getattr(tool, "__livekit_tool_info", None)) and isinstance(
-        info, FunctionToolInfo
-    ):
-        resolved_tool = FunctionTool(tool, info)
-
-    elif (info := getattr(tool, "__livekit_raw_tool_info", None)) and isinstance(
-        info, RawFunctionToolInfo
-    ):
-        resolved_tool = RawFunctionTool(tool, info)
-
-    if resolved_tool:
-        tool_name = resolved_tool.info.name
-        logger.warning(
-            f"function tool {tool_name} is wrapped, this may cause unexpected behavior and not be supported in future versions, "
-            "please wrap the original function before converting to a function tool.",
-            extra={
-                "function_tool": tool_name,
-            },
-        )
-
-    return resolved_tool
 
 
 def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]:
@@ -779,41 +718,11 @@ def find_function_tools(cls_or_obj: Any) -> list[FunctionTool | RawFunctionTool]
     (``agent.session``, ``agent.chat_ctx``) is never evaluated.
     """
     cls = cls_or_obj if isinstance(cls_or_obj, type) else type(cls_or_obj)
-    methods: list[FunctionTool | RawFunctionTool] = []
-    for name, member in inspect.getmembers(cls):
-        if not (isinstance(member, (FunctionTool, RawFunctionTool)) or _is_wrapped_tool(member)):
-            continue
-        bound = getattr(cls_or_obj, name)
-        if isinstance(bound, (FunctionTool, RawFunctionTool)):
-            methods.append(bound)
-        elif normalized_tool := _resolve_wrapped_tool(bound):
-            methods.append(normalized_tool)
-
-    return methods
-
-
-def _is_wrapped_tool(member: Any) -> bool:
-    if not callable(member):
-        return False
-    if hasattr(member, "__wrapped__") and isinstance(
-        member.__wrapped__, (FunctionTool, RawFunctionTool)
-    ):
-        return True
-    return isinstance(getattr(member, "__livekit_tool_info", None), FunctionToolInfo) or (
-        isinstance(getattr(member, "__livekit_raw_tool_info", None), RawFunctionToolInfo)
-    )
-
-
-def get_fnc_tool_names(tools: Sequence[Tool | Toolset]) -> list[str]:
-    """Get names of all function and raw function tools in the list, unwrapping tool sets."""
-    names = []
-    for tool in tools:
-        if isinstance(tool, (FunctionTool, RawFunctionTool)):
-            names.append(tool.info.name)
-        elif isinstance(tool, Toolset):
-            names.extend(get_fnc_tool_names(tool.tools))
-
-    return names
+    return [
+        getattr(cls_or_obj, name)
+        for name, member in inspect.getmembers(cls)
+        if isinstance(member, (FunctionTool, RawFunctionTool))
+    ]
 
 
 class ToolContext:
@@ -852,30 +761,17 @@ class ToolContext:
         return self._fnc_tools_map.get(name)
 
     def __eq__(self, other: object) -> bool:
+        """The same tools: the same instances under the same names."""
         if not isinstance(other, ToolContext):
             return False
-
-        if self._fnc_tools_map.keys() != other._fnc_tools_map.keys():
-            return False
-
-        for name in self._fnc_tools_map:
-            if self._fnc_tools_map[name] is not other._fnc_tools_map[name]:
-                return False
-
-        if len(self._provider_tools) != len(other._provider_tools):
-            return False
-
-        self_provider_ids = {id(tool) for tool in self._provider_tools}
-        other_provider_ids = {id(tool) for tool in other._provider_tools}
-        if self_provider_ids != other_provider_ids:
-            return False
-
-        self_tool_set_ids = {id(tool_set) for tool_set in self._tool_sets}
-        other_tool_set_ids = {id(tool_set) for tool_set in other._tool_sets}
-        if self_tool_set_ids != other_tool_set_ids:
-            return False
-
-        return True
+        mine, theirs = self._fnc_tools_map, other._fnc_tools_map
+        return (
+            mine.keys() == theirs.keys()
+            and all(tool is theirs[name] for name, tool in mine.items())
+            and len(self._provider_tools) == len(other._provider_tools)
+            and {id(t) for t in self._provider_tools} == {id(t) for t in other._provider_tools}
+            and {id(t) for t in self._tool_sets} == {id(t) for t in other._tool_sets}
+        )
 
     def update_tools(self, tools: Sequence[Tool | Toolset]) -> None:
         self._tools = list(tools)
@@ -886,31 +782,19 @@ class ToolContext:
         def add_tool(tool: Tool | Toolset) -> None:
             if isinstance(tool, ProviderTool):
                 self._provider_tools.append(tool)
-
             elif isinstance(tool, (FunctionTool, RawFunctionTool)):
-                existing = self._fnc_tools_map.get(tool.info.name)
-                if existing is not None:
-                    if existing is not tool:
-                        raise ValueError(f"duplicate function name: {tool.info.name}")
-                    return  # same instance, skip
-                self._fnc_tools_map[tool.info.name] = tool
-
+                # the same instance twice is one tool
+                if self._fnc_tools_map.setdefault(tool.info.name, tool) is not tool:
+                    raise ValueError(f"duplicate function name: {tool.info.name}")
             elif isinstance(tool, Toolset):
                 for t in tool.tools:
                     add_tool(t)
                 self._tool_sets.append(tool)
-
-            elif normalized_tool := _resolve_wrapped_tool(tool):
-                add_tool(normalized_tool)
-
-            elif callable(tool):
-                raise ValueError(
-                    "Expected an instance of FunctionTool or RawFunctionTool, got a callable object. "
-                    "If it's a wrapped tool, please consider wrapping the original function before converting to a function tool."
-                )
-
             else:
-                raise ValueError(f"unknown tool type: {type(tool)}")
+                raise ValueError(
+                    f"unknown tool type: {type(tool)}; a wrapped function tool is not one: wrap "
+                    "the original function before converting it to a function tool"
+                )
 
         for tool in itertools.chain(tools, find_function_tools(self)):
             add_tool(tool)
