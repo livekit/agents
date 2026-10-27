@@ -1,5 +1,3 @@
-from typing import Any
-
 from . import io, room_io, run_result
 from .agent import Agent, ModelSettings
 from .agent_session import (
@@ -75,12 +73,3 @@ __all__ = [
     "run_result",
     "text_transforms",
 ]
-
-
-def __getattr__(name: str) -> Any:
-    if name == "AgentSession":
-        # deprecated alias, kept one release
-        from .agent_session import VoiceSession
-
-        return VoiceSession
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -171,12 +171,6 @@ def __getattr__(name: str) -> typing.Any:
 
         return a2a_session
 
-    if name == "AgentSession":
-        # deprecated alias, kept one release
-        from .voice.agent_session import VoiceSession
-
-        return VoiceSession
-
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -249,7 +243,6 @@ __all__ = [
     "SimulationRun",
     "SimulationVerdict",
     "VoiceSession",
-    "AgentSession",
     "ExpressiveOptions",
     "NonverbalOptions",
     "SpeechSteeringOptions",

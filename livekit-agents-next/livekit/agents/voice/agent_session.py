@@ -843,13 +843,6 @@ _ERROR_RECORDS: dict[str, tuple[Any, str]] = {
 }
 
 
-def __getattr__(name: str) -> Any:
-    if name == "AgentSession":
-        # deprecated alias, kept one release
-        return VoiceSession
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 async def _setup_toolset(toolset: llm.Toolset) -> None:
     try:
         await toolset.setup()

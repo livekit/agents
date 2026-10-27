@@ -135,7 +135,7 @@ specification; implementation cleanup must follow the agreed contracts.
   Queue persistence is optional and separate from backend request batching. Owns
   STT, TTS, VAD, turn detection,
   endpointing, interruption and audio delivery. `update_options(...)` explicitly changes
-  session configuration; selecting an agent preserves those settings. `AgentSession` is a deprecated alias kept one release.
+  session configuration; selecting an agent preserves those settings.
 
 ### Key Directories
 ```
