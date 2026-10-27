@@ -48,7 +48,7 @@ USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 _SUPPORTED_MODELS: set[str] = {
     "gemma4",
     "sarvam-105b",
-    "glm5.2",
+    "glm5.3",
     "sarvam-105b-conversations",
 }
 
@@ -66,14 +66,13 @@ _VISION_MODELS: set[str] = {
 _REASONING_EFFORT_MODELS: set[str] = {
     "gemma4",
     "sarvam-105b",
-    "glm5.2",
+    "glm5.3",
 }
 
 # Models that support wiki_grounding
 _WIKI_GROUNDING_MODELS: set[str] = {
     "gemma4",
     "sarvam-105b",
-    "glm5.2",
 }
 
 # OpenAI SDK fields the Sarvam API does not accept
@@ -149,7 +148,7 @@ class LLM(OpenAILLM):
 
     * ``gemma4`` — vision-capable, ``/v2`` endpoint
     * ``sarvam-105b`` — text-only, ``/v2`` endpoint
-    * ``glm5.2`` — text-only, ``/v2`` endpoint
+    * ``glm5.3`` — text-only, ``/v2`` endpoint
     * ``sarvam-105b-conversations`` — multi-turn optimized, ``/v1`` endpoint
 
     The endpoint (``/v1`` vs ``/v2``) is resolved automatically from the model.
