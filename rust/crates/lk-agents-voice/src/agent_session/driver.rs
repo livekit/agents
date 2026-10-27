@@ -73,14 +73,14 @@ impl std::fmt::Debug for WatchHub {
 /// Everything a peer of the host may touch, and nothing else.
 #[derive(Clone)]
 pub struct PeerHandle {
-    pub api: Tx<Command>,
+    /// The loop's queue: commands, and the audio taps' installs.
+    pub queue: Tx,
     pub(super) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
     pub journal: Journal,
     pub time: crate::agent_session::Timebase,
     pub spawner: Arc<dyn lk_agents_abi::Spawner>,
     pub(super) watch: WatchHub,
     pub(super) resources: lk_agents_abi::resources::Resources,
-    pub(super) forwarder: Tx<crate::data_plane::ForwarderCommand>,
     /// Flips at `begin_closing`: a system's own drain ends on it like the driver's do.
     pub closing: tokio::sync::watch::Receiver<bool>,
 }
@@ -91,7 +91,7 @@ impl PeerHandle {
     }
 
     pub fn send(&self, origin: Origin, cmd: impl Into<Command>) -> Result<(), QueueClosed> {
-        self.api.send_from(origin, cmd.into())
+        self.queue.send_from(origin, cmd.into())
     }
 
     pub fn journal(&self, step: Step) {
@@ -112,13 +112,13 @@ impl PeerHandle {
     ) -> lk_agents_abi::resources::ResourceId {
         let sink = self.resources.register_audio_sink(sink);
         let channel = crate::audio::AudioChannel::Amd;
-        let _ = self.forwarder.send(crate::data_plane::ForwarderCommand::Install { channel, sink });
+        let _ = self.queue.send(crate::data_plane::ForwarderCommand::Install { channel, sink });
         sink
     }
 
     /// Only if this tap is still the one in place.
     pub fn remove_audio_tap(&self, tap: lk_agents_abi::resources::ResourceId) {
-        let _ = self.forwarder.send(crate::data_plane::ForwarderCommand::Remove(tap));
+        let _ = self.queue.send(crate::data_plane::ForwarderCommand::Remove(tap));
     }
 }
 
@@ -129,7 +129,7 @@ impl std::fmt::Debug for PeerHandle {
 }
 
 pub struct SessionHandle {
-    pub api: Tx<Command>,
+    pub api: Tx,
     /// Every event, in the order the driver emitted it.
     pub events: Rx<HostEvent>,
     /// Each awaited command's answer, once, by its call id.
@@ -143,63 +143,92 @@ pub struct SessionHandle {
 
 pub(super) type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
 
-/// The loop receives one [`Event`] at a time in arrival order and merges it with its timers by a
-/// stated rule, so the trace is a function of the event sequence.
-pub struct Tx<T> {
-    inner: tokio::sync::mpsc::UnboundedSender<Event>,
-    wrap: fn(T) -> Event,
-}
+/// The loop's one queue: every source sends on it, so the loop receives one [`Event`] at a time
+/// in arrival order and merges it with its timers by a stated rule; the trace is a function of the
+/// event sequence. What each source sends becomes an event by its `From` impl below.
+#[derive(Clone)]
+pub struct Tx(tokio::sync::mpsc::UnboundedSender<Event>);
 
-impl<T> Clone for Tx<T> {
-    fn clone(&self) -> Self {
-        Tx { inner: self.inner.clone(), wrap: self.wrap }
-    }
-}
-
-impl<T> Tx<T> {
-    pub(super) fn new(
-        inner: tokio::sync::mpsc::UnboundedSender<Event>,
-        wrap: fn(T) -> Event,
-    ) -> Self {
-        Tx { inner, wrap }
+impl Tx {
+    pub(super) fn new(inner: tokio::sync::mpsc::UnboundedSender<Event>) -> Self {
+        Tx(inner)
     }
 
-    pub fn send(&self, value: T) -> Result<(), QueueClosed> {
-        self.inner.send((self.wrap)(value)).map_err(|_| QueueClosed)
+    /// A queue nobody reads: what a handle made outside a session sends on.
+    pub fn disconnected() -> Self {
+        Tx(tokio::sync::mpsc::unbounded_channel().0)
+    }
+
+    pub fn send(&self, event: impl Into<Event>) -> Result<(), QueueClosed> {
+        self.0.send(event.into()).map_err(|_| QueueClosed)
+    }
+
+    pub fn send_from(&self, origin: Origin, command: Command) -> Result<(), QueueClosed> {
+        self.send(Input::Host(Sent { origin, command }))
     }
 
     pub fn is_closed(&self) -> bool {
-        self.inner.is_closed()
+        self.0.is_closed()
     }
 
     /// Resolves when the loop has dropped its receiver.
     pub async fn closed(&self) {
-        self.inner.closed().await
+        self.0.closed().await
     }
 }
 
-
-
-pub(super) fn host_input(command: Command) -> Event {
-    Event::Input(Input::Host(Sent { origin: Origin::Host, command }))
-}
-
-impl Tx<Command> {
-    pub fn disconnected() -> Self {
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        Tx::new(tx, host_input)
-    }
-
-    pub fn send_from(&self, origin: Origin, command: Command) -> Result<(), QueueClosed> {
-        self.inner
-            .send(Event::Input(Input::Host(Sent { origin, command })))
-            .map_err(|_| QueueClosed)
-    }
-}
-
-impl<T> std::fmt::Debug for Tx<T> {
+impl std::fmt::Debug for Tx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Tx")
+    }
+}
+
+/// What each source sends, as the loop receives it.
+macro_rules! queue_events {
+    ($($ty:ty => |$v:pat_param| $event:expr;)*) => {$(
+        impl From<$ty> for Event {
+            fn from($v: $ty) -> Event {
+                $event
+            }
+        }
+    )*};
+}
+queue_events! {
+    Input => |input| Event::Input(input);
+    crate::data_plane::ForwarderCommand => |command| Event::Forwarder(command);
+    Command => |command| Event::Input(Input::Host(Sent { origin: Origin::Host, command }));
+    crate::audio::Tagged<SpeechEvent> => |ev| Event::Input(Input::Stt(ev));
+    VadEvent => |ev| Event::Input(Input::Vad(ev));
+    RoomEvent => |ev| Event::Input(Input::Room(ev));
+    crate::room_io::RoomIoEvent => |ev| Event::Input(Input::RoomIo(ev));
+    GenEvent => |ev| Event::Input(Input::Gen(ev));
+    crate::agent_activity::realtime::RealtimeWake => |wake| Event::Input(Input::Realtime(wake));
+    lk_agents_abi::turn::detector::LegEvent<lk_agents_abi::EotPrediction> =>
+        |ev| Event::Input(eot_input(ev));
+    lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict> =>
+        |ev| Event::Input(Input::Overlap(ev));
+    ChannelEnd => |end| Event::Input(Input::ChannelEnded(end));
+    StreamOpened => |opened| Event::Input(Input::StreamOpened(opened));
+    lk_agents_rtc::VideoFrameRef => |frame| Event::Input(Input::Video(frame));
+    (SpeechId, lk_agents_abi::voice::io::PlaybackFinished) =>
+        |(speech, finished)| Event::Input(Input::PlaybackFinished(speech, finished));
+}
+
+/// `Closed` is the pump's own end.
+fn eot_input(ev: lk_agents_abi::turn::detector::LegEvent<lk_agents_abi::EotPrediction>) -> Input {
+    use lk_agents_abi::turn::detector::{LegEvent, ReqId};
+    match ev {
+        LegEvent::Verdict { req, verdict } => Input::Eot(req.unwrap_or(ReqId(0)), Ok(verdict)),
+        LegEvent::Error { req, recoverable: _, err } => {
+            Input::Eot(req.unwrap_or(ReqId(0)), Err(err))
+        }
+        LegEvent::Closed => Input::ChannelEnded(ChannelEnd {
+            leg: "eot",
+            cause: crate::trace::ChannelEndCause::SourceEnded,
+            sink: None,
+            closed: None,
+            error: None,
+        }),
     }
 }
 
@@ -267,16 +296,8 @@ pub struct Driver {
     pub(crate) journal: Journal,
     /// The core knows no subscriber.
     pub(crate) watch: WatchHub,
-    /// So a player's `ToolsDone` is ordered with the socket's events.
-    pub(crate) realtime_tx: Tx<crate::agent_activity::realtime::RealtimeWake>,
-    pub(crate) playback_tx: Tx<(SpeechId, lk_agents_abi::voice::io::PlaybackFinished)>,
-    pub(crate) stt_tx: Tx<crate::audio::Tagged<SpeechEvent>>,
-    /// The STT leg's retried failures (`STTError{recoverable: True}`).
-    pub(crate) stt_retried: Tx<lk_agents_abi::errors::ProviderError>,
-    pub(crate) vad_tx: Tx<VadEvent>,
-    pub(crate) leg_opens: Tx<crate::room_io::StreamOpened>,
-    /// The data plane's commands, through the queue.
-    pub(crate) forwarder_tx: Tx<crate::data_plane::ForwarderCommand>,
+    /// Where the spawned work reports back, and the data plane's commands go, in one order.
+    pub(crate) queue: Tx,
     /// Decides ownership (a tool's hold is its run's).
     pub(crate) command_origin: Origin,
     /// The time of the step being handled, or of the last one.
@@ -352,7 +373,7 @@ impl Driver {
                 handle.create(id, allow_interruptions);
                 Arc::clone(handle)
             }
-            None => Arc::new(SpeechHandle::new(id, allow_interruptions, self.shared.api.clone())),
+            None => Arc::new(SpeechHandle::new(id, allow_interruptions, self.shared.queue.clone())),
         }
     }
 
@@ -694,9 +715,7 @@ impl Driver {
         };
         let discard = crate::audio::audio_gate(&inputs);
         if self.input.gate_discard.replace(discard) != Some(discard) {
-            let _ = self
-                .forwarder_tx
-                .send(crate::data_plane::ForwarderCommand::SetGateDiscard(discard));
+            let _ = self.queue.send(crate::data_plane::ForwarderCommand::SetGateDiscard(discard));
             self.journal(Step::Playout(PlayoutStep::GatePublished {
                 stt_real: !discard,
                 realtime_real: !discard,

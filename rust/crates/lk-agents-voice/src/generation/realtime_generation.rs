@@ -25,7 +25,7 @@ pub(crate) async fn realtime_generation_task(
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
     events: &tokio::sync::Mutex<mpsc::UnboundedReceiver<Event>>,
-    wake: &Tx<RealtimeWake>,
+    wake: &Tx,
 ) -> Result<StepOutcome, DriverError> {
     // The authorization, per step: the server's deltas queue meanwhile. It stops a server turn
     // talking over a `say()`, and a tool follow-up over what became current while tools ran.
@@ -134,7 +134,7 @@ pub(crate) async fn realtime_generation_task(
 fn deliver_realtime(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    wake: &Tx<RealtimeWake>,
+    wake: &Tx,
     decision: StepDecision,
     finished: Finished,
 ) -> StepOutcome {

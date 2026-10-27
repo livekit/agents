@@ -626,7 +626,7 @@ pub enum ReplySource {
         events: tokio::sync::Mutex<
             tokio::sync::mpsc::UnboundedReceiver<lk_agents_abi::llm::realtime::Event>,
         >,
-        wake: crate::agent_session::Tx<crate::agent_activity::realtime::RealtimeWake>,
+        wake: crate::agent_session::Tx,
     },
 }
 

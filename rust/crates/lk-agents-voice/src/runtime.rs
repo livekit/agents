@@ -2,7 +2,7 @@
 //! ([`AudioForwarder`]), stepped by one queue owner, and what performs the data plane's effects.
 //! The queue owner only feeds it: [`Runtime::run`] in production, the fuzzer's run in tests.
 
-use crate::agent_session::{Driver, Event, Input, Now, Tx};
+use crate::agent_session::{Driver, Event, Now, Tx};
 use crate::audio::{AUDIO_IN_LEG, ChannelEnd};
 use crate::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use crate::trace::ChannelEndCause;
@@ -18,11 +18,9 @@ pub struct Runtime {
     pub queue: tokio::sync::mpsc::UnboundedReceiver<Event>,
     /// The microphone's frames, straight from its reader.
     pub frames: tokio::sync::mpsc::UnboundedReceiver<AudioFrame>,
-    /// Where the data plane's reports join the queue.
-    reports: Tx<Input>,
+    /// Where the data plane's reports and a reader's end join the queue.
+    reports: Tx,
     frames_tx: tokio::sync::mpsc::UnboundedSender<AudioFrame>,
-    /// Where a reader reports that its source ended.
-    ended: Tx<ChannelEnd>,
     /// The microphone, its id and its reader.
     source: Option<(ResourceId, AbortHandle)>,
 }
@@ -31,14 +29,13 @@ impl Runtime {
     pub(crate) fn new(
         driver: Driver,
         forwarder: AudioForwarder,
-        queue: (Tx<Input>, tokio::sync::mpsc::UnboundedReceiver<Event>),
-        ended: Tx<ChannelEnd>,
+        queue: (Tx, tokio::sync::mpsc::UnboundedReceiver<Event>),
         source: Option<ResourceId>,
     ) -> Self {
         let (frames_tx, frames) = tokio::sync::mpsc::unbounded_channel();
         let (reports, queue) = queue;
         let mut runtime =
-            Runtime { driver, forwarder, queue, frames, reports, frames_tx, ended, source: None };
+            Runtime { driver, forwarder, queue, frames, reports, frames_tx, source: None };
         // The session's first microphone is the host's attached one: nothing to tell it.
         if let Some(source) = source {
             runtime.read(source);
@@ -178,7 +175,7 @@ impl Runtime {
             input,
             self.frames_tx.clone(),
             self.driver.shared.closing.subscribe(),
-            self.ended.clone(),
+            self.reports.clone(),
         );
         self.source = Some((source, self.driver.shared.spawner.spawn_unboxed(reader)));
     }
@@ -224,7 +221,7 @@ async fn read_audio(
     input: Arc<dyn AudioInput>,
     frames: tokio::sync::mpsc::UnboundedSender<AudioFrame>,
     mut closing: tokio::sync::watch::Receiver<bool>,
-    ended: Tx<ChannelEnd>,
+    queue: Tx,
 ) {
     // `biased` so an arrived frame is handed over first.
     let cause = loop {
@@ -242,5 +239,5 @@ async fn read_audio(
         }
     };
     let end = ChannelEnd { leg: AUDIO_IN_LEG, cause, sink: None, closed: None, error: None };
-    let _ = ended.send(end);
+    let _ = queue.send(end);
 }

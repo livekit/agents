@@ -200,9 +200,9 @@ impl LaunchGate {
 #[derive(Clone)]
 pub(super) struct VideoForwarderParts {
     pub(super) closing: tokio::sync::watch::Receiver<bool>,
-    pub(super) ended: Tx<ChannelEnd>,
-    /// The loop's queue; the sampler runs in the loop, on the session clock.
-    pub(super) frames: Tx<lk_agents_rtc::VideoFrameRef>,
+    /// The loop's queue: the frames (the sampler runs in the loop, on the session clock) and the
+    /// source's end.
+    pub(super) queue: Tx,
 }
 
 impl VideoForwarderParts {
@@ -218,12 +218,12 @@ impl VideoForwarderParts {
                 _ = p.closing.wait_for(|c| *c) => break ChannelEndCause::Closing,
             };
             // A queue that is gone is a loop that has returned: nothing to report to.
-            if p.frames.send(frame).is_err() {
+            if p.queue.send(frame).is_err() {
                 return;
             }
         };
         let end = ChannelEnd { leg: VIDEO_IN_LEG, cause, sink: None, closed: None, error: None };
-        let _ = p.ended.send(end);
+        let _ = p.queue.send(end);
     }
 }
 
@@ -250,14 +250,13 @@ pub(super) fn on_leg_ended(end: ChannelEnd, out: &mut Out) {
 /// Drain a provider source into the loop, close it once, then report the end with the stream's
 /// sink, which the loop removes if it is still installed: a sink of a closed stream would raise on
 /// every frame for the rest of the call.
-pub(super) fn spawn_drain<T: Send + 'static>(
+pub(super) fn spawn_drain<T: Into<crate::agent_session::Event> + Send + 'static>(
     spawner: &Arc<dyn Spawner>,
     time: Timebase,
     mut closing: tokio::sync::watch::Receiver<bool>,
     mut source: Box<dyn StreamSource<T>>,
-    tx: Tx<T>,
+    queue: Tx,
     (channel, sink): (AudioChannel, ResourceId),
-    ended: Tx<ChannelEnd>,
 ) {
     spawner.spawn_unboxed(async move {
         let mut error = None;
@@ -270,7 +269,7 @@ pub(super) fn spawn_drain<T: Send + 'static>(
             };
             match next {
                 Some(Ok(Some(item))) => {
-                    if tx.send(item).is_err() {
+                    if queue.send(item).is_err() {
                         break ChannelEndCause::Closing; // the loop is gone
                     }
                 }
@@ -287,15 +286,13 @@ pub(super) fn spawn_drain<T: Send + 'static>(
         let closed = source.close(deadline).await;
         let leg = channel.label();
         let _ =
-            ended.send(ChannelEnd { leg, cause, sink: Some(sink), closed: Some(closed), error });
+            queue.send(ChannelEnd { leg, cause, sink: Some(sink), closed: Some(closed), error });
     });
 }
 
 /// A stream's retried failures, sent to the session loop.
-pub(crate) fn report_to(
-    tx: crate::agent_session::Tx<lk_agents_abi::errors::ProviderError>,
-) -> lk_agents_abi::RetryReport {
+pub(crate) fn report_to(queue: Tx) -> lk_agents_abi::RetryReport {
     Arc::new(move |error| {
-        let _ = tx.send(error);
+        let _ = queue.send(crate::agent_session::Input::SttRetried(error));
     })
 }

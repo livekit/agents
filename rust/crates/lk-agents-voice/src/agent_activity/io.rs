@@ -27,8 +27,6 @@ pub(crate) struct AgentInput {
     pub(crate) audio_enabled: bool,
     /// When audio started flowing from the current source, as the data plane reported it.
     pub(crate) first_input_at: Option<Ts>,
-    /// Where a leg's drain reports its end.
-    pub(crate) ended: crate::agent_session::Tx<crate::audio::ChannelEnd>,
     video_forwarder_parts: crate::audio::VideoForwarderParts,
     video_forwarder: Option<lk_agents_abi::AbortHandle>,
     pending_video_in: Option<Option<Arc<dyn VideoInput>>>,
@@ -62,7 +60,6 @@ impl AgentInput {
     /// was attached), nothing pending.
     pub(crate) fn new(
         sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
-        ended: crate::agent_session::Tx<crate::audio::ChannelEnd>,
         (video_forwarder_parts, video_forwarder, video_in): (
             crate::audio::VideoForwarderParts,
             Option<lk_agents_abi::AbortHandle>,
@@ -76,7 +73,6 @@ impl AgentInput {
             gate_discard: None,
             audio_enabled: true,
             first_input_at: None,
-            ended,
             video_forwarder_parts,
             video_forwarder,
             pending_video_in: None,
@@ -247,7 +243,7 @@ impl Driver {
                 self.discard_open(stream);
             }
             (Ok(Opened::Stt(sink, mut source)), true) => {
-                source.report_retries(crate::audio::report_to(self.stt_retried.clone()));
+                source.report_retries(crate::audio::report_to(self.queue.clone()));
                 if let Some(stt) = &self.session.stt {
                     out.machine().push(Effect::Provider(ProviderCall::Prewarm(stt.id)));
                 }
@@ -260,9 +256,8 @@ impl Driver {
                     self.shared.time.clone(),
                     self.shared.closing.subscribe(),
                     tagged(sink, source),
-                    self.stt_tx.clone(),
+                    self.queue.clone(),
                     (AudioChannel::Stt, sink),
-                    self.input.ended.clone(),
                 );
                 out.trace(InputStep::StreamOpened { leg: AudioChannel::Stt.label() });
             }
@@ -273,9 +268,8 @@ impl Driver {
                     self.shared.time.clone(),
                     self.shared.closing.subscribe(),
                     source,
-                    self.vad_tx.clone(),
+                    self.queue.clone(),
                     (AudioChannel::Vad, sink),
-                    self.input.ended.clone(),
                 );
                 out.trace(InputStep::StreamOpened { leg: AudioChannel::Vad.label() });
             }

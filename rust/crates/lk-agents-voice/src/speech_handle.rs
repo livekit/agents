@@ -34,7 +34,7 @@ pub fn default_input_modality() -> &'static str {
     Modality::default().as_str()
 }
 
-type Api = crate::agent_session::Tx<crate::agent_session::Command>;
+type Api = crate::agent_session::Tx;
 
 /// A refusal on a host's speech handle; each `Display` is the `RuntimeError` it raises.
 #[lk_agents_abi::host(error(kind = "RuntimeError"))]
@@ -748,10 +748,9 @@ impl SpeechHandle {
             return Err(SpeechError::AlreadyInterrupted.into());
         }
         // A closed loop has no speech left to protect.
-        let _ = self.api.send(
-            crate::agent_session::SpeechCommand::SetAllowInterruptions { speech, allow: value }
-                .into(),
-        );
+        let _ = self.api.send(crate::agent_session::Command::from(
+            crate::agent_session::SpeechCommand::SetAllowInterruptions { speech, allow: value },
+        ));
         Ok(())
     }
 
@@ -785,9 +784,9 @@ impl SpeechHandle {
         self.interrupt_requested.store(true, Ordering::Release);
         let interrupt = move |api: &Api, speech| {
             // A closed loop has nothing left to interrupt.
-            let _ = api.send(
-                crate::agent_session::SpeechCommand::InterruptSpeech { speech, force }.into(),
-            );
+            let _ = api.send(crate::agent_session::Command::from(
+                crate::agent_session::SpeechCommand::InterruptSpeech { speech, force },
+            ));
         };
         let creation = *self.creation.borrow();
         match (created, creation) {

@@ -278,7 +278,7 @@ impl SessionApi {
         }
     }
 
-    pub fn api(&self) -> Result<Tx<Command>, SessionRefused> {
+    pub fn api(&self) -> Result<Tx, SessionRefused> {
         self.running(|r| Ok(r.api.clone()))
     }
 
@@ -650,7 +650,7 @@ struct Ready {
 }
 
 struct Running {
-    api: Tx<Command>,
+    api: Tx,
     calls: Calls,
     /// `session.keyterms`, as the driver last pushed them.
     keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
@@ -691,7 +691,7 @@ struct HostParts {
 pub struct SessionRunner {
     events: Rx<HostEvent>,
     room_io: Arc<crate::room_io::RoomIo>,
-    api: Tx<Command>,
+    api: Tx,
     drained: Option<tokio::sync::oneshot::Sender<()>>,
     opening: Opening,
     #[cfg(feature = "dst")]
@@ -725,7 +725,7 @@ impl SessionRunner {
         Some(ev)
     }
 
-    pub fn api(&self) -> &Tx<Command> {
+    pub fn api(&self) -> &Tx {
         &self.api
     }
 }
@@ -893,7 +893,7 @@ async fn answer_hook(
     hooks: Arc<dyn SessionHooks>,
     call: crate::agent_session::host_events::HookCall,
     agents: HostAgents,
-    api: Tx<Command>,
+    api: Tx,
     spawner: Arc<dyn Spawner>,
 ) {
     use crate::agent::TurnEdit;

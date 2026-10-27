@@ -181,7 +181,7 @@ impl IvrSystem {
     /// The loop: a due deadline fires before same-instant feed items; ends at close.
     async fn run(mut self, mut rx: tokio::sync::mpsc::UnboundedReceiver<SystemTap>) {
         let time = self.peer.time.clone();
-        let api = self.peer.api.clone();
+        let api = self.peer.queue.clone();
         while !self.closed {
             let deadline = self.deadline;
             if deadline.is_some_and(|at| at <= time.now()) {

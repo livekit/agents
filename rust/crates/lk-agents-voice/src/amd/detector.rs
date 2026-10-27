@@ -286,7 +286,7 @@ impl AmdSystem {
         mut msgs: tokio::sync::mpsc::UnboundedReceiver<Msg>,
     ) {
         let time = self.peer.time.clone();
-        let api = self.peer.api.clone();
+        let api = self.peer.queue.clone();
         // The host may drop its handle: its channel then never yields, the feed still does.
         let mut host_open = true;
         while !self.closed {

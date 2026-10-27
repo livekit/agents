@@ -502,7 +502,7 @@ pub enum RealtimeWake {
 pub(crate) fn spawn_event_pump(
     spawner: &Arc<dyn Spawner>,
     session: Arc<dyn RealtimeSession>,
-    tx: Tx<RealtimeWake>,
+    tx: Tx,
 ) -> lk_agents_abi::AbortHandle {
     use lk_agents_abi::SpawnerExt;
     spawner.spawn_unboxed(async move {
@@ -1034,7 +1034,7 @@ impl Driver {
         // The same `start_speech` as every speech, fed by the player channel.
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let events = tokio::sync::Mutex::new(rx);
-        let source = ReplySource::Realtime { events, wake: self.realtime_tx.clone() };
+        let source = ReplySource::Realtime { events, wake: self.queue.clone() };
         let spec = SpeechSpec {
             add_to_chat_ctx,
             host_asked: asked.is_some() || turn,

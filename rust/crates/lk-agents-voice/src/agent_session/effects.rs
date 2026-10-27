@@ -737,7 +737,7 @@ impl Driver {
                     StreamKind::Vad => resources.vad(resource).map(Pending::Vad),
                 };
                 let Some(pending) = pending else { return };
-                let tx = self.leg_opens.clone();
+                let tx = self.queue.clone();
                 let time = self.shared.time.clone();
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     use crate::room_io::Opened;
@@ -771,7 +771,7 @@ impl Driver {
             E::Provider(P::Release(id)) => self.shared.resources.release(id),
             E::Provider(P::CloseRealtime(id)) => {
                 let Some(session) = self.shared.resources.realtime(id) else { return };
-                let tx = self.realtime_tx.clone();
+                let tx = self.queue.clone();
                 lk_agents_abi::SpawnerExt::spawn_unboxed(&*self.shared.spawner, async move {
                     session.aclose().await;
                     let _ = tx.send(crate::agent_activity::realtime::RealtimeWake::Closed);
@@ -796,7 +796,7 @@ impl Driver {
                             interrupted: true,
                             synchronized_transcript: None,
                         };
-                        let _ = self.playback_tx.send((speech, finished));
+                        let _ = self.queue.send((speech, finished));
                     }
                 }
             }
@@ -846,7 +846,7 @@ impl Driver {
                 }
             }
             E::Forwarder(command) => {
-                let _ = self.forwarder_tx.send(command);
+                let _ = self.queue.send(command);
             }
             E::Audio(AudioOp::SetVideoInput) => {
                 self.input.swap_video_forwarder(&*self.shared.spawner)
