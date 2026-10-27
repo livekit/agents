@@ -69,7 +69,7 @@ from .events import (
     UserState,
 )
 from .remote_session import ConsoleCall, SessionPort
-from .room_io import RoomOptions, TextInputCallback, TextInputEvent
+from .room_io import AudioInputOptions, RoomOptions, TextInputCallback, TextInputEvent
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolRunner
@@ -259,6 +259,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._root_span_context = None
         self._session_start_context = None
         self._text_input_cb: TextInputCallback | None = None
+        self._audio_input_options: AudioInputOptions | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
     # --- state ---------------------------------------------------------------------------
@@ -393,6 +394,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if chat_ctx is not None:
             self._chat_ctx = chat_ctx.copy()
         options = room_options if is_given(room_options) else RoomOptions()
+        self._audio_input_options = options.get_audio_input_options()
         text_input = options.get_text_input_options()
         self._text_input_cb = text_input.text_input_cb if text_input is not None else None
         # the job's session (on its room, or the console's) records and reports for the job and
@@ -909,6 +911,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_close(self, wire: dict[str, Any]) -> None:
         self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=None))
+        # a frame processor given directly is the room input's for the session's life
+        audio_in = self._audio_input_options
+        if audio_in is not None and isinstance(audio_in.noise_cancellation, rtc.FrameProcessor):
+            audio_in.noise_cancellation._close()
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
         self._recorded_events.append(arg)

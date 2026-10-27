@@ -1757,6 +1757,50 @@ def job_logs() -> None:
             print(f"{style}: the job's line, stamped with its job")
 
 
+async def noise_cancellation() -> None:
+    """The room input's denoising, as the reference applies it: AGC is off when a processor is
+    given directly, and the pre-connect head goes through the processor the live stream opened."""
+    print("== noise cancellation")
+    from livekit.agents.voice import room_io as _core_rtc
+
+    class Halve(rtc.FrameProcessor[rtc.AudioFrame]):
+        closed = False
+
+        @property
+        def enabled(self) -> bool:
+            return True
+
+        @enabled.setter
+        def enabled(self, value: bool) -> None:
+            pass
+
+        def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+            data = bytes(b // 2 for b in bytes(frame.data.cast("B")))
+            return rtc.AudioFrame(data, frame.sample_rate, 1, frame.samples_per_channel)
+
+        def _close(self) -> None:
+            self.closed = True
+
+    def agc(nc: object) -> bool:
+        options = room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=nc))
+        return options._to_core()["audio_input"]["auto_gain_control"]  # type: ignore[no-any-return]
+
+    assert agc(None) and agc(lambda params: None), "AGC is on without a direct processor"
+    assert not agc(Halve()), "AGC is off with a processor given directly"
+
+    class Publication:
+        sid = "TR_mic"
+
+    room = _core_rtc.Room(rtc.Room())
+    processor = Halve()
+    room._processors["TR_mic"] = processor
+    head = [rtc.AudioFrame(b"\x10\x00" * 240, 24000, 1, 240)]
+    publication = _core_rtc.TrackPublication(room, Publication())  # type: ignore[arg-type]
+    out = await publication._core_process_audio(head)
+    assert bytes(out[0].data.cast("B"))[:2] == b"\x08\x00", "the head skipped the processor"
+    print("noise cancellation: AGC default and pre-connect head as the reference")
+
+
 async def main() -> int:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
@@ -1876,6 +1920,7 @@ async def main() -> int:
     await tool_outcomes()
     await keyterms()
     await room_camera()
+    await noise_cancellation()
     await console()
     await job()
     await workflows()
