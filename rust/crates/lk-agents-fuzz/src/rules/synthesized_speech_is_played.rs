@@ -59,7 +59,18 @@ impl Rule for SynthesizedSpeechIsPlayed {
             let reset = inputs.accepted().any(|a| {
                 a.at > asked && a.at <= done && matches!(a.input, crate::input::Input::SinkReset { .. })
             });
-            if reset {
+            // The same from the output's own side: it reset, or reported the speech's playback
+            // cut that the driver never cut, as an avatar whose worker never answered a clear
+            // does once its timeout fires (`_clear_buffer_task`'s fallback; seeds 1468, 18097).
+            let cut_by_output = internal.steps().iter().any(|(at, step)| {
+                *at > asked
+                    && *at <= done
+                    && matches!(step,
+                        Step::Playout(PlayoutStep::SinkReset { speech: s })
+                        | Step::Playout(PlayoutStep::PlaybackFinished { speech: s, interrupted: true, .. })
+                            if s.0 == speech.id)
+            });
+            if reset || cut_by_output {
                 continue;
             }
             check.expect(

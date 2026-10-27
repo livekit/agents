@@ -7,7 +7,7 @@
 //! close will end it.
 use lk_agents_voice::agent_session::effects::{GateCause, GateOp};
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_voice::trace::{InterruptStep, SpeechStep, Step, TurnStep};
+use lk_agents_voice::trace::{InterruptStep, SpeechStep, Step, ToolStep, TurnStep};
 
 use crate::{
     authored::Authored,
@@ -79,12 +79,18 @@ fn floor_holder(r: &Recording, answered: Observed) -> Option<u64> {
     .and_then(|(_, holder)| holder)
 }
 
-/// Whether the scheduler let `speech` go by `answered`.
+/// Whether the scheduler let `speech`'s current step go by `answered`: a tool step started after
+/// its last authorization waits for the floor again (seed 17597).
 fn authorized(r: &Recording, speech: u64, answered: Observed) -> bool {
-    r.internal_view().steps().iter().any(|(at, step)| {
-        *at <= answered
-            && matches!(step, Step::Speech(SpeechStep::Authorized { speech: s }) if s.0 == speech)
-    })
+    let mut go = false;
+    for (_, step) in r.internal_view().steps().iter().filter(|(at, _)| *at <= answered) {
+        match step {
+            Step::Speech(SpeechStep::Authorized { speech: s }) if s.0 == speech => go = true,
+            Step::Tool(ToolStep::StepStarted { speech: s, .. }) if s.0 == speech => go = false,
+            _ => {}
+        }
+    }
+    go
 }
 
 /// The speech's launch hold was taken and not released by `answered`.
