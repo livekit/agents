@@ -33,10 +33,12 @@ pub const SEGMENT_ACLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum PaceEvent {
-    /// One text delta, raw. `start_time` is the TTS's alignment for it, when the TTS aligns.
+    /// One text delta, raw. `start_time` and `end_time` are the TTS's alignment for it, when the
+    /// TTS aligns.
     Text {
         raw: String,
         start_time: Option<f64>,
+        end_time: Option<f64>,
     },
     TextEnd,
     Audio {
@@ -85,8 +87,12 @@ impl PaceWarning {
     /// The reference's log line for it (`_SegmentSynchronizerImpl`).
     pub fn message(self) -> &'static str {
         match self {
-            PaceWarning::TextAfterEnd => "transcript synchronizer: text pushed after its input ended",
-            PaceWarning::AudioAfterEnd => "transcript synchronizer: audio pushed after its input ended",
+            PaceWarning::TextAfterEnd => {
+                "transcript synchronizer: text pushed after its input ended"
+            }
+            PaceWarning::AudioAfterEnd => {
+                "transcript synchronizer: audio pushed after its input ended"
+            }
             PaceWarning::PlaybackFinishedTooEarly => {
                 "transcript synchronizer: playback_finished called before text/audio input is done"
             }
@@ -118,17 +124,22 @@ struct Planned {
     offset: usize,
     /// The TTS's `start_time` for the delta this word came from, or the segment start.
     base: Option<f64>,
+    /// The TTS's `end_time` for that delta: its audio is over by then whatever the pace says.
+    limit: Option<f64>,
     /// The playhead when the word was planned: a word that arrives late starts no earlier.
     arrived: f64,
 }
 
 impl Planned {
+    /// Its delta's onset plus the hyphens before it, at the pace; no later than the delta's end.
     fn due(&self, speed: f64) -> f64 {
-        self.base.unwrap_or(0.0) + self.offset as f64 / speed
+        let paced = self.base.unwrap_or(0.0) + self.offset as f64 / speed;
+        self.limit.map_or(paced, |limit| paced.min(limit))
     }
 
     fn end(&self, speed: f64) -> f64 {
-        self.due(speed) + self.hyphens as f64 / speed
+        let (due, paced) = (self.due(speed), self.due(speed) + self.hyphens as f64 / speed);
+        self.limit.map_or(paced, |limit| paced.min(limit).max(due))
     }
 }
 
@@ -145,6 +156,8 @@ pub struct Pacer {
     offset: usize,
     base: Option<f64>,
     planned_hyphens: usize,
+    /// The TTS's `end_time` for the current aligned delta.
+    limit: Option<f64>,
     /// The words shown, each with where its audio ends. Heard are the ones whose audio ended.
     forwarded: Vec<(String, f64)>,
     /// Where the next unaligned word starts: the end of the last one shown (`None` before any).
@@ -171,6 +184,7 @@ impl Pacer {
             offset: 0,
             base: None,
             planned_hyphens: 0,
+            limit: None,
             forwarded: Vec::new(),
             cursor: None,
             front: None,
@@ -239,8 +253,8 @@ impl Pacer {
                 }
                 self.finish(position, interrupted, &mut out);
             }
-            (S::Streaming | S::AudioEnded, E::Text { raw, start_time }) => {
-                self.plan(&raw, start_time)
+            (S::Streaming | S::AudioEnded, E::Text { raw, start_time, end_time }) => {
+                self.plan(&raw, start_time, end_time)
             }
             (S::Streaming, E::TextEnd) => {
                 self.end_text();
@@ -259,13 +273,14 @@ impl Pacer {
         (self, out)
     }
 
-    fn plan(&mut self, raw: &str, start_time: Option<f64>) {
+    fn plan(&mut self, raw: &str, start_time: Option<f64>, end_time: Option<f64>) {
         self.saw_text = true;
         if let Some(t) = start_time {
             // An aligned delta is a word boundary: the held word belongs to the previous onset.
             let held = self.words.flush();
             self.plan_tokens(held);
             self.base = Some(t);
+            self.limit = end_time.filter(|end| *end >= t);
             self.offset = 0;
         }
         let tokens = self.words.push(raw);
@@ -287,6 +302,7 @@ impl Pacer {
             hyphens,
             offset: self.offset,
             base: self.base,
+            limit: self.limit,
             arrived: self.position.as_secs_f64(),
         });
         self.offset += hyphens;
@@ -354,7 +370,15 @@ impl Pacer {
         while let Some(front) = self.queue.front() {
             let (start, end) = match (self.front, front.base) {
                 (Some(timed), _) => timed,
-                (None, Some(_)) => (front.due(self.speed), front.end(self.speed)),
+                (None, Some(base)) => {
+                    let (start, end) = (front.due(self.speed), front.end(self.speed));
+                    // The next stamped delta starts where this one's audio is over: a token paced
+                    // past it (the space after a word) must not hold it back.
+                    match self.queue.get(1).and_then(|w| w.base).filter(|next| *next > base) {
+                        Some(next) => (start.min(next), end.min(next).max(start.min(next))),
+                        None => (start, end),
+                    }
+                }
                 (None, None) => {
                     let start = self.cursor.unwrap_or(0.0).max(front.arrived);
                     (start, start + front.hyphens as f64 / self.speed)
@@ -385,7 +409,18 @@ impl Pacer {
         self.forward(word, start, end, out);
     }
 
-    fn forward(&mut self, word: Planned, start_time: f64, end_time: f64, out: &mut Vec<PaceEffect>) {
+    fn forward(
+        &mut self,
+        word: Planned,
+        start_time: f64,
+        end_time: f64,
+        out: &mut Vec<PaceEffect>,
+    ) {
+        // The words are one voice: the last one's audio was over when this one's began, whatever
+        // pace it was shown at (a sentence's first word paced before its rate was known).
+        if let Some((_, end)) = self.forwarded.last_mut() {
+            *end = end.min(start_time);
+        }
         self.forwarded.push((word.visible, end_time));
         if !word.word.is_empty() {
             out.push(PaceEffect::Forward { word: word.word, start_time, end_time });
@@ -889,8 +924,10 @@ impl SyncedTextOutput {
         if SyncCore::pacer(&state).text_ended() {
             self.core.rotate(&mut state);
         }
-        let start_time = if aligned { text.start_time } else { None };
-        self.core.apply(&mut state, PaceEvent::Text { raw: text.text.clone(), start_time });
+        let (start_time, end_time) =
+            if aligned { (text.start_time, text.end_time) } else { (None, None) };
+        let raw = text.text.clone();
+        self.core.apply(&mut state, PaceEvent::Text { raw, start_time, end_time });
         Ok(())
     }
 }
@@ -1110,7 +1147,7 @@ mod tests {
     fn paced(text: &str, audio_secs: f64) -> Pacer {
         let mut p = Pacer::new(PacerOptions::default());
         for ev in [
-            PaceEvent::Text { raw: text.into(), start_time: None },
+            PaceEvent::Text { raw: text.into(), start_time: None, end_time: None },
             PaceEvent::TextEnd,
             PaceEvent::Audio { secs: audio_secs },
             PaceEvent::AudioEnd,
@@ -1135,7 +1172,7 @@ mod tests {
     // what was heard.
     #[test]
     fn events_out_of_order_are_warned_and_change_nothing() {
-        let text = || PaceEvent::Text { raw: "late".into(), start_time: None };
+        let text = || PaceEvent::Text { raw: "late".into(), start_time: None, end_time: None };
         let mut p = Pacer::new(PacerOptions::default());
         for ev in [text(), PaceEvent::TextEnd] {
             p = p.step(ev).0;
@@ -1179,8 +1216,8 @@ mod tests {
     fn an_aligned_delta_starts_where_the_voice_says() {
         let mut p = Pacer::new(PacerOptions::default());
         for ev in [
-            PaceEvent::Text { raw: "one ".into(), start_time: Some(0.0) },
-            PaceEvent::Text { raw: "two".into(), start_time: Some(1.0) },
+            PaceEvent::Text { raw: "one ".into(), start_time: Some(0.0), end_time: None },
+            PaceEvent::Text { raw: "two".into(), start_time: Some(1.0), end_time: None },
             PaceEvent::TextEnd,
             PaceEvent::Audio { secs: 2.0 },
             PaceEvent::AudioEnd,
@@ -1269,7 +1306,7 @@ mod tests {
     fn a_pause_shows_no_aligned_word_ahead_of_its_stamp() {
         let mut p = Pacer::new(PacerOptions::default());
         for (raw, at) in [("one ", 0.0), ("two ", 0.2)] {
-            p = p.step(PaceEvent::Text { raw: raw.into(), start_time: Some(at) }).0;
+            p = p.step(PaceEvent::Text { raw: raw.into(), start_time: Some(at), end_time: None }).0;
         }
         p = p.step(PaceEvent::Audio { secs: 0.4 }).0;
         let (p, effects) = p.step(PaceEvent::Position(Duration::from_millis(100)));
@@ -1278,12 +1315,85 @@ mod tests {
         assert_eq!(shown(&effects), "", "nothing after \"one\" has started by the pause at 0.1 s");
     }
 
+    // An aligned word's audio is over at the TTS's `end_time`, however long its hyphens pace it: a
+    // cut after it keeps it. Found by `cut_keeps_heard_words` (seed 7680): "Okay." stamped over the
+    // first 10 ms was paced to 0.26 s, so a cut at 0.24 s remembered nothing.
+    #[test]
+    fn an_aligned_word_ends_at_its_stamp() {
+        let mut p = Pacer::new(PacerOptions::default());
+        for (raw, at) in [("Okay. ", 0.0), ("I've ", 0.01)] {
+            let ev = PaceEvent::Text {
+                raw: raw.into(),
+                start_time: Some(at),
+                end_time: Some(at + 0.01),
+            };
+            p = p.step(ev).0;
+        }
+        p = p.step(PaceEvent::Audio { secs: 0.24 }).0;
+        let (p, _) = p.step(PaceEvent::Position(Duration::from_millis(240)));
+        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
+            position: Duration::from_millis(240),
+            interrupted: true,
+        });
+        let heard = effects.iter().find_map(|e| match e {
+            PaceEffect::Heard(h) => Some(h.text.clone()),
+            _ => None,
+        });
+        assert_eq!(heard.as_deref(), Some("Okay. I've"));
+    }
+
+    // An aligned delta's trailing space, paced a hyphen past the word, holds back no stamped word
+    // after it. Found by `cut_keeps_heard_words` (seed 27432): the space after "That's" was due at
+    // 0.26 s, so nothing after it showed while 120 ms played, and the cut remembered it all.
+    #[test]
+    fn a_paced_space_holds_back_no_stamped_word() {
+        let mut p = Pacer::new(PacerOptions::default());
+        for (raw, at, end) in
+            [("That's ", 0.0, None), ("outside ", 0.008, None), ("what", 0.016, Some(0.03))]
+        {
+            let ev = PaceEvent::Text { raw: raw.into(), start_time: Some(at), end_time: end };
+            p = p.step(ev).0;
+        }
+        p = p.step(PaceEvent::TextEnd).0;
+        let (_, effects) = p.step(PaceEvent::Position(Duration::from_millis(120)));
+        assert_eq!(shown(&effects).trim_end(), "That's outside what");
+    }
+
+    // A word's audio is over once the next one's starts: an adapted voice stamps a whole sentence,
+    // its first word paced at the standard rate until the audio ended, the rest at the segment's.
+    // Found by `cut_keeps_heard_words` (seed 7680): the first word outlasted the cut and the
+    // reply remembered nothing of the words after it.
+    #[test]
+    fn a_word_ends_where_the_next_starts() {
+        let mut p = Pacer::new(PacerOptions::default());
+        let ev =
+            PaceEvent::Text { raw: "one two three ".into(), start_time: Some(0.0), end_time: None };
+        p = p.step(ev).0;
+        p = p.step(PaceEvent::Audio { secs: 0.03 }).0;
+        // "one" shows at the start, paced at the standard rate (to 0.26 s).
+        p = p.step(PaceEvent::Position(Duration::ZERO)).0;
+        p = p.step(PaceEvent::TextEnd).0;
+        p = p.step(PaceEvent::AudioEnd).0;
+        let (p, _) = p.step(PaceEvent::Position(Duration::from_millis(25)));
+        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
+            position: Duration::from_millis(25),
+            interrupted: true,
+        });
+        let heard = effects.iter().find_map(|e| match e {
+            PaceEffect::Heard(h) => Some(h.text.clone()),
+            _ => None,
+        });
+        assert_eq!(heard.as_deref(), Some("one two"));
+    }
+
     // Each word lasts its hyphens at the speed known when it starts, as the reference computes
     // each delay when it reaches the word: a re-estimate moves the words after it, not before.
     #[test]
     fn a_word_keeps_the_speed_it_started_at() {
         let mut p = Pacer::new(PacerOptions::default());
-        p = p.step(PaceEvent::Text { raw: "one two three".into(), start_time: None }).0;
+        p = p
+            .step(PaceEvent::Text { raw: "one two three".into(), start_time: None, end_time: None })
+            .0;
         p = p.step(PaceEvent::TextEnd).0;
         p = p.step(PaceEvent::Audio { secs: 0.3 }).0;
         // The first word starts with the playback, at the standard rate (1 / 3.83 s).
