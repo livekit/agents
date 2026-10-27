@@ -534,11 +534,11 @@ class AgentRun(Generic[Run_T]):
                     continue
                 return finish(text)
 
-            # the step's calls run together; their outputs are handled in call order once every
-            # call has returned, and a cancel stops every call still running
             for fnc_call in calls:
                 self._usage.tool_calls += 1
                 record(fnc_call)
+            # a verbatim result the model goes on from is said when its tool returns; one that
+            # ends the turn waits for the other calls, as whether it is the answer depends on them
             running = {
                 fnc_call.call_id: asyncio.ensure_future(
                     run_call(fnc_call, tool_ctx, wants_tool_output)

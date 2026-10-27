@@ -129,7 +129,6 @@ async def test_a_say_cut_off_before_it_played_is_spoken_at_the_next_idle() -> No
 
 
 @pytest.mark.rule("B45", "R61")
-@pytest.mark.xfail(strict=True, reason="B45: the session warns once, without the text")
 async def test_a_model_that_cannot_say_is_asked_to_speak_the_exact_text(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

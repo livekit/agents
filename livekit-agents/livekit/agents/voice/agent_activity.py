@@ -1865,8 +1865,7 @@ class AgentActivity(RecognitionHooks):
 
     def _say_exactly(self, text: str) -> SpeechHandle:
         """Exact text, spoken as written with ``say()`` when a TTS or the realtime model can;
-        otherwise the model is asked to say it, and the session warns once that the wording is
-        not guaranteed."""
+        otherwise the model is asked to say it, with a warning each time."""
         if (
             self.tts is not None
             or (isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.supports_say)
@@ -1874,13 +1873,11 @@ class AgentActivity(RecognitionHooks):
         ):
             return self.say(text)
 
-        if not self._session._exact_speech_warned:
-            self._session._exact_speech_warned = True
-            logger.warning(
-                "no TTS and the model cannot say text as written: it is asked to, and the exact "
-                "wording is not guaranteed",
-                extra={"agent": self._agent.id},
-            )
+        logger.warning(
+            "no TTS and the model cannot say text as written: the model was asked to say it, "
+            "and the wording is not guaranteed",
+            extra={"agent": self._agent.id, "text": text},
+        )
         return self._generate_reply(instructions=SAY_EXACTLY.format(text=text), tool_choice="none")
 
     def _generate_reply(

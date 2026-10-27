@@ -261,7 +261,7 @@ class A2ADelegate(Delegate, Toolset):
             metadata[CALLER_LANE] = caller_lane
         own = None
         if shared is None:
-            # the context the expert keeps: the one the latest delegation to it recorded
+            # the latest `FunctionCall` to this endpoint holds `lk.delegation.context_id` in `extra`
             items = (
                 message_history.items
                 if isinstance(message_history, ChatContext)
