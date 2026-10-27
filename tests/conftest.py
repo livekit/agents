@@ -11,7 +11,11 @@ from typing import NamedTuple
 import pytest
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
-from livekit.agents.cli import log
+
+try:  # the reference package
+    from livekit.agents.cli.log import NOISY_LOGGERS
+except ImportError:  # livekit-agents-next: the CLI is one module
+    from livekit.agents.cli import NOISY_LOGGERS
 
 from . import concurrency
 from .agentdb_fixture import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
@@ -264,7 +268,10 @@ async def job_process():
 
 @pytest.fixture(autouse=True)
 def configure_test():
-    log._silence_noisy_loggers()
+    for name in NOISY_LOGGERS:
+        noisy = logging.getLogger(name)
+        if noisy.level == logging.NOTSET:
+            noisy.setLevel(logging.WARN)
 
 
 @pytest.fixture(scope="session", autouse=True)
