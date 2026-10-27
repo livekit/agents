@@ -459,6 +459,9 @@ pub fn guard(run: &Run, outcome: &mut Outcome) -> Option<Outcome> {
 }
 
 fn record_outcome(run: &Run, outcome: &mut Outcome) {
+    if std::env::var_os("VOICE_JOURNAL").is_some() {
+        dump_journal(&run.record);
+    }
     let (failures, expectations) = check_all(&run.record);
     outcome.failures = failures;
     outcome.expectations = expectations;
@@ -615,5 +618,22 @@ mod tests {
                 assert!(made > 0, "{} probe never reached its prerequisite", contract.id);
             }
         }
+    }
+}
+
+/// `VOICE_JOURNAL=1`: every journal step and applied input of the run, in sequence order.
+fn dump_journal(record: &crate::record::Recording) {
+    let mut lines: Vec<(u64, String)> = record
+        .journal()
+        .iter()
+        .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms   {step:?}", at.seq, at.at_ms)))
+        .collect();
+    lines.extend(record.applied().iter().map(|a| {
+        let mark = if a.accepted { ">" } else { "x" };
+        (a.at.seq, format!("{:>6} {:>7}ms {mark} {:?}", a.at.seq, a.at.at_ms, a.input))
+    }));
+    lines.sort_by_key(|(seq, _)| *seq);
+    for (_, line) in lines {
+        eprintln!("{line}");
     }
 }

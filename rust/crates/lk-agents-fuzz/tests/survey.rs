@@ -201,6 +201,8 @@ fn campaign(window: &Window) {
     let mut found: BTreeMap<String, [usize; BANDS]> = BTreeMap::new();
     // One example per contract, so a finding can be read without saving the corpus.
     let mut example: BTreeMap<String, (u64, String)> = BTreeMap::new();
+    // Every failing seed, since one contract can fail for several causes.
+    let mut failing: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     let mut exercised: BTreeMap<&'static str, u32> = BTreeMap::new();
     let mut bands: [Band; BANDS] = Default::default();
     let mut policies: BTreeMap<String, Band> = BTreeMap::new();
@@ -240,6 +242,7 @@ fn campaign(window: &Window) {
                 findings.insert((failure.contract.clone(), failure.subject.kind()));
                 if here.insert(&failure.contract) {
                     found.entry(failure.contract.clone()).or_default()[band_of] += 1;
+                    failing.entry(failure.contract.clone()).or_default().push(seed);
                 }
                 example
                     .entry(failure.contract.clone())
@@ -317,6 +320,8 @@ fn campaign(window: &Window) {
         println!("  {}  {contract}", counts.join(""));
         let (seed, _) = example[contract];
         println!("       seed {seed}: {}", rerun(seed, budget));
+        let all: Vec<String> = failing[contract].iter().map(u64::to_string).collect();
+        println!("       all: {}", all.join(" "));
     }
     println!("\ncontracts never exercised:");
     let mut idle = 0;
