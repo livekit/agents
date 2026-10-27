@@ -1434,7 +1434,8 @@ async def test_fragments_are_forwarded_and_mirrored_as_growing_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The model's fragments go to the adapter as they are; the history a reconnect reseeds from
-    still needs messages, so a speaker's fragments extend one until a pause on the model's clock."""
+    still needs messages: the model's fragments extend one until a pause on its clock, the
+    caller's until the model answers."""
     _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
@@ -1677,6 +1678,31 @@ async def test_each_caller_turn_takes_the_first_answer_after_it_began(
         for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
             session.push_audio(_silence(100))
         assert finals()[-1] == "Book it."
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_answer_with_no_start_answers_the_open_turn_without_splitting_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_transcript("user", "Where is", 1000))
+        session._handle_event({"type": "session.output_transcript.delta", "delta": "One moment."})
+        session._handle_event(_transcript("user", " my order?", 5000))
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session.push_audio(_silence(100))
+
+        assert [name for name, _ in events].count("input_speech_started") == 1
+        assert events[-2][1].transcript == "Where is my order?"
+        assert events[-1][0] == "input_speech_stopped"
     finally:
         await session.aclose()
         await model.aclose()
