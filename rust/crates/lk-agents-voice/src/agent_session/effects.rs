@@ -621,7 +621,7 @@ impl Driver {
                 self.timers.cancel(t);
             }
             // Not traced here: `Out::absorb` journalled it where it was decided.
-            E::Emit(mut ev) => {
+            E::Emit(ev) => {
                 // `on_backchannel_confirmed`: clear the realtime model's buffered audio so a
                 // "mm-hm" cannot prefix the next turn. The reference's `turn_detection not in
                 // ("manual", "realtime_llm")` guard is unported: `TurnConfig::mode` is private.
@@ -636,17 +636,18 @@ impl Driver {
                         out,
                     );
                 }
-                // The turn machine cannot mint ids (pure tier), so the utterance's shared item id
-                // is stamped here, where the emission leaves the driver.
-                if let SessionEvent::UserInputTranscribed(t) = &mut ev {
-                    let id = self.session.ids.user_transcript_item(t.is_final);
+                // The journal names the utterance's segments by one id: the realtime item's, else
+                // one minted here (the pure tier cannot). The event carries only the provider's, as
+                // the reference's STT path carries none.
+                if let SessionEvent::UserInputTranscribed(t) = &ev {
+                    let minted = self.session.ids.user_transcript_item(t.is_final);
+                    let id = t.item_id.clone().unwrap_or(minted);
                     let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
                     self.journal(Step::Turn(TurnStep::TranscriptSegment {
                         id: id.clone(),
                         text,
                         is_final: t.is_final,
                     }));
-                    t.item_id = Some(id);
                 }
                 // The user state and away deadline are decided on the way to the host.
                 self.on_session_edge(now, &ev, out);

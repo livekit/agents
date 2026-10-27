@@ -1334,8 +1334,11 @@ impl Driver {
         started_at: Option<f64>,
         out: &mut Out,
     ) {
-        let speech =
-            ServerSpeech::Transcription { text: t.transcript.clone(), is_final: t.is_final };
+        let speech = ServerSpeech::Transcription {
+            text: t.transcript.clone(),
+            is_final: t.is_final,
+            item_id: t.item_id.clone(),
+        };
         let eff = self.activity.audio_recognition.on_server(now, speech);
         out.machine().append(eff);
         if t.is_final {

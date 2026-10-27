@@ -722,8 +722,9 @@ pub enum ServerSpeech {
     Started,
     /// `input_speech_stopped`.
     Stopped,
-    /// `input_audio_transcription`: the server's transcript of the user's words.
-    Transcription { text: String, is_final: bool },
+    /// `input_audio_transcription`: the server's transcript of the user's words, and the id of
+    /// the item it transcribes (`UserInputTranscribedEvent.item_id`).
+    Transcription { text: String, is_final: bool, item_id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -456,22 +456,29 @@ impl AudioRecognition {
                 let ev = EndOfSpeechEvent { at: now, from_vad: true, silence_duration: 0.0 };
                 eff.append(self.user_speech_ended(ev));
             }
-            ServerSpeech::Transcription { text, is_final } => {
+            ServerSpeech::Transcription { text, is_final, item_id } => {
                 let mut ev = SpeechEvent::new(if is_final {
                     SpeechEventType::FinalTranscript
                 } else {
                     SpeechEventType::InterimTranscript
                 });
                 ev.alternatives = vec![lk_agents_abi::SpeechData::new("", &text)];
+                let transcript = |is_final, speaking| {
+                    let mut t = user_transcript(&ev, is_final, speaking);
+                    if let SessionEvent::UserInputTranscribed(t) = &mut t {
+                        t.item_id = Some(item_id.clone());
+                    }
+                    t
+                };
                 if is_final {
                     if text.is_empty() {
                         return eff;
                     }
-                    eff.emit(user_transcript(&ev, true, self.speaking_hint()));
+                    eff.emit(transcript(true, self.speaking_hint()));
                     self.last_final_transcript_time = Some(now);
                     self.append_final(&text);
                 } else {
-                    eff.emit(user_transcript(&ev, false, self.speaking_hint()));
+                    eff.emit(transcript(false, self.speaking_hint()));
                     self.interim_transcript = text;
                 }
             }
