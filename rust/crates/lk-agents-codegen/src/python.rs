@@ -411,6 +411,17 @@ fn imports(
                 plain.push("time");
             }
         }
+        for (module, name) in t
+            .host_fields
+            .iter()
+            .filter_map(|h| h.type_import.as_deref()?.split_once(':'))
+        {
+            match deferred.iter_mut().find(|(m, _)| m == module) {
+                Some((_, have)) if have.iter().any(|n| n == name) => {}
+                Some((_, have)) => have.push(name.to_owned()),
+                None => deferred.push((module.to_owned(), vec![name.to_owned()])),
+            }
+        }
         for f in d.fields().iter().filter(|f| !f.py_skip) {
             if f.literal.is_some() {
                 needs(&mut stdlib, "typing", "Literal");
@@ -558,8 +569,10 @@ fn imports(
         b.push('\n');
         wrote = false;
     }
-    {
-        let mut g: Vec<&(String, Vec<String>)> = third.iter().collect();
+    // Third-party, then the first-party `livekit` packages (`known-first-party`), as isort.
+    for first_party in [false, true] {
+        let mut g: Vec<&(String, Vec<String>)> =
+            third.iter().filter(|(m, _)| is_livekit(m) == first_party).collect();
         g.sort_by_key(|(m, _)| m.clone());
         for (m, names) in g {
             from_import(b, m, names);
@@ -586,8 +599,23 @@ fn imports(
     if !deferred.is_empty() {
         // Runtime imports here would be a cycle; `from __future__ import annotations` defers them.
         b.push_str("if TYPE_CHECKING:\n");
-        deferred.sort_by(|a, b| a.0.cmp(&b.0));
+        // isort's sections: third-party, first-party, then the package's own (relative).
+        let section = |m: &str| {
+            if m.starts_with('.') {
+                2
+            } else if is_livekit(m) {
+                1
+            } else {
+                0
+            }
+        };
+        deferred.sort_by(|a, b| section(&a.0).cmp(&section(&b.0)).then(a.0.cmp(&b.0)));
+        let mut last = None;
         for (m, names) in &deferred {
+            if last.is_some_and(|l| l != section(m)) {
+                b.push('\n');
+            }
+            last = Some(section(m));
             let mut line = String::new();
             from_import(&mut line, m, names);
             for l in line.lines() {
@@ -597,6 +625,11 @@ fn imports(
         b.push('\n');
     }
     Ok(())
+}
+
+/// `livekit` and its subpackages: first-party to the package's isort (`known-first-party`).
+fn is_livekit(module: &str) -> bool {
+    module == "livekit" || module.starts_with("livekit.")
 }
 
 /// One `from X import a, b`, wrapped at 100 columns, constants first then alphabetical (the

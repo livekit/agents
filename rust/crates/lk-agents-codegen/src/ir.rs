@@ -163,6 +163,8 @@ pub struct HostField {
     /// A `PrivateAttr` (`ImageContent._cache`).
     pub private: bool,
     pub doc: String,
+    /// `type_import = "module:Name"`: what the annotation names, imported under `TYPE_CHECKING`.
+    pub type_import: Option<String>,
 }
 
 /// One generated member: a property or a method, whose body is one call into `_bindings`.

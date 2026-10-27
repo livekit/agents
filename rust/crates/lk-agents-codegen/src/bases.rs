@@ -597,7 +597,6 @@ impl Writer<'_> {
         }
         self.need("typing_extensions", "Self");
         self.need("types", "TracebackType");
-        b.push_str("\n    async def aclose(self) -> None:\n        \"\"\"Close the provider and everything it opened.\"\"\"\n");
         let tasks: Vec<String> = self
             .p
             .methods
@@ -608,6 +607,11 @@ impl Writer<'_> {
                 _ => None,
             })
             .collect();
+        // With nothing of its own to close it is a no-op a provider overrides, not an omission.
+        let noqa = if tasks.is_empty() { "  # noqa: B027" } else { "" };
+        b.push_str(&format!(
+            "\n    async def aclose(self) -> None:{noqa}\n        \"\"\"Close the provider and everything it opened.\"\"\"\n"
+        ));
         for task in tasks {
             self.need("..utils", "aio");
             b.push_str(&format!(

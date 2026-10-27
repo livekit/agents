@@ -16,9 +16,10 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Generic, Literal, TypeVar
 
-from livekit import rtc
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self
+
+from livekit import rtc
 
 from .. import _bindings, _core
 from .._exceptions import APIError
@@ -225,7 +226,7 @@ class TTS(
             ),
         )
 
-    async def aclose(self) -> None:
+    async def aclose(self) -> None:  # noqa: B027
         """Close the provider and everything it opened."""
 
     async def __aenter__(self) -> Self:

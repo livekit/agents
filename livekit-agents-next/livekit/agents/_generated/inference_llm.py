@@ -13,10 +13,11 @@ from typing import TYPE_CHECKING, Literal
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
-    from ..llm import ToolChoice
     from openai.types.chat import ChatCompletionPredictionContentParam, completion_create_params
     from openai.types.shared.reasoning_effort import ReasoningEffort
     from openai.types.shared_params import Metadata
+
+    from ..llm import ToolChoice
 
 OpenAIModels = Literal[
     "openai/gpt-4o",

@@ -819,6 +819,7 @@ fn host_fields(attrs: &[syn::Attribute], outer: &str) -> Vec<HostField> {
             default_factory: get("default_factory"),
             private: get("private").is_some(),
             doc: get("doc").unwrap_or_default(),
+            type_import: get("type_import"),
         });
     };
     for m in metas(attrs) {

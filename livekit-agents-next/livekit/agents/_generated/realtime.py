@@ -17,9 +17,10 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
-from livekit import rtc
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self
+
+from livekit import rtc
 
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
@@ -123,7 +124,7 @@ class RealtimeModel(ABC):
                 reporting ``can_disable_turn_detection``.
         """
 
-    async def aclose(self) -> None:
+    async def aclose(self) -> None:  # noqa: B027
         """Close the provider and everything it opened."""
 
     async def __aenter__(self) -> Self:

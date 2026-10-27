@@ -39,6 +39,7 @@ pub struct AudioInputConfig {
     #[python(
         ty = "rtc.NoiseCancellationOptions | NoiseCancellationSelector | rtc.FrameProcessor[rtc.AudioFrame] | None",
         import = "livekit:rtc",
+        type_import = "..voice.room_io:NoiseCancellationSelector",
         default = "None"
     )]
     #[node(ty = "unknown")]
@@ -119,6 +120,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioOutputConfig {
     host_field(
         name = "next_in_chain",
         ty = "TextOutput | None",
+        type_import = "..voice.io:TextOutput",
         default = "None",
         doc = "The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."
     ),
@@ -131,7 +133,12 @@ pub struct TextOutputConfig {
     /// Otherwise, transcription is emitted as quickly as available.
     //
     // `None` is `NOT_GIVEN`: synchronise if there is an audio output. `Some(false)` disables it.
-    #[python(ty = "NotGivenOr[bool]", import = "..types:NOT_GIVEN", default = "NOT_GIVEN")]
+    #[python(
+        ty = "NotGivenOr[bool]",
+        import = "..types:NOT_GIVEN",
+        type_import = "..types:NotGivenOr",
+        default = "NOT_GIVEN"
+    )]
     #[node(ty = "boolean")]
     pub sync_transcription: Option<bool>,
     /// Speed factor of transcription synchronization with audio output.
@@ -180,6 +187,7 @@ pub struct TextInputOptions {
     #[python(
         ty = "TextInputCallback",
         import = "..voice.room_io:_default_text_input_cb",
+        type_import = "..voice.room_io:TextInputCallback",
         default = "_default_text_input_cb"
     )]
     #[node(ty = "unknown")]
@@ -215,7 +223,12 @@ pub struct AudioOutputOptions {
     #[node(ty = "unknown")]
     pub track_publish_options: Option<crate::HostRef>,
     /// The name of the audio track to publish. If not provided, default to "roomio_audio".
-    #[python(ty = "NotGivenOr[str]", import = "..types:NOT_GIVEN", default = "NOT_GIVEN")]
+    #[python(
+        ty = "NotGivenOr[str]",
+        import = "..types:NOT_GIVEN",
+        type_import = "..types:NotGivenOr",
+        default = "NOT_GIVEN"
+    )]
     #[node(ty = "string")]
     pub track_name: Option<String>,
 }

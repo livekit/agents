@@ -11,9 +11,10 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any, Literal
 
-from livekit import rtc
 from pydantic import BaseModel, Field, PrivateAttr
 from typing_extensions import TypedDict
+
+from livekit import rtc
 
 from .. import _bindings, utils
 

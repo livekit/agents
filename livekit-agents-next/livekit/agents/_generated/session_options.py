@@ -15,12 +15,13 @@ from typing_extensions import TypedDict
 from ..types import NotGivenOr
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from ..voice.agent_session import SessionConnectOptions, TextTransforms
     from ..voice.tool_executor import ToolHandlingOptions
     from ..voice.turn import EndpointingOptions, TurnDetectionMode, TurnHandlingOptions
     from .expressive import ExpressiveOptions
     from .keyterms import STTContextOptions
-    from collections.abc import Sequence
 
 
 class SessionKwargs(TypedDict):

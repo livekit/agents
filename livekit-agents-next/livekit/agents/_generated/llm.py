@@ -16,9 +16,10 @@ from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
-from livekit import rtc
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self
+
+from livekit import rtc
 
 from .. import _bindings, _core
 from .._exceptions import APIError

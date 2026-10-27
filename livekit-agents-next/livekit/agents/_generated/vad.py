@@ -17,8 +17,9 @@ from enum import Enum, unique
 from types import TracebackType
 from typing import Generic, Literal, TypeVar
 
-from livekit import rtc
 from typing_extensions import Self
+
+from livekit import rtc
 
 from ..utils import aio
 from .chat_items import MetricsMetadata
@@ -123,7 +124,7 @@ class VAD(
     def stream(self) -> VADStream:
         """Open a stream detecting speech in the audio pushed into it."""
 
-    async def aclose(self) -> None:
+    async def aclose(self) -> None:  # noqa: B027
         """Close the provider and everything it opened."""
 
     async def __aenter__(self) -> Self:

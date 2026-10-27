@@ -9,11 +9,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from livekit import rtc
 
 from ..types import NOT_GIVEN
 from ..voice.room_io import _default_text_input_cb
+
+if TYPE_CHECKING:
+    from ..types import NotGivenOr
+    from ..voice.io import TextOutput
+    from ..voice.room_io import NoiseCancellationSelector, TextInputCallback
 
 
 @dataclass
