@@ -1121,10 +1121,11 @@ class AudioRecognition:
             # A final that predates audio already pushed is stale whatever its age, so it cannot
             # take the fast path either: that case used to return immediately and drop the speech
             # the STT had not transcribed yet.
+            last_final_at = self._last_final_transcript_time
             flush_and_wait = (
                 can_flush
                 or not final_covers_audio
-                or time.time() - self._last_final_transcript_time > 0.5
+                or (last_final_at is not None and time.time() - last_final_at > 0.5)
             )
             if flush_and_wait:
                 self._final_transcript_received.clear()
