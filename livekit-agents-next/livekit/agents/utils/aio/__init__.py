@@ -1,5 +1,5 @@
 """asyncio helpers: channels, intervals and sleeps, task sets and wait groups, async tees and the
-slow-callback hook; ``duplex_unix``, a blocking Unix socket, stays for livekit-browser."""
+slow-callback hook."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from typing import Any, Generic, Protocol, TypeVar, overload, runtime_checkable
 from typing_extensions import AsyncContextManager
 
 from ...log import logger
-from . import duplex_unix
 
 __all__ = [
     "AsyncAtomicCounter",
@@ -39,7 +38,6 @@ __all__ = [
     "TaskSet",
     "WaitGroup",
     "cancel_and_wait",
-    "duplex_unix",
     "ChanEmpty",
     "Debounced",
     "debounced",

@@ -283,7 +283,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// One frame's payload (`duplex_unix._AsyncDuplex.recv_bytes`).
+/// One frame's payload.
 pub async fn read_frame<R: AsyncRead + Unpin + ?Sized>(r: &mut R) -> io::Result<Vec<u8>> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len).await?;
@@ -292,7 +292,7 @@ pub async fn read_frame<R: AsyncRead + Unpin + ?Sized>(r: &mut R) -> io::Result<
     Ok(buf)
 }
 
-/// One frame (`duplex_unix._AsyncDuplex.send_bytes`).
+/// One frame.
 pub async fn write_frame<W: AsyncWrite + Unpin + ?Sized>(w: &mut W, data: &[u8]) -> io::Result<()> {
     let len = u32::try_from(data.len()).map_err(|_| io::ErrorKind::InvalidInput)?;
     let mut buf = Vec::with_capacity(4 + data.len());
@@ -312,7 +312,7 @@ pub fn time_ms() -> i64 {
 type BoxRead = Box<dyn AsyncRead + Send + Unpin>;
 type BoxWrite = Box<dyn AsyncWrite + Send + Unpin>;
 
-/// The socket is closed (`duplex_unix.DuplexClosed`).
+/// The socket is closed.
 #[derive(Debug, thiserror::Error)]
 #[error("duplex closed")]
 pub struct Closed;
