@@ -52,7 +52,7 @@ class _VADOptions:
     deactivation_threshold_is_explicit: bool = False
 
 
-def _default_deactivation_threshold(activation_threshold: float) -> float:
+def _derived_deactivation_threshold(activation_threshold: float) -> float:
     # the hysteresis band that keeps a state from flapping around the activation threshold
     return max(activation_threshold - 0.15, 0.01)
 
@@ -144,7 +144,7 @@ class VAD(agents.vad.VAD):
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
             deactivation_threshold=deactivation_threshold
-            or _default_deactivation_threshold(activation_threshold),
+            or _derived_deactivation_threshold(activation_threshold),
             sample_rate=sample_rate,
             deactivation_threshold_is_explicit=is_given(deactivation_threshold),
         )
@@ -218,7 +218,7 @@ class VAD(agents.vad.VAD):
         elif is_given(activation_threshold) and not self._opts.deactivation_threshold_is_explicit:
             # the hysteresis band was derived, so it follows the new threshold; a band the
             # caller chose is theirs and stays, which is what a copy must do
-            resolved_deactivation = _default_deactivation_threshold(resolved_activation)
+            resolved_deactivation = _derived_deactivation_threshold(resolved_activation)
         else:
             resolved_deactivation = self._opts.deactivation_threshold
 
