@@ -101,6 +101,11 @@ def _clean_prometheus_multiproc_dir(path: str) -> None:
     prometheus_client opens one file per metric type per process and keeps it in a module-level cache, so
     deleting the files of a live process (this one included) makes it keep writing to an unlinked file and
     silently drops its metrics from /metrics.
+
+    A file only carries its writer's pid, so a pid the OS has since handed to another process keeps a dead
+    writer's file, and its series stay in the scrape until that directory is cleared some other way.
+    Telling the two apart would need the process start time, which has no portable source, and expiry by
+    file age would drop writers that are alive but idle -- the case this function exists to protect.
     """
     for filename in os.listdir(path):
         file_path = os.path.join(path, filename)
