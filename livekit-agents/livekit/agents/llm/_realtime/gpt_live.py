@@ -818,12 +818,22 @@ class GPTLiveSession(
             )
         else:
             # a pause on the model's clock ends its message even when its fragments arrived
-            # together
+            # together, and so does the caller speaking within a silence of the model's
+            user = self._speech.get("user")
             ends = (
                 speech is not None
                 and speech.end_ms is not None
                 and event.start_ms is not None
-                and event.start_ms - speech.end_ms > _MIN_SILENCE_MS
+                and (
+                    event.start_ms - speech.end_ms > _MIN_SILENCE_MS
+                    or (
+                        user is not None
+                        and user.start_ms is not None
+                        and user.end_ms is not None
+                        and speech.end_ms <= user.start_ms
+                        and user.end_ms <= event.start_ms
+                    )
+                )
             )
         if ends:
             self._end_speech(role)
@@ -886,9 +896,9 @@ class GPTLiveSession(
         """Close a speaker's message; for the user this is the end of their turn."""
         if (speech := self._speech.pop(role, None)) is None or role != "user":
             return
-        # its answer is spent: no later turn began before it
+        # its answer is spent, and with it every earlier or untimed one, for no later turn to reuse
         if (reply_ms := self._reply_ms(speech)) is not None:
-            self._answers = [a for a in self._answers if a > reply_ms]
+            self._answers = [a for a in self._answers if reply_ms < a < math.inf]
         # the final transcript goes out first, so nothing waits for one after the stop
         self.emit(
             "input_audio_transcription_completed",

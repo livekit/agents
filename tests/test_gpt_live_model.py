@@ -1773,6 +1773,85 @@ async def test_an_answer_with_no_start_answers_the_open_turn_without_splitting_i
         await model.aclose()
 
 
+async def test_a_quick_reply_answers_the_caller_and_a_barge_in_does_not_split_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller speaking within a silence of the model's ends the model's message, however
+    short the silence, so its reply is an answer; speech overlapping the model's is no such
+    silence."""
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+
+    def finals() -> list[str]:
+        return [
+            ev.transcript
+            for name, ev in events
+            if name == "input_audio_transcription_completed" and ev.is_final
+        ]
+
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_transcript("assistant", "Ready?", 0))
+        session._handle_event(_transcript("user", "Yes", 400))
+        session._handle_event(_transcript("assistant", "Great.", 800))
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session.push_audio(_silence(100))
+        assert finals() == ["Yes"]
+
+        session._handle_event(_transcript("assistant", " Your order", 1000))
+        session._handle_event(_transcript("user", "Wait", 1300))
+        session._handle_event(_transcript("assistant", " ships", 1400))
+        session._handle_event(_transcript("user", " stop", 1600))
+        history = session._session_start_event().session.input or []
+        assert [(m.role, m.content[0].text) for m in history] == [
+            ("assistant", "Ready?"),
+            ("user", "Yes"),
+            ("assistant", "Great. Your order ships"),
+            ("user", "Wait stop"),
+        ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_untimed_answer_is_spent_with_its_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        for _ in range(20):
+            session.push_audio(_silence(100))
+        await asyncio.sleep(0.05)
+        session._handle_event(_transcript("user", "Hi", 1000))
+        session._handle_event(
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": "item_d1", "type": "delegation", "target": "client"},
+            }
+        )
+        session._handle_event({"type": "session.output_transcript.delta", "delta": "Hello."})
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session.push_audio(_silence(100))
+        assert events[-1][0] == "input_speech_stopped"
+
+        session._handle_event(_transcript("user", "Also", 5000))
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session.push_audio(_silence(100))
+        assert events[-1][0] == "input_audio_transcription_completed"
+        assert not events[-1][1].is_final
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_a_tool_call_commits_the_callers_request_before_it_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
