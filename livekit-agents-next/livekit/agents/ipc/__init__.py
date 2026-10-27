@@ -1,4 +1,4 @@
-"""The worker's job and inference processes, as the core (``_core.ProcSupervisor``,
+"""The worker's job processes, as the core (``_core.ProcSupervisor``,
 ``_core.ProcPool``) supervises and pools them: this module spawns them (``multiprocessing``, the
 forkserver's preloads), samples their memory (psutil) and hands the core the user's callbacks.
 What runs inside a process is ``ipc.child``."""
@@ -17,25 +17,18 @@ from collections.abc import Awaitable, Callable, Generator
 from enum import Enum
 from multiprocessing.context import BaseContext
 from types import FrameType
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 import psutil
 
 from .. import _core, utils
-from ..inference_runner import _RunnersDict
 from ..job import JobContext, JobExecutorType, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
 from ..utils import shortuuid
 from . import child
 
-__all__ = ["InferenceExecutor", "InferenceProcess", "JobExecutor", "JobStatus", "ProcPool"]
-
-
-class InferenceExecutor(Protocol):
-    """Runs a registered local inference runner (``JobContext.inference_executor``)."""
-
-    async def do_inference(self, method: str, data: bytes) -> bytes | None: ...
+__all__ = ["JobExecutor", "JobStatus", "ProcPool"]
 
 
 class JobStatus(Enum):
@@ -250,9 +243,6 @@ class _SupervisedProc:
         self._proc.close()
         return self._exitcode
 
-    async def _core_inference(self, method: str, data: bytes) -> bytes | None:
-        raise RuntimeError("no inference executor")
-
     def _sample_memory_mb(self) -> tuple[float, str]:
         """The process's real footprint, preferring the metrics that don't double-count shared
         pages: PSS (Linux) divides the pages shared with the forkserver among their sharers, USS
@@ -316,7 +306,6 @@ class JobExecutor(_SupervisedProc):
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         simulation_end_fnc: Callable[[Any], Any] | None,
-        inference_executor: InferenceExecutor | None,
         initialize_timeout: float,
         close_timeout: float,
         session_end_timeout: float,
@@ -353,7 +342,6 @@ class JobExecutor(_SupervisedProc):
             simulation_end_fnc=simulation_end_fnc,
             session_end_timeout=session_end_timeout,
         )
-        self._inference_executor = inference_executor
         self._id = shortuuid("THEXEC_" if thread else "PCEXEC_")
 
     @property
@@ -397,12 +385,6 @@ class JobExecutor(_SupervisedProc):
         self._job_status = JobStatus.SUCCESS if exitcode == 0 else JobStatus.FAILED
         return exitcode
 
-    async def _core_inference(self, method: str, data: bytes) -> bytes | None:
-        if self._inference_executor is None:
-            logger.warning("inference request received but no inference executor")
-            return await super()._core_inference(method, data)
-        return await self._inference_executor.do_inference(method, data)
-
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the process"""
         if self._running_job is not None:
@@ -433,58 +415,6 @@ class JobExecutor(_SupervisedProc):
         return extra
 
 
-class InferenceProcess(_SupervisedProc):
-    """The process running the registered local inference runners, for every job's
-    ``do_inference``."""
-
-    _process_kind = "inference"
-
-    def __init__(
-        self,
-        *,
-        runners: _RunnersDict,
-        mp_ctx: BaseContext,
-        loop: asyncio.AbstractEventLoop,
-        http_proxy: str | None,
-        initialize_timeout: float = 5 * 60,
-        close_timeout: float = 5,
-        memory_warn_mb: float = 2000,
-        memory_limit_mb: float = 0,  # no limit
-        ping_interval: float = 5,
-        ping_timeout: float = 60,
-        high_ping_threshold: float = 2.5,
-    ) -> None:
-        super().__init__(
-            initialize_timeout=initialize_timeout,
-            close_timeout=close_timeout,
-            memory_warn_mb=memory_warn_mb,
-            memory_limit_mb=memory_limit_mb,
-            ping_interval=ping_interval,
-            ping_timeout=ping_timeout,
-            high_ping_threshold=high_ping_threshold,
-            mp_ctx=mp_ctx,
-            loop=loop,
-            http_proxy=http_proxy,
-        )
-        self._runners = runners
-
-    def _create_process(self, cch: socket.socket) -> Any:
-        from ..cli import _log_config
-
-        args = child.InferenceArgs(mp_cch=cch, runners=self._runners, log_config=_log_config)
-        return self._mp_ctx.Process(
-            target=child.inference_main, args=(args,), name="agents_inference_process"
-        )
-
-    async def do_inference(self, method: str, data: bytes) -> bytes | None:
-        if not self.started:
-            raise RuntimeError("process not started")
-        return await self._pch.do_inference(method, data)  # type: ignore[no-any-return]
-
-    def logging_extra(self) -> dict[str, Any]:
-        return {**super().logging_extra(), "inference": True}
-
-
 class ProcPool(
     utils.EventEmitter[
         Literal[
@@ -510,7 +440,6 @@ class ProcPool(
         initialize_timeout: float,
         close_timeout: float,
         session_end_timeout: float,
-        inference_executor: InferenceExecutor | None,
         job_executor_type: JobExecutorType,
         mp_ctx: BaseContext,
         memory_warn_mb: float,
@@ -527,7 +456,6 @@ class ProcPool(
             "initialize_timeout": initialize_timeout,
             "close_timeout": close_timeout,
             "session_end_timeout": session_end_timeout,
-            "inference_executor": inference_executor,
             "ping_interval": 2.5,
             "ping_timeout": 60,
             "high_ping_threshold": 0.5,

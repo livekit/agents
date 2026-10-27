@@ -1,4 +1,4 @@
-"""What runs inside a job or inference process (or a job thread): the handshake with the
+"""What runs inside a job process (or a job thread): the handshake with the
 parent and its messages over the core's ``IpcClient``, the process's own log lines, and the job
 itself: its ``JobContext``, the steps of the shutdown the core runs (``_core.JobRun``), its spans.
 The parent's side is ``ipc/__init__.py``."""
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from multiprocessing import current_process
 
-if current_process().name in ("job_proc", "agents_inference_process"):
+if current_process().name == "job_proc":
     import signal
 
     # the parent handles the signals (and asks the process to shut down)
@@ -22,12 +22,10 @@ import contextlib
 import contextvars
 import functools
 import logging
-import math
 import os
 import socket
 import time
 from collections.abc import Awaitable, Callable, Coroutine
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 from unittest.mock import AsyncMock, create_autospec
@@ -37,7 +35,6 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import _core
-from ..inference_runner import _RunnersDict
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
@@ -60,13 +57,6 @@ class JobArgs:
     logger_levels: dict[str, int] = field(default_factory=dict)
 
 
-@dataclass
-class InferenceArgs:
-    mp_cch: socket.socket
-    runners: _RunnersDict
-    log_config: tuple[str, str] | None
-
-
 def job_main(args: JobArgs) -> None:
     # a process forked from the forkserver inherits its core: this one is a job process
     _core.init(_core.Role.Job)
@@ -79,7 +69,7 @@ def job_main(args: JobArgs) -> None:
         simulation_end_fnc=args.simulation_end_fnc,
     )
     log_to_stdout(args.log_config, args.logger_levels, job_proc.log_fields)
-    serve_parent(cast(socket.socket, args.mp_cch), job_proc, job=True)
+    serve_parent(cast(socket.socket, args.mp_cch), job_proc)
 
     import sys
     import threading
@@ -186,7 +176,6 @@ class _JobProc:
             info=info,
             room=self._room,
             run=self._run,
-            inference_executor=self._client,
         )
         # Reachable from the remote session port (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
@@ -366,56 +355,7 @@ def thread_main(args: JobArgs) -> None:
         user_arguments=args.user_arguments,
         simulation_end_fnc=args.simulation_end_fnc,
     )
-    serve_parent(cast(socket.socket, args.mp_cch), job_proc, job=True)
-
-
-def inference_main(args: InferenceArgs) -> None:
-    _core.init(_core.Role.Inference)
-    log_to_stdout(args.log_config, {}, {"pid": os.getpid(), "inference": True})
-    serve_parent(args.mp_cch, _InferenceProc(args.runners), job=False)
-
-
-class _InferenceProc:
-    def __init__(self, runners: _RunnersDict) -> None:
-        # create an instance of each runner (the ctor must not requires any argument)
-        self._runners = {name: runner() for name, runner in runners.items()}
-        self._executor = ThreadPoolExecutor(max_workers=math.ceil(_core.cpu_count()))
-
-    def initialize(self, http_proxy: str | None) -> None:
-        for runner in self._runners.values():
-            try:
-                logger.debug(
-                    "initializing inference runner",
-                    extra={"runner": runner.__class__.INFERENCE_METHOD},
-                )
-                start_time = time.perf_counter()
-                runner.initialize()
-                logger.debug(
-                    "inference runner initialized",
-                    extra={
-                        "runner": runner.__class__.INFERENCE_METHOD,
-                        "elapsed_time": time.perf_counter() - start_time,
-                    },
-                )
-            except Exception:
-                logger.exception(
-                    "error initializing inference runner",
-                    extra={"runner": runner.__class__.INFERENCE_METHOD},
-                )
-
-    # --- the parent's messages, as the core's IpcClient serves them -------------------------
-
-    async def _core_dump_stacks(self) -> None:
-        _dump_stack_traces()
-
-    async def _core_inference(self, method: str, data: bytes) -> bytes | None:
-        if method not in self._runners:
-            logger.warning("unknown inference method", extra={"method": method})
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, self._runners[method].run, data)
-
-    async def aclose(self) -> None:
-        pass
+    serve_parent(cast(socket.socket, args.mp_cch), job_proc)
 
 
 def log_to_stdout(
@@ -449,13 +389,13 @@ class _Stamp(logging.Filter):
         return True
 
 
-def serve_parent(mp_cch: socket.socket, host: Any, *, job: bool) -> None:
+def serve_parent(mp_cch: socket.socket, host: Any) -> None:
     """A child process's (or job thread's) side of the parent's socket: the handshake
     (``host.initialize(http_proxy)``), then a loop of its own on which ``_core.IpcClient.serve``
     hands the parent's messages to ``host`` until the parent goes or the child is done. A failed
     initialization returns at once (the parent was told)."""
     try:
-        client = _core.IpcClient(mp_cch.detach(), host.initialize, job=job)
+        client = _core.IpcClient(mp_cch.detach(), host.initialize)
     except Exception:
         return
     host._client = client

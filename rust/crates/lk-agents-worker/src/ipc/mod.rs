@@ -200,14 +200,6 @@ impl IpcMessage {
         }
     }
 
-    #[cfg_attr(not(feature = "python"), allow(dead_code))]
-    fn get_bytes(&self, name: &str) -> Option<&[u8]> {
-        match self.get(name) {
-            Some(Value::Bytes(b)) => Some(b),
-            _ => None,
-        }
-    }
-
     pub fn encode(&self) -> Vec<u8> {
         fn sized(b: &mut Vec<u8>, data: &[u8]) {
             b.extend_from_slice(&(data.len() as u32).to_be_bytes());

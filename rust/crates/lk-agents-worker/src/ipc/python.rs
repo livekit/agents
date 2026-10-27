@@ -9,7 +9,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -230,8 +229,8 @@ fn message(id: i32, text: Option<String>) -> IpcMessage {
     IpcMessage::new(id, text.map(Value::Str).into_iter().collect()).expect("the schema's fields")
 }
 
-/// The parent's side of one job or inference process (`ipc/supervised_proc.py`): its
-/// initialization, supervision, messages and close, from the spawn the host made to the exit.
+/// The parent's side of one job process (`ipc/__init__.py`): its initialization, supervision
+/// and close, from the spawn the host made to the exit.
 #[pyclass(name = "ProcSupervisor", module = "livekit.agents._core", frozen)]
 pub struct PyProcSupervisor {
     sup: ProcSupervisor<PyProcHost>,
@@ -239,64 +238,12 @@ pub struct PyProcSupervisor {
     initialized: watch::Sender<Option<bool>>,
     /// Set once `run` ended: the process exited and was reaped.
     ran: watch::Sender<bool>,
-    inferences: Arc<Inferences>,
     killable: bool,
 }
 
 impl PyProcSupervisor {
     fn settle(&self, initialized: bool) {
         self.initialized.send_if_modified(|v| v.is_none() && v.replace(initialized).is_none());
-    }
-}
-
-/// `msg`, an InferenceRequest, run on the host (`_core_inference(method, data)`): its
-/// InferenceResponse, with the result or the error (logged when `log_failure`).
-async fn run_inference(host: &CancellingHandle, msg: &IpcMessage, log_failure: bool) -> IpcMessage {
-    let (method, request_id) = (msg.get_str("method").to_owned(), msg.get_str("request_id").to_owned());
-    let data = msg.get_bytes("data").unwrap_or_default().to_vec();
-    let out = host.await_call(|h| h.call_method1("_core_inference", (method, PyBytes::new(h.py(), &data)))).await;
-    let (data, error) = Python::attach(|py| match out {
-        Ok(out) if out.is_none(py) => (Value::Absent, String::new()),
-        Ok(out) => match out.extract::<Vec<u8>>(py) {
-            Ok(bytes) => (Value::Bytes(bytes), String::new()),
-            Err(e) => (Value::Absent, e.value(py).to_string()),
-        },
-        Err(e) => {
-            let error = e.value(py).to_string();
-            if log_failure {
-                py_log(Level::Error, "error running inference", Some(e));
-            }
-            (Value::Absent, error)
-        }
-    });
-    IpcMessage::new(super::INFERENCE_RESPONSE, vec![Value::Str(request_id), data, Value::Str(error)])
-        .expect("the schema's fields")
-}
-
-/// One message the process sent while supervised: an inference it asks for runs on the host's
-/// `_core_inference(method, data)` and is answered; an answer to one of ours resolves it.
-async fn on_proc_message(
-    sup: ProcSupervisor<PyProcHost>,
-    inferences: Arc<Inferences>,
-    host: Arc<CancellingHandle>,
-    data: Vec<u8>,
-    inflight: &mut tokio::task::JoinSet<()>,
-) {
-    let msg = match IpcMessage::decode(&data) {
-        Ok(msg) => msg,
-        Err(e) => return log::error!(target: "livekit.agents", "invalid IPC message: {e}"),
-    };
-    match msg.id() {
-        super::INFERENCE_RESPONSE => inferences.answered(&msg),
-        super::INFERENCE_REQUEST => {
-            while inflight.try_join_next().is_some() {}
-            inflight.spawn(async move {
-                // the inference process logged its own failure
-                let reply = run_inference(&host, &msg, false).await;
-                let _ = sup.send(&reply.encode()).await;
-            });
-        }
-        _ => {}
     }
 }
 
@@ -340,7 +287,6 @@ impl PyProcSupervisor {
             sup: ProcSupervisor::new(socket(fd)?, PyProcHost(Mutex::new(Some(host))), opts),
             initialized: watch::channel(None).0,
             ran: watch::channel(false).0,
-            inferences: Arc::default(),
             killable,
         })
     }
@@ -384,37 +330,22 @@ impl PyProcSupervisor {
     }
 
     /// The process from its initialization to its exit: once the initialization settled, the
-    /// pings, the memory monitor and the messages (`_core_inference(method, data)` answers the
-    /// inferences it asks for); then `joined` (the process was reaped), `host._core_reap()` (its
-    /// exit code) and the end of the supervision.
+    /// pings and the memory monitor; then `joined` (the process was reaped), `host._core_reap()`
+    /// (its exit code) and the end of the supervision.
     fn run<'py>(slf: Bound<'py, Self>, joined: Py<PyAny>, host: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let py = slf.py();
         let host = Arc::new(CancellingHandle::new(py, host)?);
         let this = slf.get();
-        let (sup, inferences) = (this.sup.clone(), this.inferences.clone());
+        let sup = this.sup.clone();
         let mut initialized = this.initialized.subscribe();
         let ran = this.ran.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let _ = initialized.wait_for(Option::is_some).await;
             sup.supervise();
-            let serving = {
-                let (sup, inferences, host) = (sup.clone(), inferences.clone(), host.clone());
-                tokio::spawn(async move {
-                    let mut inflight = tokio::task::JoinSet::new();
-                    while let Ok(data) = sup.recv().await {
-                        on_proc_message(sup.clone(), inferences.clone(), host.clone(), data, &mut inflight).await;
-                    }
-                    // the socket closed: what is still running is cancelled once the process is reaped
-                    std::future::pending::<()>().await;
-                })
-            };
             let joined = host.await_call(|h| Ok(joined.bind(h.py()).clone())).await;
             let exitcode = joined.and_then(|_| {
                 Python::attach(|py| host.object().bind(py).call_method0("_core_reap")?.extract::<Option<i64>>())
             });
-            serving.abort();
-            let _ = serving.await;
-            inferences.clear();
             let exitcode = exitcode.unwrap_or_else(|e| {
                 Python::attach(|py| e.print(py));
                 None
@@ -455,16 +386,6 @@ impl PyProcSupervisor {
         })
     }
 
-    /// `InferenceExecutor.do_inference`: the process runs `method` on `data`.
-    fn do_inference<'py>(&self, py: Python<'py>, method: String, data: Cow<[u8]>) -> PyResult<Bound<'py, PyAny>> {
-        let (sup, inferences) = (self.sup.clone(), self.inferences.clone());
-        let data = data.into_owned();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let send = |msg: IpcMessage| async move { sup.send(&msg.encode()).await };
-            inferences.request("inference_req", method, data, send).await
-        })
-    }
-
     /// Hands the process its job: a StartJobRequest of `fields` (the message's, by name).
     fn start_job<'py>(&self, py: Python<'py>, fields: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyAny>> {
         let data = ipc_encode(py, super::START_JOB_REQUEST, fields)?.as_bytes().to_vec();
@@ -482,96 +403,19 @@ lk_agents_abi::register_host!(class PyProcSupervisor);
 
 // ----------------------------------------------------------------------------------- client
 
-/// The child's side of the parent's socket (`ipc/proc_client.py`): the initialize handshake, then
-/// it serves the parent's messages (`serve`), answers the pings itself once the child's loop has
-/// run a callback, matches the inference requests the job makes (`do_inference`) to their
-/// responses, starts the one job and acks the parent's shutdown.
+/// The child's side of the parent's socket (`ipc/child.py`): the initialize handshake, then it
+/// serves the parent's messages (`serve`), answers the pings itself once the child's loop has run
+/// a callback, starts the one job and acks the parent's shutdown.
 #[pyclass(name = "IpcClient", module = "livekit.agents._core", frozen)]
 pub struct PyIpcClient(Arc<Child>);
 
 struct Child {
     client: IpcClient,
-    inferences: Inferences,
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
-    /// A job process (its shutdown is acked, then waits for its job), not an inference process.
-    job: bool,
     /// The job the parent started, once it did.
     run: Mutex<Option<Py<PyJobRun>>>,
     asyncio_debug: bool,
-}
-
-/// An `InferenceResponse`'s data and error.
-type InferenceReply = tokio::sync::oneshot::Sender<(Option<Vec<u8>>, String)>;
-
-/// The inference requests one side of the socket sent, awaiting their `InferenceResponse`.
-#[derive(Default)]
-struct Inferences {
-    pending: Mutex<HashMap<String, InferenceReply>>,
-    last_request: AtomicU64,
-}
-
-impl Inferences {
-    /// An `InferenceResponse`: its request's answer.
-    fn answered(&self, msg: &IpcMessage) {
-        let request_id = match msg.get("request_id") {
-            Some(Value::Str(s)) => s.clone(),
-            _ => String::new(),
-        };
-        let data = match msg.get("data") {
-            Some(Value::Bytes(data)) => Some(data.clone()),
-            _ => None,
-        };
-        let error = match msg.get("error") {
-            Some(Value::Str(s)) => s.clone(),
-            _ => String::new(),
-        };
-        match lock(&self.pending).remove(&request_id) {
-            Some(reply) => {
-                let _ = reply.send((data, error));
-            }
-            None => log::warn!(
-                target: "livekit.agents", request_id = request_id.as_str();
-                "received unexpected inference response"
-            ),
-        }
-    }
-
-    /// Sends an `InferenceRequest` for `method` on `data` (ids `<prefix>_<n>`) and awaits its
-    /// answer: raises the `RuntimeError` of a failed inference, `CancelledError` once nothing
-    /// will answer.
-    async fn request<F: std::future::Future<Output = Result<(), Closed>>>(
-        &self,
-        prefix: &str,
-        method: String,
-        data: Vec<u8>,
-        send: impl FnOnce(IpcMessage) -> F,
-    ) -> PyResult<Option<Py<PyBytes>>> {
-        let n = self.last_request.fetch_add(1, Ordering::Relaxed) + 1;
-        let request_id = format!("{prefix}_{n}");
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        lock(&self.pending).insert(request_id.clone(), tx);
-        let request = IpcMessage::new(
-            super::INFERENCE_REQUEST,
-            vec![Value::Str(method.clone()), Value::Str(request_id.clone()), Value::Bytes(data)],
-        )
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        if let Err(e) = send(request).await {
-            lock(&self.pending).remove(&request_id);
-            return Err(closed(e));
-        }
-        let Ok((data, error)) = rx.await else {
-            return Err(pyo3::exceptions::asyncio::CancelledError::new_err(()));
-        };
-        if !error.is_empty() {
-            return Err(PyRuntimeError::new_err(format!("inference of {method} failed: {error}")));
-        }
-        Ok(data.map(|d| Python::attach(|py| PyBytes::new(py, &d).unbind())))
-    }
-
-    fn clear(&self) {
-        lock(&self.pending).clear();
-    }
 }
 
 impl Child {
@@ -583,7 +427,6 @@ impl Child {
     async fn on_message(
         self: &Arc<Self>,
         host: &CancellingHandle,
-        inferences: &tokio::sync::mpsc::UnboundedSender<IpcMessage>,
         msg: IpcMessage,
     ) -> PyResult<bool> {
         let str_of = |name: &str| msg.get_str(name).to_owned();
@@ -608,10 +451,6 @@ impl Child {
                 .map_err(|e| PyValueError::new_err(e.to_string()))?;
                 Ok(self.send(pong).await.is_ok())
             }
-            super::INFERENCE_RESPONSE => {
-                self.inferences.answered(&msg);
-                Ok(true)
-            }
             // the job starts once: its run ends with the parent's shutdown
             super::START_JOB_REQUEST => {
                 if lock(&self.run).is_some() {
@@ -626,14 +465,9 @@ impl Child {
                 *lock(&self.run) = Some(run);
                 Ok(true)
             }
-            // a job process acks, then ends with its job (at once without one); an inference
-            // process exits
+            // acked, then the process ends with its job (at once without one)
             super::SHUTDOWN_REQUEST => {
                 let reason = str_of("reason");
-                if !self.job {
-                    let _ = self.send(message(super::EXITING, Some(reason))).await;
-                    return Ok(false);
-                }
                 if self.send(message(super::SHUTDOWN_REQUEST_ACK, None)).await.is_err() {
                     return Ok(false);
                 }
@@ -646,9 +480,6 @@ impl Child {
                 run.get().0.end(reason, false);
                 Ok(true)
             }
-            // the inference process runs them one at a time, beside the reads: a ping is
-            // answered while inferences queue (the reference ponged from its read task)
-            super::INFERENCE_REQUEST => Ok(inferences.send(msg).is_ok()),
             super::DUMP_STACK_TRACE_REQUEST => {
                 host.await_call(|h| h.call_method0("_core_dump_stacks")).await?;
                 Ok(true)
@@ -661,13 +492,11 @@ impl Child {
 #[pymethods]
 impl PyIpcClient {
     /// The handshake on the parent's socket `fd`, blocking: the parent's InitializeRequest, then
-    /// `initialize(http_proxy)` and the answer (the error it raised, re-raised here). `job`: a job
-    /// process, else an inference process. Once initialized, the child calls itself orphaned when
+    /// `initialize(http_proxy)` and the answer (the error it raised, re-raised here). Once initialized, the child calls itself orphaned when
     /// the parent goes quiet past its `ping_timeout` (+10 s); a parent with no ping deadline (a
     /// job thread's) never does.
     #[new]
-    #[pyo3(signature = (fd, initialize, *, job))]
-    fn new(py: Python<'_>, fd: i64, initialize: Bound<'_, PyAny>, job: bool) -> PyResult<Self> {
+    fn new(py: Python<'_>, fd: i64, initialize: Bound<'_, PyAny>) -> PyResult<Self> {
         check_pid()?;
         let rt = pyo3_async_runtimes::tokio::get_runtime();
         let client = {
@@ -702,9 +531,7 @@ impl PyIpcClient {
         }
         Ok(Self(Arc::new(Child {
             client,
-            inferences: Inferences::default(),
             stop: watch::channel(false).0,
-            job,
             run: Mutex::new(None),
             asyncio_debug: matches!(req.get("asyncio_debug"), Some(Value::Bool(true))),
         })))
@@ -718,26 +545,12 @@ impl PyIpcClient {
 
     /// Serve the parent's messages until the channel closes, the shutdown ends the process, or
     /// `stop()`. `host` (on the running loop) runs `_core_start_job(fields)` (returning the job's
-    /// `JobRun`), `_core_inference(method, data)` (the result, or raises) and
-    /// `_core_dump_stacks()`, each a coroutine. The inference requests still in flight at the end
-    /// are cancelled.
+    /// `JobRun`) and `_core_dump_stacks()`, each a coroutine.
     fn serve<'py>(&self, py: Python<'py>, host: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        let host = Arc::new(CancellingHandle::new(py, host)?);
+        let host = CancellingHandle::new(py, host)?;
         let child = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut stop = child.stop.subscribe();
-            let (queue, mut queued) = tokio::sync::mpsc::unbounded_channel::<IpcMessage>();
-            let inferring = {
-                let (child, host) = (child.clone(), host.clone());
-                tokio::spawn(async move {
-                    while let Some(msg) = queued.recv().await {
-                        let reply = run_inference(&host, &msg, true).await;
-                        if child.send(reply).await.is_err() {
-                            return;
-                        }
-                    }
-                })
-            };
             let served = async {
                 while let Ok(data) = child.client.recv().await {
                     let msg = match IpcMessage::decode(&data) {
@@ -748,7 +561,7 @@ impl PyIpcClient {
                             break;
                         }
                     };
-                    if !child.on_message(&host, &queue, msg).await? {
+                    if !child.on_message(&host, msg).await? {
                         break;
                     }
                 }
@@ -758,8 +571,6 @@ impl PyIpcClient {
                 r = served => r,
                 _ = stop.wait_for(|stopped| *stopped) => Ok(()),
             };
-            inferring.abort();
-            child.inferences.clear();
             outcome
         })
     }
@@ -767,25 +578,6 @@ impl PyIpcClient {
     /// `serve` returns.
     fn stop(&self) {
         self.0.stop.send_replace(true);
-    }
-
-    /// `InferenceExecutor.do_inference`: the parent runs `method` on `data`; raises the
-    /// `RuntimeError` of a failed inference, `CancelledError` once serving ended.
-    fn do_inference<'py>(
-        &self,
-        py: Python<'py>,
-        method: String,
-        data: Cow<[u8]>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let child = self.0.clone();
-        let data = data.into_owned();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            // unique across the job processes of one worker, whose inference process answers all
-            let prefix = format!("inference_job_{:x}", std::process::id());
-            let sender = child.clone();
-            let send = |msg: IpcMessage| async move { sender.send(msg).await };
-            child.inferences.request(&prefix, method, data, send).await
-        })
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

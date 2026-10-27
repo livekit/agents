@@ -846,7 +846,7 @@ async def job_call(call: Call) -> None:
     init = {"asyncio_debug": False, "http_proxy": ""}
     init.update(ping_interval=0.0, ping_timeout=0.0, high_ping_threshold=0.0)
     parent.sendall(frame(0, init))
-    runner._client = _core.IpcClient(child.detach(), runner.initialize, job=True)
+    runner._client = _core.IpcClient(child.detach(), runner.initialize)
     reader, writer = await asyncio.open_connection(sock=parent)
 
     async def received() -> str:

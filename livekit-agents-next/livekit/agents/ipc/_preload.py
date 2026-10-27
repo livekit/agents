@@ -49,15 +49,21 @@ def _step(name: str, fnc: Callable[[], Any]) -> None:
     logger.debug("preloaded %s", name, extra={"elapsed": round(time.perf_counter() - started, 3)})
 
 
-def _local_inference_models() -> bool:
+def _shared() -> bool | None:
+    """Whether the large models load here: ``None`` when preloading is off; else whether this
+    process shares them across jobs (the forkserver, a thread executor's worker, which have no
+    multiprocessing parent) or ``LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE`` asks for them anyway; a
+    spawned job process loads only what it uses."""
     value = os.environ.get(ENV_PRELOAD_LOCAL_INFERENCE)
     if value is not None and value.strip().lower() in _FALSY:
+        return None
+    return value is not None or multiprocessing.parent_process() is None
+
+
+def _local_inference_models() -> bool:
+    if (eot := _shared()) is None:
         return False
-
-    # the EOT weights cost ~244 MB: a process without a multiprocessing parent (the forkserver,
-    # a thread executor's worker) shares them across jobs, a spawned job process would not
-    eot = value is not None or multiprocessing.parent_process() is None
-
+    # the EOT weights cost ~244 MB: loaded where every job shares them
     # the VAD and the turn detector's local end-of-turn model: constructing them later in a
     # job is free once these singletons exist (~25 ms of GIL-held CPU otherwise). The core's
     # own when the build links them natively
@@ -97,7 +103,20 @@ def _httpx_client() -> None:
     httpx2.AsyncClient()
 
 
+def _plugin_models() -> bool:
+    # the plugins' models (the turn-detector plugin's end-of-turn models, 0.2-0.9 GB each):
+    # loaded where every job shares them copy-on-write, else by each job that uses one
+    if not _shared():
+        return False
+    from ..plugin import Plugin
+
+    for plugin in Plugin.registered_plugins:
+        plugin.preload()
+    return True
+
+
 _step("the local inference models", _local_inference_models)
+_step("the plugins' models", _plugin_models)
 _step("the livekit-rtc native library", _rtc_native_library)
 _step("the openai SDK resources", _openai_resources)
 _step("the httpx client", _httpx_client)

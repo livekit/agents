@@ -6,7 +6,6 @@ from time import perf_counter
 import aiohttp
 
 from livekit.agents import LanguageCode, get_job_context, llm, utils
-from livekit.agents.inference_runner import _InferenceRunner
 
 from .base import MAX_HISTORY_TURNS, EOUModelBase, _EUORunnerBase
 from .log import logger
@@ -16,7 +15,9 @@ REMOTE_INFERENCE_TIMEOUT = 2
 
 
 class _EUORunnerMultilingual(_EUORunnerBase):
-    INFERENCE_METHOD = "lk_end_of_utterance_multilingual"
+    @classmethod
+    def runs_locally(cls) -> bool:
+        return _remote_inference_url() is None
 
     @classmethod
     def model_type(cls) -> EOUModelType:
@@ -30,9 +31,11 @@ class MultilingualModel(EOUModelBase):
             unlikely_threshold=unlikely_threshold,
             load_languages=_remote_inference_url() is None,
         )
+        if _remote_inference_url() is None:
+            _EUORunnerMultilingual.load()
 
-    def _inference_method(self) -> str:
-        return _EUORunnerMultilingual.INFERENCE_METHOD
+    def _runner(self) -> type[_EUORunnerBase]:
+        return _EUORunnerMultilingual
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
         if not language:
@@ -112,7 +115,3 @@ def _remote_inference_url() -> str | None:
     if not url_base:
         return None
     return f"{url_base}/eot/multi"
-
-
-if not _remote_inference_url():
-    _InferenceRunner.register_runner(_EUORunnerMultilingual)

@@ -9,18 +9,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from livekit import rtc
 
-    from .ipc import InferenceExecutor
     from .job import JobContext
 
 __all__ = ["fake_job_context"]
-
-
-class _NoopInferenceExecutor:
-    """Local inference is unavailable in a fake (worker-less) job; the agent under
-    test should use a remote model (e.g. inference.LLM)."""
-
-    async def do_inference(self, method: str, data: bytes) -> bytes | None:
-        raise NotImplementedError("inference executor not available in a fake job")
 
 
 @contextlib.contextmanager
@@ -30,7 +21,6 @@ def fake_job_context(
     job_id: str = "fake-job",
     job_metadata: str = "",
     agent_identity: str = "fake-agent",
-    inference_executor: InferenceExecutor | None = None,
 ) -> Iterator[JobContext]:
     """Install a fake :class:`JobContext` as the current job context, for running an
     agent in-process (tests/dev) — no worker, no AgentServer.
@@ -79,7 +69,6 @@ def fake_job_context(
         info=info,
         room=room,
         run=_core.JobRun(fake_job=True, session_end_timeout=0.0, redaction=False),
-        inference_executor=inference_executor or _NoopInferenceExecutor(),
     )
     # the caller owns the room connection (a fake job has no signal URL), so mark the
     # context connected to keep JobContext.connect() (invoked by session.start()) a no-op

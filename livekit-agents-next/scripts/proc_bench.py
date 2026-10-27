@@ -42,7 +42,6 @@ def _executor(method: str) -> JobExecutor:
         job_entrypoint_fnc=_entrypoint,
         session_end_fnc=None,
         simulation_end_fnc=None,
-        inference_executor=None,
         initialize_timeout=120,
         close_timeout=10,
         session_end_timeout=10,

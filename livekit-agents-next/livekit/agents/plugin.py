@@ -39,6 +39,10 @@ class Plugin(ABC):  # noqa: B024
     def download_files(self) -> None:  # noqa: B027
         pass
 
+    def preload(self) -> None:  # noqa: B027
+        """Load the plugin's models (blocking) where the job processes share them: the forkserver
+        on Linux, before it forks them. A plugin with models it otherwise loads per process."""
+
     @property
     def package(self) -> str:
         return self._package

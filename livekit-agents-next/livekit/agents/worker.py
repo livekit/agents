@@ -31,7 +31,6 @@ from livekit.protocol import agent, models
 
 from . import _core, ipc, telemetry, utils
 from .http import AgentHttp
-from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
     JobContext,
@@ -359,7 +358,6 @@ class _ServerHost:
     def __init__(self, server: AgentServer) -> None:
         self._server = server
         self._proc_pool: ipc.ProcPool | None = None
-        self._inference_executor: ipc.InferenceProcess | None = None
 
     def open(self, kind: str, args: Any) -> Awaitable[Any]:
         if kind == "endpoint":
@@ -401,16 +399,6 @@ class _ServerHost:
             logger.info("preloading plugins", extra={"packages": plugin_packages})
             mp_ctx.set_forkserver_preload(plugin_packages)
         loop = asyncio.get_running_loop()
-        if _InferenceRunner.registered_runners:
-            self._inference_executor = ipc.InferenceProcess(
-                runners=_InferenceRunner.registered_runners,
-                mp_ctx=mp_ctx,
-                loop=loop,
-                http_proxy=opts["pool"]["http_proxy"],
-            )
-            logger.info("starting inference executor")
-            await self._inference_executor.start()
-            await self._inference_executor.initialize()
         storage = self._server._storage
         self._proc_pool = ipc.ProcPool(
             job_entrypoint_fnc=(
@@ -420,7 +408,6 @@ class _ServerHost:
             simulation_end_fnc=door.on_simulation_end,
             loop=loop,
             job_executor_type=JobExecutorType(opts["job_executor_type"]),
-            inference_executor=self._inference_executor,
             mp_ctx=mp_ctx,
             **opts["pool"],
         )
@@ -456,8 +443,7 @@ class _ServerHost:
         return await asyncio.get_running_loop().run_in_executor(None, telemetry.metrics.exposition)
 
     async def _health(self, _: Any) -> tuple[bool, int]:
-        alive = self._inference_executor is None or self._inference_executor.is_alive()
-        return alive, len(self.active_jobs())
+        return True, len(self.active_jobs())
 
     async def _close_websockets(self, _: Any) -> None:
         # clients of an open WebSocket get a close frame and reconnect to another worker
@@ -470,8 +456,6 @@ class _ServerHost:
     async def _close(self, _: Any) -> None:
         if self._proc_pool is not None:
             await self._proc_pool.aclose()
-        if self._inference_executor is not None:
-            await self._inference_executor.aclose()
 
     def _job_status(self, proc: ipc.JobExecutor) -> None:
         if proc.running_job is not None and self._server._runtime is not None:

@@ -1309,7 +1309,7 @@ async def job() -> None:
     init = {"asyncio_debug": False, "http_proxy": ""}
     init.update(ping_interval=0.0, ping_timeout=0.0, high_ping_threshold=0.0)
     parent.sendall(frame(0, init))
-    client = await asyncio.to_thread(_core.IpcClient, child.detach(), runner.initialize, job=True)
+    client = await asyncio.to_thread(_core.IpcClient, child.detach(), runner.initialize)
     runner._client = client
     reader, writer = await asyncio.open_connection(sock=parent)
 
@@ -2000,7 +2000,7 @@ async def main(style):
         cli.setup_logging("INFO", style)
     proc = JobExecutor(
         job_entrypoint_fnc=entrypoint, session_end_fnc=None,
-        simulation_end_fnc=None, inference_executor=None, initialize_timeout=60,
+        simulation_end_fnc=None, initialize_timeout=60,
         close_timeout=10, session_end_timeout=10, memory_warn_mb=0, memory_limit_mb=0,
         ping_interval=2.5, ping_timeout=60, high_ping_threshold=1, http_proxy=None,
         mp_ctx=mp.get_context("spawn"), loop=asyncio.get_running_loop(),

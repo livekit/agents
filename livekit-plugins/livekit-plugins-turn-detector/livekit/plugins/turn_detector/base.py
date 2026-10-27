@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import math
 import re
+import threading
 import time
 import unicodedata
 from abc import ABC, abstractmethod
@@ -13,9 +15,6 @@ from typing import Any
 from huggingface_hub import errors
 
 from livekit.agents import LanguageCode, Plugin, _core, llm
-from livekit.agents.inference_runner import _InferenceRunner
-from livekit.agents.ipc import InferenceExecutor
-from livekit.agents.job import get_job_context
 
 from .log import logger
 from .models import HG_MODEL, MODEL_REVISIONS, ONNX_FILENAME, EOUModelType
@@ -43,7 +42,41 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
     return local_path
 
 
-class _EUORunnerBase(_InferenceRunner):
+class _EUORunnerBase:
+    """The end-of-turn model, run in the job's process: loaded once per process (``load``), then
+    shared by its sessions."""
+
+    _loaded: dict[type[_EUORunnerBase], concurrent.futures.Future[_EUORunnerBase]] = {}
+    _loading = threading.Lock()
+
+    @classmethod
+    def runs_locally(cls) -> bool:
+        """Whether the model runs in this process (else a remote service answers)."""
+        return True
+
+    @classmethod
+    def load(cls, *, before_fork: bool = False) -> concurrent.futures.Future[_EUORunnerBase]:
+        """The process's model, loading on a thread of its own the first time. ``before_fork``:
+        loaded here, in a process that forks the job processes (the forkserver), with no thread
+        left behind, the inference single-threaded (a thread pool would not survive the fork)."""
+        with cls._loading:
+            if (loaded := cls._loaded.get(cls)) is None:
+                loaded = cls._loaded[cls] = concurrent.futures.Future()
+
+                def _load() -> None:
+                    try:
+                        runner = cls()
+                        runner.initialize(threads=1 if before_fork else None)
+                        loaded.set_result(runner)
+                    except BaseException as e:
+                        loaded.set_exception(e)
+
+                if before_fork:
+                    _load()
+                else:
+                    threading.Thread(target=_load, name=f"{cls.__name__}_load", daemon=True).start()
+            return loaded
+
     @classmethod
     @abstractmethod
     def model_type(cls) -> EOUModelType: ...
@@ -92,7 +125,7 @@ class _EUORunnerBase(_InferenceRunner):
         text = convo_text[:ix]
         return text
 
-    def initialize(self) -> None:
+    def initialize(self, threads: int | None = None) -> None:
         logger = logging.getLogger("transformers")
 
         class _SuppressSpecific(logging.Filter):
@@ -125,7 +158,7 @@ class _EUORunnerBase(_InferenceRunner):
                 local_files_only=True,
             )
             sess_options = ort.SessionOptions()
-            sess_options.intra_op_num_threads = max(
+            sess_options.intra_op_num_threads = threads or max(
                 1, min(math.ceil(_core.CpuMonitor().cpu_count()) // 2, 4)
             )
             sess_options.inter_op_num_threads = 1
@@ -151,13 +184,7 @@ class _EUORunnerBase(_InferenceRunner):
                 f"Could not find model {HG_MODEL} with revision {revision}."
             ) from None
 
-    def run(self, data: bytes) -> bytes | None:
-        data_json = json.loads(data)
-        chat_ctx = data_json.get("chat_ctx", None)
-
-        if not chat_ctx:
-            raise ValueError("chat_ctx is required on the inference input data")
-
+    def run(self, chat_ctx: list[dict[str, Any]]) -> dict[str, Any]:
         start_time = time.perf_counter()
         text = self._format_chat_ctx(chat_ctx)
         inputs = self._tokenizer(
@@ -172,12 +199,11 @@ class _EUORunnerBase(_InferenceRunner):
         eou_probability = outputs[0].flatten()[-1]
         end_time = time.perf_counter()
 
-        result: dict[str, Any] = {
+        return {
             "eou_probability": float(eou_probability),
             "duration": round(end_time - start_time, 3),
             "input": text,
         }
-        return json.dumps(result).encode()
 
     @classmethod
     def _download_files(cls) -> None:
@@ -199,19 +225,21 @@ class EOUPlugin(Plugin):
     def download_files(self) -> None:
         self._runner_class._download_files()
 
+    def preload(self) -> None:
+        if self._runner_class.runs_locally():
+            self._runner_class.load(before_fork=True).result()
+
 
 class EOUModelBase(ABC):
     def __init__(
         self,
         model_type: EOUModelType = "en",  # default to smaller, english-only model
-        inference_executor: InferenceExecutor | None = None,
         # if set, overrides the per-language threshold tuned for accuracy.
         # not recommended unless you're confident in the impact.
         unlikely_threshold: float | None = None,
         load_languages: bool = True,
     ) -> None:
         self._model_type = model_type
-        self._executor = inference_executor or get_job_context().inference_executor
         self._unlikely_threshold = unlikely_threshold
         self._languages: dict[str, Any] = {}
 
@@ -234,7 +262,7 @@ class EOUModelBase(ABC):
         return "livekit"
 
     @abstractmethod
-    def _inference_method(self) -> str: ...
+    def _runner(self) -> type[_EUORunnerBase]: ...
 
     async def unlikely_threshold(self, language: LanguageCode | None) -> float | None:
         if language is None:
@@ -281,14 +309,9 @@ class EOUModelBase(ABC):
                 )
 
         messages = messages[-MAX_HISTORY_TURNS:]
-        json_data = json.dumps({"chat_ctx": messages}).encode()
-
-        result = await asyncio.wait_for(
-            self._executor.do_inference(self._inference_method(), json_data), timeout=timeout
-        )
-        assert result is not None, "end_of_utterance prediction should always returns a result"
-
-        result_json: dict[str, Any] = json.loads(result.decode())
+        # the model loads once per process, started with the first model made in it
+        runner = await asyncio.wrap_future(self._runner().load())
+        result_json = await asyncio.wait_for(asyncio.to_thread(runner.run, messages), timeout)
         log_extra = {**result_json}
         if "input" in log_extra:
             log_extra["lk.pii.input"] = log_extra.pop("input")

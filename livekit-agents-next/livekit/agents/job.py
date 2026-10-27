@@ -67,7 +67,6 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
 if TYPE_CHECKING:
-    from .ipc import InferenceExecutor
     from .llm import ChatContext
     from .metrics import ModelUsage
     from .simulation import SimulationContext
@@ -225,7 +224,6 @@ class JobContext:
         info: RunningJobInfo,
         room: rtc.Room,
         run: _core.JobRun,
-        inference_executor: InferenceExecutor,
     ) -> None:
         self._proc = proc
         self._info = info
@@ -233,7 +231,6 @@ class JobContext:
         # the participant entrypoints, the connection, the API calls and the recording's setup
         self._run = run
         self._room.on("participant_connected", self._participant_available)
-        self._inf_executor = inference_executor
 
         self._log_fields: dict[str, Any] = {}
         self._log_filter = _ContextLogFieldsFilter(self)
@@ -406,10 +403,6 @@ class JobContext:
     @property
     def session_directory(self) -> Path:
         return Path(self._session_directory)
-
-    @property
-    def inference_executor(self) -> InferenceExecutor:
-        return self._inf_executor
 
     @property
     def tagger(self) -> Tagger:
