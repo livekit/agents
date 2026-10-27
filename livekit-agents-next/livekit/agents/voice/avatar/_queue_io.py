@@ -64,7 +64,7 @@ class QueueAudioOutput(
         while True:
             try:
                 self._data_ch.recv_nowait()
-            except utils.aio.channel.ChanEmpty:
+            except utils.aio.ChanEmpty:
                 break
         self.emit("clear_buffer")  # type: ignore
 

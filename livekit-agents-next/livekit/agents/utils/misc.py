@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import functools
+import inspect
+import logging
 import os
 import platform
 import re
 import string
 import time
 import uuid
-from typing import Any, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar, cast
 from urllib.parse import urlparse
 
 from typing_extensions import TypeIs
@@ -106,3 +110,70 @@ def safe_render(template: str, data: dict[str, object]) -> str:
             return str(super().format_field(value, format_spec))
 
     return _Fmt().vformat(template, (), resolved)
+
+
+def resolve_env_var(val: NotGivenOr[str], *env_vars: str, default: str = "") -> str:
+    """
+    Resolve an environment variable from a list of potential sources.
+
+    Args:
+        val: The value to resolve.
+        *env_vars: The environment variables to check. Order matters, the first non-None value will be returned.
+        default: The default value to return if no environment variables are set.
+
+    Returns:
+        The resolved environment variable.
+
+    Examples:
+    >>> resolve_env_var(
+    ...     NOT_GIVEN,
+    ...     "ABC_URL",
+    ...     default="https://agent-gateway.livekit.cloud/v1",
+    ... )
+    "https://agent-gateway.livekit.cloud/v1"
+    """
+    if is_given(val):
+        return val
+    for env_var in env_vars:
+        curr_val = os.getenv(env_var, None)
+        if curr_val is not None and curr_val != "":
+            return curr_val
+    return default
+
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def log_exceptions(msg: str = "", logger: logging.Logger = logging.getLogger()) -> Callable[[F], F]:  # noqa: B008
+    def deco(fn: F) -> F:
+        if inspect.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def async_fn_logs(*args: Any, **kwargs: Any) -> Any:
+                try:
+                    return await fn(*args, **kwargs)
+                except Exception:
+                    err = f"Error in {fn.__name__}"
+                    if msg:
+                        err += f" – {msg}"
+                    logger.exception(err)
+                    raise
+
+            return cast(F, async_fn_logs)
+
+        else:
+
+            @functools.wraps(fn)
+            def fn_logs(*args: Any, **kwargs: Any) -> Any:
+                try:
+                    return fn(*args, **kwargs)
+                except Exception:
+                    err = f"Error in {fn.__name__}"
+                    if msg:
+                        err += f" – {msg}"
+                    logger.exception(err)
+                    raise
+
+            return cast(F, fn_logs)
+
+    return deco

@@ -796,7 +796,7 @@ class RealtimeSession(  # noqa: F811
                 tool_result = self._tool_results_ch.recv_nowait()
                 logger.debug(f"[TOOL] Draining pending result: {tool_result['tool_use_id']}")
                 await self._send_tool_events(tool_result["tool_use_id"], tool_result["tool_result"])
-            except utils.aio.channel.ChanEmpty:
+            except utils.aio.ChanEmpty:
                 logger.debug("[SESSION] No more pending tool results")
                 break
             except Exception as e:
@@ -2011,7 +2011,7 @@ class RealtimeSession(  # noqa: F811
             try:
                 discarded = self._tool_results_ch.recv_nowait()
                 logger.debug(f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}")
-            except utils.aio.channel.ChanEmpty:
+            except utils.aio.ChanEmpty:
                 break
         await self._graceful_session_recycle()
 
@@ -2085,7 +2085,7 @@ class RealtimeSession(  # noqa: F811
                             # Create new task for next audio
                             audio_task = asyncio.create_task(self._audio_input_chan.recv())
                             pending.add(audio_task)
-                        except utils.aio.channel.ChanClosed:
+                        except utils.aio.ChanClosed:
                             logger.warning("audio input channel closed")
                             break
 
@@ -2112,7 +2112,7 @@ class RealtimeSession(  # noqa: F811
                             # Create new task for next tool result
                             tool_task = asyncio.create_task(self._tool_results_ch.recv())
                             pending.add(tool_task)
-                        except utils.aio.channel.ChanClosed:
+                        except utils.aio.ChanClosed:
                             logger.warning("tool results channel closed")
                             break
 

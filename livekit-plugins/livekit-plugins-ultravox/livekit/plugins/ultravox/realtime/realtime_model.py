@@ -490,12 +490,12 @@ class RealtimeSession(
 
     def _send_client_event(self, event: UltravoxEvent | dict[str, Any]) -> None:
         """Send an event to the Ultravox WebSocket."""
-        with contextlib.suppress(utils.aio.channel.ChanClosed):
+        with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(event)
 
     def _send_audio_bytes(self, audio_data: bytes) -> None:
         """Send audio bytes to the Ultravox WebSocket via message channel."""
-        with contextlib.suppress(utils.aio.channel.ChanClosed):
+        with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(audio_data)
 
     @utils.log_exceptions(logger=logger)

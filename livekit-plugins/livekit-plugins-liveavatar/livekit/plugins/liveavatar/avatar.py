@@ -217,7 +217,7 @@ class AvatarSession(BaseAvatarSession):
             yield frame
 
     def send_event(self, msg: dict) -> None:
-        with contextlib.suppress(utils.aio.channel.ChanClosed):
+        with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(msg)
 
     async def _main_task(self) -> None:

@@ -436,7 +436,7 @@ class RealtimeSession(
         return self._tools
 
     def _send(self, event: ClientEvent) -> None:
-        with contextlib.suppress(utils.aio.channel.ChanClosed):
+        with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(event)
 
     @utils.log_exceptions(logger=logger)

@@ -431,7 +431,7 @@ class GPTVoiceSession(
     # outbound
 
     def send_event(self, event: types.ClientEvent | dict[str, Any]) -> None:
-        with contextlib.suppress(utils.aio.channel.ChanClosed):
+        with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(event)
 
     def _build_delegation(self) -> types.Delegation:
@@ -769,7 +769,7 @@ class GPTVoiceSession(
             num_channels=NUM_CHANNELS,
             samples_per_channel=len(data) // 2,
         )
-        with contextlib.suppress(utils.aio.channel.ChanClosed):
+        with contextlib.suppress(utils.aio.ChanClosed):
             self._audio_ch.send_nowait(llm.DuplexAudioFrame(frame=frame))
 
     def _handle_transcript_delta(self, role: Role, event: types.TranscriptDeltaEvent) -> None:

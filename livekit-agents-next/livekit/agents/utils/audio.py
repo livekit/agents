@@ -10,7 +10,7 @@ from numpy.typing import DTypeLike
 from livekit import rtc
 
 from .. import _core
-from .aio.utils import cancel_and_wait
+from .aio import cancel_and_wait
 
 # the buffer type and frame helpers plugins use
 AudioBuffer = list[rtc.AudioFrame] | rtc.AudioFrame

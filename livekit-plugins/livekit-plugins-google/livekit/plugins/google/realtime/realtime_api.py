@@ -828,7 +828,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._send_client_event(realtime_input)
 
     def _send_client_event(self, event: ClientEvents) -> None:
-        with contextlib.suppress(utils.aio.channel.ChanClosed):
+        with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(event)
 
     def generate_reply(

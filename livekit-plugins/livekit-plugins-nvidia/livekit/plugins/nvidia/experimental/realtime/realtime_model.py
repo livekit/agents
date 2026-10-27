@@ -525,7 +525,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             if opus_bytes:
                 # Prepend audio message type
                 message = bytes([MSG_AUDIO]) + opus_bytes
-                with contextlib.suppress(utils.aio.channel.ChanClosed):
+                with contextlib.suppress(utils.aio.ChanClosed):
                     self._msg_ch.send_nowait(message)
         except (TypeError, ValueError) as e:
             logger.warning(f"Skipping invalid audio frame in _encode_and_send: {e}")
@@ -559,7 +559,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 num_channels=NUM_CHANNELS,
                 samples_per_channel=len(pcm_int16),
             )
-            with contextlib.suppress(utils.aio.channel.ChanClosed):
+            with contextlib.suppress(utils.aio.ChanClosed):
                 gen.audio_ch.send_nowait(frame)
 
             # Reset silence timer on every audio frame
@@ -587,7 +587,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             gen = self._current_generation
             assert gen is not None
 
-            with contextlib.suppress(utils.aio.channel.ChanClosed):
+            with contextlib.suppress(utils.aio.ChanClosed):
                 gen.text_ch.send_nowait(text)
             gen.output_text += text
 
