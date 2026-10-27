@@ -110,8 +110,10 @@ pub(crate) fn allowance_ms(journal: &[(Observed, Step)], at_ms: u64) -> u64 {
         .iter()
         .take_while(|(a, _)| a.at_ms <= at_ms)
         .filter_map(|(_, s)| match s {
+            // The larger bound: a minimum set above the maximum is the delay waited (seed 62945).
             Step::Core(CoreStep::ConfigApplied { effective, .. }) => {
-                effective.turn.endpointing.max_delay
+                let e = &effective.turn.endpointing;
+                e.max_delay.max(e.min_delay)
             }
             _ => None,
         })

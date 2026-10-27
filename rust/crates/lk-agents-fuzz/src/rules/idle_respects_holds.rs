@@ -9,7 +9,7 @@ use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::{Input, Ref},
-    record::{Answer, Detail, Kind, Observed, Recording},
+    record::{Answer, ApiCallView, Detail, Kind, Observed, Recording},
 };
 
 pub struct IdleRespectsHolds;
@@ -35,12 +35,53 @@ impl Rule for IdleRespectsHolds {
             })
             .map(|(at, ())| at)
             .collect();
-        for call in host.api_calls() {
-            let Some((answered, Answer::IdleOk)) = call.returned() else { continue };
+        // Each answered waiter takes the first admission not yet taken between its call and its
+        // answer: a waiter naming its own hold first, while that hold is live (it passes at once),
+        // then the rest in call order, a waiter whose named hold was released among them.
+        // Answers reach the host when awaited, often after a later waiter's admission (seeds
+        // 60080, 38465, 67).
+        let mut calls: Vec<_> = host
+            .api_calls()
+            .into_iter()
+            .filter(|c| matches!(c.returned(), Some((_, Answer::IdleOk))))
+            .filter(|c| matches!(c.input(), Input::WaitForIdle { .. }))
+            .collect();
+        calls.sort_by_key(|c| c.called_at());
+        let holds = host.holds();
+        let mut taken = vec![false; admissions.len()];
+        let mut take = |call: &ApiCallView, by_own_hold: Option<u32>| {
+            let (called, (answered, _)) = (call.called_at(), call.returned()?);
+            let i = (0..admissions.len()).find(|&i| {
+                let a = admissions[i];
+                !taken[i]
+                    && a >= called
+                    && a < answered
+                    && by_own_hold.is_none_or(|nth| {
+                        holds.iter().any(|h| {
+                            h.nth() == nth && h.released_at().is_none_or(|released| released > a)
+                        })
+                    })
+            })?;
+            taken[i] = true;
+            Some(admissions[i])
+        };
+        let mut admitted_at = vec![None; calls.len()];
+        for (k, call) in calls.iter().enumerate() {
+            if let Input::WaitForIdle { hold: Some(own) } = call.input() {
+                admitted_at[k] = take(call, Some(own.nth));
+            }
+        }
+        for (k, call) in calls.iter().enumerate() {
+            if admitted_at[k].is_none() {
+                admitted_at[k] = take(call, None);
+            }
+        }
+        for (call, admitted) in calls.iter().zip(admitted_at) {
+            let Some((answered, _)) = call.returned() else { continue };
             let Input::WaitForIdle { hold: own } = call.input() else { continue };
-            let at = admissions.iter().rev().find(|a| **a < answered).copied().unwrap_or(answered);
+            let at = admitted.unwrap_or(answered);
 
-            for hold in host.holds() {
+            for hold in &holds {
                 // A hold taken after the call, or the waiter's own hold, does not bind it.
                 if hold.taken_at() > at || own.map(|o| o.nth) == Some(hold.nth()) {
                     continue;
@@ -48,7 +89,7 @@ impl Rule for IdleRespectsHolds {
                 // Every other hold taken before the call must have been released before it too.
                 let released = hold.released_at().is_some_and(|released| released < at);
                 check.expect(
-                    &call,
+                    call,
                     released,
                     format!("idle answered while hold {} was outstanding", hold.nth()),
                 );

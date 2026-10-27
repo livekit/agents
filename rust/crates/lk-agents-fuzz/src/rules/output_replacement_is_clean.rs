@@ -42,13 +42,18 @@ impl Rule for OutputReplacementIsClean {
         for output in host.outputs() {
             // The next instance of the same kind; until one exists this output is still current.
             let Some(replaced_at) = output.replaced_at() else { continue };
-            // When the driver swapped the new one in: until then this one was still current.
+            // When the driver swapped the new one in: until then this one was still current. Its
+            // own command's swap, not an earlier attach's handled in the same burst (seed 49224).
+            let asked = r
+                .inputs_view()
+                .attach_received(output.is_audio(), replaced_at)
+                .unwrap_or(replaced_at);
             let swapped = r
                 .internal_view()
                 .steps()
                 .iter()
                 .find(|(at, step)| {
-                    *at >= replaced_at
+                    *at >= asked
                         && matches!(step, Step::Playout(PlayoutStep::OutputReplaced { .. }))
                 })
                 .map_or(replaced_at, |(at, _)| *at);
@@ -76,7 +81,11 @@ impl Rule for OutputReplacementIsClean {
             let (mut swap_flush, mut close_flush) = (text, text);
             for (at, sink) in output.received() {
                 let owed = at < swapped
-                    || running.is_some_and(|end| at <= end)
+                    // The synchroniser releases a step's heard words as its playback finishes,
+                    // reaching the text output in that same instant (seed 88522).
+                    || running.is_some_and(|end| {
+                        at <= end || (!output.is_audio() && at.at_ms == end.at_ms)
+                    })
                     || (matches!(sink, Sink::Resumed { .. }) && std::mem::take(&mut release_owed))
                     || (matches!(sink, Sink::TextFlush { .. })
                         && if at < close {

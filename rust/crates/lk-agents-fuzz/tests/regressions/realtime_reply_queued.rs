@@ -31,8 +31,9 @@ fn heard(r: &Recording, n: u32) -> bool {
 // It waits for the server's reply and goes after it, one at a time, as speeches are scheduled.
 #[test]
 fn a_reply_crossing_the_servers_own_waits_and_is_heard() {
+    // Only a server with its own turn detection opens a reply unasked (its idle timeout).
     let setup = Setup {
-        realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }),
+        realtime: Some(RealtimeSetup { turn_detection: true, ..RealtimeSetup::default() }),
         ..Setup::default()
     };
     let r = realtime(setup, &[

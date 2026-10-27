@@ -12,7 +12,7 @@ use lk_agents_voice::{
     agent_session::{HookId, HookKind, Tx},
     events::SessionEvent,
     speech_handle::SpeechHandle,
-    trace::{HandoffStep, HookEnd, Step},
+    trace::{HandoffStep, HookEnd, SpeechStep, Step},
 };
 
 use crate::{
@@ -93,8 +93,11 @@ impl Rule for DrainAnswersOnceSettled {
                     continue;
                 };
                 let id = speech.id();
+                // Refused by the paused scheduler: it never takes the floor, and the reference's
+                // drain, already past its wait, does not wait for it either (seed 82527).
                 let done = before.iter().any(|(_, s)| {
                     matches!(s, Step::Emitted(SessionEvent::SpeechDone { speech: d, .. }) if *d == id)
+                        || matches!(s, Step::Speech(SpeechStep::ScheduleRejected { speech: d, .. }) if *d == id)
                 });
                 check.expect(
                     &call,

@@ -72,6 +72,10 @@ impl Rule for SpeechIsHeard {
                 }) => {
                     pushed.entry(speech.0).or_insert(at.at_ms);
                 }
+                // The console's speaker plays a speech with no sink push (seed 83204).
+                Step::Speech(SpeechStep::AgentStartedSpeaking { speech }) => {
+                    pushed.entry(speech.0).or_insert(at.at_ms);
+                }
                 Step::Emitted(SessionEvent::SpeechDone { speech, outcome }) => {
                     done.entry(speech.0).or_insert((at.at_ms, *outcome));
                 }
@@ -242,6 +246,14 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     if OWED.iter().any(|k| open(*k)) {
         return Some("owed by the case");
     }
+    // A voice asked before the bound whose first audio comes on its own clock after it: the
+    // model answered late, and the voice's time to first audio is still running (seed 62764).
+    let voicing = r.opened().iter().filter(|o| o.kind == Kind::Tts && before(&o.at)).any(|o| {
+        r.delivered().get(&(Kind::Tts, o.nth)).is_some_and(|at| !before(at))
+    });
+    if voicing {
+        return Some("the voice's first audio");
+    }
     let journal: Vec<&(Observed, Step)> = r.journal().iter().filter(|(a, _)| before(a)).collect();
     let last = |pick: &dyn Fn(&Step) -> Option<bool>| journal.iter().filter_map(|(_, s)| pick(s)).last();
     let held = last(&|s| match s {
@@ -335,6 +347,20 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     });
     if speaking == Some(true) {
         return Some("the person speaking");
+    }
+    // The person stopped, and their turn's end is still being decided (seed 99458).
+    let endpointing = last(&|s| match s {
+        Step::Core(CoreStep::TimerArmed { timer: TimerName::Session(Timer::EndpointingDelay), .. }) => {
+            Some(true)
+        }
+        Step::Core(
+            CoreStep::TimerCancelled(TimerName::Session(Timer::EndpointingDelay))
+            | CoreStep::TimerFired(TimerName::Session(Timer::EndpointingDelay), _),
+        ) => Some(false),
+        _ => None,
+    });
+    if endpointing == Some(true) {
+        return Some("the person's turn being decided");
     }
     // The floor's holder, if another speech: waiting behind it is right while it plays, or while
     // it sits paused for the person's speech no longer than `pause_resolves` allows; not after.

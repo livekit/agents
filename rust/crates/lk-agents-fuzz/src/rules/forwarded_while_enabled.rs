@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use lk_agents_voice::agent_session::IoKind;
 use lk_agents_voice::agent_session::effects::DetectorCall;
-use lk_agents_voice::trace::{InputStep, Step};
+use lk_agents_voice::trace::{InputStep, RoomEventKind, RoomStep, Step};
 
 use crate::{
     authored::Authored,
@@ -83,6 +83,14 @@ impl Rule for ForwardedWhileEnabled {
             })
             .next()
             .map(|(at, ())| at);
+        // The person's track unpublished (a relink under a duplicate identity republishes it):
+        // what it still carried goes with it (seed 68376).
+        let unpublished: Vec<Observed> = r
+            .journal_where(|step| {
+                matches!(step, Step::Room(RoomStep::Event(RoomEventKind::TrackUnpublished))).then_some(())
+            })
+            .map(|(at, ())| at)
+            .collect();
         for sent in inputs.accepted() {
             let Input::MicFrames { mic, chunks: Count(chunks) } = &sent.input else { continue };
             let counter = next_chunk.entry(mic.nth).or_default();
@@ -96,7 +104,9 @@ impl Rule for ForwardedWhileEnabled {
                     continue;
                 }
                 pushed_enabled.entry((mic.nth, chunk)).or_insert(sent.at);
-                let replaced = mic_closed.get(&mic.nth).copied().into_iter().chain(detached).min();
+                let dropped = unpublished.iter().find(|at| **at > sent.at).copied();
+                let replaced =
+                    mic_closed.get(&mic.nth).copied().into_iter().chain(detached).chain(dropped).min();
                 let frame = (mic.nth, chunk);
                 expect_reached(
                     &inputs,
@@ -199,14 +209,16 @@ fn expect_reached(
         if kind == Kind::Stt && gate_closed.iter().any(|window| window.overlaps(pushed, moved_by)) {
             continue;
         }
-        // A provider swapped while the frame was on its way may hear it on either stream.
-        if reopened.iter().any(|(at, leg)| *leg == kind && pushed < *at && *at <= end) {
+        // A provider swapped while the frame was on its way, up to the turn that moves it, may
+        // hear it on either stream (seed 47240).
+        if reopened.iter().any(|(at, leg)| *leg == kind && pushed < *at && *at <= moved_by) {
             continue;
         }
         for stream in inference.streams(kind) {
             // AMD's own recogniser hears the microphone only while the detector listens
-            // (`AMD.push_audio`): not this path's to owe.
-            if !stream.open_throughout(pushed, end) || *stream.detail() == Detail::AmdStt {
+            // (`AMD.push_audio`): not this path's to owe. A stream closed before the turn that
+            // moves the frame (a recogniser failing) is owed nothing (seed 149497).
+            if !stream.open_throughout(pushed, moved_by) || *stream.detail() == Detail::AmdStt {
                 continue;
             }
             check.expect_with(

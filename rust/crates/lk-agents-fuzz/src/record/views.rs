@@ -217,6 +217,26 @@ impl<'a> InputsView<'a> {
         Switch { changes }
     }
 
+    /// When the driver received the attach of an output of a kind that handed over the instance
+    /// opened at `opened`: the last such attach the case sent by then (the harness opens the
+    /// instance as it applies the attach). `None` when the driver never received it (sent as the
+    /// session closed: seed 23504).
+    pub fn attach_received(&self, audio: bool, opened: Observed) -> Option<Observed> {
+        let mut received = self.received_commands();
+        self.accepted()
+            .filter_map(|a| {
+                let at = received(&a.input);
+                let attach = match a.input {
+                    Input::SetAudioOutput { attach } => audio && attach,
+                    Input::SetTranscriptionOutput { attach } => !audio && attach,
+                    _ => false,
+                };
+                (attach && a.at <= opened).then_some(at)
+            })
+            .last()
+            .flatten()
+    }
+
     /// When the driver received each accepted io command, in the order the case sent them: the
     /// n-th accepted command of a kind is the n-th `CommandReceived` of that kind.
     fn received_commands(&self) -> impl FnMut(&Input) -> Option<Observed> + 'a {

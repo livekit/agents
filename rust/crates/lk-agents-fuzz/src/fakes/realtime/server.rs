@@ -751,7 +751,9 @@ impl Server {
                 true
             }
             Exo::ServerResponse => {
-                if self.active.is_some() {
+                // Only the server's own turn detection opens a response unasked (its idle
+                // timeout, with `create_response`): with detection off it never does (seed 56103).
+                if self.active.is_some() || self.config.vad.is_none() || !self.config.create_response {
                     return false;
                 }
                 self.respond(now, None, None, None);
