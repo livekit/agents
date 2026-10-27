@@ -444,16 +444,7 @@ impl RealtimeMachine {
             }
 
             Command::UpdateChatCtx(lk_agents_abi::llm::realtime::UpdateChatCtx { chat_ctx }) => {
-                let (frames, mut update) = self.chat_ctx_events(&chat_ctx);
-                // An update still unconfirmed is superseded: its confirmations still settle.
-                if let Some(old) = self.ctx_update.take() {
-                    update.awaiting_create.extend(old.awaiting_create);
-                    update.awaiting_delete.extend(old.awaiting_delete);
-                    update.by_event_id.extend(old.by_event_id);
-                    update.touched.extend(old.touched);
-                }
-                self.ctx_update = update.pending().then_some(update);
-                Step { frames, ..Default::default() }
+                self.update_ctx(&chat_ctx)
             }
 
             Command::PushAudio(lk_agents_abi::llm::realtime::PushAudio { frame }) => {
@@ -585,29 +576,41 @@ impl RealtimeMachine {
                 if self.expected_ctx().get_by_id(&message_id).is_none() {
                     return Step::default();
                 }
-                if has_audio {
-                    // `audio_end_ms == 0`: interrupted before any audio played, delete the item.
-                    return Step::frame(if audio_end_ms > 0 {
-                        wire::conversation_item_truncate(&message_id, audio_end_ms)
-                    } else {
-                        wire::conversation_item_delete(
-                            &self.ids.short("chat_ctx_delete_"),
-                            &message_id,
-                        )
-                    });
+                if has_audio && audio_end_ms > 0 {
+                    return Step::frame(wire::conversation_item_truncate(&message_id, audio_end_ms));
                 }
-                let Some(transcript) = audio_transcript else { return Step::default() };
-                // Text-only truncation is a chat-context edit: rewrite the item and let the diff
-                // do the rest.
-                let mut ctx = self.remote.to_chat_ctx();
+                // Interrupted before any audio played (deleted), or text-only (rewritten): a
+                // conversation edit, tracked like any, so a later update does not do it again.
+                let mut ctx = self.expected_ctx();
                 let Some(idx) = ctx.index_by_id(&message_id) else { return Step::default() };
-                if let Some(m) = ctx.items[idx].as_message_mut() {
-                    m.content = vec![lk_agents_abi::ChatContent::Text(transcript)];
+                match audio_transcript.filter(|_| !has_audio) {
+                    Some(transcript) => {
+                        if let Some(m) = ctx.items[idx].as_message_mut() {
+                            m.content = vec![lk_agents_abi::ChatContent::Text(transcript)];
+                        }
+                    }
+                    None if has_audio => {
+                        ctx.items.remove(idx);
+                    }
+                    None => return Step::default(),
                 }
-                let (frames, _) = self.chat_ctx_events(&ctx);
-                Step { frames, ..Default::default() }
+                self.update_ctx(&ctx)
             }
         }
+    }
+
+    /// Bring the server to `chat_ctx`; an update still unconfirmed is superseded, its
+    /// confirmations still settling.
+    fn update_ctx(&mut self, chat_ctx: &ChatContext) -> Step {
+        let (frames, mut update) = self.chat_ctx_events(chat_ctx);
+        if let Some(old) = self.ctx_update.take() {
+            update.awaiting_create.extend(old.awaiting_create);
+            update.awaiting_delete.extend(old.awaiting_delete);
+            update.by_event_id.extend(old.by_event_id);
+            update.touched.extend(old.touched);
+        }
+        self.ctx_update = update.pending().then_some(update);
+        Step { frames, ..Default::default() }
     }
 
     /// `_create_session_update_event`.
