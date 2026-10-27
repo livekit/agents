@@ -70,12 +70,18 @@ impl Rule for TextConservation {
             let live_path =
                 lived.is_none_or(|(created, until)| transcription.on_throughout(created, until));
 
+            // A step cut on its own (the handle's unforced `interrupt()`) loses its words while
+            // the tool's follow-up still completes the speech.
+            let step_cut = internal.speech(speech.id).interrupted_at().is_some();
             // Nothing reaches the host that the case did not give it, and nothing is reordered:
             // what was forwarded so far is a prefix of what was given. A path closed part of the
-            // way skips the segments it missed, so then each forwarded piece only comes from the
-            // given text after the one before it.
-            let ordered =
-                if live_path { given.starts_with(&forwarded) } else { in_order(&given, &deltas) };
+            // way skips the segments it missed, and a cut step the words it never forwarded, so
+            // then each forwarded piece only comes from the given text after the one before it.
+            let ordered = if live_path && !step_cut {
+                given.starts_with(&forwarded)
+            } else {
+                in_order(&given, &deltas)
+            };
             check.expect(
                 &speech,
                 ordered,
@@ -83,10 +89,7 @@ impl Rule for TextConservation {
             );
 
             // A speech that ran to the end without interruption or error forwarded everything, as
-            // long as there was a transcript path to forward it down for the whole of its life. A
-            // step cut on its own (the handle's unforced `interrupt()`) loses its words while the
-            // tool's follow-up still completes the speech.
-            let step_cut = internal.speech(speech.id).interrupted_at().is_some();
+            // long as there was a transcript path to forward it down for the whole of its life.
             if live_path && speech.completed_normally() && speech.is_scheduled() && !step_cut {
                 check.expect(
                     &speech,

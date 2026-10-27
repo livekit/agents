@@ -7,7 +7,7 @@
 //! close will end it.
 use lk_agents_voice::agent_session::effects::{GateCause, GateOp};
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_voice::trace::{InterruptStep, Step, TurnStep};
+use lk_agents_voice::trace::{InterruptStep, SpeechStep, Step, TurnStep};
 
 use crate::{
     authored::Authored,
@@ -48,10 +48,41 @@ impl Rule for SpeechSettles {
             if held_at_launch(r, &speech, answered) && end_unheard(r, answered) {
                 continue;
             }
+            // Queued behind such a speech, never let go: it waits on the same person.
+            if let Some(holder) = floor_holder(r, answered)
+                && holder != speech.id
+                && !authorized(r, speech.id, answered)
+                && r.host_view()
+                    .speeches()
+                    .iter()
+                    .any(|h| h.id == holder && held_at_launch(r, h, answered))
+                && end_unheard(r, answered)
+            {
+                continue;
+            }
             let done = speech.done_at().is_some_and(|done| done <= answered);
             check.expect(&speech, done, format!("still running after everything was answered ({speech:?})"));
         }
     }
+}
+
+/// Who held the floor at `answered`, by the last change at or before it.
+fn floor_holder(r: &Recording, answered: Observed) -> Option<u64> {
+    r.journal_where(|step| match step {
+        Step::Emitted(SessionEvent::FloorChanged { holder }) => Some(holder.map(|h| h.0)),
+        _ => None,
+    })
+    .filter(|(at, _)| *at <= answered)
+    .last()
+    .and_then(|(_, holder)| holder)
+}
+
+/// Whether the scheduler let `speech` go by `answered`.
+fn authorized(r: &Recording, speech: u64, answered: Observed) -> bool {
+    r.internal_view().steps().iter().any(|(at, step)| {
+        *at <= answered
+            && matches!(step, Step::Speech(SpeechStep::Authorized { speech: s }) if s.0 == speech)
+    })
 }
 
 /// The speech's launch hold was taken and not released by `answered`.

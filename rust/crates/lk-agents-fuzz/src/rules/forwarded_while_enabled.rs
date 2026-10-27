@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use lk_agents_voice::agent_session::IoKind;
+use lk_agents_voice::agent_session::effects::DetectorCall;
 use lk_agents_voice::trace::{InputStep, Step};
 
 use crate::{
@@ -63,13 +64,20 @@ impl Rule for ForwardedWhileEnabled {
                 [(stt, Kind::Stt), (vad, Kind::Vad)].into_iter().filter(|(on, _)| *on).map(move |(_, k)| (at, k))
             })
             .collect();
-        // The close's edge detaches the microphone and takes the frame census in the same breath:
-        // what had not reached a stream by the census never will, whichever microphone it is on.
+        // The close's edge detaches the microphone: it asks for the frame census and closes the
+        // turn detector, and the legs' close stops the microphone's reader. What had not reached
+        // a stream by then never will, whichever microphone it is on. The census is journalled
+        // only once the data plane answers, and not at all for a close that never fed a channel
+        // a frame; the detector's close is journalled at the edge itself.
         let detached = r
             .journal_where(|step| {
                 matches!(
                     step,
-                    Step::Input(InputStep::LegFrames { .. } | InputStep::InputShape { .. })
+                    Step::Input(
+                        InputStep::LegFrames { .. }
+                            | InputStep::InputShape { .. }
+                            | InputStep::DetectorCalled(DetectorCall::Close)
+                    )
                 )
                 .then_some(())
             })
@@ -182,10 +190,13 @@ fn expect_reached(
     {
         return;
     }
+    // The pump is its own task: a frame still queued when its turn ends is moved in the next one,
+    // and a gate that closed meanwhile (published by that turn) gets it.
+    let moved_by = inputs.driver_turn_after(end).and_then(|t| t.ended).unwrap_or(Observed::END);
     for kind in LISTENERS {
-        // The gate feeds STT silence instead of the room while it is closed; a frame whose turn
+        // The gate feeds STT silence instead of the room while it is closed; a frame whose journey
         // touched a closed window may rightly have been replaced.
-        if kind == Kind::Stt && gate_closed.iter().any(|window| window.overlaps(pushed, end)) {
+        if kind == Kind::Stt && gate_closed.iter().any(|window| window.overlaps(pushed, moved_by)) {
             continue;
         }
         // A provider swapped while the frame was on its way may hear it on either stream.

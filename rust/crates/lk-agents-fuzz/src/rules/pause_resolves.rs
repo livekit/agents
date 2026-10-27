@@ -140,6 +140,13 @@ fn quiet_stretch(journal: &[(Observed, Step)], from: Observed, until: u64, bound
                 (false, None) => Some(a.at_ms),
             };
         }
+        // Their voice over the agent again (a recogniser's interim with no onset of its own, say):
+        // they spoke just now, so a quiet stretch starts over from here.
+        if let Step::Interrupt(InterruptStep::ByAudioActivity(_)) = s
+            && quiet.is_some_and(|q| q <= a.at_ms)
+        {
+            quiet = Some(a.at_ms);
+        }
     }
     quiet.filter(|q| until > q + bound)
 }

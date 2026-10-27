@@ -194,6 +194,8 @@ struct Response {
     function_call: Option<(String, String)>,
     /// The call's `response.output_item.added` was delivered.
     call_announced: bool,
+    /// The call's `response.output_item.done` was delivered: it is complete.
+    call_closed: bool,
 }
 
 /// What the glue does when the server delivers an event: give the response its source id at
@@ -397,6 +399,9 @@ impl Server {
                 }
                 "response.output_item.done" if frame["item"]["type"] == "message" => {
                     self.responses[r].closed = true;
+                }
+                "response.output_item.done" if frame["item"]["type"] == "function_call" => {
+                    self.responses[r].call_closed = true;
                 }
                 "response.done" => {
                     self.responses[r].finished = Some(now);
@@ -1052,9 +1057,11 @@ impl Server {
         } else if !announced && let Some(item) = self.responses[r as usize].item.take() {
             self.items.retain(|i| i.id != item);
         }
-        if self.responses[r as usize].call_announced || called {
+        // A call already complete stays so: its item is never done twice.
+        let resp = &self.responses[r as usize];
+        if !resp.call_closed && (resp.call_announced || called) {
             self.call_done(t, r, "incomplete");
-        } else {
+        } else if !resp.call_closed {
             self.responses[r as usize].function_call = None;
         }
         self.end_body(t, r, status, reason);

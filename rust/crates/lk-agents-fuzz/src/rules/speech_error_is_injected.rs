@@ -68,9 +68,12 @@ impl Rule for SpeechErrorIsInjected {
             // The realtime server is a simulation of the real one, and refuses and times out as
             // that does: a `response.create` over its own response, a connection slower than the
             // client's bound. What it said reached the host as the session's realtime error.
+            // The same instant counts: a server that never connects fails the reply and reports
+            // the connection timed out off one stall, the session's two bounds being equal, in
+            // either order.
             let server_erred = host.events().iter().any(|(at, ev)| {
                 matches!(ev, SessionEvent::Error(e) if e.source == ErrorSource::Realtime)
-                    && speech.done_at().is_none_or(|done| *at < done)
+                    && speech.done_at().is_none_or(|done| at.at_ms <= done.at_ms)
             }) || crate::fakes::realtime::server::REFUSALS.iter().any(|code| error.contains(code));
             let refused_by_close = inputs.close_asked_at().is_some() && !speech.is_scheduled();
             // A `say` the driver refused on its own terms -- words with no voice to speak them --

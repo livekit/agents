@@ -170,6 +170,9 @@ impl Tts for FakeTts {
             let ms = crate::corpus::draw_ms(&mut rng.lock().unwrap(), &["tts", TTS_MODEL, "first_audio"]);
             tokio::time::Instant::now() + std::time::Duration::from_millis(ms)
         });
+        if first_audio.is_some() {
+            self.registry.voice_due(slot.nth, first_audio);
+        }
         Ok((
             Box::new(InputSide(synthesis)),
             Box::new(Output {
@@ -219,6 +222,7 @@ impl StreamSource<SynthesizedAudio> for Output {
         // is reported as soon as it is known.
         if let (Ok(Some(_)), Some(at)) = (&next, self.first_audio.take()) {
             tokio::time::sleep_until(at).await;
+            self.registry.voice_due(self.slot.nth, None);
         }
         if matches!(next, Ok(Some(_))) && !std::mem::replace(&mut self.delivered, true) {
             self.registry.record_delivered(self.slot);
@@ -231,6 +235,7 @@ impl StreamSource<SynthesizedAudio> for Output {
     }
 
     async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
+        self.registry.voice_due(self.slot.nth, None);
         self.registry.mark_closed(self.slot);
         Closed::Clean
     }

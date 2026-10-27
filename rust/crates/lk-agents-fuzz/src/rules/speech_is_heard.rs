@@ -60,8 +60,10 @@ impl Rule for SpeechIsHeard {
         let mut authorized: BTreeMap<u64, u64> = BTreeMap::new();
         // When the person was heard to start speaking.
         let mut cancelled: std::collections::BTreeSet<u64> = Default::default();
-        let mut onsets: Vec<u64> = Vec::new();
-        let mut offsets: Vec<u64> = Vec::new();
+        // In occurrence order: an end and a start at one instant (the realtime server's
+        // `speech_stopped` then `speech_started`) leave the person speaking.
+        let mut onsets: Vec<Observed> = Vec::new();
+        let mut offsets: Vec<Observed> = Vec::new();
         for (at, step) in journal {
             match step {
                 Step::Playout(PlayoutStep::SinkCalled {
@@ -88,9 +90,9 @@ impl Rule for SpeechIsHeard {
                 }
                 Step::Emitted(SessionEvent::UserStateChanged { new, .. }) => {
                     if *new == UserState::Speaking {
-                        onsets.push(at.at_ms);
+                        onsets.push(*at);
                     } else {
-                        offsets.push(at.at_ms);
+                        offsets.push(*at);
                     }
                 }
                 _ => {}
@@ -125,8 +127,9 @@ impl Rule for SpeechIsHeard {
             if let (false, Some(at)) = (played, unheard_cut) {
                 let rightly = match cut.get(&speech.id) {
                     Some(InterruptCause::ByAudioActivity) | None => {
-                        speaking_at(&onsets, &offsets, created.at_ms)
+                        speaking_at(&onsets, &offsets, created)
                             || person_acted(r, created.at_ms, at)
+                            || onset_cancel(r, created.at_ms, at)
                             || host_cut(r, created.at_ms, at)
                             || closing.is_some_and(|c| c <= at)
                     }
@@ -155,7 +158,7 @@ impl Rule for SpeechIsHeard {
 }
 
 /// Whether the person was speaking at `at`, by their last state change at or before it.
-fn speaking_at(onsets: &[u64], offsets: &[u64], at: u64) -> bool {
+fn speaking_at(onsets: &[Observed], offsets: &[Observed], at: Observed) -> bool {
     let on = onsets.iter().filter(|o| **o <= at).max();
     let off = offsets.iter().filter(|o| **o <= at).max();
     on.is_some_and(|on| off.is_none_or(|off| on > off))
@@ -190,6 +193,16 @@ fn person_acted(r: &Recording, from: u64, to: u64) -> bool {
 /// How long before a realtime reply's creation an interrupt may already be aimed at it: the
 /// server announces a response after its request, and a cancel sent between hits it.
 const ANNOUNCE_MS: u64 = 2_000;
+
+/// Whether the realtime server heard the person start just before a reply was announced: the
+/// onset interrupts what is playing, and the cancel that sends (session-wide, as the reference's
+/// `interrupt()`) reaches the server after it made the reply, as [`host_cut`]'s interrupt does.
+fn onset_cancel(r: &Recording, created: u64, to: u64) -> bool {
+    let from = created.saturating_sub(ANNOUNCE_MS);
+    r.applied().iter().filter(|a| a.accepted && from <= a.at.at_ms && a.at.at_ms <= to).any(|a| {
+        matches!(a.input, Input::RealtimeEvent { event: RtEvent::SpeechStarted, .. })
+    })
+}
 
 /// Whether the host interrupted, or the realtime server dropped or failed, around a speech's
 /// life: from just before it was announced to its end.
@@ -269,7 +282,15 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
         matches!(s, Step::Emitted(SessionEvent::AmdResult { verdict })
             if verdict.reason == lk_agents_abi::voice::amd::AmdReason::ParticipantMissing)
     });
-    if (room_track || unanswered) && present <= 0 {
+    // The case had no audio output of its own by then: the voice goes to the room's own speaker
+    // (the room's legs), which holds it until somebody subscribes, whether or not the room's
+    // events reached the journal.
+    let room_speaker = !r.opened().iter().any(|o| {
+        o.kind == Kind::Output
+            && before(&o.at)
+            && o.detail == crate::record::Detail::Output { audio: true }
+    });
+    if (room_track || unanswered || room_speaker) && present <= 0 {
         return Some("nobody in the room to hear it");
     }
     // A provider failing within the bound: the reply waits on retries, or on a connection.
@@ -378,6 +399,8 @@ fn waited_on_the_model() -> Recording {
 fn silent_behind_a_paused_speech() -> Recording {
     use lk_agents_voice::agent_activity::scheduling::SpeechKind;
     Authored::new()
+        // The case's own speaker, not the room's: nobody need subscribe.
+        .opens(Kind::Output, crate::record::Detail::Output { audio: true })
         .speech_created(3, SpeechKind::Realtime)
         .journal(floor(3))
         .journal(Step::Interrupt(InterruptStep::PlayoutGate {

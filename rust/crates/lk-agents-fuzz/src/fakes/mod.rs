@@ -246,6 +246,9 @@ pub struct Registry {
     voice_down: std::sync::atomic::AtomicBool,
     /// The session, once it exists: what a tool body calls, as `RunContext` does.
     session: std::sync::OnceLock<Arc<SessionApi>>,
+    /// When each synthesis with a voice latency will hand over its first audio, until it has: work
+    /// the fake owes on its own clock, which no answer of the case's releases.
+    voice_due: std::sync::Mutex<BTreeMap<u32, tokio::time::Instant>>,
 }
 
 impl Registry {
@@ -259,6 +262,7 @@ impl Registry {
             tool_serial: AtomicU32::new(0),
             voice_down: std::sync::atomic::AtomicBool::new(false),
             session: std::sync::OnceLock::new(),
+            voice_due: std::sync::Mutex::default(),
         };
         (Arc::new(registry), receiver)
     }
@@ -347,6 +351,22 @@ impl Registry {
     pub(super) fn record_forwarded(&self, slot: Slot, tags: Vec<crate::record::Tag>) {
         let at = self.stamps.next();
         self.write(Record::Forwarded { at, slot, tags });
+    }
+
+    /// A synthesis owes its first audio at `at`; `None` once it handed it over or closed.
+    pub(super) fn voice_due(&self, tts: u32, at: Option<tokio::time::Instant>) {
+        let mut due = self.voice_due.lock().unwrap();
+        match at {
+            Some(at) => due.insert(tts, at),
+            None => due.remove(&tts),
+        };
+    }
+
+    /// How long until the last first audio a synthesis still owes, if one is due after now.
+    pub fn voice_due_in(&self) -> Option<std::time::Duration> {
+        let now = tokio::time::Instant::now();
+        let due = self.voice_due.lock().unwrap();
+        due.values().filter(|at| **at > now).max().map(|at| *at - now)
     }
 
     pub(super) fn mark_closed(&self, slot: Slot) {

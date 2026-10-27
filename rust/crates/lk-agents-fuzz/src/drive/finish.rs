@@ -201,7 +201,10 @@ impl Run {
     pub fn release_advance(&self) -> Input {
         let now = self.record.now().at_ms;
         let playing = now + self.room_audio_queued().as_millis() as u64;
-        let furthest = self.deadlines().map(|(_, at)| at).max().unwrap_or(now).max(playing);
+        // A voice still owing its first audio answers on its own clock.
+        let voice = now + self.registry.voice_due_in().map_or(0, |d| d.as_millis() as u64);
+        let furthest =
+            self.deadlines().map(|(_, at)| at).max().unwrap_or(now).max(playing).max(voice);
         Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
     }
 
@@ -213,6 +216,7 @@ impl Run {
         let now = self.record.now().at_ms;
         self.deadlines().any(|(periodic, at)| !periodic && at > now)
             || !self.room_audio_queued().is_zero()
+            || self.registry.voice_due_in().is_some()
     }
 
     /// The agent's voice still queued in the room's speaker or the console's: either plays on the
@@ -621,13 +625,17 @@ mod tests {
     }
 }
 
-/// `VOICE_JOURNAL=1`: every journal step and applied input of the run, in sequence order.
+/// `VOICE_JOURNAL=1`: every journal step, host event and applied input of the run, in sequence
+/// order.
 fn dump_journal(record: &crate::record::Recording) {
     let mut lines: Vec<(u64, String)> = record
         .journal()
         .iter()
         .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms   {step:?}", at.seq, at.at_ms)))
         .collect();
+    lines.extend(record.host().iter().map(|(at, h)| {
+        (at.seq, format!("{:>6} {:>7}ms H {h:?}", at.seq, at.at_ms))
+    }));
     lines.extend(record.applied().iter().map(|a| {
         let mark = if a.accepted { ">" } else { "x" };
         (a.at.seq, format!("{:>6} {:>7}ms {mark} {:?}", a.at.seq, a.at.at_ms, a.input))
