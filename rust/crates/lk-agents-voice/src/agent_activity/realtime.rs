@@ -494,6 +494,7 @@ pub enum RealtimeWake {
     },
     /// A cut reply's messages, truncated to what the caller heard of each.
     Heard {
+        speech: SpeechId,
         cuts: Vec<rt::Truncate>,
     },
 }
@@ -557,9 +558,17 @@ impl Driver {
                 }
             }
             // Not past the close's edge: the socket is going away with what it holds.
-            RealtimeWake::Heard { cuts } => {
+            RealtimeWake::Heard { speech, cuts } => {
+                if self.session.closing_past_edge() {
+                    return;
+                }
+                // Cut while its response still generates: stopped, or the server keeps adding to
+                // what was truncated ("send it only while this response is still generating").
+                for cmd in self.activity.realtime_state.cancel_where(|s| s == Some(speech)) {
+                    self.rt_send(cmd, out);
+                }
                 let t = &self.activity.realtime_state;
-                if t.caps.message_truncation && !t.ended() && !self.session.closing_past_edge() {
+                if t.caps.message_truncation && !t.ended() {
                     for cut in cuts {
                         self.rt_send(RealtimeCommand::Truncate(cut), out);
                     }

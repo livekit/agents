@@ -56,7 +56,7 @@ pub(crate) async fn realtime_generation_task(
             }
         }
         if !unheard.is_empty() {
-            let _ = wake.send(RealtimeWake::Heard { cuts: unheard });
+            let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts: unheard });
         }
         return Ok(StepOutcome::Released);
     }
@@ -118,9 +118,7 @@ pub(crate) async fn realtime_generation_task(
         // none of is gone (`truncate`, after `_realtime_generation_task`'s playout).
         generation.drain_started();
         let cuts = generation.cuts(&heard);
-        if !cuts.is_empty() {
-            let _ = wake.send(RealtimeWake::Heard { cuts });
-        }
+        let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts });
     }
     let Generation { segments, received, response_id, message_id, .. } = generation;
     drop(rx);
