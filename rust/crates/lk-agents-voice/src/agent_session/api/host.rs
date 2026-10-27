@@ -98,7 +98,7 @@ impl SessionApi {
         llm_node: Option<Arc<dyn NodeFactory>>,
         tts_node: Option<Arc<dyn NodeFactory>>,
         stt_node: Option<Arc<dyn NodeFactory>>,
-        // The host's own io legs, replacing the room's (which `agent_session.py` has turned off).
+        // The host's own io legs, replacing the room's.
         host_audio_input: Option<Arc<dyn AudioInput>>,
         host_audio_output: Option<Arc<dyn AudioOutput>>,
         host_video_input: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
@@ -137,7 +137,7 @@ impl SessionApi {
         let time = room.timebase();
         let clock = time.clock();
         let anchor = lk_agents_abi::WallAnchor::of(&*clock);
-        let config = room_io_config.unwrap_or_else(|| RoomIoConfig {
+        let mut config = room_io_config.unwrap_or_else(|| RoomIoConfig {
             participant_identity: participant_identity.map(Into::into),
             audio_input: Some(AudioInputConfig {
                 sample_rate: input_sample_rate,
@@ -157,6 +157,15 @@ impl SessionApi {
             host_audio_input.or_else(|| console.as_ref().map(|c| c.as_audio_input()));
         let host_audio_output =
             host_audio_output.or_else(|| console.as_ref().map(|c| c.as_audio_output()));
+        // `start()`: an audio leg the host set replaces the room's, which is then neither published
+        // nor subscribed ("RoomIO audio output is enabled but output.audio is already set,
+        // ignoring"). The room's text output stays: it paces a host transcription leg.
+        if host_audio_input.is_some() {
+            config.audio_input = None;
+        }
+        if host_audio_output.is_some() {
+            config.audio_output = None;
+        }
         // A host sink's playback reports are stamped on the session's clock.
         if let Some(out) = &host_audio_output {
             out.tracker().anchor_to(anchor);
