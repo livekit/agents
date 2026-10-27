@@ -941,6 +941,15 @@ impl PyProcPool {
         })
     }
 
+    /// Waits until every process a job was launched on exited (the drain).
+    fn join_jobs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let pool = self.0.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            pool.join_jobs().await;
+            Ok(())
+        })
+    }
+
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let pool = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

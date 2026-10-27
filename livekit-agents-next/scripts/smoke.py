@@ -1538,10 +1538,10 @@ async def cli() -> None:
 
     print("== cli")
     args = _core.parse_cli(["start", "agent.py", "--dev", "--reload-addr", "127.0.0.1:1"])
-    assert (args["entrypoint"], args["cli_addr"], args["log_format"]) == (
+    assert (args["entrypoint"], args["cli_addr"], args["log_style"]) == (
         "agent.py",
         "127.0.0.1:1",
-        "json",
+        "dev",
     ), args
     for bad in (["start", "--cli-addr", "x"], ["console"], ["serve"]):
         with contextlib.suppress(CLIError):

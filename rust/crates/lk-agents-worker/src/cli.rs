@@ -30,7 +30,8 @@ pub enum CliError {
 
 /// The command line `lk agent` passes, as the dict the host dispatches on: `command` (`start`,
 /// `console` or `download-files`), `entrypoint`, and for `start` `log_level`, `log_format`
-/// (`json` or `colored`), `dev`, `cli_addr` (also read as the legacy `--reload-addr`),
+/// (`json` or `colored`), `log_style` (the line style: `json`, `dev` or `compact`), `dev`,
+/// `cli_addr` (also read as the legacy `--reload-addr`),
 /// `simulation` and `options` (the server's `ws_url`/`api_key`/`api_secret` given on the line);
 /// for `console` `connect_addr` and `record`.
 #[lk_agents_abi::host(export(pid = false))]
@@ -94,6 +95,12 @@ pub fn parse_cli(argv: Vec<String>) -> Result<Value, CliError> {
                 "entrypoint": entrypoint,
                 "log_level": get("--log-level").unwrap_or_else(|| "INFO".into()),
                 "log_format": log_format,
+                // the line style: JSON in production, colored in development (compact under a simulation)
+                "log_style": match (log_format.as_str(), flag("--dev"), flag("--simulation")) {
+                    ("json", false, _) => "json",
+                    (_, _, true) => "compact",
+                    _ => "dev",
+                },
                 "dev": flag("--dev"),
                 "cli_addr": cli_addr,
                 "simulation": flag("--simulation"),
@@ -650,11 +657,14 @@ mod tests {
     }
 
     #[test]
-    fn the_go_cli_contract() {
+    fn the_go_cli_contract() -> Result<(), CliError> {
         let start = parse_cli(argv("start agent.py --dev --log-level DEBUG --reload-addr 127.0.0.1:9 --url wss://x")).unwrap();
         assert_eq!(start["entrypoint"], "agent.py");
         assert_eq!(start["cli_addr"], "127.0.0.1:9");
         assert_eq!(start["log_format"], "json");
+        assert_eq!(start["log_style"], "dev", "colored in development");
+        assert_eq!(parse_cli(argv("start"))?["log_style"], "json");
+        assert_eq!(parse_cli(argv("start --log-format colored --simulation"))?["log_style"], "compact");
         assert_eq!(start["options"], json!({"ws_url": "wss://x"}));
         assert!(parse_cli(argv("start --cli-addr x")).is_err(), "the dev channel needs --dev");
         let console = parse_cli(argv("console --connect-addr=127.0.0.1:1 --record")).unwrap();
@@ -662,6 +672,7 @@ mod tests {
         assert!(parse_cli(argv("console")).is_err());
         assert!(parse_cli(argv("start --log-format xml")).is_err());
         assert!(parse_cli(argv("start --nope")).is_err());
+        Ok(())
     }
 
     #[test]

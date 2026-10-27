@@ -464,12 +464,8 @@ class _ServerHost:
         await self._server._http.close_websockets()
 
     async def _join_jobs(self, _: Any) -> None:
-        while self._proc_pool and (
-            procs := [p for p in self._proc_pool.processes if p.running_job]
-        ):
-            await asyncio.gather(*(proc.join() for proc in procs))
-            # a joined process leaves the pool on the next loop turn
-            await asyncio.sleep(0)
+        if self._proc_pool is not None:
+            await self._proc_pool.join_jobs()
 
     async def _close(self, _: Any) -> None:
         if self._proc_pool is not None:

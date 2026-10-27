@@ -189,9 +189,7 @@ def _run_worker(server: AgentServer, args: dict[str, Any]) -> None:
         server.update_options(**args["options"])
     server._config.simulation = args["simulation"]
     devmode = args["dev"]
-    colored = devmode or args["log_format"] == "colored"
-    style = "json" if not colored else "compact" if args["simulation"] else "dev"
-    setup_logging(args["log_level"], style)
+    setup_logging(args["log_level"], args["log_style"])
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

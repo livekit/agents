@@ -71,6 +71,8 @@ pub struct PoolOptions {
 struct State<P> {
     warmed: VecDeque<P>,
     executors: Vec<P>,
+    /// The processes a job was launched on, until they exited.
+    launched: Vec<P>,
     /// Spawn tasks still initializing their process.
     spawning: usize,
     waiting: usize,
@@ -115,6 +117,7 @@ impl<H: PoolHost> ProcPool<H> {
             state: Mutex::new(State {
                 warmed: VecDeque::new(),
                 executors: Vec::new(),
+                launched: Vec::new(),
                 spawning: 0,
                 waiting: 0,
                 target_idle: opts.num_idle_processes,
@@ -261,7 +264,9 @@ impl<H: PoolHost> ProcPool<H> {
         self.track(tokio::spawn(async move {
             pool.0.host.join(&proc).await;
             pool.0.host.emit(PoolEvent::Closed, &proc);
-            lock(&pool.0.state).executors.retain(|p| p != &proc);
+            let mut st = lock(&pool.0.state);
+            st.executors.retain(|p| p != &proc);
+            st.launched.retain(|p| p != &proc);
         }));
     }
 
@@ -311,6 +316,7 @@ impl<H: PoolHost> ProcPool<H> {
             let proc = proc.ok_or(LaunchError::NoProcess)?;
             match self.0.host.launch(&proc, &job).await {
                 Ok(()) => {
+                    lock(&self.0.state).launched.push(proc.clone());
                     self.0.host.emit(PoolEvent::JobLaunched, &proc);
                     return Ok(());
                 }
@@ -329,6 +335,28 @@ impl<H: PoolHost> ProcPool<H> {
             }
         }
         unreachable!("the last attempt returns")
+    }
+
+    /// Waits until every process a job was launched on exited, those launched meanwhile
+    /// included (the drain).
+    pub async fn join_jobs(&self) {
+        loop {
+            let running = lock(&self.0.state).launched.clone();
+            if running.is_empty() {
+                return;
+            }
+            let joins: Vec<_> = running
+                .iter()
+                .map(|proc| {
+                    let (pool, proc) = (self.clone(), proc.clone());
+                    tokio::spawn(async move { pool.0.host.join(&proc).await })
+                })
+                .collect();
+            for join in joins {
+                let _ = join.await;
+            }
+            lock(&self.0.state).launched.retain(|p| !running.contains(p));
+        }
     }
 
     /// Stops the refill and the initializing spawns, closes every process and waits for the
@@ -468,6 +496,25 @@ mod tests {
         assert!(matches!(pool.launch_job("j1", ()).await, Err(LaunchError::NoProcess)));
         assert_eq!(pool.jobs_waiting(), 0);
         assert!(pool.processes().is_empty());
+        pool.aclose().await;
+    }
+
+    // Catches: the drain returning while a job's process still runs, or waiting on the idle ones.
+    #[tokio::test]
+    async fn join_jobs_waits_for_the_processes_running_a_job() {
+        let host = Arc::new(Host::default());
+        let pool = pool(&host, 1);
+        pool.start().await;
+        pool.join_jobs().await;
+        pool.launch_job("j1", ()).await.unwrap();
+        let joining = tokio::spawn({
+            let pool = pool.clone();
+            async move { pool.join_jobs().await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!joining.is_finished(), "the job's process still runs");
+        host.close(&0).await;
+        tokio::time::timeout(Duration::from_secs(1), joining).await.unwrap().unwrap();
         pool.aclose().await;
     }
 

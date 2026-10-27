@@ -205,7 +205,8 @@ pub fn update_load_interval() -> f64 {
 
 /// The command line `lk agent` passes, as the dict the host dispatches on: `command` (`start`,
 /// `console` or `download-files`), `entrypoint`, and for `start` `log_level`, `log_format`
-/// (`json` or `colored`), `dev`, `cli_addr` (also read as the legacy `--reload-addr`),
+/// (`json` or `colored`), `log_style` (the line style: `json`, `dev` or `compact`), `dev`,
+/// `cli_addr` (also read as the legacy `--reload-addr`),
 /// `simulation` and `options` (the server's `ws_url`/`api_key`/`api_secret` given on the line);
 /// for `console` `connect_addr` and `record`.
 #[napi(js_name = "parseCli")]

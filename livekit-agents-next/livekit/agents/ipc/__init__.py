@@ -561,6 +561,10 @@ class ProcPool(
     async def aclose(self) -> None:
         await self._pool.aclose()
 
+    async def join_jobs(self) -> None:
+        """Waits until every process a job was launched on exited (the drain)."""
+        await self._pool.join_jobs()
+
     async def launch_job(self, info: RunningJobInfo) -> None:
         await self._pool.launch_job(info)
 
