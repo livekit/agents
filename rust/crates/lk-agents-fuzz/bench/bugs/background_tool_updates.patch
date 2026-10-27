@@ -1,0 +1,86 @@
+Reverted by known_bugs.sh to reintroduce the bug fixed by 5e4b91e2b:
+voice tools: a background tool's updates that land before its detach is heard wait for it
+
+diff --git a/rust/crates/lk-agents-voice/src/agent_activity/tools.rs b/rust/crates/lk-agents-voice/src/agent_activity/tools.rs
+index 7079552b1..e21038f6f 100644
+--- a/rust/crates/lk-agents-voice/src/agent_activity/tools.rs
++++ b/rust/crates/lk-agents-voice/src/agent_activity/tools.rs
+@@ -62,6 +62,7 @@ impl Driver {
+             speech,
+             step,
+             updates: 0,
++            early: Vec::new(),
+             runner,
+         });
+     }
+@@ -89,9 +90,18 @@ impl Driver {
+                 self.fillers_reset_dwell(now, &call_id, out);
+                 out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Updated {
+                     id: call_id.clone(),
+-                    call_id,
++                    call_id: call_id.clone(),
+                     message: message.unwrap_or_default(),
+                 }));
++                let early = self
++                    .activity
++                    .tools
++                    .detached(&call_id)
++                    .map(|r| std::mem::take(&mut r.early))
++                    .unwrap_or_default();
++                for update in early {
++                    self.on_tool_update(now, call_id.clone(), update, out);
++                }
+                 return;
+             }
+         };
+@@ -180,7 +190,10 @@ impl Driver {
+         out: &mut Out,
+     ) {
+         if self.activity.tools.detached(&call_id).is_none() {
+-            out.trace(TraceToolStep::UpdateRefused { call_id });
++            match self.activity.tools.undetached(&call_id) {
++                Some(running) => running.early.push(update),
++                None => out.trace(TraceToolStep::UpdateRefused { call_id }),
++            }
+             return;
+         }
+         let wall = self.step.wall();
+diff --git a/rust/crates/lk-agents-voice/src/agent_session/commands.rs b/rust/crates/lk-agents-voice/src/agent_session/commands.rs
+index 34dc6c33f..14f61779f 100644
+--- a/rust/crates/lk-agents-voice/src/agent_session/commands.rs
++++ b/rust/crates/lk-agents-voice/src/agent_session/commands.rs
+@@ -385,7 +385,7 @@ pub enum FillerSource {
+     Host(Option<lk_agents_abi::HostRef>),
+ }
+ 
+-#[derive(Debug)]
++#[derive(Debug, Clone)]
+ pub enum ToolUpdate {
+     /// `raw` as written; `message` rendered by the host.
+     Progress { message: String, raw: String },
+diff --git a/rust/crates/lk-agents-voice/src/tool_executor.rs b/rust/crates/lk-agents-voice/src/tool_executor.rs
+index d60079480..0c659549e 100644
+--- a/rust/crates/lk-agents-voice/src/tool_executor.rs
++++ b/rust/crates/lk-agents-voice/src/tool_executor.rs
+@@ -79,6 +79,11 @@ impl Tools {
+         true
+     }
+ 
++    /// The running call named `call_id` not yet heard to detach: its updates wait for it.
++    pub(crate) fn undetached(&mut self, call_id: &str) -> Option<&mut Running> {
++        self.running.iter_mut().find(|r| r.call.call_id == call_id && !r.detached())
++    }
++
+     /// The detached call named `call_id`, which may send updates.
+     pub(crate) fn detached(&mut self, call_id: &str) -> Option<&mut Running> {
+         self.running.iter_mut().find(|r| r.call.call_id == call_id && r.detached())
+@@ -161,6 +166,9 @@ pub(crate) struct Running {
+     pub(crate) step: u32,
+     /// Progress updates sent so far, the first (the step's answer) included.
+     pub(crate) updates: u32,
++    /// Updates sent before the step's join heard the call detach (`ctx.update()` reaches the
++    /// driver directly, the detach in the model's order): applied, in order, once it has.
++    pub(crate) early: Vec<crate::agent_session::ToolUpdate>,
+     /// What runs the body: its cancel goes there.
+     pub(crate) runner: Arc<dyn HostToolRunner>,
+ }

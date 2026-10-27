@@ -1,0 +1,17 @@
+Reverted by known_bugs.sh to reintroduce the bug fixed by 4a8d5c8a6:
+voice core: a final transcript ends the speech pause it took, as the reference's 
+on_final_transcript
+
+diff --git a/rust/crates/lk-agents-voice/src/agent_activity/recognition.rs b/rust/crates/lk-agents-voice/src/agent_activity/recognition.rs
+index 6557f5487..890fc5d46 100644
+--- a/rust/crates/lk-agents-voice/src/agent_activity/recognition.rs
++++ b/rust/crates/lk-agents-voice/src/agent_activity/recognition.rs
+@@ -104,6 +104,8 @@ impl Driver {
+                     out,
+                     AudioInterruptTrigger::SttFinal { words },
+                 );
++                // A final ends the pause: the paused speech is interrupted, not resumed.
++                self.cancel_speech_pause(now, out);
+             }
+             SpeechEventType::InterimTranscript if !has_vad => {
+                 self.interrupt_by_audio_activity(

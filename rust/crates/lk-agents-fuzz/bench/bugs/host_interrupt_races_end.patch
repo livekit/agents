@@ -1,0 +1,127 @@
+Reverted by known_bugs.sh to reintroduce the bug fixed by 643e1bed9:
+voice core: a host interrupt() that races the speech's end lands, as the reference's does
+
+diff --git a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
+index 71c1dd71d..4c90570c7 100644
+--- a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
++++ b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
+@@ -1001,6 +1001,11 @@ impl Driver {
+             if !h.done() {
+                 h.mark_done(None);
+             }
++            // A host `interrupt()` still on its way when the speech ended landed on the handle.
++            if h.take_interrupted_at_done() {
++                let cause = InterruptCause::Host;
++                out.trace(InterruptStep::Interrupted { speech, cause, force: false });
++            }
+             out.machine().emit(SessionEvent::SpeechDone { speech, outcome: h.outcome() });
+             // The run that owned it lets it go, and its verdict moves to this speech.
+             let h = Arc::clone(h);
+diff --git a/rust/crates/lk-agents-voice/src/speech_handle.rs b/rust/crates/lk-agents-voice/src/speech_handle.rs
+index 423ee2c08..3decc95b5 100644
+--- a/rust/crates/lk-agents-voice/src/speech_handle.rs
++++ b/rust/crates/lk-agents-voice/src/speech_handle.rs
+@@ -214,6 +214,8 @@ struct Inner {
+     host: Option<lk_agents_abi::HostRef>,
+     /// The tools this speech waits on, as `(call_id, name)`: running and not yet detached.
+     blocking_tools: Vec<(String, String)>,
++    /// A host `interrupt()` landed in [`SpeechHandle::mark_done`], not yet journalled.
++    interrupted_at_done: bool,
+ }
+ 
+ /// `SpeechHandle`: one speech's id, state and outcome, shared by the loop that runs the speech and
+@@ -291,6 +293,7 @@ impl SpeechHandle {
+                 user_metrics: None,
+                 host: None,
+                 blocking_tools: Vec::new(),
++                interrupted_at_done: false,
+             }),
+         }
+     }
+@@ -376,6 +379,11 @@ impl SpeechHandle {
+         self.interrupted.get()
+     }
+ 
++    /// A host `interrupt()` landed as the speech was marked done, once: the loop journals it.
++    pub(crate) fn take_interrupted_at_done(&self) -> bool {
++        std::mem::take(&mut lock(&self.inner).interrupted_at_done)
++    }
++
+     /// `SpeechHandle._mark_scheduled`. Idempotent, like the `suppress(InvalidStateError)`.
+     pub fn mark_scheduled(&self) {
+         self.scheduled.set(true);
+@@ -576,13 +584,25 @@ impl SpeechHandle {
+ 
+     /// `_mark_done`. The error is kept out of the completion signal so awaiting never raises; see
+     /// [`exception`](Self::exception).
++    ///
++    /// A host `interrupt()` the loop has not acted on yet lands here, as it would have on the
++    /// reference's handle (`interrupt()` before done is an interruption); see
++    /// [`take_interrupted_at_done`](Self::take_interrupted_at_done).
+     pub fn mark_done(&self, error: Option<ProviderError>) {
+-        let newly_done = !self.done();
+-        if newly_done {
+-            if let Some(err) = error {
+-                self.inner.lock().unwrap().error = Some(err);
++        {
++            // Under the lock the host's `interrupt()` checks `done` in, so a request is either
++            // refused as too late or seen here.
++            let mut inner = lock(&self.inner);
++            if !self.done() {
++                if self.interrupt_requested.load(Ordering::Acquire) && !self.interrupted() {
++                    self.interrupted.set(true);
++                    inner.interrupted_at_done = true;
++                }
++                if let Some(err) = error {
++                    inner.error = Some(err);
++                }
++                self.done.set(true);
+             }
+-            self.done.set(true);
+         }
+ 
+         // Both run on every call; with no generation the mark refuses, which is fine here.
+@@ -598,13 +618,12 @@ impl SpeechHandle {
+         Ok(self.inner.lock().unwrap().error.clone())
+     }
+ 
+-    /// How a done speech ended, as `SpeechDone` reports it: as the host reads the handle, so an
+-    /// `interrupt()` that raced the speech's end is not reported completed.
++    /// How a done speech ended, as `SpeechDone` reports it.
+     pub fn outcome(&self) -> crate::events::SpeechOutcome {
+         use crate::events::SpeechOutcome;
+         if matches!(self.exception(), Ok(Some(_))) {
+             SpeechOutcome::Failed
+-        } else if self.interrupted_for_host() {
++        } else if self.interrupted() {
+             SpeechOutcome::Interrupted
+         } else {
+             SpeechOutcome::Completed
+@@ -773,15 +792,20 @@ impl SpeechHandle {
+         #[host(ambient)] spawner: Arc<dyn lk_agents_abi::Spawner>,
+     ) -> Result<(), SpeechRefused> {
+         let created = self.created();
+-        if self.interrupt_requested.load(Ordering::Acquire)
+-            || (created.is_some() && (self.interrupted() || self.done()))
+         {
+-            return Ok(());
+-        }
+-        if !force && !self.allow_interruptions() {
+-            return Err(SpeechError::InterruptionsNotAllowed.into());
++            // Checked and recorded under the lock `mark_done` takes: a request it does not see
++            // is refused as too late.
++            let _inner = lock(&self.inner);
++            if self.interrupt_requested.load(Ordering::Acquire)
++                || (created.is_some() && (self.interrupted() || self.done()))
++            {
++                return Ok(());
++            }
++            if !force && !self.allow_interruptions() {
++                return Err(SpeechError::InterruptionsNotAllowed.into());
++            }
++            self.interrupt_requested.store(true, Ordering::Release);
+         }
+-        self.interrupt_requested.store(true, Ordering::Release);
+         let interrupt = move |api: &Api, speech| {
+             // A closed loop has nothing left to interrupt.
+             let _ = api.send(crate::agent_session::Command::from(

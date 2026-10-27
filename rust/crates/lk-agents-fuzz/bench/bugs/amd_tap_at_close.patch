@@ -1,0 +1,54 @@
+Reverted by known_bugs.sh to reintroduce the bug fixed by dd59355d4:
+voice core: what the deep seeds found. AMD's own recognition stream, opened while the detector 
+closed, queued on its channel and dropped with it, is closed (amd_tap_queued_at_close, survey 
+seed 7022); a reply created behind a speech that goes on to a tool step is planned once that step 
+is recorded with its tools, not at the speech's end: it held the floor the tool step needed, and 
+both waited out the replan's six-second bound (reply_behind_tool_step, survey seed 14338)
+
+diff --git a/rust/crates/lk-agents-voice/src/amd/detector.rs b/rust/crates/lk-agents-voice/src/amd/detector.rs
+index 587eb91de..4432fbba8 100644
+--- a/rust/crates/lk-agents-voice/src/amd/detector.rs
++++ b/rust/crates/lk-agents-voice/src/amd/detector.rs
+@@ -309,6 +309,15 @@ impl AmdSystem {
+                 () = api.closed() => break,
+             }
+         }
++        // A tap that opened while the system was closing is still queued here: dropped with the
++        // channel it would never be closed, and a dropped host stream is never cancelled.
++        msgs.close();
++        while let Ok(msg) = msgs.try_recv() {
++            if let Msg::SttOpened(Ok((_sink, source))) = msg {
++                self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: TAP }));
++                self.discard_tap(source);
++            }
++        }
+     }
+ 
+     /// One item off the feed: what the reference's `AudioRecognition` hands the classifier.
+diff --git a/rust/crates/lk-agents-voice/src/generation/pipeline_reply.rs b/rust/crates/lk-agents-voice/src/generation/pipeline_reply.rs
+index 86af948a1..59c82f64c 100644
+--- a/rust/crates/lk-agents-voice/src/generation/pipeline_reply.rs
++++ b/rust/crates/lk-agents-voice/src/generation/pipeline_reply.rs
+@@ -355,7 +355,9 @@ async fn follow_up(
+ }
+ 
+ /// The first request of a reply created behind a playing or cut speech, planned once its item is on
+-/// the record. Bounded, and cut short by interruption or closing.
++/// the record: the speech finished, or the step it was playing committed with its tools. Not the
++/// speech's end then: its follow-up step needs the floor this reply may hold. Bounded, and cut
++/// short by interruption or closing.
+ async fn replan_after(
+     shared: &Arc<SessionShared>,
+     handle: &Arc<SpeechHandle>,
+@@ -363,7 +365,10 @@ async fn replan_after(
+ ) -> crate::generation::Request {
+     let crate::generation::Replan { after, spec } = replan;
+     let bound = crate::speech_handle::INTERRUPTION_TIMEOUT + Duration::from_secs(1);
+-    let frame = wait_frame(shared, handle, bound, |f| f.finished.contains(&after)).await;
++    let recorded = |f: &crate::agent_session::ActivitySnapshot| {
++        f.finished.contains(&after) || f.tools_committed.keys().any(|(speech, _)| *speech == after)
++    };
++    let frame = wait_frame(shared, handle, bound, recorded).await;
+     let instructions = frame.instructions.render(Some(lk_agents_abi::Modality::Audio));
+     spec.plan(&frame.chat_ctx, &instructions, shared.time.wall())
+ }

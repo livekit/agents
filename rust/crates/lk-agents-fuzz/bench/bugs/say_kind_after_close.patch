@@ -1,0 +1,76 @@
+Reverted by known_bugs.sh to reintroduce the bug fixed by b1936ecfe:
+voice core: a say released by the close's hard edge keeps its kind: the scheduler's record of it 
+went with the release, so the step reported spoken afterwards committed its item as a reply's, 
+naming no voice (say_item_after_close_edge, survey seed 114526)
+
+diff --git a/rust/crates/lk-agents-voice/src/agent_activity/mod.rs b/rust/crates/lk-agents-voice/src/agent_activity/mod.rs
+index 75f334fa6..f406046b1 100644
+--- a/rust/crates/lk-agents-voice/src/agent_activity/mod.rs
++++ b/rust/crates/lk-agents-voice/src/agent_activity/mod.rs
+@@ -16,7 +16,7 @@ pub mod tools;
+ use crate::agent::{CommitOutcome, Committed, Source, Visibility};
+ use crate::agent_activity::false_interruption::{InterruptOutcome, PausedSpeech};
+ use crate::agent_activity::options::{AgentSessionOptions, ConfigStack, LegSet};
+-use crate::agent_activity::scheduling::{SpeechId, SpeechScheduler};
++use crate::agent_activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
+ use crate::agent_session::effects::{AudioOp, Effect, Out};
+ use crate::agent_session::{ActivityCommand, Driver, HostAudio, HostVideo};
+ use crate::audio_recognition::AudioRecognition;
+@@ -50,8 +50,9 @@ pub(crate) struct AgentActivity {
+     pub(crate) speech_scheduler: SpeechScheduler,
+     /// `_paused_speech` and the false-interruption timer.
+     pub(crate) paused_speech: PausedSpeech,
+-    /// The agent each speech was created under: late tool items belong to it.
+-    pub(crate) speech_agents: BTreeMap<SpeechId, String>,
++    /// The agent each speech was created under, and what it was created as: late items belong to
++    /// it, and keep their source once the close's edge released the speech.
++    pub(crate) speech_agents: BTreeMap<SpeechId, (String, SpeechKind)>,
+     pub(crate) finished: BTreeSet<SpeechId>,
+     /// Per tool step: whether the activity that made the speech drains, so the step's reply
+     /// offers no tools.
+@@ -140,13 +141,18 @@ impl AgentActivity {
+     }
+ 
+     /// The speech is the running agent's: its late items are attributed to it.
+-    pub(crate) fn note_speech_agent(&mut self, speech: SpeechId) {
+-        self.speech_agents.insert(speech, self.agent.clone());
++    pub(crate) fn note_speech_agent(&mut self, speech: SpeechId, kind: SpeechKind) {
++        self.speech_agents.insert(speech, (self.agent.clone(), kind));
+     }
+ 
+     /// The agent `speech` was created under.
+     pub(crate) fn speech_agent(&self, speech: SpeechId) -> Option<&str> {
+-        self.speech_agents.get(&speech).map(String::as_str)
++        self.speech_agents.get(&speech).map(|(agent, _)| agent.as_str())
++    }
++
++    /// What `speech` was created as, after its release too.
++    pub(crate) fn speech_kind(&self, speech: SpeechId) -> Option<SpeechKind> {
++        self.speech_agents.get(&speech).map(|(_, kind)| *kind)
+     }
+ 
+     pub(crate) fn set_tools_in_flight(&mut self, speech: SpeechId, running: bool) {
+diff --git a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
+index 70cbe64d1..55eff0440 100644
+--- a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
++++ b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
+@@ -633,7 +633,7 @@ impl Driver {
+ 
+         let handle = self.new_speech(spec.host_handle.as_ref(), id, spec.allow_interruptions);
+ 
+-        self.activity.note_speech_agent(id);
++        self.activity.note_speech_agent(id, kind);
+ 
+         let message_id = self.session.ids.mint("item");
+         let ctx = ReplyContext {
+@@ -883,7 +883,9 @@ impl Driver {
+         out.trace(SpeechStep::StepSpoken { speech, step, interrupted });
+         // The step's edge is spent: the next step's first frame is a new one.
+         self.activity.spoke.remove(&speech);
+-        let kind = self.activity.speech_scheduler.kind(speech);
++        // Read off the record kept past the release: a `say` cut by the close's edge reports its
++        // step after the edge released it, and is still a `say`'s item.
++        let kind = self.activity.speech_kind(speech).or(self.activity.speech_scheduler.kind(speech));
+         let mut item = item.map(|msg| {
+             let source = match kind {
+                 Some(SpeechKind::Say) => Source::Say { speech },

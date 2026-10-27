@@ -1,0 +1,27 @@
+Reverted by known_bugs.sh to reintroduce the bug fixed by ba251a1d5:
+voice core: the driver's own say (a tool's progress line) is the TTS's when there is one, like 
+the host's say: a realtime model without say failed it (seed 1626)
+
+diff --git a/rust/crates/lk-agents-voice/src/agent_activity/tools.rs b/rust/crates/lk-agents-voice/src/agent_activity/tools.rs
+index 72c348a47..cd4b0fd4f 100644
+--- a/rust/crates/lk-agents-voice/src/agent_activity/tools.rs
++++ b/rust/crates/lk-agents-voice/src/agent_activity/tools.rs
+@@ -357,14 +357,11 @@ impl Driver {
+         self.activity.tools.claim.take().map(|c| c.tool)
+     }
+ 
+-    /// `say(text)` from inside the driver: on a realtime session the model's, else a pipeline
+-    /// say. `None` when nothing was scheduled (no voice to speak it).
++    /// `say(text)` from inside the driver: the realtime model's when it says and there is no
++    /// TTS, else a pipeline say. `None` when nothing was scheduled (no voice to speak it).
+     pub(crate) fn say_text(&mut self, now: Ts, text: String, out: &mut Out) -> Option<SpeechId> {
+-        let realtime = self.activity.rt_session.is_some();
+-        if self.session.tts.is_none()
+-            && self.session.outputs.plays_audio()
+-            && !(realtime && self.activity.realtime_state.says())
+-        {
++        let realtime = self.realtime_says();
++        if self.session.tts.is_none() && self.session.outputs.plays_audio() && !realtime {
+             out.trace(crate::trace::SpeechStep::SayRefused {
+                 why: crate::agent_activity::speech::SAY_WITHOUT_TTS_REFUSED,
+             });

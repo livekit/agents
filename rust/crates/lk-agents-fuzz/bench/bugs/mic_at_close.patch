@@ -1,0 +1,19 @@
+Reverted by known_bugs.sh to reintroduce the bug fixed by 05fd068ed:
+voice core: a microphone attached as the session closes is released; tests follow the AgentTask 
+removal
+
+diff --git a/rust/crates/lk-agents-voice/src/runtime.rs b/rust/crates/lk-agents-voice/src/runtime.rs
+index b8e73395e..e2bf1da00 100644
+--- a/rust/crates/lk-agents-voice/src/runtime.rs
++++ b/rust/crates/lk-agents-voice/src/runtime.rs
+@@ -100,6 +100,10 @@ impl Runtime {
+         for event in undelivered {
+             match event {
+                 Event::Input(input) => inputs.push(input),
++                // A microphone attached too late to be read is let go, not left in the table.
++                Event::Forwarder(ForwarderCommand::SetSource(Some(source))) => {
++                    self.driver.shared.resources.release(source);
++                }
+                 Event::Forwarder(command) => {
+                     for effect in self.forwarder.handle(command) {
+                         match effect {
