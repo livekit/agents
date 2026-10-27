@@ -19,7 +19,7 @@ use lk_agents_voice::{
     agent::Source,
     agent_activity::scheduling::SpeechKind,
     events::SessionEvent,
-    trace::{CoreStep, SpeechStep, Step},
+    trace::{CoreStep, HandoffStep, SpeechStep, Step},
 };
 
 use crate::{
@@ -137,11 +137,23 @@ fn message_names_models(
     }
 }
 
-/// Whether a recognition stream was open at `at`.
+/// Whether the session had an STT at `at`: a recognition stream open, and no agent since taken
+/// over without one (its turn, decided as the old one's stream closes, names no STT).
 fn stt_open(r: &Recording, at: &Observed) -> bool {
-    r.opened().iter().filter(|o| o.kind == Kind::Stt && o.at.seq <= at.seq).any(|o| {
+    let open = r.opened().iter().filter(|o| o.kind == Kind::Stt && o.at.seq <= at.seq).any(|o| {
         !r.closed().iter().any(|(c, k, n)| *k == Kind::Stt && *n == o.nth && c.seq <= at.seq)
-    })
+    });
+    let agent_has_stt = r
+        .journal()
+        .iter()
+        .take_while(|(a, _)| a.seq <= at.seq)
+        .filter_map(|(_, s)| match s {
+            Step::Handoff(HandoffStep::AgentUpdated { legs, .. }) => Some(legs.stt),
+            _ => None,
+        })
+        .last()
+        .unwrap_or(true);
+    open && agent_has_stt
 }
 
 /// A model's metrics record is whole: labelled, stamped on the wall clock within the session,
