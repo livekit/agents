@@ -354,7 +354,7 @@ pub struct InputTokenDetails {
 pub struct OutputTokenDetails {
     pub text_tokens: u32,
     pub audio_tokens: u32,
-    // Deprecated upstream; the deprecated `UsageSummary` still sums it, `ModelUsageCollector` does not.
+    // Deprecated upstream; `ModelUsageCollector` does not sum it.
     pub image_tokens: u32,
 }
 

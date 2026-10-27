@@ -26,10 +26,6 @@ const SOURCES: &[(&str, &str)] = &[
         "rust/crates/lk-agents-abi/src/metrics/usage/records.rs",
         "lk_agents_abi::metrics::usage::records",
     ),
-    (
-        "rust/crates/lk-agents-abi/src/metrics/usage_collector/records.rs",
-        "lk_agents_abi::metrics::usage_collector::records",
-    ),
     ("rust/crates/lk-agents-abi/src/voice/amd.rs", "lk_agents_abi::voice::amd"),
     (
         "rust/crates/lk-agents-abi/src/voice/session_options.rs",
@@ -142,7 +138,6 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/evals/llm_judge.rs", "lk_agents_abi::evals"),
     ("rust/crates/lk-agents-abi/src/evals/evaluator.rs", "lk_agents_abi::evals"),
     ("rust/crates/lk-agents-abi/src/metrics/usage.rs", "lk_agents_abi::metrics"),
-    ("rust/crates/lk-agents-abi/src/metrics/usage_collector.rs", "lk_agents_abi::metrics"),
     ("rust/crates/lk-agents-abi/src/utils/filters.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/utils/byte_stream.rs", "lk_agents_abi"),
     ("rust/crates/lk-agents-abi/src/tts/stream_pacer.rs", "lk_agents_abi::tts::stream_pacer"),

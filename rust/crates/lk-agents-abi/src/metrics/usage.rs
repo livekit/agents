@@ -119,7 +119,7 @@ impl ModelUsageCollector {
 
         u.output_text_tokens += u64::from(m.output_token_details.text_tokens);
         u.output_audio_tokens += u64::from(m.output_token_details.audio_tokens);
-        // `image_tokens` is not summed (no field); `UsageSummary` differs on purpose.
+        // `image_tokens` is not summed (no field).
         u.output_tokens += u64::from(m.output_tokens);
         u.session_duration += m.session_duration;
     }

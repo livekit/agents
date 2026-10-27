@@ -55,33 +55,6 @@ def model_usage_repr(usage: BaseModel) -> str:
     return f"{type(usage).__name__}({', '.join(f'{k}={v!r}' for k, v in fields.items())})"
 
 
-def usage_summary_post_init(summary: Any) -> None:
-    import warnings
-
-    warnings.warn(
-        "UsageSummary is deprecated. Use LLMModelUsage, TTSModelUsage, "
-        "or STTModelUsage from metrics.model_usage instead.",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-
-
-def usage_summary_llm_input_tokens(summary: Any) -> int:
-    return summary.llm_prompt_tokens  # type: ignore[no-any-return]
-
-
-def usage_summary_set_llm_input_tokens(summary: Any, value: int) -> None:
-    summary.llm_prompt_tokens = value
-
-
-def usage_summary_llm_output_tokens(summary: Any) -> int:
-    return summary.llm_completion_tokens  # type: ignore[no-any-return]
-
-
-def usage_summary_set_llm_output_tokens(summary: Any, value: int) -> None:
-    summary.llm_completion_tokens = value
-
-
 def _default_total_tokens(metrics: Any) -> Any:
     if "total_tokens" not in metrics.model_fields_set:
         metrics.total_tokens = metrics.input_tokens + metrics.output_tokens

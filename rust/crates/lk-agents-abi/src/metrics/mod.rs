@@ -1,12 +1,10 @@
-//! `metrics/`: the records (`base`, `usage::records`, `usage_collector::records`) and pure folds,
-//! records in, [`AgentSessionUsage`] out. Not ported: the `__repr__`s, the `DeprecationWarning`s
-//! (the binding raises them), `__call__`.
+//! `metrics/`: the records (`base`, `usage::records`) and pure folds, records in,
+//! [`AgentSessionUsage`] out. Not ported: the `__repr__`s, `__call__`.
 
 pub mod base;
 pub mod log;
 pub mod otel;
 pub mod usage;
-pub mod usage_collector;
 
 #[cfg(test)]
 pub(crate) mod testkit;
@@ -25,7 +23,6 @@ pub use usage::{
     AgentSessionUsage, EotModelUsage, InterruptionModelUsage, LlmModelUsage, ModelUsage,
     ModelUsageCollector, SttModelUsage, TtsModelUsage,
 };
-pub use usage_collector::{UsageCollector, UsageSummary};
 
 /// Not in `__all__`, but imported directly by `inference/interruption.py`.
 pub use base::Metadata;

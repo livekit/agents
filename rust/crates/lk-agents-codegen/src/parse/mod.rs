@@ -854,8 +854,6 @@ fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Vec<Member> {
             args: get("args").unwrap_or_default(),
             ret: get("ret").unwrap_or_else(|| "None".to_owned()),
             doc: get("doc").unwrap_or_default(),
-            // Explicit: an implicit setter would give every property a writable alias.
-            setter: get("setter"),
             name,
         });
     };

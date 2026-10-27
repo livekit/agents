@@ -993,14 +993,6 @@ class ModelUsageCollector:
     def collect(self, metrics: Any) -> None: ...
 
 
-class UsageCollector:
-    """`metrics.UsageCollector` -- the deprecated session-wide totals, with no per-model breakdown."""
-
-    def __init__(self) -> None: ...
-    def summary(self) -> dict[str, Any]: ...
-    def collect(self, metrics: Any) -> None: ...
-
-
 class ExpFilter:
     def __init__(
         self,

@@ -181,8 +181,6 @@ pub struct Member {
     pub doc: String,
     /// The `_bindings` name; defaults to `<snake_type>_<name>` so two models can share a member.
     pub hook: String,
-    /// `@<name>.setter` hook: `UsageSummary.llm_input_tokens` is read/write in the reference.
-    pub setter: Option<String>,
 }
 
 /// One host's view of one declaration.

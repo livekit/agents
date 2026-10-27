@@ -893,26 +893,6 @@ impl ModelUsageCollector {
     }
 }
 
-/// `metrics.UsageCollector` -- the deprecated session-wide totals, with no per-model breakdown.
-#[napi(js_name = "UsageCollector")]
-pub struct UsageCollector {
-    pub(crate) inner: std::sync::Mutex<lk_agents_abi::metrics::UsageCollector>,
-}
-
-#[napi]
-impl UsageCollector {
-    #[napi(constructor)]
-    pub fn new() -> Self {
-        UsageCollector { inner: std::sync::Mutex::new(lk_agents_abi::metrics::UsageCollector::new()) }
-    }
-
-    #[napi(js_name = "summary")]
-    pub fn summary(&self) -> crate::generated::records::UsageSummary {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::generated::records::UsageSummary::from(&inner.summary())
-    }
-}
-
 #[napi(js_name = "ExpFilter")]
 pub struct ExpFilter {
     pub(crate) inner: lk_agents_abi::ExpFilter,

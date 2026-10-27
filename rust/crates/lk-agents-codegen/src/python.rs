@@ -918,12 +918,6 @@ fn class(all: &[Decl], d: &Decl) -> Result<String, String> {
             docstring(&mut b, &lines, 8);
         }
         b.push_str(&format!("        return _bindings.{}(self)\n", m.hook));
-        if let Some(setter) = &m.setter {
-            b.push('\n');
-            b.push_str(&format!("    @{}.setter\n", m.name));
-            b.push_str(&format!("    def {}(self, value: {}) -> None:\n", m.name, m.ret));
-            b.push_str(&format!("        _bindings.{setter}(self, value)\n"));
-        }
         body = true;
     }
 
