@@ -8,6 +8,7 @@ use crate::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with}
 use crate::generation::playout::{Next, Segment, first_frame, perform_audio_forwarding};
 use crate::generation::tools::{ToolStep, run_tools};
 use crate::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
+use crate::trace::GenerationStep;
 use crate::io::RealtimeAudioNode;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{NextStep, StepDecision};
@@ -96,6 +97,11 @@ pub(crate) async fn realtime_generation_task(
         text_out: text_out.as_deref(),
         speaks_text: out.is_none(),
         plays_audio: out.is_some(),
+        // A text message is voiced by the TTS when one plays into the audio output
+        // (`"audio" not in msg_modalities and self.tts`).
+        tts: out.and(ctx.providers.tts.clone()),
+        voiced: None,
+        backlog: std::collections::VecDeque::new(),
         leg: None,
     };
     let played = perform_audio_forwarding(shared, handle, out, &mut generation).await;
@@ -104,6 +110,7 @@ pub(crate) async fn realtime_generation_task(
         node.end();
     }
     // `Generation::next` fails only on the speech's own request failing: nothing was generated.
+    generation.unvoice().await;
     let heard = played.map_err(|failed| failed.error)?;
     let interrupted = !heard.complete || handle.interrupted();
     if interrupted {
@@ -211,8 +218,25 @@ struct Generation<'a> {
     speaks_text: bool,
     /// An audio output plays the generation: a message whose modality is unsettled is audio.
     plays_audio: bool,
+    /// The TTS a text message is spoken with, when an audio output plays it.
+    tts: Option<Arc<dyn lk_agents_abi::Tts>>,
+    /// The text message the TTS is speaking now.
+    voiced: Option<Voiced>,
+    /// Events that came while a voiced message's audio was awaited, in order.
+    backlog: std::collections::VecDeque<Event>,
     /// The open message's transcript leg, flushed at its `MessageDone`.
     leg: Option<TextLeg<'a>>,
+}
+
+/// A text message spoken by the TTS: its text goes in as it streams, its audio is the message's.
+struct Voiced {
+    sink: lk_agents_abi::TtsSink,
+    source: lk_agents_abi::TtsSource,
+    transforms: Option<lk_agents_voice::transcription::Pipeline>,
+    /// The message's text is all in.
+    input_done: bool,
+    /// Its last frame came.
+    ended: bool,
 }
 
 /// One message of the generation, as the server holds it.
@@ -241,7 +265,11 @@ impl Generation<'_> {
 
     /// What was already sent to this speech when it was cut: the server holds it too.
     fn drain_started(&mut self) {
+        let mut events: Vec<Event> = self.backlog.drain(..).collect();
         while let Ok(ev) = self.events.try_recv() {
+            events.push(ev);
+        }
+        for ev in events {
             match ev {
                 Event::MessageStarted(m) => self.message_started(m.message_id),
                 Event::MessageModalities(m) => self.settle(&m.message_id, m.modalities),
@@ -270,6 +298,89 @@ impl Generation<'_> {
         if let Some(m) = self.messages.iter_mut().find(|m| m.id == id) {
             m.modalities = Some(modalities);
         }
+    }
+
+    /// The current message turned out to be text: the TTS speaks it, from the words so far.
+    async fn voice_message(&mut self) -> Result<(), DriverError> {
+        let (Some(tts), Some(idx)) = (self.tts.clone(), self.current) else { return Ok(()) };
+        if self.handle.interrupted() || self.voiced.is_some() {
+            return Ok(());
+        }
+        let words = self.segments.get(idx).cloned().unwrap_or_default();
+        let text = super::tts::transformed(self.shared, &words);
+        let segment = idx as u32;
+        self.shared.trace(GenerationStep::TtsRequested { speech: self.handle.id(), segment, text });
+        let (sink, source) = tts.stream().await?;
+        let shared = self.shared;
+        let mut transforms = (!shared.tts_transforms.is_empty())
+            .then(|| lk_agents_voice::transcription::Pipeline::new(&shared.tts_transforms));
+        super::tts::push_text(&sink, &mut transforms, &words)?;
+        self.voiced = Some(Voiced { sink, source, transforms, input_done: false, ended: false });
+        Ok(())
+    }
+
+    /// The voiced message's next frame, its text fed meanwhile; `None` once its audio is over.
+    async fn voice(&mut self) -> Option<Result<Next, DriverError>> {
+        let v = self.voiced.as_mut()?;
+        if v.ended {
+            self.unvoice().await;
+            return None;
+        }
+        let got = {
+            let mut pending = Box::pin(v.source.next());
+            loop {
+                if v.input_done {
+                    break pending.await;
+                }
+                tokio::select! {
+                    biased;
+                    ev = self.events.recv() => match ev {
+                        Some(Event::TextDelta(d)) => {
+                            if let Some(seg) = self.current.and_then(|i| self.segments.get_mut(i)) {
+                                seg.push_str(&d.delta);
+                            }
+                            if !self.handle.interrupted() && let Some(leg) = &self.leg {
+                                leg.capture(&d.delta).await;
+                            }
+                            if let Err(e) = super::tts::push_text(&v.sink, &mut v.transforms, &d.delta) {
+                                break Err(e);
+                            }
+                        }
+                        // Its text is all in; the boundary is the audio's end.
+                        Some(Event::MessageDone(m)) => {
+                            super::tts::end_input(&v.sink, &mut v.transforms);
+                            v.input_done = true;
+                            self.backlog.push_back(Event::MessageDone(m));
+                        }
+                        Some(ev) => self.backlog.push_back(ev),
+                        None => {
+                            super::tts::end_input(&v.sink, &mut v.transforms);
+                            v.input_done = true;
+                        }
+                    },
+                    got = &mut pending => break got,
+                }
+            }
+        };
+        match got {
+            Ok(Some(chunk)) => {
+                v.ended = chunk.is_final && v.input_done;
+                self.add_audio(&chunk.frame);
+                Some(Ok(Next::Frame(chunk.frame)))
+            }
+            Ok(None) => {
+                self.unvoice().await;
+                None
+            }
+            Err(e) => Some(Err(DriverError::from(e))),
+        }
+    }
+
+    /// The voiced message's synthesis is over: its input ended and its stream closed.
+    async fn unvoice(&mut self) {
+        let Some(v) = self.voiced.take() else { return };
+        v.sink.end_input();
+        let _ = v.source.close(super::pipeline_reply::teardown_deadline(self.shared)).await;
     }
 
     /// The truncations that leave the server holding what the caller heard (`heard.played` of the
@@ -325,10 +436,22 @@ impl Segment for Generation<'_> {
 
     async fn next(&mut self) -> Result<Next, DriverError> {
         loop {
-            // The channel closed: the session ended, or the loop released this speech.
-            let Some(ev) = self.events.recv().await else {
-                self.end_message();
-                return Ok(Next::End);
+            if self.voiced.is_some() {
+                match self.voice().await {
+                    Some(next) => return next,
+                    None => continue,
+                }
+            }
+            let ev = match self.backlog.pop_front() {
+                Some(ev) => ev,
+                None => match self.events.recv().await {
+                    Some(ev) => ev,
+                    // The channel closed: the session ended, or the loop released this speech.
+                    None => {
+                        self.end_message();
+                        return Ok(Next::End);
+                    }
+                },
             };
             self.received = true;
             if self.response_id.is_none()
@@ -365,7 +488,12 @@ impl Segment for Generation<'_> {
                     self.add_audio(&frame);
                     return Ok(Next::Frame(frame));
                 }
-                Event::MessageModalities(m) => self.settle(&m.message_id, m.modalities),
+                Event::MessageModalities(m) => {
+                    self.settle(&m.message_id, m.modalities);
+                    if m.modalities == Modalities::TextOnly {
+                        self.voice_message().await?;
+                    }
+                }
                 // A boundary, so `wait_for_playout` can finish this message while the next arrives.
                 Event::MessageDone(m) => {
                     self.message_done(&m.message_id);

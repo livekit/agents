@@ -188,7 +188,7 @@ async fn synthesize(
 }
 
 /// One text chunk through the segment's filters. Empty output is normal (a filter mid-pattern).
-fn push_text(
+pub(super) fn push_text(
     sink: &lk_agents_abi::TtsSink,
     transforms: &mut Option<Pipeline>,
     chunk: &str,
@@ -204,7 +204,7 @@ fn push_text(
 
 /// The input is over: the filters' tail, then `end_input` (not `flush`: a `StreamAdapter` holds its
 /// final frame until input is done).
-fn end_input(sink: &lk_agents_abi::TtsSink, transforms: &mut Option<Pipeline>) {
+pub(super) fn end_input(sink: &lk_agents_abi::TtsSink, transforms: &mut Option<Pipeline>) {
     for piece in transforms.as_mut().map(|p| p.flush()).unwrap_or_default() {
         let _ = sink.push(piece);
     }
@@ -314,7 +314,7 @@ impl Segment for Streaming<'_, '_> {
 
 /// Run whole on a scratch pipeline. The duplex path journals this, so `TtsRequested{text}` is what
 /// the TTS was given.
-fn transformed(shared: &Arc<SessionShared>, raw: &str) -> String {
+pub(super) fn transformed(shared: &Arc<SessionShared>, raw: &str) -> String {
     if shared.tts_transforms.is_empty() {
         return raw.to_owned();
     }
