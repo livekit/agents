@@ -546,6 +546,8 @@ pub struct StreamInfo {
     pub attributes: HashMap<String, String>,
     // Carried whole so the host can rebuild its `TextStreamInfo` for `TextInputEvent.info`.
     pub timestamp: i64,
+    // Only a text stream has attachments: a byte stream's header reads as none.
+    #[binding(default)]
     pub attachments: Vec<String>,
 }
 
