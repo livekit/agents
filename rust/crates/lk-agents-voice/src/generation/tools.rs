@@ -72,7 +72,8 @@ impl ToolStep {
             }
             if handle.scheduled() {
                 let call = Box::new(call.clone());
-                shared.report(GenEvent::ToolCallStarted { speech, step, call, runner });
+                let grant = None;
+                shared.report(GenEvent::ToolCallStarted { speech, step, call, runner, grant });
             }
             self.calls.push(Dispatched { call, rx: None });
             return;
@@ -86,14 +87,24 @@ impl ToolStep {
                     handle.item_added(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
                 }
                 let call = Box::new(call.clone());
-                shared.report(GenEvent::ToolCallStarted { speech, step, call, runner });
+                // A hosted call's approval is the loop's to decide, from the record as the start
+                // reaches it: the body waits for the answer.
+                let (grant, granted) = match &runner {
+                    Some(_) => {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        (Some(tx), Some(rx))
+                    }
+                    None => (None, None),
+                };
+                shared.report(GenEvent::ToolCallStarted { speech, step, call, runner, grant });
+                granted
             };
         let mut one = call.clone();
-        let deferred = if handle.step_authorized(step) {
-            start(shared, handle, &mut one);
-            None
+        let (deferred, granted) = if handle.step_authorized(step) {
+            let granted = start(shared, handle, &mut one);
+            (None, granted)
         } else {
-            Some(start)
+            (Some(start), None)
         };
         let rx = {
             let (tx, rx) = tokio::sync::oneshot::channel();
@@ -108,6 +119,7 @@ impl ToolStep {
             let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
                 // A start already reported runs, as the reference's executor starts the body
                 // right after `tool_execution_started_cb`, interrupted or not.
+                let mut granted = granted;
                 if let Some(start) = deferred {
                     // Authorization first: a discarded preemptive generation, or a speech
                     // interrupted while queued, drops the call unrun.
@@ -123,7 +135,7 @@ impl ToolStep {
                     if let Some(previous) = previous {
                         let _ = previous.await;
                     }
-                    start(&shared, &handle, &mut one);
+                    granted = start(&shared, &handle, &mut one);
                 }
                 let _ = started_tx.send(());
                 // The host classifies, the driver decides (`answer`).
@@ -133,7 +145,10 @@ impl ToolStep {
                     Ok(runner) => {
                         handle.tool_blocking(&one.call_id, &one.name);
                         // Decided as the body starts: a call dropped unrun spends no answer.
-                        let granted = crate::tool_executor::grant(&shared, &one);
+                        let granted = match granted {
+                            Some(rx) => rx.await.unwrap_or(false),
+                            None => false,
+                        };
                         let report = runner.answer(&one, &host_speech, granted).await;
                         handle.tool_returned(&one.call_id);
                         report

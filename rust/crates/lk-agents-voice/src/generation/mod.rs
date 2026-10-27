@@ -829,6 +829,9 @@ pub enum GenEvent {
         step: u32,
         call: Box<lk_agents_abi::FunctionCall>,
         runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
+        /// A hosted call's approval, decided by the loop as it hears the start: the body waits
+        /// for it (`needs_approval`).
+        grant: Option<tokio::sync::oneshot::Sender<bool>>,
     },
     /// `None` when there is nothing to say.
     ToolCallEnded {

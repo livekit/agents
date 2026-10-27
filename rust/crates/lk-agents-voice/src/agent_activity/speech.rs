@@ -818,7 +818,10 @@ impl Driver {
                     self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
                 }
             }
-            GenEvent::ToolCallStarted { speech, step, call, runner } => {
+            GenEvent::ToolCallStarted { speech, step, call, runner, grant } => {
+                if let Some(grant) = grant {
+                    let _ = grant.send(crate::tool_executor::grant(&self.shared, &call));
+                }
                 self.on_tool_started(now, speech, step, *call, runner, out);
             }
             GenEvent::ToolCallEnded { speech, call_id, end, message } => {
