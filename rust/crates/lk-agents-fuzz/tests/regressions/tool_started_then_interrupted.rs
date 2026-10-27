@@ -20,7 +20,7 @@ fn a_started_call_runs_though_its_speech_is_interrupted() {
         Input::Advance { ms: Millis(20) },
     ];
     let run = simulate_with(3, async {
-        let mut run = Run::start(&Setup::default(), 3, Policy::Pos).await;
+        let mut run = Run::start(&Setup::default(), 3, Policy::BasicPos).await;
         for input in &inputs {
             run.apply(input).await;
         }

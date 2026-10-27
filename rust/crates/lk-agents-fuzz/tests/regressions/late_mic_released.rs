@@ -20,7 +20,7 @@ fn a_mic_attached_at_the_close_is_released() {
                 inputs: inputs.clone(),
                 schedule,
                 random: Vec::new(),
-                policy: Policy::Pos,
+                policy: Policy::BasicPos,
             };
             run(case).failures.iter().any(|f| f.contract == "every_resource_released")
         })

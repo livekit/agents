@@ -9,7 +9,8 @@ fn clean(inputs: Vec<Input>) {
     for schedule in 0..16 {
         let setup = Setup { vad: true, stt: true, ..Setup::default() };
         let inputs = inputs.clone();
-        let outcome = run(Case { setup, inputs, schedule, policy: Policy::Pos, ..Case::default() });
+        let outcome =
+            run(Case { setup, inputs, schedule, policy: Policy::BasicPos, ..Case::default() });
         let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.as_str()).collect();
         assert!(!failed.contains(&"forwarded_while_enabled"), "schedule {schedule}: {failed:?}");
     }

@@ -18,7 +18,7 @@ fn an_attach_sent_after_a_say_is_not_the_says_path() {
 fn failures(schedule: u64) -> Vec<String> {
     let setup = Setup { tts: false, ..Setup::default() };
     let run = simulate_with(schedule, async move {
-        let mut run = Run::start(&setup, schedule, Policy::Pos).await;
+        let mut run = Run::start(&setup, schedule, Policy::BasicPos).await;
         let inputs = [
             Input::SetTranscriptionOutput { attach: false },
             Input::SetAudioOutput { attach: false },

@@ -10,7 +10,10 @@ use std::mem::Discriminant;
 
 use fastrand::Rng;
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_voice::agent_session::{Event, Input, objects::races};
+use lk_agents_voice::agent_session::{
+    Event, Input,
+    objects::{Access, races},
+};
 
 /// How the next step is chosen, drawn per seed and carried by the case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -23,15 +26,23 @@ pub enum Policy {
     /// implements it (livekit/gosim#28). The processes are each event source and the pool of
     /// tasks the driver spawned. Every event draws an independent priority; the enabled step with
     /// the highest priority runs: a source's oldest pending event, or one task turn, after which
-    /// the pool draws a new priority. Full POS re-draws the priorities of events racing with the
-    /// one just run; every event here races, since all of them reach one core, so it would
-    /// degenerate to a random walk.
-    Pos,
+    /// the pool draws a new priority.
+    BasicPos,
+    /// Partial-order sampling (Algorithm 4 with POS*'s read relaxation): BasicPOS, and after each
+    /// step every pending head racing with it draws a new priority. Racing is per object touched
+    /// ([`Event::accesses`]), not per process: one core handles every event, but two events of
+    /// different speeches, or a data-plane command and a speech's tool start, touch nothing in
+    /// common. The task pool's steps are unknown, so the pool races with every event.
+    FullPos,
 }
 
 impl Policy {
     pub fn of(schedule: u64) -> Self {
-        if Rng::with_seed(schedule ^ POLICY_STREAM).bool() { Policy::Pos } else { Policy::Arrival }
+        if Rng::with_seed(schedule ^ POLICY_STREAM).bool() {
+            Policy::BasicPos
+        } else {
+            Policy::Arrival
+        }
     }
 }
 
@@ -74,6 +85,7 @@ struct Queued {
     source: Source,
     arrival: u64,
     priority: Priority,
+    accesses: Vec<Access>,
     event: Event,
 }
 
@@ -110,7 +122,8 @@ impl Queue {
         let arrival = self.arrivals;
         self.arrivals += 1;
         let priority = self.draw();
-        self.pending.push(Queued { source: Source::of(&event), arrival, priority, event });
+        let (source, accesses) = (Source::of(&event), event.accesses());
+        self.pending.push(Queued { source, arrival, priority, accesses, event });
     }
 
     /// The next step: an event, a task turn when `tasks_ready`, or nothing.
@@ -130,7 +143,7 @@ impl Queue {
             .collect();
         let event = match self.policy {
             Policy::Arrival => heads.iter().copied().min_by_key(|&i| self.pending[i].arrival),
-            Policy::Pos => {
+            Policy::BasicPos | Policy::FullPos => {
                 for &i in &heads {
                     if self.starved(self.pending[i].priority) {
                         self.pending[i].priority = self.draw();
@@ -145,6 +158,12 @@ impl Queue {
         };
         if let Some(i) = event {
             let i = self.commutation_pair(i, &heads);
+            if self.policy == Policy::FullPos {
+                let accesses = std::mem::take(&mut self.pending[i].accesses);
+                self.reassign(&heads, |other| races(&accesses, other));
+                // The pool's next step is unknown: it races.
+                self.tasks = self.draw();
+            }
             return Some(self.deliver(i, self.owed.is_some()));
         }
         if !tasks_ready {
@@ -152,7 +171,20 @@ impl Queue {
         }
         // The pool took its step: like a goroutine in gosim, it draws its next priority.
         self.tasks = self.draw();
+        if self.policy == Policy::FullPos {
+            self.reassign(&heads, |_| true);
+        }
         Some(Next::Tasks)
+    }
+
+    /// Algorithm 4's reassignment: every pending head racing with the step just taken draws a
+    /// new priority, so the next race is ordered afresh rather than by what the step outran.
+    fn reassign(&mut self, heads: &[usize], racing: impl Fn(&[Access]) -> bool) {
+        for &j in heads {
+            if racing(&self.pending[j].accesses) {
+                self.pending[j].priority = self.draw();
+            }
+        }
     }
 
     fn deliver(&mut self, i: usize, paired: bool) -> Next {
