@@ -8,12 +8,15 @@ searches the glue: wiring, job context, exceptions, and latency the glue adds.
 What every seed checks:
 
 - nothing raises and nothing is logged with a traceback (a drawn toolset that fails its setup
-  logs one, as the reference does, and is the only one allowed);
+  logs one, as the reference does, and is the only one allowed), and no error event is emitted:
+  nothing is made to fail, so one is a failure the session made up (a plugin stream ending in
+  the close's cancellation reported as a provider error);
 - every speech ``say()`` and ``generate_reply()`` returned is done once the call settles, and the
-  session closes once, within a bound;
+  session closes once, within a bound, leaving no task running;
 - a reply asked of an idle agent is heard within its providers' drawn delays and a budget
   (``BUDGET_S``): the LLM's first chunk and the voice's first audio, or the realtime server's;
-- a realtime session is asked for a reply only once the updates sent before it applied;
+- a realtime session is asked for a reply only once the updates sent before it applied, and the
+  server's turn detection is kept unless a detector was named;
 - in a job: the entrypoint, the session end callback and the shutdown callbacks see the job's
   context, the session started on the job's room is the job's primary session and connected the
   room once, and the job tells its parent it is shutting down and exiting.
@@ -190,6 +193,9 @@ def providers(call: Call) -> Any:
     class StreamingSTT(stt.STT):
         """Hears "<utterance>" in each burst of half a second or more."""
 
+        # a plugin whose reader task the close cancels raises that cancellation from its stream
+        cancels_at_close = False
+
         def __init__(self, name: str = "fuzz-stt") -> None:
             super().__init__(
                 capabilities=stt.STTCapabilities(streaming=True, interim_results=False)
@@ -207,6 +213,14 @@ def providers(call: Call) -> Any:
             return _Recognize(stt=self, conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
     class _Recognize(stt.RecognizeStream):
+        async def __anext__(self) -> stt.SpeechEvent:
+            try:
+                return await super().__anext__()
+            except StopAsyncIteration:
+                if getattr(self._stt, "cancels_at_close", False):
+                    raise asyncio.CancelledError() from None
+                raise
+
         async def _run(self) -> None:
             heard = 0.0
             async for frame in self.input:
@@ -611,6 +625,9 @@ def build_session(call: Call, p: Any) -> tuple[Any, list[Any], str]:
             "batch": p.BatchSTT,
             "fallback": p.fallback_stt,
         }[stt_kind]()
+        if stt_kind == "streaming" and d.chance(0.5):
+            stt.cancels_at_close = True
+            stt_kind += "(cancelled at close)"
         voice = d.rng.choice(["chunked", "streaming"])
         tts = p.ChunkedTTS() if voice == "chunked" else p.StreamingTTS()
         kwargs.update(stt=stt, llm=p.FuzzLLM(), tts=tts, vad=vad)
@@ -667,6 +684,11 @@ async def measured_reply(call: Call, realtime: bool) -> None:
         voice = next((d for at, d in call.tts_delays if at >= start), 0.0)
         owed = call.llm_delays.get(asked, 0.0) + voice
     check(heard_at is not None, f"a reply asked at {start:.2f}s was not heard within 4 s")
+    # the server answers what it was sent before the reply: the user message is in its context
+    check(
+        not realtime or asked in call.rt_delays,
+        "the realtime server was asked for a reply before the user message sent ahead of it applied",
+    )
     took = heard_at - start  # type: ignore[operator]
     call.log(f"measured reply: {took:.3f}s, providers owed {owed:.3f}s")
     check(
@@ -700,6 +722,8 @@ async def room_call_body(call: Call) -> None:
     options = room_options(call)
     call.log("call:", desc, "room_options" if options is not None else "")
     session.on("close", lambda ev: setattr(call, "closes", call.closes + 1))
+    # nothing is made to fail: an error event is a provider failure the session made up
+    session.on("error", lambda ev: call.violations.append(f"an error event: {ev.error}"))
     call.room = _core.FakeRoom(sample_rate=48000)
     call.room.join("user")
     kwargs = {"room_options": options} if options is not None else {}
@@ -784,6 +808,8 @@ async def job_call(call: Call) -> None:
         call.log("job:", desc)
         call.session = session
         session.on("close", lambda ev: setattr(call, "closes", call.closes + 1))
+        # nothing is made to fail: an error event is a provider failure the session made up
+        session.on("error", lambda ev: call.violations.append(f"an error event: {ev.error}"))
         await session.start(FrontDesk(tools))
         seen["primary"] = ctx._primary_agent_session is session
         seen["connects"] = ctx.room.connect.await_count - connects

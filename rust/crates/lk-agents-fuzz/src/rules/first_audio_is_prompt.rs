@@ -81,15 +81,14 @@ impl Rule for FirstAudioIsPrompt {
             let (Some(had), Some(may)) = (delivered.get(&source), may.last()) else {
                 continue;
             };
-            let may = &may;
-            let from = (*had).max(*may);
+            let from = (*had).max(may);
             if pushed.at_ms <= from.at_ms + BUDGET_MS {
                 check.expect_with(Subject::Speech(speech), true, String::new);
                 continue;
             }
             let excused = journal
                 .iter()
-                .filter(|(a, _)| a.seq >= from.seq.min(may.seq) && a.seq <= pushed.seq)
+                .filter(|(a, _)| a.seq >= may.seq && a.seq <= pushed.seq)
                 .any(|(_, s)| excuses(s, speech));
             if excused {
                 check.expect_with(Subject::Speech(speech), true, String::new);

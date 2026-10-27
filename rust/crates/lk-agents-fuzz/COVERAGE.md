@@ -774,7 +774,8 @@ Measured nowhere here, and each a separate source of production risk:
 ## 12. Keeping it true
 
 **The launch gate** is one command, `rust/crates/lk-agents-fuzz/launch-gate.sh`: the workspace
-build, the voice core's unit tests, the fuzz suites (every contract's examples, counterexamples
+build, the voice core's unit tests, the provider clients' unit tests (`lk-agents-inference`,
+`lk-agents-abi`: what the DST does not run), the fuzz suites (every contract's examples, counterexamples
 and probe, determinism, the regression tests), the 1,024-seed survey, a
 4,096-seed campaign on the next window (`VOICE_GATE_SEEDS`), and the soak. It fails on any
 finding of a contract not in `check::KNOWN_FINDINGS` (the open findings, listed so a new kind of

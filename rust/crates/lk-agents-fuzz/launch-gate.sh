@@ -41,6 +41,10 @@ cargo check -q --workspace --all-targets
 step "voice core unit tests"
 cargo test -q -p lk-agents-voice
 
+# The provider clients the DST does not run: the gateway's TTS, STT and LLM, the host bridges.
+step "provider clients' unit tests"
+cargo test -q -p lk-agents-inference -p lk-agents-abi
+
 step "fuzz suites: contract registry, probes, determinism, regressions"
 cargo test -q --release -p lk-agents-fuzz
 
