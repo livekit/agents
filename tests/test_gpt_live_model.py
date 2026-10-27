@@ -387,6 +387,63 @@ async def test_reconnect_discards_partial_input_audio(
         await model.aclose()
 
 
+async def test_a_delegation_answers_on_the_clock_of_the_session_it_arrives_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audio pushed while reconnecting goes out on the new session, whose clock starts with it."""
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = iter(sockets)
+    reconnect = asyncio.Event()
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        ws = next(connections)
+        if ws is sockets[1]:
+            await reconnect.wait()
+        return ws
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    events = _user_events(session)
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await session._session_started_fut
+        for _ in range(10):
+            session.push_audio(_silence(100))
+        await asyncio.sleep(0.05)
+
+        await sockets[0].close()
+        await asyncio.sleep(0.05)
+        for _ in range(20):
+            session.push_audio(_silence(100))
+        reconnect.set()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await session._session_started_fut
+        await asyncio.sleep(0.05)
+
+        session._handle_event(_transcript("user", "Hello?", 1500))
+        session._handle_event(
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": "item_d1", "type": "delegation", "target": "client"},
+            }
+        )
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session.push_audio(_silence(100))
+        assert events[-2][1].transcript == "Hello?"
+        assert events[-1][0] == "input_speech_stopped"
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_the_mute_state_survives_a_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
     sockets = [_LifecycleWS(), _LifecycleWS()]
     connections = iter(sockets)
@@ -1665,6 +1722,7 @@ async def test_each_caller_turn_takes_the_first_answer_after_it_began(
         }
         for _ in range(100):
             session.push_audio(_silence(100))
+        await asyncio.sleep(0.05)  # a delegation answers at the caller audio sent
         assert finals()[-1] == "Hello"
         session._handle_event(delegation)
         for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
@@ -1673,6 +1731,7 @@ async def test_each_caller_turn_takes_the_first_answer_after_it_began(
 
         for _ in range(12):
             session.push_audio(_silence(100))
+        await asyncio.sleep(0.05)
         session._handle_event(delegation)
         session._handle_event(_transcript("user", "Book it.", 11500))
         for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
@@ -1734,6 +1793,7 @@ async def test_a_tool_call_commits_the_callers_request_before_it_runs(
         await asyncio.sleep(0.05)
         for _ in range(20):
             session.push_audio(_silence(100))
+        await asyncio.sleep(0.05)
         session._handle_event(_transcript("user", "What's the weather in Paris?", 1000))
         session._handle_event(
             {
@@ -1745,10 +1805,16 @@ async def test_a_tool_call_commits_the_callers_request_before_it_runs(
         session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
         assert order == ["final", "call"]
 
-        # the caller starts their next request while the first one's tools still run
-        session._handle_event(_transcript("user", "Also", 3000))
+        # the caller starts their next request while the first one's tools still run, and the
+        # model answers it before the caller's last words arrive
+        session._handle_event(_transcript("user", "Also book", 3000))
+        session._handle_event(_transcript("assistant", "Sure.", 4000))
         session._handle_event(_response_event("item_d1", _function_call_done("call_2")))
+        session._handle_event(_transcript("user", " a table", 3800))
         assert order == ["final", "call", "call"]
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session.push_audio(_silence(100))
+        assert order == ["final", "call", "call", "final"]
     finally:
         await session.aclose()
         await model.aclose()
