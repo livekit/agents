@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -23,13 +24,15 @@ def provider(request, monkeypatch):
 
 
 @asynccontextmanager
-async def running(provider, *, max_retry=0, liveness_timeout=0.3):
+async def running(
+    provider, *, max_retry=0, liveness_timeout=0.3, timeout=10, continuous_audio=True
+):
     case, instance, transport = provider
     stream = instance.stream(
         conn_options=APIConnectOptions(
             max_retry=max_retry,
             retry_interval=0,
-            timeout=10,
+            timeout=timeout,
             liveness_timeout=liveness_timeout,
         )
     )
@@ -40,14 +43,17 @@ async def running(provider, *, max_retry=0, liveness_timeout=0.3):
         # Keep supplying audio after a reconnect. Outbound audio must not count as
         # inbound activity or successful provider progress.
         while not stream._task.done() and not stream._input_ch.closed:
+            samples = 1600 if continuous_audio else 3200
             stream.push_frame(
                 rtc.AudioFrame(
-                    data=b"\x01\x01" * 1600,
+                    data=b"\x01\x01" * samples,
                     sample_rate=16000,
                     num_channels=1,
-                    samples_per_channel=1600,
+                    samples_per_channel=samples,
                 )
             )
+            if not continuous_audio:
+                return
             await asyncio.sleep(0.1)
 
     sender = asyncio.create_task(feed())
@@ -191,10 +197,14 @@ async def test_failure_while_waiting_for_final_result_is_reported(
         assert len(transport.sockets) == 1
 
 
-async def test_cancellation_closes_socket_without_retry(provider):
+@pytest.mark.parametrize("end_input", [False, True])
+async def test_cancellation_closes_socket_without_retry(provider, end_input):
     _, instance, transport = provider
     async with running(provider) as stream:
         await asyncio.sleep(0.05)
+        if end_input:
+            stream.end_input()
+            await asyncio.sleep(0.05)
         await stream.aclose()
         await instance.aclose()
         assert len(transport.sockets) == 1
@@ -215,3 +225,136 @@ async def test_close_after_input_end_finishes_without_retry(provider):
         # returning. Virtual time covers that wait without a wall-clock delay.
         await asyncio.wait_for(stream._task, 40)
         assert len(transport.sockets) == 1
+
+
+async def test_flush_preserves_stream_for_more_audio(provider):
+    _, _, transport = provider
+    transport.auto_reply = True
+    async with running(provider, continuous_audio=False) as stream:
+        await asyncio.sleep(0.2)
+        # Leave a partial audio packet for flush() to send.
+        stream.push_frame(
+            rtc.AudioFrame(
+                data=b"\x01\x01" * 320,
+                sample_rate=16000,
+                num_channels=1,
+                samples_per_channel=320,
+            )
+        )
+        stream.flush()
+        await asyncio.sleep(0.2)
+        if stream._task.done():
+            await stream._task
+        assert not stream._task.done()
+        before = sum(len(socket.writes) for socket in transport.sockets)
+        stream.push_frame(
+            rtc.AudioFrame(
+                data=b"\x02\x02" * 1600,
+                sample_rate=16000,
+                num_channels=1,
+                samples_per_channel=1600,
+            )
+        )
+        stream.flush()
+        await asyncio.sleep(0.2)
+        assert sum(len(socket.writes) for socket in transport.sockets) > before
+        assert not stream._task.done()
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [case for case in CASES if case.post_input_timeout],
+    ids=lambda case: case.name,
+    indirect=True,
+)
+@pytest.mark.parametrize("max_retry", [0, 2])
+async def test_post_input_timeout_is_not_extended_by_pongs(provider, max_retry):
+    _, _, transport = provider
+    async with running(
+        provider, timeout=0.5, max_retry=max_retry, continuous_audio=False
+    ) as stream:
+        await asyncio.sleep(0.2)
+        stream.end_input()
+        with pytest.raises(APIError):
+            await asyncio.wait_for(stream._task, 2)
+        assert len(transport.sockets) == max_retry + 1
+        assert transport.sockets[0].pings >= 2
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [case for case in CASES if case.post_input_timeout],
+    ids=lambda case: case.name,
+    indirect=True,
+)
+async def test_post_input_drain_preserves_delayed_transcript(provider):
+    case, _, transport = provider
+    async with running(provider, timeout=0.5, continuous_audio=False) as stream:
+        await asyncio.sleep(0.2)
+        stream.end_input()
+        await asyncio.sleep(0.2)
+        socket = transport.sockets[0]
+        if case.end_packet is not None:
+            assert any(
+                isinstance(data, str) and json.loads(data).get("type") == case.end_packet
+                for data in socket.writes
+            )
+        for event in case.completion:
+            socket.emit(event)
+        if case.completion_closes_socket:
+            socket.server_close()
+
+        async def collect():
+            return [
+                event.alternatives[0].text
+                async for event in stream
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+            ]
+
+        assert await asyncio.wait_for(collect(), 1) == ["words"]
+        assert len(transport.sockets) == 1
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [case for case in CASES if case.post_input_timeout],
+    ids=lambda case: case.name,
+    indirect=True,
+)
+async def test_final_response_deadline_starts_after_audio_is_sent(provider, monkeypatch):
+    case, _, transport = provider
+    async with running(provider, timeout=0.5, continuous_audio=False) as stream:
+        await asyncio.sleep(0.2)
+        socket = transport.sockets[0]
+        blocked = asyncio.Event()
+        release = asyncio.Event()
+
+        def pause(send):
+            async def write(data):
+                blocked.set()
+                await release.wait()
+                await send(data)
+
+            return write
+
+        monkeypatch.setattr(socket, "send_str", pause(socket.send_str))
+        monkeypatch.setattr(socket, "send_bytes", pause(socket.send_bytes))
+        stream.push_frame(
+            rtc.AudioFrame(
+                data=b"\x01\x01" * 1600,
+                sample_rate=16000,
+                num_channels=1,
+                samples_per_channel=1600,
+            )
+        )
+        stream.end_input()
+        await asyncio.wait_for(blocked.wait(), 1)
+        await asyncio.sleep(0.7)
+        assert not stream._task.done()
+        release.set()
+        await asyncio.sleep(0.2)
+        for event in case.completion:
+            socket.emit(event)
+        if case.completion_closes_socket:
+            socket.server_close()
+        await asyncio.wait_for(stream._task, 1)

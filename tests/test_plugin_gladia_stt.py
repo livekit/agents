@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+from dataclasses import replace
 
 import aiohttp
 import pytest
 
+from livekit import rtc
 from livekit.agents import APIConnectOptions, stt
 
 from .stt_contract_cases import CASES_BY_NAME, assert_control_write_failure, make_provider
@@ -99,3 +102,81 @@ async def test_stop_recording_write_failure_is_reported(monkeypatch):
     await assert_control_write_failure(
         CASES_BY_NAME["gladia"], monkeypatch, "stop_recording", "end"
     )
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("stop", ["flush", "silence"])
+@pytest.mark.parametrize("first_samples", [320, 1600])
+async def test_segment_completion_preserves_queued_audio(monkeypatch, stop, first_samples):
+    from livekit.plugins.gladia.stt import AudioEnergyFilter
+
+    case = replace(
+        CASES_BY_NAME["gladia"],
+        completion=(
+            {
+                "type": "transcript",
+                "data": {
+                    "is_final": True,
+                    "utterance": {
+                        "text": "words",
+                        "start": 0,
+                        "end": 0.02,
+                        "words": [{"word": "words", "start": 0, "end": 0.02}],
+                    },
+                },
+            },
+            {"type": "end_session"},
+        ),
+        options={
+            "energy_filter": AudioEnergyFilter(min_silence=0) if stop == "silence" else False,
+        },
+    )
+    _, provider, transport = make_provider(case, monkeypatch)
+    transport.auto_reply = True
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    frames = [
+        rtc.AudioFrame(
+            data=bytes([value, value]) * samples,
+            sample_rate=16000,
+            num_channels=1,
+            samples_per_channel=samples,
+        )
+        for value, samples in [(1, first_samples), (2, 1600)]
+    ]
+    try:
+        stream.push_frame(frames[0])
+        if stop == "flush":
+            stream.flush()
+        else:
+            stream.push_frame(rtc.AudioFrame.create(16000, 1, 320))
+        stream.push_frame(frames[1])
+        # Close input before either connection runs. Its remaining queue must drain.
+        stream.end_input()
+        events = [event async for event in stream]
+        assert [
+            event.alternatives[0].text
+            for event in events
+            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        ] == ["words", "words"]
+        finals = [
+            event.alternatives[0]
+            for event in events
+            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        assert finals[1].start_time - finals[0].start_time == pytest.approx(frames[0].duration)
+        assert finals[1].words[0].start_time - finals[0].words[0].start_time == pytest.approx(
+            frames[0].duration
+        )
+        assert len(transport.sockets) == 2
+        for socket, frame in zip(transport.sockets, frames, strict=True):
+            chunks = [
+                base64.b64decode(json.loads(data)["data"]["chunk"])
+                for data in socket.writes
+                if json.loads(data).get("type") == "audio_chunk"
+            ]
+            assert b"".join(chunks) == frame.data.tobytes()
+        assert stream._num_retries == 0
+    finally:
+        await stream.aclose()
+        await provider.aclose()

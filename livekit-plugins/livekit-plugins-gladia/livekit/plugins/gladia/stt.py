@@ -758,6 +758,7 @@ class SpeechStream(stt.SpeechStream):
                 self._audio_energy_filter = AudioEnergyFilter()
 
         self._pushed_audio_duration = 0.0
+        self._session_time_offset = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -878,6 +879,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
+        self._pushed_audio_duration = 0.0
         backoff_time = 1.0
         max_backoff = 30.0
 
@@ -895,6 +897,7 @@ class SpeechStream(stt.SpeechStream):
                 async with self._session.ws_connect(session_url, autoping=False) as ws:
                     self._ws = ws
                     self._closing_ws = False
+                    self._session_time_offset = self._pushed_audio_duration
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
                     send_task = asyncio.create_task(self._send_audio_task())
@@ -917,15 +920,22 @@ class SpeechStream(stt.SpeechStream):
                             and recv_task not in done
                             and wait_reconnect_task not in done
                         ):
+                            # Audio sending has finished. Bound only the final drain.
                             done, _ = await asyncio.wait(
                                 [recv_task, wait_reconnect_task],
+                                timeout=self._conn_options.timeout,
                                 return_when=asyncio.FIRST_COMPLETED,
                             )
+                            if not done:
+                                raise APITimeoutError("Gladia STT final response timed out")
                             if recv_task in done:
                                 recv_task.result()
 
                         if wait_reconnect_task not in done:
-                            break
+                            if self._input_ch.closed and self._input_ch.empty():
+                                break
+                            # A segment stop ends the provider connection, not the public stream.
+                            continue
 
                         self._reconnect_event.clear()
                         logger.info("Reconnecting Gladia session due to options change")
@@ -1012,14 +1022,14 @@ class SpeechStream(stt.SpeechStream):
                     chunk_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                     message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
                     await self._ws.send_str(message)
+                    self._pushed_audio_duration += frame.duration
 
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        self._closing_ws = True
-                        await self._ws.send_str(json.dumps({"type": "stop_recording"}))
-                        has_ended = False
+                if has_ended:
+                    break
 
-            # Tell Gladia we're done sending audio when the stream ends
+            # stop_recording terminates this provider session. _run drains its final
+            # messages and opens another connection when input remains.
+            self._audio_duration_collector.flush()
             self._closing_ws = True
             if self._ws:
                 await self._ws.send_str(json.dumps({"type": "stop_recording"}))
@@ -1057,6 +1067,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _process_gladia_message(self, data: dict) -> None:
         """Process messages from Gladia WebSocket."""
+        time_offset = self.start_time_offset + self._session_time_offset
         if data["type"] == "transcript":
             is_final = data["data"]["is_final"]
             utterance = data["data"]["utterance"]
@@ -1083,16 +1094,16 @@ class SpeechStream(stt.SpeechStream):
 
                 speech_data = stt.SpeechData(
                     language=language,
-                    start_time=utterance.get("start", 0) + self.start_time_offset,
-                    end_time=utterance.get("end", 0) + self.start_time_offset,
+                    start_time=utterance.get("start", 0) + time_offset,
+                    end_time=utterance.get("end", 0) + time_offset,
                     confidence=utterance.get("confidence", 1.0),
                     text=text,
                     words=[
                         TimedString(
                             text=word.get("word", ""),
-                            start_time=word.get("start", 0) + self.start_time_offset,
-                            end_time=word.get("end", 0) + self.start_time_offset,
-                            start_time_offset=self.start_time_offset,
+                            start_time=word.get("start", 0) + time_offset,
+                            end_time=word.get("end", 0) + time_offset,
+                            start_time_offset=time_offset,
                         )
                         for word in words
                     ],
@@ -1165,16 +1176,16 @@ class SpeechStream(stt.SpeechStream):
                         if original_language
                         else None,
                         source_texts=[original_text or ""] if original_language else None,
-                        start_time=translated_utterance.get("start", 0) + self.start_time_offset,
-                        end_time=translated_utterance.get("end", 0) + self.start_time_offset,
+                        start_time=translated_utterance.get("start", 0) + time_offset,
+                        end_time=translated_utterance.get("end", 0) + time_offset,
                         confidence=translated_utterance.get("confidence", 1.0),
                         text=translated_text,  # Use the translated text
                         words=[
                             TimedString(
                                 text=word.get("word", ""),
-                                start_time=word.get("start", 0) + self.start_time_offset,
-                                end_time=word.get("end", 0) + self.start_time_offset,
-                                start_time_offset=self.start_time_offset,
+                                start_time=word.get("start", 0) + time_offset,
+                                end_time=word.get("end", 0) + time_offset,
+                                start_time_offset=time_offset,
                             )
                             for word in words
                         ],

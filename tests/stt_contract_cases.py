@@ -4,6 +4,8 @@ Each case uses the public STT constructor and stream(). Only HTTP/WebSocket I/O 
 fake. Add a case here when a new stream implementation uses WebSocketMonitor.
 """
 
+import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Literal
@@ -21,6 +23,10 @@ class STTCase:
     completion: tuple[dict[str, Any], ...] = ()
     progress: dict[str, Any] | bytes = field(kw_only=True)
     constructor_module: str | None = None
+    reply: Callable | None = None
+    post_input_timeout: bool = False
+    end_packet: str | None = None
+    completion_closes_socket: bool = True
     api_key: bool = True
     http_session: bool = True
 
@@ -42,6 +48,30 @@ def plugin(name):
     return f"livekit.plugins.{name}"
 
 
+def _gladia_reply(socket, data):
+    if json.loads(data).get("type") == "stop_recording":
+        for event in socket.transport.case.completion:
+            socket.emit(event)
+
+
+def _microsoft_reply(socket, data):
+    if json.loads(data).get("type") == "input_audio_buffer.commit":
+        item_id = f"item-{len(socket.writes)}"
+        socket.emit({"type": "input_audio_buffer.committed", "item_id": item_id})
+        socket.emit(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item_id": item_id,
+                "transcript": "words",
+            }
+        )
+
+
+def _rtzr_reply(socket, data):
+    if data == "EOS":
+        socket.server_close()
+
+
 CASES = [
     STTCase(
         "inference",
@@ -57,6 +87,8 @@ CASES = [
     STTCase(
         "baseten",
         plugin("baseten.stt"),
+        post_input_timeout=True,
+        completion=({"type": "transcription", "transcript": "words", "is_final": True},),
         options={"model_endpoint": "wss://unused"},
         progress={"type": "transcription", "transcript": "words", "is_final": False},
     ),
@@ -106,6 +138,20 @@ CASES = [
     STTCase(
         "gladia",
         plugin("gladia.stt"),
+        reply=_gladia_reply,
+        post_input_timeout=True,
+        end_packet="stop_recording",
+        completion_closes_socket=False,
+        completion=(
+            {
+                "type": "transcript",
+                "data": {
+                    "is_final": True,
+                    "utterance": {"text": "words"},
+                },
+            },
+            {"type": "end_session"},
+        ),
         progress={
             "type": "transcript",
             "data": {"is_final": False, "utterance": {"text": "words"}},
@@ -114,6 +160,14 @@ CASES = [
     STTCase(
         "gradium",
         plugin("gradium.stt"),
+        post_input_timeout=True,
+        end_packet="end_of_stream",
+        completion_closes_socket=False,
+        completion=(
+            {"type": "text", "text": "words", "start_s": 0},
+            {"type": "end_text", "stop_s": 0.1},
+            {"type": "end_of_stream"},
+        ),
         greetings=({"type": "ready"},),
         progress={"type": "text", "text": "words", "start_s": 0},
     ),
@@ -128,6 +182,7 @@ CASES = [
     STTCase(
         "microsoft_ai",
         plugin("microsoft_ai.stt"),
+        reply=_microsoft_reply,
         options={
             "vad": None,
             "url": "wss://unused",
@@ -166,6 +221,7 @@ CASES = [
     STTCase(
         "rtzr",
         plugin("rtzr.stt"),
+        reply=_rtzr_reply,
         api_key=False,
         progress={
             "alternatives": [{"text": "words"}],

@@ -69,6 +69,8 @@ class Socket(_Context):
         if self.closed:
             raise aiohttp.ClientConnectionError("test write failed")
         self.writes.append(data)
+        if self.transport.auto_reply and self.transport.case.reply is not None:
+            self.transport.case.reply(self, data)
 
     async def send_json(self, data):
         await self.send_str(json.dumps(data))
@@ -115,6 +117,7 @@ class Transport:
     def __init__(self, case):
         self.case = case
         self.failure = None
+        self.auto_reply = False
         self.error = aiohttp.ServerTimeoutError("test connection lost")
         self.sockets = []
         self.connected = asyncio.Event()
