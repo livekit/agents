@@ -79,9 +79,19 @@ FishAudioModels = Literal[
     "fishaudio/s2-pro",
     "fishaudio/drama-3",
 ]
+AssemblyAIModels = Literal[
+    "assemblyai",
+    "assemblyai/assemblyai-tts-1",
+]
 
 TTSModels = (
-    CartesiaModels | DeepgramModels | RimeModels | InworldModels | XaiModels | FishAudioModels
+    CartesiaModels
+    | DeepgramModels
+    | RimeModels
+    | InworldModels
+    | XaiModels
+    | FishAudioModels
+    | AssemblyAIModels
 )
 
 
@@ -207,6 +217,12 @@ class FishAudioOptions(TypedDict, total=False):
     min_chunk_length: int  # min characters before splitting a new chunk, range 0-100
     condition_on_previous_chunks: bool  # use prior audio as context for consistency
     early_stop_threshold: float  # early-stopping threshold for batching, range 0-1
+
+
+class AssemblyaiOptions(TypedDict, total=False):
+    """AssemblyAI TTS options passed through to LiveKit Inference."""
+
+    word_timestamps: bool  # default True; word timings are forwarded as an aligned transcript
 
 
 TTSEncoding = Literal["pcm_s16le"]
@@ -354,6 +370,25 @@ class TTS(tts.TTS):
     @overload
     def __init__(
         self,
+        model: AssemblyAIModels,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None:
+        pass
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -390,6 +425,7 @@ class TTS(tts.TTS):
             | InworldOptions
             | XaiOptions
             | FishAudioOptions
+            | AssemblyaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
