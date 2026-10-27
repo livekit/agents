@@ -42,7 +42,7 @@ from .log import logger
 from .models import ChatModels
 from .tools import MistralTool
 
-DEFAULT_MODEL: ChatModels = "ministral-8b-latest"
+DEFAULT_MODEL: ChatModels = "mistral-small-latest"
 
 
 @dataclass
@@ -104,7 +104,7 @@ class LLM(llm.LLM):
             api_key: Your Mistral AI API key.  If not provided, will use
                 the ``MISTRAL_API_KEY`` environment variable.
             model: The Mistral AI model to use, default is
-                ``"ministral-8b-latest"``.
+                ``"mistral-small-latest"``.
             temperature: The temperature to use the LLM with.
             top_p: Nucleus sampling parameter.
             presence_penalty: Penalize new tokens based on their presence
