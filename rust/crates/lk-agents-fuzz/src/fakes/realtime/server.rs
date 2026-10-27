@@ -174,8 +174,11 @@ struct Response {
     announced: bool,
     /// `response.output_item.done` for the message was delivered: it is complete.
     closed: bool,
-    /// Its `response.done` was delivered: the client knows it is over.
-    finished: bool,
+    /// When its `response.created` and its `response.done` were delivered. The client knows of
+    /// either only once it had a moment to read it: a frame it sends in that same instant crossed
+    /// the event on the wire.
+    told_created: Option<Ts>,
+    finished: Option<Ts>,
     /// The client was told the person started speaking while it was generating: a reason to
     /// cancel it.
     prompted: bool,
@@ -381,6 +384,7 @@ impl Server {
                     let id = self.responses[r].id.clone();
                     self.responses[r].source = Some(hooks.created(&id));
                     self.responses[r].created = true;
+                    self.responses[r].told_created = Some(now);
                     self.told_active = Some(r as u32);
                 }
                 "response.output_item.added"
@@ -395,7 +399,7 @@ impl Server {
                     self.responses[r].closed = true;
                 }
                 "response.done" => {
-                    self.responses[r].finished = true;
+                    self.responses[r].finished = Some(now);
                     if let Some(source) = self.responses[r].source {
                         hooks.done(source);
                     }
@@ -488,7 +492,10 @@ impl Server {
             }
             "response.create" => {
                 if self.active.is_some() {
-                    let knowing = self.told_active.is_some();
+                    let knowing = self
+                        .told_active
+                        .and_then(|r| self.responses[r as usize].told_created)
+                        .is_some_and(|at| at < now);
                     let why = "Conversation already has an active response in progress. Wait until the response is finished before creating a new one.";
                     return self.refuse(now, "conversation_already_has_active_response", why, true, knowing, frame);
                 }
@@ -540,8 +547,8 @@ impl Server {
                         // (of every one, unnamed); a response it asked for and has not heard of,
                         // or one whose end is on its way, makes the cancel a race.
                         let knowing = match named {
-                            Some(id) => self.responses.iter().any(|r| r.id == id && r.finished),
-                            None => self.responses.iter().all(|r| r.finished),
+                            Some(id) => self.responses.iter().any(|r| r.id == id && r.finished.is_some_and(|at| at < now)),
+                            None => self.responses.iter().all(|r| r.finished.is_some_and(|at| at < now)),
                         };
                         let why = "Cancellation failed: no active response found";
                         self.refuse(now, "response_cancel_not_active", why, true, knowing, frame);

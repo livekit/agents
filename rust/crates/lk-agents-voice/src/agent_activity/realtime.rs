@@ -41,6 +41,9 @@ pub(crate) mod realtime_state {
         pub(super) caps: RealtimeCapabilities,
         next_key: u64,
         pub(super) pending: BTreeMap<String, Pending>,
+        /// Requests ready to go while the server was busy, oldest first: sent one at a time once
+        /// it is not (the server takes one reply at a time and refuses the rest).
+        queue: std::collections::VecDeque<String>,
         /// Every generation still generating, oldest first: a server-initiated turn created while
         /// another plays is queued behind it (`_on_generation_created` schedules a new speech).
         open: Vec<Open>,
@@ -135,6 +138,11 @@ pub(crate) mod realtime_state {
         pub(super) speech: Option<SpeechId>,
         /// Held until that speech is authorized, as the reference asks the server only then.
         pub(super) unsent: Option<RealtimeCommand>,
+        /// Ready, and held while the server generates a reply or answers another request.
+        pub(super) queued: Option<RealtimeCommand>,
+        /// What went to the server: asked again if the server refuses it for a reply it had
+        /// started that the client had not heard of yet.
+        pub(super) sent: Option<RealtimeCommand>,
     }
 
     struct Open {
@@ -236,7 +244,8 @@ pub(crate) mod realtime_state {
             unsent: Option<RealtimeCommand>,
         ) -> RequestKey {
             let key = self.mint_key();
-            let pending = Pending { key, request, call, allow_interruptions, speech, unsent };
+            let pending =
+                Pending { key, request, call, allow_interruptions, speech, unsent, queued: None, sent: None };
             self.pending.insert(req_id, pending);
             key
         }
@@ -280,6 +289,66 @@ pub(crate) mod realtime_state {
                 self.auto_follow_up = None;
                 reuse.speech
             })
+        }
+
+        /// The server would refuse a reply now: it generates one not told to stop, or a request
+        /// other than `req_id` went out and has not been answered.
+        fn busy(&self, req_id: &str) -> bool {
+            self.open.iter().any(|o| !o.cancelled)
+                || self.pending.iter().any(|(id, p)| {
+                    id != req_id && p.unsent.is_none() && p.queued.is_none()
+                })
+        }
+
+        /// `cmd` asks for `req_id`'s reply: `Some` to send it now, or held in the queue.
+        pub(super) fn send_or_queue(
+            &mut self,
+            req_id: &str,
+            cmd: RealtimeCommand,
+        ) -> Option<RealtimeCommand> {
+            if !self.busy(req_id) {
+                return Some(cmd);
+            }
+            if let Some(p) = self.pending.get_mut(req_id) {
+                p.queued = Some(cmd);
+                self.queue.push_back(req_id.to_owned());
+            }
+            None
+        }
+
+        /// `req_id` went to the server as `cmd`.
+        pub(super) fn sent(&mut self, req_id: &str, cmd: &RealtimeCommand) {
+            if let Some(p) = self.pending.get_mut(req_id) {
+                p.sent = Some(cmd.clone());
+            }
+        }
+
+        /// The server refused `req_id` for a reply of its own it had started as the request
+        /// crossed it: back at the head of the queue. Its timer key, to cancel.
+        pub(super) fn requeue(&mut self, req_id: &str) -> Option<RequestKey> {
+            let p = self.pending.get_mut(req_id)?;
+            p.queued = Some(p.sent.take()?);
+            self.queue.push_front(req_id.to_owned());
+            Some(p.key)
+        }
+
+        /// The queue's next request, once the server is free: its command and timer key.
+        pub(super) fn next_queued(&mut self) -> Option<(RealtimeCommand, RequestKey)> {
+            while let Some(req_id) = self.queue.front().cloned() {
+                if !self.pending.get(&req_id).is_some_and(|p| p.queued.is_some()) {
+                    self.queue.pop_front();
+                    continue;
+                }
+                if self.busy(&req_id) {
+                    return None;
+                }
+                self.queue.pop_front();
+                let p = self.pending.get_mut(&req_id)?;
+                let cmd = p.queued.take()?;
+                p.sent = Some(cmd.clone());
+                return Some((cmd, p.key));
+            }
+            None
         }
 
         /// A generation is still generating and not yet told to stop.
@@ -457,6 +526,13 @@ impl Driver {
     }
 
     pub(crate) fn on_realtime(&mut self, now: Ts, wake: RealtimeWake, out: &mut Out) {
+        self.on_realtime_wake(now, wake, out);
+        // Whatever the wake ended (a reply done, a request answered or settled) may free the
+        // server for the next queued request.
+        self.realtime_send_queued(now, out);
+    }
+
+    fn on_realtime_wake(&mut self, now: Ts, wake: RealtimeWake, out: &mut Out) {
         match wake {
             RealtimeWake::Event(ev) => self.on_realtime_event(now, ev, out),
             RealtimeWake::Ended => {
@@ -679,9 +755,8 @@ impl Driver {
                 Some(speech)
             }
             None => {
-                let key = t.register(req_id, request, call, allow, None, None);
-                self.rt_send(cmd, out);
-                out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
+                let key = t.register(req_id.clone(), request, call, allow, None, None);
+                self.send_request_now(now, &req_id, cmd, key, out);
                 None
             }
         }
@@ -690,8 +765,39 @@ impl Driver {
     /// The speech announced for a request is authorized: the request goes to the server now.
     pub(crate) fn realtime_authorized(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
         let Some((cmd, key)) = self.activity.realtime_state.take_unsent(speech) else { return };
-        self.rt_send(cmd, out);
-        out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
+        let req_id = self.activity.realtime_state.pending.iter().find(|(_, p)| p.key == key).map(|(id, _)| id.clone());
+        if let Some(req_id) = req_id {
+            self.send_request_now(now, &req_id, cmd, key, out);
+        }
+    }
+
+    /// A reply's request goes to the server, with its timer, unless the server is busy: then it
+    /// waits in the queue and goes when the reply the server generates (or the request it
+    /// answers) is done -- one at a time, as speeches are scheduled; nothing is cut or lost.
+    fn send_request_now(
+        &mut self,
+        now: Ts,
+        req_id: &str,
+        cmd: RealtimeCommand,
+        key: RequestKey,
+        out: &mut Out,
+    ) {
+        if let Some(cmd) = self.activity.realtime_state.send_or_queue(req_id, cmd) {
+            self.activity.realtime_state.sent(req_id, &cmd);
+            self.rt_send(cmd, out);
+            out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
+        }
+    }
+
+    /// The queue's next request, if the server is free for it.
+    pub(crate) fn realtime_send_queued(&mut self, now: Ts, out: &mut Out) {
+        if self.activity.realtime_state.ended() || self.activity.realtime_state.closing {
+            return;
+        }
+        if let Some((cmd, key)) = self.activity.realtime_state.next_queued() {
+            self.rt_send(cmd, out);
+            out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
+        }
     }
 
     /// Its timer goes with it.
@@ -758,7 +864,8 @@ impl Driver {
                 continue;
             }
             out.machine().cancel(Timer::RealtimeRequest(pending.key));
-            if cancel && pending.unsent.is_none() && !self.activity.realtime_state.ended() {
+            let asked = pending.unsent.is_none() && pending.queued.is_none();
+            if cancel && asked && !self.activity.realtime_state.ended() {
                 self.activity.realtime_state.cancelled_requests.insert(req_id.clone());
                 self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
             }
@@ -789,6 +896,14 @@ impl Driver {
     }
 
     fn fail_request(&mut self, req_id: &str, error: RealtimeError, out: &mut Out) {
+        // Refused for a reply the server had started as the request crossed it on the wire: it
+        // waits for that reply, as a request asked over it would have.
+        if error.code.as_deref() == Some("conversation_already_has_active_response")
+            && let Some(key) = self.activity.realtime_state.requeue(req_id)
+        {
+            out.machine().cancel(Timer::RealtimeRequest(key));
+            return;
+        }
         // A cancelled request that will not generate is forgotten.
         let _ = self.activity.realtime_state.cancelled_requests.remove(req_id);
         // Unknown: already claimed by a `GenerationCreated`, or cancelled by the driver.
@@ -1038,12 +1153,6 @@ impl Driver {
                 || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent);
             let tool_choice =
                 if draining { Some(lk_agents_abi::ToolChoice::Forbidden) } else { tool_choice };
-            // `self._rt_session.interrupt()` first, as the reference does: a response the server
-            // is still generating (a turn it answered while the tools ran) would have it refuse
-            // the follow-up (`conversation_already_has_active_response`), and the tools' result
-            // would never be spoken. The server takes a reply asked right after a cancel
-            // (`corpus/probes/probe-cancel_then_create.json`).
-            self.rt_send(RealtimeCommand::Interrupt(rt::Interrupt { response_id: None }), out);
             let request = Request::ToolFollowUp { speech, step, tool_choice };
             self.send_request(now, req_id, request, None, None, out);
         }

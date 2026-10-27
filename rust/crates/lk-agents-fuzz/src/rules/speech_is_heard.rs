@@ -16,7 +16,7 @@ use lk_agents_voice::{
     events::{SessionEvent, SpeechOutcome},
     trace::{
         CoreStep, GenerationStep, InterruptCause, InterruptStep, RealtimeStep, PlayoutStep, RoomEventKind, RoomStep, SinkCall,
-        SpeechStep, Step, TimerName, ToolStep,
+        SpeechStep, Step, TimerName,
     },
 };
 
@@ -128,7 +128,6 @@ impl Rule for SpeechIsHeard {
                         speaking_at(&onsets, &offsets, created.at_ms)
                             || person_acted(r, created.at_ms, at)
                             || host_cut(r, created.at_ms, at)
-                            || tools_committed(r, created.at_ms, at)
                             || closing.is_some_and(|c| c <= at)
                     }
                     Some(_) => true,
@@ -206,16 +205,6 @@ fn host_cut(r: &Recording, created: u64, to: u64) -> bool {
                     ..
                 }
         )
-    })
-}
-
-/// Whether a tool's results were committed while the speech lived: on a realtime session the
-/// tools' follow-up cancels the response the server is generating (the reference's `interrupt()`
-/// before the tool reply), so a reply asked meanwhile ends unheard for the tools' result.
-fn tools_committed(r: &Recording, created: u64, to: u64) -> bool {
-    let from = created.saturating_sub(ANNOUNCE_MS);
-    r.journal().iter().any(|(at, s)| {
-        from <= at.at_ms && at.at_ms <= to && matches!(s, Step::Tool(ToolStep::Finished { .. }))
     })
 }
 

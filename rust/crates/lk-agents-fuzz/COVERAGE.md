@@ -193,7 +193,7 @@ was a driver bug).
 | P4 | `items_carry_their_payload` | a pipeline reply names the models that timed it, a transcribed user turn the STT; a step cut short is recorded interrupted; items and metrics are stamped on the wall clock within the session; metrics carry their label, non-negative durations and their speech id (section 13) | 0 / 0 / 0 (new 2026-10-26) |
 | P2 | `realtime_reply_cancelled_with_cause` | the client never cancels the realtime server's reply to the person's turn before it heard of it, nor in the very moment it heard of it with nothing happening (section 13.4) | 0 / 0 / 0 (new 2026-10-26) |
 | P2 | `realtime_reply_reads_tool_output` | a realtime reply asked once a tool's results are committed is asked after the tool's output reached the server (section 13.4) | 0 / 0 / 0 (new 2026-10-26) |
-| P5 | `realtime_server_accepts_requests` | the realtime server refuses no frame the client had already been told was invalid; a refusal racing an event on the wire is the protocol's (section 13.4) | 22 of 1,024 seeds (new 2026-10-26; known: three open findings, section 13.4) |
+| P5 | `realtime_server_accepts_requests` | the realtime server refuses no frame the client had already been told was invalid; a refusal racing an event on the wire is the protocol's (section 13.4) | 0 / 0 / 0 (new 2026-10-26) |
 | P5 | soak: residue | after a long call and release, nothing opened is still live | red (2026-10-25): seed 6 leaves a floor hold. Every call must reach its close: one that stopped before it fails the soak |
 
 Every rule is exercised. Promises with no rule are listed per subsystem in section 5.
@@ -975,7 +975,7 @@ Every refusal, and two answers the real server gives from the wrong state, are r
 - `realtime_reply_cancelled_with_cause`: a client cancel stops the server's reply to the person's
   turn before any audio and with no onset told over it, in the moment the client heard of it with
   no input, no time passing and no refusal to schedule its speech. With c6881abb9 reverted it
-  fails 5 of the 1,024 survey seeds and 22 of the 4,096 campaign seeds.
+  fails 5 of the 1,024 survey seeds and 21 of the 4,096 campaign seeds.
 
 Where the docs and the server disagree, the server wins: the docs say a cancel with nothing in
 progress is safe, the server refuses it; they give no minimum for a commit, the server wants
@@ -991,14 +991,13 @@ Found by it and fixed, each with a regression test that fails with its fix rever
 | On a reconnect the driver replayed its conversation onto the new connection after the session had replayed it itself: every item went twice, the server refused each second one | `realtime_reconnect` |
 | The native session counted the audio sent before a reconnect as still in the server's buffer, so a commit after it named nothing and was refused | `realtime_reconnect` |
 | A cancelled reply's late `response.done` closed the reply asked after it, whose audio was dropped, and its late deltas were played as the new reply's | `realtime_cancelled_tail` |
-| The tools' follow-up was asked over a reply the server was still generating, without the reference's `interrupt()` first: refused, the tools' result never spoken | `realtime_tool_follow_up_taken` |
+| A reply asked while the server generated one (the host's `generate_reply` or `say`, a deferred tool reply, the tools' follow-up), or crossing a reply the server started on its own, was refused and lost (the reference asks the same and is refused the same). Replies now go one at a time, as speeches are scheduled: a request the server would refuse waits in a queue and goes once the reply it would cross is done, nothing cut; one refused for a reply that crossed it on the wire goes again after it | `realtime_reply_queued` |
 | The outputs reached the server only on the step's later wake, after the commit had let a waiting reply go, which read the call without its result (campaign seed 1978) | `realtime_outputs_before_next_reply` |
+| A tool output for a call the developer's `update_chat_ctx` removed while it ran was sent, naming a call the server no longer held (`invalid_tool_call_id`); a later edit re-sent it too. It is not sent, and an edit leaves out an output whose call neither side holds; a truncation of a message an edit removed is not sent either | `realtime_context_edits` |
+| A context update sent while the previous one was unconfirmed was diffed against what the server had confirmed, and deleted again what that one deleted (`item_delete_invalid_item_id`); it is now diffed against what the server is being brought to | `realtime_context_edits` |
+| A reconnect that crossed an unconfirmed context update replayed the confirmed conversation and then that update's frames, creating twice what it deletes and creates again; an update right after any replay was diffed against nothing (`item_create_duplicate_item_id`). The new connection gets the conversation the server was being brought to, tracked until confirmed | `realtime_reconnect` |
 
-Open, listed under `realtime_server_accepts_requests` in `check::KNOWN_FINDINGS`: a reply the host
-or a deferred tool asks for while the server generates its own reply to the person's turn is
-refused (the reference asks the same and is refused the same); a tool output for a call the
-developer's `update_chat_ctx` removed is refused (`invalid_tool_call_id`); a reconnect that crossed
-a chat-context update still in flight re-creates its items (`item_create_duplicate_item_id`).
+None is open: `realtime_server_accepts_requests` is not a known finding.
 
 ## 14. Manually found bugs and what catches them
 

@@ -96,12 +96,6 @@ impl Check {
 /// `session_settles` is the release phase's own verdict, not a rule.
 pub const KNOWN_FINDINGS: &[&str] = &[
     "tool_lifecycle",
-    // Requests the real realtime server refuses, found when its fake became the server
-    // (COVERAGE.md 13.1): a reply asked over the server's own reply to the person's turn (the
-    // reference asks the same and is refused the same), a tool output for a call the developer's
-    // `update_chat_ctx` removed, and items re-created by a reconnect that crossed a context
-    // update still in flight.
-    "realtime_server_accepts_requests",
 ];
 
 /// One guarantee the driver must keep.

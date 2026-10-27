@@ -57,6 +57,9 @@ pub struct RealtimeMachine {
     /// response's tail still streams after it (`corpus/probes/probe-cancel_then_create.json`),
     /// and is not the next generation's to play.
     closed_messages: HashSet<String>,
+    /// The calls a context update deleted from the conversation: an output for one names a call
+    /// the server no longer holds, and is refused (`invalid_tool_call_id`).
+    deleted_calls: HashSet<String>,
     /// `_response_created_futures`, reduced to its deadline.
     pending_replies: HashMap<String, Ts>,
     /// `_discarded_event_ids`: requests abandoned before the server created their response. The
@@ -116,6 +119,7 @@ impl RealtimeMachine {
             tools: Vec::new(),
             generation: Generation::None,
             closed_messages: HashSet::new(),
+            deleted_calls: HashSet::new(),
             pending_replies: HashMap::new(),
             discarded: HashSet::new(),
             say_tags: VecDeque::new(),
@@ -309,16 +313,33 @@ impl RealtimeMachine {
         // would name nothing and be refused (`input_audio_buffer_commit_empty`).
         self.pushed = Duration::ZERO;
 
-        let replay = self.remote.to_chat_ctx();
+        // The conversation the new connection gets: the one the server is being brought to, a
+        // context update the lost connection had not confirmed included. Resending that update's
+        // frames after the replay re-created what the replay had just restored (an item it
+        // deletes and creates again under the same id), and the server refused it.
+        let replay = self.expected_ctx();
+        let unconfirmed = self.ctx_update.take();
         self.remote = RemoteChatContext::new();
-        let (frames, _) = self.chat_ctx_events(&replay);
+        let (frames, mut update) = self.chat_ctx_events(&replay);
         step.frames.extend(frames);
-        // The replay holds only confirmed items: an item event the lost connection never
-        // confirmed goes again after it, and its confirmation settles the update.
-        if let Some(update) = &self.ctx_update {
-            step.frames.extend(
-                update.frames.iter().filter(|(id, _)| update.by_event_id.contains_key(id)).map(|(_, f)| f.clone()),
-            );
+        // The replay is tracked as an update until confirmed, so what is sent meanwhile is diffed
+        // against what the server is being brought to (an update diffed against the empty mirror
+        // re-created every replayed item); its confirmations settle the update the lost
+        // connection left unconfirmed.
+        match unconfirmed {
+            Some(old) if update.pending() => {
+                update.req_id = old.req_id;
+                update.deadline = old.deadline;
+                self.ctx_update = Some(update);
+            }
+            Some(old) => {
+                step.events.push(Event::ChatCtxUpdated { req_id: old.req_id, rejected: old.rejected });
+            }
+            None if update.pending() => {
+                update.deadline = now.saturating_add(UPDATE_CHAT_CTX_TIMEOUT);
+                self.ctx_update = Some(update);
+            }
+            None => {}
         }
 
         self.discarded.clear();
@@ -426,10 +447,12 @@ impl RealtimeMachine {
 
         if self.ctx_update.as_ref().is_some_and(|c| c.deadline <= now) {
             let ctx = self.ctx_update.take().expect("just checked");
-            step.events.push(Event::ChatCtxUpdated {
+            if !ctx.req_id.is_empty() {
+                step.events.push(Event::ChatCtxUpdated {
                 req_id: ctx.req_id,
-                rejected: vec!["update_chat_ctx timed out.".to_owned()],
-            });
+                    rejected: vec!["update_chat_ctx timed out.".to_owned()],
+                });
+            }
         }
 
         if self.session_deadline.is_some_and(|at| at <= now) {
@@ -474,8 +497,20 @@ impl RealtimeMachine {
                 }
                 update.req_id = req_id;
                 update.deadline = now.saturating_add(UPDATE_CHAT_CTX_TIMEOUT);
+                // An update still unconfirmed is superseded: its confirmations still settle, its
+                // caller is answered now.
+                let mut events = Vec::new();
+                if let Some(old) = self.ctx_update.take() {
+                    update.awaiting_create.extend(old.awaiting_create);
+                    update.awaiting_delete.extend(old.awaiting_delete);
+                    update.by_event_id.extend(old.by_event_id);
+                    update.touched.extend(old.touched);
+                    if !old.req_id.is_empty() {
+                        events.push(Event::ChatCtxUpdated { req_id: old.req_id, rejected: old.rejected });
+                    }
+                }
                 self.ctx_update = Some(update);
-                Step { frames, ..Default::default() }
+                Step { frames, events, ..Default::default() }
             }
 
             Command::PushAudio(lk_agents_abi::llm::realtime::PushAudio { frame }) => {
@@ -495,6 +530,13 @@ impl RealtimeMachine {
                 step
             }
 
+            // The output of a call a context update took out of the conversation answers nothing
+            // the server holds: not sent.
+            Command::PushItem(lk_agents_abi::llm::realtime::PushItem { item, .. })
+                if matches!(&*item, ChatItem::FunctionCallOutput(o) if self.deleted_calls.contains(&o.call_id)) =>
+            {
+                Step::default()
+            }
             Command::PushItem(lk_agents_abi::llm::realtime::PushItem { item, .. }) => match wire::to_wire_item(&item, self.images.as_ref()) {
                 Ok(v) => {
                     Step::frame(wire::conversation_item_create(&self.ids.short("video_"), v, None))
@@ -593,6 +635,11 @@ impl RealtimeMachine {
             }
 
             Command::Truncate(lk_agents_abi::llm::realtime::Truncate { message_id, has_audio, audio_end_ms, audio_transcript }) => {
+                // A message a context update took out of the conversation has nothing left to
+                // cut: the server would refuse it (`item_truncate_invalid_item_id`).
+                if self.expected_ctx().get_by_id(&message_id).is_none() {
+                    return Step::default();
+                }
                 if has_audio {
                     // `audio_end_ms == 0`: interrupted before any audio played, delete the item.
                     return Step::frame(if audio_end_ms > 0 {
@@ -749,7 +796,29 @@ impl RealtimeMachine {
         wire::session_update(&self.ids.short("tools_update_"), session)
     }
 
-    /// `_create_update_chat_ctx_events`: the mirror diffed against the agent's context.
+    /// The conversation the server is being brought to: the confirmed mirror, with the context
+    /// update still awaiting confirmation applied.
+    fn expected_ctx(&self) -> ChatContext {
+        let mut ctx = self.remote.to_chat_ctx();
+        let Some(update) = &self.ctx_update else { return ctx };
+        ctx.items.retain(|i| !update.touched.contains(i.id()));
+        for (at, item) in update.target.items.iter().enumerate() {
+            if !update.touched.contains(item.id()) || ctx.get_by_id(item.id()).is_some() {
+                continue;
+            }
+            let after = update.target.items[..at]
+                .iter()
+                .rev()
+                .find_map(|prev| ctx.index_by_id(prev.id()).map(|i| i + 1))
+                .unwrap_or(0);
+            ctx.items.insert(after, item.clone());
+        }
+        ctx
+    }
+
+    /// `_create_update_chat_ctx_events`: what the server is being brought to (`expected_ctx`)
+    /// diffed against the agent's context. Diffed against the bare mirror, an update sent while
+    /// another was unconfirmed deleted again what that one had deleted, and was refused.
     fn chat_ctx_events(&mut self, chat_ctx: &ChatContext) -> (Vec<Value>, CtxUpdate) {
         let mut chat_ctx = chat_ctx.clone();
 
@@ -767,7 +836,7 @@ impl RealtimeMachine {
             chat_ctx.items.insert(at, self.remote.items()[pos].clone());
         }
 
-        let remote_ctx = self.remote.to_chat_ctx();
+        let remote_ctx = self.expected_ctx();
         // Empty content can be a local placeholder or a remote item with non-text content; keep
         // the remote ones, or every committed audio turn is deleted on the next update.
         let remote_ids: HashSet<&str> = remote_ctx.items.iter().map(ChatItem::id).collect();
@@ -784,7 +853,36 @@ impl RealtimeMachine {
                 .collect(),
         );
 
+        // An output whose call neither the context nor the conversation holds would be refused
+        // (`invalid_tool_call_id`): the context's own record of a call it dropped.
+        let calls: HashSet<&str> = filtered
+            .items
+            .iter()
+            .chain(&remote_ctx.items)
+            .filter_map(|i| match i {
+                ChatItem::FunctionCall(c) => Some(c.call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let filtered = ChatContext::new(
+            filtered
+                .items
+                .iter()
+                .filter(|i| !matches!(i, ChatItem::FunctionCallOutput(o) if !calls.contains(o.call_id.as_str())))
+                .cloned()
+                .collect(),
+        );
         let diff = compute_chat_ctx_diff(&remote_ctx, &filtered);
+        for id in &diff.to_remove {
+            if let Some(ChatItem::FunctionCall(c)) = remote_ctx.get_by_id(id) {
+                self.deleted_calls.insert(c.call_id.clone());
+            }
+        }
+        for (_, id) in &diff.to_create {
+            if let Some(ChatItem::FunctionCall(c)) = filtered.get_by_id(id) {
+                self.deleted_calls.remove(&c.call_id);
+            }
+        }
         let mut frames = Vec::new();
         let mut update = CtxUpdate {
             req_id: String::new(),
@@ -792,15 +890,16 @@ impl RealtimeMachine {
             awaiting_create: HashSet::new(),
             awaiting_delete: HashSet::new(),
             by_event_id: HashMap::new(),
-            frames: Vec::new(),
+            target: filtered.clone(),
+            touched: HashSet::new(),
             rejected: Vec::new(),
         };
 
         let delete = |frames: &mut Vec<Value>, update: &mut CtxUpdate, id: &str| {
             let event_id = self.ids.short("chat_ctx_delete_");
             let frame = wire::conversation_item_delete(&event_id, id);
-            frames.push(frame.clone());
-            update.frames.push((event_id.clone(), frame));
+            frames.push(frame);
+            update.touched.insert(id.to_owned());
             update.awaiting_delete.insert(id.to_owned());
             update.by_event_id.insert(event_id, (true, id.to_owned()));
         };
@@ -820,8 +919,8 @@ impl RealtimeMachine {
                     // `"root"` when there is no predecessor -- a literal, not an omitted key.
                     Some(prev.as_deref().unwrap_or("root")),
                 );
-                frames.push(frame.clone());
-                update.frames.push((event_id.clone(), frame));
+                frames.push(frame);
+                update.touched.insert(id.to_owned());
                 update.awaiting_create.insert(id.to_owned());
                 update.by_event_id.insert(event_id, (false, id.to_owned()));
             };
@@ -956,6 +1055,10 @@ impl RealtimeMachine {
             return Step::default();
         }
         let update = self.ctx_update.take().expect("just checked");
+        // A reconnection's own replay has no caller to answer.
+        if update.req_id.is_empty() {
+            return Step::default();
+        }
         Step::event(Event::ChatCtxUpdated { req_id: update.req_id, rejected: update.rejected })
     }
 
@@ -1135,8 +1238,10 @@ struct CtxUpdate {
     /// `_chat_ctx_event_futures`, keyed by client `event_id`: an update sends a delete and a
     /// create under the same item id, so only the event id says which one a rejection answers.
     by_event_id: HashMap<String, (bool, String)>,
-    /// Every frame of the update, by `event_id`: a reconnection sends the unconfirmed ones again.
-    frames: Vec<(String, Value)>,
+    /// The context it brings the server to, and the items it deletes or creates: what a
+    /// reconnection replays when the lost connection had not confirmed it.
+    target: ChatContext,
+    touched: HashSet<String>,
     rejected: Vec<String>,
 }
 
