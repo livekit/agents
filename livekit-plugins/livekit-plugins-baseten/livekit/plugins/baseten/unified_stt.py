@@ -224,7 +224,13 @@ class _UnifiedBackend:
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt_module.SpeechEvent:
         """One-shot recognition, run over the same streaming session."""
-        stream = self.make_stream(owner, language=language, conn_options=conn_options)
+        # The buffer is queued once, and a stream's own reconnect would resume
+        # after the audio its first socket consumed, so it could finish cleanly
+        # on nothing. No retries here: STT.recognize() retries with a fresh
+        # stream and the whole buffer instead.
+        stream = self.make_stream(
+            owner, language=language, conn_options=replace(conn_options, max_retry=0)
+        )
         stream.push_frame(rtc.combine_audio_frames(buffer))
         stream.end_input()
 
@@ -401,6 +407,11 @@ class UnifiedSpeechStream(stt_module.SpeechStream):
                 text = "".join(s.get("text", "") for s in segments).strip()
                 is_final = kind == "transcription.done"
                 self._mark_provider_progress()
+                # Leaving out partial_interval_s is how partials are turned off,
+                # but a deployment may send them anyway; interim_results=False
+                # is a promise to the caller, so it is kept here too.
+                if not is_final and not self._opts.enable_partial_transcripts:
+                    continue
 
                 # Only real words open a turn. An empty final (a flush with no
                 # speech behind it) would otherwise emit START/END_OF_SPEECH and,

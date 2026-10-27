@@ -29,7 +29,11 @@ _SAMPLE_RATE = 16000
 # split: the turn is cut at the length limit, then finished by the flush.
 # empty: a final with no text. at_capacity / invalid_event: an error, then a close.
 # drop: go away (1001, a replica shutting down) on the flush, before its final.
-_Mode = Literal["reply", "failed", "split", "empty", "at_capacity", "invalid_event", "drop"]
+# drop_once: drop the first connection that way, then reply on the next.
+# A flushed turn with no audio behind it gets an empty final, as from the real server.
+_Mode = Literal[
+    "reply", "failed", "split", "empty", "at_capacity", "invalid_event", "drop", "drop_once"
+]
 
 _CLOSE_CODES = {"at_capacity": 1013, "invalid_event": 1008}
 
@@ -51,6 +55,7 @@ class _FakeUnifiedServer:
         self.refusals = refusals or []
         self.session_updates: list[dict[str, Any]] = []
         self.audio_bytes = 0
+        self.audio_per_connection: list[int] = []
         self.control: list[str] = []
         self.connections = 0
 
@@ -63,7 +68,9 @@ class _FakeUnifiedServer:
             await ws.send_json({"type": "error", "code": self.mode, "message": "refused"})
             await ws.close(code=_CLOSE_CODES[self.mode])
             return ws
+        self.audio_per_connection.append(0)
         turn_id = 0
+        turn_audio = 0
         async for msg in ws:
             event = json.loads(msg.data)
             kind = event["type"]
@@ -78,13 +85,16 @@ class _FakeUnifiedServer:
                 )
                 continue
             if kind == "input_audio_buffer.append":
-                self.audio_bytes += len(base64.b64decode(event["audio"]))
+                n = len(base64.b64decode(event["audio"]))
+                self.audio_bytes += n
+                self.audio_per_connection[-1] += n
+                turn_audio += n
                 continue
             self.control.append(kind)
             if kind == "close":
                 await ws.close()
                 break
-            if self.mode == "drop":
+            if self.mode == "drop" or (self.mode == "drop_once" and self.connections == 1):
                 await ws.close(code=1001)
                 break
             # input_audio_buffer.flush
@@ -106,7 +116,7 @@ class _FakeUnifiedServer:
                         "message": "boom",
                     }
                 )
-            elif self.mode == "empty":
+            elif self.mode == "empty" or not turn_audio:
                 await ws.send_json(_done(turn_id, [""]))
             elif self.mode == "split":
                 await ws.send_json(_done(turn_id, ["hello"], ended_by="max_turn_length"))
@@ -115,7 +125,47 @@ class _FakeUnifiedServer:
             else:
                 await ws.send_json(_done(turn_id, ["hello", " world"]))
             turn_id += 1
+            turn_audio = 0
         return ws
+
+
+async def _recognize(
+    server: _FakeUnifiedServer, samples: int = 512, max_retry: int = 0, **stt_kwargs: Any
+) -> stt.SpeechEvent:
+    app = web.Application()
+    app.router.add_get("/ws", server.handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            baseten_stt = STT(
+                model="unified",
+                api_key="test-key",
+                model_endpoint=f"ws://127.0.0.1:{port}/ws",
+                http_session=session,
+                **stt_kwargs,
+            )
+            frame = rtc.AudioFrame(
+                data=b"\x00\x00" * samples,
+                sample_rate=_SAMPLE_RATE,
+                num_channels=1,
+                samples_per_channel=samples,
+            )
+            return await asyncio.wait_for(
+                baseten_stt.recognize(
+                    [frame],
+                    conn_options=APIConnectOptions(
+                        max_retry=max_retry, retry_interval=0.01, timeout=5
+                    ),
+                ),
+                timeout=15,
+            )
+    finally:
+        await runner.cleanup()
 
 
 async def _run_stream(
@@ -277,6 +327,19 @@ async def test_empty_final_does_not_end_a_turn_it_never_opened() -> None:
     assert stt.SpeechEventType.FINAL_TRANSCRIPT not in _types(events)
 
 
+async def test_partials_off_drops_partials_the_server_sends_anyway() -> None:
+    server = _FakeUnifiedServer()
+    events = await _run_stream(server, enable_partial_transcripts=False)
+
+    # the fake sends a partial whatever was asked for
+    assert "partial_interval_s" not in server.session_updates[0]
+    assert _types(events) == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+
+
 async def test_refusals_are_logged_and_the_session_goes_on(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -316,6 +379,17 @@ async def test_close_that_skips_an_owed_final_is_a_connection_error() -> None:
     with pytest.raises(APIConnectionError):
         await _run_stream(server)
     assert server.connections == 1
+
+
+async def test_recognize_resends_the_whole_buffer_after_a_drop() -> None:
+    # the first socket takes all the audio and then drops; a stream reconnecting
+    # on its own would send the second one nothing and return an empty success
+    server = _FakeUnifiedServer("drop_once")
+    event = await _recognize(server, samples=2400, max_retry=1)
+
+    assert server.connections == 2
+    assert server.audio_per_connection == [2400 * 2, 2400 * 2]
+    assert event.alternatives[0].text == "hello world"
 
 
 def test_mulaw_is_rejected() -> None:
