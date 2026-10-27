@@ -4,6 +4,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import math
 import os
 import time
 from collections.abc import AsyncIterable, Callable
@@ -121,8 +122,9 @@ class _Speech:
     start_ms: int | None = None
     end_ms: int | None = None
     started_at: float = field(default_factory=time.time)
-    reply_ms: int | None = None
-    """Where on the model's clock the model began answering the user's turn."""
+    reply_ms: float | None = None
+    """Where on the model's clock the model began answering the user's turn; infinite when the
+    answer has no known start, so no later fragment is known to follow it."""
     quiet_ms: int = 0
     """Input audio pushed since the user's last fragment, once the model has answered."""
 
@@ -792,17 +794,16 @@ class GPTLiveSession(
         if not event.delta:
             return
         speech = self._speech.get(role)
-        start_ms = event.start_ms or 0
         if role == "user":
             # the caller's turn is everything they say before the model answers, however long
             # they pause: a fragment from after the answer began starts the next one
             ends = (
-                speech is not None and speech.reply_ms is not None and start_ms >= speech.reply_ms
+                speech is not None
+                and speech.reply_ms is not None
+                and event.start_ms is not None
+                and event.start_ms >= speech.reply_ms
             )
         else:
-            user = self._speech.get("user")
-            if user is not None and user.reply_ms is None and start_ms >= (user.start_ms or 0):
-                user.reply_ms = start_ms
             # a pause on the model's clock ends its message even when its fragments arrived
             # together
             ends = (
@@ -818,6 +819,11 @@ class GPTLiveSession(
             speech = self._speech[role] = _Speech(
                 message_id=utils.shortuuid("speech_"), start_ms=event.start_ms
             )
+            # the caller's transcript runs behind the model's, so the answer can arrive first
+            if role == "user" and (model := self._speech.get("assistant")) is not None:
+                self._answer(speech, model.start_ms)
+            elif role == "assistant" and (user := self._speech.get("user")) is not None:
+                self._answer(user, speech.start_ms)
             self._history.insert(
                 llm.ChatMessage(
                     id=speech.message_id,
@@ -855,6 +861,16 @@ class GPTLiveSession(
                 ),
             )
 
+    def _answer(self, user: _Speech, start_ms: int | None) -> None:
+        """Record model output that began at ``start_ms`` as the answer to the caller's turn, if
+        it began no earlier than the turn did: speech already under way is no answer to it."""
+        if user.reply_ms is not None:
+            return
+        if start_ms is None or user.start_ms is None:
+            user.reply_ms = math.inf
+        elif start_ms >= user.start_ms:
+            user.reply_ms = start_ms
+
     def _end_speech(self, role: Role) -> None:
         """Close a speaker's message; for the user this is the end of their turn."""
         if (speech := self._speech.pop(role, None)) is None or role != "user":
@@ -874,6 +890,9 @@ class GPTLiveSession(
         )
 
     def _handle_delegation_created(self, event: types.SessionDelegationCreatedEvent) -> None:
+        # delegating is the model acting on what the caller said, whether or not it speaks
+        if (user := self._speech.get("user")) is not None:
+            self._answer(user, None)
         delegation = event.delegation
         if not delegation.id:
             logger.warning("gpt-live delegation has no id; nothing can answer it")
@@ -930,6 +949,8 @@ class GPTLiveSession(
                 name=item.name,
                 arguments=item.arguments,
             )
+            # the tool reads the chat context, so the request it serves is committed first
+            self._end_speech("user")
             self._history.insert(fnc_call)
             self.emit("function_call", fnc_call)
 
