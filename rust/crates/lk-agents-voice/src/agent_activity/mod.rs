@@ -16,7 +16,7 @@ pub mod tools;
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_activity::false_interruption::{InterruptOutcome, PausedSpeech};
 use crate::agent_activity::options::{AgentSessionOptions, ConfigStack, LegSet};
-use crate::agent_activity::scheduling::{SpeechId, SpeechScheduler};
+use crate::agent_activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
 use crate::agent_session::effects::{AudioOp, Effect, Out};
 use crate::agent_session::{ActivityCommand, Driver, HostAudio, HostVideo};
 use crate::audio_recognition::AudioRecognition;
@@ -50,8 +50,9 @@ pub(crate) struct AgentActivity {
     pub(crate) speech_scheduler: SpeechScheduler,
     /// `_paused_speech` and the false-interruption timer.
     pub(crate) paused_speech: PausedSpeech,
-    /// The agent each speech was created under: late tool items belong to it.
-    pub(crate) speech_agents: BTreeMap<SpeechId, String>,
+    /// The agent each speech was created under, and what it was created as: late items belong to
+    /// it, and keep their source once the close's edge released the speech.
+    pub(crate) speech_agents: BTreeMap<SpeechId, (String, SpeechKind)>,
     pub(crate) finished: BTreeSet<SpeechId>,
     /// Per tool step: whether the activity that made the speech drains, so the step's reply
     /// offers no tools.
@@ -140,13 +141,18 @@ impl AgentActivity {
     }
 
     /// The speech is the running agent's: its late items are attributed to it.
-    pub(crate) fn note_speech_agent(&mut self, speech: SpeechId) {
-        self.speech_agents.insert(speech, self.agent.clone());
+    pub(crate) fn note_speech_agent(&mut self, speech: SpeechId, kind: SpeechKind) {
+        self.speech_agents.insert(speech, (self.agent.clone(), kind));
     }
 
     /// The agent `speech` was created under.
     pub(crate) fn speech_agent(&self, speech: SpeechId) -> Option<&str> {
-        self.speech_agents.get(&speech).map(String::as_str)
+        self.speech_agents.get(&speech).map(|(agent, _)| agent.as_str())
+    }
+
+    /// What `speech` was created as, after its release too.
+    pub(crate) fn speech_kind(&self, speech: SpeechId) -> Option<SpeechKind> {
+        self.speech_agents.get(&speech).map(|(_, kind)| *kind)
     }
 
     pub(crate) fn set_tools_in_flight(&mut self, speech: SpeechId, running: bool) {

@@ -633,7 +633,7 @@ impl Driver {
 
         let handle = self.new_speech(spec.host_handle.as_ref(), id, spec.allow_interruptions);
 
-        self.activity.note_speech_agent(id);
+        self.activity.note_speech_agent(id, kind);
 
         let message_id = self.session.ids.mint("item");
         let ctx = ReplyContext {
@@ -883,7 +883,9 @@ impl Driver {
         out.trace(SpeechStep::StepSpoken { speech, step, interrupted });
         // The step's edge is spent: the next step's first frame is a new one.
         self.activity.spoke.remove(&speech);
-        let kind = self.activity.speech_scheduler.kind(speech);
+        // Read off the record kept past the release: a `say` cut by the close's edge reports its
+        // step after the edge released it, and is still a `say`'s item.
+        let kind = self.activity.speech_kind(speech).or(self.activity.speech_scheduler.kind(speech));
         let mut item = item.map(|msg| {
             let source = match kind {
                 Some(SpeechKind::Say) => Source::Say { speech },

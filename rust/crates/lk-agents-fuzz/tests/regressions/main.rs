@@ -102,3 +102,4 @@ mod amd_tap_queued_at_close;
 mod launch_held_by_unheard_speaker;
 mod handoff_refused_releases;
 mod voice_connection_reused;
+mod say_item_after_close_edge;
