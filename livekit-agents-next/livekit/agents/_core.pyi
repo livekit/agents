@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Any, Protocol
 
 from ._generated._core_classes import *  # noqa: F401, F403
+from ._generated._core_classes import ChatItem
 from ._generated.storage import DatabaseInfo, EventRow, InboxRow, StreamInfo
 from ._generated.storage_run import ItemRow, LaneRow, TaskPage, TaskRow
 from ._generated.storage_threads import ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
@@ -486,3 +487,21 @@ class AgentNodes:
 
 def tts_node(tts: Any, text: Any, *, conn_options: Any) -> ItemStream: ...
 def stt_node(stt: Any, audio: Any, *, conn_options: Any) -> ItemStream: ...
+
+# --- lk-agents-abi llm/to_dict.rs ----------------------------------------------------------------
+
+def chat_ctx_to_dict(
+    items: list[ChatItem],
+    *,
+    exclude_image: bool = True,
+    exclude_audio: bool = True,
+    exclude_timestamp: bool = True,
+    exclude_function_call: bool = False,
+    exclude_metrics: bool = False,
+    exclude_config_update: bool = False,
+    serialize_media: Callable[[Any], Any] | None = None,
+    strip_expr_markup: Callable[[str], str] | None = None,
+) -> dict[str, Any]:
+    """``ChatContext.to_dict``: ``{"items": [...]}``, each item's JSON dump. ``serialize_media``
+    renders a frame (required only when media is kept); ``strip_expr_markup`` strips assistant
+    messages' markup."""

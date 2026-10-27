@@ -14,8 +14,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
@@ -314,42 +312,9 @@ class _ChatItemBase(BaseModel):
 
     def _essential_fields(self) -> tuple[Any, ...]:
         """What identifies this item's content beyond its id and type: what
-        :meth:`ChatContext.is_equivalent` compares and :meth:`_fingerprint` hashes.
-        Timestamps, metrics and other metadata are left out."""
+        :meth:`ChatContext.is_equivalent` compares. Timestamps, metrics and other metadata are
+        left out."""
         return ()
-
-    def _fingerprint(self) -> bytes:
-        """A short digest of :meth:`_essential_fields`, to tell whether an item changed
-        without keeping a copy of it."""
-        payload = json.dumps(
-            [type(self).__name__, *self._essential_fields()],
-            ensure_ascii=False,
-            default=_fingerprint_default,
-        )
-        return hashlib.blake2b(payload.encode(), digest_size=8).digest()
-
-
-def _fingerprint_default(value: Any) -> Any:
-    # Avoid hashing inline media payloads. Their object identity detects replacement
-    # within a running session; callers should also give replacements a new image id.
-    if isinstance(value, ImageContent):
-        image_source = (
-            value.image
-            if isinstance(value.image, str) and not value.image.startswith("data:")
-            else id(value.image)
-        )
-        return [
-            "image",
-            value.id,
-            image_source,
-            value.inference_width,
-            value.inference_height,
-            value.inference_detail,
-            value.mime_type,
-        ]
-    if isinstance(value, AudioContent):
-        return ["audio", value.transcript]
-    return str(value)
 
 
 class ChatMessage(_ChatItemBase):
@@ -514,30 +479,16 @@ class ChatContext:
         metrics: NotGivenOr[MetricsReport] = NOT_GIVEN,
         extra: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> ChatMessage:
-        kwargs: dict[str, Any] = {}
-        if is_given(id):
-            kwargs["id"] = id
-        if is_given(interrupted):
-            kwargs["interrupted"] = interrupted
-        if is_given(created_at):
-            kwargs["created_at"] = created_at
-        if is_given(metrics):
-            kwargs["metrics"] = metrics
-        if is_given(extra):
-            kwargs["extra"] = extra
-
-        if isinstance(content, Instructions):
-            message = ChatMessage(role=role, content=[str(content)], **kwargs)
-        elif isinstance(content, str):
-            message = ChatMessage(role=role, content=[content], **kwargs)
-        else:
+        given = {"id": id, "interrupted": interrupted, "metrics": metrics, "extra": extra}
+        kwargs: dict[str, Any] = {k: v for k, v in given.items() if is_given(v)}
+        if isinstance(content, (str, Instructions)):
+            content = [str(content)]
+        if not is_given(created_at):
             message = ChatMessage(role=role, content=content, **kwargs)
-
-        if is_given(created_at):
-            idx = self.find_insertion_index(created_at=created_at)
-            self._items.insert(idx, message)
-        else:
             self._items.append(message)
+            return message
+        message = ChatMessage(role=role, content=content, created_at=created_at, **kwargs)
+        self._items.insert(self.find_insertion_index(created_at=created_at), message)
         return message
 
     def insert(self, item: ChatItem | Sequence[ChatItem]) -> None:
@@ -646,50 +597,20 @@ class ChatContext:
         exclude_config_update: bool = False,
         strip_markup: bool = False,
     ) -> dict[str, Any]:
-        items: list[ChatItem] = []
-        for item in self.items:
-            if exclude_function_call and item.type in [
-                "function_call",
-                "function_call_output",
-            ]:
-                continue
+        """``{"items": [...]}``, each item's JSON dump (the core's ``chat_ctx_to_dict``).
+        ``strip_markup`` strips the ``<expr/>`` dialect from assistant messages."""
+        from .._core_view import to_core_items
 
-            if exclude_config_update and item.type == "agent_config_update":
-                continue
-
-            if item.type == "message":
-                item = item.model_copy()
-                if exclude_image:
-                    item.content = [c for c in item.content if not isinstance(c, ImageContent)]
-                if exclude_audio:
-                    item.content = [c for c in item.content if not isinstance(c, AudioContent)]
-                # only strip the <expr/> dialect, and only in assistant messages
-                if strip_markup and item.role == "assistant":
-                    from ..tts import strip_expr_markup
-
-                    item.content = [
-                        strip_expr_markup(c) if isinstance(c, str) else c for c in item.content
-                    ]
-
-            items.append(item)
-
-        exclude_fields: set[str] = set()
-        if exclude_timestamp:
-            exclude_fields.add("created_at")
-        if exclude_metrics:
-            exclude_fields.add("metrics")
-
-        return {
-            "items": [
-                item.model_dump(
-                    mode="json",
-                    exclude_none=True,
-                    exclude_defaults=False,
-                    exclude=exclude_fields,
-                )
-                for item in items
-            ],
-        }
+        return _core.chat_ctx_to_dict(  # type: ignore[no-any-return]
+            to_core_items(self.items),
+            exclude_image=exclude_image,
+            exclude_audio=exclude_audio,
+            exclude_timestamp=exclude_timestamp,
+            exclude_function_call=exclude_function_call,
+            exclude_metrics=exclude_metrics,
+            exclude_config_update=exclude_config_update,
+            strip_expr_markup=_core.strip_expr_markup if strip_markup else None,
+        )
 
     @overload
     def to_provider_format(
@@ -758,16 +679,6 @@ class ChatContext:
                 return i + 1
 
         return 0
-
-    def _upsert_item(self, item: ChatItem, *, allow_type_mismatch: bool = False) -> None:
-        """Update an item with the same ID if it exists, otherwise insert it by creation time."""
-        idx = self.index_by_id(item.id)
-        if idx is not None:
-            if not allow_type_mismatch and item.type != self._items[idx].type:
-                raise ValueError(f"Item type mismatch: {item.type} != {self._items[idx].type}")
-            self._items[idx] = item
-        else:
-            self.insert(item)
 
     async def _summarize(self, llm_v: LLM, *, keep_last_turns: int = 2) -> ChatContext:
         """Replace all but the last ``keep_last_turns`` turns with an LLM-written summary."""
