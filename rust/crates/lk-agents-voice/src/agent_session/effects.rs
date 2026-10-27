@@ -493,6 +493,13 @@ impl Driver {
             }
         }
         self.flush_activity();
+        self.publish_scheduling();
+    }
+
+    /// Whether a new speech would be refused, as the host's `say()` reads it: at the end of every
+    /// cycle, and before a hook reaches the host, whose callback may speak at once (a new agent's
+    /// `on_enter`, issued in the cycle that ends the drain).
+    pub(crate) fn publish_scheduling(&self) {
         let gate = crate::agent_session::SchedulingGate {
             paused: self.activity.speech_scheduler.is_paused(),
             handoff_draining: self.activity.handoff.draining() && self.session.closing.is_none(),

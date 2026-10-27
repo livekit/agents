@@ -65,6 +65,7 @@ impl Driver {
             HookCall::FunctionToolsExecuted { speech, .. } => (None, Some(*speech), None),
         };
         out.trace(HandoffStep::HookIssued { hook: id, kind, agent, speech, turn });
+        self.publish_scheduling();
         let hosted =
             self.activity.hook_bound.is_some() && self.events.send(HostEvent::Hook(call)).is_ok();
         if !hosted {
