@@ -947,3 +947,7 @@ mod frame_tests {
         assert_eq!(d.next_frame().unwrap(), Some(b"hello".to_vec()));
     }
 }
+
+#[cfg(test)]
+#[path = "remote_session_tests.rs"]
+mod encode_tests;

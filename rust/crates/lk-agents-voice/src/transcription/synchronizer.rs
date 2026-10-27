@@ -1124,6 +1124,79 @@ mod tests {
         p
     }
 
+    fn warned(effects: &[PaceEffect]) -> Vec<&'static str> {
+        effects
+            .iter()
+            .filter_map(|e| match e {
+                PaceEffect::Warn(w) => Some(w.name()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // Catches: an event out of order (a missing rotation upstream) silently changing a segment
+    // instead of being warned about and ignored, or a segment that finished early never reporting
+    // what was heard.
+    #[test]
+    fn events_out_of_order_are_warned_and_change_nothing() {
+        let text = || PaceEvent::Text { raw: "late".into(), start_time: None };
+        let mut p = Pacer::new(PacerOptions::default());
+        for ev in [text(), PaceEvent::TextEnd] {
+            p = p.step(ev).0;
+        }
+        let (p, effects) = p.step(text());
+        assert_eq!(warned(&effects), ["text_after_end"]);
+        let (p, _) = p.step(PaceEvent::Audio { secs: 0.2 });
+        let (p, _) = p.step(PaceEvent::AudioEnd);
+        let (p, effects) = p.step(PaceEvent::AudioEnd);
+        assert_eq!(warned(&effects), ["audio_after_end"]);
+
+        // Audio first: the text's end is what ends the inputs.
+        let mut q = Pacer::new(PacerOptions::default());
+        for ev in [text(), PaceEvent::Audio { secs: 0.2 }, PaceEvent::AudioEnd, PaceEvent::TextEnd]
+        {
+            let (next, effects) = q.step(ev);
+            assert!(warned(&effects).is_empty());
+            q = next;
+        }
+        assert!(q.text_ended() && q.audio_ended());
+
+        // Finished before the inputs ended: warned, and still heard once.
+        let early = Pacer::new(PacerOptions::default()).step(text()).0;
+        let finish =
+            PaceEvent::PlaybackFinished { position: Duration::from_millis(50), interrupted: false };
+        let (early, effects) = early.step(finish.clone());
+        assert_eq!(warned(&effects), ["playback_finished_too_early"]);
+        assert_eq!(effects.iter().filter(|e| matches!(e, PaceEffect::Heard(_))).count(), 1);
+        let (early, effects) = early.step(PaceEvent::Position(Duration::from_millis(60)));
+        assert_eq!(warned(&effects), ["after_finished"]);
+        let (early, effects) = early.step(PaceEvent::Close);
+        assert!(effects.is_empty() && early.is_over());
+        let (_, effects) = early.step(finish);
+        assert_eq!(warned(&effects), ["after_close"]);
+        let _ = p;
+    }
+
+    // Catches: an aligned delta (a TTS that reports where each word starts) planned on the
+    // estimated pace instead of its own onset.
+    #[test]
+    fn an_aligned_delta_starts_where_the_voice_says() {
+        let mut p = Pacer::new(PacerOptions::default());
+        for ev in [
+            PaceEvent::Text { raw: "one ".into(), start_time: Some(0.0) },
+            PaceEvent::Text { raw: "two".into(), start_time: Some(1.0) },
+            PaceEvent::TextEnd,
+            PaceEvent::Audio { secs: 2.0 },
+            PaceEvent::AudioEnd,
+        ] {
+            p = p.step(ev).0;
+        }
+        let (p, effects) = p.step(PaceEvent::Position(Duration::from_millis(900)));
+        assert_eq!(shown(&effects), "one", "the second word starts at its aligned onset, 1 s");
+        let (_, effects) = p.step(PaceEvent::Position(Duration::from_millis(1900)));
+        assert_eq!(shown(&effects), " two");
+    }
+
     fn shown(effects: &[PaceEffect]) -> String {
         effects
             .iter()

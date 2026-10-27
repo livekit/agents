@@ -495,4 +495,52 @@ mod tests {
         assert!(!rest.is_empty(), "flush must release what push held");
         assert_eq!(held.concat() + &rest.concat(), "plain *", "nothing is lost across the two");
     }
+
+    // Catches: a markdown construct the reference strips reaching the speaker (or one it keeps
+    // stripped), whole or split across chunks. Expected outputs are the reference
+    // `filter_markdown`'s, run over the same chunks.
+    #[test]
+    fn markdown_is_stripped_as_the_reference_strips_it() {
+        let cases: &[(&[&str], &str)] = &[
+            (&["这是**重点**内容。"], "这是重点内容。"),
+            (&["タイ語*強調*です。"], "タイ語強調です。"),
+            (&["a ** b and *  x* here."], "a ** b and *  x* here."),
+            (&["```py\nprint(1)\n```\n"], "\nprint(1)\n\n"),
+            (&["say `unterminated here."], "say `unterminated here."),
+            (&["``a``b and `` `` x."], "`ab and  ` x."),
+            (&["~~gone~~ but ~~ a~~ and x~~y~~z."], " but ~~ a~~ and xz."),
+            (&["***\n"], "\n"),
+            (&["- - -\n"], "\n"),
+            (&["___\n"], "\n"),
+            (&["* * *x\n"], "* *x\n"),
+            (&["see [a](b) and ![img](u) and [a] (b) end."], "see a and img and [a] (b) end."),
+            (&["[open( never closes."], "[open( never closes."),
+            (
+                &["a_b_c and __bold__ and _ital_ and ***both***."],
+                "a_b_c and bold and ital and both.",
+            ),
+            (
+                &["* item\n1. one\n> quote\n#tag\n##  h2\n+ plus\n"],
+                "item\n1. one\nquote\n#tag\nh2\nplus\n",
+            ),
+            (&["**", "bold", "** after"], "bold after"),
+            (&["~~", "x", "~~ y"], " y"),
+            (&["`", "code", "` z"], "code z"),
+            (&["[link", "](url) done"], "link done"),
+            (&["![i", "](u) done"], "i done"),
+            (&["*a*b*c*."], "*a*b*c*."),
+            (&["_a_b_ c."], "_a_b_ c."),
+            (&["**a**b."], "**a**b."),
+            (&["mixed ~~*x*~~ ok."], "mixed  ok."),
+            (&["\u{2014} dash *em* \u{2014}."], "\u{2014} dash em \u{2014}."),
+            (&["tail with trailing *"], "tail with trailing *"),
+        ];
+        for (chunks, expected) in cases {
+            let mut f = MarkdownFilter::new();
+            let mut out: Vec<String> = chunks.iter().flat_map(|c| f.push(c)).collect();
+            out.extend(f.flush());
+            assert_eq!(out.concat(), *expected, "{chunks:?}");
+        }
+        assert_eq!(filter_emoji("ok \u{2B50}\u{FE0F} done"), "ok  done");
+    }
 }
