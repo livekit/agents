@@ -5,10 +5,11 @@ synchronous work on it (a blocking HTTP client inside a tool, a large numpy oper
 ``time.sleep``) is audible as latency or jitter. asyncio only reports slow callbacks in debug
 mode, which is far too expensive for production and only logs.
 
-The watchdog is the core's (``_core.LoopMonitor``); this module turns its reports into the
-span, log and metric. It observes a single loop without patching asyncio:
+The watchdog is the core's (``_core.LoopMonitor``), and so are the thresholds (from the
+environment), the report's span attributes and log line, and their rate limits; this module
+emits them and records the metric. It observes a single loop without patching asyncio:
 
-* a **heartbeat** scheduled with ``loop.call_later`` every ``tick_interval`` records the time.
+* a **heartbeat** scheduled with ``loop.call_later`` every tick interval records the time.
   When the loop is blocked, the tick fires late by the length of the block (to within one
   interval);
 * a **watchdog thread** wakes on the same interval and compares now against the last tick. Once
@@ -21,10 +22,9 @@ span, log and metric. It observes a single loop without patching asyncio:
   CPU time. It also logs a warning and records a histogram measurement.
 
 Spans nest under the span the blocked task was in when sampled, else under the primary agent
-session's root span (``telemetry.session_context``), else under ``job_entrypoint``; the session
-span also carries a per-stall event plus a count / total / max summary. The worker process has
-no job to attach spans to and produces only the log and the metric. Output is rate limited so
-a pathologically blocked loop cannot flood the exporter.
+session's root span (``telemetry.session_context``), else under ``job_entrypoint``. The worker
+process has no job to attach spans to and produces only the log and the metric. Output is rate
+limited so a pathologically blocked loop cannot flood the exporter.
 
 What a report means
 -------------------
@@ -50,8 +50,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import math
-import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -61,28 +59,13 @@ from opentelemetry import context as otel_context, trace
 
 from .. import _core
 from ..log import logger
-from . import otel_metrics, session_context, trace_types
+from . import otel_metrics, session_context
 from .traces import tracer
 
 DEFAULT_WARN_THRESHOLD = 0.1
 """Blocks at or above this many seconds are reported as warnings."""
 DEFAULT_ERROR_THRESHOLD = 0.5
 """Blocks at or above this many seconds are reported as errors (span status ERROR)."""
-DEFAULT_TICK_INTERVAL = 0.02
-"""Heartbeat period at the default warn threshold. Also the measurement resolution: a block
-is measured to within one tick, and detection near the threshold needs several ticks per
-threshold (see ``_tick_interval_for``)."""
-_TICKS_PER_WARN_THRESHOLD = 5
-# the monitor never ticks faster than this: two wake-ups per tick (heartbeat and watchdog) in
-# every job process add up. A warn threshold below it is raised to it.
-_MIN_TICK_INTERVAL = 0.02
-_MAX_TICK_INTERVAL = 0.05
-
-ENV_WARN_THRESHOLD_MS = "LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS"
-ENV_ERROR_THRESHOLD_MS = "LIVEKIT_AGENTS_LOOP_BLOCK_ERROR_MS"
-
-MAX_SPANS_PER_MINUTE = 30
-MAX_LOGS_PER_MINUTE = 5
 
 SPAN_NAME = "event_loop_blocked"
 
@@ -94,44 +77,11 @@ class LoopMonitorThresholds:
 
     @classmethod
     def from_env(cls) -> LoopMonitorThresholds | None:
-        """Thresholds from the environment, or ``None`` when monitoring is disabled.
-
-        ``LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS=0`` disables the monitor. Invalid values fall
-        back to the defaults with a warning rather than disabling silently.
-        """
-        warn = _env_seconds(ENV_WARN_THRESHOLD_MS, DEFAULT_WARN_THRESHOLD)
-        error = _env_seconds(ENV_ERROR_THRESHOLD_MS, DEFAULT_ERROR_THRESHOLD)
-        if warn <= 0:
-            return None
-        if error < warn:
-            logger.warning(
-                "%s (%.0fms) is below %s (%.0fms); using the warn threshold for both",
-                ENV_ERROR_THRESHOLD_MS,
-                error * 1000,
-                ENV_WARN_THRESHOLD_MS,
-                warn * 1000,
-            )
-            error = warn
-        return cls(warn=warn, error=error)
-
-
-def _env_seconds(name: str, default: float) -> float:
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        value_ms = float(raw)
-    except ValueError:
-        logger.warning(
-            "invalid %s=%r, expected milliseconds; using %.0fms", name, raw, default * 1000
-        )
-        return default
-    if not math.isfinite(value_ms) or value_ms < 0:
-        logger.warning(
-            "invalid %s=%r, must be finite and >= 0; using %.0fms", name, raw, default * 1000
-        )
-        return default
-    return value_ms / 1000.0
+        """Thresholds from ``LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS`` and ``_ERROR_MS``, or ``None``
+        when monitoring is disabled (a warn threshold of 0). Invalid values fall back to the
+        defaults with a warning rather than disabling silently."""
+        thresholds = _core.LoopMonitor.thresholds_from_env()
+        return cls(*thresholds) if thresholds is not None else None
 
 
 @dataclass
@@ -163,11 +113,13 @@ class EventLoopMonitor:
         *,
         warn_threshold: float = DEFAULT_WARN_THRESHOLD,
         error_threshold: float = DEFAULT_ERROR_THRESHOLD,
-        tick_interval: float = DEFAULT_TICK_INTERVAL,
+        tick_interval: float | None = None,
         name: str = "event-loop",
         emit_spans: bool = True,
     ) -> None:
-        self._emit_spans = emit_spans  # False on the worker loop: no job to attach spans to
+        """``tick_interval`` defaults to a fifth of the warn threshold, within bounds; a warn
+        threshold below the smallest tick is then raised to it. ``emit_spans=False`` on the
+        worker loop: no job to attach spans to."""
         self._core = _core.LoopMonitor(
             loop,
             warn_threshold=warn_threshold,
@@ -205,31 +157,20 @@ class EventLoopMonitor:
         self._core.stop()
 
     def _report(self, raw: dict[str, Any]) -> None:
-        emit_span, emit_log = raw.pop("emit_span"), raw.pop("emit_log")
-        suppressed = raw.pop("suppressed")
+        span, log, reported = raw.pop("span"), raw.pop("log"), raw.pop("reported")
         report = BlockedReport(**raw)
 
         def _emit() -> None:
-            # the metric and the session summary count every stall, including the ones the
-            # span and log limiters drop
+            # the metric counts every stall, including the ones the limiters drop
             try:
                 otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
             except Exception:
                 logger.exception("failed to record the blocked event loop metric")
-            if (session := session_context.primary_session()) is not None and (
-                session_context.session_root_context() is not None
-            ):
-                session._record_loop_stall(
-                    report.duration,
-                    timestamp_ns=int((report.started_at + report.duration) * 1_000_000_000),
-                )
-            if not emit_span and not emit_log:
-                return
-            if emit_span and self._emit_spans:
-                self._emit_span(report, suppressed=suppressed)
-            if emit_log:
-                self._emit_log(report)
-            if self._on_report is not None:
+            if span is not None:
+                _emit_span(report, *span)
+            if log is not None:
+                logger.warning(log[0], extra=log[1])
+            if reported and self._on_report is not None:
                 self._on_report(report)
 
         try:
@@ -240,82 +181,25 @@ class EventLoopMonitor:
         except Exception:
             logger.exception("failed to report a blocked event loop")
 
-    def _emit_span(self, report: BlockedReport, *, suppressed: int) -> None:
-        start_ns = int(report.started_at * 1_000_000_000)
-        end_ns = start_ns + int(report.duration * 1_000_000_000)
-        attributes: dict[str, Any] = {
-            trace_types.ATTR_BLOCKING_DURATION: report.duration,
-            trace_types.ATTR_BLOCKING_THRESHOLD: report.warn_threshold,
-            trace_types.ATTR_BLOCKING_SEVERITY: report.severity,
-            trace_types.ATTR_BLOCKING_GC_TIME: report.gc_time,
-            trace_types.ATTR_BLOCKING_CPU_TIME: report.cpu_time,
-        }
-        if report.task_name:
-            attributes[trace_types.ATTR_BLOCKING_TASK] = report.task_name
-        if report.stacks:
-            attributes[trace_types.ATTR_BLOCKING_STACK] = "\n---\n".join(report.stacks)
-        if report.importing:
-            attributes[trace_types.ATTR_BLOCKING_IMPORT] = report.importing
-        if suppressed:
-            attributes[trace_types.ATTR_BLOCKING_SUPPRESSED] = suppressed
 
-        from ..job import get_job_context
+def _emit_span(report: BlockedReport, attributes: dict[str, Any], error: str | None) -> None:
+    from ..job import get_job_context
 
-        if get_job_context(required=False) is None:
-            return  # no job, no trace to belong to: a root span here would be a stray trace
-        # under the span the blocked task was in, else the session root, else the report
-        # context (job_entrypoint); the heartbeat's own context predates all of them
-        if report.parent_span_context is not None:
-            parent: otel_context.Context | None = trace.set_span_in_context(
-                trace.NonRecordingSpan(report.parent_span_context)
-            )
-        else:
-            parent = session_context.session_root_context()
-        span = tracer.start_span(
-            SPAN_NAME, context=parent, start_time=start_ns, attributes=attributes
+    if get_job_context(required=False) is None:
+        return  # no job, no trace to belong to: a root span here would be a stray trace
+    # under the span the blocked task was in, else the session root, else the report context
+    # (job_entrypoint); the heartbeat's own context predates all of them
+    if report.parent_span_context is not None:
+        parent: otel_context.Context | None = trace.set_span_in_context(
+            trace.NonRecordingSpan(report.parent_span_context)
         )
-        if report.severity == "error":
-            span.set_status(
-                trace.Status(
-                    trace.StatusCode.ERROR,
-                    f"event loop blocked for {report.duration * 1000:.0f}ms",
-                )
-            )
-        span.end(end_time=end_ns)
-
-    def _emit_log(self, report: BlockedReport) -> None:
-        location = report.location
-        extra: dict[str, Any] = {
-            "duration": round(report.duration, 4),
-            "threshold": report.warn_threshold,
-            "gc_time": round(report.gc_time, 4),
-            "cpu_time": round(report.cpu_time, 4),
-        }
-        if report.task_name:
-            extra["task"] = report.task_name
-        if report.stacks:
-            extra["stack"] = report.stacks[-1]
-        if report.importing:
-            extra["import"] = report.importing
-        where = f" at {location}" if location else ""
-        if report.importing:
-            # a lazy import on the loop: name the module, so it can be preloaded
-            logger.warning(
-                "event loop blocked for %.0fms importing %s%s; import it at process "
-                "warm-up (prewarm) instead of on first use",
-                report.duration * 1000,
-                report.importing,
-                where,
-                extra=extra,
-            )
-            return
-        logger.warning(
-            "event loop blocked for %.0fms%s; synchronous work on the agent loop delays "
-            "audio and turn handling, move it to a thread or an async client",
-            report.duration * 1000,
-            where,
-            extra=extra,
-        )
+    else:
+        parent = session_context.session_root_context()
+    start_ns = int(report.started_at * 1_000_000_000)
+    span = tracer.start_span(SPAN_NAME, context=parent, start_time=start_ns, attributes=attributes)
+    if error is not None:
+        span.set_status(trace.Status(trace.StatusCode.ERROR, error))
+    span.end(end_time=start_ns + int(report.duration * 1_000_000_000))
 
 
 def _current_span_in(task_context: contextvars.Context) -> trace.SpanContext | None:
@@ -337,15 +221,6 @@ _monitors: dict[asyncio.AbstractEventLoop, EventLoopMonitor] = {}
 _registry_lock = threading.Lock()
 
 
-def _tick_interval_for(warn_threshold: float) -> float:
-    """A fifth of the warn threshold, within bounds. A block is measured to within one tick,
-    so fewer ticks per threshold means blocks just over it go unreported; more ticks cost
-    wake-ups (two per tick, heartbeat and watchdog) for no gain."""
-    return min(
-        max(warn_threshold / _TICKS_PER_WARN_THRESHOLD, _MIN_TICK_INTERVAL), _MAX_TICK_INTERVAL
-    )
-
-
 def start_monitoring(
     loop: asyncio.AbstractEventLoop,
     *,
@@ -358,32 +233,18 @@ def start_monitoring(
     Returns the monitor, or ``None`` when monitoring is disabled or already running for
     that loop.
     """
-    if thresholds is None:
-        thresholds = LoopMonitorThresholds.from_env()
-    if thresholds is None:
+    if (thresholds := thresholds or LoopMonitorThresholds.from_env()) is None:
         return None
-    if thresholds.warn < _MIN_TICK_INTERVAL:
-        logger.warning(
-            "loop monitor warn threshold %.0fms raised to %.0fms, the smallest it measures",
-            thresholds.warn * 1000,
-            _MIN_TICK_INTERVAL * 1000,
-        )
-        thresholds = LoopMonitorThresholds(
-            warn=_MIN_TICK_INTERVAL, error=max(thresholds.error, _MIN_TICK_INTERVAL)
-        )
-
     with _registry_lock:
         if loop in _monitors:
             return None
-        monitor = EventLoopMonitor(
+        monitor = _monitors[loop] = EventLoopMonitor(
             loop,
             warn_threshold=thresholds.warn,
             error_threshold=thresholds.error,
-            tick_interval=_tick_interval_for(thresholds.warn),
             name=name,
             emit_spans=emit_spans,
         )
-        _monitors[loop] = monitor
     monitor.start()
     return monitor
 

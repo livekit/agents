@@ -1,7 +1,9 @@
 //! `_core.LoopMonitor`: `telemetry/loop_monitor.py`'s watchdog. A heartbeat on the loop
 //! (`loop.call_later`) stamps each tick; a watchdog thread notices a tick that is late, samples
 //! the loop thread's stack while the block lasts, and the late tick reports the block, measured.
-//! The host turns the report into its span, log and metric.
+//! The report carries its span's attributes and its log line, rate limited; the host emits them
+//! and records the metric. The thresholds come from the environment, the tick from the warn
+//! threshold.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
@@ -17,6 +19,62 @@ const MAX_STACK_FRAMES: usize = 20;
 const MAX_SPANS_PER_MINUTE: usize = 30;
 const MAX_LOGS_PER_MINUTE: usize = 5;
 const LOG: &str = "livekit.agents";
+
+const DEFAULT_WARN_THRESHOLD: f64 = 0.1;
+const DEFAULT_ERROR_THRESHOLD: f64 = 0.5;
+const ENV_WARN_THRESHOLD_MS: &str = "LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS";
+const ENV_ERROR_THRESHOLD_MS: &str = "LIVEKIT_AGENTS_LOOP_BLOCK_ERROR_MS";
+/// A block is measured to within one tick, so fewer ticks per warn threshold miss blocks just
+/// over it; more cost wake-ups (two per tick, heartbeat and watchdog) for no gain.
+const TICKS_PER_WARN_THRESHOLD: f64 = 5.0;
+/// The monitor never ticks faster than this: a warn threshold below it is raised to it.
+const MIN_TICK_INTERVAL: f64 = 0.02;
+const MAX_TICK_INTERVAL: f64 = 0.05;
+
+/// A threshold in seconds from its millisecond variable; an invalid value falls back to the
+/// default with a warning rather than disabling the monitor silently.
+fn env_seconds(name: &str, default: f64) -> f64 {
+    let raw = match std::env::var(name) {
+        Ok(raw) if !raw.trim().is_empty() => raw,
+        _ => return default,
+    };
+    match raw.trim().parse::<f64>() {
+        Ok(ms) if ms.is_finite() && ms >= 0.0 => ms / 1000.0,
+        Ok(_) => {
+            log::warn!(target: LOG, "invalid {name}={raw:?}, must be finite and >= 0; using {:.0}ms", default * 1000.0);
+            default
+        }
+        Err(_) => {
+            log::warn!(target: LOG, "invalid {name}={raw:?}, expected milliseconds; using {:.0}ms", default * 1000.0);
+            default
+        }
+    }
+}
+
+/// `(warn, error)` from the environment; `None` when `LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS=0`
+/// disables the monitor.
+fn thresholds_from_env() -> Option<(f64, f64)> {
+    let warn = env_seconds(ENV_WARN_THRESHOLD_MS, DEFAULT_WARN_THRESHOLD);
+    let error = env_seconds(ENV_ERROR_THRESHOLD_MS, DEFAULT_ERROR_THRESHOLD);
+    if warn <= 0.0 {
+        return None;
+    }
+    if error < warn {
+        log::warn!(
+            target: LOG,
+            "{ENV_ERROR_THRESHOLD_MS} ({:.0}ms) is below {ENV_WARN_THRESHOLD_MS} ({:.0}ms); using the warn threshold for both",
+            error * 1000.0,
+            warn * 1000.0
+        );
+        return Some((warn, warn));
+    }
+    Some((warn, error))
+}
+
+/// A fifth of the warn threshold, within bounds.
+fn tick_interval_for(warn: f64) -> f64 {
+    (warn / TICKS_PER_WARN_THRESHOLD).clamp(MIN_TICK_INTERVAL, MAX_TICK_INTERVAL)
+}
 
 /// At most `limit` events per rolling 60 s window; what was refused is counted.
 struct RateLimiter {
@@ -256,25 +314,108 @@ fn build_report<'py>(
         let suppressed = if emit_span && inner.emit_spans { st.span_limiter.take_suppressed() } else { 0 };
         (emit_span, emit_log, suppressed)
     };
+    let block = Block {
+        lag,
+        warn: inner.warn,
+        severity,
+        gc_time: gc_time.min(lag),
+        cpu_time,
+        task_name: samples.iter().find_map(|s| s.task_name.clone()),
+        importing: samples.iter().find_map(|s| s.importing.clone()),
+        location: stacks.last().and_then(|s| innermost_location(s)),
+        stacks,
+    };
     let d = PyDict::new(py);
     d.set_item("duration", lag)?;
     // the block started no earlier than the last on-time tick
     d.set_item("started_at", wall() - lag)?;
     d.set_item("warn_threshold", inner.warn)?;
     d.set_item("severity", severity)?;
-    d.set_item("gc_time", gc_time.min(lag))?;
+    d.set_item("gc_time", block.gc_time)?;
     d.set_item("cpu_time", cpu_time)?;
     d.set_item("watchdog_gap", watchdog_gap)?;
     d.set_item("process_descheduled", process_descheduled)?;
-    d.set_item("task_name", samples.iter().find_map(|s| s.task_name.clone()))?;
-    d.set_item("importing", samples.iter().find_map(|s| s.importing.clone()))?;
-    d.set_item("location", stacks.last().and_then(|s| innermost_location(s)))?;
-    d.set_item("stacks", PyList::new(py, &stacks)?)?;
+    d.set_item("task_name", &block.task_name)?;
+    d.set_item("importing", &block.importing)?;
+    d.set_item("location", &block.location)?;
+    d.set_item("stacks", PyList::new(py, &block.stacks)?)?;
     d.set_item("parent_span_context", samples.iter().find_map(|s| s.span_context.as_ref().map(|c| c.clone_ref(py))))?;
-    d.set_item("emit_span", emit_span)?;
-    d.set_item("emit_log", emit_log)?;
-    d.set_item("suppressed", suppressed)?;
+    // what the rate limiters let through: the span's `(attributes, error status)` (none on a
+    // loop without spans) and the log's `(message, extra)`
+    let span = if emit_span && inner.emit_spans { Some(block.span(py, suppressed)?) } else { None };
+    d.set_item("span", span)?;
+    d.set_item("log", if emit_log { Some(block.log(py)?) } else { None })?;
+    d.set_item("reported", emit_span || emit_log)?;
     Ok(d)
+}
+
+/// One reported block, as its span and its log line describe it.
+struct Block {
+    lag: f64,
+    warn: f64,
+    severity: &'static str,
+    gc_time: f64,
+    cpu_time: f64,
+    task_name: Option<String>,
+    importing: Option<String>,
+    location: Option<String>,
+    stacks: Vec<String>,
+}
+
+impl Block {
+    /// The `event_loop_blocked` span's attributes, and its error status when it is one.
+    fn span<'py>(&self, py: Python<'py>, suppressed: u64) -> PyResult<(Bound<'py, PyDict>, Option<String>)> {
+        let a = PyDict::new(py);
+        a.set_item("lk.blocking.duration", self.lag)?;
+        a.set_item("lk.blocking.threshold", self.warn)?;
+        a.set_item("lk.blocking.severity", self.severity)?;
+        a.set_item("lk.blocking.gc_time", self.gc_time)?;
+        a.set_item("lk.blocking.cpu_time", self.cpu_time)?;
+        if let Some(task) = &self.task_name {
+            a.set_item("lk.blocking.task", task)?;
+        }
+        if !self.stacks.is_empty() {
+            a.set_item("lk.blocking.stack", self.stacks.join("\n---\n"))?;
+        }
+        if let Some(module) = &self.importing {
+            a.set_item("lk.blocking.import", module)?;
+        }
+        if suppressed > 0 {
+            a.set_item("lk.blocking.suppressed", suppressed)?;
+        }
+        let status = (self.severity == "error").then(|| format!("event loop blocked for {:.0}ms", self.lag * 1000.0));
+        Ok((a, status))
+    }
+
+    /// The warning's message and `extra`: a lazy import names the module, to preload it.
+    fn log<'py>(&self, py: Python<'py>) -> PyResult<(String, Bound<'py, PyDict>)> {
+        let round4 = |v: f64| (v * 1e4).round() / 1e4;
+        let extra = PyDict::new(py);
+        extra.set_item("duration", round4(self.lag))?;
+        extra.set_item("threshold", self.warn)?;
+        extra.set_item("gc_time", round4(self.gc_time))?;
+        extra.set_item("cpu_time", round4(self.cpu_time))?;
+        if let Some(task) = &self.task_name {
+            extra.set_item("task", task)?;
+        }
+        if let Some(stack) = self.stacks.last() {
+            extra.set_item("stack", stack)?;
+        }
+        if let Some(module) = &self.importing {
+            extra.set_item("import", module)?;
+        }
+        let at = self.location.as_ref().map(|l| format!(" at {l}")).unwrap_or_default();
+        let ms = self.lag * 1000.0;
+        let message = match &self.importing {
+            Some(module) => format!(
+                "event loop blocked for {ms:.0}ms importing {module}{at}; import it at process warm-up (prewarm) instead of on first use"
+            ),
+            None => format!(
+                "event loop blocked for {ms:.0}ms{at}; synchronous work on the agent loop delays audio and turn handling, move it to a thread or an async client"
+            ),
+        };
+        Ok((message, extra))
+    }
 }
 
 /// `_format_frames`: the event loop machinery dropped (never the innermost frame), cut through the
@@ -476,22 +617,40 @@ impl Inner {
 #[pymethods]
 impl LoopMonitor {
     /// `report(dict)` runs on the loop thread for each block past `warn_threshold`; `span_of`
-    /// reads the span current in a task's context. Thresholds in seconds.
+    /// reads the span current in a task's context. Thresholds in seconds. Without
+    /// `tick_interval`, the tick is a fifth of the warn threshold within bounds, and a warn
+    /// threshold below the smallest tick is raised to it.
     #[new]
     #[pyo3(signature = (event_loop, *, warn_threshold, error_threshold, tick_interval, name, emit_spans, report, span_of))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         event_loop: Py<PyAny>,
-        warn_threshold: f64,
-        error_threshold: f64,
-        tick_interval: f64,
+        mut warn_threshold: f64,
+        mut error_threshold: f64,
+        tick_interval: Option<f64>,
         name: String,
         emit_spans: bool,
         report: Py<PyAny>,
         span_of: Py<PyAny>,
     ) -> PyResult<Self> {
         use pyo3::exceptions::PyValueError;
+        let tick_interval = match tick_interval {
+            Some(tick) => tick,
+            None => {
+                if warn_threshold < MIN_TICK_INTERVAL {
+                    log::warn!(
+                        target: LOG,
+                        "loop monitor warn threshold {:.0}ms raised to {:.0}ms, the smallest it measures",
+                        warn_threshold * 1000.0,
+                        MIN_TICK_INTERVAL * 1000.0
+                    );
+                    warn_threshold = MIN_TICK_INTERVAL;
+                    error_threshold = error_threshold.max(MIN_TICK_INTERVAL);
+                }
+                tick_interval_for(warn_threshold)
+            }
+        };
         if warn_threshold <= 0.0 {
             return Err(PyValueError::new_err("warn_threshold must be > 0"));
         }
@@ -542,6 +701,13 @@ impl LoopMonitor {
                 exited: (Mutex::new(false), Condvar::new()),
             }),
         })
+    }
+
+    /// `(warn, error)` from `LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS` and `_ERROR_MS`, `None` when
+    /// the monitor is disabled.
+    #[staticmethod]
+    fn thresholds_from_env() -> Option<(f64, f64)> {
+        thresholds_from_env()
     }
 
     #[getter]
@@ -661,6 +827,15 @@ mod tests {
         assert!(!out.contains("main.py") && out.contains("agent.py"), "{out}");
         let inside = vec![frame("/main.py", "main"), frame(&ipc, "_run_job")];
         assert!(format_frames(&inside, None, "/py/asyncio/").contains("job_proc_lazy_main"));
+    }
+
+    // Catches: a tick too coarse to measure blocks near the threshold, or one waking too often.
+    #[test]
+    fn the_tick_is_a_fifth_of_the_warn_threshold_within_bounds() {
+        assert!((tick_interval_for(0.1) - 0.02).abs() < 1e-12);
+        assert!((tick_interval_for(0.25) - 0.05).abs() < 1e-12);
+        assert!((tick_interval_for(1.0) - 0.05).abs() < 1e-12);
+        assert!((tick_interval_for(0.01) - 0.02).abs() < 1e-12);
     }
 
     // Catches: the limiter forgetting what it refused, or refusing after the window rolled.
