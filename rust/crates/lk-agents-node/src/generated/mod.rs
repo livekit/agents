@@ -21,6 +21,7 @@
 //! - `lk_agents_abi::llm::provider_format::host::to_provider_format`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::llm::provider_format::host::convert_mid_conversation_instructions`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_abi::tokenize::search::keyword_search`: parameter `docs`: Slice(Declared { name: "Document", by_ref: false }) borrows inside a container
+//! - `lk_agents_voice::avatar::wait_avatar_join`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
 //! - `lk_agents_rtc::wait_for_participant`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::wait_for_agent`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::wait_for_participant_attribute`: `lk_agents_rtc` is not linked by lk-agents-node

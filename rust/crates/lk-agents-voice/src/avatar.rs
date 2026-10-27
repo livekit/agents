@@ -846,6 +846,31 @@ impl AvatarPlayback {
     }
 }
 
+// ----------------------------------------------------------------------------- the avatar's join
+
+/// `AvatarSession`'s join wait: from the room's connection (awaited when it is not connected
+/// yet), the avatar participant `identity` and its video track. Returns when the wait started and
+/// when the avatar joined, in `time.time()` seconds, for its `AvatarMetrics`.
+#[lk_agents_abi::host(export)]
+pub async fn wait_avatar_join(
+    room: Arc<dyn RtcRoom>,
+    identity: String,
+    #[host(ambient)] clock: Arc<dyn Clock>,
+) -> std::result::Result<(f64, f64), lk_agents_rtc::RtcError> {
+    let mut events = room.events();
+    while room.connection_state() == lk_agents_rtc::ConnectionState::Disconnected {
+        if events.recv().await.is_none() {
+            return Err(lk_agents_rtc::RtcError::NotConnected);
+        }
+    }
+    let started = wall(&*clock);
+    lk_agents_rtc::wait_for_participant(Arc::clone(&room), Some(identity.clone()), None, true)
+        .await?;
+    let video = Some(vec![lk_agents_rtc::TRACK_KIND_VIDEO]);
+    lk_agents_rtc::wait_for_track_publication(room, Some(identity), video, true, false).await?;
+    Ok((started, wall(&*clock)))
+}
+
 // ----------------------------------------------------------------------------- the receiver's binding
 
 #[cfg(feature = "python")]

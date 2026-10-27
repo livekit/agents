@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar
@@ -9,7 +8,7 @@ from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 from livekit import rtc
 from livekit.api import TwirpError
 
-from ... import utils
+from ... import _core, utils
 from ...job import get_job_context
 from ...log import logger
 from ...metrics import AvatarMetrics, Metadata
@@ -97,11 +96,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         self._room = room
         self._agent_session = agent_session
         self._agent_session.on("conversation_item_added", self._on_conversation_item_added)
-
-        if self._room.isconnected():
-            self._wait_avatar_join_task = asyncio.create_task(self._wait_avatar_join())
-        else:
-            self._room.on("connection_state_changed", self._on_connection_state_changed)
+        self._wait_avatar_join_task = asyncio.create_task(self._wait_avatar_join(room))
 
     async def wait_for_join(self, *, timeout: float | None = 30.0) -> None:
         """Wait until the avatar participant has joined the room and
@@ -111,7 +106,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         ``timeout`` seconds. Pass ``timeout=None`` to wait indefinitely.
         """
         if self._wait_avatar_join_task is None:
-            # TODO(long): fix when this called before the room is connected
+            # not started
             return
         if timeout is None:
             await self._wait_avatar_join_task
@@ -148,28 +143,14 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
             self._agent_session.off("conversation_item_added", self._on_conversation_item_added)
             self._agent_session = None
 
-        if self._room:
-            self._room.off("connection_state_changed", self._on_connection_state_changed)
-            self._room = None
-
+        self._room = None
         if self._wait_avatar_join_task:
             await utils.aio.cancel_and_wait(self._wait_avatar_join_task)
             self._wait_avatar_join_task = None
 
-    async def _wait_avatar_join(self) -> None:
-        assert self._room is not None
-
-        started_time = time.time()
-        await utils.wait_for_participant(
-            room=self._room, identity=self.avatar_identity, include_local=True
-        )
-        await utils.wait_for_track_publication(
-            room=self._room,
-            identity=self.avatar_identity,
-            kind=rtc.TrackKind.KIND_VIDEO,
-            include_local=True,
-        )
-        joined_time = time.time()
+    async def _wait_avatar_join(self, room: rtc.Room) -> None:
+        # from the room's connection to the avatar's video track
+        started_time, joined_time = await _core.wait_avatar_join(room, self.avatar_identity)
         self._emit_metrics(
             AvatarMetrics(
                 timestamp=joined_time,
@@ -194,12 +175,6 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                         ),
                     )
                 )
-
-    def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
-        assert self._room is not None
-
-        if state == rtc.ConnectionState.CONN_CONNECTED and not self._wait_avatar_join_task:
-            self._wait_avatar_join_task = asyncio.create_task(self._wait_avatar_join())
 
     def _emit_metrics(self, metrics: AvatarMetrics) -> None:
         assert self._agent_session is not None

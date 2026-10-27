@@ -289,3 +289,26 @@ async fn a_stream_without_its_format_fails_the_receiver() {
         other => panic!("{other:?}"),
     }
 }
+
+// Catches: a join wait that starts before the room connects (the reference arms it on the
+// connection), or that ends at the participant without its video track.
+#[tokio::test]
+async fn the_join_wait_starts_at_the_connection_and_ends_at_the_avatar_video() {
+    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let room = rtc.room("join");
+    room.set_connection_state(lk_agents_rtc::ConnectionState::Disconnected);
+    let wait = tokio::spawn(wait_avatar_join(room.clone(), "avatar".into(), clock.clone()));
+    clock.advance(Duration::from_secs(1));
+    tokio::task::yield_now().await;
+    let connected_at = wall(&*clock);
+    room.set_connection_state(lk_agents_rtc::ConnectionState::Connected);
+    let avatar = room.add_participant("avatar", ParticipantKind::Agent);
+    tokio::task::yield_now().await;
+    clock.advance(Duration::from_secs(2));
+    assert!(!wait.is_finished());
+    avatar.publish_track("TR_cam", TrackSource::Camera);
+    let (started, joined) =
+        tokio::time::timeout(Duration::from_secs(5), wait).await.unwrap().unwrap().unwrap();
+    assert!((started - connected_at).abs() < 0.01, "{started} {connected_at}");
+    assert!((joined - connected_at - 2.0).abs() < 0.01, "{joined} {connected_at}");
+}
