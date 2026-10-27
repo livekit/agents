@@ -4,8 +4,8 @@ use lk_agents_abi::voice::session_options::TextTransformSet;
 
 use crate::{
     drive::{
-        AmdAnswer, AmdSetup, ConnSetup, KeytermDetectionSetup, NodeSetup, PreConnect, RealtimeSetup, RoomLegs,
-        RoomSetup, Setup,
+        AmdAnswer, AmdSetup, ConnSetup, KeytermDetectionSetup, NodeSetup, PreConnect, RealtimeSetup,
+        RoomLegs, RoomSetup, Setup, TtsAlignment,
     },
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
@@ -92,6 +92,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         tts_latency: None,
         conn: None,
         chunked_tts: false,
+        tts_alignment: TtsAlignment::None,
+        aligned_transcript: None,
+        agent_aligned_transcript: None,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;
@@ -164,5 +167,19 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     if let Some(nodes) = setup.nodes.as_mut() {
         nodes.transcription = rng.bool();
     }
+    // The voice's word alignment, and the session's and the agents' say on using it, drawn last
+    // too. Most aligning voices stamp their words; some advertise it and send none.
+    setup.tts_alignment = match rng.u8(0..100) {
+        0..40 => TtsAlignment::None,
+        40..85 => TtsAlignment::Words,
+        _ => TtsAlignment::Missing,
+    };
+    let said = |rng: &mut Rng| match rng.usize(0..3) {
+        0 => None,
+        1 => Some(false),
+        _ => Some(true),
+    };
+    setup.aligned_transcript = said(rng);
+    setup.agent_aligned_transcript = said(rng);
     setup
 }

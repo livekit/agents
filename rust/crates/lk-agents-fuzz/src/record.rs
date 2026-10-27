@@ -574,6 +574,23 @@ pub enum TaskEnd {
     Stuck,
 }
 
+/// What a transcript rule needs to know of how the session was built.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TranscriptSetup {
+    /// A synchroniser paces the transcript against the audio (`sync_transcription`).
+    pub synchronized: bool,
+    /// The effective `use_tts_aligned_transcript`, the agent's else the session's, is on.
+    pub aligned: bool,
+    /// Every word spoken comes back stamped: by the voice, or by the stream adapter.
+    pub stamps: bool,
+    /// The voice does not stream: the session's stream adapter stamps each sentence itself.
+    pub adapted: bool,
+    /// The voice plays in another process that reports each segment's end with no give-up timer
+    /// (the avatar): a report that lands after the agent cut the segment is taken by the next
+    /// one, so which speech a release belongs to is not the journal's to say.
+    pub late_reports: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct Recording {
     now: Observed,
@@ -585,6 +602,10 @@ pub struct Recording {
     closed: Vec<(Observed, Kind, u32)>,
     results: Vec<(Observed, u32, Answer)>,
     produced: Vec<(Observed, u32, u16, String)>,
+    /// Each word a synthesis stream stamped, by stream: the word and its start, in seconds.
+    stamped: Vec<(u32, String, f64)>,
+    /// How the case built the transcript path.
+    transcript: TranscriptSetup,
     /// When the product was handed each source's first chunk of audio: a synthesis stream's, once
     /// the voice's time to first audio passed, or a realtime generation's first delta.
     delivered: BTreeMap<(Kind, u32), Observed>,
@@ -749,6 +770,16 @@ impl Recording {
         &self.produced
     }
 
+    /// Each word a synthesis stream stamped: the stream, the word, its start in seconds.
+    pub fn stamped(&self) -> &[(u32, String, f64)] {
+        &self.stamped
+    }
+
+    /// How the case built the transcript path, which no input says.
+    pub fn transcript(&self) -> TranscriptSetup {
+        self.transcript
+    }
+
     /// When the product was handed each source's first audio, by `(Kind::Tts | Kind::Generation,
     /// nth)`.
     pub fn delivered(&self) -> &BTreeMap<(Kind, u32), Observed> {
@@ -900,9 +931,21 @@ impl Recording {
         self.nodes.push((at, agent, node));
     }
 
-    pub fn record_produced(&mut self, at: Observed, tts: u32, chunk: u16, text: String) {
+    pub fn record_produced(
+        &mut self,
+        at: Observed,
+        tts: u32,
+        chunk: u16,
+        text: String,
+        stamps: Vec<(String, f64)>,
+    ) {
         self.index.produced_chunks.insert((tts, chunk));
         self.produced.push((at, tts, chunk, text));
+        self.stamped.extend(stamps.into_iter().map(|(word, start)| (tts, word, start)));
+    }
+
+    pub fn set_transcript(&mut self, transcript: TranscriptSetup) {
+        self.transcript = transcript;
     }
 
     /// Snapshot one speech handle. The earliest stamp at which it was seen done is kept, because

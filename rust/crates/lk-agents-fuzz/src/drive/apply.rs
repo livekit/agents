@@ -535,14 +535,13 @@ impl Run {
                 let (llm, tts, stt) = (
                     given(llm, || fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
                     given(tts, || {
-                        (match self.setup.tts_latency {
-                            Some(seed) => fakes::FakeTts::with_latency(
-                                registry.clone(),
-                                !seed,
-                                !self.setup.chunked_tts,
-                            ),
-                            None => fakes::FakeTts::new(registry.clone(), !self.setup.chunked_tts),
-                        }) as Arc<Tts>
+                        let latency = self.setup.tts_latency.map(|seed| !seed);
+                        fakes::FakeTts::new(
+                            registry.clone(),
+                            latency,
+                            !self.setup.chunked_tts,
+                            self.setup.tts_alignment,
+                        ) as Arc<Tts>
                     }),
                     given(stt, || session_stt(&self.setup, &registry, connect)),
                 );

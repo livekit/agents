@@ -114,8 +114,8 @@ impl Run {
                         self.end_utterances_on(at, slot.nth);
                     }
                 }
-                Record::Produced { at, tts, chunk, text } => {
-                    self.record.record_produced(at, tts, chunk, text);
+                Record::Produced { at, tts, chunk, text, stamps } => {
+                    self.record.record_produced(at, tts, chunk, text, stamps);
                 }
                 Record::Delivered { at, slot } => {
                     self.record.record_delivered(at, slot.kind, slot.nth);

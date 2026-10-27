@@ -142,12 +142,14 @@ pub enum Record {
         at: Observed,
         slot: Slot,
     },
-    /// One chunk of audio a synthesis stream produced, with the text that caused it.
+    /// One chunk of audio a synthesis stream produced, with the text that caused it and the
+    /// words it stamped (each with its start, in seconds from the stream's first audio).
     Produced {
         at: Observed,
         tts: u32,
         chunk: u16,
         text: String,
+        stamps: Vec<(String, f64)>,
     },
     /// One audio delta a realtime generation delivered: the n-th chunk of that generation.
     Generated {
@@ -431,9 +433,9 @@ impl Registry {
         self.write(Record::Held { at, socket, items });
     }
 
-    fn record_produced(&self, tts: u32, chunk: u16, text: String) {
+    fn record_produced(&self, tts: u32, chunk: u16, text: String, stamps: Vec<(String, f64)>) {
         let at = self.stamps.next();
-        self.write(Record::Produced { at, tts, chunk, text });
+        self.write(Record::Produced { at, tts, chunk, text, stamps });
     }
 
     /// Run one delivery through the real channel, against a control the harness took out of its

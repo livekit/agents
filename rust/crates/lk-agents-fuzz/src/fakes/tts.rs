@@ -3,10 +3,14 @@
 //! push index, and the pushed text is recorded beside it. The case can `Hold` a stream (pushed
 //! text queues, nothing is produced), `Release` it (the queue drains), or `Fail` it (the product
 //! reads a provider error). This fake cannot synthesize arbitrary audio.
+//!
+//! A voice that aligns stamps each chunk's words as Cartesia's `word_timestamps` do through the
+//! gateway: one token per word, the word and a trailing space, with its start and end in seconds
+//! from the stream's first audio. A chunk's words share its audio evenly, in order.
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lk_agents_abi::{
-    AudioFrame, SynthesizedAudio, Ts, Tts, TtsCapabilities, TtsSink, TtsSource,
+    AudioFrame, SynthesizedAudio, TimedString, Ts, Tts, TtsCapabilities, TtsSink, TtsSource,
     errors::{ApiError, ProviderError},
     utils::stream::{Closed, StreamSink, StreamSource},
 };
@@ -14,6 +18,7 @@ use tokio::sync::mpsc;
 
 use super::{Control, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot};
 use crate::{
+    drive::TtsAlignment,
     input::Input,
     record::{Detail, Kind, Tag},
 };
@@ -28,17 +33,21 @@ pub struct FakeTts {
     latency: Option<Mutex<fastrand::Rng>>,
     /// Off, the voice only synthesizes whole texts: the session adapts it sentence by sentence.
     streaming: bool,
+    alignment: TtsAlignment,
 }
 
 impl FakeTts {
-    pub fn new(registry: Arc<Registry>, streaming: bool) -> Arc<Self> {
-        Arc::new(FakeTts { registry, latency: None, streaming })
-    }
-
-    /// A voice that takes as long to start as the recorded one did.
-    pub fn with_latency(registry: Arc<Registry>, seed: u64, streaming: bool) -> Arc<Self> {
-        let latency = Some(Mutex::new(fastrand::Rng::with_seed(seed)));
-        Arc::new(FakeTts { registry, latency, streaming })
+    /// `latency`: a voice that takes as long to start as the recorded one did, drawn from this
+    /// seed. `streaming` off, the voice only synthesizes whole texts: the session adapts it
+    /// sentence by sentence.
+    pub fn new(
+        registry: Arc<Registry>,
+        latency: Option<u64>,
+        streaming: bool,
+        alignment: TtsAlignment,
+    ) -> Arc<Self> {
+        let latency = latency.map(|seed| Mutex::new(fastrand::Rng::with_seed(seed)));
+        Arc::new(FakeTts { registry, latency, streaming, alignment })
     }
 }
 
@@ -47,6 +56,7 @@ pub struct Synthesis {
     slot: OnceLock<Slot>,
     registry: Arc<Registry>,
     state: Mutex<SynthesisState>,
+    stamps: bool,
 }
 
 struct SynthesisState {
@@ -56,6 +66,8 @@ struct SynthesisState {
     ended: bool,
     queued: Vec<String>,
     chunks: u16,
+    /// Seconds of audio produced so far: where the next chunk's words start.
+    spoken: f64,
 }
 
 impl Synthesis {
@@ -70,8 +82,17 @@ impl Synthesis {
         // as long as the text takes to say: about 10 ms a character, as a voice speaks
         let samples = SAMPLES_PER_CHUNK * text.chars().count().clamp(1, 12);
         let frame = AudioFrame::new(sample.to_le_bytes().repeat(samples), SAMPLE_RATE, 1, samples as u32);
-        if sender.send(Ok(SynthesizedAudio::new(frame, "synthesis"))).is_ok() {
-            self.registry.record_produced(self.nth(), chunk, text);
+        let span = samples as f64 / f64::from(SAMPLE_RATE);
+        let timed_transcript =
+            if self.stamps { stamps(&text, state.spoken, span) } else { Vec::new() };
+        let stamped = timed_transcript
+            .iter()
+            .map(|w| (w.text.clone(), w.start_time.unwrap_or_default()))
+            .collect();
+        let audio = SynthesizedAudio { timed_transcript, ..SynthesizedAudio::new(frame, "synthesis") };
+        if sender.send(Ok(audio)).is_ok() {
+            state.spoken += span;
+            self.registry.record_produced(self.nth(), chunk, text, stamped);
             state.chunks += 1;
         }
     }
@@ -130,7 +151,10 @@ impl Tts for FakeTts {
     }
 
     fn capabilities(&self) -> TtsCapabilities {
-        TtsCapabilities { streaming: self.streaming, aligned_transcript: false }
+        TtsCapabilities {
+            streaming: self.streaming,
+            aligned_transcript: self.alignment != TtsAlignment::None,
+        }
     }
 
     fn sample_rate(&self) -> u32 {
@@ -162,7 +186,9 @@ impl Tts for FakeTts {
                 ended: false,
                 queued: vec![],
                 chunks: 0,
+                spoken: 0.0,
             }),
+            stamps: self.alignment == TtsAlignment::Words,
         });
         let slot = self.registry.register(Kind::Tts, Detail::None, Control::Tts(synthesis.clone()));
         let _ = synthesis.slot.set(slot);
@@ -184,6 +210,24 @@ impl Tts for FakeTts {
             }),
         ))
     }
+}
+
+/// A chunk's words, stamped across its `span` seconds from `at`, in order.
+fn stamps(text: &str, at: f64, span: f64) -> Vec<TimedString> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let each = span / words.len().max(1) as f64;
+    words
+        .iter()
+        .enumerate()
+        .map(|(i, word)| {
+            let start = at + i as f64 * each;
+            TimedString {
+                start_time: Some(start),
+                end_time: Some(start + each),
+                ..TimedString::new(format!("{word} "))
+            }
+        })
+        .collect()
 }
 
 /// The product's side of a stream: what it pushes goes through the shared state.

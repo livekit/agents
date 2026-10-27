@@ -198,7 +198,21 @@ impl Authored {
     /// One chunk of audio the n-th synthesis stream produced.
     pub fn produced(mut self, tts: u32, chunk: u16, text: &str) -> Self {
         let at = self.next();
-        self.recording.record_produced(at, tts, chunk, text.into());
+        self.recording.record_produced(at, tts, chunk, text.into(), Vec::new());
+        self
+    }
+
+    /// One chunk of audio the n-th synthesis stream produced, with the words it stamped.
+    pub fn stamped(mut self, tts: u32, chunk: u16, text: &str, stamps: &[(&str, f64)]) -> Self {
+        let at = self.next();
+        let stamps = stamps.iter().map(|(w, t)| ((*w).to_owned(), *t)).collect();
+        self.recording.record_produced(at, tts, chunk, text.into(), stamps);
+        self
+    }
+
+    /// How the session's transcript path was built.
+    pub fn transcript(mut self, transcript: crate::record::TranscriptSetup) -> Self {
+        self.recording.set_transcript(transcript);
         self
     }
 

@@ -123,6 +123,26 @@ impl<'a> InputsView<'a> {
         Some(Turn { began: applied[began].at, ended: applied.get(began + 1).map(|a| a.at) })
     }
 
+    /// Whether the case had touched an output by `at`: attached, replaced or detached the audio or
+    /// transcription output, or switched either leg. A synchroniser sits between the two only as
+    /// the session was built.
+    pub fn outputs_touched_by(&self, at: Observed) -> bool {
+        self.accepted().take_while(|a| a.at <= at).any(|a| {
+            matches!(
+                a.input,
+                Input::SetAudioOutput { .. }
+                    | Input::SetTranscriptionOutput { .. }
+                    | Input::SetIoEnabled { leg: IoKind::AudioOutput | IoKind::Transcription, .. }
+            )
+        })
+    }
+
+    /// Whether the case failed a synthesis or took the voice down at any point.
+    pub fn voice_failed(&self) -> bool {
+        self.accepted()
+            .any(|a| matches!(a.input, Input::TtsFail { .. } | Input::TtsOutage { down: true }))
+    }
+
     /// The audio input path: the leg's enable, and the microphone attached.
     pub fn audio_input(&self) -> Switch {
         self.path(IoKind::AudioInput, |input| match input {
@@ -899,6 +919,17 @@ pub struct Interruption {
 }
 
 /// What the driver journalled about one speech, in order.
+/// One word a synchroniser released: where its audio starts and ends in the segment, and how much
+/// of the segment had played when it was.
+#[derive(Clone, Copy, Debug)]
+pub struct Shown<'a> {
+    pub at: Observed,
+    pub text: &'a str,
+    pub start: f64,
+    pub end: f64,
+    pub played: std::time::Duration,
+}
+
 #[derive(Clone, Copy)]
 pub struct SpeechTrace<'a> {
     r: &'a Recording,
@@ -950,6 +981,29 @@ impl<'a> SpeechTrace<'a> {
         self.steps()
             .filter_map(|(_, step)| match step {
                 Step::Playout(PlayoutStep::TranscriptForwarded { text, .. }) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether any of its transcript was the voice's aligned words.
+    pub fn transcript_aligned(&self) -> bool {
+        self.first(|s| {
+            matches!(
+                s,
+                Step::Playout(PlayoutStep::TranscriptForwarded { start_time: Some(_), .. })
+            )
+        })
+        .is_some()
+    }
+
+    /// What a synchroniser released of its transcript, word by word, in order.
+    pub fn transcript_shown(&self) -> Vec<Shown<'a>> {
+        self.steps()
+            .filter_map(|(at, step)| match step {
+                Step::Playout(PlayoutStep::TranscriptShown { text, start, end, played, .. }) => {
+                    Some(Shown { at, text, start: *start, end: *end, played: *played })
+                }
                 _ => None,
             })
             .collect()

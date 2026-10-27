@@ -86,6 +86,7 @@ use crate::{
     record::step_name,
     record::{
         Answer, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Stamps, Tag,
+        TranscriptSetup,
         hook_of,
     },
 };
@@ -220,6 +221,13 @@ pub struct Setup {
     /// A voice that does not stream: the session speaks it sentence by sentence through its
     /// stream adapter, each sentence a synthesis of its own, retried on its own.
     pub chunked_tts: bool,
+    /// Whether the voice says it aligns its words to its audio, and whether it then does.
+    pub tts_alignment: TtsAlignment,
+    /// `VoiceSession(use_tts_aligned_transcript=)`; `None` is not given.
+    pub aligned_transcript: Option<bool>,
+    /// `Agent(use_tts_aligned_transcript=)` on the first agent and on every agent a handoff
+    /// installs; `None` defers to the session's.
+    pub agent_aligned_transcript: Option<bool>,
 }
 
 /// Each leg's `max_retry`, and the interval between retries.
@@ -234,6 +242,18 @@ pub struct ConnSetup {
 impl ConnSetup {
     /// `SessionConnectOptions()`: three retries on every leg, two seconds apart.
     pub const DEFAULT: ConnSetup = ConnSetup { stt: 3, llm: 3, tts: 3, interval_ms: 2_000 };
+}
+
+/// `TTSCapabilities.aligned_transcript`, and what the voice then sends.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum TtsAlignment {
+    /// Not advertised: the voice sends audio only.
+    #[default]
+    None,
+    /// Advertised, and every word comes back stamped, as Cartesia's `word_timestamps` do.
+    Words,
+    /// Advertised, and nothing comes back: a model and language pair with no timings.
+    Missing,
 }
 
 /// The room's legs, and whether the person's app sends the audio it buffered before the agent
@@ -395,6 +415,9 @@ impl Default for Setup {
             amd: None,
             stt_model: 0,
             tts_latency: None,
+            tts_alignment: TtsAlignment::None,
+            aligned_transcript: None,
+            agent_aligned_transcript: None,
             keyterms: Vec::new(),
             keyterm_detection: None,
             nodes: None,

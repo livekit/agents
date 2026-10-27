@@ -6,6 +6,9 @@
 //! (attributed through `Detail::Chat`). Forwarded text is the journal's `TranscriptForwarded`.
 //! Whitespace is ignored on both sides because the TTS leg re-segments text at sentences.
 //!
+//! A speech whose transcript is the voice's aligned words (`use_tts_aligned_transcript`) forwards
+//! what the voice said, which `aligned_transcript_follows_tts` judges instead.
+//!
 //! A speech whose transcript path the case closed forwards nothing from then on, which is the
 //! documented behaviour and not a loss. The sink is re-read for every segment, so a detach
 //! part-way through a speech suppresses the rest of it, and the completion clause therefore
@@ -56,6 +59,9 @@ impl Rule for TextConservation {
             else {
                 continue;
             };
+            if internal.speech(speech.id).transcript_aligned() {
+                continue;
+            }
             let deltas: Vec<String> =
                 internal.speech(speech.id).transcript_forwarded().into_iter().map(squash).collect();
             let forwarded: String = deltas.concat();

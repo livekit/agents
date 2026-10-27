@@ -84,12 +84,12 @@ impl Run {
         // A realtime session has a voice too when the developer gives one: it speaks `say()`, and
         // a text-only model's replies.
         let tts = setup.tts.then(|| {
-            (match setup.tts_latency {
-                Some(seed) => {
-                    fakes::FakeTts::with_latency(registry.clone(), seed, !setup.chunked_tts)
-                }
-                None => fakes::FakeTts::new(registry.clone(), !setup.chunked_tts),
-            }) as Arc<Tts>
+            fakes::FakeTts::new(
+                registry.clone(),
+                setup.tts_latency,
+                !setup.chunked_tts,
+                setup.tts_alignment,
+            ) as Arc<Tts>
         });
         let providers = Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone() };
         let nodes = agent_nodes(setup, &registry, OPENING_AGENT, &providers);
@@ -164,7 +164,7 @@ impl Run {
                 Some(&options),
                 None,
                 None,
-                None,
+                setup.agent_aligned_transcript,
                 setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
                 adaptive.then(|| {
                     Arc::new(fakes::FakeInterruptionSource(registry.clone()))
@@ -343,6 +343,16 @@ impl Run {
             record: Recording::default(),
         };
         run.record.set_conn(setup.conn.unwrap_or(ConnSetup::DEFAULT), setup.chunked_tts);
+        run.record.set_transcript(TranscriptSetup {
+            synchronized: setup.sync_transcription,
+            aligned: setup.agent_aligned_transcript.or(setup.aligned_transcript) == Some(true),
+            // A streaming voice stamping its words. A voice that does not stream is adapted sentence
+            // by sentence, the adapter stamping: not held to it (seed 31412, a three-line text,
+            // came back with no stamp).
+            stamps: setup.tts_alignment == TtsAlignment::Words && !setup.chunked_tts,
+            adapted: setup.chunked_tts,
+            late_reports: setup.avatar,
+        });
         if let Some((nth, cli)) = console_mic {
             run.mics.insert(nth, (Mic::Console(cli), 0));
         }
@@ -492,7 +502,7 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         stt_context_options: HostValue::NotGiven,
         tool_handling: HostValue::NotGiven,
         max_tool_steps: setup.max_tool_steps.map_or(3, i64::from),
-        use_tts_aligned_transcript: Maybe::NotGiven,
+        use_tts_aligned_transcript: setup.aligned_transcript.map_or(Maybe::NotGiven, Maybe::Given),
         tts_text_transforms: setup.text_transforms.map_or(Maybe::NotGiven, Maybe::Given),
         min_consecutive_speech_delay: secs(setup.speech_gap_ms.unwrap_or(0)),
         expressive: Default::default(),
@@ -621,6 +631,7 @@ pub(super) fn frame(
     tools: &[String],
 ) -> UpdateAgentArgs {
     let mut args = plain_frame(registry, agent, instructions, tools);
+    args.use_tts_aligned_transcript = setup.agent_aligned_transcript;
     if setup.nodes.is_some() {
         let nodes = agent_nodes(setup, registry, agent, legs);
         args.llm_node = nodes.llm;
