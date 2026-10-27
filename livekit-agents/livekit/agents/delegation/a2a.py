@@ -149,7 +149,9 @@ class A2ADelegate(Delegate, Toolset):
             if self._tool is None:
                 label = self._tool_name or self.id
                 self._tool = function_tool(
-                    self._ask, name=self._tool_name or "ask", description=f"{label}\n\n{UNREAD}"
+                    self._ask,
+                    name=self._tool_name or "ask",
+                    description=f"{label}\n\n{UNREAD}\n\n{ASK}",
                 )
                 self._unread = True
             raise

@@ -1282,6 +1282,7 @@ class AgentActivity(RecognitionHooks):
                 except Exception:
                     logger.exception("could not give the model a toolset's changed tools")
 
+        # runs on the activity's loop, so the refresh tasks are only touched there
         def schedule() -> None:
             if self._closed:
                 return
