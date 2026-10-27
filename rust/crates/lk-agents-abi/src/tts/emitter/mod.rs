@@ -101,14 +101,6 @@ impl SegmentDump {
         }
         out
     }
-
-    /// Creates the directory (the reference would raise inside the emitter task).
-    pub fn write(&self, stamp: &str) -> std::io::Result<std::path::PathBuf> {
-        std::fs::create_dir_all(Self::DIR)?;
-        let path = self.path(stamp);
-        std::fs::write(&path, self.wav_bytes())?;
-        Ok(path)
-    }
 }
 
 #[derive(Debug, Clone)]

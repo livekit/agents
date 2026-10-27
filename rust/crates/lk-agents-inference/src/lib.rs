@@ -27,6 +27,7 @@ pub mod avatar;
 pub mod llm;
 pub mod local_models;
 pub mod stt;
+#[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod token;
 pub mod transport;

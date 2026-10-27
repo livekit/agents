@@ -462,7 +462,9 @@ impl AudioEmitter {
             .call_method0("now")?
             .call_method1("strftime", ("%Y-%m-%d_%H-%M-%S",))?
             .extract()?;
-        d.write(&stamp)?;
+        // Creates the directory (the reference would raise inside the emitter task).
+        std::fs::create_dir_all(SegmentDump::DIR)?;
+        std::fs::write(d.path(&stamp), d.wav_bytes())?;
         Ok(())
     }
 }

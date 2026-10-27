@@ -1414,6 +1414,7 @@ dependencies = [
  "jsonwebtoken 9.3.1",
  "livekit-protocol",
  "lk-agents-abi",
+ "lk-agents-inference",
  "lk-agents-media",
  "log",
  "pbjson-types",

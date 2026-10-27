@@ -39,15 +39,14 @@ lk-agents-host-derive = { path = "../lk-agents-host-derive" }
 # happen to be in the build graph, because `cargo test -p lk-agents-abi` resolves features on its
 # own -- the same trap `lk-agents-py`'s manifest writes down.
 #
-# Still deliberately *not* a dependency: `serde` itself. `to_dict` is a hand-written projection that
-# reproduces pydantic's declaration order and `exclude_none` rules -- a `#[derive(Serialize)]` on
-# `ChatItem` would produce a *different*, plausible-looking JSON that nothing gates, which is the
-# whole hazard §1.11 named. `serde_json::Value` is the output type; the derive is not wanted.
+# `to_dict` is a hand-written projection that reproduces pydantic's declaration order and
+# `exclude_none` rules -- a `#[derive(Serialize)]` on `ChatItem` would produce a *different*,
+# plausible-looking JSON that nothing gates, which is the whole hazard §1.11 named.
+# `serde_json::Value` is the output type; no `to_dict` type derives serde.
 serde_json = { workspace = true, features = ["preserve_order"] }
-# Optional, off by default, and never on a `to_dict` type: the `serde` feature below derives
-# `Serialize`/`Deserialize` on the plain enums a stored test case carries (`CloseReason`, in
-# `lk-agents-voice`'s `Action::Close`; `tests/corpus/*.ron` there). `lk-agents-voice`'s `testkit`
-# feature turns it on; the shipped library never does.
+# Optional, and never on a `to_dict` type: the `serde` feature below derives
+# `Serialize`/`Deserialize` on the plain enums the voice core's commands and journal carry (a
+# stored simulation case names them). `lk-agents-voice` turns it on.
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 # One warning today: a repaired tool-arguments payload (`llm::tool_arguments::parse_logged`), which
@@ -77,7 +76,7 @@ chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 # `multiple-pymethods`: a class's generated `#[pymethods]` block (`#[host(object)]`) and the
 # hand-written methods beside it that no declaration expresses (a getter building host objects).
 python = ["dep:pyo3", "pyo3/multiple-pymethods", "dep:inventory", "dep:pyo3-async-runtimes"]
-# See the `serde` dependency's note: the derive on the plain enums a stored test case carries.
+# See the `serde` dependency's note: the derive on the plain enums the voice core carries.
 serde = ["dep:serde"]
 
 [dev-dependencies]

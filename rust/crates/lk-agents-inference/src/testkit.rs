@@ -1,5 +1,5 @@
-//! Fakes for the [`crate::transport`] seam. Not `#[cfg(test)]`: the driver and the binding use
-//! them too. Deterministic; the only clock is the caller's `VirtualClock`.
+//! Fakes for the [`crate::transport`] seam, for tests only (`cfg(test)` or the `testkit` feature).
+//! Deterministic; the only clock is the caller's `VirtualClock`.
 
 use crate::transport::{
     HttpRequest, HttpStream, HttpTransport, LineStream, TransportError, WsMessage, WsReceiver,
