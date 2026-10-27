@@ -220,6 +220,8 @@ class FishAudioOptions(TypedDict, total=False):
 
 
 class AssemblyaiOptions(TypedDict, total=False):
+    """AssemblyAI TTS options passed through to LiveKit Inference."""
+
     word_timestamps: bool  # default True; word timings are forwarded as an aligned transcript
 
 
