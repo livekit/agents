@@ -99,7 +99,6 @@ table! { RealtimeEvents:
     event::Metrics => Covered("response.done usage, transcription usage");
     event::ConnectionAcquired => Covered("a connection opened");
     event::Error => Covered("error, a failed connection");
-    event::HostInputTranscription => Skipped("a host session's wall-clock transcription");
     event::HostError => Skipped("a host session's wall-clock error");
 }
 

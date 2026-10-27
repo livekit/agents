@@ -151,7 +151,7 @@ impl RealtimeMachine {
     }
 
     /// `time.time()` at a session instant.
-    fn wall_secs(&self, t: Ts) -> f64 {
+    pub(crate) fn wall_secs(&self, t: Ts) -> f64 {
         self.wall_at(t).duration_since(SystemTime::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
     }
 
@@ -585,9 +585,10 @@ impl RealtimeMachine {
                 if self.pending_replies.remove(&req_id).is_none() {
                     return Step::default();
                 }
-                let mut step = Step::frame(wire::response_cancel(None));
-                // The cancel is a no-op if the response was never created; the id discards it
-                // when it arrives anyway.
+                // Nothing is cancelled now: an untargeted cancel hits whatever is in flight, a
+                // reply the server opened itself among them. The id discards the response when it
+                // is created, and cancels it by id.
+                let mut step = Step::default();
                 self.discarded.insert(req_id.clone());
                 if self.dialect.force_message_say {
                     self.stale_say.insert(req_id.clone(), now.saturating_add(STALE_SAY_CLEANUP));
@@ -622,11 +623,17 @@ impl RealtimeMachine {
                 Step::frame(frame)
             }
 
-            Command::Interrupt(_) => {
+            Command::Interrupt(lk_agents_abi::llm::realtime::Interrupt { response_id }) => {
                 if !self.has_active_generation() {
                     return Step::default();
                 }
-                let mut step = Step::frame(wire::response_cancel(None));
+                // Named, only the response it names: one already over, or another's, is left be.
+                let target = match response_id {
+                    Some(id) if self.response_id().as_deref() == Some(id.as_str()) => Some(id),
+                    Some(_) => return Step::default(),
+                    None => None,
+                };
+                let mut step = Step::frame(wire::response_cancel(target.as_deref()));
                 if self.dialect.discard_silent_responses {
                     step.merge(self.discard_abandoned());
                 }
@@ -957,7 +964,8 @@ impl RealtimeMachine {
             transcript: t.transcript,
             is_final: true,
             confidence: t.confidence,
-            turn_started_at: self.speech_started_at.remove(&t.item_id),
+            // Wall seconds: this session's clock is the model's, not the driver's.
+            turn_started_at: self.speech_started_at.remove(&t.item_id).map(|at| self.wall_secs(at)),
         }))
     }
 

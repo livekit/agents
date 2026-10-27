@@ -1139,17 +1139,16 @@ if not hasattr(rtc, 'AudioFrame'):
             );
             d.set_item("turn_started_at", 1_000_000.5).unwrap();
             let read = || match host_event(&d).unwrap().anchored(None) {
-                Event::HostInputTranscription(v) => v,
+                Event::InputTranscription(v) => v,
                 other => panic!("{other:?}"),
             };
-            let v = read();
-            let t = &v.transcription;
+            let t = read();
             assert_eq!(
                 (t.item_id.as_str(), t.transcript.as_str(), t.is_final),
                 ("item_9", "hello there", true)
             );
             assert_eq!(t.confidence, None, "an absent confidence is absent");
-            assert_eq!(v.turn_started_at, Some(1_000_000.5));
+            assert_eq!(t.turn_started_at, Some(1_000_000.5));
             d.set_item("turn_started_at", py.None()).unwrap();
             assert_eq!(read().turn_started_at, None);
             d.del_item("turn_started_at").unwrap();

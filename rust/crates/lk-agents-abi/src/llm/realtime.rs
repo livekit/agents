@@ -240,9 +240,9 @@ pub struct InputSpeechStopped {
 }
 
 /// `InputTranscriptionCompleted` (`llm/realtime.py:152`); also emitted for partials (`is_final`).
-/// A host session reports it as a [`HostInputTranscription`], its onset in wall seconds.
+/// `input_transcription`.
 #[derive(Debug, Clone, Default, PartialEq, Host)]
-#[binding(fields_only)]
+#[binding(extract, from_items, tag = "kind", tag_value = "input_transcription")]
 pub struct InputTranscription {
     pub item_id: String,
     pub transcript: String,
@@ -250,9 +250,12 @@ pub struct InputTranscription {
     /// Geometric mean of the per-token probabilities, when the provider returns logprobs.
     #[binding(default)]
     pub confidence: Option<f64>,
-    /// When the turn began: final transcripts only, when server VAD reported an onset for `item_id`.
-    #[binding(extract_skip)]
-    pub turn_started_at: Option<Ts>,
+    /// When the turn began, as `time.time()`: final transcripts only, when server VAD reported an
+    /// onset for `item_id`. Wall seconds, whatever clock the session runs on: it may precede the
+    /// session (the message is placed at it, `agent_activity.py:2040`). Absent or `None` reads as
+    /// no turn start; a wrongly typed value raises.
+    #[binding(default)]
+    pub turn_started_at: Option<f64>,
 }
 
 /// `input_speech_started`: the kind is the whole event.
@@ -264,18 +267,6 @@ pub struct InputSpeechStarted {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
 #[binding(extract, from_items, tag = "kind", tag_value = "session_reconnected")]
 pub struct SessionReconnected {}
-
-/// `input_transcription` as a host session reports it: the transcription, and `turn_started_at` as
-/// the host's `time.time()`, which the driver uses as given.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "input_transcription")]
-pub struct HostInputTranscription {
-    #[binding(flatten)]
-    pub transcription: InputTranscription,
-    /// Absent or `None` reads as no turn start; a wrongly typed value raises.
-    #[binding(default)]
-    pub turn_started_at: Option<f64>,
-}
 
 /// `error` as a host session reports it: the error, and `timestamp` as the host's `time.time()`.
 #[derive(Debug, Clone, PartialEq, Host)]
@@ -359,8 +350,6 @@ pub enum Event {
     /// Server-side VAD; also what drives interruption.
     InputSpeechStarted(InputSpeechStarted),
     InputSpeechStopped(InputSpeechStopped),
-    /// A host session reports it as [`Event::HostInputTranscription`].
-    #[binding(skip)]
     InputTranscription(InputTranscription),
 
     GenerationCreated(GenerationCreated),
@@ -412,17 +401,13 @@ pub enum Event {
     #[binding(skip)]
     Error(RealtimeModelError),
 
-    /// The wall-clock twins of `InputTranscription` and `Error`, as a host session reports them.
-    /// [`HostRealtimeLeg`] places an error's stamp on the session's clock ([`Event::anchored`]); a
-    /// transcription's `turn_started_at` stays the host's wall seconds, which may precede the
-    /// session (the message is placed at it, `agent_activity.py:2040`).
-    HostInputTranscription(HostInputTranscription),
+    /// The wall-clock twin of `Error`, as a host session reports it. [`HostRealtimeLeg`] places its
+    /// stamp on the session's clock ([`Event::anchored`]).
     HostError(HostRealtimeError),
 }
 
 impl Event {
-    /// A host session's error, its stamp placed by `anchor` on the session's clock; a host
-    /// transcription keeps its wall-clock onset.
+    /// A host session's error, its stamp placed by `anchor` on the session's clock.
     pub fn anchored(self, anchor: Option<crate::WallAnchor>) -> Event {
         match self {
             // Forwarded, not dropped: the host's `error` subscription owns the recoverable policy.

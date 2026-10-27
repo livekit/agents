@@ -775,7 +775,8 @@ fn a_re_announced_speech_onset_keeps_the_original_timestamp() {
         Event::InputTranscription(t) if t.is_final => Some(t.turn_started_at),
         _ => None,
     });
-    assert_eq!(turn_started, Some(Some(at(3))), "the first onset, not the second");
+    // Wall seconds (the test machine's clock starts at the epoch), not the model clock's instant.
+    assert_eq!(turn_started, Some(Some(3.0)), "the first onset, not the second");
 }
 
 // Catches: `aclose()` leaving a pending reply or a half-finished message's consumer hanging.
@@ -887,4 +888,26 @@ fn a_transcription_with_usage_reports_stt_metrics() {
     assert!(stt[0].streamed);
     let md = stt[0].metadata.as_ref().unwrap();
     assert_eq!(md.model_name.as_deref(), Some("gpt-4o-mini-transcribe"), "the transcription model");
+}
+
+// Catches: a cancelled request whose response was never created sending an untargeted
+// `response.cancel`, which cancels the reply the server opened itself meanwhile; and a named
+// interrupt cancelling a response other than the one it names.
+#[test]
+fn a_cancel_names_the_response_it_means() {
+    let mut m = machine(OPENAI);
+    m.open(at(0));
+    m.command(at(0), reply("response_create_1"));
+    // The server's VAD opens a reply of its own while the request is in flight.
+    recv(&mut m, at(1), response_created("resp_vad", None));
+    let cancel = lk_agents_abi::llm::realtime::CancelReply { req_id: "response_create_1".into() };
+    let step = m.command(at(1), Command::CancelReply(cancel));
+    assert!(step.frames.is_empty(), "{:?}", step.frames);
+    let interrupt = |id: &str| Command::Interrupt(Interrupt { response_id: Some(id.into()) });
+    assert!(m.command(at(1), interrupt("resp_other")).frames.is_empty());
+    let step = m.command(at(1), interrupt("resp_vad"));
+    assert_eq!(step.frames, [json!({"type": "response.cancel", "response_id": "resp_vad"})]);
+    // The cancelled request's response, created late, is cancelled by its own id.
+    let step = recv(&mut m, at(2), response_created("resp_late", Some("response_create_1")));
+    assert!(step.frames.contains(&json!({"type": "response.cancel", "response_id": "resp_late"})));
 }

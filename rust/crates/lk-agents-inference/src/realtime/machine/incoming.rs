@@ -152,7 +152,7 @@ impl RealtimeMachine {
                 // Close any open partial stream so a consumer waiting for `is_final` does not
                 // hang. With nothing accumulated nothing is emitted.
                 let partial = self.take_accumulated(&item_id, content_index);
-                let turn_started_at = self.speech_started_at.remove(&item_id);
+                let turn_started_at = self.speech_started_at.remove(&item_id).map(|t| self.wall_secs(t));
                 match partial {
                     None => Step::default(),
                     Some(transcript) => {

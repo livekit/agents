@@ -95,14 +95,10 @@ impl FakeRealtime {
         // Server detection left at its default is the driver's to switch off when it detects
         // turns itself; switched off by the developer, it stays off.
         let given = self.setup.vad.is_none();
-        NativeRealtime::new(
-            INFERENCE,
-            "fake-key",
-            transport,
-            self.spawner.clone(),
-            self.clock.clone(),
-            Arc::new(NoImages),
-        )
+        // The model's own clock, as a model built by the host runs on (`RealClock` from its
+        // construction): never the session's.
+        let clock = Arc::new(ModelClock { session: self.clock.clone(), offset: MODEL_BUILT_BEFORE });
+        NativeRealtime::new(INFERENCE, "fake-key", transport, self.spawner.clone(), clock, Arc::new(NoImages))
         .with_options(opts, given)
         .with_connect(Connect {
             base_url: "https://realtime.fake/v1".into(),
@@ -149,6 +145,31 @@ impl Realtime for FakeRealtime {
     }
 }
 
+/// How long before the session the model was built (at the entrypoint, or in a prewarm).
+const MODEL_BUILT_BEFORE: Duration = Duration::from_secs(3_600);
+
+/// The session's time, counted from the model's construction `offset` earlier: what a model's
+/// own clock reads.
+struct ModelClock {
+    session: Arc<dyn Clock>,
+    offset: Duration,
+}
+
+#[async_trait::async_trait]
+impl Clock for ModelClock {
+    fn now(&self) -> lk_agents_abi::Ts {
+        self.session.now().saturating_add(self.offset)
+    }
+
+    async fn wait_until(&self, at: lk_agents_abi::Ts) {
+        self.session.wait_until(at.saturating_sub(self.offset)).await
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        self.session.wall()
+    }
+}
+
 /// A transport no session connects through: what the capabilities are read from.
 struct Refused;
 
@@ -187,9 +208,11 @@ impl RealtimeSession for Session {
         self.inner.chat_ctx().await
     }
 
+    /// The production close, then the session is over for the server: a connection the client
+    /// left open (no close frame) keeps the socket unclosed, as a server still billing it would.
     async fn aclose(&self) {
         self.inner.aclose().await;
-        self.socket.hang_up(true);
+        self.socket.end_session();
     }
 }
 
@@ -239,6 +262,20 @@ impl Socket {
 
     fn now(&self) -> lk_agents_abi::Ts {
         self.clock.now()
+    }
+
+    /// The session closed. The socket is closed for good only if the client closed its
+    /// connection: one still open was dropped without a close frame.
+    fn end_session(&self) {
+        let open = {
+            let mut state = self.state.lock().unwrap();
+            state.closed = true;
+            state.open
+        };
+        if !open && let Some(slot) = self.slot.get() {
+            self.registry.mark_closed(*slot);
+        }
+        self.wake.notify_one();
     }
 }
 

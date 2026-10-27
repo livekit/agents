@@ -180,14 +180,13 @@ impl DuplexSession {
             DuplexEvent::OutputEnded { error } => st.seg.on_output_ended(now, error),
             DuplexEvent::Session(Event::FunctionCall(ready)) => st.seg.on_function_call(*ready.call),
             DuplexEvent::Session(Event::SessionReconnected(_)) => st.seg.on_reconnected(),
-            DuplexEvent::Session(Event::HostInputTranscription(t)) => {
+            DuplexEvent::Session(Event::InputTranscription(t)) => {
                 let started_at = t
                     .turn_started_at
                     .map(|s| SystemTime::UNIX_EPOCH + Duration::from_secs_f64(s.max(0.0)))
                     .unwrap_or_else(SystemTime::now);
-                let tr = &t.transcription;
-                st.seg.on_input_transcription(&tr.item_id, &tr.transcript, tr.is_final, tr.confidence, started_at);
-                vec![Event::HostInputTranscription(t)]
+                st.seg.on_input_transcription(&t.item_id, &t.transcript, t.is_final, t.confidence, started_at);
+                vec![Event::InputTranscription(t)]
             }
             DuplexEvent::Session(Event::GenerateReplyFailed(f)) => {
                 st.seg.forget_reply(&f.req_id);

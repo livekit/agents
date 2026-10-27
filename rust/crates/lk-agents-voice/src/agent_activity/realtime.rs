@@ -578,19 +578,11 @@ impl Driver {
                 out.machine().append(eff);
                 self.start_false_interruption_timer(now, out)
             }
+            // The onset is wall seconds, which the session's clock may never have shown (it may
+            // precede the session): used as given.
             Event::InputTranscription(t) => {
-                // A native session's onset is on the session clock.
-                let started_at = t.turn_started_at.map(|at| self.step.wall_secs_at(at));
+                let started_at = t.turn_started_at.filter(|at| at.is_finite());
                 self.on_input_transcription(now, t, started_at, out);
-            }
-            // A host session's onset is the host's `time.time()`, which the session's clock may
-            // never have shown (`turn_started_at` precedes the session): it is used as given.
-            Event::HostInputTranscription(rt::HostInputTranscription {
-                transcription,
-                turn_started_at,
-            }) => {
-                let started_at = turn_started_at.filter(|at| at.is_finite());
-                self.on_input_transcription(now, transcription, started_at, out);
             }
             Event::GenerationCreated(rt::GenerationCreated { response_id, req_id }) => {
                 self.on_generation_created(now, response_id, req_id, out)

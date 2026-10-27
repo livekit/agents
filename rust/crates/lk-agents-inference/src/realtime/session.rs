@@ -220,10 +220,11 @@ pub fn warn_on_half_disabled_turn_taking(td: &lk_agents_abi::Maybe<Option<TurnDe
     }
 }
 
-/// What a session's pump is told: the core's commands, and the model's option changes.
+/// What a session's pump is told: the core's commands, the model's option changes, and the close.
 pub(crate) enum Cmd {
     Core(Command),
     Options(OptionsPatch),
+    Close,
 }
 
 /// `_core.NativeRealtimeModel`: a realtime model whose connection, reconnect and conversation
@@ -316,7 +317,11 @@ impl NativeRealtime {
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
-        let shared = Arc::new(Shared { machine: Mutex::new(machine), caps: std::sync::Mutex::new(caps) });
+        let shared = Arc::new(Shared {
+            machine: Mutex::new(machine),
+            caps: std::sync::Mutex::new(caps),
+            closing: tokio::sync::Notify::new(),
+        });
         let commands = Arc::new(cmd_tx);
         self.sessions.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::downgrade(&commands));
 
@@ -331,19 +336,27 @@ impl NativeRealtime {
             label,
             events: ev_tx,
         };
-        let abort = self.spawner.spawn_unboxed(pump.run(cmd_rx));
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let abort = self.spawner.spawn_unboxed(async move {
+            pump.run(cmd_rx).await;
+            drop(done_tx);
+        });
 
         SessionHandle {
             shared,
             commands,
             events: Mutex::new(ev_rx),
             abort,
+            done: std::sync::Mutex::new(Some(done_rx)),
+            clock: self.clock.clone(),
             ids: self.ids.clone(),
         }
     }
 }
 
 struct Shared {
+    /// `aclose` was called: a pump waiting to reconnect stops waiting.
+    closing: tokio::sync::Notify,
     machine: Mutex<RealtimeMachine>,
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
     caps: std::sync::Mutex<RealtimeCapabilities>,
@@ -357,6 +370,9 @@ pub struct SessionHandle {
     /// One consumer is the contract.
     events: Mutex<mpsc::UnboundedReceiver<Event>>,
     abort: lk_agents_abi::AbortHandle,
+    /// Resolves (closed) when the pump has ended.
+    done: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGen>,
 }
 
@@ -399,9 +415,17 @@ impl SessionHandle {
         self.events.lock().await.recv().await
     }
 
+    /// `aclose`: the response in flight is cancelled and the socket closed with a close frame,
+    /// the machine's `close()` failing what still waits; a pump that cannot take the close (it is
+    /// connecting) is aborted at the bound.
     pub async fn aclose(&self) {
-        // Dropping the command sender ends the pump through the machine's `close()`.
         self.send(Command::Interrupt(lk_agents_abi::llm::realtime::Interrupt { response_id: None }));
+        let _ = self.commands.send(Cmd::Close);
+        self.shared.closing.notify_one();
+        let done = self.done.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(done) = done {
+            let _ = lk_agents_abi::timeout(&*self.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, done).await;
+        }
         self.abort.abort();
     }
 }
@@ -459,7 +483,13 @@ impl Pump {
                 self.provider_label
             );
             let at = self.clock.now().saturating_add(Duration::from_secs_f64(interval));
-            self.clock.wait_until(at).await;
+            tokio::select! {
+                () = self.clock.wait_until(at) => {}
+                () = self.shared.closing.notified() => {
+                    self.close().await;
+                    return;
+                }
+            }
             num_retries += 1;
             reconnecting = true;
         }
@@ -559,7 +589,7 @@ impl Pump {
                         *self.shared.caps.lock().unwrap_or_else(|e| e.into_inner()) = m.capabilities();
                         step
                     }
-                    None => {
+                    Some(Cmd::Close) | None => {
                         self.close().await;
                         return Ok(Outcome::Closed);
                     }
