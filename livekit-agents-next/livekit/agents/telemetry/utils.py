@@ -80,7 +80,7 @@ def record_exception(
 
     # `error.type` is the GenAI/HTTP conventions' low-cardinality error identifier;
     # unlike the message it never carries user data, so it is set either way
-    from .gen_ai import set_error_type
+    from .traces import set_error_type
 
     set_error_type(span, exception)
 

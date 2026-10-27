@@ -38,14 +38,8 @@ from livekit.protocol import agent, models
 from . import _core
 from .log import logger
 from .observability import Tagger
-from .telemetry import (
-    _upload_session_report,
-    otel_metrics,
-    rpc as rpc_tracing,
-    session_context,
-    trace_types,
-    utils as telemetry_utils,
-)
+from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
+from .telemetry.metrics import flush_turn_metrics
 from .telemetry.traces import (
     _BufferingHandler,
     _cloud_log_handler,
@@ -54,6 +48,8 @@ from .telemetry.traces import (
     _prepare_cloud_tracer,
     _setup_cloud_tracer,
     _shutdown_telemetry,
+    install_rpc_tracing,
+    session_span,
 )
 from .types import (
     ATTRIBUTE_REDACTION_ENABLED,
@@ -323,7 +319,7 @@ class JobContext:
         if not (session := self._primary_agent_session):
             return
 
-        otel_metrics.flush_turn_metrics(session.history)
+        flush_turn_metrics(session.history)
 
         report = self.make_session_report(session)
 
@@ -622,7 +618,7 @@ class JobContext:
             await self.connect()
 
         # nests under session_start when the session is starting, else the ambient context
-        with session_context.session_span(
+        with session_span(
             "wait_for_participant",
             attributes={trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
             job_ctx=self,
@@ -675,7 +671,7 @@ class JobContext:
             single_peer_connection=single_peer_connection,
         )
 
-        with session_context.session_span(
+        with session_span(
             "room_connect",
             attributes={
                 trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
@@ -695,7 +691,7 @@ class JobContext:
                     ),
                 }
             )
-        rpc_tracing.install(self._room.local_participant)
+        install_rpc_tracing(self._room.local_participant)
 
         # a simulator leaving ends the job; the agent under test may add other participants
         self._room.on(

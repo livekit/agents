@@ -43,7 +43,7 @@ from ..llm import LLM, ChatContext, RealtimeModel, StopResponse, function_tool
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
-from ..telemetry import otel_metrics
+from ..telemetry.metrics import collect_usage
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -479,7 +479,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection: the DTMF tool joins the session's tools and the core's navigator
         runs, counting ``transcript`` (AMD's greeting) as heard."""
-        from ..beta.tools import send_dtmf_events
+        from ..beta import send_dtmf_events
 
         if send_dtmf_events not in self._tools:
             self._tools.append(send_dtmf_events)
@@ -803,7 +803,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_metrics(self, wire: dict[str, Any]) -> None:
-        otel_metrics.collect_usage(_AGENT_METRICS.validate_python(wire["metrics"]))
+        collect_usage(_AGENT_METRICS.validate_python(wire["metrics"]))
 
     def _error_record(self, wire: dict[str, Any]) -> tuple[Any, Any]:
         """The reference's payload: the provider's error record, and the provider that failed."""

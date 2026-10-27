@@ -1311,7 +1311,7 @@ class _FakeTransferHost:
 async def tools() -> None:
     """The prebuilt tools in a session: keypad tones published by the core, then ``end_call``,
     after whose goodbye the core closes the session."""
-    from livekit.agents.beta.tools import EndCallTool, send_dtmf_events
+    from livekit.agents.beta import EndCallTool, send_dtmf_events
 
     print("== tools")
     room = _core.FakeRoom(sample_rate=48000)
@@ -1338,11 +1338,7 @@ async def tools() -> None:
 async def toolsets() -> None:
     """Tool search: a search loads the matching tools (ranked by the core); the proxy returns
     their schemas and calls one by name, its arguments checked by the core."""
-    from livekit.agents.beta.toolsets import (
-        KeywordSearchStrategy,
-        ToolProxyToolset,
-        ToolSearchToolset,
-    )
+    from livekit.agents.beta import KeywordSearchStrategy, ToolProxyToolset, ToolSearchToolset
     from livekit.agents.llm import ToolError
 
     print("== toolsets")

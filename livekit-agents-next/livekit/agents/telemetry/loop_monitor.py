@@ -22,7 +22,7 @@ emits them and records the metric. It observes a single loop without patching as
   CPU time. It also logs a warning and records a histogram measurement.
 
 Spans nest under the span the blocked task was in when sampled, else under the primary agent
-session's root span (``telemetry.session_context``), else under ``job_entrypoint``. The worker
+session's root span (``telemetry.traces.session_root_context``), else under ``job_entrypoint``. The worker
 process has no job to attach spans to and produces only the log and the metric. Output is rate
 limited so a pathologically blocked loop cannot flood the exporter.
 
@@ -59,8 +59,8 @@ from opentelemetry import context as otel_context, trace
 
 from .. import _core
 from ..log import logger
-from . import otel_metrics, session_context
-from .traces import tracer
+from .metrics import record_event_loop_blocked
+from .traces import session_root_context, tracer
 
 DEFAULT_WARN_THRESHOLD = 0.1
 """Blocks at or above this many seconds are reported as warnings."""
@@ -163,7 +163,7 @@ class EventLoopMonitor:
         def _emit() -> None:
             # the metric counts every stall, including the ones the limiters drop
             try:
-                otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
+                record_event_loop_blocked(report.duration, severity=report.severity)
             except Exception:
                 logger.exception("failed to record the blocked event loop metric")
             if span is not None:
@@ -194,7 +194,7 @@ def _emit_span(report: BlockedReport, attributes: dict[str, Any], error: str | N
             trace.NonRecordingSpan(report.parent_span_context)
         )
     else:
-        parent = session_context.session_root_context()
+        parent = session_root_context()
     start_ns = int(report.started_at * 1_000_000_000)
     span = tracer.start_span(SPAN_NAME, context=parent, start_time=start_ns, attributes=attributes)
     if error is not None:

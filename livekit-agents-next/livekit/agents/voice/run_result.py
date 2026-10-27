@@ -1053,7 +1053,7 @@ class ChatMessageAssert:
         if not any(excluded_model in llm_v.model for excluded_model in excluded_models_temperature):
             extra_kwargs["temperature"] = 0.0
 
-        from ..evals.judge import _judge_chat_kwargs
+        from ..evals import _judge_chat_kwargs
 
         # TODO(theomonnom): LLMStream should provide utilities to make function calling easier.
         async for chunk in llm_v.chat(

@@ -53,7 +53,7 @@ ATTR_RPC_REQUEST_ID = "lk.rpc.request_id"
 ATTR_RPC_CALLER_IDENTITY = "lk.rpc.caller_identity"
 ATTR_RPC_DESTINATION_IDENTITY = "lk.rpc.destination_identity"
 ATTR_RPC_PAYLOAD = "lk.pii.rpc.payload"
-"""Request payload, truncated to ``telemetry.rpc.MAX_PAYLOAD_ATTR_LEN`` characters."""
+"""Request payload, truncated to ``telemetry.traces.MAX_PAYLOAD_ATTR_LEN`` characters."""
 ATTR_RPC_PAYLOAD_SIZE = "lk.rpc.payload_size"
 ATTR_RPC_RESPONSE = "lk.pii.rpc.response"
 """Response payload, truncated like the request."""
@@ -81,7 +81,7 @@ ATTR_FUNCTION_TOOL_OUTPUT = "lk.pii.function_tool.output"
 # OpenTelemetry GenAI semantic conventions, mirroring the attribute registry of
 # https://github.com/open-telemetry/semantic-conventions-genai. Backends ingest these
 # directly, so the names must stay byte-for-byte identical to the registry. The ones the
-# spec flags as sensitive are listed in `telemetry.pii.GEN_AI_PII_ATTRIBUTES`, since a
+# spec flags as sensitive are listed in `telemetry.traces.GEN_AI_PII_ATTRIBUTES`, since a
 # standard name cannot carry the `lk.pii.` marker segment.
 
 ATTR_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"

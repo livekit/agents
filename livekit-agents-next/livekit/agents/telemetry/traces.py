@@ -1,3 +1,20 @@
+"""The agent's traces: the tracer and its exporters, PII redaction, the GenAI attributes, the
+session's trace context and RPC spans.
+
+The job's trace is rooted at ``job_entrypoint`` and ``agent_session`` is a child of it. Code
+running on a task whose context predates the session (the event loop monitor's heartbeat above
+all) resolves the running session through the job (:func:`session_root_context`) so its spans
+nest under ``agent_session`` while one exists; :func:`session_span` nests startup work under
+``session_start`` while the session is starting.
+
+RPCs go through the room SDK's ``RpcInterceptor`` hook (``livekit-rtc`` >= 1.1.18): one
+interceptor per local participant turns each call into a span following the OpenTelemetry RPC
+conventions, ``rpc_call`` (``SpanKind.CLIENT``) under the current span for outgoing calls and
+``rpc_handler`` (``SpanKind.SERVER``) under the session's root span for incoming ones. Payloads
+are recorded truncated under ``lk.pii`` keys; participant identities are recorded as is. On an
+SDK without the hook, ``install`` is a no-op.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +27,8 @@ import random
 import threading
 import time
 import weakref
-from collections.abc import Callable, Iterator, Mapping, Sequence, Set
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence, Set
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -19,7 +37,7 @@ import aiofiles
 import aiohttp
 import requests
 from google.protobuf.json_format import MessageToDict
-from opentelemetry import context as otel_context, metrics as metrics_api, trace as trace_api
+from opentelemetry import context as otel_context, metrics as metrics_api, trace, trace as trace_api
 from opentelemetry._logs import LogRecord as OTelLogRecord, get_logger_provider, set_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
@@ -27,10 +45,6 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.metrics import NoOpMeterProvider
-
-# _ProxyMeterProvider is what get_meter_provider() returns before anyone calls
-# set_meter_provider; there is no public alias for it (opentelemetry-api is
-# pinned <1.45, where this import is stable).
 from opentelemetry.metrics._internal import _ProxyMeterProvider
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk._logs import (
@@ -56,34 +70,35 @@ from opentelemetry.sdk.metrics import (
 )
 from opentelemetry.sdk.metrics.export import AggregationTemporality, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
+from opentelemetry.sdk.trace import ReadableSpan, Span as SdkSpan, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
-from opentelemetry.trace import Span, Tracer
+from opentelemetry.trace import Span, Status, StatusCode, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
 from opentelemetry.util.types import AttributeValue
 
-from livekit import api
+from livekit import api, rtc
 from livekit.protocol import metrics as proto_metrics
 
 from .. import _core
 from .._proto import encode_chat_item
 from ..log import TRACE_LEVEL, logger
-from ..types import (
-    ATTRIBUTE_REDACTION_ENABLED,
-    ATTRIBUTE_SIMULATION_ENABLED,
-)
+from ..types import ATTRIBUTE_REDACTION_ENABLED, ATTRIBUTE_SIMULATION_ENABLED
 from ..utils import is_given
-from . import gen_ai, pii, trace_types, utils as telemetry_utils
+from . import trace_types, utils as telemetry_utils
+from .utils import REDACTED_EXCEPTION_MESSAGE
 
 if TYPE_CHECKING:
-    from ..job import SessionReport
+    from opentelemetry.sdk.trace import Event
+
+    from ..job import JobContext, SessionReport
     from ..llm import ChatItem
     from ..observability import Tagger
-
+    from ..voice.agent_session import VoiceSession
 
 _SESSION_OPTION_KEY_ALIASES = {
     "keyterms": "lk.pii.keyterms",
 }
+
 
 # Option keys never written to the report: prompt text authored by the customer
 # (``stt_context_options.keyterm_detection.instructions``) can embed anything about their
@@ -164,14 +179,18 @@ def _serialize_session_options(options: dict[str, Any]) -> dict[str, Any]:
 
 
 _USE_SPAN_SIGNATURE = inspect.signature(trace_api.use_span)
+
+
 _START_SPAN_SIGNATURE = inspect.signature(Tracer.start_span)
+
+
 _START_AS_CURRENT_SPAN_SIGNATURE = inspect.signature(Tracer.start_as_current_span)
 
 
 def _with_conversation_id(
     attributes: Mapping[str, AttributeValue] | None,
 ) -> Mapping[str, AttributeValue] | None:
-    if (conversation_id := gen_ai._conversation_id()) is None:
+    if (conversation_id := _conversation_id()) is None:
         return attributes
     return {trace_types.ATTR_GEN_AI_CONVERSATION_ID: conversation_id, **(attributes or {})}
 
@@ -477,12 +496,12 @@ class _GatedSpanExporter(SpanExporter):
         if not held or not traces_enabled:
             return
         if redacted:
-            held = [pii.redact(s) for s in held]
+            held = [redact(s) for s in held]
         if self._requeue is not None:
             for s in held:
                 self._requeue(s)
         else:
-            self._inner.export([pii.restore_pii(s) for s in held])
+            self._inner.export([restore_pii(s) for s in held])
 
     def close_job(self, job_id: str) -> None:
         """The job ended; anything still held was never meant to upload."""
@@ -501,7 +520,7 @@ class _GatedSpanExporter(SpanExporter):
                         # LiveKit Cloud may receive is the project's setting, applied at its
                         # collector. restore_pii is a no-op once that setting mandates
                         # redaction.
-                        exportable.append(pii.restore_pii(s))
+                        exportable.append(restore_pii(s))
                     continue
                 job_id = (s.attributes or {}).get("job_id")
                 if isinstance(job_id, str) and job_id in self._open_jobs:
@@ -574,7 +593,7 @@ class _TraceLevelLoggingHandler(LoggingHandler):
             attributes.pop(trace_types.ATTR_EXCEPTION_TRACE, None)
             # callers pass user data through `extra={"lk.pii.<name>": ...}` precisely
             # because a log body cannot be redacted; drop those before export
-            log_record.attributes = pii.filter_attributes(attributes)
+            log_record.attributes = filter_attributes(attributes)
 
         # OTel's std_to_otel returns UNSPECIFIED for levels < 10
         # Map our TRACE_LEVEL to OTel's TRACE
@@ -647,7 +666,7 @@ def _install_pii_redaction(
         tracer_provider,
         # PII flows to every exporter unless withheld: the GenAI conventions are only
         # useful to a backend that can render the conversation
-        pii._PIIFilteringSpanProcessor(allow_pii=allow_pii if allow_pii is not None else True),
+        _PIIFilteringSpanProcessor(allow_pii=allow_pii if allow_pii is not None else True),
     )
 
 
@@ -680,6 +699,8 @@ def set_tracer_provider(
 
 
 _TOKEN_TTL = timedelta(hours=6)
+
+
 _TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
 
@@ -1041,7 +1062,7 @@ class _CloudTelemetry:
             self._logger_provider = owned
 
         # ahead of any exporter already on the provider, as for spans
-        _prepend_log_processor(self._logger_provider, pii._PIIFilteringLogProcessor())
+        _prepend_log_processor(self._logger_provider, _PIIFilteringLogProcessor())
 
     def _ensure_log_pipeline(self, url: str) -> None:
         if self._log_batch_processor is not None or self._logger_provider is None:
@@ -1233,6 +1254,8 @@ def _parse_retry_delay(body: bytes) -> float | None:
 
 
 _RECORDING_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=900, sock_connect=30)
+
+
 _RECORDING_UPLOAD_MAX_RETRIES = 3
 
 
@@ -1431,3 +1454,478 @@ def _shutdown_telemetry(job_id: str, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOU
     once at process exit.
     """
     _cloud.release(job_id, timeout)
+
+
+_FALSY = ("0", "false", "no", "off")
+
+
+# the env var name the GenAI conventions standardise for this opt-in
+_capture_content: bool = (
+    os.environ.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "").strip().lower()
+    not in _FALSY
+)
+
+
+def set_capture_content(enabled: bool) -> None:
+    """Whether spans carry message content (judge explanations); off by default unless
+    ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` is set."""
+    global _capture_content
+    _capture_content = enabled
+
+
+def capture_content_enabled() -> bool:
+    return _capture_content
+
+
+def _conversation_id() -> str | None:
+    """The convention forbids fabricating one (no UUIDs, trace ids or content hashes),
+    so this is the room sid LiveKit already stamps on every record."""
+    from ..job import get_job_context
+
+    ctx = get_job_context(required=False)
+    if ctx is None:
+        return None
+    return ctx.job.room.sid or None
+
+
+def set_error_type(span: trace.Span, error: BaseException | str) -> None:
+    """A low-cardinality identifier, never the error message: that is free-form and may
+    carry user data."""
+    if not span.is_recording():
+        return
+    if isinstance(error, str):
+        span.set_attribute(trace_types.ATTR_ERROR_TYPE, error)
+        return
+
+    status_code = getattr(error, "status_code", None)
+    if isinstance(status_code, int):
+        span.set_attribute(trace_types.ATTR_ERROR_TYPE, str(status_code))
+        return
+    span.set_attribute(trace_types.ATTR_ERROR_TYPE, type(error).__qualname__)
+
+
+# exception details are recorded by `record_exception`, which resolves redaction from the
+# ambient job context; that can disagree with the span's own stamp, so they are filtered
+# here as well
+_REDACTED_EXCEPTION_ATTRIBUTES = (
+    trace_types.ATTR_EXCEPTION_MESSAGE,
+    trace_types.ATTR_EXCEPTION_TRACE,
+)
+
+
+GEN_AI_PII_ATTRIBUTES: frozenset[str] = frozenset(
+    {
+        # flagged "likely to contain sensitive information including user/PII data"
+        # by the GenAI semantic conventions
+        trace_types.ATTR_GEN_AI_INPUT_MESSAGES,
+        trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES,
+        trace_types.ATTR_GEN_AI_SYSTEM_INSTRUCTIONS,
+        trace_types.ATTR_GEN_AI_TOOL_CALL_ARGUMENTS,
+        trace_types.ATTR_GEN_AI_TOOL_CALL_RESULT,
+        trace_types.ATTR_GEN_AI_TOOL_DESCRIPTION,
+        trace_types.ATTR_GEN_AI_TOOL_DEFINITIONS,
+        # free-form text the caller supplied or the model produced
+        trace_types.ATTR_GEN_AI_RETRIEVAL_QUERY_TEXT,
+        trace_types.ATTR_GEN_AI_RETRIEVAL_DOCUMENTS,
+        trace_types.ATTR_GEN_AI_MEMORY_QUERY_TEXT,
+        trace_types.ATTR_GEN_AI_MEMORY_RECORDS,
+        trace_types.ATTR_GEN_AI_EVALUATION_EXPLANATION,
+    }
+)
+
+
+"""GenAI attributes carrying content. Fixed names, so they cannot be ``lk.pii.``-marked."""
+
+
+PII_EVENT_NAMES: frozenset[str] = frozenset(
+    {
+        # the GenAI content events carry the message body in a generic `content`
+        # attribute, so the whole event is dropped rather than filtered
+        trace_types.EVENT_GEN_AI_SYSTEM_MESSAGE,
+        trace_types.EVENT_GEN_AI_USER_MESSAGE,
+        trace_types.EVENT_GEN_AI_ASSISTANT_MESSAGE,
+        trace_types.EVENT_GEN_AI_TOOL_MESSAGE,
+        trace_types.EVENT_GEN_AI_CHOICE,
+        trace_types.EVENT_GEN_AI_CLIENT_INFERENCE_OPERATION_DETAILS,
+    }
+)
+
+
+def is_pii_attribute(key: str) -> bool:
+    if "pii" in key.split("."):
+        return True
+    if key in GEN_AI_PII_ATTRIBUTES:
+        return True
+    # gen_ai.prompt.variable.<key> holds the values interpolated into a prompt template
+    return key.startswith(trace_types.ATTR_GEN_AI_PROMPT_VARIABLE)
+
+
+def filter_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not attributes:
+        return {}
+
+    redacted: dict[str, Any] = {}
+    for key, value in attributes.items():
+        if is_pii_attribute(key):
+            continue
+        if key == trace_types.ATTR_EXCEPTION_TRACE:
+            continue
+        if key == trace_types.ATTR_EXCEPTION_MESSAGE:
+            # `error.type` still names the class; only the free-form message goes
+            redacted[key] = REDACTED_EXCEPTION_MESSAGE
+            continue
+        redacted[key] = value
+    return redacted
+
+
+def _contains_pii(attributes: Mapping[str, Any] | None) -> bool:
+    return any(is_pii_attribute(k) or k in _REDACTED_EXCEPTION_ATTRIBUTES for k in attributes or ())
+
+
+_RAW_ATTRIBUTES = "_lk_raw_attributes"
+
+
+_RAW_EVENTS = "_lk_raw_events"
+
+
+_RAW_STATUS = "_lk_raw_status"
+
+
+class _PIIFilteringSpanProcessor(SpanProcessor):
+    """Drops PII attributes so they never reach an exporter that is not LiveKit Cloud's.
+
+    Must be registered **before** any exporting processor: ``on_end`` is dispatched in
+    registration order over one shared :class:`ReadableSpan` snapshot, so rewriting the
+    snapshot here is what the downstream processors go on to export.
+
+    LiveKit Cloud is exempt — its PII handling is the project's setting in the dashboard,
+    not ours to second-guess — so the original attributes are stashed on the snapshot for
+    :func:`restore_pii` to put back on that one export path. When the project does mandate
+    redaction, nothing is stashed and Cloud is stripped along with everyone else.
+
+    ``allow_pii`` lifts the stripping for a provider whose exporters the integrator has
+    explicitly granted PII (``set_tracer_provider(..., allow_pii=True)``).
+    """
+
+    def __init__(self, *, allow_pii: bool = False) -> None:
+        self._allow_pii = allow_pii
+
+    def on_start(self, span: SdkSpan, parent_context: otel_context.Context | None = None) -> None:
+        pass
+
+    def on_end(self, span: ReadableSpan) -> None:
+        from .utils import redaction_enabled
+
+        attributes = span.attributes
+        # the flag stamped at span start keeps this correct for a span ended off the
+        # job's thread, and when concurrent jobs share the providers (THREAD executor)
+        project_redaction = redaction_enabled(attributes)
+        if self._allow_pii and not project_redaction:
+            return
+
+        events = span.events
+        filtered_events = _filter_events(events)
+        if not _contains_pii(attributes) and filtered_events is None:
+            return
+
+        if not project_redaction:
+            # LiveKit Cloud still receives what the project allows
+            setattr(span, _RAW_ATTRIBUTES, dict(attributes or {}))
+            setattr(span, _RAW_EVENTS, tuple(events))
+            setattr(span, _RAW_STATUS, span.status)
+
+        # rebind rather than mutate: the snapshot's BoundedAttributes is shared with the
+        # live span, and is immutable once the span has ended
+        span._attributes = filter_attributes(attributes)
+        if filtered_events is not None:
+            span._events = filtered_events
+        # record_exception also puts the message in the span status
+        if span.status.status_code is StatusCode.ERROR and span.status.description:
+            span._status = Status(StatusCode.ERROR, REDACTED_EXCEPTION_MESSAGE)
+
+    def shutdown(self) -> None:
+        pass
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+
+def redact(span: ReadableSpan) -> ReadableSpan:
+    """A snapshot of ``span`` with PII stripped, whatever ``on_end`` stashed for restore.
+
+    For a span that ended before its job decided on redaction (the gate held it): the
+    processor saw redaction off at the time, so the attributes may be intact or stashed."""
+    events = _filter_events(span.events)
+    status = span.status
+    if status.status_code is StatusCode.ERROR and status.description:
+        status = Status(StatusCode.ERROR, REDACTED_EXCEPTION_MESSAGE)
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes=filter_attributes(span.attributes),
+        events=events if events is not None else span.events,
+        links=span.links,
+        kind=span.kind,
+        status=status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
+def restore_pii(span: ReadableSpan) -> ReadableSpan:
+    """The span as it was before PII was stripped for third-party exporters.
+
+    Only LiveKit Cloud's own exporter calls this; every other destination sees the
+    redacted snapshot. Returns ``span`` unchanged when nothing was stashed.
+    """
+    attributes = getattr(span, _RAW_ATTRIBUTES, None)
+    if attributes is None:
+        return span
+
+    from .utils import redaction_enabled
+
+    # nothing is stashed once the project mandates redaction, so this is belt-and-braces:
+    # it keeps a change to that upstream check from turning into a leak here
+    if redaction_enabled(span.attributes):
+        return span
+
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes=attributes,
+        events=getattr(span, _RAW_EVENTS, span.events),
+        links=span.links,
+        kind=span.kind,
+        status=getattr(span, _RAW_STATUS, span.status),
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
+class _PIIFilteringLogProcessor(LogRecordProcessor):
+    """Log counterpart of :class:`_PIIFilteringSpanProcessor`.
+
+    ``_TraceLevelLoggingHandler`` redacts the records the framework's own handler creates;
+    this covers every other emitter on the logger provider, including the exporters an
+    integrator attached before handing us the provider.
+    """
+
+    def on_emit(self, log_data: ReadWriteLogRecord) -> None:
+        # on_emit runs synchronously on the emitting thread, so the ambient job context is
+        # the right source here — unlike spans, a log record has no earlier stamp to read
+        from .utils import redaction_enabled
+
+        if not redaction_enabled():
+            return
+
+        record = log_data.log_record
+        if _contains_pii(record.attributes):
+            record.attributes = filter_attributes(record.attributes)
+
+    def shutdown(self) -> None:
+        pass
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+
+def _filter_events(events: Sequence[Event]) -> list[Event] | None:
+    """``None`` when nothing changed."""
+    from opentelemetry.sdk.trace import Event as SdkEvent
+
+    changed = False
+    kept: list[Event] = []
+    for event in events:
+        if event.name in PII_EVENT_NAMES:
+            changed = True
+            continue
+        if _contains_pii(event.attributes):
+            changed = True
+            kept.append(
+                SdkEvent(
+                    name=event.name,
+                    attributes=filter_attributes(event.attributes),
+                    timestamp=event.timestamp,
+                )
+            )
+            continue
+        kept.append(event)
+
+    return kept if changed else None
+
+
+def _current_job(job_ctx: JobContext | None) -> JobContext | None:
+    if job_ctx is not None:
+        return job_ctx
+    from ..job import get_job_context
+
+    return get_job_context(required=False)
+
+
+def primary_session(job_ctx: JobContext | None = None) -> VoiceSession | None:
+    job_ctx = _current_job(job_ctx)
+    return job_ctx._primary_agent_session if job_ctx is not None else None
+
+
+def session_root_context(job_ctx: JobContext | None = None) -> otel_context.Context | None:
+    """The primary agent session's root span context, if a session is running."""
+    session = primary_session(job_ctx)
+    if session is not None and session._root_span_context is not None:
+        return session._root_span_context
+    return None
+
+
+@contextmanager
+def session_span(
+    name: str,
+    *,
+    attributes: dict[str, Any] | None = None,
+    job_ctx: JobContext | None = None,
+) -> Iterator[trace.Span]:
+    """A span for session work: under ``session_start`` while the primary session is starting,
+    else in the ambient context. Never made current (see ``detached_span``): ``room.connect()``
+    spawns tasks that live on. ``job_ctx`` resolves the session from any task or thread."""
+    session = primary_session(_current_job(job_ctx))
+    parent = session._session_start_context if session is not None else None
+    with tracer.detached_span(name, context=parent, attributes=attributes) as span:
+        yield span
+
+
+MAX_PAYLOAD_ATTR_LEN = 1024
+
+
+"""Request and response payloads longer than this many characters are truncated in span
+attributes."""
+
+
+_RpcInterceptorBase: type = getattr(rtc, "RpcInterceptor", object)
+
+
+_warned_unsupported = False
+
+
+def _truncate(payload: str) -> str:
+    return payload[:MAX_PAYLOAD_ATTR_LEN]
+
+
+def _payload_attributes(payload: str) -> dict[str, Any]:
+    attrs: dict[str, Any] = {trace_types.ATTR_RPC_PAYLOAD_SIZE: len(payload.encode("utf-8"))}
+    if payload:
+        attrs[trace_types.ATTR_RPC_PAYLOAD] = _truncate(payload)
+    return attrs
+
+
+def _response_attributes(response: str | None) -> dict[str, Any]:
+    response = response or ""
+    attrs: dict[str, Any] = {trace_types.ATTR_RPC_RESPONSE_SIZE: len(response.encode("utf-8"))}
+    if response:
+        attrs[trace_types.ATTR_RPC_RESPONSE] = _truncate(response)
+    return attrs
+
+
+_CANCEL_DESCRIPTIONS = {
+    "RESPONSE_TIMEOUT": "response timeout",
+    "RECIPIENT_DISCONNECTED": "caller disconnected",
+    "APPLICATION_ERROR": "handler cancelled",
+}
+
+
+def _cancellation_outcome(invocation: Any) -> tuple[Any, str]:
+    """The RPC error code the caller receives for a cancelled handler chain, and a status text.
+
+    ``cancel_reason`` is set by the SDK before it cancels the chain; ``None`` there means the
+    cancellation came from inside the chain, which the SDK answers as ``APPLICATION_ERROR``.
+    An SDK without the field gives no code."""
+    if not hasattr(invocation, "cancel_reason"):
+        return None, "cancelled"
+    code = invocation.cancel_reason
+    if code is None:
+        code = rtc.RpcError.ErrorCode.APPLICATION_ERROR
+    return code, _CANCEL_DESCRIPTIONS.get(getattr(code, "name", ""), "cancelled")
+
+
+class TracingRpcInterceptor(_RpcInterceptorBase):  # type: ignore[misc]
+    """An ``rtc.RpcInterceptor`` emitting ``rpc_call`` / ``rpc_handler`` spans."""
+
+    async def intercept_outgoing(self, call: Any, next: Callable[[Any], Awaitable[str]]) -> str:
+        attributes: dict[str, Any] = {
+            trace_types.ATTR_RPC_METHOD: call.method,
+            trace_types.ATTR_RPC_DESTINATION_IDENTITY: call.destination_identity,
+            **_payload_attributes(call.payload),
+        }
+        if call.response_timeout is not None:
+            attributes[trace_types.ATTR_RPC_RESPONSE_TIMEOUT] = call.response_timeout
+
+        with tracer.start_as_current_span(
+            "rpc_call", kind=trace.SpanKind.CLIENT, attributes=attributes
+        ) as span:
+            try:
+                response = await next(call)
+            except rtc.RpcError as e:
+                span.set_attribute(trace_types.ATTR_RPC_ERROR_CODE, int(e.code))
+                raise
+            span.set_attributes(_response_attributes(response))
+            return response
+
+    async def intercept_incoming(
+        self, invocation: Any, next: Callable[[Any], Awaitable[str | None]]
+    ) -> str | None:
+        attributes: dict[str, Any] = {
+            trace_types.ATTR_RPC_METHOD: getattr(invocation, "method", ""),
+            trace_types.ATTR_RPC_REQUEST_ID: invocation.request_id,
+            trace_types.ATTR_RPC_CALLER_IDENTITY: invocation.caller_identity,
+            trace_types.ATTR_RPC_RESPONSE_TIMEOUT: invocation.response_timeout,
+            trace_types.ATTR_RPC_HANDLER_REGISTERED: True,
+            **_payload_attributes(invocation.payload),
+        }
+        with tracer.start_as_current_span(
+            "rpc_handler",
+            context=session_root_context(),
+            kind=trace.SpanKind.SERVER,
+            attributes=attributes,
+        ) as span:
+            try:
+                response = await next(invocation)
+            except rtc.RpcError as e:
+                span.set_attribute(trace_types.ATTR_RPC_ERROR_CODE, int(e.code))
+                if e.code == rtc.RpcError.ErrorCode.UNSUPPORTED_METHOD:
+                    # a client called a method this agent never registered
+                    span.set_attribute(trace_types.ATTR_RPC_HANDLER_REGISTERED, False)
+                raise
+            except asyncio.CancelledError:
+                # the SDK maps a cancellation to an RpcError only after this interceptor has
+                # unwound, and a CancelledError is not an Exception, so the span would end
+                # UNSET; invocation.cancel_reason says what the caller gets (livekit>=1.1.19)
+                code, description = _cancellation_outcome(invocation)
+                if code is not None:
+                    span.set_attribute(trace_types.ATTR_RPC_ERROR_CODE, int(code))
+                span.set_status(trace.Status(trace.StatusCode.ERROR, description))
+                raise
+            span.set_attributes(_response_attributes(response))
+            return response
+
+
+_interceptor = TracingRpcInterceptor()
+
+
+def install_rpc_tracing(local_participant: Any) -> bool:
+    """Trace RPCs on ``local_participant``. Idempotent. Returns False when the installed
+    ``livekit-rtc`` has no interceptor support."""
+    global _warned_unsupported
+    add = getattr(local_participant, "add_rpc_interceptor", None)
+    if add is None:
+        if not _warned_unsupported:
+            _warned_unsupported = True
+            logger.debug(
+                "livekit-rtc has no RpcInterceptor support; RPC calls will not be traced "
+                "(requires livekit>=1.1.18)"
+            )
+        return False
+    add(_interceptor)
+    return True
