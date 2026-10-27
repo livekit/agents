@@ -17,6 +17,7 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import contextvars
+import itertools
 import socket
 import time
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,7 @@ from typing import Any, cast
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
+from livekit.protocol import agent
 
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
@@ -41,6 +43,7 @@ from .proto import (
     InferenceRequest,
     InferenceResponse,
     InitializeRequest,
+    JoinTiming,
     ShutdownRequest,
     ShutdownRequestAck,
     ShuttingDown,
@@ -208,6 +211,7 @@ class _JobProc:
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
+        self._entrypoint_started_mono = 0.0
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
         self._ctx_connect_called = False
@@ -299,6 +303,16 @@ class _JobProc:
 
         def _on_ctx_connect() -> None:
             self._ctx_connect_called = True
+            timing = _join_timing(
+                self._job_ctx._info,
+                self._entrypoint_started_mono,
+                self._job_ctx._connect_called_mono,
+                self._job_ctx._connected_mono,
+            )
+            if timing is not None:
+                self._join_timing_task = asyncio.create_task(
+                    self._client.send(JoinTiming(timing=timing))
+                )
 
         def _on_ctx_shutdown(reason: str) -> None:
             self._ctx_shutdown_called = True
@@ -337,6 +351,7 @@ class _JobProc:
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
 
+        self._entrypoint_started_mono = time.monotonic()
         # the job's root span, from the availability request to the end of shutdown; the
         # entrypoint returning is an event on it
         job_span = _start_job_span(self._job_ctx)
@@ -586,6 +601,37 @@ def _record_dispatch_timeline(
         # the server's own start time, for lining up with server-side traces
         started = _server_timestamp_seconds(server_started)
         span.add_event("job_started_on_server", timestamp=int(started * 1e9))
+
+
+def _join_timing(
+    info: RunningJobInfo,
+    entrypoint_started_mono: float,
+    connect_called_mono: float,
+    connected_mono: float,
+) -> agent.JobJoinTiming | None:
+    """The worker-side join stages for the server's join latency, from monotonic stamps.
+    None when a stage is unknown (simulation, console, resumed job)."""
+    stamps = [
+        info.received_mono,
+        info.accepted_mono,
+        info.assigned_mono,
+        info.launched_mono,
+        entrypoint_started_mono,
+        connect_called_mono,
+        connected_mono,
+    ]
+    if not all(stamps):
+        return None
+    ms = [max(round((end - start) * 1000), 0) for start, end in itertools.pairwise(stamps)]
+    return agent.JobJoinTiming(
+        accept_ms=ms[0],
+        assignment_ms=ms[1],
+        launch_ms=ms[2],
+        launch_warm=info.launched_warm,
+        entrypoint_ms=ms[3],
+        pre_connect_ms=ms[4],
+        connect_ms=ms[5],
+    )
 
 
 @dataclass

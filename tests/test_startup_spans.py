@@ -23,10 +23,11 @@ from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext
 from livekit.agents.ipc.job_proc_lazy_main import (
     _callback_name,
+    _join_timing,
     _record_dispatch_timeline,
     _server_timestamp_seconds,
 )
-from livekit.agents.ipc.proto import StartJobRequest
+from livekit.agents.ipc.proto import JoinTiming, StartJobRequest
 from livekit.agents.job import AutoSubscribe, JobAcceptArguments, RunningJobInfo
 from livekit.agents.telemetry import session_context, set_tracer_provider, trace_types, tracer
 from livekit.protocol import agent as agent_proto
@@ -88,6 +89,11 @@ def test_start_job_request_round_trips_dispatch_timestamps() -> None:
         accepted_at=1_700_000_000.2,
         assigned_at=1_700_000_000.5,
         launched_at=1_700_000_000.6,
+        received_mono=5000.1,
+        accepted_mono=5000.2,
+        assigned_mono=5000.5,
+        launched_mono=5000.6,
+        launched_warm=True,
     )
     buf = io.BytesIO()
     req.write(buf)
@@ -104,6 +110,13 @@ def test_start_job_request_round_trips_dispatch_timestamps() -> None:
     assert abs(out.assigned_at - 1_700_000_000.5) < 1e-4
     assert abs(out.launched_at - 1_700_000_000.6) < 1e-4
     assert out.accepted_at - out.received_at == pytest.approx(0.1, abs=1e-4)
+    assert (out.received_mono, out.accepted_mono, out.assigned_mono, out.launched_mono) == (
+        5000.1,
+        5000.2,
+        5000.5,
+        5000.6,
+    )
+    assert out.launched_warm is True
 
 
 def test_dispatch_timeline_events_and_latencies(span_exporter: InMemorySpanExporter) -> None:
@@ -526,3 +539,57 @@ async def test_session_lifecycle_spans_and_events(span_exporter: InMemorySpanExp
     assert any((e.attributes or {})[trace_types.ATTR_NEW_STATE] == "speaking" for e in user_states)
     # the whole tree, not just the edges this test names (tests/trace_schema.py)
     assert_trace_well_formed(span_exporter.get_finished_spans())
+
+
+# -- join timing --
+
+
+def test_join_timing_durations() -> None:
+    info = _info(
+        received_mono=100.0,
+        accepted_mono=100.2,
+        assigned_mono=100.5,
+        launched_mono=100.6,
+        launched_warm=True,
+    )
+    timing = _join_timing(
+        info, entrypoint_started_mono=101.0, connect_called_mono=103.0, connected_mono=103.25
+    )
+    assert timing == agent_proto.JobJoinTiming(
+        accept_ms=200,
+        assignment_ms=300,
+        launch_ms=100,
+        launch_warm=True,
+        entrypoint_ms=400,
+        pre_connect_ms=2000,
+        connect_ms=250,
+    )
+
+
+def test_join_timing_unknown_stage_sends_nothing() -> None:
+    # simulation / console / resumed jobs carry no worker stamps
+    assert _join_timing(_info(), 101.0, 103.0, 103.25) is None
+
+
+def test_join_timing_ipc_round_trip() -> None:
+    msg = JoinTiming(timing=agent_proto.JobJoinTiming(accept_ms=7, connect_ms=9))
+    buf = io.BytesIO()
+    msg.write(buf)
+    buf.seek(0)
+    decoded = JoinTiming()
+    decoded.read(buf)
+    assert decoded == msg
+
+
+async def test_connect_stamps_call_and_transport_connected() -> None:
+    room = _mock_room()
+    ctx = JobContext(
+        proc=MagicMock(),
+        info=_info(),
+        room=room,
+        on_connect=lambda: None,
+        on_shutdown=lambda reason: None,
+        inference_executor=MagicMock(),
+    )
+    await ctx.connect()
+    assert 0 < ctx._connect_called_mono <= ctx._connected_mono
