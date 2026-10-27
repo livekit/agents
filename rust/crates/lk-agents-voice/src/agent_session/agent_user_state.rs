@@ -24,6 +24,8 @@ pub(crate) struct AgentUserState {
     running_tool_calls: u32,
     /// `_user_turn_claims`: while > 0 the user state is pinned to `Speaking`.
     claims: u32,
+    /// The room's linked participant left: no away window until someone is linked again.
+    unlinked: bool,
 }
 
 impl AgentUserState {
@@ -36,6 +38,7 @@ impl AgentUserState {
             away_armed: false,
             running_tool_calls: 0,
             claims: 0,
+            unlinked: false,
         }
     }
 
@@ -128,7 +131,7 @@ impl AgentUserState {
             eff.cancel(Timer::UserAway);
         }
         let Some(timeout) = self.away_timeout else { return eff };
-        if !self.both_listening() || self.running_tool_calls > 0 {
+        if !self.both_listening() || self.running_tool_calls > 0 || self.unlinked {
             return eff;
         }
         self.away_armed = true;
@@ -152,6 +155,29 @@ impl AgentUserState {
             }
             UserState::Listening | UserState::Speaking => Effects::new(),
         }
+    }
+
+    /// `reset_away_timer`: activity outside the conversation (a participant linked, a key pressed)
+    /// brings an away user back, or restarts the window while both listen.
+    pub(crate) fn reset_away_timer(&mut self, now: Ts, closing: bool) -> Effects {
+        if closing || self.away_timeout.is_none() {
+            return Effects::new();
+        }
+        self.on_final_transcript(now, closing)
+    }
+
+    /// The room linked a participant (`true`) or its linked participant left (`false`). Leaving
+    /// cancels the away window; a link resets it.
+    pub(crate) fn on_link(&mut self, now: Ts, linked: bool, closing: bool) -> Effects {
+        self.unlinked = !linked;
+        if linked {
+            return self.reset_away_timer(now, closing);
+        }
+        let mut eff = Effects::new();
+        if std::mem::take(&mut self.away_armed) {
+            eff.cancel(Timer::UserAway);
+        }
+        eff
     }
 
     /// A tool call started: the away window is held off (and cancelled) until the last one lands.

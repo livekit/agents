@@ -499,14 +499,19 @@ impl RoomIo {
                 if this.room.participant(&stream.sender).is_none() {
                     continue;
                 }
-                let sender = stream.sender.clone();
-                let info = stream.info.clone();
-                let text = stream.read_all().await;
-                let _ = this.events_tx.send(RoomIoEvent::TextInput(TextInput {
-                    text,
-                    participant: sender,
-                    info: Box::new(info),
-                }));
+                // One task per stream, so a stalled sender holds back no other message.
+                let events = this.events_tx.clone();
+                let reader = this.spawner.spawn_unboxed(async move {
+                    let text = stream.read_all().await;
+                    let _ = events.send(RoomIoEvent::TextInput(TextInput {
+                        text,
+                        participant: stream.sender,
+                        info: Box::new(stream.info),
+                    }));
+                });
+                let mut tasks = this.tasks.lock().unwrap();
+                tasks.retain(|t| !t.is_finished());
+                tasks.push(reader);
             }
         });
         self.tasks.lock().unwrap().push(handle);
@@ -660,8 +665,10 @@ impl RoomLink {
 
 impl Driver {
     pub(crate) fn on_room_io(&mut self, now: Ts, ev: RoomIoEvent, out: &mut Out) {
+        let closing = self.session.closing_past_edge();
         match &ev {
             RoomIoEvent::ParticipantUnlinked(unlinked) => {
+                out.machine().append(self.session.states.on_link(now, false, closing));
                 let reason = unlinked.reason;
                 // A deletion in flight is the end of the call already (`not self._delete_room_task`).
                 let closes = self.session.room.disconnect_closes(reason);
@@ -671,8 +678,10 @@ impl Driver {
                     self.begin_closing(now, Close { reason, drain: false, error: None }, out);
                 }
             }
-            // Journalled so a re-link is a step the rules can read; no driver state changes.
-            RoomIoEvent::ParticipantLinked(_) => out.trace(RoomStep::Link(RoomLinkStep::Linked)),
+            RoomIoEvent::ParticipantLinked(_) => {
+                out.trace(RoomStep::Link(RoomLinkStep::Linked));
+                out.machine().append(self.session.states.on_link(now, true, closing));
+            }
             RoomIoEvent::TextInput(_) | RoomIoEvent::DeleteRoomRequested(_) => {}
         }
         let _ = self.events.send(HostEvent::Room(ev));

@@ -13,7 +13,7 @@ import contextlib
 import contextvars
 import inspect
 import time
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal
 
@@ -69,6 +69,7 @@ from .events import (
     UserState,
 )
 from .remote_session import ConsoleCall, SessionPort
+from .room_io import RoomOptions, TextInputCallback, TextInputEvent
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolRunner
@@ -77,7 +78,6 @@ if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
     from .amd import AMD
-    from .room_io import RoomOptions
 
 __all__ = [
     "VoiceSession",
@@ -258,6 +258,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # the job's telemetry parents its spans here; the core traces the session itself
         self._root_span_context = None
         self._session_start_context = None
+        self._text_input_cb: TextInputCallback | None = None
+        self._tasks: set[asyncio.Task[Any]] = set()
 
     # --- state ---------------------------------------------------------------------------
 
@@ -390,6 +392,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room = job_ctx.room if job_ctx is not None else _core.OfflineRoom("console")
         if chat_ctx is not None:
             self._chat_ctx = chat_ctx.copy()
+        options = room_options if is_given(room_options) else RoomOptions()
+        text_input = options.get_text_input_options()
+        self._text_input_cb = text_input.text_input_cb if text_input is not None else None
         # the job's session (on its room, or the console's) records and reports for the job and
         # closes with it; the primary one, and the console's, serve the remote session protocol
         in_job = job_ctx is not None and (console is not None or room is job_ctx.room)
@@ -633,6 +638,17 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         return asyncio.ensure_future(self._running.interrupt(force=force))
 
+    @contextlib.asynccontextmanager
+    async def _claim_user_turn(self) -> AsyncIterator[None]:
+        """A programmatic user turn: the user state is pinned to ``speaking`` and
+        ``wait_for_idle`` held while inside."""
+        self._running.claim_user_turn()
+        try:
+            yield
+        finally:
+            if self._core is not None:
+                self._core.release_user_turn()
+
     def clear_user_turn(self) -> None:
         self._running.clear_user_turn()
 
@@ -850,6 +866,47 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 AMDPredictionEvent(**{k: v for k, v in wire.items() if k != "type"})
             )
 
+    def _on_text_input(self, wire: dict[str, Any]) -> None:
+        if (callback := self._text_input_cb) is None:
+            return
+        room = self._room
+        participants = room.remote_participants if isinstance(room, rtc.Room) else {}
+        info = wire["info"]
+        ev = TextInputEvent(
+            text=wire["text"],
+            info=rtc.TextStreamInfo(
+                stream_id=info["stream_id"],
+                mime_type=info["mime_type"],
+                topic=info["topic"],
+                timestamp=info["timestamp"],
+                size=info["size"],
+                attributes=info["attributes"],
+                attachments=info["attachments"],
+            ),
+            participant=participants.get(wire["participant"]),
+        )
+
+        async def _run() -> None:
+            try:
+                if inspect.isawaitable(result := callback(self, ev)):
+                    await result
+            except Exception:
+                logger.warning("failed to handle chat text stream", exc_info=True)
+
+        task = asyncio.ensure_future(_run())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    def _on_delete_room(self, wire: dict[str, Any]) -> None:
+        if (job_ctx := get_job_context(required=False)) is None:
+            return
+        logger.info(
+            "deleting room on agent session close "
+            "(disable via `RoomOptions.delete_room_on_close=False`)",
+            extra={"room": wire["room"]},
+        )
+        job_ctx.delete_room(room_name=wire["room"])
+
     def _on_close(self, wire: dict[str, Any]) -> None:
         self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=None))
 
@@ -1026,6 +1083,8 @@ _HANDLERS: dict[str, Callable[[VoiceSession[Any], dict[str, Any]], None]] = {
     "error": VoiceSession._on_error,
     "close": VoiceSession._on_close,
     "amd_result": VoiceSession._on_amd_result,
+    "text_input": VoiceSession._on_text_input,
+    "delete_room_requested": VoiceSession._on_delete_room,
 }
 
 

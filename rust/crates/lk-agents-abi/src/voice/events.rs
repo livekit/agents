@@ -978,7 +978,10 @@ pub enum HostWire {
     OverlappingSpeech(OverlappingSpeechWire),
     Error(SessionErrorWire),
     ToolExecutionUpdated(ToolExecutionUpdated),
+    // The session acts on the link's edges itself (the away timer, the close).
+    #[python(ignored)]
     ParticipantLinked(ParticipantLinked),
+    #[python(ignored)]
     ParticipantUnlinked(ParticipantUnlinked),
     TextInput(TextInput),
     DeleteRoomRequested(DeleteRoomRequested),

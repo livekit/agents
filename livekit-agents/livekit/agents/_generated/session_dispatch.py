@@ -45,6 +45,8 @@ IGNORED_EVENTS: frozenset[str] = frozenset(
         "preemptive_generation",
         "backchannel_confirmed",
         "overlap_interruption",
+        "participant_linked",
+        "participant_unlinked",
     }
 )
 

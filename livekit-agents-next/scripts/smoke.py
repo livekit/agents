@@ -1814,6 +1814,12 @@ async def main() -> int:
     session.generate_reply(user_input="what's the weather like?")
     await settle(room, 4)
 
+    print("== chat from the room")
+    assert room.send_chat("user", "typed hello", "chat_1"), "nobody reads lk.chat"
+    await settle(room, 3)
+    said = [i.text_content for i in session.history.items if getattr(i, "role", None) == "user"]
+    assert "typed hello" in said, f"the chat message got no turn: {said}"
+
     print("== speech from the room")
     room.speak(frames=40)
     await settle(room, 6)
