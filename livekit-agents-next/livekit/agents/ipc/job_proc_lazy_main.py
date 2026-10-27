@@ -34,11 +34,6 @@ from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..utils import aio, http_context, log_exceptions
 from .proc_client import _dump_stack_traces_impl, log_to_stdout, serve_parent
 
-# The core's bound on VoiceSession.aclose() during the job shutdown, a guardrail against close
-# paths that hang: past it the rest of the shutdown (on_session_end, ShuttingDown,
-# room.disconnect, the shutdown callbacks) runs anyway.
-_SESSION_ACLOSE_TIMEOUT = 60.0
-
 _T = TypeVar("_T")
 
 
@@ -171,6 +166,9 @@ class _JobProc:
             fake_job=info.fake_job,
             session_end_timeout=self._session_end_timeout,
             redaction=info.job.enable_redaction,
+            url=info.url,
+            recording=info.job.enable_recording,
+            session_end=self._session_end_fnc,
         )
         self._room.on("disconnected", lambda *_: self._run.shutdown("room disconnected", False))
         self._job_ctx = JobContext(
@@ -264,9 +262,8 @@ class _JobProc:
             },
         )
 
-    def _core_span(self, name: str, callback: Callable[..., Any] | None) -> trace.Span:
-        fnc = callback or (self._session_end_fnc if name == "on_session_end" else None)
-        attributes = {trace_types.ATTR_CALLBACK_NAME: _callback_name(fnc)} if fnc else None
+    def _core_span(self, name: str, callback: str | None) -> trace.Span:
+        attributes = {trace_types.ATTR_CALLBACK_NAME: callback} if callback else None
         return tracer.start_span(
             name, context=trace.set_span_in_context(self._shutdown_span), attributes=attributes
         )
@@ -278,16 +275,9 @@ class _JobProc:
             trace_utils.record_exception(span, error or asyncio.TimeoutError())
         span.end()
 
-    @property
-    def _session_aclose_timeout(self) -> float:
-        return _SESSION_ACLOSE_TIMEOUT
-
     async def _core_close_session(self) -> None:
         if session := self._job_ctx._primary_agent_session:
             await self._in_job(session.aclose(), "job_close_session")
-
-    def _core_has_session_end(self) -> bool:
-        return self._session_end_fnc is not None
 
     async def _core_session_end(self, span: trace.Span) -> None:
         assert self._session_end_fnc is not None
@@ -302,12 +292,11 @@ class _JobProc:
         with trace.use_span(span, end_on_exit=False, record_exception=False):
             await self._room.disconnect()
 
-    def _core_shutdown_callbacks(self) -> list[tuple[Callable[[str], Awaitable[None]], bool]]:
-        # framework callbacks (the session's own close) get no span of their own
-        return [(cb, _is_framework_callback(cb)) for cb in self._job_ctx._shutdown_callbacks]
-
     async def _core_shutdown_callback(
-        self, callback: Callable[[str], Awaitable[None]], reason: str, span: trace.Span | None
+        self,
+        callback: Callable[..., Awaitable[None]],
+        args: tuple[str, ...],
+        span: trace.Span | None,
     ) -> None:
         # a framework callback runs in the shutdown's own span
         with trace.use_span(
@@ -315,27 +304,12 @@ class _JobProc:
             end_on_exit=False,
             record_exception=False,
         ):
-            await self._in_job(callback(reason), "job_shutdown_callback")
+            await self._in_job(_awaited(callback, args), "job_shutdown_callback")
 
 
-def _is_framework_callback(fnc: Any) -> bool:
-    """Registered by livekit-agents itself rather than by the user's entrypoint."""
-    module = getattr(fnc, "__module__", None) or ""
-    return module == "livekit.agents" or module.startswith("livekit.agents.")
-
-
-def _callback_name(fnc: Any) -> str:
-    return str(getattr(fnc, "__qualname__", None) or getattr(fnc, "__name__", None) or repr(fnc))
-
-
-def _server_timestamp_seconds(value: int) -> float:
-    """``JobState`` timestamps are int64; the server writes unix nanoseconds. Be tolerant
-    of milliseconds/seconds should that ever change."""
-    if value > 1e17:
-        return value / 1e9
-    if value > 1e11:
-        return value / 1e3
-    return float(value)
+async def _awaited(callback: Callable[..., Awaitable[None]], args: tuple[str, ...]) -> None:
+    # a callback may return any awaitable (a lambda returning a future)
+    await callback(*args)
 
 
 def _start_job_span(job_ctx: JobContext) -> trace.Span:
@@ -358,42 +332,18 @@ def _start_job_span(job_ctx: JobContext) -> trace.Span:
             trace_types.ATTR_JOB_AGENT_ID: job.state.agent_id,
         },
     )
-    _record_dispatch_timeline(span, info, entrypoint_started_at)
+    events, attributes = _core.job_timeline(
+        info.received_at,
+        info.accepted_at,
+        info.assigned_at,
+        info.launched_at,
+        entrypoint_started_at,
+        job.state.started_at,
+    )
+    for name, timestamp in events:
+        span.add_event(name, timestamp=timestamp)
+    span.set_attributes(dict(attributes))
     return span
-
-
-def _record_dispatch_timeline(
-    span: trace.Span, info: RunningJobInfo, entrypoint_started_at: float
-) -> None:
-    """Stamp the dispatch stages on ``span``: one timestamped event per stage instant, and
-    the seconds between adjacent stages as attributes (they sum to the dispatch latency).
-
-    Timestamps travel from the worker through ``StartJobRequest``; a zero means the stage
-    is unknown (simulation, console, resumed job) and is skipped rather than guessed."""
-    stages = [
-        ("job_received", info.received_at),
-        ("job_accepted", info.accepted_at),
-        ("job_assigned", info.assigned_at),
-        ("process_assigned", info.launched_at),
-        ("entrypoint_started", entrypoint_started_at),
-    ]
-    for event_name, ts in stages:
-        if ts:
-            span.add_event(event_name, timestamp=int(ts * 1e9))
-
-    def _gap(attr: str, start: float, end: float) -> None:
-        if start and end:
-            span.set_attribute(attr, max(end - start, 0.0))
-
-    _gap(trace_types.ATTR_JOB_ACCEPT_LATENCY, info.received_at, info.accepted_at)
-    _gap(trace_types.ATTR_JOB_ASSIGNMENT_LATENCY, info.accepted_at, info.assigned_at)
-    _gap(trace_types.ATTR_JOB_LAUNCH_LATENCY, info.assigned_at, info.launched_at)
-    _gap(trace_types.ATTR_JOB_ENTRYPOINT_LATENCY, info.launched_at, entrypoint_started_at)
-    _gap(trace_types.ATTR_JOB_DISPATCH_LATENCY, info.received_at, entrypoint_started_at)
-    if (server_started := info.job.state.started_at) > 0:
-        # the server's own start time, for lining up with server-side traces
-        started = _server_timestamp_seconds(server_started)
-        span.add_event("job_started_on_server", timestamp=int(started * 1e9))
 
 
 @dataclass

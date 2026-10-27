@@ -1134,12 +1134,16 @@ async def job() -> None:
     async def on_shutdown(reason: str) -> None:
         seen.append(f"shutdown callback {reason!r}")
 
+    async def on_shutdown_no_reason() -> None:
+        seen.append("shutdown callback, no reason")
+
     async def entrypoint(ctx: JobContext) -> None:
         ctx.add_participant_entrypoint(on_participant)
         with contextlib.suppress(ValueError):
             ctx.add_participant_entrypoint(on_participant)
             seen.append("added twice")
         ctx.add_shutdown_callback(on_shutdown)
+        ctx.add_shutdown_callback(on_shutdown_no_reason)
         await asyncio.gather(ctx.connect(), ctx.connect())
         seen.append(f"waited for {(await ctx.wait_for_participant()).identity}")
         seen.append(f"delete_room {type(await ctx.delete_room()).__name__}")
@@ -1197,9 +1201,17 @@ async def job() -> None:
         "delete_room DeleteRoomResponse",
         "participant mock_user",
         "shutdown callback 'done'",
+        "shutdown callback, no reason",
         "waited for mock_user",
     ], seen
     assert sent == ["ShuttingDown", "Exiting"], sent
+    events, attributes = _core.job_timeline(1.0, 2.0, 0.0, 4.0, 5.0, 3_000_000_000_000_000_000)
+    assert [e[0] for e in events][-1] == "job_started_on_server" and len(events) == 5, events
+    assert dict(attributes) == {
+        "lk.job.accept_latency": 1.0,
+        "lk.job.entrypoint_latency": 1.0,
+        "lk.job.dispatch_latency": 4.0,
+    }, attributes
 
 
 async def workflows() -> None:

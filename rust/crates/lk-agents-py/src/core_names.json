@@ -218,6 +218,7 @@
   "ipc_encode",
   "ipc_pair",
   "is_cloud",
+  "job_timeline",
   "judge_inference_class",
   "judge_intent",
   "judge_llm",

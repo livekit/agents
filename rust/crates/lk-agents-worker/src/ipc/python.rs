@@ -958,6 +958,57 @@ lk_agents_abi::register_host!(class PyProcPool);
 /// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
 const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// A job's dispatch timeline, for its root span: one event per known stage instant (unix
+/// nanoseconds) and the seconds between adjacent stages as attributes (they sum to the dispatch
+/// latency). A zero instant is unknown (a simulation, the console, a resumed job) and skipped.
+/// `server_started_at` is the server's own start (`JobState.started_at`, unix nanoseconds, or
+/// milliseconds or seconds should that change).
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn job_timeline(
+    received_at: f64,
+    accepted_at: f64,
+    assigned_at: f64,
+    launched_at: f64,
+    entrypoint_started_at: f64,
+    server_started_at: i64,
+) -> (Vec<(&'static str, i64)>, Vec<(&'static str, f64)>) {
+    let ns = |ts: f64| (ts * 1e9) as i64;
+    let stages = [
+        ("job_received", received_at),
+        ("job_accepted", accepted_at),
+        ("job_assigned", assigned_at),
+        ("process_assigned", launched_at),
+        ("entrypoint_started", entrypoint_started_at),
+    ];
+    let mut events: Vec<_> = stages.iter().filter(|(_, ts)| *ts != 0.0).map(|(name, ts)| (*name, ns(*ts))).collect();
+    let gaps = [
+        ("lk.job.accept_latency", received_at, accepted_at),
+        ("lk.job.assignment_latency", accepted_at, assigned_at),
+        ("lk.job.launch_latency", assigned_at, launched_at),
+        ("lk.job.entrypoint_latency", launched_at, entrypoint_started_at),
+        ("lk.job.dispatch_latency", received_at, entrypoint_started_at),
+    ];
+    let attributes = gaps
+        .iter()
+        .filter(|(_, start, end)| *start != 0.0 && *end != 0.0)
+        .map(|(attr, start, end)| (*attr, (end - start).max(0.0)))
+        .collect();
+    if server_started_at > 0 {
+        let v = server_started_at as f64;
+        let started = if v > 1e17 { v / 1e9 } else if v > 1e11 { v / 1e3 } else { v };
+        events.push(("job_started_on_server", ns(started)));
+    }
+    (events, attributes)
+}
+
+lk_agents_abi::register_host!(fn job_timeline);
+
+/// The default bound on `VoiceSession.aclose()` during the shutdown, a guardrail against close
+/// paths that hang: past it the rest of the shutdown (on_session_end, ShuttingDown,
+/// room.disconnect, the shutdown callbacks) runs anyway.
+const SESSION_ACLOSE_TIMEOUT: f64 = 60.0;
+
 /// The entrypoint has this long to connect the room before a warning.
 const CONNECT_WARNING_DELAY: Duration = Duration::from_secs(10);
 
@@ -982,6 +1033,25 @@ struct JobRunState {
     redaction: bool,
     /// The job's primary session: the first started for it.
     primary_session: Option<Py<PyAny>>,
+    /// `ctx.add_shutdown_callback`'s, in order.
+    shutdown_callbacks: Vec<ShutdownCallback>,
+}
+
+/// A shutdown callback: whether it takes the reason, whether livekit-agents registered it (no
+/// span of its own) and its name (its span's `lk.callback.name`).
+struct ShutdownCallback {
+    callback: Py<PyAny>,
+    takes_reason: bool,
+    framework: bool,
+    name: String,
+}
+
+/// A callable's name, as the shutdown spans label it.
+fn callable_name(callable: &Bound<'_, PyAny>) -> String {
+    ["__qualname__", "__name__"]
+        .iter()
+        .find_map(|attr| callable.getattr(*attr).ok().and_then(|n| n.extract::<String>().ok()))
+        .unwrap_or_else(|| callable.repr().map(|r| r.to_string()).unwrap_or_default())
 }
 
 /// A job's run, for `JobContext` and `job_proc_lazy_main.py`'s `_JobProc`: what ends the job (the
@@ -998,6 +1068,14 @@ struct JobRunInner {
     parent: std::sync::OnceLock<Arc<Child>>,
     fake: bool,
     session_end_timeout: f64,
+    /// The name of the door's `on_session_end`, when it has one.
+    session_end: Option<String>,
+    /// The bound on `VoiceSession.aclose()` during the shutdown.
+    session_aclose_timeout: f64,
+    /// The job's LiveKit Cloud observability endpoint, when it has one.
+    observability_url: Option<String>,
+    /// The server asked for the job's recording.
+    recording: bool,
     state: Mutex<JobRunState>,
     ended: watch::Sender<bool>,
     /// Held while the room connects, so a second `connect()` waits for the first.
@@ -1133,11 +1211,9 @@ impl JobRunInner {
         Ok(())
     }
 
-    fn span(&self, name: &str, callback: Option<&Py<PyAny>>) -> PyResult<Py<PyAny>> {
-        Python::attach(|py| {
-            let callback = callback.map(|c| c.clone_ref(py));
-            Ok(self.host().object().bind(py).call_method1("_core_span", (name, callback))?.unbind())
-        })
+    /// A span of the shutdown's, named `name`, labelled with the callback it runs.
+    fn span(&self, name: &str, callback: Option<&str>) -> PyResult<Py<PyAny>> {
+        Python::attach(|py| Ok(self.host().object().bind(py).call_method1("_core_span", (name, callback))?.unbind()))
     }
 
     fn span_end(&self, span: Py<PyAny>, error: Option<PyErr>, timed_out: bool) {
@@ -1152,8 +1228,8 @@ impl JobRunInner {
     }
 
     /// One step run inside a span of its own: `error_msg` is logged with a failure.
-    async fn spanned(&self, name: &str, method: &'static str, timeout: Option<f64>, error_msg: &str) {
-        let span = match self.span(name, None) {
+    async fn spanned(&self, name: &str, callback: Option<&str>, method: &'static str, timeout: Option<f64>, error_msg: &str) {
+        let span = match self.span(name, callback) {
             Ok(span) => span,
             Err(e) => return Python::attach(|py| e.print(py)),
         };
@@ -1230,9 +1306,7 @@ impl JobRunInner {
         }
 
         // the bound on `VoiceSession.aclose()`: past it, the rest of the shutdown still runs
-        let aclose_timeout = Python::attach(|py| -> PyResult<f64> {
-            self.host().object().bind(py).getattr("_session_aclose_timeout")?.extract()
-        })?;
+        let aclose_timeout = self.session_aclose_timeout;
         let close = self.call(|h| h.call_method0("_core_close_session"));
         match tokio::time::timeout(secs(aclose_timeout), close).await {
             Ok(Err(e)) => Python::attach(|py| e.print(py)),
@@ -1246,19 +1320,17 @@ impl JobRunInner {
             ),
         }
 
-        let has_session_end = Python::attach(|py| -> PyResult<bool> {
-            self.host().object().bind(py).call_method0("_core_has_session_end")?.extract()
-        })?;
-        if has_session_end {
+        if let Some(session_end) = &self.session_end {
             self.spanned(
                 "on_session_end",
+                Some(session_end),
                 "_core_session_end",
                 Some(self.session_end_timeout),
                 "error while executing the on_session_end callback",
             )
             .await;
         }
-        self.spanned("session_end_upload", "_core_upload", None, "error in job_ctx._on_session_end").await;
+        self.spanned("session_end_upload", None, "_core_upload", None, "error in job_ctx._on_session_end").await;
         // the parent learns the job is ending, then why
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(message(super::SHUTTING_DOWN, None)).await;
@@ -1276,19 +1348,22 @@ impl JobRunInner {
         r?;
 
         // the shutdown callbacks run together; a framework one gets no span of its own
-        let callbacks: Vec<(Py<PyAny>, bool)> = Python::attach(|py| {
-            self.host().object().bind(py).call_method0("_core_shutdown_callbacks")?.extract()
-        })?;
+        let callbacks = std::mem::take(&mut lock(&self.state).shutdown_callbacks);
         let mut runs = Vec::new();
-        for (callback, framework) in callbacks {
+        for ShutdownCallback { callback, takes_reason, framework, name } in callbacks {
             let inner = self.clone();
             let reason = reason.clone();
             runs.push(tokio::spawn(async move {
-                let span = if framework { None } else { Some(inner.span("shutdown_callback", Some(&callback))?) };
+                let span = if framework { None } else { Some(inner.span("shutdown_callback", Some(&name))?) };
                 let r = inner
                     .call(|h| {
-                        let span = span.as_ref().map(|s| s.clone_ref(h.py()));
-                        h.call_method1("_core_shutdown_callback", (callback, reason.as_str(), span))
+                        let py = h.py();
+                        let span = span.as_ref().map(|s| s.clone_ref(py));
+                        let args = match takes_reason {
+                            true => PyTuple::new(py, [reason.as_str()])?,
+                            false => PyTuple::empty(py),
+                        };
+                        h.call_method1("_core_shutdown_callback", (callback, args, span))
                     })
                     .await;
                 if let Some(span) = span {
@@ -1309,20 +1384,67 @@ impl JobRunInner {
 
 #[pymethods]
 impl PyJobRun {
-    /// `redaction` is the job's own (`Job.enable_redaction`).
+    /// `redaction` and `recording` are the job's own (`Job.enable_redaction`,
+    /// `Job.enable_recording`), `url` the server's; `session_end` is the door's `on_session_end`.
     #[new]
-    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction))]
-    fn new(fake_job: bool, session_end_timeout: f64, redaction: bool) -> Self {
+    #[pyo3(signature = (
+        *, fake_job, session_end_timeout, redaction, url = String::new(), recording = false,
+        session_end = None, session_aclose_timeout = SESSION_ACLOSE_TIMEOUT,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        fake_job: bool,
+        session_end_timeout: f64,
+        redaction: bool,
+        url: String,
+        recording: bool,
+        session_end: Option<Bound<'_, PyAny>>,
+        session_aclose_timeout: f64,
+    ) -> Self {
+        let env = std::env::var("LIVEKIT_OBSERVABILITY_URL").ok();
         Self(Arc::new(JobRunInner {
             host: std::sync::OnceLock::new(),
             parent: std::sync::OnceLock::new(),
             fake: fake_job,
             session_end_timeout,
+            session_end: session_end.as_ref().map(callable_name),
+            session_aclose_timeout,
+            observability_url: lk_agents_abi::worker::job::observability_url(&url, env.as_deref()),
+            recording,
             state: Mutex::new(JobRunState { redaction, ..JobRunState::default() }),
             ended: watch::channel(false).0,
             connecting: tokio::sync::Mutex::new(()),
             tasks_closed: watch::channel(false).0,
         }))
+    }
+
+    /// `ctx.add_shutdown_callback`: `callback(reason)`, or `callback()` when it takes no argument,
+    /// runs as the job shuts down.
+    fn add_shutdown_callback(&self, callback: Bound<'_, PyAny>) -> PyResult<()> {
+        let bound_method = callback.py().import("inspect")?.call_method1("ismethod", (&callback,))?.is_truthy()?;
+        let argcount: usize = callback.getattr("__code__")?.getattr("co_argcount")?.extract()?;
+        let module: String = callback.getattr("__module__").and_then(|m| m.extract()).unwrap_or_default();
+        lock(&self.0.state).shutdown_callbacks.push(ShutdownCallback {
+            takes_reason: argcount > usize::from(bound_method),
+            framework: module == "livekit.agents" || module.starts_with("livekit.agents."),
+            name: callable_name(&callback),
+            callback: callback.unbind(),
+        });
+        Ok(())
+    }
+
+    /// The job's LiveKit Cloud observability endpoint: `LIVEKIT_OBSERVABILITY_URL`, else the
+    /// server's when it is LiveKit Cloud's.
+    #[getter]
+    fn observability_url(&self) -> Option<String> {
+        self.0.observability_url.clone()
+    }
+
+    /// Whether the job buffers its logs from the start, for the recording to upload them: the
+    /// server asked for the recording of a real job that has an observability endpoint.
+    #[getter]
+    fn buffer_logs(&self) -> bool {
+        !self.0.fake && self.0.recording && self.0.observability_url.is_some()
     }
 
     /// The job ends with `reason`; the first reason given is the one kept.
@@ -1430,7 +1552,8 @@ impl PyJobRun {
     /// `ctx.init_recording(options)`: the redaction to record with when the cloud upload is to be
     /// set up now, `None` when not (set up already, nothing to upload, or no observability
     /// endpoint). Audio without its transcript under redaction is refused.
-    fn init_recording(&self, options: HashMap<String, bool>, observability: bool) -> PyResult<Option<bool>> {
+    fn init_recording(&self, options: HashMap<String, bool>) -> PyResult<Option<bool>> {
+        let observability = self.0.observability_url.is_some();
         let get = |key: &str, default: bool| options.get(key).copied().unwrap_or(default);
         let mut st = lock(&self.0.state);
         let redaction = st.redaction || get("redaction", false);

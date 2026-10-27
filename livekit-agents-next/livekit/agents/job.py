@@ -18,18 +18,15 @@ import asyncio
 import contextvars
 import datetime
 import functools
-import inspect
 import json
 import logging
 import multiprocessing as mp
-import os
 import tempfile
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
-from urllib.parse import urlparse
 
 import aiohttp
 
@@ -67,20 +64,8 @@ from .types import (
     recording_enabled,
 )
 from .utils import http_context, is_given, wait_for_participant
-from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
-
-
-def _observability_url(livekit_url: str) -> str | None:
-    """Return the observability endpoint, or None if observability is unavailable."""
-    url = os.environ.get("LIVEKIT_OBSERVABILITY_URL")
-    if url:
-        return url
-    hostname = urlparse(livekit_url).hostname
-    if hostname and is_cloud(livekit_url):
-        return f"https://{hostname}"
-    return None
 
 
 if TYPE_CHECKING:
@@ -247,7 +232,6 @@ class JobContext:
         self._room = room
         # the participant entrypoints, the connection, the API calls and the recording's setup
         self._run = run
-        self._shutdown_callbacks: list[Callable[[str], Coroutine[None, None, None]]] = []
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
@@ -280,9 +264,7 @@ class JobContext:
 
     def _start_log_buffering(self) -> None:
         """Start buffering logs early so crash logs can be uploaded."""
-        if self._info.fake_job or not self._info.job.enable_recording:
-            return
-        if not _observability_url(self._info.url):
+        if not self._run.buffer_logs:
             return
 
         self._early_log_handler = _BufferingHandler()
@@ -293,8 +275,7 @@ class JobContext:
         uploaded is decided in ``init_recording``, and the job's spans are held until then."""
         if self._info.fake_job:
             return
-        obs_url = _observability_url(self._info.url)
-        if not obs_url:
+        if not (obs_url := self._run.observability_url):
             return
         try:
             _prepare_cloud_tracer(
@@ -359,7 +340,7 @@ class JobContext:
                 logger.exception("failed to save session report")
 
         has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
-        obs_url = _observability_url(self._info.url)
+        obs_url = self._run.observability_url
         if (recording_enabled(session._recording_options) or has_evals) and obs_url:
             try:
                 await _upload_session_report(
@@ -618,19 +599,7 @@ class JobContext:
         Add a callback to be called when the job is shutting down.
         Optionally the callback can take a single argument, the shutdown reason.
         """
-        min_args_num = 2 if inspect.ismethod(callback) else 1
-        if callback.__code__.co_argcount >= min_args_num:
-            self._shutdown_callbacks.append(callback)  # type: ignore
-        else:
-
-            async def wrapper(_: str) -> None:
-                await callback()  # type: ignore
-
-            # the job_shutdown trace labels callbacks by name and tells framework ones by module
-            wrapper.__name__ = getattr(callback, "__name__", wrapper.__name__)
-            wrapper.__qualname__ = getattr(callback, "__qualname__", wrapper.__qualname__)
-            wrapper.__module__ = getattr(callback, "__module__", wrapper.__module__)
-            self._shutdown_callbacks.append(wrapper)
+        self._run.add_shutdown_callback(callback)
 
     async def wait_for_participant(
         self,
@@ -849,9 +818,8 @@ class JobContext:
         self._run.add_participant_entrypoint(entrypoint_fnc, kinds)
 
     def init_recording(self, options: RecordingOptions) -> None:
-        obs_url = _observability_url(self._info.url)
-        redaction = self._run.init_recording(dict(options), obs_url is not None)  # type: ignore[arg-type]
-        if redaction is None or obs_url is None:
+        redaction = self._run.init_recording(dict(options))  # type: ignore[arg-type]
+        if redaction is None or (obs_url := self._run.observability_url) is None:
             self._stop_log_buffering()
             return
 

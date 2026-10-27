@@ -204,7 +204,25 @@ class JobRun:
     host given to ``run`` runs, ``_core_*``), the participant entrypoints, the room connected
     once, the API calls in flight and the recording's setup."""
 
-    def __init__(self, *, fake_job: bool, session_end_timeout: float, redaction: bool) -> None: ...
+    def __init__(
+        self,
+        *,
+        fake_job: bool,
+        session_end_timeout: float,
+        redaction: bool,
+        url: str = "",
+        recording: bool = False,
+        session_end: Callable[..., Any] | None = None,
+        session_aclose_timeout: float = 60.0,
+    ) -> None: ...
+    def add_shutdown_callback(self, callback: Callable[..., Awaitable[None]]) -> None:
+        """``callback(reason)``, or ``callback()`` when it takes no argument, runs as the job
+        shuts down."""
+    @property
+    def observability_url(self) -> str | None: ...
+    @property
+    def buffer_logs(self) -> bool:
+        """The job buffers its logs from the start, for the recording to upload them."""
     def shutdown(self, reason: str, user_initiated: bool) -> None: ...
     def connected(self) -> None: ...
     def connect(self, connect: Callable[[], Awaitable[None]]) -> Awaitable[None]: ...
@@ -215,7 +233,7 @@ class JobRun:
         self, call: Callable[[], Awaitable[Any]], name: str, console_result: Any
     ) -> asyncio.Future[Any]: ...
     def close_tasks(self) -> Awaitable[None]: ...
-    def init_recording(self, options: dict[str, bool], observability: bool) -> bool | None: ...
+    def init_recording(self, options: dict[str, bool]) -> bool | None: ...
     def claim_session(self, session: Any) -> bool: ...
     @property
     def primary_session(self) -> Any: ...
@@ -224,6 +242,17 @@ class JobRun:
     @property
     def redaction(self) -> bool: ...
     def run(self, host: Any) -> Awaitable[None]: ...
+
+def job_timeline(
+    received_at: float,
+    accepted_at: float,
+    assigned_at: float,
+    launched_at: float,
+    entrypoint_started_at: float,
+    server_started_at: int,
+) -> tuple[list[tuple[str, int]], list[tuple[str, float]]]:
+    """A job's dispatch timeline for its root span: the known stage instants as events (unix
+    nanoseconds), the seconds between adjacent stages as attributes."""
 
 class ProcPool:
     """The warm job processes of ``ipc/proc_pool.py``'s ``ProcPool`` (``host``), which makes the
