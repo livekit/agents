@@ -20,6 +20,7 @@ from livekit.agents import (
     LanguageCode,
     stt,
     utils,
+    vad,
 )
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -108,6 +109,7 @@ class STT(stt.STT):
         target_streaming_delay_ms: NotGivenOr[int] = NOT_GIVEN,
         diarize: NotGivenOr[bool] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetection | None] = NOT_GIVEN,
+        vad: vad.VAD | None = None,
     ):
         """
         Create a new instance of MistralAI STT.
@@ -122,20 +124,30 @@ class STT(stt.STT):
                 Used with batch models and the Voxtral 3 realtime model.
             target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
             diarize: Label each piece of text with its speaker (``speaker_id``). Supported by the batch models and
-                the Voxtral 3 realtime model, but not by earlier realtime models. It can't be used together with
-                ``turn_detection`` on the realtime model, so the server-side turn detection is disabled by default
-                when ``diarize`` is enabled. The realtime model numbers the speakers within one transcript only: the
-                numbering restarts after each flush, so the speakers of different transcripts can't be compared.
+                the Voxtral 3 realtime model, but not by earlier realtime models.
+                Voxtral 3 doesn't support diarization together with its server-side turn detection, so enabling
+                ``diarize`` disables ``turn_detection`` by default, and passing both raises a ``ValueError``.
+                The plugin then emits no start and end of speech events, and the voice pipeline can't use
+                ``turn_detection="stt"``, unless a ``vad`` is given to provide them.
+                The realtime model numbers the speakers within one transcript only: the numbering restarts after
+                each flush, so the speakers of different transcripts can't be compared.
             turn_detection: Server-side turn detection of the Voxtral 3 realtime model, which provides the start and
                 end of speech events and finalizes the transcript of each turn. Enabled with the server defaults
-                when not provided, unless ``diarize`` is enabled. Pass a :class:`TurnDetection` dict to tune it, or
-                ``None`` to disable it. Only supported by the Voxtral 3 realtime model.
+                when not provided, unless ``diarize`` is enabled or a ``vad`` is given, which it can't be used with.
+                Pass a :class:`TurnDetection` dict to tune it, or ``None`` to disable it. Only supported by the
+                Voxtral 3 realtime model.
+            vad: Optional Voice Activity Detector run by the plugin on the realtime models: its end of speech
+                flushes the audio to get the final transcript, and its start and end of speech are emitted as speech
+                events, which the voice pipeline needs for ``turn_detection="stt"`` when the server doesn't provide
+                them (earlier realtime models, or Voxtral 3 with ``diarize``). It takes precedence over the
+                server-side turn detection of Voxtral 3, which is disabled by default, and can't be used with an
+                explicit ``turn_detection``. Only used with realtime models.
 
         Note:
-            Realtime models without server-side turn detection (earlier models, or Voxtral 3 with
-            ``turn_detection=None`` or ``diarize``) have no endpointing. The voice pipeline (`AgentSession`) requests a flush
-            from its own VAD and turn detection to get the final transcripts. A stream used on its own needs to
-            be flushed with `stream.flush()`.
+            Realtime models without server-side turn detection or a ``vad`` (earlier models, or Voxtral 3 with
+            ``turn_detection=None`` or ``diarize``) have no endpointing. The voice pipeline (`AgentSession`)
+            requests a flush from its own VAD and turn detection to get the final transcripts. A stream used on its
+            own needs to be flushed with `stream.flush()`.
         """
         resolved_model = model if is_given(model) else DEFAULT_MODEL
         is_realtime = _is_realtime(resolved_model)
@@ -150,13 +162,15 @@ class STT(stt.STT):
                 server_turn_detection = (
                     turn_detection.copy() if turn_detection is not None else None
                 )
-            elif not diarize_enabled:
+            elif not diarize_enabled and vad is None:
                 server_turn_detection = {}
         elif is_given(turn_detection) and turn_detection is not None:
             raise ValueError("turn detection is only supported by the latest realtime model")
 
         if diarize_enabled and server_turn_detection is not None:
             raise ValueError("diarization and turn detection can't be used together")
+        if vad is not None and server_turn_detection is not None:
+            raise ValueError("a vad and turn detection can't be used together")
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -165,7 +179,7 @@ class STT(stt.STT):
                 diarization=diarize_enabled,
                 aligned_transcript=False,
                 offline_recognize=not is_realtime,
-                manual_flush=is_realtime and server_turn_detection is None,
+                manual_flush=is_realtime and server_turn_detection is None and vad is None,
             )
         )
         self._opts = _STTOptions(
@@ -183,6 +197,7 @@ class STT(stt.STT):
         if not client and not mistral_api_key:
             raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
+        self._vad = vad if is_realtime else None
         self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
         self._pool = utils.ConnectionPool[RealtimeConnection](
             connect_cb=self._connect_ws,
@@ -278,10 +293,13 @@ class STT(stt.STT):
                 Used with batch models and the Voxtral 3 realtime model.
             target_streaming_delay_ms: Target streaming delay in milliseconds for realtime mode. Only used with realtime models.
             diarize: Label each piece of text with its speaker. Not supported by earlier realtime models.
-                Changing it on the Voxtral 3 realtime model also resets the turn detection to its default,
-                which is disabled with ``diarize`` and enabled otherwise, unless ``turn_detection`` is given.
+                Voxtral 3 doesn't support diarization together with its server-side turn detection: changing
+                ``diarize`` on the Voxtral 3 realtime model also resets the turn detection to its default, which is
+                disabled with ``diarize`` (or a ``vad``) and enabled otherwise, unless ``turn_detection`` is given.
+                Without turn detection, the plugin emits no start and end of speech events, so the voice pipeline
+                can't use ``turn_detection="stt"`` unless the STT was created with a ``vad``.
             turn_detection: Server-side turn detection of the Voxtral 3 realtime model. Only supported by that
-                model, and not together with ``diarize``.
+                model, and not together with ``diarize`` or a ``vad``.
 
         Raises:
             ValueError: If the model is not of the same kind as the current one, or if the options
@@ -298,7 +316,7 @@ class STT(stt.STT):
         elif is_voxtral_3_realtime:
             if was_voxtral_3_realtime and resolved_diarize == self._opts.diarize:
                 new_turn_detection = self._opts.turn_detection
-            elif not resolved_diarize:
+            elif not resolved_diarize and self._vad is None:
                 new_turn_detection = {}
 
         if _is_realtime(resolved_model) != self.capabilities.streaming:
@@ -313,6 +331,8 @@ class STT(stt.STT):
             raise ValueError("diarization is not supported by this realtime model")
         if resolved_diarize and new_turn_detection is not None:
             raise ValueError("diarization and turn detection can't be used together")
+        if self._vad is not None and new_turn_detection is not None:
+            raise ValueError("a vad and turn detection can't be used together")
 
         new_context_bias = (
             (list(context_bias) if context_bias else None)
@@ -349,7 +369,9 @@ class STT(stt.STT):
         if is_given(target_streaming_delay_ms):
             self._opts.target_streaming_delay_ms = target_streaming_delay_ms
         self._capabilities.diarization = resolved_diarize
-        self._capabilities.manual_flush = self.capabilities.streaming and new_turn_detection is None
+        self._capabilities.manual_flush = (
+            self.capabilities.streaming and new_turn_detection is None and self._vad is None
+        )
 
         if session_changed and self.capabilities.streaming:
             self._pool.invalidate()
@@ -452,6 +474,7 @@ class SpeechStream(stt.RecognizeStream):
         )
         self._pool = pool
         self._opts = stt._opts
+        self._vad = stt._vad
         self._reconnect_event = asyncio.Event()
         self._request_id = ""
         self._audio_duration = 0.0
@@ -464,6 +487,7 @@ class SpeechStream(stt.RecognizeStream):
         self._detected_language = LanguageCode(language) if is_given(language) else LanguageCode("")
 
     async def _apply_stream_language(self, connection: RealtimeConnection) -> None:
+        """Apply this stream's language override to a Voxtral 3 realtime connection."""
         # the language of the stream overrides the one of the session, which can still be
         # changed as no audio was sent on the connection yet
         if (
@@ -486,7 +510,9 @@ class SpeechStream(stt.RecognizeStream):
         self._audio_pending = False
         await connection.flush_audio()
 
-    async def _send_task(self, connection: RealtimeConnection) -> None:
+    async def _send_task(
+        self, connection: RealtimeConnection, vad_stream: vad.VADStream | None
+    ) -> None:
         samples_per_chunk = SAMPLE_RATE // 20  # 50ms chunks
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=SAMPLE_RATE,
@@ -500,14 +526,36 @@ class SpeechStream(stt.RecognizeStream):
                     await self._send_audio(connection, frame.data.tobytes())
                 await self._flush_audio(connection)
             else:
+                if vad_stream is not None:
+                    vad_stream.push_frame(data)
+
                 data_bytes = data.data.tobytes()
                 bytes_per_second = SAMPLE_RATE * NUM_CHANNELS * 2
                 self._audio_duration += len(data_bytes) / bytes_per_second
                 for frame in audio_bstream.write(data.data.tobytes()):
                     await self._send_audio(connection, frame.data.tobytes())
 
+        if vad_stream is not None:
+            vad_stream.end_input()
         await connection.end_audio()
         self._audio_ended = True
+
+    async def _vad_task(self, vad_stream: vad.VADStream, connection: RealtimeConnection) -> None:
+        async for ev in vad_stream:
+            if ev.type == vad.VADEventType.START_OF_SPEECH:
+                if not self._speaking:
+                    self._speaking = True
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    )
+            elif ev.type == vad.VADEventType.END_OF_SPEECH:
+                # force Mistral to finalize the current speech segment
+                await self._flush_audio(connection)
+                if self._speaking:
+                    self._speaking = False
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    )
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
         try:
@@ -682,11 +730,14 @@ class SpeechStream(stt.RecognizeStream):
                 async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
                     self._audio_pending = False
                     await self._apply_stream_language(connection)
+                    vad_stream = self._vad.stream() if self._vad else None
 
                     tasks = [
-                        asyncio.create_task(self._send_task(connection)),
+                        asyncio.create_task(self._send_task(connection, vad_stream)),
                         asyncio.create_task(self._recv_task(connection)),
                     ]
+                    if vad_stream is not None:
+                        tasks.append(asyncio.create_task(self._vad_task(vad_stream, connection)))
 
                     tasks_group = asyncio.gather(*tasks)
                     wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
@@ -717,6 +768,8 @@ class SpeechStream(stt.RecognizeStream):
                         await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
                         tasks_group.cancel()
                         tasks_group.exception()
+                        if vad_stream is not None:
+                            await vad_stream.aclose()
 
         except (APIStatusError, APITimeoutError, APIConnectionError):
             raise

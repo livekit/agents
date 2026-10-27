@@ -64,7 +64,7 @@ To use the end of the turns detected by the server as the end of the user turns 
 `AgentSession`, set `turn_detection="stt"` on the session or the agent.
 
 **Earlier realtime models** (e.g. `voxtral-mini-transcribe-realtime-2602`) have no server-side
-endpointing, and neither does Voxtral 3 with `turn_detection=None`. The voice pipeline
+endpointing, and neither does Voxtral 3 with `turn_detection=None` or `diarize=True`. The voice pipeline
 (`AgentSession`) tells the plugin when the user stopped speaking, based on its own VAD and turn
 detection, and the plugin flushes the audio to get the final transcript.
 
@@ -80,6 +80,21 @@ session = AgentSession(
 
 To use the STT on its own, outside of an `AgentSession`, flush the stream yourself with
 `stream.flush()` when the user stops speaking to get the final transcript.
+
+**With a VAD.** Pass a `vad` to have the plugin detect the end of the speech itself: its end of speech
+flushes the audio, and its start and end of speech are emitted as speech events. That is what
+`turn_detection="stt"` of an `AgentSession` relies on with the models that have no server-side turn
+detection, and it also makes a stream used on its own flush without `stream.flush()`. With Voxtral 3, a
+`vad` replaces the server-side turn detection, which can't be used together with it.
+
+```python
+from livekit.plugins import mistralai, silero
+
+stt = mistralai.STT(
+    model="voxtral-mini-transcribe-realtime-2602",
+    vad=silero.VAD.load(),
+)
+```
 
 #### Speaker diarization
 
@@ -97,9 +112,23 @@ stt = mistralai.STT(model="voxtral-mini-transcribe-realtime-3", diarize=True)
 Earlier realtime models don't support it. On the Voxtral 3 realtime model, diarization can't be
 used together with server-side turn detection, so `turn_detection` is disabled by default when
 `diarize=True` and passing both raises a `ValueError`. The voice pipeline then decides when a turn
-ends, like with `turn_detection=None`. The realtime model numbers the speakers within one
-transcript only: the numbering restarts after each flush, so the speakers of different transcripts
-can't be compared. The transcripts carry no timestamps.
+ends, like with `turn_detection=None`.
+
+Without the server-side turn detection, the plugin emits no start and end of speech events, so the
+`AgentSession` can't use `turn_detection="stt"`: no user turn would ever end. To use it with diarization,
+give the STT a `vad`, which provides the events:
+
+```python
+stt = mistralai.STT(
+    model="voxtral-mini-transcribe-realtime-3",
+    diarize=True,
+    vad=silero.VAD.load(),
+)
+session = AgentSession(stt=stt, turn_detection="stt", ...)
+```
+
+The realtime model numbers the speakers within one transcript only: the numbering restarts after each
+flush, so the speakers of different transcripts can't be compared. The transcripts carry no timestamps.
 
 #### Updating the options
 
