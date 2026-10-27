@@ -1302,7 +1302,7 @@ async def _upload_session_report(
             "timestamp": report.timestamp,
             "options": _serialize_session_options(report.options),
             "recording_options": _core.RecordingOptions(**recording_options),
-            "model_usage": report.model_usage,
+            "model_usage": [u.model_dump() for u in report.model_usage or []],
             "chat_history": to_core_items(report.chat_history.items),
         },
         tagger._core,
