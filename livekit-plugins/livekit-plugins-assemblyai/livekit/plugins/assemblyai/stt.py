@@ -201,11 +201,11 @@ class STT(stt.STT):
                 automatically detecting/code-switching across all supported languages.
                 At most 10 codes, except on universal-3-6-pro; 'multi' (the unsteered
                 multilingual default) cannot be combined with other codes. Leave unset to
-                use the model's default multilingual behavior. Only supported with the Universal-3 Pro family
-                models. Can be updated mid-session via ``update_options``; pass an
-                empty list (or empty string) there to clear steering back to the model
-                default. At construction an empty value is equivalent to leaving it
-                unset.
+                use the model's default multilingual behavior. Only supported with the
+                Universal-3 Pro family models. Can be updated mid-session via
+                ``update_options``; pass an empty list (or empty string) there to clear
+                steering back to the model default. At construction an empty value is
+                equivalent to leaving it unset.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
