@@ -5,7 +5,7 @@ agent. This is an Avatar plugin: it composes with your existing voice/LLM
 plugin and does not replace or fork it.
 
 The plugin has no dependency on Boson Voice, Boson Audio, or a particular TTS
-provider. Its input is the standard audio output of a LiveKit `AgentSession`,
+provider. Its input is the standard audio output of a LiveKit `VoiceSession`,
 so it works with any TTS plugin, realtime model, or custom source that produces
 LiveKit audio frames. Only Avatar rendering and Avatar session lifecycle are
 Boson-specific.
@@ -50,18 +50,18 @@ key server-side and cache the result according to your application's needs.
 
 ## Usage
 
-Create the voice `AgentSession` with the audio provider of your choice, then
+Create the voice `VoiceSession` with the audio provider of your choice, then
 start the Avatar before starting the agent session:
 
 ```python
-from livekit.agents import Agent, AgentSession, JobContext, inference
+from livekit.agents import Agent, VoiceSession, JobContext, inference
 from livekit.plugins import boson_avatar
 
 
 async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
 
-    session = AgentSession(
+    session = VoiceSession(
         stt=inference.STT("deepgram/nova-3"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3"),

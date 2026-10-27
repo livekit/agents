@@ -25,9 +25,9 @@ from livekit import api, rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    AgentSession,
     APIConnectOptions,
     NotGivenOr,
+    VoiceSession,
     get_job_context,
     utils,
 )
@@ -122,7 +122,7 @@ class AvatarSession(BaseAvatarSession):
         self._startup_cleanup_task: asyncio.Task[None] | None = None
         self._shutdown_task: asyncio.Task[None] | None = None
         self._agent_close_task: asyncio.Task[None] | None = None
-        self._tracked_agent_session: AgentSession[Any] | None = None
+        self._tracked_agent_session: VoiceSession[Any] | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -139,14 +139,14 @@ class AvatarSession(BaseAvatarSession):
 
     async def start(  # type: ignore[override]
         self,
-        agent_session: AgentSession,
+        agent_session: VoiceSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> str:
-        """Start the Avatar participant and route generic AgentSession audio to it."""
+        """Start the Avatar participant and route generic VoiceSession audio to it."""
         if self._start_called:
             raise RuntimeError("AvatarSession.start() called twice; create a new AvatarSession.")
         self._start_called = True
@@ -381,7 +381,7 @@ class AvatarSession(BaseAvatarSession):
 
     def _consume_agent_close_result(self, task: asyncio.Task[None]) -> None:
         self._consume_background_task_result(
-            task, "failed to close boson avatar after AgentSession closed"
+            task, "failed to close boson avatar after VoiceSession closed"
         )
 
     def _consume_background_task_result(self, task: asyncio.Task[None], message: str) -> None:
