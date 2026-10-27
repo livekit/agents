@@ -395,10 +395,12 @@ impl Pacer {
         self.forwarded.iter().take_while(|(_, end)| *end <= at).map(|(w, _)| w.as_str()).collect()
     }
 
-    /// The playout ended. Complete: everything left is heard, at once. Cut: what was forwarded.
+    /// The playout ended. Complete: everything left is heard, at once. Cut: what was forwarded by
+    /// the playhead it reports. A sink that reports no progress (an avatar's data stream) paces
+    /// nothing before this; the reference's loop paced its words on the wall clock meanwhile.
     fn finish(&mut self, position: Duration, interrupted: bool, out: &mut Vec<PaceEffect>) {
-        self.position = position;
         if interrupted {
+            self.release(position, out);
             self.queue.clear();
         } else {
             self.end_text();
@@ -1225,6 +1227,24 @@ mod tests {
             _ => None,
         });
         assert_eq!(heard.as_deref(), Some("one"), "\"two\" was shown but still playing");
+    }
+
+    // Catches: a sink that reports no progress (`DataStreamAudioOutput`, an avatar) cut after
+    // seconds of speech leaving nothing heard, so the interrupted reply had no item and the caller
+    // no transcript (found by `scripts/e2e.py avatar` on LiveKit Cloud).
+    #[test]
+    fn a_cut_without_progress_hears_up_to_the_reported_playhead() {
+        let p = paced("one two three four", 0.4);
+        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
+            position: Duration::from_millis(260),
+            interrupted: true,
+        });
+        assert_eq!(shown(&effects), "one two three");
+        let heard = effects.iter().find_map(|e| match e {
+            PaceEffect::Heard(h) => Some(h.text.clone()),
+            _ => None,
+        });
+        assert_eq!(heard.as_deref(), Some("one two"));
     }
 
     // The reference's pacing loop sleeps through a pause: the word whose delay began before it is

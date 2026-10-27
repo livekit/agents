@@ -388,11 +388,17 @@ impl AudioOutput for DataStreamAudioOutput {
         }
     }
 
+    /// Once per pushed segment: the interruption's cut and the playout's both clear, and a second
+    /// `lk.clear_buffer` with nothing pushed since gets no `lk.playback_finished`, so its timer
+    /// would mark a later segment done.
     fn clear_buffer(&self) {
         if !self.inner.is_started() {
             return;
         }
-        let pushed = *self.inner.pushed.lock().unwrap_or_else(|p| p.into_inner());
+        let pushed = std::mem::take(&mut *self.inner.pushed.lock().unwrap_or_else(|p| p.into_inner()));
+        if pushed == 0.0 {
+            return;
+        }
         self.inner.spawner.spawn_unboxed(Arc::clone(&self.inner).clear(pushed));
     }
 
