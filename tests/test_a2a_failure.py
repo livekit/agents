@@ -5,6 +5,7 @@ reaches the model."""
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -19,7 +20,7 @@ from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.a2a.codec import metadata_from_wire
 from livekit.agents.a2a.extension import REASON
 from livekit.agents.delegation import A2ADelegate
-from livekit.agents.llm import ChatContext, FunctionCallOutput, LLMStream
+from livekit.agents.llm import ChatContext, FunctionCallOutput, LLMStream, Tool, Toolset
 from livekit.agents.storage import AgentDBStorage, StorageUnavailable
 
 from . import fake_agentstore
@@ -136,6 +137,24 @@ async def test_a_failed_run_keeps_the_tool_calls_that_ran(door: Callable[..., Do
     # the next turn's model sees the booking that ran, so it does not book again
     out = tool_output(model, "c1")
     assert out is not None and out.output == "booked room 12"
+
+
+@pytest.mark.rule("B47")
+@pytest.mark.xfail(strict=True, reason="B47: the exception's text is the failed task's message")
+async def test_a_failed_run_puts_a_fixed_sentence_on_the_wire_not_the_exception(
+    door: Callable[..., Door],
+) -> None:
+    async def handler(ctx: A2ASessionContext[Any]) -> str:
+        raise ValueError("the fares database at db.internal:5432 refused the login")
+
+    desk = door(handler)
+    sent = await desk.send("fare to Oslo?", context_id=await desk.thread())
+    assert sent.state == "failed"
+    assert sent.task["status"]["message"]["parts"][0]["text"] == (
+        "the agent failed before it finished"
+    )
+    for shown in (sent.frames, sent.task):
+        assert "db.internal" not in json.dumps(shown) and "ValueError" not in json.dumps(shown)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -364,3 +383,70 @@ async def test_an_expert_down_at_setup_is_a_tool_error_and_the_other_tools_run(
     assert asked is not None and asked.is_error and "connection refused" in asked.output
     other = tool_output(model, "c2")
     assert other is not None and other.output == "sunny in Oslo"
+
+
+# ---------------------------------------------------------------------------------------------
+# a toolset that cannot be set up
+# ---------------------------------------------------------------------------------------------
+
+
+class Unreachable(Toolset):
+    """A toolset whose server is down: every ``setup()`` raises, and is counted."""
+
+    def __init__(self) -> None:
+        super().__init__(id="crm")
+        self.setups = 0
+
+    async def setup(self) -> Unreachable:
+        self.setups += 1
+        raise ConnectionError("the CRM server is down")
+
+
+class OffersRecorded(ScriptedLLM):
+    """A scripted model that also keeps the tool ids each request offered."""
+
+    def __init__(self, *replies: Reply) -> None:
+        super().__init__(*replies)
+        self.offered: list[list[str]] = []
+
+    def chat(
+        self, *, chat_ctx: ChatContext, tools: list[Tool] | None = None, **kwargs: Any
+    ) -> LLMStream:
+        self.offered.append([tool.id for tool in tools or []])
+        return super().chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
+
+
+@pytest.mark.rule("B48")
+@pytest.mark.xfail(strict=True, reason="B48: a toolset whose setup raises fails the text turn")
+async def test_a_toolset_that_cannot_be_set_up_leaves_the_turn_its_other_tools(
+    door: Callable[..., Door],
+) -> None:
+    model = OffersRecorded(
+        Reply(tool_calls=[call("weather", "c1", city="Oslo")]),
+        Reply("It is sunny in Oslo.", when=output_of("c1")),
+        Reply("Still sunny."),
+    )
+    crm = Unreachable()
+    front = Agent(instructions="front desk", llm=model, tools=[crm])
+
+    @front.tool
+    async def weather(ctx: RunContext, city: str) -> str:
+        """The weather in a city."""
+        return f"sunny in {city}"
+
+    async def handler(ctx: A2ASessionContext[Any]) -> str | None:
+        return (await front.run(ctx.message, message_history=ctx.message_history)).output
+
+    desk = door(handler)
+    thread = await desk.thread()
+    sent = await desk.send("weather in Oslo?", context_id=thread)
+    assert sent.state == "completed"
+    assert sent.answer == "It is sunny in Oslo."
+    assert all("weather" in offered for offered in model.offered)
+    # two model calls, one setup: a down server costs the run one attempt, not one per step
+    assert len(model.offered) == 2 and crm.setups == 1
+
+    again = await desk.send("and now?", context_id=thread)
+    assert again.answer == "Still sunny."
+    # the next run tries again
+    assert crm.setups == 2
