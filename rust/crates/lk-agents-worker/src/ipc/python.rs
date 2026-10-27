@@ -1086,7 +1086,7 @@ impl JobRunInner {
                     let st = lock(&self.state);
                     if !st.connected && !st.user_shutdown {
                         drop(st);
-                        self.log(Level::Warning, "The room connection was not established within 10 seconds after calling job_entry. This might mean that job_ctx.connect() was never invoked, or that no LiveSession with an active RoomIO has been started.", None);
+                        self.log(Level::Warning, "The room connection was not established within 10 seconds after calling job_entry. This might mean that job_ctx.connect() was never invoked, or that no VoiceSession with an active RoomIO has been started.", None);
                     }
                 }
                 _ = ended.wait_for(|e| *e) => break,
@@ -1102,7 +1102,7 @@ impl JobRunInner {
             let _ = self.call(move |h| h.call_method1("_core_cancel", (entry,))).await;
         }
 
-        // the bound on `LiveSession.aclose()`: past it, the rest of the shutdown still runs
+        // the bound on `VoiceSession.aclose()`: past it, the rest of the shutdown still runs
         let aclose_timeout = Python::attach(|py| -> PyResult<f64> {
             self.host().object().bind(py).getattr("_session_aclose_timeout")?.extract()
         })?;
@@ -1113,7 +1113,7 @@ impl JobRunInner {
             Err(_) => self.log(
                 Level::Error,
                 &format!(
-                    "LiveSession.aclose() timed out after {aclose_timeout:.1}s; proceeding with shutdown so registered callbacks still run."
+                    "VoiceSession.aclose() timed out after {aclose_timeout:.1}s; proceeding with shutdown so registered callbacks still run."
                 ),
                 None,
             ),

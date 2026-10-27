@@ -39,7 +39,7 @@ use tokio::sync::oneshot;
 /// The host's end of a session: assembled by [`host_new`](Self::host_new), opened once, commanded through
 /// [`send`](Self::send), closed through [`close`](Self::close). Every method takes `&self`; one
 /// `Mutex` around a small enum, off every per-frame path.
-#[lk_agents_abi::class(name = "LiveSession")]
+#[lk_agents_abi::class(name = "VoiceSession")]
 pub struct SessionApi {
     /// `Arc`, so `open`'s future can write the running loop back after the borrow ended.
     stage: Arc<Mutex<Stage>>,

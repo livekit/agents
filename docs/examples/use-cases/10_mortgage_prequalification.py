@@ -47,10 +47,19 @@ def questions_for(loan_type: str) -> list[Question]:
     return questions
 
 
+async def complete_application(ctx: RunContext[ApplicationContext]) -> Application:
+    """Produce the final application from recorded, validated answers."""
+    applicant = ctx.context.applicant
+    required = {q.id for q in questions_for(applicant.loan_type)}
+    if not required <= applicant.answers.keys():
+        raise ModelRetry("Collect all outstanding answers first")
+    return Application(loan_type=applicant.loan_type, answers=dict(applicant.answers))
+
+
 loan_officer = Agent[ApplicationContext](
     instructions="Harbor Credit Union home loans. Ask the outstanding questions one at a time, record each answer, and produce the application only when all are answered. Never quote a rate.",
     llm="google/gemma-4-31b-it",
-    output_type=Application,
+    output_type=complete_application,
 )
 
 
@@ -74,19 +83,6 @@ async def record_answer(ctx: RunContext[ApplicationContext], question_id: str, a
         raise ModelRetry(f"Choose one of: {', '.join(question.choices)}")
     applicant.answers[question_id] = answer
     return "answer recorded"
-
-
-@loan_officer.output_validator
-async def complete_application(
-    ctx: RunContext[ApplicationContext], output: Application
-) -> Application:
-    applicant = ctx.context.applicant
-    required = {q.id for q in questions_for(applicant.loan_type)}
-    if not required <= applicant.answers.keys():
-        raise ModelRetry("Collect all outstanding answers first")
-    if output.loan_type != applicant.loan_type or output.answers != applicant.answers:
-        raise ModelRetry("Return the recorded application exactly")
-    return output
 
 
 server = AgentServer(storage=AgentDBStorage())

@@ -751,7 +751,7 @@ pub struct ExpressiveConfig {
     pub tts_instructions_append: Option<String>,
 }
 
-/// `bool | ExpressiveOptions`, as `LiveSession(expressive=)`, `Agent(expressive=)` and
+/// `bool | ExpressiveOptions`, as `VoiceSession(expressive=)`, `Agent(expressive=)` and
 /// `update_options(expressive=)` take it: `False`/`None` is off, `True` the default options, a dict
 /// (even an empty one) on with those options.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

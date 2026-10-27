@@ -19,7 +19,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     JobContext,
-    LiveSession,
+    VoiceSession,
     tts,
 )
 from livekit.agents.voice.agent_session import SessionConnectOptions
@@ -683,7 +683,7 @@ def _mock_example(monkeypatch: pytest.MonkeyPatch):
     started = asyncio.Event()
     ready = asyncio.Event()
     handle = _Handle()
-    session = MagicMock(spec=LiveSession)
+    session = MagicMock(spec=VoiceSession)
     session.room_io = SimpleNamespace(wait_for_ready=AsyncMock(side_effect=ready.wait))
     session.say.return_value = handle
 
@@ -692,7 +692,7 @@ def _mock_example(monkeypatch: pytest.MonkeyPatch):
 
     session.start = AsyncMock(side_effect=start)
     session_factory = MagicMock(return_value=session)
-    monkeypatch.setattr(room_example, "LiveSession", session_factory)
+    monkeypatch.setattr(room_example, "VoiceSession", session_factory)
     context = MagicMock(spec=JobContext)
     context.room = MagicMock(spec=rtc.Room)
     return context, session, speech, provider_factory, session_factory, started, ready, handle
@@ -820,7 +820,7 @@ async def test_actual_agent_session_say_uses_only_tts_and_emits_audio() -> None:
     capture = AsyncMock(wraps=output.capture_frame)
     output.capture_frame = capture
     async with speech:
-        session = LiveSession(
+        session = VoiceSession(
             tts=speech,
             vad=None,
             turn_handling={"turn_detection": None},

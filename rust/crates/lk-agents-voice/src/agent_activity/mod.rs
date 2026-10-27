@@ -33,7 +33,7 @@ pub const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 /// `voice/agent_activity.py`'s `AgentActivity`: the running agent (its name, prompt and
 /// tools), its audio recognition, the speech queue and the current speech, the false-interruption
 /// pause, the hooks, and the realtime session. The `Driver` orchestrates it
-/// together with the [`LiveSession`](crate::agent_session::LiveSession): what spans two of its
+/// together with the [`VoiceSession`](crate::agent_session::VoiceSession): what spans two of its
 /// components is the driver's to answer.
 pub(crate) struct AgentActivity {
     /// The running agent's id (`AgentActivity.agent.id`).

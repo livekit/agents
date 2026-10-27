@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from livekit.agents import Agent, ExpressiveOptions, LiveSession, inference, tokenize, tts
+from livekit.agents import Agent, ExpressiveOptions, VoiceSession, inference, tokenize, tts
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
@@ -73,15 +73,15 @@ def test_update_and_remove_expressive_instructions() -> None:
 
 
 def test_expressive_param_defaults_off() -> None:
-    assert LiveSession()._expressive is False
-    assert LiveSession(expressive=True)._expressive is True
+    assert VoiceSession()._expressive is False
+    assert VoiceSession(expressive=True)._expressive is True
 
     opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
-    assert LiveSession(expressive=opts)._expressive == opts
+    assert VoiceSession(expressive=opts)._expressive == opts
 
 
 def test_update_options_expressive() -> None:
-    session = LiveSession(expressive=True)
+    session = VoiceSession(expressive=True)
     assert session._expressive is True
 
     # turn off
@@ -114,10 +114,10 @@ def test_agent_expressive_overrides_session() -> None:
     # constructed hermetically; fishaudio declares a markup dialect, which expressive requires
     tts = inference.TTS("fishaudio/s2.1-pro", api_key="fake", api_secret="fake")
 
-    session_on = LiveSession(expressive=True, tts=tts)
-    session_off = LiveSession(tts=tts)
+    session_on = VoiceSession(expressive=True, tts=tts)
+    session_off = VoiceSession(tts=tts)
 
-    def resolves(agent: Agent, session: LiveSession) -> bool:
+    def resolves(agent: Agent, session: VoiceSession) -> bool:
         return AgentActivity(agent, session)._resolve_expressive_options() is not None
 
     # agent unset: the session value applies
@@ -148,7 +148,7 @@ def test_expressive_needs_a_tts_the_framework_can_lower_for() -> None:
             raise NotImplementedError
 
     def resolves(tts_obj: tts.TTS) -> bool:
-        session = LiveSession(expressive=True, tts=tts_obj)
+        session = VoiceSession(expressive=True, tts=tts_obj)
         return (
             AgentActivity(Agent(instructions="test"), session)._resolve_expressive_options()
             is not None
@@ -184,7 +184,7 @@ def test_a_caller_supplied_stream_adapter_stays_expressive() -> None:
     adapter = tts.StreamAdapter(tts=wrapped)
     assert adapter.capabilities.streaming  # what the old guard rejected it for
 
-    session = LiveSession(expressive=True, tts=adapter)
+    session = VoiceSession(expressive=True, tts=adapter)
     activity = AgentActivity(Agent(instructions="test"), session)
     assert activity._resolve_expressive_options() is not None
 

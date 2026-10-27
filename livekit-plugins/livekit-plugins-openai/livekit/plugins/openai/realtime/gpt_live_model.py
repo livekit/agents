@@ -103,7 +103,7 @@ class GPTLiveDelegation:
     """Work the model handed to the application, under client delegation.
 
     It carries no task text: the ask is whatever the conversation says, which the agent's chat
-    context holds. Answer it with :meth:`GPTLiveSession.append_commentary`, passing this id.
+    context holds. Answer it with :meth:`GPTVoiceSession.append_commentary`, passing this id.
     """
 
     id: str
@@ -149,7 +149,7 @@ class _LiveOptions:
 
 
 class GPTLiveModel(llm.DuplexModel):
-    """OpenAI GPT-Live full-duplex voice model, ready to pass to ``LiveSession(llm=)``."""
+    """OpenAI GPT-Live full-duplex voice model, ready to pass to ``VoiceSession(llm=)``."""
 
     def __init__(
         self,
@@ -362,15 +362,15 @@ class GPTLiveModel(llm.DuplexModel):
     def audio_gate(self) -> llm.AudioGate:
         return llm.FixedGate(_SILENCE_RMS, min_silence_duration=_MIN_SILENCE_DURATION)
 
-    def session(self) -> GPTLiveSession:
-        return GPTLiveSession(self)
+    def session(self) -> GPTVoiceSession:
+        return GPTVoiceSession(self)
 
     async def aclose(self) -> None:
         if self._http_session_owned and self._http_session:
             await self._http_session.close()
 
 
-class GPTLiveSession(
+class GPTVoiceSession(
     llm.DuplexSession[
         Literal["openai_server_event_received", "openai_client_event_queued", "delegation_created"]
     ]
@@ -427,7 +427,7 @@ class GPTLiveSession(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
 
-        self._main_atask = asyncio.create_task(self._main_task(), name="GPTLiveSession._main")
+        self._main_atask = asyncio.create_task(self._main_task(), name="GPTVoiceSession._main")
 
     # outbound
 

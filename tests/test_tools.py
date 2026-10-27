@@ -1463,9 +1463,9 @@ class TestAsyncToolOptions:
         # session-level options are resolved and stored at __init__; the actual
         # wiring onto toolset executors happens later at activity start (so
         # toolsets added after session.__init__ are picked up).
-        from livekit.agents.voice.agent_session import LiveSession
+        from livekit.agents.voice.agent_session import VoiceSession
 
-        session = LiveSession(tool_handling={"async_options": {"update_template": "from-session"}})
+        session = VoiceSession(tool_handling={"async_options": {"update_template": "from-session"}})
         assert session._async_tool_options["update_template"] == "from-session"
         # other keys fall back to defaults, not to anything else
         assert "{function_name}" in session._async_tool_options["duplicate_reject_template"]
@@ -2140,9 +2140,9 @@ class TestAgentSessionWaitForIdle:
         """wait_for_idle raises instead of spinning when no activity has started."""
         import asyncio as _asyncio
 
-        from livekit.agents.voice.agent_session import LiveSession
+        from livekit.agents.voice.agent_session import VoiceSession
 
-        session = LiveSession()
+        session = VoiceSession()
         with pytest.raises(RuntimeError, match="no active AgentActivity"):
             _asyncio.get_event_loop().run_until_complete(session.wait_for_idle())
 

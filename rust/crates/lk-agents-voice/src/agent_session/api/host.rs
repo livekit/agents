@@ -32,7 +32,7 @@ use std::time::Duration;
 /// `voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
 /// `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
 /// borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
-#[lk_agents_abi::host(object(name = "LiveSession"))]
+#[lk_agents_abi::host(object(name = "VoiceSession"))]
 impl SessionApi {
     /// Assemble a session; the loop begins at `start()`.
     ///

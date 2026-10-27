@@ -46,16 +46,7 @@ from livekit import agents
 from livekit.agents import Agent, AgentServer, AgentSession
 from livekit.plugins import azure
 
-class Assistant(Agent):
-    def __init__(self):
-        super().__init__(
-            instructions="You are a helpful voice assistant powered by Azure."
-        )
-
-    async def on_enter(self):
-        await self.session.generate_reply(
-            instructions="Greet the user and offer assistance"
-        )
+assistant = Agent(instructions="You are a helpful voice assistant powered by Azure.")
 
 server = AgentServer()
 
@@ -67,7 +58,8 @@ async def entrypoint(ctx: agents.JobContext):
         )
     )
 
-    await session.start(room=ctx.room, agent=Assistant())
+    await session.start(room=ctx.room, agent=assistant)
+    await session.generate_reply(instructions="Greet the user and offer assistance")
 
 if __name__ == "__main__":
     agents.cli.run_app(server)

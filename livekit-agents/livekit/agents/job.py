@@ -87,7 +87,7 @@ if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .simulation import SimulationContext
     from .storage.resolve import Thread
-    from .voice.agent_session import LiveSession, RecordingOptions
+    from .voice.agent_session import RecordingOptions, VoiceSession
     from .voice.report import SessionReport
 
 
@@ -239,7 +239,7 @@ class JobContext:
         self._log_filter = _ContextLogFieldsFilter(self)
         self._handlers_with_filter: list[logging.Handler] = []
 
-        self._primary_agent_session: LiveSession | None = None
+        self._primary_agent_session: VoiceSession | None = None
         self._thread: Thread | None = None
 
         # Lazily built from the job's simulation attributes; None when not under a
@@ -343,7 +343,7 @@ class JobContext:
 
         c = AgentsConsole.get_instance()
 
-        # in case LiveSession.aclose() was cancelled due to timeout
+        # in case VoiceSession.aclose() was cancelled due to timeout
         if (recorder_io := session._recorder_io) and recorder_io.recording:
             logger.warning("recorder_io is still recording at session end, closing it")
             await recorder_io.aclose()
@@ -440,19 +440,19 @@ class JobContext:
         """
         return self._tagger
 
-    def make_session_report(self, session: LiveSession | None = None) -> SessionReport:
+    def make_session_report(self, session: VoiceSession | None = None) -> SessionReport:
         from .voice.report import SessionReport
 
         session = session or self._primary_agent_session
 
         if not session:
-            raise RuntimeError("Cannot prepare report, no LiveSession was found")
+            raise RuntimeError("Cannot prepare report, no VoiceSession was found")
 
         recorder_io = session._recorder_io
 
         if recorder_io and recorder_io.recording:
             raise RuntimeError(
-                "Cannot create the LiveSession report, the RecorderIO is still recording"
+                "Cannot create the VoiceSession report, the RecorderIO is still recording"
             )
 
         sr = SessionReport(
@@ -507,7 +507,7 @@ class JobContext:
     def thread(self) -> Thread | None:
         """The call's durable thread, resolved before the entrypoint runs: the ``thread_id`` of
         the dispatch metadata, else a new thread. ``None`` on a server without storage. Pass it
-        to ``LiveSession(thread=)``."""
+        to ``VoiceSession(thread=)``."""
         return self._thread
 
     @property
@@ -524,10 +524,10 @@ class JobContext:
         return self._room.local_participant
 
     @property
-    def primary_session(self) -> LiveSession:
-        """Returns the primary LiveSession for this job."""
+    def primary_session(self) -> VoiceSession:
+        """Returns the primary VoiceSession for this job."""
         if not self._primary_agent_session:
-            raise RuntimeError("No LiveSession was started for this job")
+            raise RuntimeError("No VoiceSession was started for this job")
         return self._primary_agent_session
 
     def simulation_context(self) -> SimulationContext | None:

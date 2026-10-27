@@ -1,6 +1,6 @@
 """The remote session protocol a client drives a call through: ``lk agent simulate`` and the
 dashboard over the room's ``lk.agent.session`` byte streams, ``lk agent console`` over its socket.
-The core serves it for the session (``LiveSession(remote_session=)``); this module answers what a
+The core serves it for the session (``VoiceSession(remote_session=)``); this module answers what a
 client asks that needs the session's objects, and holds the console subcommand's socket."""
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from ..log import logger
 from ..version import __version__
 
 if TYPE_CHECKING:
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
     from .run_result import RunResult
 
 
@@ -42,7 +42,7 @@ class ConsoleCall:
 class SessionPort:
     """What a remote client asks of ``session`` that needs its objects (``_core.SessionPort``)."""
 
-    def __init__(self, session: LiveSession[Any]) -> None:
+    def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
 
     async def _core_chat_history(self) -> list[_core.ChatItem]:

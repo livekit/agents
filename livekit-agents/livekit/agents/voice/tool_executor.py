@@ -43,7 +43,7 @@ from .events import (
 
 if TYPE_CHECKING:
     from .agent_activity import AgentActivity
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
     from .speech_handle import SpeechHandle
 
 
@@ -124,13 +124,13 @@ class ToolHandlingOptions(TypedDict, total=False):
 
     Can be passed as a plain dict::
 
-        LiveSession(
+        VoiceSession(
             tool_handling={
                 "async_options": {"update_template": "..."},
             },
         )
 
-    Set on ``LiveSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
+    Set on ``VoiceSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
     """
 
     async_options: AsyncToolOptions
@@ -166,7 +166,7 @@ def _resolve_async_tool_options(
 # session-scoped view shared across executors, so cancel_task / get_running_tasks
 # see all tasks of their session but never a nested session's. weak-keyed so a
 # dropped session can't leak its tasks.
-_RunningTasks: weakref.WeakKeyDictionary[LiveSession, dict[str, _RunningTask]] = (
+_RunningTasks: weakref.WeakKeyDictionary[VoiceSession, dict[str, _RunningTask]] = (
     weakref.WeakKeyDictionary()
 )
 
@@ -562,7 +562,7 @@ class _ToolExecutor:
             if run_state is not None:
                 run_state._watch_handle(self._reply_task)
 
-    async def _deliver_reply(self, session: LiveSession) -> None:
+    async def _deliver_reply(self, session: VoiceSession) -> None:
         from .agent_activity import ActivityClosedError
 
         target_activity: AgentActivity

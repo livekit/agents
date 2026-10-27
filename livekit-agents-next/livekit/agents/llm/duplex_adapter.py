@@ -35,7 +35,7 @@ AdaptiveNoiseGate = _core.AdaptiveNoiseGate
 
 
 class DuplexRealtimeAdapter(RealtimeModel):
-    """Runs a :class:`DuplexModel` inside an ``LiveSession``.
+    """Runs a :class:`DuplexModel` inside an ``VoiceSession``.
 
     The core (``_core.DuplexRealtimeModel``) gates the model's continuous output, segments it
     into generations and attaches its transcript; output the model never transcribes still plays,
@@ -93,7 +93,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         raise NotImplementedError(
-            "DuplexRealtimeAdapter sessions run inside a LiveSession (the core segments them)"
+            "DuplexRealtimeAdapter sessions run inside a VoiceSession (the core segments them)"
         )
 
     async def aclose(self) -> None:

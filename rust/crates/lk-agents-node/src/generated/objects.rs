@@ -557,10 +557,10 @@ impl SessionClock {
 /// `voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
 /// `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
 /// borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
-use crate::session::LiveSession;
+use crate::session::VoiceSession;
 
 #[napi]
-impl LiveSession {
+impl VoiceSession {
     #[napi(js_name = "start", ts_return_type = "Promise<void>")]
     pub fn start<'env>(&self, env: &'env Env, capture_run: Option<bool>) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
         let reply = crate::host_error::run(env, || {
@@ -2145,7 +2145,7 @@ impl InferenceTts {
 }
 
 /// `_core.NativeRealtimeModel`: a realtime model whose connection, reconnect and conversation
-/// mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `LiveSession`
+/// mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `VoiceSession`
 /// takes it as its realtime model, and nothing per-turn crosses. The keyword constructor,
 /// `update_options` and `bind_identification` are `realtime::python`'s.
 #[napi(js_name = "NativeRealtimeModel")]

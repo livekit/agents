@@ -33,7 +33,7 @@ after. A `contextId` the threads service does not know ends the task `failed` wi
 `livekit/reason: thread-not-found`.
 
 An A2A message addresses a thread by ID. The platform resolves phone numbers
-to thread IDs before dispatch; see [channel routing](planned-channels.md).
+to thread IDs before dispatch; see [channel routing](channels.md#channel-routing).
 
 Every message carries a `messageId`; a resent message with the same id
 returns the task the first one created and runs nothing.
@@ -91,7 +91,7 @@ A Python run result separates framework status from application output.
 as the status message. `status="completed"` maps to `completed`, with the
 accepted `result.output` delivered as an artifact. The application's
 `output_type` describes that accepted output. See
-[run results](agent-router.md#what-a-run-returns).
+[run results](text-session.md#what-a-run-returns).
 
 A turn whose tool returned `InputRequired(question)` ends `input-required`.
 The question is the turn's reply, as the status message; no model call
@@ -177,7 +177,7 @@ A text answered together with the one that followed it:
 Two credentials reach a thread endpoint. The project credential, any
 token the project's key signed that carries no thread grant, is unscoped.
 A thread grant, minted by the application's backend for a browser or a
-device the way a room token is ([backend-api.md](backend-api.md)), scopes
+device the way a room token is ([browser thread access](backend-api.md#from-the-browser)), scopes
 everything to one scope, the subject the threads belong to:
 
 ```json
@@ -195,8 +195,8 @@ a token with only `agentThread` reaches public endpoints.
 | -------- | ------ |
 | `create` | a first message with no `contextId`: a new thread in the grant's scope, which the request never carries; a grant with no scope cannot create |
 | `write`  | a message, `tasks/cancel` |
-| `read`   | `tasks/get`, `tasks/list`, `tasks/resubscribe`, and the thread's history and tasks from the platform's threads API ([backend-api.md](backend-api.md)) |
-| `list`, `delete` | the threads service's listing of the scope and deletion, for a browser ([planned-backend-api.md](planned-backend-api.md)) |
+| `read`   | `tasks/get`, `tasks/list`, `tasks/resubscribe`, and the thread's history and tasks from the platform's threads API ([browser thread access](backend-api.md#from-the-browser)) |
+| `list`, `delete` | the threads service's listing of the scope and deletion, for a browser ([browser thread access](backend-api.md#from-the-browser)) |
 
 A thread of another scope is refused.
 
@@ -215,7 +215,7 @@ A refusal is an HTTP status with `{"error": "..."}`, not a JSON-RPC error:
 ## The extension
 
 A LiveKit client activates it only toward a card that offers it:
-`AgentClient`, `A2AAgent` and a `LiveSession` delegating to an endpoint
+`AgentClient`, `RemoteAgent` and a `VoiceSession` delegating to an endpoint
 then send `A2A-Extensions: https://livekit.io/a2a/ext/agents/v1`
 without the developer doing anything, and the server echoes it. With it,
 a delegation is marked `livekit/kind: delegation`, and the caller's thread

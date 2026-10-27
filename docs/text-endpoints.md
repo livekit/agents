@@ -32,26 +32,15 @@ Called once per turn with the agent's lane already loaded; a batched burst
 is one call. The return value is the answer; the framework commits the lane
 and delivers it. A handler that raises ends the task `failed`.
 
-A handler that yields instead of returning delivers the answer as it is
-written: each piece reaches the client at once, and the answer is the last
-run's result, its question when a tool asked for input. `agent.stream()` is
-`agent.run()` as that iterator:
+For explicit streaming, consume `agent.run_stream(...)`, forward text through
+`ctx.stream(...)`, and return its complete `RunResult` after saving context.
+The returned result finalizes the same answer rather than delivering the text
+again. See [managed streaming endpoints](agents.md#managed-endpoints-and-persistence)
+for the complete entrypoint and cancellation contract.
 
-```python
-@server.a2a_session(endpoint="scheduling", description="Book, confirm or move an appointment.")
-async def text(ctx: A2ASessionContext) -> AsyncIterator[str]:
-    app = SchedulingContext(clinic=clinic_service)
-    await ctx.store.load_context(app)
-    async for delta in scheduler.stream(
-        ctx.message, message_history=ctx.message_history, context=app
-    ):
-        yield delta
-    await ctx.store.save_context(app)
-```
-
-A handler that awaits `agent.run()` streams too, the run forwards the
-model's text to the client itself; yielding is for a handler that wants the
-pieces in its own hands.
+A handler using `await agent.run(...)` can use automatic managed forwarding.
+`run_stream(...)` instead gives its consumer control of delivery, so the same
+text occurrences are not forwarded by both paths.
 
 A module defines its doors on an `AgentHandler` and leaves the server to
 the entrypoint, which serves them with `server.add(handler, ...)`:
@@ -70,9 +59,9 @@ agents share one process in `examples/`. `livekit.agents.a2a_session` and
 `rtc_session` are the same decorators for a single door with no handler;
 `server.a2a_session` and `server.rtc_session` serve one in one step.
 
-The handler explicitly calls an agent or an [AgentRouter](agent-router.md).
-A direct `agent.run()` executes that agent. A routed handler loads the routing
-state, passes it to `router.run()`, and saves the returned state.
+The handler explicitly calls an agent or an [TextSession](text-session.md).
+A direct `agent.run()` executes that agent. A text-session handler loads the routing
+state, passes it to `session.run()`, and saves the returned state.
 
 | `A2ASessionContext` | What                                                                                                                 |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -203,7 +192,7 @@ await client.cancel(task_id, thread_id=thread_id)
 
 Thin over the stock `a2a-sdk`; any A2A client works without it.
 
-[Routed conversations](agent-router.md) cover conversational input and child results.
+[Routed conversations](text-session.md) cover conversational input and child results.
 Conversation persistence stores histories and routing records between turns;
 it does not restore suspended Python execution.
 

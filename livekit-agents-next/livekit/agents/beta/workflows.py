@@ -31,7 +31,7 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from ..voice import room_io
 from ..voice.agent import Agent
-from ..voice.agent_session import LiveSession
+from ..voice.agent_session import VoiceSession
 from ..voice.background_audio import (
     AudioConfig,
     AudioSource,
@@ -223,7 +223,7 @@ class WarmTransfer:
             tts=tts,
         )
 
-    async def run(self, session: LiveSession) -> WarmTransferResult:
+    async def run(self, session: VoiceSession) -> WarmTransferResult:
         """Dial and bridge a human participant during this live operation."""
         job_ctx = get_job_context()
         identity = await self._transfer.run(_TransferHost(self, session, job_ctx), job_ctx.room)
@@ -335,13 +335,13 @@ class _TransferHost:
     """What the core's transfer asks of the SDK: the rooms, the human agent's session, the hold
     music and the API requests. Each ``_core_<method>`` is one call or two."""
 
-    def __init__(self, transfer: WarmTransfer, session: LiveSession, job_ctx: JobContext) -> None:
+    def __init__(self, transfer: WarmTransfer, session: VoiceSession, job_ctx: JobContext) -> None:
         self._transfer = transfer
         self._session = session
         self._job = job_ctx
         self._room = rtc.Room()
         self._player = BackgroundAudioPlayer()
-        self._human: LiveSession = LiveSession(
+        self._human: VoiceSession = VoiceSession(
             vad=session.vad or NOT_GIVEN,
             llm=session.llm or NOT_GIVEN,
             stt=session.stt or NOT_GIVEN,

@@ -14,7 +14,7 @@ from .tool_context import DuplicateMode, Tool, Toolset
 
 if TYPE_CHECKING:
     from ..voice.agent_activity import AgentActivity
-    from ..voice.agent_session import LiveSession
+    from ..voice.agent_session import VoiceSession
     from ..voice.events import RunContext as AsyncRunContext  # noqa: F401
 
 # AsyncRunContext is a deprecated alias for RunContext kept for one release so user
@@ -51,7 +51,7 @@ class AsyncToolset(Toolset):
             await ctx.update(f"Found {len(flights)}, picking the best...")
             return await book_best(flights)
 
-        session = LiveSession(tools=[AsyncToolset(id="booking", tools=[book_flight])])
+        session = VoiceSession(tools=[AsyncToolset(id="booking", tools=[book_flight])])
     """
 
     def __init__(
@@ -75,7 +75,7 @@ class AsyncToolset(Toolset):
         )
         self._executor = _ToolExecutor(owning_activity=None)
 
-    def _attach_activity(self, *, activity: AgentActivity | None, session: LiveSession) -> None:
+    def _attach_activity(self, *, activity: AgentActivity | None, session: VoiceSession) -> None:
         """Bind this toolset to a scope. ``activity=None`` makes it session-scoped
         (replies survive handoff); otherwise replies stay with ``activity``'s agent."""
         self._executor.set_owning_activity(activity)

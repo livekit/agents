@@ -12,7 +12,7 @@ channel, what a tool did. A developer cannot edit it, which is the point.
 - **Derivations that must be trusted.** A run that started and never ended,
   the channel each request came on, the order of events across agents: all
   derived from the journal, never from the editable history. Who is
-  speaking in a routed conversation is recorded in the application's router state.
+  speaking in a text-session conversation is recorded in the application's session state.
 - **A record that survives compaction.** After a long conversation is
   summarized, the history is short and the journal still holds every turn.
 - **One stream for everything that watches.** The journal's events are the

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, LiveSession, llm, utils
+from livekit.agents import Agent, VoiceSession, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.voice.events import ConversationItemAddedEvent
@@ -51,7 +51,7 @@ async def _run_realtime_redaction_session(
     job_ctx = _fake_job_context(enable_redaction=project_redaction)
 
     with patch("livekit.agents.voice.agent_session.get_job_context", return_value=job_ctx):
-        async with LiveSession(
+        async with VoiceSession(
             llm=model,
             stt=stt,
             vad=None,
@@ -67,7 +67,7 @@ async def test_realtime_response_id_is_available_on_assistant_message() -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
     conversation_events: list[ConversationItemAddedEvent] = []
 
-    async with LiveSession(llm=model) as session:
+    async with VoiceSession(llm=model) as session:
         session.on("conversation_item_added", conversation_events.append)
         await session.start(Agent(instructions="test"))
 
@@ -121,7 +121,7 @@ async def _transcribed_user_messages(
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
     conversation_events: list[ConversationItemAddedEvent] = []
 
-    async with LiveSession(llm=model) as session:
+    async with VoiceSession(llm=model) as session:
         session.on("conversation_item_added", conversation_events.append)
         await session.start(Agent(instructions="test"))
 
@@ -248,7 +248,7 @@ async def test_realtime_audio_redaction_warning_is_emitted_once_per_session(
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
 
     with caplog.at_level(logging.WARNING, logger="livekit.agents"):
-        async with LiveSession(
+        async with VoiceSession(
             llm=model, vad=None, turn_handling={"turn_detection": None}
         ) as session:
             await session.start(
@@ -266,7 +266,7 @@ async def test_usage_reported_as_the_session_closes_is_still_collected() -> None
     """A session-billed model only learns its final usage as the connection drains."""
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
 
-    async with LiveSession(llm=model) as session:
+    async with VoiceSession(llm=model) as session:
         await session.start(Agent(instructions="test"))
         model.active_session.closing_metrics = RealtimeModelMetrics(
             request_id="sess_1",

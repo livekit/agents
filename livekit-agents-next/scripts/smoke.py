@@ -35,9 +35,9 @@ from livekit.agents import (
     BackgroundAudioPlayer,
     BuiltinAudioClip,
     FlushSentinel,
-    LiveSession,
     ModelSettings,
     RunContext,
+    VoiceSession,
     _core,
     function_tool,
     llm,
@@ -352,7 +352,7 @@ async def _empty() -> object:
 async def realtime() -> None:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
-    session = LiveSession(llm=ScriptedRealtime(), vad=None)
+    session = VoiceSession(llm=ScriptedRealtime(), vad=None)
     session.on("conversation_item_added", print_item)
     await session.start(Agent(instructions="You are realtime.", name="realtime"), room=room)
     handle = session.generate_reply(instructions="greet the user")
@@ -391,7 +391,7 @@ async def realtime_fallback() -> None:
         "realtime_availability_changed",
         lambda ev: changes.append((ev.realtime_model is primary, ev.available)),
     )
-    session = LiveSession(llm=adapter, vad=None)
+    session = VoiceSession(llm=adapter, vad=None)
     session.on("conversation_item_added", print_item)
     await session.start(Agent(instructions="You are realtime.", name="fallback"), room=room)
     await settle(room, 0.5)
@@ -483,7 +483,7 @@ async def duplex() -> None:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
     model = ScriptedDuplex()
-    session = LiveSession(llm=llm.DuplexRealtimeAdapter(model), vad=None)
+    session = VoiceSession(llm=llm.DuplexRealtimeAdapter(model), vad=None)
     session.on("conversation_item_added", print_item)
     await session.start(Agent(instructions="You are duplex.", name="duplex"), room=room)
     await settle(room, 0.2)
@@ -561,7 +561,7 @@ async def native_realtime() -> None:
     model = OpenAIRealtimeModel(
         api_key="sk-local", base_url=f"http://127.0.0.1:{port}/v1", voice="cedar"
     )
-    session = LiveSession(llm=model, vad=None)
+    session = VoiceSession(llm=model, vad=None)
     session.on("conversation_item_added", print_item)
     metrics: list[Any] = []
     session.on("metrics_collected", lambda ev: metrics.append(ev.metrics))
@@ -627,11 +627,11 @@ class Redacting(Agent):
             yield ev
 
 
-async def node_session(agent: Agent, act: Callable[[LiveSession, _core.FakeRoom], Any]) -> int:
+async def node_session(agent: Agent, act: Callable[[VoiceSession, _core.FakeRoom], Any]) -> int:
     """Run ``act`` on a session started on ``agent``; the bytes the room played."""
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
-    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
     session.on("conversation_item_added", print_item)
     session.on("user_input_transcribed", lambda ev: print(f"user_input {ev.transcript!r}"))
     await session.start(agent, room=room)
@@ -646,10 +646,10 @@ async def nodes() -> None:
     print("== llm_node")
     said: list[str] = []
 
-    def record(session: LiveSession) -> None:
+    def record(session: VoiceSession) -> None:
         session.on("conversation_item_added", lambda ev: said.append(ev.item.text_content or ""))
 
-    async def reply(session: LiveSession, room: _core.FakeRoom) -> None:
+    async def reply(session: VoiceSession, room: _core.FakeRoom) -> None:
         record(session)
         session.generate_reply(user_input="hello there")
         await settle(room, 3)
@@ -657,7 +657,7 @@ async def nodes() -> None:
     await node_session(Shouting(), reply)
     assert "YOU SAID: HELLO THERE" in said, said
 
-    async def say(session: LiveSession, room: _core.FakeRoom) -> None:
+    async def say(session: VoiceSession, room: _core.FakeRoom) -> None:
         handle = session.say("Twenty characters...")
         await settle(room, 3)
         assert handle.done(), "say() did not finish"
@@ -671,7 +671,7 @@ async def nodes() -> None:
     print("== stt_node")
     heard: list[str] = []
 
-    async def speak(session: LiveSession, room: _core.FakeRoom) -> None:
+    async def speak(session: VoiceSession, room: _core.FakeRoom) -> None:
         session.on("user_input_transcribed", lambda ev: heard.append(ev.transcript))
         room.speak(frames=40)
         await settle(room, 4)
@@ -683,7 +683,7 @@ async def nodes() -> None:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
     batch = BatchSTT()
-    session = LiveSession(stt=batch, llm=ScriptedLLM(), tts=SilentTTS(), vad=ScriptedVAD())
+    session = VoiceSession(stt=batch, llm=ScriptedLLM(), tts=SilentTTS(), vad=ScriptedVAD())
     heard.clear()
     session.on("user_input_transcribed", lambda ev: heard.append(ev.transcript))
     await session.start(Agent(instructions="x", name="batch"), room=room)
@@ -700,7 +700,7 @@ async def avatar() -> None:
     print("== avatar")
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
-    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
     await session.start(Agent(instructions="You speak through an avatar."), room=room)
     session.output.replace_audio_tail(DataStreamAudioOutput(room, destination_identity="avatar"))
     await settle(room, 0.5)
@@ -755,7 +755,7 @@ async def expressive() -> None:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
     model, voice = RecordingLLM(), MarkupTTS()
-    session = LiveSession(stt=ScriptedSTT(), llm=model, tts=voice, vad=None, expressive=True)
+    session = VoiceSession(stt=ScriptedSTT(), llm=model, tts=voice, vad=None, expressive=True)
     await session.start(Agent(instructions="You are expressive."), room=room)
     await settle(room, 1)
     session.generate_reply(user_input="hello there")
@@ -774,7 +774,7 @@ async def background_audio() -> None:
     print("== background audio")
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
-    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
     await session.start(Agent(instructions="You hum while you think."), room=room)
 
     async def tone() -> AsyncIterator[rtc.AudioFrame]:
@@ -880,7 +880,7 @@ async def amd() -> None:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
     classifier = ClassifyingLLM("machine-ivr")
-    session = LiveSession(stt=ScriptedSTT(), llm=classifier, tts=SilentTTS())
+    session = VoiceSession(stt=ScriptedSTT(), llm=classifier, tts=SilentTTS())
     heard = asyncio.Event()
     session.on("user_input_transcribed", lambda ev: ev.is_final and heard.set())
     await session.start(Agent(instructions="You call people."), room=room)
@@ -921,7 +921,7 @@ async def filler() -> None:
             await release.wait()
         return "shipped"
 
-    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
     await session.start(Agent(instructions="You track orders.", tools=[look_up_order]), room=room)
     session.generate_reply(user_input="where is my order?")
     await settle(room, 4)
@@ -986,7 +986,7 @@ async def keyterms() -> None:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
     recogniser, detector = KeytermSTT(), KeytermLLM()
-    session = LiveSession(
+    session = VoiceSession(
         stt=recogniser,
         llm=ScriptedLLM(),
         tts=SilentTTS(),
@@ -1014,7 +1014,7 @@ async def room_camera() -> None:
     print("== room camera")
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
-    session = LiveSession(llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    session = VoiceSession(llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
     await session.start(
         Agent(instructions="You can see."),
         room=room,
@@ -1042,7 +1042,7 @@ async def console() -> None:
     )
     server = await asyncio.start_server(lambda r, w: accepted.set_result((r, w)), "127.0.0.1", 0)
     ConsoleCall.addr = f"127.0.0.1:{server.sockets[0].getsockname()[1]}"
-    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
     await session.start(FrontDesk())
     reader, writer = await asyncio.wait_for(accepted, 10)
 
@@ -1291,7 +1291,7 @@ async def tools() -> None:
     print("== tools")
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
-    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
     closed: list[str] = []
     session.on("close", lambda ev: closed.append(ev.reason.value))
     agent = Agent(instructions="You answer the phone.", tools=[EndCallTool(), send_dtmf_events])
@@ -1601,7 +1601,7 @@ async def llm_prewarm() -> None:
     llm_ = inference.LLM(
         "openai/gpt-4.1-mini", base_url=f"http://127.0.0.1:{port}", api_key="k", api_secret="s"
     )
-    session = LiveSession(stt=ScriptedSTT(), llm=llm_, tts=SilentTTS(), vad=None)
+    session = VoiceSession(stt=ScriptedSTT(), llm=llm_, tts=SilentTTS(), vad=None)
     await session.start(Agent(instructions="You answer."), room=room)
     for _ in range(100):
         if seen:
@@ -1613,7 +1613,7 @@ async def llm_prewarm() -> None:
     assert seen == ["GET /models"], seen
 
 
-def agent_name(session: LiveSession) -> str:
+def agent_name(session: VoiceSession) -> str:
     return type(session.current_agent).__name__
 
 
@@ -1653,7 +1653,7 @@ def log_transport() -> None:
 async def main() -> int:
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
-    session = LiveSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
 
     def on_tools(ev: object) -> None:
         calls = [(c.name, o.output) for c, o in ev.zipped()]  # type: ignore[attr-defined]

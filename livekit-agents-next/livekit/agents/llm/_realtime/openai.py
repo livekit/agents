@@ -1,7 +1,7 @@
 """The OpenAI Realtime API, and every provider speaking it (Azure OpenAI, xAI, LiveKit Inference).
 
 The model is the core's (``_core.NativeRealtimeModel``): the socket, the session options, the
-reconnects and the conversation mirror are Rust, and a ``LiveSession`` drives it directly. This
+reconnects and the conversation mirror are Rust, and a ``VoiceSession`` drives it directly. This
 class keeps the plugin's constructor and hands its arguments over as given.
 """
 
@@ -279,11 +279,11 @@ class RealtimeModel(llm_realtime.RealtimeModel):
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         raise NotImplementedError(
-            f"{type(self).__name__} sessions run in the core; give the model to a LiveSession"
+            f"{type(self).__name__} sessions run in the core; give the model to a VoiceSession"
         )
 
     def _core_native(self) -> _core.NativeRealtimeModel:
-        """The model as a ``LiveSession`` drives it."""
+        """The model as a ``VoiceSession`` drives it."""
         return self._native
 
     async def aclose(self) -> None:

@@ -482,7 +482,7 @@ class RealtimeModel(llm.RealtimeModel):
                     interrupt_response=True,
                 ),
             )
-            session = LiveSession(llm=model)
+            session = VoiceSession(llm=model)
             ```
         """
         api_version: str | None = kwargs.get("api_version") or os.getenv("OPENAI_API_VERSION")

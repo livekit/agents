@@ -56,7 +56,7 @@ impl FakeInterruption {
     }
 }
 
-/// The detector as a host hands it to `LiveSession(interruption_detector=)`: opened at `start()`.
+/// The detector as a host hands it to `VoiceSession(interruption_detector=)`: opened at `start()`.
 pub struct FakeInterruptionSource(pub Arc<Registry>);
 
 impl InterruptionSource for FakeInterruptionSource {

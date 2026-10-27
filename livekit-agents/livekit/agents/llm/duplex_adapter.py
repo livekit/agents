@@ -241,7 +241,7 @@ class _Burst:
 
 
 class DuplexRealtimeAdapter(RealtimeModel):
-    """Runs a :class:`DuplexModel` inside an ``LiveSession``.
+    """Runs a :class:`DuplexModel` inside an ``VoiceSession``.
 
     Segments the model's continuous output into generations and presents them as an ordinary
     ``RealtimeSession``; output the model never transcribes still plays, it just has no chat item.

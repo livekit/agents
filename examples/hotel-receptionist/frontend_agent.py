@@ -1,6 +1,6 @@
 import os
 
-from livekit.agents import Agent, AgentHandler, InputRequired, JobContext, LiveSession
+from livekit.agents import Agent, AgentHandler, InputRequired, JobContext, VoiceSession
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.delegation import A2ADelegate
 from livekit.plugins import openai
@@ -44,7 +44,7 @@ front_desk = AgentHandler()  # the worker's own lane: the phone and the text doo
 
 @front_desk.rtc_session()
 async def phone(ctx: JobContext) -> None:
-    session = LiveSession(llm=openai.realtime.RealtimeModel(), thread=ctx.thread)
+    session = VoiceSession(llm=openai.realtime.RealtimeModel(), thread=ctx.thread)
     await session.start(agent=voice, room=ctx.room)
     if not session.history.items:
         await session.generate_reply(instructions="Greet the guest in one sentence.")

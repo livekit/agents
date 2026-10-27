@@ -760,7 +760,7 @@ def test_gemini_api_scheduling_does_not_warn(
     assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
 
 
-class _FakeLiveSession:
+class _FakeVoiceSession:
     """Stands in for the genai live session and records what the plugin sends."""
 
     def __init__(self) -> None:
@@ -794,7 +794,7 @@ async def _connected_session(
     sent_after_handle: llm.ChatContext | None = None,
     pending: llm.ChatContext | None = None,
     caller_handle: bool = False,
-) -> AsyncIterator[tuple[RealtimeSession, _FakeLiveSession]]:
+) -> AsyncIterator[tuple[RealtimeSession, _FakeVoiceSession]]:
     """Connect once onto a fake socket.
 
     `known` is the state the handle stands for, `sent_after_handle` what the previous
@@ -804,10 +804,10 @@ async def _connected_session(
     """
     from google.genai.live import AsyncLive
 
-    fake = _FakeLiveSession()
+    fake = _FakeVoiceSession()
 
     @asynccontextmanager
-    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeVoiceSession]:
         yield fake
 
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
@@ -958,7 +958,7 @@ async def test_handle_does_not_claim_a_queued_but_unsent_update(
     updated = known.copy()
     updated.add_message(role="user", content="queued behind the handle")
 
-    class _GatedSession(_FakeLiveSession):
+    class _GatedSession(_FakeVoiceSession):
         """First socket: the connect-time handle arrives while the send is still blocked."""
 
         def __init__(self) -> None:
@@ -977,11 +977,11 @@ async def test_handle_does_not_claim_a_queued_but_unsent_update(
             )
             await self._closed.wait()
 
-    sockets: list[_FakeLiveSession] = [_GatedSession(), _FakeLiveSession()]
-    opened: list[_FakeLiveSession] = []
+    sockets: list[_FakeVoiceSession] = [_GatedSession(), _FakeVoiceSession()]
+    opened: list[_FakeVoiceSession] = []
 
     @asynccontextmanager
-    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeVoiceSession]:
         fake = sockets[len(opened)]
         opened.append(fake)
         yield fake
@@ -1020,7 +1020,7 @@ async def test_failed_send_with_a_queued_update_replays_each_item_once(
     first = known.copy()
     first.add_message(role="user", content="first update")
 
-    class _FailingSession(_FakeLiveSession):
+    class _FailingSession(_FakeVoiceSession):
         """Blocks the first send until released, then fails it."""
 
         def __init__(self) -> None:
@@ -1033,11 +1033,11 @@ async def test_failed_send_with_a_queued_update_replays_each_item_once(
             await self.release.wait()
             raise RuntimeError("socket gone")
 
-    sockets: list[_FakeLiveSession] = [_FailingSession(), _FakeLiveSession()]
-    opened: list[_FakeLiveSession] = []
+    sockets: list[_FakeVoiceSession] = [_FailingSession(), _FakeVoiceSession()]
+    opened: list[_FakeVoiceSession] = []
 
     @asynccontextmanager
-    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeVoiceSession]:
         fake = sockets[len(opened)]
         opened.append(fake)
         yield fake

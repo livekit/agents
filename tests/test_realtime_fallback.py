@@ -24,7 +24,7 @@ class _StubActivity:
 
 
 class _StubAgentSession:
-    """Minimal stand-in for LiveSession that records orchestrated interrupt/generate_reply."""
+    """Minimal stand-in for VoiceSession that records orchestrated interrupt/generate_reply."""
 
     def __init__(self, agent_state: str = "listening", chat_ctx: ChatContext | None = None) -> None:
         self.agent_state = agent_state
@@ -366,7 +366,7 @@ async def test_exhausted_models_escalate_as_non_recoverable() -> None:
 
     primary.active_session.emit_error(recoverable=False)
 
-    # nothing left to fall back to: escalate so LiveSession can close
+    # nothing left to fall back to: escalate so VoiceSession can close
     assert session._swap_task is None
     assert len(errors) == 1
     assert errors[0].recoverable is False
@@ -422,7 +422,7 @@ async def test_regenerates_via_agent_session_when_speaking() -> None:
     primary.active_session.emit_error(recoverable=False)
     await session._swap_task
 
-    # regeneration goes through the LiveSession (orchestrated), not the raw child session
+    # regeneration goes through the VoiceSession (orchestrated), not the raw child session
     assert session._agent_session.interrupt_calls == 1
     assert session._agent_session.generate_reply_calls == 1
     assert backup.active_session.generate_reply_calls == 0

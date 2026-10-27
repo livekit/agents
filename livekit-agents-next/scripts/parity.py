@@ -770,7 +770,7 @@ class Call:
         return self.models.SilentTTS(self)
 
     def session_of(self, **kwargs: Any) -> Any:
-        from livekit.agents import LiveSession
+        from livekit.agents import VoiceSession
 
         kwargs.setdefault("vad", None)
         kwargs.setdefault("aec_warmup_duration", None)
@@ -780,7 +780,7 @@ class Call:
         if th.setdefault("turn_detection", "stt") == "default":
             del th["turn_detection"]
         kwargs["turn_handling"] = th
-        self.session = LiveSession(**kwargs)
+        self.session = VoiceSession(**kwargs)
         self._observe(self.session)
         return self.session
 

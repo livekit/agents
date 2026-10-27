@@ -431,7 +431,7 @@ class FunctionCallOutput(_ChatItemBase):
     reply_required: bool = Field(default=True)
     """Whether the model should answer once it receives this output.
 
-    LiveSession uses it to decide whether to generate a follow-up reply.
+    VoiceSession uses it to decide whether to generate a follow-up reply.
     Realtime models can also use it to schedule their response.
     """
 

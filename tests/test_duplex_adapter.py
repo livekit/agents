@@ -966,10 +966,10 @@ async def test_a_reply_the_model_never_gives_does_not_strand_the_caller(monkeypa
 
 async def test_a_duplex_model_is_wrapped_when_handed_to_a_session() -> None:
     """Callers pass the model itself; the adapter is the framework's business, not theirs."""
-    from livekit.agents import Agent, LiveSession
+    from livekit.agents import Agent, VoiceSession
 
     model = _FakeDuplexModel()
-    session = LiveSession(llm=model)
+    session = VoiceSession(llm=model)
     assert isinstance(session.llm, llm.DuplexRealtimeAdapter)
     assert session.llm.duplex_model is model
 
@@ -979,7 +979,7 @@ async def test_a_duplex_model_is_wrapped_when_handed_to_a_session() -> None:
 
 async def test_duplex_session_reaches_the_plugin_past_the_adapter() -> None:
     """Provider-specific APIs live on the plugin's session, so apps must not stop at the adapter."""
-    from livekit.agents import Agent, LiveSession
+    from livekit.agents import Agent, VoiceSession
 
     model = _FakeDuplexModel()
     ready = asyncio.Event()
@@ -990,14 +990,14 @@ async def test_duplex_session_reaches_the_plugin_past_the_adapter() -> None:
             seen.append(self.duplex_session)
             ready.set()
 
-    async with LiveSession(llm=model, aec_warmup_duration=None) as session:
+    async with VoiceSession(llm=model, aec_warmup_duration=None) as session:
         await session.start(InspectDuplex(instructions=""))
         await asyncio.wait_for(ready.wait(), 1)
         assert seen == [model.session_obj]
 
 
 async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:
-    from livekit.agents import Agent, LiveSession
+    from livekit.agents import Agent, VoiceSession
 
     from .fake_realtime import FakeRealtimeModel
 
@@ -1009,7 +1009,7 @@ async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:
                 _ = self.duplex_session
             ready.set()
 
-    async with LiveSession(llm=FakeRealtimeModel(), aec_warmup_duration=None) as session:
+    async with VoiceSession(llm=FakeRealtimeModel(), aec_warmup_duration=None) as session:
         await session.start(InspectDuplex(instructions=""))
         await asyncio.wait_for(ready.wait(), 1)
 
@@ -1047,17 +1047,17 @@ async def test_a_failed_audio_stream_reports_an_unrecoverable_error(duplex) -> N
 
 
 async def test_a_duplex_model_refuses_a_text_simulation(monkeypatch: pytest.MonkeyPatch) -> None:
-    from livekit.agents.voice import Agent, LiveSession
+    from livekit.agents.voice import Agent, VoiceSession
 
-    monkeypatch.setattr(LiveSession, "_text_only", property(lambda self: True))
-    session = LiveSession(llm=_FakeDuplexModel())
+    monkeypatch.setattr(VoiceSession, "_text_only", property(lambda self: True))
+    session = VoiceSession(llm=_FakeDuplexModel())
     with pytest.raises(RuntimeError, match="text simulation"):
         await session.start(Agent(instructions="hi"))
 
 
 async def test_a_duplex_model_starts_outside_a_text_simulation() -> None:
-    from livekit.agents.voice import Agent, LiveSession
+    from livekit.agents.voice import Agent, VoiceSession
 
-    session = LiveSession(llm=_FakeDuplexModel())
+    session = VoiceSession(llm=_FakeDuplexModel())
     await session.start(Agent(instructions="hi"))
     await session.aclose()

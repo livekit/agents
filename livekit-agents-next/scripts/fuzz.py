@@ -1,4 +1,4 @@
-"""Property-based runs of the call path through the real Python ``LiveSession``: each seed draws a
+"""Property-based runs of the call path through the real Python ``VoiceSession``: each seed draws a
 call (pipeline or realtime providers, their delays from the DST's calibration, room options,
 toolsets, a job around it or not) and a sequence of what a person and a developer do, runs it on
 the reference tests' virtual-time loop over ``_core.FakeRoom``, and checks what must hold whatever
@@ -604,7 +604,7 @@ def agents(call: Call) -> tuple[Any, Any]:
 
 def build_session(call: Call, p: Any) -> tuple[Any, list[Any], str]:
     """The drawn session, the front desk's tools, and a description of the draw."""
-    from livekit.agents import LiveSession
+    from livekit.agents import VoiceSession
 
     d = call.draw
     realtime = d.chance(0.3)
@@ -638,7 +638,7 @@ def build_session(call: Call, p: Any) -> tuple[Any, list[Any], str]:
     if d.chance(0.25):
         tools.append(p.FailingToolset(id="back_office"))
         desc.append("failing-toolset")
-    return LiveSession(**kwargs), tools, " ".join(desc)
+    return VoiceSession(**kwargs), tools, " ".join(desc)
 
 
 def room_options(call: Call) -> Any:

@@ -7,7 +7,7 @@ See [https://docs.livekit.io/agents/](https://docs.livekit.io/agents/) for quick
 ```python
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, JobContext, LiveSession, cli
+from livekit.agents import Agent, AgentServer, JobContext, VoiceSession, cli
 from livekit.plugins import openai
 
 load_dotenv()
@@ -17,7 +17,7 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    session = LiveSession(llm=openai.realtime.RealtimeModel(voice="coral"))
+    session = VoiceSession(llm=openai.realtime.RealtimeModel(voice="coral"))
     await session.start(
         room=ctx.room, agent=Agent(instructions="You are a helpful voice AI assistant.")
     )

@@ -9,9 +9,9 @@ from livekit.agents import (
     Agent,
     AgentServer,
     JobContext,
-    LiveSession,
     RunContext,
     RunResult,
+    VoiceSession,
     persisted,
 )
 from livekit.agents.a2a import A2ASessionContext
@@ -106,7 +106,7 @@ server = AgentServer(storage=AgentDBStorage())
 @server.rtc_session()
 async def phone(ctx: JobContext) -> None:
     deps = Deps(clinic=httpx.AsyncClient(base_url=CLINIC))
-    session = LiveSession(
+    session = VoiceSession(
         llm=openai.realtime.RealtimeModel(),
         thread=ctx.thread,
         context=AppContext(services=deps, patient=Patient()),

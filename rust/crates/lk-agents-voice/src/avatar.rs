@@ -374,7 +374,7 @@ impl AudioOutput for DataStreamAudioOutput {
 
     fn pause(&self) {
         log::warn!(target: LOG,
-            "pause is not supported by DataStreamAudioOutput, disable `LiveSession.resume_false_interruption` if you are using an avatar plugin.");
+            "pause is not supported by DataStreamAudioOutput, disable `VoiceSession.resume_false_interruption` if you are using an avatar plugin.");
     }
 
     fn resume(&self) {}

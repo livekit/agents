@@ -5,7 +5,7 @@ use super::driver::*;
 use crate::agent_activity::false_interruption::PausedSpeech;
 use crate::agent_activity::scheduling::SpeechScheduler;
 use crate::agent_activity::{AgentActivity, DriverConfig, PIPELINE_SAMPLE_RATE};
-use crate::agent_session::LiveSession;
+use crate::agent_session::VoiceSession;
 use crate::agent_session::SessionShared;
 use crate::agent_session::commands::{Command, Origin};
 use crate::agent_session::host_events::HostEvent;
@@ -324,7 +324,7 @@ impl DriverBuilder {
 
         // The constructor context as the agent's view, not announced (the host has it). The prompt
         // is rendered per request.
-        let session = LiveSession::new(
+        let session = VoiceSession::new(
             config,
             crate::agent_session::SessionParts {
                 llm,

@@ -18,11 +18,11 @@ from livekit import api, rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    LiveSession,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     NotGivenOr,
+    VoiceSession,
     get_job_context,
     utils,
 )
@@ -279,7 +279,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def start(
         self,
-        agent_session: LiveSession,
+        agent_session: VoiceSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,
@@ -300,7 +300,7 @@ class AvatarSession(BaseAvatarSession):
         else:
             raise BitHumanException(f"Invalid mode: {self._mode}")
 
-    async def _start_local(self, agent_session: LiveSession, room: rtc.Room) -> None:
+    async def _start_local(self, agent_session: VoiceSession, room: rtc.Room) -> None:
         from bithuman import AsyncBithuman
 
         if self._runtime:
@@ -346,7 +346,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def _start_cloud(
         self,
-        agent_session: LiveSession,
+        agent_session: VoiceSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,

@@ -303,7 +303,7 @@ class A2AService:
         task_id: str | None = None,
     ) -> TurnOutcome:
         """One message in process, A2A semantics kept, no wire: what
-        ``LiveSession(delegate=endpoint)`` calls (plan 7.2). Progress and tokens reach the hooks."""
+        ``VoiceSession(delegate=endpoint)`` calls (plan 7.2). Progress and tokens reach the hooks."""
         call = CallContext(
             principal=principal or Principal(kind="project"),
             extensions=Extensions(livekit=True),

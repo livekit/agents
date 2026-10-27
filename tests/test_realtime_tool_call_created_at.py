@@ -4,7 +4,7 @@ import time
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, LiveSession, function_tool, llm, utils
+from livekit.agents import Agent, VoiceSession, function_tool, llm, utils
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
@@ -25,7 +25,7 @@ async def test_realtime_tool_call_created_at_is_stamped_at_execution_start() -> 
 
     model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
 
-    async with LiveSession(llm=model) as session:
+    async with VoiceSession(llm=model) as session:
         await session.start(ToolAgent())
 
         speech_handle = session.generate_reply()

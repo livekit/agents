@@ -25,7 +25,7 @@ class AsyncToolset(Toolset):
             await ctx.update(f"Found {len(flights)}, picking the best...")
             return await book_best(flights)
 
-        session = LiveSession(tools=[AsyncToolset(id="booking", tools=[book_flight])])
+        session = VoiceSession(tools=[AsyncToolset(id="booking", tools=[book_flight])])
     """
 
     def __init__(

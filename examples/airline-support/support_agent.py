@@ -20,10 +20,10 @@ from livekit.agents import (
     AgentServer,
     InputRequired,
     JobContext,
-    LiveSession,
     RunContext,
     RunResult,
     ToolError,
+    VoiceSession,
     cli,
     persisted,
 )
@@ -338,7 +338,7 @@ async def text(ctx: A2ASessionContext) -> RunResult[str]:
 
 @server.rtc_session()
 async def chat(ctx: JobContext) -> None:
-    session = LiveSession(llm=LLM, context=SupportContext(), thread=ctx.thread)
+    session = VoiceSession(llm=LLM, context=SupportContext(), thread=ctx.thread)
     await session.start(agent=support, room=ctx.room)
     await session.store.load_context(session.context)
     if not session.history.items:

@@ -92,9 +92,7 @@ whisper_model_id = "your-whisper-model-id"  # or use chain_id for chain deployme
 orpheus_model_id = "your-orpheus-model-id"
 
 
-class Assistant(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions="You are a helpful voice AI assistant.")
+assistant = Agent(instructions="You are a helpful voice assistant.")
 
 
 async def entrypoint(ctx: agents.JobContext):
@@ -123,7 +121,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     await session.start(
         room=ctx.room,
-        agent=Assistant(),
+        agent=assistant,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
         ),

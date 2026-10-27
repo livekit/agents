@@ -489,7 +489,7 @@ Ranked by what a person on the call or a developer would hit:
 ## 6. Through the public API
 
 The fuzzer drives the core as its host does. `Run::start` (`src/drive/start.rs`) assembles the
-session with `SessionApi::host_new`, the `LiveSession(...)` `lk-agents-py` binds, over a
+session with `SessionApi::host_new`, the `VoiceSession(...)` `lk-agents-py` binds, over a
 `FakeRoom` from `lk-agents-rtc` and the fakes, with the setup as `SessionOptions` kwargs, and
 awaits `start()`. Every input that is a host call (`src/drive/apply.rs`) is that method with its
 argument shapes: `say`/`say_stream`/`say_audio` and their pushers, `generate_reply`,
@@ -1017,7 +1017,7 @@ the explicit context copy is belt and braces). Their regression tests, and for 7
   and 50 ms. With 54c213e74 reverted reply 0 takes 417 ms against 217 ms owed; with only its
   prewarm reverted, the same.
 - **`fuzz.py`** (`livekit-agents-next/scripts/fuzz.py`, run by `smoke.py`): seeded random calls
-  through the real Python `LiveSession` over `_core.FakeRoom` on the reference tests'
+  through the real Python `VoiceSession` over `_core.FakeRoom` on the reference tests'
   virtual-time loop, with providers whose delays are drawn from `corpus/calibration.json`:
   pipeline (streaming, recognize-only over a VAD, or fallback STT; a chunked or streaming voice)
   or realtime (server turn detection or not, the default VAD or none), room options, a toolset

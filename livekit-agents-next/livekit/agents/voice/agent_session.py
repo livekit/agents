@@ -1,6 +1,6 @@
-"""``LiveSession``: the developer's handle on a session the Rust core runs.
+"""``VoiceSession``: the developer's handle on a session the Rust core runs.
 
-The core (``_core.LiveSession``) owns the whole session: turn detection, scheduling, generation,
+The core (``_core.VoiceSession``) owns the whole session: turn detection, scheduling, generation,
 tools' ordering, interruptions, the room's io. This class turns the constructor's arguments into
 the core's, forwards each call as one command, mirrors the core's events into the public event
 classes and answers the core's hook calls by running the ``Agent``'s methods.
@@ -80,7 +80,7 @@ if TYPE_CHECKING:
     from .room_io import RoomOptions
 
 __all__ = [
-    "LiveSession",
+    "VoiceSession",
     "ExpressiveOptions",
     "NonverbalOptions",
     "RecordingOptions",
@@ -157,7 +157,7 @@ def _core_leg(leg: Any) -> Any:
     return leg
 
 
-class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
         self,
         *,
@@ -190,7 +190,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """
         super().__init__()
         if unknown := options.keys() - _OPTION_DEFAULTS.keys():
-            raise TypeError(f"unexpected LiveSession options: {sorted(unknown)}")
+            raise TypeError(f"unexpected VoiceSession options: {sorted(unknown)}")
         self._conn_options = conn_options or SessionConnectOptions()
         self._options = _core.SessionOptions(
             {**_OPTION_DEFAULTS, **options, "conn_options": conn_options}
@@ -228,7 +228,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._context = context
         self._thread = thread
 
-        self._core: _core.LiveSession = None  # type: ignore[assignment]
+        self._core: _core.VoiceSession = None  # type: ignore[assignment]
         self._room: rtc.Room | _core.FakeRoom | _core.OfflineRoom | None = None
         self._amd: AMD | None = None
         self._agent: Agent | None = None
@@ -256,7 +256,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
-            raise ValueError("LiveSession userdata is not set")
+            raise ValueError("VoiceSession userdata is not set")
         return self._userdata
 
     @userdata.setter
@@ -345,7 +345,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def current_agent(self) -> Agent:
         if self._agent is None:
-            raise RuntimeError("LiveSession isn't running")
+            raise RuntimeError("VoiceSession isn't running")
         return self._agent
 
     @property
@@ -354,9 +354,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return AgentSessionUsage(model_usage=[_MODEL_USAGE.validate_python(u) for u in model_usage])
 
     @property
-    def _running(self) -> _core.LiveSession:
+    def _running(self) -> _core.VoiceSession:
         if self._core is None:
-            raise RuntimeError("LiveSession isn't running")
+            raise RuntimeError("VoiceSession isn't running")
         return self._core
 
     # --- lifecycle -----------------------------------------------------------------------
@@ -414,7 +414,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         sampler = self._video_sampler
         keyterm_llm = _detection_llm(self._stt_context)
         self._room = room
-        self._core = _core.LiveSession(
+        self._core = _core.VoiceSession(
             room,
             instructions=frame["instructions"],
             dynamic_instructions=frame["dynamic_instructions"],
@@ -534,7 +534,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._core is not None:
             self._core.shutdown(drain=drain)
 
-    async def __aenter__(self) -> LiveSession[Userdata_T]:
+    async def __aenter__(self) -> VoiceSession[Userdata_T]:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -856,7 +856,7 @@ _ERROR_RECORDS: dict[str, tuple[Any, str]] = {
 def __getattr__(name: str) -> Any:
     if name == "AgentSession":
         # deprecated alias, kept one release
-        return LiveSession
+        return VoiceSession
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -881,7 +881,7 @@ class _DynamicInstructions:
     """An agent's ``@agent.instructions`` functions, rendered by the core before each model
     request of a reply (``_core_render``)."""
 
-    def __init__(self, session: LiveSession[Any], agent: Agent) -> None:
+    def __init__(self, session: VoiceSession[Any], agent: Agent) -> None:
         self._session = session
         self._agent = agent
 
@@ -899,7 +899,7 @@ def _origin() -> str | None:
 
 
 @contextlib.contextmanager
-def _in_hook(hook: str, session: LiveSession[Any], agent: Agent) -> Any:
+def _in_hook(hook: str, session: VoiceSession[Any], agent: Agent) -> Any:
     binding = _BindingContextVar.set(_VoiceBinding(session, agent, origin="hook"))
     name = _hook_name.set(hook)
     try:
@@ -913,7 +913,7 @@ class _AgentHooks:
     """The agent's hooks as the core awaits them (``_core.SessionHooks``): each runs in the agent's
     binding and returns the core's answer; ``render_tool_reply`` is the core's default."""
 
-    def __init__(self, session: LiveSession[Any]) -> None:
+    def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
 
     async def _core_on_enter(self, agent: Agent) -> None:
@@ -1001,17 +1001,17 @@ class _AgentNodes:
         return self._agent.stt_node(audio, ModelSettings())
 
 
-_HANDLERS: dict[str, Callable[[LiveSession[Any], dict[str, Any]], None]] = {
-    "speech_created": LiveSession._on_speech_created,
-    "conversation_item_added": LiveSession._on_item_added,
-    "run_item_added": LiveSession._on_run_item,
-    "run_refused": LiveSession._on_run_refused,
-    "run_settled": LiveSession._on_run_settled,
-    "tool_execution_updated": LiveSession._on_tool_update,
-    "metrics_collected": LiveSession._on_metrics,
-    "session_usage_updated": LiveSession._on_usage,
-    "overlapping_speech": LiveSession._on_overlapping_speech,
-    "error": LiveSession._on_error,
-    "close": LiveSession._on_close,
-    "amd_result": LiveSession._on_amd_result,
+_HANDLERS: dict[str, Callable[[VoiceSession[Any], dict[str, Any]], None]] = {
+    "speech_created": VoiceSession._on_speech_created,
+    "conversation_item_added": VoiceSession._on_item_added,
+    "run_item_added": VoiceSession._on_run_item,
+    "run_refused": VoiceSession._on_run_refused,
+    "run_settled": VoiceSession._on_run_settled,
+    "tool_execution_updated": VoiceSession._on_tool_update,
+    "metrics_collected": VoiceSession._on_metrics,
+    "session_usage_updated": VoiceSession._on_usage,
+    "overlapping_speech": VoiceSession._on_overlapping_speech,
+    "error": VoiceSession._on_error,
+    "close": VoiceSession._on_close,
+    "amd_result": VoiceSession._on_amd_result,
 }

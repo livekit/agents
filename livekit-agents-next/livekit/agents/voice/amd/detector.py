@@ -1,6 +1,6 @@
 """``AMD``: the answering-machine detector a call attaches to its session.
 
-The core runs the detector (``_core.LiveSession.attach_amd``): the wait on the room for the
+The core runs the detector (``_core.VoiceSession.attach_amd``): the wait on the room for the
 callee's answer, the classifier, its timers, the authorization hold, the IVR navigator's close,
 AMD's own STT and the interrupt on a machine verdict. This class resolves the models and hands a
 ``machine-ivr`` verdict to the navigator.
@@ -24,7 +24,7 @@ from .classifier import CLASSIFIER_TOOLS, AMDCategory, AMDPredictionEvent
 
 if TYPE_CHECKING:
     from ...inference import LLMModels
-    from ..agent_session import LiveSession
+    from ..agent_session import VoiceSession
 
 __all__ = ["AMD", "DetectionOptions"]
 
@@ -58,7 +58,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             result = await detector.execute()
 
     Args:
-        session: The :class:`LiveSession` to wire AMD to.
+        session: The :class:`VoiceSession` to wire AMD to.
         llm: LLM used for greeting classification, an :class:`LLM` or an inference model
             string. When omitted, the gateway's default model with LiveKit Cloud credentials,
             else the session's LLM. ``None`` always reuses the session's LLM.
@@ -76,7 +76,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
 
     def __init__(
         self,
-        session: LiveSession,
+        session: VoiceSession,
         *,
         llm: NotGivenOr[_LLM | LLMModels | str | None] = NOT_GIVEN,
         stt: NotGivenOr[_STT | str | None] = NOT_GIVEN,
@@ -169,7 +169,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         if self._session._amd is self:
             self._session._amd = None
 
-    async def _run(self, session: LiveSession) -> None:
+    async def _run(self, session: VoiceSession) -> None:
         if self._attached:
             logger.warning("AMD already running, skipping")
             return
@@ -224,7 +224,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         self._verdict_ready.set()
         self.emit("amd_prediction", result)
 
-    def _resolve_llm(self, session: LiveSession) -> _LLM | None:
+    def _resolve_llm(self, session: VoiceSession) -> _LLM | None:
         llm: _LLM | None = None
         if isinstance(self._llm_config, str):
             llm = inference.LLM(self._llm_config)

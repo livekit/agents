@@ -1,8 +1,8 @@
 """
 - Northside's front desk, with an insurance eligibility expert deployed on its own.
 - The voice door is thin: the realtime model's one tool is the front desk's own text door,
-  `A2AAgent(FRONT_DESK_URL).as_tool()`, and the front desk owns the real ones.
-- The front desk exposes the eligibility endpoint through `A2AAgent(EXPERT_URL).as_tool()`.
+  `RemoteAgent(FRONT_DESK_URL).as_tool()`, and the front desk owns the real ones.
+- The front desk exposes the eligibility endpoint through `RemoteAgent(EXPERT_URL).as_tool()`.
   Progress and task correlation are handled by the adapter.
 - The expert's card offers the Live extension, so it writes its own lane in the caller's thread,
   on its own worker. `public=False` closes its endpoint to callers without a project token; the
@@ -12,8 +12,8 @@
 
 import asyncio
 
-from livekit.agents import Agent, AgentServer, JobContext, LiveSession, RunContext, RunResult
-from livekit.agents.a2a import A2AAgent, A2ASessionContext
+from livekit.agents import Agent, AgentServer, JobContext, RunContext, RunResult, VoiceSession
+from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 from livekit.agents.storage import AgentDBStorage
 from livekit.plugins import openai
 
@@ -40,11 +40,13 @@ eligibility = Agent(
 front_desk = Agent(
     instructions="Northside Family Clinic front desk. Appointments, insurance, directions.",
     llm="google/gemma-4-31b-it",
-    tools=[A2AAgent(EXPERT_URL).as_tool()],
+    tools=[RemoteAgent(EXPERT_URL).as_tool()],
 )
 voice = Agent(
     instructions="You are the clinic's voice on the phone. Hand every request to the front desk.",
-    tools=[A2AAgent(FRONT_DESK_URL).as_tool()],  # one tool, ask_front_desk, described by its card
+    tools=[
+        RemoteAgent(FRONT_DESK_URL).as_tool()
+    ],  # one tool, ask_front_desk, described by its card
 )
 
 
@@ -70,7 +72,7 @@ server = AgentServer(storage=AgentDBStorage())
 @server.rtc_session()
 async def phone(ctx: JobContext) -> None:
     # the voice door is thin: the realtime model owns the floor, the front desk owns the tools
-    session = LiveSession(llm=openai.realtime.RealtimeModel(), thread=ctx.thread)
+    session = VoiceSession(llm=openai.realtime.RealtimeModel(), thread=ctx.thread)
     await session.start(agent=voice, room=ctx.room)
 
 

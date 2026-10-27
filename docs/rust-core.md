@@ -7,63 +7,59 @@ inference clients, media) is written once in Rust and reached from each
 language through a generated binding. The packages keep what only a host
 language can do and what a developer reads, writes or subclasses.
 
-Additional core architecture is in [planned-rust-core.md](planned-rust-core.md).
-
 ## What lives where
 
 | Rust, `rust/crates`                                                                                                                                                   | Python, `livekit-agents`                                                                                                         |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | the worker control plane: registration, load and status, job assignment, the WebSocket and WebTransport transports, the endpoint streams cloud opens per HTTP request | process management and IPC (`ipc/`): the process pool, job processes, signals, the ASGI app the endpoint streams are served into |
 | the agent-db client: the `wsdb` protocol, the thread schema, every SQL statement, the lease and its renewal, the answer streams, the threads service client         | `storage/`: the developer-facing types, thread resolution, the A2A door                                                         |
-| the voice driver, the `Native*` inference clients and fallback adapters, MCP, media decode and encode, resampling                                                     | the developer surface: `Agent`, `AgentSession`, `LiveSession`, tools, tasks, `RunContext`, plugins                               |
+| the voice driver, the `Native*` inference clients and fallback adapters, MCP, media decode and encode, resampling                                                     | the developer surface: `Agent`, `TextSession`, `VoiceSession`, `VoiceTask`, tools, `RunContext`, plugins                               |
 
 Plugins stay Python. A Python provider reaches the core through a host
 proxy: the core calls the Python object behind a Rust trait (see "Host
 callbacks").
 
-The Python package drives the worker and storage through `_core`. The voice,
-inference, media and rtc crates are compiled into `_core` and register their
-classes; the Python voice pipeline does not call them.
+Python and Node reach the Rust runtime and its cores through generated
+bindings. The runtime drives voice, worker, storage, inference, and media
+operations; language hosts expose application callbacks and provider plugins.
 
 ## Crates
 
-| Crate                   | Subject                                                                                                                                                                                                                                                                                                                            |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lk-agents-abi`         | The provider seam (`Stt`, `Tts`, `Llm`, `Vad`, `Realtime` traits) and the data vocabulary every other crate is written against, one module per subject named like the Python package. The host records (`#[derive(Host)]`). Behind its `python` feature: the registration table, the fork guard, the host bridge. Performs no I/O. |
-| `lk-agents-bindgen`     | The expansion of `#[host(..)]`: an item's pyo3 binding, emitted in the crate that owns the item. Shares its attribute parser with `lk-agents-codegen`.                                                                                                                                                                             |
-| `lk-agents-host-derive` | The proc macros: `#[derive(Host)]`, `#[host(..)]`, `Vocabulary`. Reached through `lk-agents-abi`.                                                                                                                                                                                                                                  |
-| `lk-agents-codegen`     | The generator binary: reads every declaration and writes the `.pyi` stubs, the pydantic modules, the plugin base classes, the TypeScript interfaces and the napi records. Also `check-layout`, the architecture check on the voice crate's module boundaries.                                                                      |
-| `lk-agents-media`       | Container decode to PCM, ogg/opus encode, image encode, resampling. Pure Rust by default; `blingfire`, `images`, `ffmpeg` and `resample` add the C and C++ parts.                                                                                                                                                                  |
-| `lk-agents-rtc`         | RTC capabilities supplied by the host SDK: rooms, participants, tracks, streams and audio sources as host proxies, plus a fake room for tests.                                                                                                                                                                                     |
-| `lk-agents-inference`   | The `Native*` inference-gateway clients (STT, TTS, LLM, realtime, VAD, end of turn, AMD, interruption), the fallback adapters, the MCP client. The socket appears only in `transport` and `native`.                                                                                                                                |
-| `lk-agents-voice`       | The voice session driver. Directories mirror the Python voice modules (`agent_session/`, `agent_activity/`, `generation/`, `audio_recognition/`, `room_io/`); `trace.rs` is the `Step` journal.                                                                                                                                    |
-| `lk-agents-worker`      | The worker control plane: `Worker`, `WorkerHost`, the sans-IO `WorkerState`, the transports, `EndpointStream`.                                                                                                                                                                                                                     |
-| `lk-agents-storage`     | The thread storage client: `conn` (wsdb), `schema`, `db`, `run`, `streams`. See [storage.md](storage.md).                                                                                                                                                                                                                        |
-| `lk-agents-a2a`         | The A2A text door's turn engine: one message through its policy on a lane of `lk-agents-storage`, the handler on the host.                                                                                                                                                                                                       |
-| `lk-agents-fuzz`        | The voice behavioural suite (see "Testing").                                                                                                                                                                                                                                                                                       |
-| `lk-agents-py`          | `livekit.agents._core`, the pyo3 extension. A shell.                                                                                                                                                                                                                                                                               |
-| `lk-agents-node`        | `@livekit/agents-core`, the napi-rs binding.                                                                                                                                                                                                                                                                                       |
+| Crate | Responsibility |
+| --- | --- |
+| `lk-agents-abi` | Data vocabulary: typed records, chat items, events/effects, resource references, and host records; no I/O or async runtime |
+| `lk-agents-bindgen` | Expands binding declarations in their owning crate; shares its parser with codegen |
+| `lk-agents-host-derive` | The `Host`, `host`, and `Vocabulary` proc macros |
+| `lk-agents-codegen` | Generates Python stubs/models/provider bases, TypeScript interfaces, napi records, and architecture checks |
+| `lk-agents-media` | Decode, encode, image conversion, and resampling; optional codec features add C/C++ implementations |
+| `lk-agents-inference` | Deterministic reconnect, retry, and provider-fallback decisions |
+| `lk-agents-voice` | Session decision core and data-plane core; generation, tools, IVR, AMD, transcription timing, and turn decisions |
+| `lk-agents-worker` | Worker control-plane decisions, including `WorkerState` |
+| `lk-agents-storage` | Schema, statement plans, lease/fence decisions, and run commit rules |
+| `lk-agents-a2a` | Text endpoint policies and transport-turn decisions over storage |
+| `lk-agents-runtime` | All async I/O: provider traits/clients, connections, clocks, RTC proxies/fakes, resource tables, event queues, and async host APIs |
+| `lk-agents-fuzz` | Drives cores directly through typed events and behavioral contracts |
+| `lk-agents-py`, `lk-agents-node` | Language registration shells for the generated API |
 
 Dependencies point down:
 
 ```
-lk-agents-py, lk-agents-node                    the bindings
-lk-agents-fuzz                                  tests the voice driver
-lk-agents-voice      -> rtc, media, abi
-lk-agents-inference  -> media, abi
-lk-agents-worker, lk-agents-rtc, lk-agents-media -> abi
-lk-agents-a2a        -> storage
-lk-agents-storage    -> host-derive
-lk-agents-abi        -> host-derive -> bindgen
-lk-agents-codegen    -> bindgen                 (a build tool, not linked)
+lk-agents-py, lk-agents-node                          registration
+lk-agents-runtime                                   I/O and queue ownership
+lk-agents-voice, -worker, -storage, -inference, -media decision/data-plane cores
+lk-agents-a2a -> lk-agents-storage                    transport policy decisions
+lk-agents-abi                                       shared data vocabulary
 ```
 
-`lk-agents-abi` is the bottom of the product crates: it cannot see voice or
-inference, so nothing that needs them lives there. `lk-agents-storage` is
-host-neutral and depends on no other product crate; `lk-agents-a2a`, also host-neutral, only
-on it. The workspace builds
-from the sibling `livekit/rust-sdks` checkout for `livekit-protocol` (the
-`livekit.agent` protobuf package and the worker wire) and `livekit-token`.
+No core depends on `lk-agents-runtime` or an async executor. Provider and RTC
+objects stay in runtime-owned tables; cores receive typed resource descriptions
+and IDs. Shared RTC data records live in ABI; RTC traits, proxies, and the fake
+room belong to the runtime. `lk-agents-fuzz` depends on the cores without the
+runtime; runtime-adapter tests can use a deterministic executor.
+
+Proc macros and codegen are build tools, not runtime dependencies on I/O.
+The workspace reuses `livekit-protocol`, `livekit-api`, and `livekit-token`
+from LiveKit's Rust SDK rather than duplicating their wire definitions.
 
 ## Boundaries
 
@@ -71,16 +67,16 @@ from the sibling `livekit/rust-sdks` checkout for `livekit-protocol` (the
 
 The core never links the `livekit` crate or `livekit-ffi`. Rooms,
 participants, tracks and audio sources belong to the host's SDK and reach
-Rust as host proxies (`lk-agents-rtc`); no rtc type appears in a core
-signature. User-defined audio and text I/O goes through `voice/io`.
+Rust as runtime-owned host proxies; core signatures contain only ABI data
+records and resource IDs, never live RTC objects. User-defined audio and text I/O goes through `voice/io`.
 
 ### Host callbacks
 
-The core calls into Python in three shapes, all generated:
+The runtime calls into Python in three shapes, all generated:
 
 | Shape              | Declared as                                                               | Used by                                                                        |
 | ------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| provider proxy     | a bare `#[host(proxy(host = "livekit.agents.llm.LLM"))]` on the abi trait | a Python STT, TTS, LLM, VAD or realtime model driven by the core               |
+| provider proxy     | a bare `#[host(proxy(host = "livekit.agents.llm.LLM"))]` on the runtime provider trait | a Python STT, TTS, LLM, VAD or realtime model driven by the core               |
 | `open(kind, args)` | one bridge for every kind, returning an awaitable                         | `WorkerHost`: `job_request`, `launch_job`, `terminate_job`, `load`, `endpoint` |
 | stream proxy       | `#[host(proxy)]` on a trait whose method returns a sink and a source     | `TurnHost`: `handle` returns the turn's events, checkpoints answered by verdicts |
 
@@ -143,7 +139,8 @@ pub struct AgentStateChanged { .. }
   `python` feature it expands to the record's pyo3 conversions or class.
 - `#[host(..)]` on a function, `impl`, trait, stream or error expands in
   place to its pyo3 function, methods, proxy, stream class or exception
-  (`lk-agents-bindgen`). Only `lk-agents-py` turns the `python` features on.
+  (`lk-agents-bindgen`). Async items and host proxies are declared in the
+  runtime; synchronous core items and ABI data remain free of an executor.
 - `lk-agents-codegen` parses the same source with `syn` for what a proc
   macro cannot see (order, doc comments) and writes the `.pyi` stubs and
   pydantic modules under `livekit-agents/livekit/agents/_generated/`, the
@@ -161,9 +158,121 @@ cargo run -p lk-agents-codegen -- --write   # regenerate in place
 cargo run -p lk-agents-codegen -- --check   # exit 1 when a generated file would change
 ```
 
-`lk-agents-py` is `lib.rs` (registration) and `runtime.rs` (`init`, the
-fork guard re-export). The hand-written exceptions are
-`lk-agents-py/src/storage.rs` and `lk-agents-py/src/turn.rs` (see the bindings rules).
+The language bindings are registration shells. Runtime initialization, the
+fork guard, async host bridging, and voice handles live in
+`lk-agents-runtime` behind its language features and are generated from their
+own declarations.
+
+## Managed turns and the host boundary
+
+The storage and A2A cores decide lease ownership, fencing, arrival order,
+inbox policies, task transitions, and commit plans. Runtime adapters execute
+the database requests, renewals, streams, and transport writes. A storage
+script can await ordered I/O, but stateful policy decisions remain in cores.
+Python and Node use the same turn machinery.
+
+The internal host opens a handler as an event source and verdict sink:
+
+```text
+handle(TurnContext) -> (Sink<Verdict>, Source<TurnEvent>)
+```
+
+The host emits checkpoints before model calls and answer delivery. The turn
+answers each with `continue` or `yield`, then consumes the handler's final
+output. `TurnContext` carries thread/lane identity, incoming messages, history,
+explicitly saved fields, transport task records, and permitted caller history.
+The handler output carries new history items, typed output or an input-required
+outcome, usage, explicitly staged field writes, and failure/yield information.
+Cross-boundary records are generated from ABI declarations.
+
+Submission makes the task record durable before acknowledging it; execution
+then applies the lane policy. Lease loss fences writes; worker loss does not
+implicitly rerun application code. Storage failures surface as failed transport
+outcomes under the [storage contract](storage.md#the-unit-of-work).
+
+Application context construction and field load/save stay explicit in the host.
+Only staged fields join the managed write set. `TextSessionState` is saved
+application data, not a stack reconstructed by storage. The internal checkpoint
+protocol is distinct from the public [semantic run stream](agents.md#semantic-events).
+
+## Voice core execution
+
+### Steps, time, and resources
+
+The session core exposes `handle(event, now) -> effects` and
+`wake_at() -> Option<Ts>`. Its queue owner delivers a due wake before another
+input at the same instant. `now` supplies the session clock and its wall-time
+mapping; item timestamps derive from that step. IDs are counters seeded once
+at construction. The core reads neither clocks nor entropy.
+
+Providers, room objects, inputs, outputs, and recorders live in a runtime
+resource table. Events identify them by `ResourceId` and carry their required
+data: kind, capabilities, sample rate, and label. The core never retains a
+provider object, channel, callback closure, or independently running future.
+
+### Inputs and effects
+
+| Source | Inputs |
+| --- | --- |
+| Host | Validatable API arguments, hook answers, and tool results, all with request IDs |
+| Hearing | STT, VAD, end-of-turn and overlap reports; leg lifecycle events |
+| Models | LLM text/tool events, TTS output and completion, realtime events |
+| Data plane | Playout progress, cuts, gates, and forwarded-frame counters |
+| Room | Participant and track lifecycle events |
+| Time | A wake with supplied clock values |
+
+Effects request provider I/O, host tools/hooks, resource changes, media gates,
+output operations, host-view updates, and journal observations. The runtime
+executes them and reports answers as correlated events. Decisions occur in
+the step, not in effect execution.
+
+### Pending answers and synchronous host views
+
+Maintain pending entries for API calls, hooks, tools, and model requests.
+Each entry is settled by its answer, cancellation, or timeout wake. Settled IDs
+are never reused; late answers are ignored and journalled. End-of-operation
+cleanup cannot declare success while it still owes an answer.
+
+The runtime maintains the values host code reads synchronously, such as speech
+state, resolved options, and participant identity, from host-view effects.
+`interrupt()` is the narrow exception: its host-request flag is monotone and
+can be recorded immediately while the core separately reports the actual
+speech outcome. Other option changes become visible through the core's
+accepted update; tests compare host views with settled core state.
+
+### Streaming and the data plane
+
+LLM tokens are input events. Pure generation logic splits sentences and requests
+TTS as soon as text is ready. Audio demand provides backpressure: runtime
+adapters pull provider audio while the output buffer has room. Cancellation,
+stalls, and interruptions are explicit state transitions.
+
+A separate data-plane core handles 20 ms media frames without routing every
+frame through the decision queue. It owns microphone fan-out, conversion,
+output buffering, transcription timing against played audio, recording taps,
+and pre-connect buffering. Decision-core effects change its gates; it reports
+playout positions and counters through the queue owner. A cut reports where
+playback stopped. The boundary between the two cores is visible to the fuzzer.
+
+### Scheduling, composition, and replay
+
+A session owns no dedicated thread. The process runtime steps many sessions,
+one event per core at a time. Work per event follows what changed; a VAD tick
+must not scan every subsystem. Smaller machines own their state and exchange
+typed internal signals in a defined order until settled; the driver routes
+signals and concatenates effects. External events, not internal signals, are
+reordered by the scheduling harness.
+
+Core tests need no executor. They cover raw host-argument validation, pending
+answers, same-instant ordering, bursts, resource lifecycle, and consistency
+between cores and host views. Runtime adapters use fake sockets and a
+deterministic executor. Sampling policies and seeds are retained with cases;
+compare distinct findings as well as reach under the same inputs.
+
+The runtime exports journal observations without retaining an unbounded call
+log in memory. Production event logs can contain conversation text; retention,
+redaction, and access follow application policy. Offline replay supplies the
+recorded events and clock values to cores without repeating external effects.
 
 ## Testing
 
@@ -184,10 +293,11 @@ fakes: every event at a provider boundary (a transcript, a detector tick, a
 playout report, a socket drop) is an input the case sends. Runs are
 deterministic: paused virtual time, session-scoped ids. The run owns the
 driver's queue: it calls `handle` itself and delivers a due wake first. Then
-the case's policy, saved with the case, chooses between the next pending event
-and a turn for one of the driver's ready tasks: arrival order drains the queue
-first, as the channel does; partial-order sampling picks events by random
-priority within each source's order and interleaves task turns at random. The
+the case's saved scheduling policy chooses which external event is delivered
+next. Partial-order sampling preserves each source's causal order, varies
+inter-source ordering, and delivers bursts before settlement. The hop between
+the decision and data-plane cores is another schedulable external boundary;
+internal machine signals retain their defined order. The
 search (`src/search/`) plays the person, the developer's program
 and the providers, each acting on what it observed, with a per-seed dial of
 uniform moves from none to almost all. `rules/` holds one guarantee per file,
@@ -260,9 +370,7 @@ What decides is a core; what talks is `lk-agents-runtime`, one crate for all
 I/O, the way everything Python lives in `lk-agents-py`. A script that only
 awaits I/O in sequence (a statement, then the next) stays a script in the
 runtime; the decisions inside it (a lease, a policy, a retry) are a core.
-`WorkerState` (`lk-agents-worker/src/state.rs`) is the model. The crate
-layout and voice design are in
-[planned-rust-core.md](planned-rust-core.md#cores-and-the-runtime).
+`WorkerState` (`lk-agents-worker/src/state.rs`) is the model.
 
 - **A core is a state machine.** `handle(event, now) -> effects`, and
   `wake_at() -> Option<Ts>` for when it next wants `Event::Wake`: no
@@ -311,7 +419,7 @@ layout and voice design are in
 ### Names and layout
 
 - **Names follow the Python reference.** The same concept carries the
-  same name (`AgentSession`, `AgentActivity`, `SpeechHandle`,
+  same name (`VoiceSession`, `AgentActivity`, `SpeechHandle`,
   `schedule_speech`), snake_cased. The structure may differ.
 - **1,250 lines per `.rs` file** under `rust/crates`. Generated output
   (first-line mark) is skipped. Enforced by the layout check.
@@ -327,15 +435,12 @@ layout and voice design are in
 - **Bindings are generated in place.** `#[host(..)]` on the core item
   expands to pyo3 and napi behind the `python` and `node` features. One
   declaration gives pyo3, napi, `.pyi` and `.d.ts`.
-- **`lk-agents-py` and `lk-agents-node` are shells:** `lib.rs`
-  (registration) and `runtime.rs` only.
+- **`lk-agents-py` and `lk-agents-node` are registration shells.** Runtime
+  support and async bridging belong to `lk-agents-runtime`.
 - **Host records are declared only in `lk-agents-abi`.** Enforced by the
   layout check.
 - **Extend the generator, never hand-write binding code.** A Rust
   declaration may not be bigger than the Python it replaces.
-- **Known exceptions:** `lk-agents-py/src/storage.rs` and
-  `lk-agents-py/src/turn.rs` are hand-written until both move to `#[host]` on
-  `lk-agents-storage`.
 
 ### Typed end to end
 
@@ -345,7 +450,7 @@ The framework is typed end to end, in Python and in Node.
   callback is fully typed. The generated `.pyi` and `.d.ts` are the typed
   surface of the core; the `.d.ts` carries no `any`.
 - **Generics carry types:** `Agent[Context, Output]`,
-  `RunContext[Context]`, `RunResult[Output]`, router frames.
+  `RunContext[Context]`, `RunResult[Output]`, session frames.
 - **Typed data at boundaries.** Persisted fields, output and tool
   arguments are validated types, never raw dicts in the developer surface.
 - **Typed wire.** A2A frames, grants, threads service calls and extension

@@ -49,7 +49,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
 _NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
@@ -244,7 +244,7 @@ class _STTPipeline:
 class AudioRecognition:
     def __init__(
         self,
-        session: LiveSession,
+        session: VoiceSession,
         *,
         hooks: RecognitionHooks,
         endpointing: BaseEndpointing,

@@ -230,7 +230,7 @@ class STT(stt.STT):
                 Only supported with the Universal-3 Pro family models. Set at construction
                 (connect) time only; it cannot be changed via `update_options`.
             agent_context_carryover: Deprecated, use
-                ``LiveSession(stt_context_options={"forward_chat_context": ...})`` instead.
+                ``VoiceSession(stt_context_options={"forward_chat_context": ...})`` instead.
                 On the Universal-3 Pro family, assistant replies are carried into ``agent_context``
                 by default; pass ``False`` to opt out. On other models it is off. Replies longer
                 than the 1750-character server cap are truncated (keeping the tail) before
@@ -278,7 +278,7 @@ class STT(stt.STT):
         if is_given(agent_context_carryover):
             logger.warning(
                 "'agent_context_carryover' is deprecated, use "
-                "LiveSession(stt_context_options={'forward_chat_context': ...}) instead."
+                "VoiceSession(stt_context_options={'forward_chat_context': ...}) instead."
             )
             if agent_context_carryover and not supports_carryover:
                 logger.warning(

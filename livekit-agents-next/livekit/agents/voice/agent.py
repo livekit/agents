@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_run import AgentRun
-    from .agent_session import ExpressiveOptions, LiveSession
+    from .agent_session import ExpressiveOptions, VoiceSession
     from .events import RunContext
     from .run_result import RunResult, RunUsage
     from .turn import TurnDetectionMode
@@ -66,7 +66,7 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R", bound=Awaitable[Any])
 _InstructionsFn = Callable[["RunContext"], str | Awaitable[str]]
 _InstructionsFnT = TypeVar("_InstructionsFnT", bound=Callable[..., str | Awaitable[str]])
-_OnEnterFn = Callable[["LiveSession"], Any]
+_OnEnterFn = Callable[["VoiceSession"], Any]
 _OutputValidatorFn = Callable[["RunContext", Any], Any]
 Output_T = TypeVar("Output_T", default=Any)
 
@@ -79,7 +79,7 @@ _BindingContextVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_age
 class _VoiceBinding(NamedTuple):
     """The voice session running ``agent``'s hook or tool, and what its commands are sent as."""
 
-    session: LiveSession
+    session: VoiceSession
     agent: Agent
     origin: str | None = None
 
@@ -222,7 +222,7 @@ class Agent(Generic[Context_T, Output_T]):
         self._mcp_servers = mcp_servers
         if self._mcp_servers:
             logger.warning(
-                "passing MCP servers to LiveSession or Agent is deprecated "
+                "passing MCP servers to VoiceSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
 
@@ -492,7 +492,7 @@ class Agent(Generic[Context_T, Output_T]):
     a decorator registering the function to run then, which receives the session::
 
         @scheduler.on_enter
-        async def greet(session: LiveSession) -> None:
+        async def greet(session: VoiceSession) -> None:
             session.generate_reply(instructions="Greet the caller.")
     """
 
@@ -665,7 +665,7 @@ class Agent(Generic[Context_T, Output_T]):
             )
         return binding
 
-    def _get_session_or_raise(self) -> LiveSession:
+    def _get_session_or_raise(self) -> VoiceSession:
         return self._get_voice_binding_or_raise().session
 
     def _get_voice_binding_or_raise(self) -> _VoiceBinding:
@@ -681,7 +681,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         Retrieves the turn detection mode for identifying conversational turns.
 
-        If this property was not set at Agent creation, but an ``LiveSession`` provides a turn detection,
+        If this property was not set at Agent creation, but an ``VoiceSession`` provides a turn detection,
         the session's turn detection mode will be used at runtime instead.
 
         Returns:
@@ -694,7 +694,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         Retrieves the Speech-To-Text component for the agent.
 
-        If this property was not set at Agent creation, but an ``LiveSession`` provides an STT component,
+        If this property was not set at Agent creation, but an ``VoiceSession`` provides an STT component,
         the session's STT will be used at runtime instead.
 
         Returns:
@@ -707,7 +707,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         Retrieves the Language Model or RealtimeModel used for text generation.
 
-        If this property was not set at Agent creation, but an ``LiveSession`` provides an LLM or RealtimeModel,
+        If this property was not set at Agent creation, but an ``VoiceSession`` provides an LLM or RealtimeModel,
         the session's model will be used at runtime instead.
 
         Returns:
@@ -720,7 +720,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         Retrieves the Text-To-Speech component for the agent.
 
-        If this property was not set at Agent creation, but an ``LiveSession`` provides a TTS component,
+        If this property was not set at Agent creation, but an ``VoiceSession`` provides a TTS component,
         the session's TTS will be used at runtime instead.
 
         Returns:
@@ -733,7 +733,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         Retrieves the expressive TTS delivery setting for the agent.
 
-        If this property was not set at Agent creation, the ``LiveSession``'s ``expressive``
+        If this property was not set at Agent creation, the ``VoiceSession``'s ``expressive``
         value will be used at runtime instead. When set, it overrides the session value for
         this agent's turns, matching how ``llm`` and ``tts`` overrides behave.
 
@@ -748,7 +748,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         Retrieves the list of Model Context Protocol (MCP) servers providing external tools.
 
-        If this property was not set at Agent creation, but an ``LiveSession`` provides MCP servers,
+        If this property was not set at Agent creation, but an ``VoiceSession`` provides MCP servers,
         the session's MCP servers will be used at runtime instead.
 
         Returns:
@@ -761,7 +761,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         Retrieves the Voice Activity Detection component for the agent.
 
-        If this property was not set at Agent creation, but an ``LiveSession`` provides a VAD component,
+        If this property was not set at Agent creation, but an ``VoiceSession`` provides a VAD component,
         the session's VAD will be used at runtime instead.
 
         Returns:
@@ -774,7 +774,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         Indicates whether interruptions (e.g., stopping TTS playback) are allowed.
 
-        If this property was not set at Agent creation, but an ``LiveSession`` provides a value for
+        If this property was not set at Agent creation, but an ``VoiceSession`` provides a value for
         allowing interruptions, the session's value will be used at runtime instead.
 
         Returns:
@@ -809,7 +809,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         Retrieves the minimum consecutive speech delay for the agent.
 
-        If this property was not set at Agent creation, but an ``LiveSession`` provides a value for
+        If this property was not set at Agent creation, but an ``VoiceSession`` provides a value for
         the minimum consecutive speech delay, the session's value will be used at runtime instead.
 
         Returns:
@@ -823,7 +823,7 @@ class Agent(Generic[Context_T, Output_T]):
         Indicates whether to use TTS-aligned transcript as the input of
         the ``transcription_node``.
 
-        If this property was not set at Agent creation, but an ``LiveSession`` provides a value for
+        If this property was not set at Agent creation, but an ``VoiceSession`` provides a value for
         the use of TTS-aligned transcript, the session's value will be used at runtime instead.
 
         Returns:
@@ -832,7 +832,7 @@ class Agent(Generic[Context_T, Output_T]):
         return self._use_tts_aligned_transcript
 
     @property
-    def session(self) -> LiveSession:
+    def session(self) -> VoiceSession:
         """
         Retrieve the VoiceAgent associated with the current agent.
 

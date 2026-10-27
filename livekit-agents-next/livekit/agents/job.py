@@ -88,7 +88,7 @@ if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .simulation import SimulationContext
     from .storage.resolve import Thread
-    from .voice.agent_session import LiveSession, RecordingOptions
+    from .voice.agent_session import RecordingOptions, VoiceSession
     from .voice.report import SessionReport
 
 
@@ -383,7 +383,7 @@ class JobContext:
         return self._info.fake_job
 
     @property
-    def _primary_agent_session(self) -> LiveSession | None:
+    def _primary_agent_session(self) -> VoiceSession | None:
         return self._run.primary_session  # type: ignore[no-any-return]
 
     @property
@@ -413,13 +413,13 @@ class JobContext:
         """
         return self._tagger
 
-    def make_session_report(self, session: LiveSession | None = None) -> SessionReport:
+    def make_session_report(self, session: VoiceSession | None = None) -> SessionReport:
         from .voice.report import SessionReport
 
         session = session or self._primary_agent_session
 
         if not session:
-            raise RuntimeError("Cannot prepare report, no LiveSession was found")
+            raise RuntimeError("Cannot prepare report, no VoiceSession was found")
 
         sr = SessionReport(
             job_id=self.job.id,
@@ -464,7 +464,7 @@ class JobContext:
     def thread(self) -> Thread | None:
         """The call's durable thread, resolved before the entrypoint runs: the ``thread_id`` of
         the dispatch metadata, else a new thread. ``None`` on a server without storage. Pass it
-        to ``LiveSession(thread=)``."""
+        to ``VoiceSession(thread=)``."""
         return self._thread
 
     @property
@@ -481,10 +481,10 @@ class JobContext:
         return self._room.local_participant
 
     @property
-    def primary_session(self) -> LiveSession:
-        """Returns the primary LiveSession for this job."""
+    def primary_session(self) -> VoiceSession:
+        """Returns the primary VoiceSession for this job."""
         if not self._primary_agent_session:
-            raise RuntimeError("No LiveSession was started for this job")
+            raise RuntimeError("No VoiceSession was started for this job")
         return self._primary_agent_session
 
     def simulation_context(self) -> SimulationContext | None:

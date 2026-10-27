@@ -42,7 +42,7 @@ import aiohttp
 import numpy as np
 
 from livekit import api, rtc
-from livekit.agents import Agent, AgentServer, JobContext, LiveSession, cli, inference
+from livekit.agents import Agent, AgentServer, JobContext, VoiceSession, cli, inference
 from livekit.agents.utils import shortuuid
 
 TOPIC = "lk.latency"
@@ -71,7 +71,7 @@ STAGES = {
 
 
 async def entry(ctx: JobContext) -> None:
-    session = LiveSession(stt=STT, llm=LLM, tts=TTS)
+    session = VoiceSession(stt=STT, llm=LLM, tts=TTS)
     sends: set[asyncio.Task[Any]] = set()
 
     def on_item(ev: Any) -> None:

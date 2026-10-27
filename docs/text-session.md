@@ -1,12 +1,31 @@
-# AgentRouter and agents as tools
+# TextSession
+
+`TextSession` coordinates text conversations across requests: agent selection,
+private histories, pending expert calls, and human input. It can be reconstructed
+for each request; pass the previously saved `TextSessionState` to continue the
+same logical conversation. Agent definitions remain shared configuration.
+
+Each `run()` builds request-scoped execution from the supplied state. A text
+request has a bounded lifetime; its conversation state can outlive the request. The application explicitly loads and saves that state.
+The `TextSession` object, runtime services, and Python execution stack are not
+serialized.
 
 An `Agent` is shared configuration. A conversational task collects information
-across turns and produces a validated result. `AgentRouter` coordinates these
-conversations: it invokes `Agent.run()`, tracks agents called as tools, and
+across turns and produces a validated result. The text session invokes
+`Agent.run()`, tracks agents called as tools, and
 delivers each child's accepted output to its caller.
 
-Applications can call any agent directly. Routing state belongs to the router;
+Applications can call any agent directly. Routing state belongs to the session;
 application data and services belong to the context supplied by the application.
+
+`VoiceSession` owns frontend expert-tool interactions, event delivery, and human
+reply correlation. It does not require a `TextSession`. See
+[frontend expert events](voice.md#conversation-owned-inbox).
+
+`VoiceTask` has a separate frontend role: a bounded live interaction inside
+an active voice session, with its parent waiting in memory. Backend stateless
+runs use `Agent.run()`; backend conversations spanning requests use routing
+state. See [frontend voice interactions](voice.md#voicetask-frontend-live-interactions).
 
 ## Agent definitions and application data
 
@@ -51,7 +70,7 @@ The invocation ends when it returns, including when it needs human input.
 
 | `result.status` | Available data | What happens next |
 | --- | --- | --- |
-| `"completed"` | `result.output: Output` | The child completes and the router delivers its value to the parent tool call |
+| `"completed"` | `result.output: Output` | The child completes and the session delivers its value to the parent tool call |
 | `"input_required"` | `result.question: str` | Deliver the question and save the active conversation |
 
 `RunResult[Output]` is a discriminated union. Checking its literal `status`
@@ -60,12 +79,12 @@ and the input-required branch exposes the question. History and usage access
 are available on both branches.
 
 History methods on the result describe the agent invocation represented by
-that result. They do not flatten the router's private frame histories. Router
+that result. They do not flatten the session's private frame histories. Session
 state retains those separate histories for application inspection.
 
-The router returns an envelope containing `result: RunResult[Output]` and
-`state: RouterState`. The contained run result uses this invocation contract.
-Router frames and parent-call bookkeeping belong to the envelope's routing
+The session returns an envelope containing `result: RunResult[Output]` and
+`state: TextSessionState`. The contained run result uses this invocation contract.
+Session frames and parent-call bookkeeping belong to the envelope's routing
 state. See the [result surface](agents.md#running-a-turn).
 
 The model produces the application's final value. The framework constructs
@@ -124,7 +143,7 @@ For `output_type=str`, conversational tasks use an explicit final-output action
 to distinguish completion from a question. A standalone text run returns its
 answer as its output. Completion is determined by the output contract.
 
-## Running a routed conversation
+## Running a text conversation
 
 ```python
 @dataclass
@@ -149,37 +168,52 @@ front_desk = Agent[BookingContext](
     ],
 )
 
-router = AgentRouter(agent=front_desk)
+session = TextSession(agent=front_desk)
 
-routed = await router.run("I need a room", context=app)
+turn = await session.run("I need a room", context=app)
 
-routed = await router.run(
+turn = await session.run(
     "Two nights",
-    state=routed.state,
+    state=turn.state,
     context=app,
 )
 ```
 
-The router supplies each agent with its frame's history and the appropriate
+The session supplies each agent with its frame's history and the appropriate
 application context. It returns an envelope with two members:
 
 | Member | Responsibility |
 | --- | --- |
-| `routed.result` | `RunResult[Output]`: invocation status, output/question, history, and usage |
-| `routed.state` | `RouterState`: frames, active conversation, and parent tool-call relationships |
+| `turn.result` | `RunResult[Output]`: invocation status, output/question, history, and usage |
+| `turn.state` | `TextSessionState`: frames, active conversation, and parent tool-call relationships |
 
-Read `routed.result.status` to handle the outcome. Save `routed.state` and
+Read `turn.result.status` to handle the outcome. Save `turn.state` and
 changed application fields before accepting the next turn, including
 turns whose status is `"input_required"`.
 
-Only the active frame receives unaddressed human input. Its parent remains
-inactive while the child owns the conversation. Voice and text use the same
-routing and completion contract.
+Only the active backend frame receives unaddressed input. Its parent remains
+inactive while the child owns the backend conversation. When invoked remotely
+by a frontend, this backend returns progress, questions, and results through
+its endpoint; the caller's `VoiceSession` independently owns their presentation.
 
-## Loading and saving router state
+## Streaming a backend invocation
+
+`session.run_stream(...)` accepts the same input, state, and context as `run()`.
+It is an async context manager with `stream_text`, `stream_events`, and
+`result`. The settled value remains the session envelope: `turn.result`
+and `turn.state`. Individual child events identify their agent, invocation,
+and session frame; they do not merge private histories into the parent.
+
+The last text fragment is not a save boundary. Retrieve the settled envelope,
+assign its returned state, and explicitly save related application fields and
+routing state, including an input-required outcome. Cancellation or failure
+raises and does not manufacture a successful result/state envelope. See
+[text session streaming](agents.md#text-session-streaming).
+
+## Loading and saving session state
 
 The application loads routing state and passes it explicitly through `state=`.
-The router starts at its root agent when state is `None`; supplied state
+The session starts at its root agent when state is `None`; supplied state
 identifies the active frame and its history.
 
 Store routing state in an application-defined record with a persisted field:
@@ -187,32 +221,33 @@ Store routing state in an application-defined record with a persisted field:
 ```python
 from dataclasses import dataclass
 
-from livekit.agents import RouterState, persisted
+from livekit.agents import TextSessionState, persisted
 
 
 @dataclass
 class Conversation:
-    routing: RouterState | None = persisted(default=None)
+    session_state: TextSessionState | None = persisted(default=None)
 ```
 
 For each incoming request:
 
 ```python
+session = TextSession(agent=front_desk)
 conversation = Conversation()
 await ctx.store.load_context(conversation)
 await ctx.store.load_context(app)
 
-routed = await router.run(
+turn = await session.run(
     ctx.message,
-    state=conversation.routing,
+    state=conversation.session_state,
     context=app,
 )
 
-conversation.routing = routed.state
+conversation.session_state = turn.state
 await ctx.store.save_context(app)
 await ctx.store.save_context(conversation)
 
-result = routed.result
+result = turn.result
 if result.status == "input_required":
     await send_question(result.question)
 elif result.status == "completed":
@@ -225,11 +260,11 @@ a new conversation starts with the declared `None` default. `Conversation`
 is an application-defined storage record, while `app` is the freshly
 constructed application context supplied to agents.
 
-`router.run()` reads the supplied state and returns its envelope. The
-application assigns `routed.state` and saves explicitly after each retained turn,
+`session.run()` reads the supplied state and returns its envelope. The
+application assigns `turn.state` and saves explicitly after each retained turn,
 including `status="input_required"`. Runtime service objects remain outside routing
 state. Load and save any marked application-context fields explicitly as
-well; see [context persistence](state-and-deps.md#persisting-router-state).
+well; see [context persistence](state-and-deps.md#persisting-text-session-state).
 
 ## Configuring an agent tool
 
@@ -260,14 +295,14 @@ boolean configuration and read-back functions. The shared approval mechanism
 binds the decision to the invocation and its validated arguments. See
 [tool approval](tools.md#approval) for the read-back contract.
 
-With `needs_approval=True`, the router returns an input-required result asking
+With `needs_approval=True`, the session returns an input-required result asking
 permission to start the requested specialist. The child has not run yet.
-Router state retains the pending call's identity, validated arguments, and
+Session state retains the pending call's identity, validated arguments, and
 parent frame. Save this state and any changed application fields using the
-same [load/save flow](#loading-and-saving-router-state) as other human turns.
+same [load/save flow](#loading-and-saving-session-state) as other human turns.
 
 The next request loads that state and passes the person's reply to
-`router.run(...)`. The shared approval mechanism resolves the saved request using the same
+`session.run(...)`. The shared approval mechanism resolves the saved request using the same
 read-back and repeated-call rules as ordinary tools. Approval
 allows the requested child invocation to start; rejection resolves the parent tool
 call with the rejection so the parent can respond. A decision applies to the
@@ -280,7 +315,7 @@ permission to commit the booking. Configure that tool with
 draft revision. See [human input and approvals](human-in-the-loop.md#approvals).
 
 The application explicitly saves each returned routing state, including approval
-waits. Router state stores pending decisions and call relationships; runtime
+waits. Session state stores pending decisions and call relationships; runtime
 services are supplied again by the application on the next request. External
 effects still require their own idempotency and authorization checks.
 
@@ -288,17 +323,18 @@ effects still require their own idempotency and authorization checks.
 
 An agent exposed as a tool is a reusable responsibility with a typed result,
 such as booking a room or verifying a guest. The parent model selects that
-tool and supplies its input. The router creates a child frame and records the
+tool and supplies its input. The session creates a child frame and records the
 parent frame ID and originating tool-call ID.
 
-1. The router invokes the child with its own history and application context.
-2. If the child result has `status="input_required"`, the router returns an
+1. The session invokes the child with its own history and application context.
+2. If the child result has `status="input_required"`, the session returns an
    input-required result with the question and preserves the active child frame.
-   The parent waits.
+   The backend caller receives this outcome. A remote frontend can phrase
+   the question through its own live-session presentation mechanism.
 3. The next human message starts another child invocation with its saved history.
 4. A child result with `status="completed"` carries its accepted final output
    and completes the child frame.
-5. The router records that value as the originating parent tool call's result,
+5. The session records that value as the originating parent tool call's result,
    transfers visible dialogue if configured, and starts a fresh parent invocation.
    The parent LLM reads the result and selected dialogue, then generates its
    next response.
@@ -311,18 +347,20 @@ The waiting relationship is serialized data. It retains the parent frame and
 call identity while each Python invocation finishes. A parent tool function
 is not suspended across human turns.
 
-The router supplies the child's result to the recorded call before invoking
+The session supplies the child's result to the recorded call before invoking
 the parent model again. A parent waiting for a child is not sent to the model
 with an unresolved call. Ordinary follow-up questions stay within the active
-child conversation.
+backend child conversation. Frontend presentation belongs to the calling
+`VoiceSession`, outside this text session.
 
 ## Remote agent tools
 
-`A2AAgent(url).as_tool()` exposes a remote endpoint through the same agent-tool
+`RemoteAgent(url).as_tool()` exposes an A2A endpoint through the same agent-tool
 lifecycle. The remote card defines its public tool contract; its service owns
-history, approval, and execution. The router retains the references needed
-to forward human replies and deliver completion to the parent. Progress,
-cancellation, and protocol metadata are handled by the adapter. See
+history, approval, and execution. The text session retains the references needed to forward replies and
+deliver completion to its parent agent. The same remote tool can be attached
+to a frontend agent; there, `VoiceSession` owns those interactions without a
+session. Progress, cancellation, and protocol metadata are handled by the adapter. See
 [remote agents as tools](agents.md#remote-agents-as-tools).
 
 ## Frames and history isolation
@@ -334,7 +372,7 @@ Each conversational frame records:
 - Its parent frame ID and originating parent tool-call ID, when called as a tool.
 - The application's context-scope reference.
 
-Router state identifies the active frame and its ordered parent chain. Stack
+Session state identifies the active frame and its ordered parent chain. Stack
 depth is the number of active frames from root to child; it is not a Python
 call-stack depth. Completed frames may remain available for inspection but
 are not active ancestors. Multiple frames may invoke the
@@ -376,7 +414,7 @@ occurred while the child owned the conversation:
 Visible dialogue contains user messages and assistant messages actually
 delivered to the person. Child instructions, private tool calls/results, and
 internal model work remain in the child's frame. The complete child history
-remains available in router state for application inspection.
+remains available in session state for application inspection.
 
 For example, a booking agent may learn that the customer is travelling with
 a baby. Returning visible dialogue lets the parent retain that preference
@@ -389,7 +427,7 @@ need to return only a validated address.
 | Book a room using previously discussed preferences | Fork | Result and visible dialogue |
 | Review a selected part of a conversation | Fork with a history selector | Result only |
 
-The router delivers the chosen information before invoking the parent again.
+The session delivers the chosen information before invoking the parent again.
 Keep the parent's tool call/result sequence valid, preserve dialogue ordering,
 and record transferred messages so later turns do not append them again.
 Only dialogue added during the child conversation is eligible for transfer;
@@ -404,8 +442,7 @@ can be reused while booking drafts remain separate. See
 ## Authoritative completion and approval
 
 Tools enforce availability, price, prerequisites, and approval. Resolve final
-results against the authoritative service using an output validator or an
-output function:
+results against the authoritative service using an output function:
 
 ```python
 async def booking_result(
@@ -433,13 +470,13 @@ availability and authorization before committing the booking.
 
 ## Persistence and execution ownership
 
-Router state contains serializable frame histories and routing metadata.
+Session state contains serializable frame histories and routing metadata.
 The application explicitly loads and saves it alongside the relevant context
 fields. Runtime services are reconstructed by application code. Save routing
 and application changes consistently so both describe the same completed turn.
 
 Serialize turns for one conversation and use revision checks on saves. Bound
-agent-tool calls and nesting depth. Resolve stable agent IDs through the router's
+agent-tool calls and nesting depth. Resolve stable agent IDs through the session's
 configured agent definitions; an unknown ID produces a routing error.
 
 Conversation persistence preserves the position between turns. External effects
@@ -449,13 +486,13 @@ and arbitrary await points are outside the persisted state.
 ## Direct execution
 
 `agent.run(message, message_history=..., context=...)` always runs that agent.
-A stored routing frame is consulted only by `router.run(..., state=...)`.
+A stored routing frame is consulted only by `session.run(..., state=...)`.
 
 An application switching to direct execution supplies the selected frame's
 history and appropriate context. An active child's history is independently
 usable by `Agent.run()`. A parent waiting for a child must first receive the
 child outcome for its outstanding tool call.
 
-To return to routed execution, retain router state and update the selected
+To return to text-session execution, retain session state and update the selected
 frame with the direct run's resulting history. Routing state retains the
 parent-call relationship needed to deliver an accepted child result.

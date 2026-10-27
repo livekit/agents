@@ -50,7 +50,7 @@ from ..job import JobExecutorType
 from ..log import _add_global_log_fields, logger
 from ..plugin import Plugin
 from ..utils import aio, shortuuid
-from ..voice import LiveSession, io
+from ..voice import VoiceSession, io
 from ..voice.run_result import RunEvent
 from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, ServerEnvOption, WorkerOptions
@@ -391,13 +391,13 @@ class AgentsConsole:
         )
 
         # Present so this (local) console satisfies the same interface as the
-        # TCP console in ``cli.py`` that ``LiveSession``/``JobContext`` consult.
+        # TCP console in ``cli.py`` that ``VoiceSession``/``JobContext`` consult.
         # Always None here: the local console never uses a TCP transport.
         self._tcp_transport: Any = None
         self._tcp_audio_input: Any = None
         self._tcp_audio_output: Any = None
 
-    def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: LiveSession) -> None:
+    def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: VoiceSession) -> None:
         with self._lock:
             if self._io_acquired:
                 raise RuntimeError("the ConsoleIO was already acquired by another session")
@@ -484,7 +484,7 @@ class AgentsConsole:
             return self._io_acquired
 
     @property
-    def io_session(self) -> LiveSession:
+    def io_session(self) -> VoiceSession:
         if not self._io_acquired:
             raise RuntimeError("AgentsConsole is not acquired")
 
@@ -538,7 +538,7 @@ class AgentsConsole:
 
     def _update_sess_io(
         self,
-        sess: LiveSession,
+        sess: VoiceSession,
         mode: ConsoleMode,
         audio_input: ConsoleAudioInput,
         audio_output: io.AudioOutput,
@@ -1534,7 +1534,7 @@ def _run_console(
 ) -> None:
     c = AgentsConsole.get_instance()
 
-    # Register this rich console as the canonical instance that LiveSession and
+    # Register this rich console as the canonical instance that VoiceSession and
     # JobContext consult (they import ``AgentsConsole`` from the thin ``cli``
     # module). Without this, the local console's audio I/O would never be wired.
     from .cli import AgentsConsole as _CanonicalConsole
@@ -1692,7 +1692,7 @@ def _build_cli(server: AgentServer) -> typer.Typer:
             bool,
             typer.Option(help="Whether to start the console in text mode"),
         ] = False,
-        record: Annotated[bool, typer.Option(help="Whether to record the LiveSession")] = False,
+        record: Annotated[bool, typer.Option(help="Whether to record the VoiceSession")] = False,
         log_level: Annotated[
             LogLevel,
             typer.Option(

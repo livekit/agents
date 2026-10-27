@@ -24,7 +24,7 @@ from livekit.plugins.openai.realtime import gpt_live_model
 from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveDelegation,
     GPTLiveModel,
-    GPTLiveSession,
+    GPTVoiceSession,
 )
 from livekit.plugins.openai.realtime.gpt_live_types import ServiceTier
 from livekit.plugins.openai.tools import WebSearch
@@ -42,7 +42,7 @@ class _FakeWS:
     def __init__(self, *, auto_start: bool) -> None:
         self.sent: list[dict[str, Any]] = []
         self.auto_start = auto_start
-        self.session: GPTLiveSession | None = None
+        self.session: GPTVoiceSession | None = None
 
     async def send_str(self, data: str) -> None:
         event = json.loads(data)
@@ -67,11 +67,11 @@ def _connect_hook(monkeypatch: pytest.MonkeyPatch, *, auto_start: bool = True) -
     """Replace the handshake before any session exists, so nothing can reach the network."""
     ws = _FakeWS(auto_start=auto_start)
 
-    async def _create_ws_conn(self: GPTLiveSession) -> _FakeWS:
+    async def _create_ws_conn(self: GPTVoiceSession) -> _FakeWS:
         ws.session = self
         return ws
 
-    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", _create_ws_conn)
+    monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", _create_ws_conn)
     return ws
 
 
@@ -218,12 +218,12 @@ async def test_startup_failures_exhaust_retries(
 ) -> None:
     sockets: list[_LifecycleWS] = []
 
-    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+    async def connect(self: GPTVoiceSession) -> _LifecycleWS:
         ws = _LifecycleWS(start=len(sockets) + 1 == healthy_attempt, disconnect_on_start=True)
         sockets.append(ws)
         return ws
 
-    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", connect)
     model = GPTLiveModel(
         api_key="sk-test", conn_options=APIConnectOptions(max_retry=2, retry_interval=0)
     )
@@ -248,13 +248,13 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
     sockets = [_LifecycleWS(), _LifecycleWS()]
     connections = 0
 
-    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+    async def connect(self: GPTVoiceSession) -> _LifecycleWS:
         nonlocal connections
         ws = sockets[connections]
         connections += 1
         return ws
 
-    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", connect)
     monkeypatch.setattr(gpt_live_model, "_SESSION_CLOSE_TIMEOUT", 0.5)
     model = GPTLiveModel(api_key="sk-test", max_session_duration=0.1 if timed else None)
     session = model.session()
@@ -332,7 +332,7 @@ async def test_reconnect_discards_partial_input_audio(
     sockets = [_LifecycleWS(), _LifecycleWS()]
     connections = iter(sockets)
 
-    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+    async def connect(self: GPTVoiceSession) -> _LifecycleWS:
         return next(connections)
 
     def frame(level: int, duration_ms: int) -> rtc.AudioFrame:
@@ -344,7 +344,7 @@ async def test_reconnect_discards_partial_input_audio(
             samples_per_channel=samples,
         )
 
-    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", connect)
     model = GPTLiveModel(
         api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
     )
@@ -389,10 +389,10 @@ async def test_the_mute_state_survives_a_reconnect(monkeypatch: pytest.MonkeyPat
     sockets = [_LifecycleWS(), _LifecycleWS()]
     connections = iter(sockets)
 
-    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+    async def connect(self: GPTVoiceSession) -> _LifecycleWS:
         return next(connections)
 
-    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", connect)
     model = GPTLiveModel(
         api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
     )
@@ -434,10 +434,10 @@ async def test_an_unmuted_session_is_not_muted_again_on_reconnect(
     sockets = [_LifecycleWS(), _LifecycleWS()]
     connections = iter(sockets)
 
-    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+    async def connect(self: GPTVoiceSession) -> _LifecycleWS:
         return next(connections)
 
-    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", connect)
     model = GPTLiveModel(
         api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
     )
@@ -542,7 +542,7 @@ async def test_transport_errors_do_not_expose_provider_payloads(
     async def fail(*args: Any, **kwargs: Any) -> Any:
         raise aiohttp.ClientConnectionError(private)
 
-    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+    async def connect(self: GPTVoiceSession) -> _LifecycleWS:
         return ws
 
     model = GPTLiveModel(
@@ -553,7 +553,7 @@ async def test_transport_errors_do_not_expose_provider_payloads(
         monkeypatch.setattr(model, "_ensure_http_session", lambda: SimpleNamespace(ws_connect=fail))
     else:
         monkeypatch.setattr(ws, "send_str" if operation == "send" else "receive", fail)
-        monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+        monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", connect)
     session = model.session()
     errors: list[llm.RealtimeModelError] = []
     session.on("error", errors.append)
@@ -911,7 +911,7 @@ async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
     model = GPTLiveModel(api_key="sk-test")
     adapted = llm.DuplexRealtimeAdapter(model).session()
     session = adapted.duplex_session
-    assert isinstance(session, GPTLiveSession)
+    assert isinstance(session, GPTVoiceSession)
     generations: list[llm.GenerationCreatedEvent] = []
     errors: list[llm.RealtimeModelError] = []
     adapted.on("generation_created", generations.append)
@@ -1350,7 +1350,7 @@ async def test_a_delegated_model_is_billed_under_its_own_name(
         await model.aclose()
 
 
-def _user_events(session: GPTLiveSession) -> list[tuple[str, Any]]:
+def _user_events(session: GPTVoiceSession) -> list[tuple[str, Any]]:
     events: list[tuple[str, Any]] = []
     for name in (
         "input_speech_started",

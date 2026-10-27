@@ -132,9 +132,7 @@ boosting = json.loads(
 server = AgentServer()
 
 
-class Assistant(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions="You are a helpful voice assistant.")
+assistant = Agent(instructions="You are a helpful voice assistant.")
 
 
 @server.rtc_session()
@@ -156,7 +154,7 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    await session.start(agent=Assistant(), room=ctx.room)
+    await session.start(agent=assistant, room=ctx.room)
     await ctx.connect()
 
 

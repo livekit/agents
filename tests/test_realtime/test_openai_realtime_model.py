@@ -18,7 +18,7 @@ from openai.types.realtime import (
 from openai.types.realtime.audio_transcription import AudioTranscription
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
-from livekit.agents import LiveSession, llm
+from livekit.agents import VoiceSession, llm
 from livekit.agents._exceptions import APIError
 from livekit.agents.llm._realtime.openai_types import RealtimeModels as CoreRealtimeModels
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
@@ -636,7 +636,7 @@ def test_transcription_metrics_use_session_model_after_update(
 
 def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
     realtime_session, _ = _transcription_metrics_session()
-    agent_session = LiveSession()
+    agent_session = VoiceSession()
     activity = AgentActivity.__new__(AgentActivity)
     activity._session = agent_session
     realtime_session.on("metrics_collected", activity._on_metrics_collected)

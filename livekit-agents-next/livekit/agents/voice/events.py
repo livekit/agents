@@ -41,7 +41,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
     from .agent_run import AgentRun
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
     from .run_result import RunUsage
     from .tool_executor import UpdatePromptArgs
 
@@ -89,7 +89,7 @@ class RunContext(Generic[Context_T]):
         self,
         *,
         function_call: FunctionCall | None,
-        session: LiveSession[Any] | None = None,
+        session: VoiceSession[Any] | None = None,
         speech_handle: SpeechHandle | None = None,
         run: AgentRun[Any] | None = None,
     ) -> None:
@@ -106,7 +106,7 @@ class RunContext(Generic[Context_T]):
         )
 
     @property
-    def session(self) -> LiveSession[Any]:
+    def session(self) -> VoiceSession[Any]:
         """The live session, on a call.
 
         Raises:
@@ -213,7 +213,7 @@ class RunContext(Generic[Context_T]):
             core.filler_stop(filler)
 
     @asynccontextmanager
-    async def foreground(self) -> AsyncIterator[LiveSession[Any]]:
+    async def foreground(self) -> AsyncIterator[VoiceSession[Any]]:
         """Wait for idle, then hold the floor while interactive work runs (
         a ``say``), so no other speech or deferred tool reply lands in between."""
         core = self.session._core

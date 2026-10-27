@@ -1471,7 +1471,7 @@ class TestAvatarSession:
 class TestUsageExample:
     """Developer-facing usage, mirroring the README example as living documentation.
 
-    Constructs ``AvatarSession``, starts it before the ``LiveSession``, and
+    Constructs ``AvatarSession``, starts it before the ``VoiceSession``, and
     observes the lifecycle logs. The call sequence and public surface here are
     exactly what a developer writes.
     """
@@ -1484,7 +1484,7 @@ class TestUsageExample:
             self.audio = sink
 
     class _AgentSession:
-        """Stand-in for ``livekit.agents.LiveSession``."""
+        """Stand-in for ``livekit.agents.VoiceSession``."""
 
         def __init__(self):
             self._started = False

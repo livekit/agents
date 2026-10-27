@@ -147,12 +147,9 @@ See [official documentation](https://docs.aws.amazon.com/nova/latest/userguide/a
 Nova 2 Sonic supports programmatic text input. This can be used to trigger agent responses or to mix speech and text input within a UI in the same conversation:
 
 ```python
-class Assistant(Agent):
-    async def on_enter(self):
-        # Make the agent speak first with a greeting
-        await self.session.generate_reply(
-            instructions="Greet the user and introduce your capabilities"
-        )
+await session.generate_reply(
+    instructions="Greet the user and introduce your capabilities"
+)
 ```
 
 #### `instructions` vs `user_input`
@@ -212,16 +209,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-class Assistant(Agent):
-    def __init__(self):
-        super().__init__(
-            instructions="You are a helpful voice assistant powered by Amazon Nova 2 Sonic."
-        )
-    
-    async def on_enter(self):
-        await self.session.generate_reply(
-            instructions="Greet the user and offer assistance"
-        )
+assistant = Agent(instructions="You are a helpful voice assistant powered by Amazon Nova 2 Sonic.")
 
 server = agents.AgentServer()
 
@@ -237,7 +225,8 @@ async def entrypoint(ctx: agents.JobContext):
         )
     )
     
-    await session.start(room=ctx.room, agent=Assistant())
+    await session.start(room=ctx.room, agent=assistant)
+    await session.generate_reply(instructions="Greet the user and offer assistance")
 
 if __name__ == "__main__":
     agents.cli.run_app(server)

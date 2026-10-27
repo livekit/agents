@@ -16,7 +16,7 @@ from ...metrics.base import AvatarMetrics, Metadata
 from ..events import ConversationItemAddedEvent, MetricsCollectedEvent
 
 if TYPE_CHECKING:
-    from ..agent_session import LiveSession
+    from ..agent_session import VoiceSession
 
 
 class AudioSegmentEnd:
@@ -71,7 +71,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         super().__init__()
         self._wait_avatar_join_task: asyncio.Task[None] | None = None
         self._room: rtc.Room | None = None
-        self._agent_session: LiveSession | None = None
+        self._agent_session: VoiceSession | None = None
 
     @property
     @abstractmethod
@@ -84,7 +84,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         """The provider of the avatar"""
         return "unknown"
 
-    async def start(self, agent_session: LiveSession, room: rtc.Room) -> None:
+    async def start(self, agent_session: VoiceSession, room: rtc.Room) -> None:
         job_ctx = get_job_context(required=False)
         if job_ctx is not None:
             job_ctx.add_shutdown_callback(self.aclose)

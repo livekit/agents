@@ -30,7 +30,7 @@ from .tool_output import make_tool_output
 
 if TYPE_CHECKING:
     from .agent import Agent
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
 
 __all__ = ["AsyncToolOptions", "ToolHandlingOptions", "UpdatePromptArgs"]
 
@@ -68,7 +68,7 @@ class ToolRunner:
     """One agent frame's tools, run for the core (``_core_run``/``_core_cancel``)."""
 
     def __init__(
-        self, session: LiveSession[Any], agent: Agent, tools: Sequence[Tool | Toolset]
+        self, session: VoiceSession[Any], agent: Agent, tools: Sequence[Tool | Toolset]
     ) -> None:
         self._session = session
         self._agent = agent

@@ -140,19 +140,14 @@ logger = logging.getLogger("inworld-agent")
 load_dotenv()
 
 
-class InworldAgent(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions=(
-                "Your name is Nova. You interact with users via voice. "
-                "Keep your responses concise and to the point. "
-                "Do not use emojis, asterisks, markdown, or other special characters. "
-                "You are helpful, curious, and friendly."
-            ),
-        )
-
-    async def on_enter(self):
-        self.session.generate_reply()
+assistant = Agent(
+    instructions=(
+        "Your name is Nova. You interact with users via voice. "
+        "Keep your responses concise and to the point. "
+        "Do not use emojis, asterisks, markdown, or other special characters. "
+        "You are helpful, curious, and friendly."
+    ),
+)
 
 
 server = AgentServer()
@@ -183,10 +178,11 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(log_usage)
 
     await session.start(
-        agent=InworldAgent(),
+        agent=assistant,
         room=ctx.room,
         room_options=room_io.RoomOptions(),
     )
+    await session.generate_reply()
 
 
 if __name__ == "__main__":

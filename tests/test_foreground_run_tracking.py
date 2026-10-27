@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, LiveSession, RunContext, function_tool
+from livekit.agents import Agent, RunContext, VoiceSession, function_tool
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -97,7 +97,7 @@ async def test_handoff_inside_foreground_after_going_non_blocking() -> None:
     completes the run. Without a guard, the handoff and everything it triggers land
     after ``run()`` returned, and under the test framework the session closes first.
     """
-    async with LiveSession(llm=_router_llm()) as sess:
+    async with VoiceSession(llm=_router_llm()) as sess:
         await sess.start(Router())
 
         result = await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
@@ -110,7 +110,7 @@ async def test_handoff_inside_foreground_after_going_non_blocking() -> None:
 
 async def test_handoff_inside_foreground_event_sequence() -> None:
     """The same case asserted positionally, the way the testing guide shows."""
-    async with LiveSession(llm=_router_llm()) as sess:
+    async with VoiceSession(llm=_router_llm()) as sess:
         await sess.start(Router())
 
         result = await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
@@ -137,7 +137,7 @@ async def test_background_tool_does_not_hold_the_run_open() -> None:
         ]
     )
     agent = BackgroundWorker()
-    async with LiveSession(llm=llm) as sess:
+    async with VoiceSession(llm=llm) as sess:
         await sess.start(agent)
 
         loop = asyncio.get_running_loop()
@@ -158,7 +158,7 @@ async def test_guard_released_when_the_floor_never_arrives(
     registered before that wait, so releasing it has to cover the failure path too."""
     from livekit.agents.voice.agent_activity import ActivityClosedError
 
-    async def _raise(self: LiveSession) -> None:
+    async def _raise(self: VoiceSession) -> None:
         raise ActivityClosedError("activity closed")
 
     llm = FakeLLM(
@@ -173,9 +173,9 @@ async def test_guard_released_when_the_floor_never_arrives(
             FakeLLMResponse(input="", content="ok", ttft=0.1, duration=0.1),
         ]
     )
-    async with LiveSession(llm=llm) as sess:
+    async with VoiceSession(llm=llm) as sess:
         await sess.start(Router())
-        monkeypatch.setattr(LiveSession, "wait_for_idle", _raise)
+        monkeypatch.setattr(VoiceSession, "wait_for_idle", _raise)
 
         # the tool raises out of ctx.foreground(); the run still has to come back
         await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
@@ -201,7 +201,7 @@ async def test_stale_foreground_scope_does_not_hold_a_later_run() -> None:
         ]
     )
     agent = LateFloorWorker()
-    async with LiveSession(llm=llm) as sess:
+    async with VoiceSession(llm=llm) as sess:
         await sess.start(agent)
 
         await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)

@@ -9,9 +9,9 @@ import pytest
 from livekit.agents import (
     Agent,
     InputRequired,
-    LiveSession,
     ModelRetry,
     RunContext,
+    VoiceSession,
     function_tool,
     persisted,
 )
@@ -97,17 +97,17 @@ async def test_agent_instructions_and_on_enter() -> None:
         fake_responses=[FakeLLMResponse(input="hello", content="hi there", ttft=0, duration=0)]
     )
     agent = Agent(instructions="static part")
-    entered: list[LiveSession] = []
+    entered: list[VoiceSession] = []
 
     @agent.instructions
     def dynamic(ctx: RunContext) -> str:
         return "dynamic part"
 
     @agent.on_enter
-    async def greet(session: LiveSession) -> None:
+    async def greet(session: VoiceSession) -> None:
         entered.append(session)
 
-    async with LiveSession(llm=llm) as session:
+    async with VoiceSession(llm=llm) as session:
         await session.start(agent)
         assert entered == [session]
         assert agent._frozen
@@ -154,7 +154,7 @@ async def test_input_required_pauses_the_turn_until_the_next_message() -> None:
             FakeLLMResponse(input="here it is", content="got it, thanks", ttft=0, duration=0),
         ]
     )
-    async with LiveSession(llm=llm) as session:
+    async with VoiceSession(llm=llm) as session:
         await session.start(fnol)
         result = await session.run(user_input="my car is damaged")
         result.expect.next_event().is_function_call(name="request_photo")
@@ -368,7 +368,7 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     sid = await new_session(storage, agent.id)
     thread = Thread(storage, sid, agent_name=agent.id)
     app = AppContext(settings=deps, patient=state)
-    async with LiveSession(llm=llm, context=app, thread=thread) as session:
+    async with VoiceSession(llm=llm, context=app, thread=thread) as session:
         assert session.context is app
         await session.start(agent)
         await session.store.load_context(app)
@@ -405,7 +405,7 @@ def test_agent_session_alias_is_deprecated() -> None:
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        assert livekit.agents.AgentSession is LiveSession
+        assert livekit.agents.AgentSession is VoiceSession
     assert any(issubclass(w.category, DeprecationWarning) for w in caught)
 
 

@@ -1,5 +1,6 @@
 """An opted-in CRM lead is called with an explicit conversation thread; sales representatives can resume it."""
 
+import json
 from dataclasses import dataclass
 
 import httpx
@@ -34,9 +35,9 @@ sales = Agent(
 
 @server.a2a_session(endpoint="sales", description="Brightpath Solar sales.")
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
-    deps = Deps(crm=httpx.AsyncClient(base_url=CRM))
-    result = await sales.run(ctx.message, message_history=ctx.message_history, context=deps)
-    return result
+    async with httpx.AsyncClient(base_url=CRM) as crm:
+        context = Deps(crm=crm)
+        return await sales.run(ctx.message, message_history=ctx.message_history, context=context)
 
 
 async def on_new_lead(lk: api.LiveKitAPI, lead: Lead) -> None:
@@ -44,7 +45,9 @@ async def on_new_lead(lk: api.LiveKitAPI, lead: Lead) -> None:
     async with httpx.AsyncClient(base_url=CRM) as crm:
         await crm.patch(f"/leads/{lead.id}", json={"thread_id": sess.id})
     room = f"lead-{lead.id}"
-    dispatch = api.CreateAgentDispatchRequest(agent_name=AGENT, room=room, thread_id=sess.id)
+    dispatch = api.CreateAgentDispatchRequest(
+        agent_name=AGENT, room=room, metadata=json.dumps({"thread_id": sess.id})
+    )
     await lk.agent_dispatch.create_dispatch(dispatch)
     call = api.CreateSIPParticipantRequest(
         room_name=room, sip_trunk_id=TRUNK, sip_call_to=lead.phone

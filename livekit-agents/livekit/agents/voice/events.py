@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
     from .agent_activity import AgentActivity
     from .agent_run import AgentRun
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
     from .run_result import RunUsage
     from .tool_executor import UpdatePromptArgs, _ToolExecutor
 
@@ -61,7 +61,7 @@ class RunContext(Generic[Context_T]):
         self,
         *,
         function_call: FunctionCall | None,
-        session: LiveSession[Any] | None = None,
+        session: VoiceSession[Any] | None = None,
         speech_handle: SpeechHandle | None = None,
         activity: AgentActivity | None = None,
         run: AgentRun[Any] | None = None,
@@ -87,7 +87,7 @@ class RunContext(Generic[Context_T]):
         self._run_state = session._global_run_state if session is not None else None
 
     @property
-    def session(self) -> LiveSession[Any]:
+    def session(self) -> VoiceSession[Any]:
         """The live session, on a call.
 
         Raises:
@@ -433,7 +433,7 @@ class EotPredictionEvent(BaseModel):
 class _AgentBackchannelOpportunityEvent(BaseModel):
     """Internal: a window in which the agent could backchannel (a short
     acknowledgment such as "mm-hmm"), as predicted by the turn detector. Passed to
-    ``AgentActivity`` only — not surfaced as a public ``LiveSession`` event yet.
+    ``AgentActivity`` only — not surfaced as a public ``VoiceSession`` event yet.
 
     ``AgentActivity`` owns the decision of what to do with it. The end-of-turn margin
     (``end_of_turn_threshold - end_of_turn_probability``) gives a progressive risk axis:

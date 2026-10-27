@@ -16,7 +16,7 @@ from ..types import FlushSentinel, TimedString as TimedString
 
 if TYPE_CHECKING:
     from .agent import ModelSettings
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
 
 STTNode = Callable[
     [AsyncIterable[rtc.AudioFrame], "ModelSettings"],
@@ -303,7 +303,7 @@ class AgentInput:
     """``session.input``: the legs the core reads. Before ``start()`` they are handed over
     with the session; after, each change is one command."""
 
-    def __init__(self, session: LiveSession[Any]) -> None:
+    def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
         self._audio: AudioInput | None = None
         self._video: VideoInput | None = None
@@ -348,7 +348,7 @@ class AgentInput:
 class AgentOutput:
     """``session.output``: the sinks the core plays into."""
 
-    def __init__(self, session: LiveSession[Any]) -> None:
+    def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
         self._audio: AudioOutput | None = None
         self._transcription: TextOutput | None = None

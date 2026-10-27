@@ -9,7 +9,7 @@ history, the state, the tasks, the A2A context.
 
 - Not a call. A call is a job: a worker process attached to a room for the
   call's duration. The thread outlives it. The runtime a call attaches to
-  is a `LiveSession`; see [voice.md](voice.md).
+  is a `VoiceSession`; see [voice.md](voice.md).
 - Not a request. A text message is a run inside the thread; see below.
 - Not a person. One person may have several threads, one per chat in a
   sidebar for instance, and the application decides which.
@@ -27,7 +27,7 @@ history, the state, the tasks, the A2A context.
 | the journal | the framework's append-only record of what happened, shared by every lane; see [journal.md](journal.md)                                                           |
 
 Several endpoints can take part in one thread, each in its configured lane.
-Local agents coordinated by a router have separate frames within saved router
+Local agents coordinated by a session have separate frames within saved session
 state; those frames do not each create a transport lane. A tool reads another agent's history
 with `ctx.thread.lane(agent).history()`.
 
@@ -45,7 +45,7 @@ A backend that wants to find a conversation again stores the thread id in
 its own tables, against its user, lead or order, and passes it on as
 `contextId` or in the dispatch; see [backend-api.md](backend-api.md).
 For phone-number routing, see
-[planned-channels.md](planned-channels.md).
+[channels.md](channels.md).
 
 ## One person, several conversations
 
@@ -63,7 +63,7 @@ thread id. Each thread is its own memory: what the agent learned in one
 of a person's threads it does not know in another. An application that
 wants one memory keeps one thread per person.
 
-For SMS, WhatsApp and email routing, see [planned-channels.md](planned-channels.md).
+For SMS, WhatsApp and email routing, see [channels.md](channels.md).
 
 ## Runs
 
@@ -81,7 +81,7 @@ On every context, in a tool during any run and in an endpoint's handler,
 `ctx.thread` is the durable thread. On a call, the live call itself is
 `ctx.live_session`, `None` outside a call; only it speaks. In an
 `rtc_session` entrypoint, `ctx.thread` is the call's thread, `None` on a
-server without storage, and `LiveSession(thread=ctx.thread)` gives it to
+server without storage, and `VoiceSession(thread=ctx.thread)` gives it to
 the call. Without storage, a run's `ctx.thread` is an in-memory thread
 with the same API and no persistence; see [storage.md](storage.md).
 

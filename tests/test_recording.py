@@ -15,7 +15,7 @@ import aiohttp
 import pytest
 from google.rpc import error_details_pb2, status_pb2
 
-from livekit.agents import Agent, LiveSession
+from livekit.agents import Agent, VoiceSession
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
@@ -45,9 +45,9 @@ class SimpleAgent(Agent):
         super().__init__(instructions="You are a test agent.")
 
 
-def _create_simple_session() -> LiveSession:
-    """Create a minimal LiveSession without TranscriptSynchronizer to avoid leaked tasks."""
-    session = LiveSession[None](
+def _create_simple_session() -> VoiceSession:
+    """Create a minimal VoiceSession without TranscriptSynchronizer to avoid leaked tasks."""
+    session = VoiceSession[None](
         vad=FakeVAD(fake_user_speeches=[], min_silence_duration=0.5, min_speech_duration=0.05),
         stt=FakeSTT(fake_user_speeches=[]),
         llm=FakeLLM(fake_responses=[]),
@@ -59,7 +59,7 @@ def _create_simple_session() -> LiveSession:
     return session
 
 
-async def _cleanup(session: LiveSession) -> None:
+async def _cleanup(session: VoiceSession) -> None:
     """Drain and close a session, suppressing errors from missing context."""
     with contextlib.suppress(RuntimeError):
         await session.drain()

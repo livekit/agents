@@ -50,7 +50,7 @@ from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
     from .agent import ModelSettings
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
     from .transcription.text_transforms import TextTransforms
 
 
@@ -822,7 +822,7 @@ class _ToolOutput:
 
 def perform_tool_executions(
     *,
-    session: LiveSession,
+    session: VoiceSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],
@@ -850,7 +850,7 @@ def perform_tool_executions(
 @utils.log_exceptions(logger=logger)
 async def _execute_tools_task(
     *,
-    session: LiveSession,
+    session: VoiceSession,
     speech_handle: SpeechHandle,
     tool_ctx: ToolContext,
     tool_choice: NotGivenOr[llm.ToolChoice],

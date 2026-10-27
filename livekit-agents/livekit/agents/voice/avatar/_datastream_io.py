@@ -196,7 +196,7 @@ class DataStreamAudioOutput(AudioOutput):
         super().pause()
         logger.warning(
             "pause is not supported by DataStreamAudioOutput, "
-            "disable `LiveSession.resume_false_interruption` if you are using an avatar plugin."
+            "disable `VoiceSession.resume_false_interruption` if you are using an avatar plugin."
         )
 
     async def _clear_buffer_task(self, pushed_duration: float) -> None:

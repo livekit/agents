@@ -10,7 +10,7 @@ persistence, typed tool arguments, and voice or text entrypoints.
 | [04_a_claim_with_a_photo.py](04_a_claim_with_a_photo.py) | Claim intake | A tool returns InputRequired; the final result is a typed Claim |
 | [07_hospital_main_line.py](07_hospital_main_line.py) | Hospital departments | Application code explicitly selects an agent from the saved department; ordinary nested runs provide direct delegation |
 | [10_mortgage_prequalification.py](10_mortgage_prequalification.py) | Mortgage questionnaire | Answers are persisted between turns and the final application is validated against recorded answers |
-| [planned-06_card_servicing_toolsets.py](planned-06_card_servicing_toolsets.py) | Card servicing | Filtered tools, approval, and runtime bank clients |
+| [planned-06_card_servicing_toolsets.py](planned-06_card_servicing_toolsets.py) | Card servicing | Reusable toolsets, explicit verification, approval, and runtime bank clients |
 | [planned-08_summarizing_the_simulations.py](planned-08_summarizing_the_simulations.py) | Simulation analysis | Ordinary application code runs a digester and a reviewer with a bounded transcript-read budget |
 | [planned-09_speed_to_lead.py](planned-09_speed_to_lead.py) | Opted-in sales calls | A CRM creates a conversation thread and dispatches an outbound call; a representative can resume the thread |
 | [planned-12_many_chats.py](planned-12_many_chats.py) | Multiple chats | Each thread has its own persisted title and pinned facts |
@@ -39,7 +39,7 @@ exposes `result.question`. Check `result.status` before accessing either.
 Another human message starts a new invocation with saved history and context.
 
 A tool can explicitly await another agent's `run()` when its work completes
-within that invocation. [AgentRouter](../../agent-router.md) specifies routing
+within that invocation. [TextSession](../../text-session.md) specifies routing
 frames for conversations that move between agents over multiple turns.
 
 Effects require domain validation and stable idempotency contracts. Saving a

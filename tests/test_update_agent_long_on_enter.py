@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, LiveSession, RunContext, function_tool
+from livekit.agents import Agent, RunContext, VoiceSession, function_tool
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -50,7 +50,7 @@ async def test_update_agent_on_enter_output_captured():
             FakeLLMResponse(input="delayed_greeting", content="hello!", ttft=0.1, duration=0.1),
         ]
     )
-    async with LiveSession(llm=llm) as sess:
+    async with VoiceSession(llm=llm) as sess:
         await sess.start(GreeterToGreeting())
 
         result = await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)

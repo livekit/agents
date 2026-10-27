@@ -165,7 +165,7 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
 
 
 async def _job_entrypoint_session_aclose_hangs(job_ctx: JobContext) -> None:
-    """Plant a fake LiveSession whose aclose() hangs forever; the
+    """Plant a fake VoiceSession whose aclose() hangs forever; the
     _SESSION_ACLOSE_TIMEOUT guardrail must fire so shutdown callbacks still run."""
     from livekit.agents.ipc import job_proc_lazy_main
 
@@ -513,7 +513,7 @@ async def test_job_slow_shutdown():
 
 
 async def test_shutdown_callback_runs_when_session_aclose_hangs():
-    """Regression test: when LiveSession.aclose() blocks indefinitely during
+    """Regression test: when VoiceSession.aclose() blocks indefinitely during
     job shutdown, the _SESSION_ACLOSE_TIMEOUT guardrail must fire and
     user-registered shutdown callbacks must still run. The entrypoint shrinks
     the hardcoded constant to 0.5s so the test stays fast."""

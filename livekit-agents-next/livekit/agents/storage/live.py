@@ -1,6 +1,6 @@
-"""The voice door's lane (plan 3.3.1, 3.3.7): what a ``LiveSession`` does with its storage.
+"""The voice door's lane (plan 3.3.1, 3.3.7): what a ``VoiceSession`` does with its storage.
 
-A ``LiveSession`` keeps the call's history in memory. Given a thread, ``LiveLane`` opens the
+A ``VoiceSession`` keeps the call's history in memory. Given a thread, ``LiveLane`` opens the
 agent's lane at ``start()``, takes the lease per voice turn, from the end of the person's turn to the commit of
 the reply, and releases it without draining: a text that landed in the inbox meanwhile is
 answered by the worker waiting on it. When an acquire returns a newer version than the one last

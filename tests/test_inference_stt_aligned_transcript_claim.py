@@ -18,8 +18,8 @@ from livekit.agents import (
     Agent,
     EndpointingOptions,
     InterruptionOptions,
-    LiveSession,
     TurnHandlingOptions,
+    VoiceSession,
     inference,
 )
 from livekit.agents.inference.stt import SpeechStream as InferenceSpeechStream
@@ -138,7 +138,7 @@ def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
 
 def _build_session(
     *, aligned_transcript: object, mode: str | None = None, streaming: bool = True
-) -> LiveSession:
+) -> VoiceSession:
     speech = FakeUserSpeech(start_time=0.5, end_time=2.0, transcript="hello", stt_delay=0.0)
     interruption = InterruptionOptions(resume_false_interruption=False)
     if mode is not None:
@@ -148,7 +148,7 @@ def _build_session(
         aligned_transcript=aligned_transcript,  # type: ignore[arg-type]
     )
     stt_impl._capabilities.streaming = streaming
-    return LiveSession[None](
+    return VoiceSession[None](
         vad=FakeVAD(fake_user_speeches=[speech]),
         stt=stt_impl,
         llm=FakeLLM(fake_responses=[]),
@@ -238,7 +238,7 @@ def test_mode_vad_keeps_fast_interruption_on_either_stt(
 ) -> None:
     """`interruption.mode="vad"` is the one mitigation that holds regardless of the STT.
 
-    `InterruptionOptions["mode"]` populates `LiveSession.interruption_detection`, which
+    `InterruptionOptions["mode"]` populates `VoiceSession.interruption_detection`, which
     `_resolve_interruption_detection` short-circuits on before it ever reaches the
     hosted/dev-mode check. So it behaves the same whether the STT is the Cartesia plugin
     or the inference gateway, and stays correct after the alignment fix lands.

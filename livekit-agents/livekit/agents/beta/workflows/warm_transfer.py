@@ -20,7 +20,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice import room_io
 from ...voice.agent import Agent
-from ...voice.agent_session import LiveSession
+from ...voice.agent_session import VoiceSession
 from ...voice.background_audio import (
     AudioConfig,
     AudioSource,
@@ -122,10 +122,10 @@ class WarmTransfer:
             allow_interruptions=allow_interruptions,
         )
 
-        self.session: LiveSession
+        self.session: VoiceSession
         self._result: asyncio.Future[WarmTransferResult] = asyncio.Future()
         self._caller_room: rtc.Room | None = None
-        self._human_agent_sess: LiveSession | None = None
+        self._human_agent_sess: VoiceSession | None = None
         self._human_agent_failed_fut: asyncio.Future[None] = asyncio.Future()
         self._human_agent_identity = "human-agent-sip"
 
@@ -205,7 +205,7 @@ class WarmTransfer:
             prev_convo += f"{role}: {msg.text_content}\n"
         return prev_convo
 
-    async def run(self, session: LiveSession) -> WarmTransferResult:
+    async def run(self, session: VoiceSession) -> WarmTransferResult:
         """Dial and bridge a human participant during this live operation."""
         self.session = session
         try:
@@ -316,7 +316,7 @@ class WarmTransfer:
         else:
             self._result.set_result(result)
 
-    async def _dial_human_agent(self) -> LiveSession:
+    async def _dial_human_agent(self) -> VoiceSession:
         assert self._caller_room is not None
 
         job_ctx = get_job_context()
@@ -344,7 +344,7 @@ class WarmTransfer:
             "connecting to human agent room",
             extra={"ws_url": ws_url, "human_agent_room_name": human_agent_room_name},
         )
-        human_agent_sess: LiveSession = LiveSession(
+        human_agent_sess: VoiceSession = VoiceSession(
             vad=self.session.vad or NOT_GIVEN,
             llm=self.session.llm or NOT_GIVEN,
             stt=self.session.stt or NOT_GIVEN,

@@ -7,7 +7,7 @@ from livekit.agents import Agent, AgentServer, RunContext, RunResult, persisted
 from livekit.agents.a2a import A2ASessionContext, AgentClient
 from livekit.agents.storage import AgentDBStorage
 
-APP = "https://acme.livekit.cloud/agents/assistant/production"
+APP = "https://acme.livekit.cloud/agents/assistant/production/assistant"
 
 
 @dataclass
@@ -67,17 +67,34 @@ async def new_thread(lk: api.LiveKitAPI, user_id: str) -> str:
     return sess.id
 
 
-async def sidebar(lk: api.LiveKitAPI, user_id: str) -> list[dict]:
-    """The chat list: the platform keeps this user's threads; nothing to keep on your side."""
+@dataclass
+class ChatSummary:
+    id: str
+    title: str
+    last_active: int
+
+
+async def sidebar(lk: api.LiveKitAPI, user_id: str) -> list[ChatSummary]:
+    """List the subject's threads and read their display metadata."""
     threads = await lk.threads.list(scope=user_id, limit=30)
-    return [
-        {"id": s.id, "title": s.attributes.get("title", "New chat"), "at": s.last_active}
-        for s in threads
-    ]
+    summaries = []
+    for thread in threads:
+        info = await thread.info()  # A listed handle can use its already loaded info.
+        summaries.append(
+            ChatSummary(
+                id=thread.id,
+                title=info.attributes.get("title", "New chat"),
+                last_active=info.last_active,
+            )
+        )
+    return summaries
 
 
 async def send(token: str, thread_id: str, text: str) -> None:
     client = AgentClient(APP, token=token)
-    reply = await client.send(text, thread_id=thread_id)
-    async for item in reply:
-        print(item)
+    try:
+        reply = await client.send(text, thread_id=thread_id)
+        async for item in reply:
+            print(item)
+    finally:
+        await client.aclose()

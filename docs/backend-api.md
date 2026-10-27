@@ -3,7 +3,6 @@
 Everything a backend does with threads from outside the agent: the
 platform's threads service, the tokens it mints, and a client for an
 endpoint. The wire underneath is [a2a.md](a2a.md).
-[planned-backend-api.md](planned-backend-api.md) extends this page.
 
 ## Threads
 
@@ -53,6 +52,40 @@ personal. It is the one dimension threads are listed by: newest first,
 paginated, each row with the attributes the application set, a title or a
 preview. A thread per chat with the user as scope is how a sidebar works.
 
+## A thread handle
+
+A handle addresses a conversation in the platform's threads service, using
+the project credential or a thread grant. Sending a message separately names
+the agent endpoint through `AgentClient`:
+
+```python
+from livekit import api
+lk = api.LiveKitAPI()
+
+thread = lk.threads.get(thread_id)                                       # a handle; nothing fetched yet
+thread = await lk.threads.create(scope=user_id)                          # a new thread for a subject
+threads = await lk.threads.list(scope=user_id, limit=30)                 # newest first, with info loaded
+
+thread.id
+info = await thread.info()                                                 # scope, attributes, created, last active
+await thread.update(attributes={"title": "Renewal"})
+await thread.delete()
+
+items = await thread.chat_history()                       # list[ChatItem]: the thread's history
+items = await thread.chat_history(agent="eligibility")    # one agent's lane of the thread
+```
+
+`create`, `get`, `list`, `info`, `update`, `delete`, and `chat_history`
+use the threads service. Thread history selects configured transport lanes;
+it does not flatten private `TextSessionState` frame histories. See
+[thread reads](#reading-a-thread).
+
+An endpoint client owns message delivery, task progress, replies, and
+cancellation. A thread ID alone does not choose an endpoint or an agent.
+Inside a managed run, `ctx.thread` also exposes scoped lane access.
+`TextSession` coordinates execution separately; a thread handle is not a
+rehydrated session.
+
 ## The boundary
 
 The platform holds what continues a conversation: the id, the history,
@@ -99,7 +132,7 @@ token = credentials.thread_grant_token(
 `can_list(scope)`, `can_read(thread)`, `can_write(thread)` and
 `can_delete(thread)` are its checks. Its `list` and `delete` flags are the
 threads service's browser operations
-([thread handles](planned-backend-api.md)). With that token the browser talks to the platform's threads API, and
+([thread handles](#a-thread-handle)). With that token the browser talks to the platform's threads API, and
 what it cannot do is see another scope, set attributes, or anything the
 grant does not list. What stays on your backend: minting tokens, setting
 attributes such as a title when the agent does not, and your product's own
@@ -139,5 +172,43 @@ separate get or resume call.
 Nothing here is required: `tasks/get`, `tasks/list` and
 `tasks/resubscribe` are served to any A2A client.
 
-See `examples/use-cases/03_insurance_eligibility.py` for an endpoint
-called over A2A, and `planned-12_many_chats.py` for a sidebar.
+## Calls
+
+```python
+import json
+
+dispatch = api.CreateAgentDispatchRequest(
+    agent_name="sales", room=room, metadata=json.dumps({"thread_id": thread.id})
+)
+await lk.agent_dispatch.create_dispatch(dispatch)                              # the job carries the thread
+await lk.sip.create_sip_participant(api.CreateSIPParticipantRequest(room_name=room, sip_trunk_id=TRUNK, sip_call_to=lead.phone))
+```
+
+The dispatch carries the thread id, and the job hands it to the call's
+`VoiceSession`.
+
+## From the browser
+
+A chat UI needs no backend of its own beyond the one call that mints a
+token ([tokens](#tokens)). The browser uses the
+same client with it:
+
+```javascript
+const threads = new ThreadsClient({ token });             // scoped: this subject
+const chats = await threads.list({ limit: 30 });           // only this subject's
+const thread = threads.get(chats[0].id);
+const history = await thread.chatHistory();
+```
+
+The backend mints the grant; the browser receives only that scoped credential.
+To send a message, the client must also be configured with the deployed agent's
+endpoint URL and include the chosen thread ID. Use the endpoint-client
+[send/reply/cancel contract](#a-client-for-an-endpoint); listing
+threads does not implicitly select where a message should execute.
+
+With a grant, `list` takes the subject from the token (the grant's `list`
+flag) and `delete` needs the grant's `delete` flag.
+
+See `examples/use-cases/03_insurance_eligibility.py` for a remote expert,
+`planned-09_speed_to_lead.py` for outbound calls, and `planned-12_many_chats.py`
+for a sidebar.

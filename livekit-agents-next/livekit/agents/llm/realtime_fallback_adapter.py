@@ -77,7 +77,7 @@ class RealtimeModelFallbackAdapter(
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         raise NotImplementedError(
-            "RealtimeModelFallbackAdapter sessions run inside a LiveSession (the core swaps them)"
+            "RealtimeModelFallbackAdapter sessions run inside a VoiceSession (the core swaps them)"
         )
 
     def _core_native(self, children: list[Any]) -> _core.RealtimeFallbackModel:

@@ -7,12 +7,12 @@ from livekit.agents import (
     Agent,
     AgentServer,
     JobContext,
-    LiveSession,
     RunContext,
     RunResult,
+    VoiceSession,
     persisted,
 )
-from livekit.agents.a2a import A2AAgent, A2ASessionContext
+from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 from livekit.agents.storage import AgentDBStorage
 from livekit.plugins import openai
 
@@ -86,13 +86,13 @@ async def text(ctx: A2ASessionContext) -> RunResult[str]:
 MAIN_LINE_URL = "https://mercy.livekit.cloud/agents/hospital/production/main-line"
 voice = Agent[AppContext](
     instructions="Mercy General's voice on the phone. Hand every request to the main line.",
-    tools=[A2AAgent(MAIN_LINE_URL).as_tool()],
+    tools=[RemoteAgent(MAIN_LINE_URL).as_tool()],
 )
 
 
 @server.rtc_session()
 async def phone(ctx: JobContext) -> None:
-    session = LiveSession(
+    session = VoiceSession(
         llm=openai.realtime.RealtimeModel(), thread=ctx.thread, context=AppContext(caller=Caller())
     )
     await session.start(agent=voice, room=ctx.room)

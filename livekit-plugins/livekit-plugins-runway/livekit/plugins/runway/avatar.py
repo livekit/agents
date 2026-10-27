@@ -11,11 +11,11 @@ from livekit import api, rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
-    LiveSession,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     NotGivenOr,
+    VoiceSession,
     get_job_context,
     utils,
 )
@@ -99,7 +99,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def start(
         self,
-        agent_session: LiveSession,
+        agent_session: VoiceSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,

@@ -2,8 +2,8 @@ import pytest
 
 from livekit.agents import (
     Agent,
-    LiveSession,
     RunContext,
+    VoiceSession,
     function_tool,
     inference,
     llm,
@@ -42,13 +42,13 @@ class EchoAgent(Agent):
         super().__init__(instructions="Your name is Echo. You would interact with users via voice.")
 
     async def on_enter(self) -> None:
-        # LiveSession.run will even capture this generate_reply!
+        # VoiceSession.run will even capture this generate_reply!
         self.session.generate_reply(user_input="Say hello to the user!")
 
 
 @pytest.mark.asyncio
 async def test_function_call():
-    async with _llm_model() as llm, LiveSession(llm=llm) as sess:
+    async with _llm_model() as llm, VoiceSession(llm=llm) as sess:
         await sess.start(KellyAgent())
 
         result = await sess.run(user_input="What is the weather in San Francisco?")
@@ -72,7 +72,7 @@ async def test_function_call():
 
 @pytest.mark.asyncio
 async def test_start_with_capture_run():
-    async with _llm_model() as llm, LiveSession(llm=llm) as sess:
+    async with _llm_model() as llm, VoiceSession(llm=llm) as sess:
         result = await sess.start(EchoAgent(), capture_run=True)
 
         print(result.events)

@@ -3,7 +3,7 @@
 A delegate answers one request inside the caller's turn and the caller phrases the result.
 ``A2ADelegate`` (``a2a.py``) reaches an expert over A2A, an endpoint of this project or any A2A
 server; the interface is here for anything else that answers a request. The ``delegate`` tool
-of ``tool.py`` and ``LiveSession(delegate=)`` take any ``Delegate``.
+of ``tool.py`` and ``VoiceSession(delegate=)`` take any ``Delegate``.
 """
 
 from __future__ import annotations

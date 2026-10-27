@@ -9,7 +9,7 @@ from ..log import logger
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
     from .events import AgentStateChangedEvent, UserStateChangedEvent
 
 
@@ -23,7 +23,7 @@ class _FillerScheduler:
         self,
         source: _FillerSource,
         *,
-        session: LiveSession,
+        session: VoiceSession,
         speech_handle: SpeechHandle,
         delay: float,
         interval: float | None,

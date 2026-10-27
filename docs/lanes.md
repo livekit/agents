@@ -6,7 +6,7 @@ name is the default. It holds transport history and tasks. A local agent
 invocation does not allocate a lane merely because it has another agent ID.
 
 Local routing frames and their private histories are saved through
-application-owned router state. Several frames may reference the same agent
+application-owned session state. Several frames may reference the same agent
 definition while remaining separate conversations.
 
 ```
@@ -21,7 +21,7 @@ thread AT_...                one database
 |             |                                                                                                   |
 | ----------- | ------------------------------------------------------------------------------------------------- |
 | history     | every message, tool call and result the agent's model sees, item by item                          |
-| application data | explicitly saved fields and router state, with context-scope identity; see [state-and-deps.md](state-and-deps.md) |
+| application data | explicitly saved fields and session state, with context-scope identity; see [state-and-deps.md](state-and-deps.md) |
 | tasks       | one row per transport task, as A2A tasks                                            |
 | inbox       | messages received while a turn ran, under the `batch` policy                                      |
 | the lease   | which worker holds the lane right now, and until when                                             |
@@ -34,13 +34,21 @@ A phone line and text endpoint configured for the same lane share transport
 history. Their application data remains subject to explicit load/save.
 
 Each direct `agent.run()` executes the selected agent. An optional
-[AgentRouter](agent-router.md) owns local routing frames and private histories;
+[TextSession](text-session.md) owns local routing frames and private histories;
 the application stores that routing state explicitly. Remote endpoints using
 the same project thread own their configured lanes.
 
 Context sharing is explicit. Shared persisted scopes serialize updates;
 separate child contexts have independent fields. See
 [application context](state-and-deps.md).
+
+The lane inbox batches incoming transport messages. The live session's
+[conversation-owned inbox](voice.md#conversation-owned-inbox) holds
+expert events and reply correlation in process for the originating frontend
+conversation. It is push-driven and does not require AgentDB. Persistence for
+frontend event recovery is optional and separate from lane request batching.
+Sharing a lane or thread database does not share that frontend queue. Neither
+mechanism requires application code to manage another public queue API.
 
 ## One writer at a time
 
@@ -74,7 +82,7 @@ commit append-only, with no fence, and write no state.
 
 ## Voice and text share a lane
 
-A call's `LiveSession`, given `thread=ctx.thread`, keeps the conversation
+A call's `VoiceSession`, given `thread=ctx.thread`, keeps the conversation
 in memory and takes the lane's lease for each voice turn, from the end of the person's turn to the
 commit of the reply, then releases it. A text that arrives between two voice
 turns runs on any worker that takes the lane. When the call's next turn

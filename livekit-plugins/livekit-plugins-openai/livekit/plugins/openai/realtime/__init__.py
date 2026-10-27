@@ -2,8 +2,8 @@ from . import gpt_live_types as gpt_live_types, utils as utils
 from .gpt_live_model import (
     GPTLiveDelegation,
     GPTLiveModel,
-    GPTLiveSession,
     GPTLiveVoices,
+    GPTVoiceSession,
     ResponsesDelegationOptions,
 )
 from .inference_realtime_model import InferenceRealtimeModel
@@ -14,7 +14,7 @@ __all__ = [
     "RealtimeSession",
     "RealtimeModel",
     "GPTLiveModel",
-    "GPTLiveSession",
+    "GPTVoiceSession",
     "GPTLiveDelegation",
     "GPTLiveVoices",
     "ResponsesDelegationOptions",

@@ -4,11 +4,11 @@ from . import io, run_result
 from .agent import Agent, ModelSettings
 from .agent_session import (
     ExpressiveOptions,
-    LiveSession,
     NonverbalOptions,
     RecordingOptions,
     SpeechSteeringOptions,
     VoiceActivityVideoSampler,
+    VoiceSession,
 )
 from .audio_recognition import AudioRecognition
 from .events import (
@@ -50,7 +50,7 @@ from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
-    "LiveSession",
+    "VoiceSession",
     "AgentSession",
     "ExpressiveOptions",
     "NonverbalOptions",

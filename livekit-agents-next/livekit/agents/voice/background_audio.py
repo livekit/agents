@@ -16,7 +16,7 @@ from ..job import get_job_context
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-from .agent_session import LiveSession
+from .agent_session import VoiceSession
 from .events import AgentStateChangedEvent
 from .room_io._core_rtc import _SOURCES, _name
 
@@ -157,7 +157,7 @@ class BackgroundAudioPlayer:
         self.publication: rtc.LocalTrackPublication | None = None
         self._lock = asyncio.Lock()
         self._started = False
-        self._agent_session: LiveSession | None = None
+        self._agent_session: VoiceSession | None = None
         self._ambient_handle: PlayHandle | None = None
 
     def play(
@@ -195,7 +195,7 @@ class BackgroundAudioPlayer:
         self,
         *,
         room: rtc.Room,
-        agent_session: NotGivenOr[LiveSession] = NOT_GIVEN,
+        agent_session: NotGivenOr[VoiceSession] = NOT_GIVEN,
         track_publish_options: NotGivenOr[rtc.TrackPublishOptions] = NOT_GIVEN,
     ) -> None:
         """
@@ -209,7 +209,7 @@ class BackgroundAudioPlayer:
         Args:
             room (rtc.Room):
                 The LiveKit Room object where the audio track will be published.
-            agent_session (NotGivenOr[LiveSession], optional):
+            agent_session (NotGivenOr[VoiceSession], optional):
                 The session object used to track the agent's state (e.g., "thinking").
                 Required if `thinking_sound` is provided.
             track_publish_options (NotGivenOr[rtc.TrackPublishOptions], optional):

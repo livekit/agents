@@ -1,4 +1,4 @@
-# LiveKit Agents 2.0: the backend API
+# LiveKit Agents 2.0
 
 An agent is configuration, built once and shared. A thread is one durable
 conversation with a person, across channels and over time. A run is one
@@ -33,26 +33,22 @@ on related capabilities. The examples show applications of these features.
 
 | Document | Feature |
 | --- | --- |
-| [agents.md](agents.md) | `Agent`: definition, runs and results, context, agents as tools, local and remote delegation |
-| [planned-agents.md](planned-agents.md) | `iter`, filtered/prefixed toolsets, history processors, model-call hooks, capabilities |
+| [agents.md](agents.md) | `Agent`: definition, runs, streaming, typed results, context, and local/remote agent tools |
 | [tools.md](tools.md) | `@agent.tool`, `@function_tool`, toolsets, MCP, approvals, errors |
 | [state-and-deps.md](state-and-deps.md) | typed context; explicit field load/save, scopes, and fresh runtime dependencies |
 | [human-in-the-loop.md](human-in-the-loop.md) | `InputRequired`, approvals, and the other transitions |
-| [agent-router.md](agent-router.md) | agents as tools, typed completion, human input, frames and histories |
+| [text-session.md](text-session.md) | text conversations across requests: agents as tools, typed completion, human input, frames and histories |
 | [threads.md](threads.md) | what a thread is, how it is found, what it holds, `ctx.thread`, lifecycle |
 | [lanes.md](lanes.md) | one agent's part of a thread: history, state, the lease, run order |
 | [storage.md](storage.md) | what is saved, the backends, the unit of work |
 | [journal.md](journal.md) | what the framework records about a thread, separate from the history |
 | [text-endpoints.md](text-endpoints.md) | `@server.a2a_session`, turn policies, bursts and interruptions |
-| [channels.md](channels.md) | where a message came from and what that changes |
-| [planned-channels.md](planned-channels.md) | SMS, WhatsApp, email, outbound text |
+| [channels.md](channels.md) | channel routing, SMS/WhatsApp/email, attachments, and text/voice continuation |
 | [a2a.md](a2a.md) | the wire reference: the agent card, tasks, metadata keys, errors |
 | [a2a-live-ext.md](a2a-live-ext.md) | the LiveKit extension's specification |
-| [voice.md](voice.md) | `LiveSession`, the voice door, one thread for calls and texts |
-| [backend-api.md](backend-api.md) | the threads service, its history and tasks, thread grants, `AgentClient` |
-| [planned-backend-api.md](planned-backend-api.md) | `lk.threads`, watching a thread, the Node client |
+| [voice.md](voice.md) | `VoiceSession`, frontend-only live `VoiceTask` interactions, and voice/text continuity |
+| [backend-api.md](backend-api.md) | thread service and handles, grants, endpoint clients, call dispatch, and browser access |
 | [rust-core.md](rust-core.md) | the Rust core: crates, boundaries, bindings, testing, codebase rules |
-| [planned-rust-core.md](planned-rust-core.md) | run ownership, host bindings, deterministic cores, runtime I/O, and verification |
 | [examples/use-cases/](examples/use-cases/README.md) | agent use cases, one idea each |
 
 ## Running it
@@ -73,7 +69,7 @@ on related capabilities. The examples show applications of these features.
 - **thread**: the conversation. It has an id the platform mints, a
   history, explicitly saved application fields, and A2A tasks. The A2A `contextId` is its id.
 - **lane**: one agent's part of a thread. Each agent in a conversation has
-  its own transport history and A2A tasks there, written by one run at a time; local router frames remain separate.
+  its own transport history and A2A tasks there, written by one run at a time; local session frames remain separate.
 - **run**: one input to one result, tools included. A text message, a voice
   turn. The framework loads and commits transport records; application fields and routing state require explicit load/save.
 - **transition**: what a tool or a hook returns to say what happens next:

@@ -228,7 +228,7 @@ pub(crate) enum Cmd {
 }
 
 /// `_core.NativeRealtimeModel`: a realtime model whose connection, reconnect and conversation
-/// mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `LiveSession`
+/// mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `VoiceSession`
 /// takes it as its realtime model, and nothing per-turn crosses. The keyword constructor,
 /// `update_options` and `bind_identification` are `realtime::python`'s.
 #[lk_agents_abi::host(object(

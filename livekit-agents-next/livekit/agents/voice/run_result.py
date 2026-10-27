@@ -31,7 +31,7 @@ from ..utils import is_given
 if TYPE_CHECKING:
     from ..metrics import AgentSessionUsage
     from .agent import Agent
-    from .agent_session import LiveSession
+    from .agent_session import VoiceSession
 
 
 lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
@@ -43,7 +43,7 @@ _OUTPUT_RETRY_PROMPT = (
 
 
 class RunOutputOptions(TypedDict, total=False):
-    """Structured-output behavior for :meth:`LiveSession.run`.
+    """Structured-output behavior for :meth:`VoiceSession.run`.
 
     Can be passed as a plain dict::
 
@@ -132,7 +132,7 @@ class RunResult(Generic[Run_T]):
         user_input: str | None = None,
         output_type: type[Run_T] | None,
         output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
-        session: LiveSession | None = None,
+        session: VoiceSession | None = None,
     ) -> None:
         if not is_given(output_options):
             output_options = RunOutputOptions()
@@ -1143,7 +1143,7 @@ class AgentHandoffAssert:
 if TYPE_CHECKING:
     MockTools = dict[type[Agent], dict[str, Callable]]
 _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
-_SessionMockTools: weakref.WeakKeyDictionary[LiveSession, MockTools] = weakref.WeakKeyDictionary()
+_SessionMockTools: weakref.WeakKeyDictionary[VoiceSession, MockTools] = weakref.WeakKeyDictionary()
 
 
 @overload
@@ -1153,11 +1153,13 @@ def mock_tools(
 
 
 @overload
-def mock_tools(agent: type[Agent], mocks: dict[str, Callable], *, session: LiveSession) -> None: ...
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable], *, session: VoiceSession
+) -> None: ...
 
 
 def mock_tools(
-    agent: type[Agent], mocks: dict[str, Callable], *, session: LiveSession | None = None
+    agent: type[Agent], mocks: dict[str, Callable], *, session: VoiceSession | None = None
 ) -> contextlib.AbstractContextManager[None] | None:
     """Assign a set of mock tool callables to a specific Agent type.
 

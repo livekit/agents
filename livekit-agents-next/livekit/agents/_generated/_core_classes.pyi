@@ -711,7 +711,7 @@ class SessionClock:
     def __repr__(self) -> str: ...
 
 
-class LiveSession:
+class VoiceSession:
     """`voice/agent_session.py`'s `AgentSession`, over the driver: assembled at construction, opened at
     `start()`, closed at `aclose()`; every other method is one command. `frozen`, so there is no
     borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
@@ -1772,7 +1772,7 @@ class InferenceTts:
 
 class NativeRealtimeModel:
     """`_core.NativeRealtimeModel`: a realtime model whose connection, reconnect and conversation
-    mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `LiveSession`
+    mirror are in Rust. Not a `RealtimeModel` subclass (the ABC stays Python); `VoiceSession`
     takes it as its realtime model, and nothing per-turn crosses. The keyword constructor,
     `update_options` and `bind_identification` are `realtime::python`'s.
     """

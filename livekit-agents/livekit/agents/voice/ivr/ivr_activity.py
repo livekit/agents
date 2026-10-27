@@ -11,14 +11,14 @@ from ...log import logger
 from ...utils.aio.debounce import Debounced
 
 if TYPE_CHECKING:
-    from ..agent_session import LiveSession
+    from ..agent_session import VoiceSession
     from ..events import AgentStateChangedEvent, UserInputTranscribedEvent, UserStateChangedEvent
 
 
 class IVRActivity:
     def __init__(
         self,
-        session: LiveSession,
+        session: VoiceSession,
         *,
         max_silence_duration: float = 5.0,
     ) -> None:

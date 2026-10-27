@@ -103,8 +103,8 @@ class Toolset:
 
         Agent-scoped toolsets (passed to ``Agent(tools=...)``) are closed when the
         agent exits (on agent transition or session close). Session-scoped
-        toolsets (passed to ``LiveSession(tools=...)``) are closed only when the
-        ``LiveSession`` shuts down.
+        toolsets (passed to ``VoiceSession(tools=...)``) are closed only when the
+        ``VoiceSession`` shuts down.
         """
         toolsets = [tool for tool in self._tools if isinstance(tool, Toolset)]
         if toolsets:

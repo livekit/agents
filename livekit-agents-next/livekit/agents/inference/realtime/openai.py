@@ -86,7 +86,7 @@ class RealtimeModel(_RealtimeModel):
         return "livekit"
 
     def _core_native(self) -> _core.NativeRealtimeModel:
-        """The model, identified as the current job's, as a ``LiveSession`` drives it."""
+        """The model, identified as the current job's, as a ``VoiceSession`` drives it."""
         headers = get_inference_headers(inference_class=self._inference_class)
         self._native.bind_identification(list(headers.items()))
         return self._native

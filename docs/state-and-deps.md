@@ -62,7 +62,7 @@ persistence from whether an arbitrary object happens to serialize.
 | `draft` | Yes, under `draft` | Decode and validate RoomDraft before user code |
 | `customer` | No | Application supplies/loads it for each activation |
 | `hotel` | No | Application supplies a live service for each activation |
-| Router frames, active agent, private histories | Only if router state is explicitly stored | Load the application's saved router state |
+| Session frames, active agent, private histories | Only if session state is explicitly stored | Load the application's saved session state |
 | Thread history and approvals | Separately, by the runtime | Load the thread records |
 
 The application constructs runtime context as usual:
@@ -110,9 +110,9 @@ customer service/database; conversation preferences do not silently update
 it. A child's final Booking result lets the parent update its own
 preferences.last_booking_code explicitly. State is not merged on child exit.
 
-Router state is separate from agent application data and can be stored in its
+Session state is separate from agent application data and can be stored in its
 own marked field using the same explicit load/save API.
-The router records the active frame, its parent, and the parent tool-call ID
+The session records the active frame, its parent, and the parent tool-call ID
 that receives the child's accepted output. Each frame references
 the context scope chosen by the application.
 History, preferences, draft, and customer profile are not interchangeable
@@ -121,49 +121,54 @@ forms of memory.
 A child can start with fresh or forked history. On completion, the parent can
 receive its typed result alone or the result plus visible dialogue. These
 history choices do not share or merge application context fields; context
-scopes retain their explicit ownership. See the [history policies](agent-router.md#history-passed-to-the-child).
+scopes retain their explicit ownership. See the [history policies](text-session.md#history-passed-to-the-child).
 
-## Persisting router state
+## Persisting text session state
 
-An application-defined record can mark the router's serializable state for
+`TextSessionState` belongs to backend orchestration across requests. Frontend
+`VoiceSession` interactions use their own in-process event and reply state;
+they do not require a text session record.
+
+An application-defined record can mark the session's serializable state for
 storage:
 
 ```python
 @dataclass
 class Conversation:
-    routing: RouterState | None = persisted(default=None)
+    session_state: TextSessionState | None = persisted(default=None)
 ```
 
 For each request, the runtime supplies `ctx.store` for the resolved thread.
-The application explicitly restores routing state, passes it to the router,
+The application explicitly restores routing state, passes it to the session,
 and saves the returned state:
 
 ```python
+session = TextSession(agent=main)
 conversation = Conversation()
 await ctx.store.load_context(conversation)
 await ctx.store.load_context(app)
 
-routed = await router.run(
+turn = await session.run(
     ctx.message,
-    state=conversation.routing,
+    state=conversation.session_state,
     context=app,
 )
 
-conversation.routing = routed.state
+conversation.session_state = turn.state
 await ctx.store.save_context(app)
 await ctx.store.save_context(conversation)
 ```
 
-`None` starts at the router's root agent. Existing state supplies the active
+`None` starts at the session's root agent. Existing state supplies the active
 frame and saved histories. The application constructs `app` with fresh
 customer and service objects and explicitly loads/saves its marked fields
 using the same store API and the appropriate application-data scope.
 
-The router returns an envelope: `routed.result` is the agent's `RunResult`,
-and `routed.state` is the updated `RouterState`. Save the routing state when
-`routed.result.status == "input_required"` as well as on completion. Persist related routing and draft changes in the same managed
-transaction. Returning from `router.run()` or the handler does not implicitly
-save either record. See [AgentRouter](agent-router.md#loading-and-saving-router-state)
+The session returns an envelope: `turn.result` is the agent's `RunResult`,
+and `turn.state` is the updated `TextSessionState`. Save the routing state when
+`turn.result.status == "input_required"` as well as on completion. Persist related routing and draft changes in the same managed
+transaction. Returning from `session.run()` or the handler does not implicitly
+save either record. See [TextSession](text-session.md#loading-and-saving-session-state)
 for the routing-state lifecycle.
 
 ## Explicit load and save on the store
@@ -221,6 +226,12 @@ resources.
 
 ## Explicit saves
 
+Streaming has the same persistence boundary. `stream.result()` returns
+the settled invocation value; it does not call `save_context` or commit the
+surrounding handler transaction. Save retained fields and backend routing state
+explicitly after a successful completed or input-required outcome. See
+[streaming persistence](agents.md#managed-endpoints-and-persistence).
+
 `persisted(...)` selects fields for storage. Mutating a marked field changes
 only the in-memory object until the application calls `save_context`.
 `agent.run(...)` and returning from a handler do not implicitly save context.
@@ -266,7 +277,7 @@ singleton for an Agent or a Python context class. Storage identity is:
 (thread/tenant boundary, context_scope_id, field_name)
 ```
 
-The scope ID identifies stored application data. Saved router frames retain
+The scope ID identifies stored application data. Saved session frames retain
 their context-scope references across turns.
 
 | Operation | Context/data scope |

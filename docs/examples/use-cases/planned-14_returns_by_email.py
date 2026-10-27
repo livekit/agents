@@ -55,6 +55,9 @@ async def start_return(
     r = await ctx.context.services.shop.post(
         "/returns", json=body, headers={"Idempotency-Key": ctx.function_call.call_id}
     )
+    r.raise_for_status()
+    # The shop also enforces one active RMA per eligible order; a new model
+    # call ID must not open another return for the same business request.
     rma = r.json()
     ctx.context.returned.order_id, ctx.context.returned.rma_id = (order_id, rma["rma_id"])
     await ctx.store.save_context(ctx.context)
@@ -76,11 +79,12 @@ server = AgentServer(storage=AgentDBStorage())
 
 @server.a2a_session(endpoint="returns", description="Larkfield Outfitters returns.")
 async def inbox(ctx: A2ASessionContext) -> RunResult[str]:
-    deps = Deps(
-        shop=httpx.AsyncClient(base_url=SHOP), warehouse=httpx.AsyncClient(base_url=WAREHOUSE)
-    )
-    app = AppContext(services=deps)
-    await ctx.store.load_context(app)
-    result = await support.run(ctx.message, message_history=ctx.message_history, context=app)
-    await ctx.store.save_context(app)
-    return result
+    async with (
+        httpx.AsyncClient(base_url=SHOP) as shop,
+        httpx.AsyncClient(base_url=WAREHOUSE) as warehouse,
+    ):
+        app = AppContext(services=Deps(shop=shop, warehouse=warehouse))
+        await ctx.store.load_context(app)
+        result = await support.run(ctx.message, message_history=ctx.message_history, context=app)
+        await ctx.store.save_context(app)
+        return result

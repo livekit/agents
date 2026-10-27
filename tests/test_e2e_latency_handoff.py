@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, LiveSession, RunContext, function_tool
+from livekit.agents import Agent, RunContext, VoiceSession, function_tool
 from livekit.agents.llm import ChatMessage, FunctionToolCall
 
 from .fake_session import FakeActions, create_session, run_session
@@ -318,7 +318,7 @@ async def test_new_user_turn_supersedes_the_handoff_turn() -> None:
     assert "e2e_latency" not in greeting.metrics
 
 
-def _handoff_later(session: LiveSession, delay: float) -> None:
+def _handoff_later(session: VoiceSession, delay: float) -> None:
     """A handoff nothing in the conversation caused, like a timer or an external event."""
     asyncio.get_event_loop().call_later(delay, session.update_agent, Greeter())
 

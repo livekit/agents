@@ -763,7 +763,7 @@ async def test_the_rtc_door_resolves_the_call_thread(agentdb_storage: AgentDBSto
 
 
 async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: Workers) -> None:
-    from livekit.agents import LiveSession
+    from livekit.agents import VoiceSession
 
     call_worker, text_worker = agentdb_workers
     sid = await new_session(call_worker, "desk")
@@ -779,7 +779,7 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: 
     state = Patient()
     thread = Thread(call_worker, sid, agent_name="desk")
     app = AppContext(patient=state)
-    async with LiveSession(llm=llm, context=app, thread=thread) as session:
+    async with VoiceSession(llm=llm, context=app, thread=thread) as session:
         await session.start(agent)
         assert session.thread is thread
         await session.run(user_input="hello")

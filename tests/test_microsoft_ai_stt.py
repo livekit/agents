@@ -22,8 +22,8 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     JobContext,
-    LiveSession,
     StopResponse,
+    VoiceSession,
     inference,
     llm,
     stt,
@@ -1415,7 +1415,7 @@ async def test_stt_smoke_checks_complete_words_without_printing_them(
 async def test_completed_turn_echoes_exact_text_once_without_an_llm(
     monkeypatch: pytest.MonkeyPatch, text: str
 ) -> None:
-    session = MagicMock(spec=LiveSession)
+    session = MagicMock(spec=VoiceSession)
     handle = MagicMock(spec=SpeechHandle)
     session.say.return_value = handle
     monkeypatch.setattr(echo_example.EchoAgent, "session", property(lambda _: session))
@@ -1431,7 +1431,7 @@ async def test_completed_turn_echoes_exact_text_once_without_an_llm(
 async def test_repeated_words_in_distinct_turns_are_not_silently_deduplicated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = MagicMock(spec=LiveSession)
+    session = MagicMock(spec=VoiceSession)
     monkeypatch.setattr(echo_example.EchoAgent, "session", property(lambda _: session))
     agent = echo_example.EchoAgent()
     for _ in range(2):
@@ -1443,7 +1443,7 @@ async def test_repeated_words_in_distinct_turns_are_not_silently_deduplicated(
 
 
 async def test_empty_completed_turn_does_not_synthesize(monkeypatch: pytest.MonkeyPatch) -> None:
-    session = MagicMock(spec=LiveSession)
+    session = MagicMock(spec=VoiceSession)
     monkeypatch.setattr(echo_example.EchoAgent, "session", property(lambda _: session))
     with pytest.raises(StopResponse):
         await echo_example.EchoAgent().on_user_turn_completed(
@@ -1477,7 +1477,7 @@ def _mock_entrypoint(monkeypatch: pytest.MonkeyPatch):
     detector = MagicMock(spec=inference.VAD)
     vad_factory = MagicMock(return_value=detector)
     monkeypatch.setattr(echo_example.inference, "VAD", vad_factory)
-    session = MagicMock(spec=LiveSession)
+    session = MagicMock(spec=VoiceSession)
     session.room_io = SimpleNamespace(wait_for_ready=AsyncMock())
     callbacks = {}
 
@@ -1496,7 +1496,7 @@ def _mock_entrypoint(monkeypatch: pytest.MonkeyPatch):
 
     session.start = AsyncMock(side_effect=start)
     session_factory = MagicMock(return_value=session)
-    monkeypatch.setattr(echo_example, "LiveSession", session_factory)
+    monkeypatch.setattr(echo_example, "VoiceSession", session_factory)
     ctx = MagicMock(spec=JobContext)
     ctx.room = MagicMock(spec=rtc.Room)
     return SimpleNamespace(
@@ -1616,7 +1616,7 @@ async def test_real_model_less_session_speaks_final_text_and_can_interrupt() -> 
     began = asyncio.Event()
     output.on("playback_started", lambda _: began.set())
     async with speech:
-        session = LiveSession(
+        session = VoiceSession(
             tts=speech,
             vad=None,
             turn_handling={"turn_detection": None},

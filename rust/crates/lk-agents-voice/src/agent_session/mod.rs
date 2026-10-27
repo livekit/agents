@@ -44,7 +44,7 @@ pub const DEFAULT_AEC_WARMUP: Duration = Duration::from_secs(3);
 
 /// `voice/agent_session.py`'s `AgentSession`. The `Driver` orchestrates it together with the
 /// [`AgentActivity`](crate::agent_activity::AgentActivity).
-pub(crate) struct LiveSession {
+pub(crate) struct VoiceSession {
     pub(crate) states: AgentUserState,
     pub(crate) aec: AecWarmup,
     /// Guard 1. Cleared when the adaptive detector takes interruption over.
@@ -104,7 +104,7 @@ pub(crate) struct SessionParts {
 }
 
 
-impl LiveSession {
+impl VoiceSession {
     pub(crate) fn new(config: DriverConfig, parts: SessionParts) -> Self {
         let SessionParts {
             llm,
@@ -124,7 +124,7 @@ impl LiveSession {
             chat_ctx.update_agent_chat_ctx(items, &agent);
         }
         let cfg = &config.effective;
-        LiveSession {
+        VoiceSession {
             states: AgentUserState::new(cfg.timers.user_away()),
             aec: AecWarmup::new(cfg.timers.aec_warmup()),
             by_audio_activity: cfg.turn.interruption.by_audio_activity(),
@@ -672,11 +672,11 @@ mod label_tests {
     use crate::events::SessionEvent;
     use lk_agents_abi::Ts;
 
-    fn state(aec: Option<Duration>) -> LiveSession {
+    fn state(aec: Option<Duration>) -> VoiceSession {
         let legs = crate::agent_activity::options::LegSet::none();
         let mut config = DriverConfig::new(Default::default(), legs);
         config.effective.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec);
-        LiveSession::new(config, SessionParts::default())
+        VoiceSession::new(config, SessionParts::default())
     }
 
     fn arms(eff: &Effects) -> Vec<Ts> {

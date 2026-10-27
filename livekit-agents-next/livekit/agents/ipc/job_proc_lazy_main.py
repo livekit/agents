@@ -40,7 +40,7 @@ from .proto import (
     StartJobRequest,
 )
 
-# The core's bound on LiveSession.aclose() during the job shutdown, a guardrail against close
+# The core's bound on VoiceSession.aclose() during the job shutdown, a guardrail against close
 # paths that hang: past it the rest of the shutdown (on_session_end, ShuttingDown,
 # room.disconnect, the shutdown callbacks) runs anyway.
 _SESSION_ACLOSE_TIMEOUT = 60.0

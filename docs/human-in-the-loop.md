@@ -70,8 +70,10 @@ in `result.output`; the framework outcome stays outside `output_type`.
 
 A conversation tool that returns `Failed(error)` or `Rejected(reason)`
 records the text as an error output and the model replies to it.
-`Completed(value)` from a conversation tool is that call's output; an
-agent completes when its final output is accepted. The handler delivers the
+`Completed(value)` from an ordinary agent tool is that call's output. Inside
+a `VoiceTask` tool, it completes that live task and returns its validated result
+to the waiting frontend caller. See [custom voice tasks](voice.md#authoring-a-custom-voicetask).
+An agent completes when its final output is accepted. The handler delivers the
 returned framework outcome to the transport.
 
 ## Approvals
@@ -83,16 +85,20 @@ after that answer; the schema has no approval flag the model could set. See
 [tools.md](tools.md).
 
 An agent exposed with `as_tool(needs_approval=True)` asks permission before
-starting the specialist. The router retains the pending invocation and its
+starting the specialist. The session retains the pending invocation and its
 arguments in routing state. The application explicitly saves that state; on
-the next request it loads it and passes the person's reply to the router.
+the next request it loads it and passes the person's reply to the session.
 Approval to start the specialist does not authorize actions inside it: a
 reservation or payment tool can require its own approval. See
-[agent-tool approvals](agent-router.md#approval-before-starting-a-child).
+[agent-tool approvals](text-session.md#approval-before-starting-a-child).
 
-## Routed conversations
+## Text-session conversations
 
-[AgentRouter](agent-router.md) specifies task completion, human input, frames,
+[TextSession](text-session.md) specifies task completion, human input, frames,
 agent-tool calls, and child completion. It retains the active frame while waiting for a person.
 The next message starts a new invocation of that frame's agent. Accepted child output fills the parent tool call and starts a fresh parent
 invocation.
+
+Frontend remote-agent questions are coordinated by `VoiceSession`, which owns
+presentation and reply correlation without a `TextSession`. See the
+[frontend event queue](voice.md#conversation-owned-inbox).

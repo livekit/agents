@@ -124,7 +124,7 @@ from .turn import (
 if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_run import AgentRun
-    from .agent_session import ExpressiveOptions, LiveSession
+    from .agent_session import ExpressiveOptions, VoiceSession
 
 
 # the binding of an agent in the current context: a voice activity, or an AgentRun for
@@ -182,7 +182,7 @@ class ActivityClosedError(Exception):
 
 @dataclass
 class _OnEnterData:
-    session: LiveSession
+    session: VoiceSession
     agent: Agent
 
 
@@ -347,7 +347,7 @@ def _record_queue_wait(speech_handle: SpeechHandle) -> None:
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(
-        self, agent: Agent, sess: LiveSession, *, chat_ctx: llm.ChatContext | None = None
+        self, agent: Agent, sess: VoiceSession, *, chat_ctx: llm.ChatContext | None = None
     ) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
@@ -453,7 +453,7 @@ class AgentActivity(RecognitionHooks):
             raise ValueError(
                 "the RealtimeModel uses a server-side turn detection, "
                 "allow_interruptions cannot be False, disable turn_detection in "
-                "the RealtimeModel and use VAD on the LiveSession instead"
+                "the RealtimeModel and use VAD on the VoiceSession instead"
             )
 
         # validate turn detection mode and turn detector
@@ -555,7 +555,7 @@ class AgentActivity(RecognitionHooks):
             if isinstance(turn_detection, _StreamingTurnDetector):
                 if self.vad is None:
                     logger.warning(
-                        "TurnDetector requires a VAD model. Pass vad=inference.VAD() to LiveSession/Agent"
+                        "TurnDetector requires a VAD model. Pass vad=inference.VAD() to VoiceSession/Agent"
                         " or turn_detection=None to disable the default TurnDetector"
                     )
                     return None
@@ -654,7 +654,7 @@ class AgentActivity(RecognitionHooks):
         return self._scheduling_paused
 
     @property
-    def session(self) -> LiveSession:
+    def session(self) -> VoiceSession:
         return self._session
 
     @property
@@ -876,7 +876,7 @@ class AgentActivity(RecognitionHooks):
         ):
             raise RuntimeError(
                 "cannot swap to or from a RealtimeModel while the agent is running, "
-                "use LiveSession.update_agent() instead"
+                "use VoiceSession.update_agent() instead"
             )
         # a new vad must satisfy the streaming turn detector's min_silence requirement
         if is_given(new_vad) and self._audio_recognition is not None:
@@ -1027,7 +1027,7 @@ class AgentActivity(RecognitionHooks):
         reuse_resources: _ReusableResources | None = None,
         trace_context: otel_context.Context | None = None,
     ) -> None:
-        # `start` must only be called by LiveSession
+        # `start` must only be called by VoiceSession
 
         # bound for the whole start so every task spawned on the way inherits the binding
         token = _AgentActivityContextVar.set(self)
@@ -1298,7 +1298,7 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.on("remote_item_added", self._on_remote_item_added)
             self._rt_session.on("error", self._on_error)
 
-            # the fallback adapter's session needs the LiveSession to drive interrupt/generate_reply on swap
+            # the fallback adapter's session needs the VoiceSession to drive interrupt/generate_reply on swap
             if isinstance(self._rt_session, _FallbackRealtimeSession):
                 self._rt_session._agent_session = self._session
 
@@ -1405,8 +1405,8 @@ class AgentActivity(RecognitionHooks):
     async def drain(
         self, *, new_activity: AgentActivity | None = None
     ) -> _ReusableResources | None:
-        # `drain` must only be called by LiveSession
-        # LiveSession makes sure there is always one agent available to the users.
+        # `drain` must only be called by VoiceSession
+        # VoiceSession makes sure there is always one agent available to the users.
         current_span = trace.get_current_span()
         current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, self._agent.label)
 
@@ -1492,7 +1492,7 @@ class AgentActivity(RecognitionHooks):
         reuse_resources: _ReusableResources | None = None,
         trace_context: otel_context.Context | None = None,
     ) -> None:
-        # `resume` must only be called by LiveSession
+        # `resume` must only be called by VoiceSession
 
         token = _AgentActivityContextVar.set(self)
         try:
@@ -1519,13 +1519,13 @@ class AgentActivity(RecognitionHooks):
         blocked_tasks: list[asyncio.Task],
         new_activity: AgentActivity | None = None,
     ) -> _ReusableResources | None:
-        # `pause` must only be called by LiveSession
+        # `pause` must only be called by VoiceSession
 
         # When draining, the tasks that have done the "premption" must be ignored.
         # They will most likely block until the Agent transition is done. So we must not
         # wait for them to avoid deadlocks.
 
-        # When resuming, the LiveSession.update_agent must use the same AgentActivity instance!
+        # When resuming, the VoiceSession.update_agent must use the same AgentActivity instance!
         async with self._lock:
             if self._closed:
                 # already closed by the session close
@@ -1613,7 +1613,7 @@ class AgentActivity(RecognitionHooks):
         self._cancel_speech_pause_task = None
 
     async def aclose(self) -> None:
-        # `aclose` must only be called by LiveSession
+        # `aclose` must only be called by VoiceSession
 
         async with self._lock:
             if self._closed:
@@ -1708,7 +1708,7 @@ class AgentActivity(RecognitionHooks):
         ):
             raise RuntimeError(
                 "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); "
-                "add a TTS model to LiveSession to enable say()"
+                "add a TTS model to VoiceSession to enable say()"
             )
 
         if self._rt_turn_detection_enabled and allow_interruptions is False:
@@ -2131,7 +2131,7 @@ class AgentActivity(RecognitionHooks):
                 await _wait_for_eou()
 
             if self._session._user_turn_claims > 0:
-                # `LiveSession.claim_user_turn` is holding idle open
+                # `VoiceSession.claim_user_turn` is holding idle open
                 await self._session._user_turn_released.wait()
                 agent_active = wait_for_agent
                 user_active = wait_for_user

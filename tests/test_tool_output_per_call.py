@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, LiveSession, ToolResult, function_tool
+from livekit.agents import Agent, ToolResult, VoiceSession, function_tool
 from livekit.agents.llm import FunctionCallOutput, FunctionToolCall, StopResponse
 
 from .fake_session import FakeActions, create_session, run_session
@@ -37,7 +37,7 @@ class ToolAgent(Agent):
 
 async def _run(
     behavior: Callable[[], Any], *, reply_to: str | None = None
-) -> tuple[Agent, LiveSession, FunctionCallOutput]:
+) -> tuple[Agent, VoiceSession, FunctionCallOutput]:
     """Run one turn whose single tool call is answered, and return that answer."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Do the thing.")

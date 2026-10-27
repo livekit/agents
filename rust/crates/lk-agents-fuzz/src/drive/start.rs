@@ -1,6 +1,6 @@
 //! Building the session through the host API, and the product objects a case's words become.
 //!
-//! [`Run::start`] assembles a real `LiveSession` over the fake room and the fakes, as a host does,
+//! [`Run::start`] assembles a real `VoiceSession` over the fake room and the fakes, as a host does,
 //! and installs the probe before `start()`. Below it are the constructors the start and the calls
 //! share: an agent, a history, a patch, built from the case's terms.
 use super::*;

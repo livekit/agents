@@ -138,7 +138,7 @@ async def open() -> AsyncIterator[aiohttp.ClientSession]:  # noqa: A001
     Example::
 
         async with utils.http_context.open():
-            async with LiveSession() as session:
+            async with VoiceSession() as session:
                 await session.start(MyAgent())
     """
     if _ContextVar.get(None) is not None:

@@ -129,7 +129,7 @@ class RecordingOptions(TypedDict, total=False):
     means "record everything except logs." Redaction defaults to the project setting;
     ``False`` is ignored when redaction is enabled globally for the project.
 
-    Can be passed directly to :pymethod:`LiveSession.start(record=...)`:
+    Can be passed directly to :pymethod:`VoiceSession.start(record=...)`:
 
     * ``record=True``  → all on (backward compatible)
     * ``record=False`` → all off (backward compatible)
@@ -241,7 +241,7 @@ DEFAULT_SPEECH_STEERING_OPTIONS: SpeechSteeringOptions = SpeechSteeringOptions(d
 
 
 class ExpressiveOptions(TypedDict, total=False):
-    """Configuration for the expressive pipeline, passed as ``LiveSession(expressive=...)``
+    """Configuration for the expressive pipeline, passed as ``VoiceSession(expressive=...)``
     or ``Agent(expressive=...)`` (the agent value overrides the session's).
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
@@ -342,7 +342,7 @@ class AgentSessionOptions:
         return self.turn_handling["preemptive_generation"]
 
 
-Userdata_T = TypeVar_("Userdata_T", default=Any)  # LiveSession(...) with no userdata
+Userdata_T = TypeVar_("Userdata_T", default=Any)  # VoiceSession(...) with no userdata
 Run_T = TypeVar("Run_T")
 
 # _RunContextVar = contextvars.ContextVar[RunResult]("agents_run_state")
@@ -350,7 +350,7 @@ Run_T = TypeVar("Run_T")
 
 @runtime_checkable
 class _VideoSampler(Protocol):
-    def __call__(self, frame: rtc.VideoFrame, session: LiveSession) -> bool: ...
+    def __call__(self, frame: rtc.VideoFrame, session: VoiceSession) -> bool: ...
 
 
 # TODO(theomonnom): Should this be moved to another file?
@@ -360,7 +360,7 @@ class VoiceActivityVideoSampler:
         self.silent_fps = silent_fps
         self._last_sampled_time: float | None = None
 
-    def __call__(self, frame: rtc.VideoFrame, session: LiveSession) -> bool:
+    def __call__(self, frame: rtc.VideoFrame, session: VoiceSession) -> bool:
         now = time.time()
         is_speaking = session.user_state == "speaking"
         target_fps = self.speaking_fps if is_speaking else self.silent_fps
@@ -382,7 +382,7 @@ class VoiceActivityVideoSampler:
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
 
-class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
+class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @deprecate_params(
         {
             "min_endpointing_delay": "Use turn_handling=TurnHandlingOptions(...) instead",
@@ -448,7 +448,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         mcp_servers: NotGivenOr[list[mcp.MCPServer]] = NOT_GIVEN,
         keyterms_options: NotGivenOr[KeytermsOptions] = NOT_GIVEN,
     ) -> None:
-        """`LiveSession` is the LiveKit Agents runtime that glues together
+        """`VoiceSession` is the LiveKit Agents runtime that glues together
         media streams, speech/LLM components, and tool orchestration into a
         single real-time voice agent.
 
@@ -673,7 +673,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._mcp_servers = mcp_servers or None
         if self._mcp_servers:
             logger.warning(
-                "passing MCP servers to LiveSession or Agent is deprecated "
+                "passing MCP servers to VoiceSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._tools = tools if is_given(tools) else []
@@ -799,7 +799,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def userdata(self) -> Userdata_T:
         if self._userdata is None:
-            raise ValueError("LiveSession userdata is not set")
+            raise ValueError("VoiceSession userdata is not set")
 
         return self._userdata
 
@@ -999,7 +999,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     if recording_enabled(self._opts.recording_options):
                         if record_is_given:
                             raise RuntimeError(
-                                "Only one `LiveSession` can be the primary at a time. "
+                                "Only one `VoiceSession` can be the primary at a time. "
                                 "If you want to ignore primary designation, "
                                 "use session.start(record=False)."
                             )
@@ -1244,7 +1244,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             transcript_output = _collect_chain(self.output.transcription)
 
             logger.debug(
-                "using audio io: %s -> `LiveSession` -> %s",
+                "using audio io: %s -> `VoiceSession` -> %s",
                 " -> ".join([f"`{out.label}`" for out in audio_input]) or "(none)",
                 " -> ".join([f"`{out.label}`" for out in audio_output]) or "(none)",
             )
@@ -1259,13 +1259,13 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
             logger.debug(
-                "using transcript io: `LiveSession` -> %s",
+                "using transcript io: `VoiceSession` -> %s",
                 " -> ".join([f"`{out.label}`" for out in transcript_output]) or "(none)",
             )
 
             if video_input or video_output:
                 logger.debug(
-                    "using video io: %s > `LiveSession` > %s",
+                    "using video io: %s > `VoiceSession` > %s",
                     " -> ".join([f"`{out.label}`" for out in video_input]) or "(none)",
                     " -> ".join([f"`{out.label}`" for out in video_output]) or "(none)",
                 )
@@ -1277,7 +1277,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     async def drain(self) -> None:
         if self._activity is None:
-            raise RuntimeError("LiveSession isn't running")
+            raise RuntimeError("VoiceSession isn't running")
 
         await self._activity.drain()
 
@@ -1285,7 +1285,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def room_io(self) -> room_io.RoomIO:
         if not self._room_io:
             raise RuntimeError(
-                "Cannot access room_io: the LiveSession was not started with a room."
+                "Cannot access room_io: the VoiceSession was not started with a room."
             )
 
         return self._room_io
@@ -1589,15 +1589,15 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         if self._activity is None:
-            raise RuntimeError("LiveSession isn't running")
+            raise RuntimeError("VoiceSession isn't running")
 
         run_state = self._global_run_state
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
         if activity is None:
-            raise RuntimeError("LiveSession is closing, cannot use say()")
+            raise RuntimeError("VoiceSession is closing, cannot use say()")
 
-        # attach to the session span if called outside of the LiveSession
+        # attach to the session span if called outside of the VoiceSession
         use_span: AbstractContextManager[trace.Span | None] = nullcontext()
         if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
             use_span = tracer.use_span(self._session_span, end_on_exit=False)
@@ -1650,7 +1650,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             ``handle.exception()`` for the failure instead.
         """  # noqa: E501
         if self._activity is None:
-            raise RuntimeError("LiveSession isn't running")
+            raise RuntimeError("VoiceSession isn't running")
 
         user_message = (
             llm.ChatMessage(role="user", content=[user_input])
@@ -1662,9 +1662,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
         if activity is None:
-            raise RuntimeError("LiveSession is closing, cannot use generate_reply()")
+            raise RuntimeError("VoiceSession is closing, cannot use generate_reply()")
 
-        # attach to the session span if called outside of the LiveSession
+        # attach to the session span if called outside of the VoiceSession
         use_span: AbstractContextManager[trace.Span | None] = nullcontext()
         if trace.get_current_span() is trace.INVALID_SPAN and self._session_span is not None:
             use_span = tracer.use_span(self._session_span, end_on_exit=False)
@@ -1699,7 +1699,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 playing disallows interruptions and ``force`` is False.
         """
         if self._activity is None:
-            raise RuntimeError("LiveSession isn't running")
+            raise RuntimeError("VoiceSession isn't running")
 
         return self._activity.interrupt(force=force)
 
@@ -1753,7 +1753,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn
         if self._activity is None:
-            raise RuntimeError("LiveSession isn't running")
+            raise RuntimeError("VoiceSession isn't running")
 
         self._activity.clear_user_turn()
 
@@ -1782,10 +1782,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             asyncio.Future[str]: A future that resolves with the audio transcript.
 
         Raises:
-            RuntimeError: If the LiveSession isn't running.
+            RuntimeError: If the VoiceSession isn't running.
         """
         if self._activity is None:
-            raise RuntimeError("LiveSession isn't running")
+            raise RuntimeError("VoiceSession isn't running")
 
         return self._activity.commit_user_turn(
             transcript_timeout=transcript_timeout,
@@ -1835,7 +1835,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             activity = self._activity
             if activity is None:
-                raise RuntimeError("LiveSession has no active AgentActivity")
+                raise RuntimeError("VoiceSession has no active AgentActivity")
 
             try:
                 await activity.wait_for_idle()
@@ -1888,7 +1888,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _current_activity_or_raise(self) -> AgentActivity:
         if self._activity is None:
-            raise RuntimeError("LiveSession isn't running")
+            raise RuntimeError("VoiceSession isn't running")
         return self._activity
 
     def _activity_of(self, agent: Agent) -> AgentActivity | None:
@@ -2096,7 +2096,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """:meta private: internal — emit a debug/trace payload to the debugger/recorder."""
         st = Struct()
         ParseDict(payload, st)
-        # super().emit bypasses LiveSession.emit's narrowed AgentEvent type;
+        # super().emit bypasses VoiceSession.emit's narrowed AgentEvent type;
         # debug messages ride the proto, not the Pydantic event union.
         super().emit("debug_message", agent_pb.DebugMessage(payload=st))
 
@@ -2120,10 +2120,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 return
 
         if isinstance(error.error, APIError):
-            logger.error(f"LiveSession is closing due to unrecoverable error: {error.error}")
+            logger.error(f"VoiceSession is closing due to unrecoverable error: {error.error}")
         else:
             logger.error(
-                "LiveSession is closing due to unrecoverable error",
+                "VoiceSession is closing due to unrecoverable error",
                 exc_info=error.error,
             )
 
@@ -2512,7 +2512,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     # ---
 
-    async def __aenter__(self) -> LiveSession:
+    async def __aenter__(self) -> VoiceSession:
         return self
 
     async def __aexit__(
@@ -2528,9 +2528,9 @@ def __getattr__(name: str) -> Any:
     if name == "AgentSession":
         warnings.warn(
             "AgentSession is deprecated and will be removed in the next release, "
-            "use LiveSession instead",
+            "use VoiceSession instead",
             DeprecationWarning,
             stacklevel=2,
         )
-        return LiveSession
+        return VoiceSession
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

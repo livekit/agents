@@ -88,37 +88,59 @@ specification; implementation cleanup must follow the agreed contracts.
 
 ### Core Concepts
 - **Fast brain / slow brain**: the pattern every example follows. A frontend agent talks to the
-  person (persona, pacing, voice) and its one tool is an `A2AAgent(...).as_tool()` to a backend agent that
+  person (persona, pacing, voice) and its one tool is a `RemoteAgent(...).as_tool()` to a backend agent that
   holds the tools, the state and the systems of record.
 - **Agent** (`voice/agent.py`): shared configuration, `Agent[Context]`, and validated
-  `output_type`. `await agent.run(message, message_history=, context=)` executes that agent.
+  `output_type`, authored as a constructed instance with registered callbacks. `await agent.run(message, message_history=, context=)` executes that agent.
+- **Streaming**: `agent.run_stream(...)` and backend `session.run_stream(...)` are
+  async context managers with one text/event consumer and an awaitable `result()`.
+  They share `run()` semantics; cancellation and cleanup settle before final retrieval.
+  Application context/session saves remain explicit. See `docs/agents.md`.
 - **RunContext[Context]**: tools and instruction functions receive `ctx.context`,
   `ctx.thread`, `ctx.live_session`, `ctx.store`, and `ctx.update()`.
 - **RunResult[Output]**: a discriminated result; `status="completed"` exposes the typed
   `output`, while `status="input_required"` exposes `question`. Tools can request input
   with `InputRequired(...)`; framework outcomes remain separate from `output_type`.
-- **AgentRouter**: optional orchestration of agents used as tools. Each child requires
-  `output_type`; accepted final output completes it and fills the parent tool call.
-  It returns an envelope with `result: RunResult` and `state: RouterState`. Application code
-  supplies and persists routing state. See `docs/agent-router.md`.
+- **TextSession**: request-scoped text conversation orchestration, reconstructed from
+  shared agent configuration and explicitly supplied saved state.
+  Each child requires `output_type`; accepted final output fills the parent tool call.
+  Returns `result: RunResult` and `state: TextSessionState`; application code explicitly
+  loads and saves backend routing state. See `docs/text-session.md`.
+- **VoiceTask[Output]**: fast-brain/frontend live interactions in an active voice session.
+  `.run()` resolves the session from invocation-local runtime context; callers do not
+  pass it explicitly. Calling outside a live interaction fails before execution.
+  Temporarily takes the floor, returns a typed result, and restores the parent without
+  calling the parent's on_exit/on_enter hooks. Its
+  parent await remains in memory. Not for stateless workloads, backend orchestration,
+  background execution, or recovery across requests/deployments. See `docs/voice.md`.
 - **Context persistence**: `persisted(...)` marks fields; `load_context` and `save_context`
   are explicit. Runtime services remain application-supplied objects.
 - **Thread**: one conversation (`AT_...` id, the A2A `contextId`), with configured handler lanes,
   histories and transport tasks stored in agent-db.
 - **AgentHandler / AgentServer** (`worker.py`): a module declares an agent's doors on an
-  `AgentHandler(lane=)`: `rtc_session()` (a call, run on a `LiveSession`) and
+  `AgentHandler(lane=)`: `rtc_session()` (a call, run on a `VoiceSession`) and
   `a2a_session(endpoint=)` (an A2A text endpoint). The entrypoint's `AgentServer` serves them
   with `server.add(...)`; the examples' `main.py` adds a front desk and a back office.
 - **Approval and verbatim**: `needs_approval=` holds approval in the framework (the body runs
   only on a repeat of the call after the person answered its read-back). The agent facing the
   person words questions and results unless they are `verbatim=True`.
-- **LiveSession** (`voice/agent_session.py`): the runtime a call's room attaches to: models, turn
-  detection, audio. `AgentSession` is a deprecated alias kept one release.
+- **VoiceSession** (`voice/agent_session.py`): owns frontend expert-tool calls, an
+  in-process frontend event queue, and human reply correlation without TextSession.
+  Expert events are eligible when the active agent exposes the corresponding remote
+  tool and the floor is available; the original Agent object need not be active.
+  Expert questions are rephrased and human replies forwarded. They do not trigger
+  local VoiceTask collection; that extension is outside the current contract.
+  Preserve expert request identity and separate collection from reply delivery,
+  allowing a future collector to explicitly answer that same pending request.
+  Queue persistence is optional and separate from backend request batching. Owns
+  STT, TTS, VAD, turn detection,
+  endpointing, interruption and audio delivery. `update_options(...)` explicitly changes
+  session configuration; selecting an agent preserves those settings. `AgentSession` is a deprecated alias kept one release.
 
 ### Key Directories
 ```
 livekit-agents/livekit/agents/
-├── voice/              # Agent, LiveSession, room I/O, transcription
+├── voice/              # Agent, VoiceSession, room I/O, transcription
 ├── a2a/                # The text door: A2A endpoint, codec, LiveKit extension, AgentClient, tokens
 ├── delegation/         # Internal remote tool adapter, progress and task correlation
 ├── storage/            # AgentDBStorage, thread resolution, the call's lane (live.py)
@@ -155,7 +177,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 1. A text message reaches `/agents/<agent>/<deployment>/<endpoint>` as A2A; a call is a job dispatch.
 2. The platform resolves the thread (the `contextId`, or `thread_id` in the dispatch metadata) or creates one.
 3. The worker loads the agent's lane from agent-db and takes its lease.
-4. The handler runs `agent.run(...)` (text) or the `LiveSession` runs the agent (call).
+4. The handler runs `agent.run(...)` (text) or the `VoiceSession` runs the agent (call).
 5. The framework commits history and explicitly saved context fields and releases the lease.
 
 ## Environment Variables

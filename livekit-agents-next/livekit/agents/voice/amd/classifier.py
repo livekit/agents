@@ -1,6 +1,6 @@
 """The classifier's public types and the tools its LLM answers with.
 
-The classifier itself is the core's (``_core.LiveSession.attach_amd``); the tools here are the
+The classifier itself is the core's (``_core.VoiceSession.attach_amd``); the tools here are the
 objects a host LLM is handed beside the core's specs, and are never executed.
 """
 

@@ -445,7 +445,7 @@ async def test_consultation_setup_releases_resources_on_failure(
     )
     task.session = parent
     session = Mock(start=AsyncMock())
-    monkeypatch.setattr(warm_transfer, "LiveSession", Mock(return_value=session))
+    monkeypatch.setattr(warm_transfer, "VoiceSession", Mock(return_value=session))
     monkeypatch.setattr(warm_transfer, "Agent", Mock())
     originate = AsyncMock()
     monkeypatch.setattr(task, "_originate_human_agent", originate)

@@ -25,8 +25,8 @@ async def find_appointment(
 ```
 
 `@agent.tool` and `@agent.tool(name=, description=, ...)` register a tool on
-a module-level agent. A subclass declares its tools as methods with
-`@function_tool`; `Agent(tools=[...])` takes tools built elsewhere.
+a module-level agent. `@function_tool` declares a reusable tool function;
+`Agent(tools=[...])` takes tools and toolsets built elsewhere.
 
 - Sync or async. Arguments are anything pydantic validates: scalars,
   dataclasses, pydantic models, lists, dicts.
@@ -40,10 +40,11 @@ a module-level agent. A subclass declares its tools as methods with
 ## Agents as tools
 
 `agent.as_tool(...)` exposes a specialist with a typed input schema and a
-mandatory `output_type`. Attach it through the parent's `tools=` and run the
-conversation with `AgentRouter`. Configure its name, description, parameters,
+mandatory `output_type`. Attach it through the parent's `tools=` and run a backend
+conversation with `TextSession`. Frontend remote tools are coordinated by
+`VoiceSession` without a session. Configure its name, description, parameters,
 approval gate, and history policy in the
-[agent-tool specification](agent-router.md#configuring-an-agent-tool).
+[agent-tool specification](text-session.md#configuring-an-agent-tool).
 
 ## What a tool returns
 
@@ -58,7 +59,7 @@ approval gate, and history policy in the
 | any other exception | logged; the model reads "An internal error occurred" |
 | `InputRequired(question)` | the turn waits for the person; see [human-in-the-loop.md](human-in-the-loop.md) |
 | `Failed(error)`, `Rejected(reason)` | the model reads the text as an error output and replies |
-| `Completed(value)` | ordinary call output; [agent tasks](agent-router.md) complete through accepted typed final output |
+| `Completed(value)` | An ordinary agent tool returns its call output; a VoiceTask tool completes its live interaction with the validated typed value. See [custom voice tasks](voice.md#authoring-a-custom-voicetask). |
 
 ## Approval
 
@@ -68,9 +69,9 @@ before the tool body or child agent starts. Approval is bound to the exact
 tool invocation and validated arguments; changed arguments require approval
 again. The model cannot grant approval through a tool argument.
 
-For an agent tool, the router retains the pending invocation in its state.
+For an agent tool, the session retains the pending invocation in its state.
 The application explicitly saves that state and loads it for the next reply.
-See [approval persistence](agent-router.md#approval-before-starting-a-child).
+See [approval persistence](text-session.md#approval-before-starting-a-child).
 
 
 ```python
@@ -144,13 +145,13 @@ member_services = Agent(..., tools=[Cards(), rewards])
 | Class | What |
 |---|---|
 | `Toolset(id=, tools=)` | a group of tools; a subclass adds its `@function_tool` methods |
-| `AsyncToolset(id=, tools=, tool_handling=)` | on a call, background work from its tools survives a handoff when the toolset is passed to `LiveSession(tools=)` |
+| `AsyncToolset(id=, tools=, tool_handling=)` | on a call, background work from its tools survives a handoff when the toolset is passed to `VoiceSession(tools=)` |
 | `MCPToolset(id=, mcp_server=, tool_options=)` | the tools of an MCP server, `MCPServerHTTP(url)` or `MCPServerStdio(command, args)` |
 
 A toolset connects per run of the agent: `setup()` when the agent's
 activity starts, a call or a run, and `aclose()` when it ends. An
 `MCPToolset` connects to its server and lists its tools in `setup()`.
-Toolsets passed to `LiveSession(tools=)` live for the whole call.
+Toolsets passed to `VoiceSession(tools=)` live for the whole call.
 
 Runtime clients in application context are supplied per run; see
 [state-and-deps.md](state-and-deps.md).
@@ -177,6 +178,3 @@ tool does this for an expert's `input-required`
 A tool may run again after a retry. Use a stable business-operation key for external effects and enforce it in
 the authoritative service. A tool-call ID identifies a repeated invocation,
 but a model retry can create a new call ID for the same business action.
-
-Filtered and prefixed toolsets are specified in
-[planned-agents.md](planned-agents.md).

@@ -10,8 +10,8 @@ import aiohttp
 from livekit import api, rtc
 from livekit.agents import (
     NOT_GIVEN,
-    LiveSession,
     NotGivenOr,
+    VoiceSession,
     get_job_context,
     utils,
 )
@@ -92,7 +92,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def start(
         self,
-        agent_session: LiveSession,
+        agent_session: VoiceSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,
