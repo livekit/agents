@@ -291,34 +291,22 @@ async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
     session.aclose().await;
 }
 
-// Catches: Azure's legacy API reached with the OpenAI URL, auth or session shape. Legacy Azure
-// takes `api-version` and `deployment` in the query, an `api-key` header, and the flat beta
-// session; its beta event names must read as the GA ones.
+// Catches: Azure reached with the OpenAI URL or auth. Azure takes the deployment as `model` and an
+// `api-key` header; its beta event names must read as the GA ones.
 #[tokio::test]
-async fn legacy_azure_gets_its_url_header_and_flat_session() {
+async fn azure_gets_its_url_and_header() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let connect = Connect {
         base_url: "https://res.openai.azure.com/openai".into(),
-        azure: Some(Azure { deployment: Some("gpt-rt".into()), api_version: Some("2024-10-01-preview".into()) }),
+        azure: Some(Azure { deployment: Some("gpt-rt".into()) }),
         auth: Auth::Azure { api_key: Some("az-key".into()), entra_token: None },
         conn: Default::default(),
     };
     let session = model(ws.clone(), OPENAI).with_connect(connect).session(false).await;
 
-    let sent = frames(&ws, 1).await;
-    let s = &sent[0]["session"];
-    assert_eq!(s["modalities"], json!(["audio", "text"]));
-    assert_eq!(s["input_audio_format"], json!("pcm16"));
-    assert_eq!(s["voice"], json!("marin"));
-    assert_eq!(s["max_response_output_tokens"], json!("inf"));
-    assert!(s.get("audio").is_none() && s.get("type").is_none(), "{s}");
-    assert!(s.get("tracing").is_none(), "a null tracing is not carried");
-
+    frames(&ws, 1).await;
     let (url, headers) = ws.last_connect().unwrap();
-    assert_eq!(
-        url,
-        "wss://res.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-rt"
-    );
+    assert_eq!(url, "wss://res.openai.azure.com/openai/v1/realtime?model=gpt-rt");
     assert!(headers.contains(&("api-key".to_owned(), "az-key".to_owned())));
     assert!(!headers.iter().any(|(k, _)| k == "Authorization"));
 
