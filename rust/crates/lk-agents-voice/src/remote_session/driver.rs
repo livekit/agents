@@ -2,17 +2,15 @@
 //! correlation and timeouts (`voice/remote_session.py`'s `SessionHost` and `RemoteSession`).
 //! Tasks go through the injected [`Spawner`]; every wait is bounded on the injected [`Clock`].
 
-use std::collections::{BTreeMap, HashMap};
-use std::future::Future;
+use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lk_agents_abi::AbortHandle;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::{Clock, Spawner, SpawnerExt, Ts};
-use tokio::sync::{Notify, mpsc, oneshot};
+use lk_agents_abi::{Clock, Spawner, SpawnerExt, TaskSet};
+use tokio::sync::{mpsc, oneshot};
 
 use super::{
     ClientSink, ConsoleSink, NonFiniteStamp, SessionHost, SessionPort, SessionTransport, WireEvent,
@@ -22,109 +20,6 @@ use proto::agent_session_message::Message;
 
 /// The Python logger every line here lands on (`pyo3-log` maps the target to the logger name).
 const LOG: &str = "livekit.agents";
-
-/// Named tasks and a way to wait for them to be gone (`utils.aio.TaskSet`). Entries are inserted
-/// before spawning and removed by a guard the task owns.
-#[derive(Default)]
-struct TaskSet {
-    inner: Mutex<TaskEntries>,
-    changed: Notify,
-}
-
-#[derive(Default)]
-struct TaskEntries {
-    next: u64,
-    tasks: BTreeMap<u64, (String, Option<AbortHandle>)>,
-}
-
-struct Leave {
-    table: Arc<TaskSet>,
-    id: u64,
-}
-
-impl Drop for Leave {
-    fn drop(&mut self) {
-        self.table.inner.lock().expect("task table").tasks.remove(&self.id);
-        self.table.changed.notify_waiters();
-    }
-}
-
-impl TaskSet {
-    fn spawn(
-        self: &Arc<Self>,
-        spawner: &dyn Spawner,
-        name: &str,
-        fut: impl Future<Output = ()> + Send + 'static,
-    ) {
-        let id = {
-            let mut g = self.inner.lock().expect("task table");
-            g.next += 1;
-            let id = g.next;
-            g.tasks.insert(id, (name.to_owned(), None));
-            id
-        };
-        let leave = Leave { table: Arc::clone(self), id };
-        let handle = spawner.spawn_unboxed(async move {
-            let _leave = leave;
-            fut.await;
-        });
-        if let Some(entry) = self.inner.lock().expect("task table").tasks.get_mut(&id) {
-            entry.1 = Some(handle);
-        }
-    }
-
-    fn names(&self) -> Vec<String> {
-        self.inner.lock().expect("task table").tasks.values().map(|(n, _)| n.clone()).collect()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.inner.lock().expect("task table").tasks.is_empty()
-    }
-
-    /// `true` when the table emptied.
-    async fn wait_empty(&self, clock: &dyn Clock, deadline: Option<Ts>) -> bool {
-        loop {
-            let notified = self.changed.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if self.is_empty() {
-                return true;
-            }
-            match deadline {
-                None => notified.await,
-                Some(at) => {
-                    tokio::select! {
-                        _ = &mut notified => {}
-                        _ = clock.wait_until(at) => return self.is_empty(),
-                    }
-                }
-            }
-        }
-    }
-
-    /// `cancel_and_wait(*tasks)`; returns the names aborted.
-    async fn cancel_and_wait(&self, clock: &dyn Clock) -> Vec<String> {
-        let names = {
-            let g = self.inner.lock().expect("task table");
-            for (_, handle) in g.tasks.values() {
-                if let Some(h) = handle {
-                    h.abort();
-                }
-            }
-            g.tasks.values().map(|(n, _)| n.clone()).collect()
-        };
-        self.wait_empty(clock, None).await;
-        names
-    }
-
-    /// `_drain(tasks, deadline)`: wait until `deadline`, then cancel the stragglers and name them.
-    async fn drain(&self, clock: &dyn Clock, deadline: Ts) -> Vec<String> {
-        if self.wait_empty(clock, Some(deadline)).await {
-            return Vec::new();
-        }
-        self.cancel_and_wait(clock).await
-    }
-}
 
 /// `SessionHost` (`remote_session.py:321`), running. Events queue from construction and one writer
 /// drains them in order; each request is a task named by its type.
@@ -798,6 +693,8 @@ async fn client_recv_loop(
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::Notify;
+
     use super::super::{
         AgentInfo, ChatItem, IoUpdate, RtcStats, RunOutcome, SessionState, SimulationVerdict,
         VerdictOutcome,

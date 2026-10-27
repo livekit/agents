@@ -137,4 +137,4 @@ pub use utils::timer::{TimerId, TimerSet};
 
 pub use utils::bounded_lossy::{AUDIO_QUEUE_FRAMES, BoundedLossy, LossyTx, Pushed};
 pub use utils::monotone::Monotone;
-pub use utils::spawner::{Abort, AbortHandle, BoxFuture, Spawner, SpawnerExt, TokioSpawner};
+pub use utils::spawner::{Abort, AbortHandle, BoxFuture, Spawner, SpawnerExt, TaskSet, TokioSpawner};
