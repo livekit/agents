@@ -90,15 +90,18 @@ _U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "univers
 
 # Server-side cap on the number of steering codes, mirrored client-side so bad
 # input fails at construction/update time instead of as a websocket error.
+# Universal-3.6 Pro has no documented cap.
 _MAX_LANGUAGE_CODES = 10
+_UNCAPPED_LANGUAGE_CODES_MODELS = ("universal-3-6-pro",)
 
 
-def _normalize_language_codes(language_codes: str | list[str]) -> list[str]:
+def _normalize_language_codes(language_codes: str | list[str], model: str) -> list[str]:
     """Normalize code(s) to bare ISO 639-1 and dedup preserving order.
 
     Accepts a single code or a list, mirroring the server, which takes either.
-    Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes,
-    and 'multi' (the unsteered multilingual default) must be sent alone.
+    Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes
+    (except on Universal-3.6 Pro), and 'multi' (the unsteered multilingual
+    default) must be sent alone.
     """
     if isinstance(language_codes, str):
         # A bare code is shorthand for a one-element list; wrapping here (the
@@ -106,7 +109,7 @@ def _normalize_language_codes(language_codes: str | list[str]) -> list[str]:
         # being iterated per-character. "" means "no codes", like [].
         language_codes = [language_codes] if language_codes else []
     normalized = list(dict.fromkeys(LanguageCode(code).language for code in language_codes))
-    if len(normalized) > _MAX_LANGUAGE_CODES:
+    if model not in _UNCAPPED_LANGUAGE_CODES_MODELS and len(normalized) > _MAX_LANGUAGE_CODES:
         raise ValueError(
             f"language_codes accepts at most {_MAX_LANGUAGE_CODES} codes "
             f"(got {len(normalized)} after normalization)"
@@ -196,9 +199,9 @@ class STT(stt.STT):
                 normalization are dropped, preserving order. One code biases the model
                 toward that language — several codes, toward that set — instead of
                 automatically detecting/code-switching across all supported languages.
-                At most 10 codes; 'multi' (the unsteered multilingual default) cannot
-                be combined with other codes. Leave unset to use the model's default
-                multilingual behavior. Only supported with the Universal-3 Pro family
+                At most 10 codes, except on universal-3-6-pro; 'multi' (the unsteered
+                multilingual default) cannot be combined with other codes. Leave unset to
+                use the model's default multilingual behavior. Only supported with the Universal-3 Pro family
                 models. Can be updated mid-session via ``update_options``; pass an
                 empty list (or empty string) there to clear steering back to the model
                 default. At construction an empty value is equivalent to leaving it
@@ -357,9 +360,9 @@ class STT(stt.STT):
         # language_code is shorthand for a one-element list.
         normalized_language_codes: NotGivenOr[list[str]] = NOT_GIVEN
         if is_given(language_code):
-            normalized_language_codes = _normalize_language_codes(language_code)
+            normalized_language_codes = _normalize_language_codes(language_code, model)
         elif is_given(language_codes):
-            normalized_language_codes = _normalize_language_codes(language_codes)
+            normalized_language_codes = _normalize_language_codes(language_codes, model)
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -466,7 +469,7 @@ class STT(stt.STT):
                     "The 'language_codes' parameter is only supported with the "
                     f"{', '.join(_U3_PRO_MODELS)} models."
                 )
-            language_codes = _normalize_language_codes(language_codes)
+            language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
@@ -612,7 +615,7 @@ class SpeechStream(stt.SpeechStream):
                     "The 'language_codes' parameter is only supported with the "
                     f"{', '.join(_U3_PRO_MODELS)} models."
                 )
-            language_codes = _normalize_language_codes(language_codes)
+            language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
