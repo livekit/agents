@@ -40,8 +40,14 @@ impl ToolStep {
         shared: &Arc<SessionShared>,
         handle: &Arc<SpeechHandle>,
         ctx: &ReplyContext,
-        call: FunctionCall,
+        mut call: FunctionCall,
     ) {
+        // Malformed arguments the model's template leaked into are repaired once, here, and the
+        // history keeps the repaired form: the next request would otherwise carry invalid JSON
+        // that a provider refuses.
+        if let Some(repaired) = repaired_arguments(&call.arguments) {
+            call.arguments = repaired;
+        }
         // Only advertised calls reach the speech; an invented tool is answered with an error.
         let advertised = ctx.request.tools.iter().any(|t| t.name == call.name);
         let names = vec![call.name.clone()];
@@ -165,6 +171,32 @@ impl ToolStep {
             Some(rx)
         };
         self.calls.push(Dispatched { call, rx });
+    }
+}
+
+/// Arguments that are not JSON as written, as canonical JSON once repaired; `None` for valid or
+/// unrepairable ones (the runner reports the latter to the model).
+fn repaired_arguments(raw: &str) -> Option<String> {
+    if raw.trim().is_empty() || serde_json::from_str::<serde_json::Value>(raw).is_ok() {
+        return None;
+    }
+    let parsed = lk_agents_abi::llm::tool_arguments::parse(raw).ok()?;
+    parsed.repair.as_ref()?;
+    Some(serde_json::Value::Object(parsed.arguments).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    // Catches: a repaired call's arguments left malformed in history, or valid ones rewritten.
+    #[test]
+    fn malformed_arguments_are_kept_repaired() {
+        let raw = r#"{"order_id": ["<|\"|\"O_WAAB70<|\"|\"]}"#;
+        let repaired = super::repaired_arguments(raw).expect("repaired");
+        assert!(serde_json::from_str::<serde_json::Value>(&repaired).is_ok(), "{repaired}");
+        let leaked = super::repaired_arguments(r#"{"label":"human<|im_end|>"#).expect("repaired");
+        assert_eq!(leaked, r#"{"label":"human"}"#);
+        assert_eq!(super::repaired_arguments(r#"{"a": 1}"#), None);
+        assert_eq!(super::repaired_arguments(""), None);
     }
 }
 

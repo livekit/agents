@@ -332,6 +332,8 @@ impl Make for ToolArgs {
                 r#"{"label":"human"}"#,
                 r#"{"label":"machine-vm"}"#,
                 r#"{"seconds":3}"#,
+                // A chat-template token leaked into the arguments, which end there.
+                r#"{"label":"human<|im_end|>"#,
             ]))
             .to_owned(),
         ))
