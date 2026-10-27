@@ -563,6 +563,11 @@ impl Aligned<'_> {
             return;
         }
         if !self.stamped {
+            log::warn!(
+                target: "livekit.agents",
+                "no aligned transcript was returned from tts, forwarding the generated text \
+                 without word timings"
+            );
             self.words.push_str(fallback);
             capture(self.leg, fallback).await;
         }

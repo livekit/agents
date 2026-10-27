@@ -2519,11 +2519,6 @@ pub struct TranscriptSynchronizer {
 
 #[napi]
 impl TranscriptSynchronizer {
-    #[napi(js_name = "warnings")]
-    pub fn warnings(&self) -> Vec<String> {
-        self.inner.warning_names().into_iter().map(|v| v.to_string()).collect::<Vec<_>>()
-    }
-
     #[napi(getter, js_name = "enabled")]
     pub fn enabled(&self) -> bool {
         self.inner.enabled()

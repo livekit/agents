@@ -273,6 +273,11 @@ impl Pump<'_> {
                             // nothing when none of its audio played (`forward_generation` leaves
                             // such a segment "skipped").
                             None => {
+                                // On the aligned path none of the model's text went out: with no
+                                // stamp it stands in, as `_aligned_transcript_or_text` falls back.
+                                if aligned.as_ref().is_some_and(|a| !a.closed) {
+                                    capture(text_out, &opening.text).await;
+                                }
                                 let words = drain_segment_text(rx, opening, text_out).await.text;
                                 let heard = if played {
                                     synchronized.unwrap_or(words)
@@ -371,19 +376,20 @@ impl<'a> TextLeg<'a> {
             return;
         }
         let Some(out) = self.out else { return };
-        let text = match event {
+        let (text, start_time) = match event {
             SynthesisEvent::Text(text) => {
                 let _ = out.capture_text(&text).await;
-                text
+                (text, None)
             }
             SynthesisEvent::TimedText(word) => {
                 let _ = out.capture_timed(&word).await;
-                word.text
+                (word.text, word.start_time)
             }
             SynthesisEvent::FlushText => return out.flush(),
             SynthesisEvent::Audio(..) => return,
         };
-        self.shared.trace(PlayoutStep::TranscriptForwarded { speech: self.speech, text });
+        let speech = self.speech;
+        self.shared.trace(PlayoutStep::TranscriptForwarded { speech, text, start_time });
     }
 
     pub(super) fn flush(&self) {

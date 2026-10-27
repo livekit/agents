@@ -788,6 +788,8 @@ class VoiceSession:
         output_sample_rate: int = 24000,
         options: SessionOptions | None = None,
         agent_turn_handling: Any | None = None,
+        agent_min_consecutive_speech_delay: float | None = None,
+        agent_use_tts_aligned_transcript: bool | None = None,
         turn_detector: Any | None = None,
         interruption_detector: Any | None = None,
         text_output: bool = True,
@@ -1943,7 +1945,6 @@ class TranscriptSynchronizer:
     ) -> None: ...
     @property
     def text_output(self) -> CoreTextOutput: ...
-    def warnings(self) -> list[str]: ...
     @property
     def enabled(self) -> bool: ...
     def set_enabled(self, enabled: bool) -> None: ...

@@ -266,12 +266,12 @@ pub(super) fn unheard() -> Heard {
 }
 
 /// What the sink reported for this segment, on one channel, in order. `Shown`: a synchroniser
-/// below released words as of the played position; nothing to fold, but the playout wakes at the
+/// below released a word as of the played position; journalled, and the playout wakes at the
 /// release, ahead of the words' forwarder, so a finished segment's stream closes before its words
 /// reach the text output. `Reset`: the sink's playback count was reset under it.
 enum SinkReport {
     Playback(PlaybackEvent),
-    Shown,
+    Shown(lk_agents_abi::TimedString),
     Reset,
 }
 
@@ -282,8 +282,8 @@ impl PlaybackObserver for SinkReports {
         let _ = self.0.send(SinkReport::Playback(ev.clone()));
     }
 
-    fn on_transcript_shown(&self, _text: &str) {
-        let _ = self.0.send(SinkReport::Shown);
+    fn on_transcript_shown(&self, word: &lk_agents_abi::TimedString) {
+        let _ = self.0.send(SinkReport::Shown(word.clone()));
     }
 
     fn on_playback_reset(&self) {
@@ -368,7 +368,13 @@ impl Playing<'_> {
     fn on_event(&mut self, report: SinkReport) {
         let speech = self.handle.id();
         match report {
-            SinkReport::Shown => {}
+            SinkReport::Shown(word) => self.trace(PlayoutStep::TranscriptShown {
+                speech,
+                text: word.text,
+                start: word.start_time.unwrap_or_default(),
+                end: word.end_time.unwrap_or_default(),
+                played: self.played,
+            }),
             SinkReport::Reset => self.trace(PlayoutStep::SinkReset { speech }),
             SinkReport::Playback(PlaybackEvent::Started(s)) => {
                 let time = &self.shared.time;
@@ -482,22 +488,24 @@ impl Playing<'_> {
         // Synchronous: interruption may not wait for a lock.
         clear_sink(self.shared, self.handle.id(), self.out);
         self.drain(segment);
-        let heard = self.heard_at_cut(text).await;
+        let (heard, reported) = self.heard_at_cut(text).await;
         self.drain(segment);
-        // Never started (a bare recorder): no finish to report.
-        if self.started {
-            self.finished(heard.position, true);
+        // Never started (a bare recorder), or the sink never said: no finish to journal.
+        if let (true, Some(interrupted)) = (self.started, reported) {
+            self.finished(heard.position, interrupted);
         }
         heard
     }
 
     /// Nothing pushed is nothing heard. Otherwise the sink's report of the cut if it lands within a
-    /// few hops (never on the clock), else the words at the tracker's position.
-    async fn heard_at_cut(&mut self, text: String) -> Heard {
+    /// few hops (never on the clock), else the words at the tracker's position. With it, whether
+    /// the sink says it cut the segment (one that had played out before the clear reached it
+    /// reports a whole finish); `None` when it said nothing.
+    async fn heard_at_cut(&mut self, text: String) -> (Heard, Option<bool>) {
         let frames = self.pushed;
         if frames == 0 {
             // Nothing reached the sink, so no position (the tracker's would be another segment's).
-            return unheard();
+            return (unheard(), Some(true));
         }
         let mut report = None;
         for _ in 0..CUT_REPORT_HOPS {
@@ -516,7 +524,7 @@ impl Playing<'_> {
         let Some(ev) = report else {
             let position = self.out.tracker().position();
             let played = self.completed + position;
-            return Heard { text, position, complete: false, frames, played };
+            return (Heard { text, position, complete: false, frames, played }, None);
         };
         // The segments before were counted as they finished; a report that is not the cut is one
         // of them (nothing was captured since), already counted.
@@ -524,7 +532,8 @@ impl Playing<'_> {
         let cut = if ev.interrupted { ev.playback_position } else { Duration::ZERO };
         let text = synchronized(ev.synchronized_transcript, text);
         let played = self.completed + cut;
-        Heard { text, position: ev.playback_position, complete: false, frames, played }
+        let heard = Heard { text, position: ev.playback_position, complete: false, frames, played };
+        (heard, Some(ev.interrupted))
     }
 
     /// The sink's reports so far, folded without settling the segment (a cut has nothing owed).

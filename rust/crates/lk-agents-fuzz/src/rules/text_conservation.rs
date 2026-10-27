@@ -202,7 +202,7 @@ fn say_two_words(handle: Handle) -> Authored {
 
 fn forwarded(text: &str) -> lk_agents_voice::trace::Step {
     use lk_agents_voice::agent_activity::scheduling::SpeechId;
-    Playout(TranscriptForwarded { speech: SpeechId(1), text: text.into() })
+    Playout(TranscriptForwarded { speech: SpeechId(1), text: text.into(), start_time: None })
 }
 
 /// Every word given was forwarded, in order, and the speech completed.

@@ -453,6 +453,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             hooks=hooks,
             options=self._options,
             agent_turn_handling=frame.get("turn_handling"),
+            agent_min_consecutive_speech_delay=frame.get("min_consecutive_speech_delay"),
+            agent_use_tts_aligned_transcript=frame.get("use_tts_aligned_transcript"),
             agent_expressive=frame["expressive"],
             tools=frame["tools"],
             tools_host=frame["tools_host"],

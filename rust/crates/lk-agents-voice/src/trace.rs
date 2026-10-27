@@ -424,6 +424,17 @@ pub enum PlayoutStep {
     TranscriptForwarded {
         speech: SpeechId,
         text: String,
+        /// The TTS's stamp for it, on the aligned path (`use_tts_aligned_transcript`).
+        start_time: Option<f64>,
+    },
+    /// A synchroniser released `text` to the transcript once the segment had played `played`;
+    /// `start` and `end` are where its audio starts and ends in the segment, in seconds.
+    TranscriptShown {
+        speech: SpeechId,
+        text: String,
+        start: f64,
+        end: f64,
+        played: std::time::Duration,
     },
     /// The recorder was detached after one last flush.
     RecorderDetached,
@@ -870,7 +881,8 @@ impl Step {
                 | PlayoutStep::PlaybackFinished { speech, .. }
                 | PlayoutStep::AudioPlayed { speech, .. }
                 | PlayoutStep::SinkReset { speech }
-                | PlayoutStep::TranscriptForwarded { speech, .. } => Some(*speech),
+                | PlayoutStep::TranscriptForwarded { speech, .. }
+                | PlayoutStep::TranscriptShown { speech, .. } => Some(*speech),
                 PlayoutStep::SinkCalled { speech, .. } => *speech,
                 PlayoutStep::OutputReplaced { .. }
                 | PlayoutStep::GatePublished { .. }

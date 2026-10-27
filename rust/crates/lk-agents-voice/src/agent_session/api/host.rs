@@ -74,8 +74,11 @@ impl SessionApi {
         output_sample_rate: u32,
         // The session layer `_core.SessionOptions(kwargs)` built; none is an empty session layer.
         options: Option<&crate::agent_activity::options::HostOptions>,
-        // The first agent's own `turn_handling`, as written: the agent layer of the stack.
+        // The first agent's own `turn_handling`, as written, `min_consecutive_speech_delay` in
+        // seconds and `use_tts_aligned_transcript`: the agent layer of the stack.
         agent_turn_handling: Option<crate::agent_activity::options::TurnHandlingKwargs>,
+        agent_min_consecutive_speech_delay: Option<f64>,
+        agent_use_tts_aligned_transcript: Option<bool>,
         // `_core_view.TurnDetector` over the user's audio `turn_detection`.
         turn_detector: Option<Arc<dyn lk_agents_abi::EotDetector>>,
         // The adaptive-interruption detector: an object means the host's gate said yes.
@@ -191,7 +194,11 @@ impl SessionApi {
         });
         let stack = crate::agent_activity::options::ConfigStack {
             session: session_layer,
-            agent: agent_turn_handling.as_ref().map(crate::turn::agent_layer),
+            agent: Some(crate::turn::agent_layer(
+                agent_turn_handling.as_ref(),
+                agent_min_consecutive_speech_delay,
+                agent_use_tts_aligned_transcript,
+            )),
         };
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
         let stt = stt.map(|s| nodes.stt(stt_leg(s, vad.clone(), &conn.stt, clock.clone())));

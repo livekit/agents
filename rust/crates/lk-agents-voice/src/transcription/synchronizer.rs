@@ -56,9 +56,10 @@ pub enum PaceEvent {
 #[must_use = "an effect not performed is a word the user never sees"]
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum PaceEffect {
-    /// One raw token for the text output, stamped with where its audio ends.
+    /// One raw token for the text output, with where its audio starts and ends.
     Forward {
         word: String,
+        start_time: f64,
         end_time: f64,
     },
     Flush,
@@ -81,14 +82,16 @@ pub enum PaceWarning {
 }
 
 impl PaceWarning {
-    /// The key of the facade's `_PACE_WARNINGS` table (checked by `test_transcript_warning_seam.py`).
-    pub fn name(self) -> &'static str {
+    /// The reference's log line for it (`_SegmentSynchronizerImpl`).
+    pub fn message(self) -> &'static str {
         match self {
-            PaceWarning::TextAfterEnd => "text_after_end",
-            PaceWarning::AudioAfterEnd => "audio_after_end",
-            PaceWarning::PlaybackFinishedTooEarly => "playback_finished_too_early",
-            PaceWarning::AfterFinished => "after_finished",
-            PaceWarning::AfterClose => "after_close",
+            PaceWarning::TextAfterEnd => "transcript synchronizer: text pushed after its input ended",
+            PaceWarning::AudioAfterEnd => "transcript synchronizer: audio pushed after its input ended",
+            PaceWarning::PlaybackFinishedTooEarly => {
+                "transcript synchronizer: playback_finished called before text/audio input is done"
+            }
+            PaceWarning::AfterFinished => "transcript synchronizer: segment used after it finished",
+            PaceWarning::AfterClose => "transcript synchronizer: segment used after close",
         }
     }
 }
@@ -354,12 +357,13 @@ impl Pacer {
                 (None, Some(_)) => (front.due(self.speed), front.end(self.speed)),
                 (None, None) => {
                     let start = self.cursor.unwrap_or(0.0).max(front.arrived);
-                    if start > now + 1e-9 {
-                        break;
-                    }
                     (start, start + front.hyphens as f64 / self.speed)
                 }
             };
+            // Only a word whose audio has started is in its delay (what a pause shows).
+            if start > now + 1e-9 {
+                break;
+            }
             self.front = Some((start, end));
             let shown_at = if front.base.is_some() { start } else { (start + end) / 2.0 };
             if shown_at > now + 1e-9 {
@@ -368,23 +372,23 @@ impl Pacer {
             let word = self.queue.pop_front().expect("peeked");
             self.front = None;
             self.cursor = Some(end);
-            self.forward(word, end, out);
+            self.forward(word, start, end, out);
         }
     }
 
     /// The word whose delay had begun is still shown: the reference's pacing loop sleeps through
     /// a pause and waits only before the next word.
     fn paused(&mut self, out: &mut Vec<PaceEffect>) {
-        let Some((_, end)) = self.front.take() else { return };
+        let Some((start, end)) = self.front.take() else { return };
         let word = self.queue.pop_front().expect("a started word is the queue's front");
         self.cursor = Some(end);
-        self.forward(word, end, out);
+        self.forward(word, start, end, out);
     }
 
-    fn forward(&mut self, word: Planned, end_time: f64, out: &mut Vec<PaceEffect>) {
+    fn forward(&mut self, word: Planned, start_time: f64, end_time: f64, out: &mut Vec<PaceEffect>) {
         self.forwarded.push((word.visible, end_time));
         if !word.word.is_empty() {
-            out.push(PaceEffect::Forward { word: word.word, end_time });
+            out.push(PaceEffect::Forward { word: word.word, start_time, end_time });
         }
     }
 
@@ -407,8 +411,9 @@ impl Pacer {
             let end = position.as_secs_f64();
             while let Some(word) = self.queue.pop_front() {
                 // Stamped no later than the playout's own end: the audio is over.
-                let end_time = word.end(self.speed).min(end.max(word.due(self.speed)));
-                self.forward(word, end_time, out);
+                let start_time = word.due(self.speed);
+                let end_time = word.end(self.speed).min(end.max(start_time));
+                self.forward(word, start_time, end_time, out);
             }
         }
         out.push(PaceEffect::Flush);
@@ -607,8 +612,6 @@ struct SyncCore {
     tx: Mutex<Option<mpsc::UnboundedSender<Out>>>,
     /// Shared with the forwarder task, which must not keep the core alive (or it never ends).
     forwarder_done: Arc<Monotone<bool>>,
-    /// Every pacer warning, in order. A core crate has no logger; the host phrases them.
-    warnings: Mutex<Vec<PaceWarning>>,
     /// The audio node's tracker; released words are raised on it as `transcript_shown`.
     tracker: Arc<PlaybackTracker>,
 }
@@ -642,16 +645,19 @@ impl SyncCore {
         state.pacer = Some(pacer);
         for effect in effects {
             match effect {
-                PaceEffect::Forward { word, end_time } => {
-                    self.tracker.transcript_shown(&word);
-                    self.send(Out::Word(TimedString {
+                PaceEffect::Forward { word, start_time, end_time } => {
+                    let shown = TimedString {
+                        start_time: Some(start_time),
                         end_time: Some(end_time),
                         ..TimedString::new(word)
-                    }));
+                    };
+                    self.tracker.transcript_shown(&shown);
+                    // The text output gets where the word's audio ends, as the reference's does.
+                    self.send(Out::Word(TimedString { start_time: None, ..shown }));
                 }
                 PaceEffect::Flush => self.send(Out::Flush),
                 PaceEffect::Heard(heard) => state.heard = Some(heard),
-                PaceEffect::Warn(w) => self.warnings.lock().unwrap().push(w),
+                PaceEffect::Warn(w) => log::warn!(target: "livekit.agents", "{}", w.message()),
             }
         }
     }
@@ -803,10 +809,10 @@ impl AudioOutput for SyncedAudioOutput {
     async fn capture(&self, frame: &AudioFrame) -> Result<()> {
         // Passthrough first, unconditionally: the transcript must never hold up speech.
         self.next.capture_frame(frame).await?;
-        if !self.core.enabled() {
+        let mut state = self.core.state.lock().unwrap();
+        if !state.enabled {
             return Ok(());
         }
-        let mut state = self.core.state.lock().unwrap();
         self.core.fresh_if_over(&mut state);
         if SyncCore::pacer(&state).audio_ended() {
             // A missing `playback_finished`: this frame is the next turn's.
@@ -1021,7 +1027,6 @@ impl TranscriptSynchronizer {
             clock,
             tx: Mutex::new(Some(tx)),
             forwarder_done: Arc::new(Monotone::new(false)),
-            warnings: Mutex::new(Vec::new()),
             tracker: Arc::new(PlaybackTracker::new()),
         });
         // The task holds only the done flag, so it never keeps the core alive.
@@ -1043,12 +1048,6 @@ impl TranscriptSynchronizer {
         crate::io::CoreTextOutput::new(self.text_output())
     }
 
-    /// The pacer's warnings so far, by name (`PaceWarning::name`), in order.
-    #[host(method(name = "warnings"))]
-    pub fn warning_names(&self) -> Vec<&'static str> {
-        self.warnings().into_iter().map(PaceWarning::name).collect()
-    }
-
     /// The node to install as `session.output.audio`.
     pub fn audio_output(&self) -> Arc<dyn AudioOutput> {
         self.audio.clone()
@@ -1068,11 +1067,6 @@ impl TranscriptSynchronizer {
     pub fn set_enabled(&self, enabled: bool) {
         let mut state = self.core.state.lock().unwrap();
         self.core.set_enabled_locked(&mut state, enabled);
-    }
-
-    /// Every pacer warning so far, in order.
-    pub fn warnings(&self) -> Vec<PaceWarning> {
-        self.core.warnings.lock().unwrap().clone()
     }
 
     /// End the live segment now and start a fresh one.
@@ -1126,11 +1120,11 @@ mod tests {
         p
     }
 
-    fn warned(effects: &[PaceEffect]) -> Vec<&'static str> {
+    fn warned(effects: &[PaceEffect]) -> Vec<PaceWarning> {
         effects
             .iter()
             .filter_map(|e| match e {
-                PaceEffect::Warn(w) => Some(w.name()),
+                PaceEffect::Warn(w) => Some(*w),
                 _ => None,
             })
             .collect()
@@ -1147,11 +1141,11 @@ mod tests {
             p = p.step(ev).0;
         }
         let (p, effects) = p.step(text());
-        assert_eq!(warned(&effects), ["text_after_end"]);
+        assert_eq!(warned(&effects), [PaceWarning::TextAfterEnd]);
         let (p, _) = p.step(PaceEvent::Audio { secs: 0.2 });
         let (p, _) = p.step(PaceEvent::AudioEnd);
         let (p, effects) = p.step(PaceEvent::AudioEnd);
-        assert_eq!(warned(&effects), ["audio_after_end"]);
+        assert_eq!(warned(&effects), [PaceWarning::AudioAfterEnd]);
 
         // Audio first: the text's end is what ends the inputs.
         let mut q = Pacer::new(PacerOptions::default());
@@ -1168,14 +1162,14 @@ mod tests {
         let finish =
             PaceEvent::PlaybackFinished { position: Duration::from_millis(50), interrupted: false };
         let (early, effects) = early.step(finish.clone());
-        assert_eq!(warned(&effects), ["playback_finished_too_early"]);
+        assert_eq!(warned(&effects), [PaceWarning::PlaybackFinishedTooEarly]);
         assert_eq!(effects.iter().filter(|e| matches!(e, PaceEffect::Heard(_))).count(), 1);
         let (early, effects) = early.step(PaceEvent::Position(Duration::from_millis(60)));
-        assert_eq!(warned(&effects), ["after_finished"]);
+        assert_eq!(warned(&effects), [PaceWarning::AfterFinished]);
         let (early, effects) = early.step(PaceEvent::Close);
         assert!(effects.is_empty() && early.is_over());
         let (_, effects) = early.step(finish);
-        assert_eq!(warned(&effects), ["after_close"]);
+        assert_eq!(warned(&effects), [PaceWarning::AfterClose]);
         let _ = p;
     }
 
@@ -1267,6 +1261,21 @@ mod tests {
             _ => None,
         });
         assert_eq!(heard.as_deref(), Some("one"), "\"two\" was shown but still playing");
+    }
+
+    // An aligned word starts at its stamp: a pause before it shows nothing (the pause shows only
+    // a word already playing). Found by `transcript_follows_audio` reading it.
+    #[test]
+    fn a_pause_shows_no_aligned_word_ahead_of_its_stamp() {
+        let mut p = Pacer::new(PacerOptions::default());
+        for (raw, at) in [("one ", 0.0), ("two ", 0.2)] {
+            p = p.step(PaceEvent::Text { raw: raw.into(), start_time: Some(at) }).0;
+        }
+        p = p.step(PaceEvent::Audio { secs: 0.4 }).0;
+        let (p, effects) = p.step(PaceEvent::Position(Duration::from_millis(100)));
+        assert_eq!(shown(&effects), "one");
+        let (_, effects) = p.step(PaceEvent::Paused);
+        assert_eq!(shown(&effects), "", "nothing after \"one\" has started by the pause at 0.1 s");
     }
 
     // Each word lasts its hyphens at the speed known when it starts, as the reference computes

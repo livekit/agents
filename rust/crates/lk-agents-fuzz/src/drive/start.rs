@@ -163,6 +163,8 @@ impl Run {
                 SAMPLE_RATE,
                 Some(&options),
                 None,
+                None,
+                None,
                 setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
                 adaptive.then(|| {
                     Arc::new(fakes::FakeInterruptionSource(registry.clone()))

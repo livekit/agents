@@ -494,11 +494,11 @@ impl SessionApi {
             realtime_audio_output_node,
         } = frame;
         self.agents.install(&agent, agent_host);
-        let mut options =
-            turn_handling.as_ref().map(crate::turn::agent_layer).unwrap_or_default();
-        options.speech.min_consecutive_speech_delay = min_consecutive_speech_delay
-            .and_then(|s| std::time::Duration::try_from_secs_f64(s).ok());
-        options.speech.use_tts_aligned_transcript = use_tts_aligned_transcript;
+        let options = crate::turn::agent_layer(
+            turn_handling.as_ref(),
+            min_consecutive_speech_delay,
+            use_tts_aligned_transcript,
+        );
         self.set_agent_layer(Some(options));
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
         let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);

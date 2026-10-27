@@ -42,9 +42,10 @@ pub enum PlaybackEvent {
 pub trait PlaybackObserver: Send + Sync {
     fn on_playback_event(&self, ev: &PlaybackEvent);
 
-    /// A synchroniser below released `text` as of the played position. Ignored by default.
-    fn on_transcript_shown(&self, text: &str) {
-        let _ = text;
+    /// A synchroniser below released `word` (where its audio starts and ends in the segment) as
+    /// of the played position. Ignored by default.
+    fn on_transcript_shown(&self, word: &TimedString) {
+        let _ = word;
     }
 
     /// The sink's playback count was reset (`_reset_playback_count`); parked waits are released
@@ -180,10 +181,10 @@ impl PlaybackTracker {
         self.observers.lock().unwrap().retain(|o| !o.is_closed());
     }
 
-    /// A synchroniser's release of `text`, fanned out like a playback event.
-    pub fn transcript_shown(&self, text: &str) {
+    /// A synchroniser's release of `word`, fanned out like a playback event.
+    pub fn transcript_shown(&self, word: &TimedString) {
         for o in self.observers() {
-            o.on_transcript_shown(text);
+            o.on_transcript_shown(word);
         }
     }
 
@@ -307,8 +308,8 @@ impl PlaybackObserver for PlaybackTracker {
         }
     }
 
-    fn on_transcript_shown(&self, text: &str) {
-        self.transcript_shown(text);
+    fn on_transcript_shown(&self, word: &TimedString) {
+        self.transcript_shown(word);
     }
 
     /// A reset below is told above, not repeated: each node's count is its own.

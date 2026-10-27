@@ -128,12 +128,23 @@ pub fn turn_handling_layer(kw: &TurnHandlingKwargs) -> AgentSessionOptions {
     o
 }
 
-/// The leaves an `Agent(turn_handling=..)` may override: endpointing, `interruption` enabled and
-/// mode, preemptive generation, and a `turn_detection` literal. The turn limit is session-only.
-pub fn agent_layer(kw: &TurnHandlingKwargs) -> AgentSessionOptions {
-    let mut o = turn_handling_layer(&TurnHandlingKwargs { user_turn_limit: None, ..*kw });
+/// The leaves an `Agent` may override: from its `turn_handling`, endpointing, `interruption`
+/// enabled and mode, preemptive generation and a `turn_detection` literal (the turn limit is
+/// session-only); its `min_consecutive_speech_delay` (seconds) and `use_tts_aligned_transcript`.
+/// `None` defers to the session's.
+pub fn agent_layer(
+    turn_handling: Option<&TurnHandlingKwargs>,
+    min_consecutive_speech_delay: Option<f64>,
+    use_tts_aligned_transcript: Option<bool>,
+) -> AgentSessionOptions {
+    let mut o = turn_handling
+        .map(|kw| turn_handling_layer(&TurnHandlingKwargs { user_turn_limit: None, ..*kw }))
+        .unwrap_or_default();
     let InterruptionOptions { enabled, mode, .. } = o.turn.interruption;
     o.turn.interruption = InterruptionOptions { enabled, mode, ..InterruptionOptions::default() };
+    o.speech.min_consecutive_speech_delay =
+        min_consecutive_speech_delay.and_then(|s| Duration::try_from_secs_f64(s).ok());
+    o.speech.use_tts_aligned_transcript = use_tts_aligned_transcript;
     o
 }
 
