@@ -40,7 +40,7 @@ from ..voice.background_audio import (
     BuiltinAudioClip,
     PlayHandle,
 )
-from ..voice.room_io import _core_rtc
+from ..voice.room_io import Room
 
 if TYPE_CHECKING:
     from ..voice.turn import TurnHandlingOptions
@@ -370,7 +370,7 @@ class _TransferHost:
         self._session.output.set_audio_enabled(state["audio_output"])
         self._session.output.set_transcription_enabled(state["transcription_output"])
 
-    async def _core_connect_human(self, room_name: str, identity: str) -> _core_rtc.Room:
+    async def _core_connect_human(self, room_name: str, identity: str) -> Room:
         token = (
             api.AccessToken()
             .with_identity(identity)
@@ -387,7 +387,7 @@ class _TransferHost:
             .to_jwt()
         )
         await self._room.connect(self._job._info.url, token)
-        return _core_rtc.Room.of(self._room)
+        return Room.of(self._room)
 
     async def _core_start_human(self) -> None:
         await self._human.start(

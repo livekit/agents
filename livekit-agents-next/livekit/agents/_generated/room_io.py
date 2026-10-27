@@ -86,10 +86,10 @@ class TextInputEvent:
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-AudioInputOptions.__module__ = "livekit.agents.voice.room_io.types"
-TextOutputOptions.__module__ = "livekit.agents.voice.room_io.types"
-NoiseCancellationParams.__module__ = "livekit.agents.voice.room_io.types"
-TextInputOptions.__module__ = "livekit.agents.voice.room_io.types"
-VideoInputOptions.__module__ = "livekit.agents.voice.room_io.types"
-AudioOutputOptions.__module__ = "livekit.agents.voice.room_io.types"
-TextInputEvent.__module__ = "livekit.agents.voice.room_io.types"
+AudioInputOptions.__module__ = "livekit.agents.voice.room_io"
+TextOutputOptions.__module__ = "livekit.agents.voice.room_io"
+NoiseCancellationParams.__module__ = "livekit.agents.voice.room_io"
+TextInputOptions.__module__ = "livekit.agents.voice.room_io"
+VideoInputOptions.__module__ = "livekit.agents.voice.room_io"
+AudioOutputOptions.__module__ = "livekit.agents.voice.room_io"
+TextInputEvent.__module__ = "livekit.agents.voice.room_io"

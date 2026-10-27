@@ -17,7 +17,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .agent_session import VoiceSession
 from .events import AgentStateChangedEvent
-from .room_io._core_rtc import _SOURCES, _name
+from .room_io import _SOURCES, _name
 
 _resource_stack = contextlib.ExitStack()
 atexit.register(_resource_stack.close)

@@ -28,7 +28,7 @@ pub trait RtcHost: Send + Sync {
 ///
 /// `connection_state` rather than `isconnected`: the reference's boolean cannot distinguish
 /// disconnected from reconnecting, and [`ConnectionState::is_connected`] recovers it exactly.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io._core_rtc.Room", live))]
+#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io.Room", live))]
 pub trait RtcRoom: Send + Sync {
     /// Owned and asked every time: a room's name is `""` until it connects (N409).
     fn name(&self) -> String;

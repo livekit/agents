@@ -70,5 +70,5 @@ class STTContextOptions(TypedDict, total=False):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-KeytermDetectionOptions.__module__ = "livekit.agents.voice.keyterm_detection"
-STTContextOptions.__module__ = "livekit.agents.voice.keyterm_detection"
+KeytermDetectionOptions.__module__ = "livekit.agents.voice.agent_session"
+STTContextOptions.__module__ = "livekit.agents.voice.agent_session"

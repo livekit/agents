@@ -8,7 +8,7 @@ use lk_agents_host_derive::Host;
 // `classifier.py:28`. The wire strings are public API (enum values, an OTel attribute, the job
 // tagger key).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Host)]
-#[python(enum, module = "amd", path = "livekit.agents.voice.amd.classifier", name = "AMDCategory")]
+#[python(enum, module = "amd", path = "livekit.agents.voice.amd", name = "AMDCategory")]
 #[host(wire(msg = format!("unknown amd category {s:?}")))]
 pub enum AmdCategory {
     #[host(rename = "human")]
@@ -65,7 +65,7 @@ crate::python::into_host_str!(AmdReason, |v| v.as_str());
 #[python(
     pydantic,
     module = "amd",
-    path = "livekit.agents.voice.amd.classifier",
+    path = "livekit.agents.voice.amd",
     name = "AMDPredictionEvent",
     tag = "type",
     tag_value = "amd_prediction",
@@ -188,7 +188,7 @@ pub struct AmdConstants {
     total = "False",
     typed_dict_from = "typing",
     module = "amd",
-    path = "livekit.agents.voice.amd.detector",
+    path = "livekit.agents.voice.amd",
     name = "DetectionOptions"
 )]
 #[node(interface)]

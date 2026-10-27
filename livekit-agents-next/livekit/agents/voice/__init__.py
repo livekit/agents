@@ -2,9 +2,12 @@ from . import io, room_io, run_result
 from .agent import Agent, ModelSettings
 from .agent_session import (
     ExpressiveOptions,
+    KeytermDetectionOptions,
     NonverbalOptions,
     RecordingOptions,
     SpeechSteeringOptions,
+    STTContextOptions,
+    TextTransforms,
     VoiceActivityVideoSampler,
     VoiceSession,
 )
@@ -30,10 +33,8 @@ from .events import (
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
-from .keyterm_detection import KeytermDetectionOptions, STTContextOptions
 from .run_result import RunOutputOptions
 from .speech_handle import SpeechHandle
-from .transcription import text_transforms
 
 __all__ = [
     "VoiceSession",
@@ -71,5 +72,5 @@ __all__ = [
     "io",
     "room_io",
     "run_result",
-    "text_transforms",
+    "TextTransforms",
 ]

@@ -3,7 +3,8 @@
 The core runs the detector (``_core.VoiceSession.attach_amd``): the wait on the room for the
 callee's answer, the classifier, its timers, the authorization hold, the IVR navigator's close,
 AMD's own STT and the interrupt on a machine verdict. This class resolves the models and hands a
-``machine-ivr`` verdict to the navigator.
+``machine-ivr`` verdict to the navigator. The classifier's tools here are the objects a host LLM is
+handed beside the core's specs, and are never executed.
 """
 
 from __future__ import annotations
@@ -13,25 +14,57 @@ import os
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
-from ... import _core, inference
-from ..._generated.amd import DetectionOptions
-from ...llm import LLM as _LLM
-from ...log import logger
-from ...stt import STT as _STT
-from ...types import NOT_GIVEN, NotGivenOr
-from ...utils import EventEmitter, is_given
-from .classifier import CLASSIFIER_TOOLS, AMDCategory, AMDPredictionEvent
+from .. import _core, inference
+from .._generated.amd import AMDCategory, AMDPredictionEvent, DetectionOptions
+from ..llm import LLM as _LLM
+from ..llm.tool_context import function_tool
+from ..log import logger
+from ..stt import STT as _STT
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import EventEmitter, is_given
 
 if TYPE_CHECKING:
-    from ...inference import LLMModels
-    from ..agent_session import VoiceSession
+    from ..inference import LLMModels
+    from .agent_session import VoiceSession
 
-__all__ = ["AMD", "DetectionOptions"]
+__all__ = [
+    "AMD",
+    "AMDCategory",
+    "AMDPredictionEvent",
+    "AMD_PROMPT",
+    "DetectionOptions",
+]
+
+AMD_PROMPT: str = _core.amd_constants()["prompt"]
+
+
+@function_tool
+async def save_prediction(label: AMDCategory) -> None:
+    """Save the prediction to the verdict."""
+
+
+@function_tool
+async def postpone_termination(seconds: float) -> str:
+    """Postpone the termination of the classification task.
+    Use when the transcript is ambiguous and more audio is expected.
+
+    Args:
+        seconds: Additional seconds to wait (max 10).
+    """
+    return ""
+
+
+CLASSIFIER_TOOLS = [save_prediction, postpone_termination]
+
 
 _CONSTANTS: dict[str, Any] = _core.amd_constants()
 
+
 EVALUATED_LLM_MODELS: set[str] = set(_CONSTANTS["evaluated_llm_models"])
+
+
 EVALUATED_STT_MODELS: set[str] = set(_CONSTANTS["evaluated_stt_models"])
+
 
 # `DetectionOptions`' keys as the core's config names them
 _CONFIG_KEYS = {
@@ -182,7 +215,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         if session.options["ivr_detection"]:
             logger.warning("session level ivr_detection will be disabled when AMD is used")
 
-        from ..agent_session import _core_leg
+        from .agent_session import _core_leg
 
         provided = self._detection_options
         config: dict[str, Any] = {

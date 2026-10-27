@@ -106,6 +106,7 @@ from .voice import (
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     SpeechSteeringOptions,
+    TextTransforms,
     ToolCallEnded,
     ToolCallStarted,
     ToolCallUpdated,
@@ -118,14 +119,10 @@ from .voice import (
     VoiceSession,
     io,
     room_io,
-    text_transforms,
 )
+from .voice.agent_session import KeytermDetectionOptions, STTContextOptions
 from .voice.amd import AMD, AMDCategory, AMDPredictionEvent
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
-from .voice.keyterm_detection import (
-    KeytermDetectionOptions,
-    STTContextOptions,
-)
 from .voice.run_result import (
     AgentHandoffEvent,
     ChatMessageEvent,
@@ -249,7 +246,7 @@ __all__ = [
     "SpeechSteeringOptions",
     "RecordingOptions",
     "RunOutputOptions",
-    "text_transforms",
+    "TextTransforms",
     "AgentEvent",
     "ModelSettings",
     "Agent",

@@ -15,7 +15,7 @@ import inspect
 import time
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic
+from typing import TYPE_CHECKING, Any, Generic, Literal
 
 import numpy as np
 from pydantic import TypeAdapter
@@ -34,11 +34,12 @@ from .._core_view import (
 )
 from .._generated.amd import AMDPredictionEvent
 from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
+from .._generated.keyterms import KeytermDetectionOptions, STTContextOptions
 from .._generated.session_dispatch import IGNORED_EVENTS, MIRRORED_STATES, PUBLIC_EVENTS
 from .._generated.vad import VAD
 from ..inference.interruption import OverlappingSpeechEvent
 from ..job import get_job_context
-from ..llm import ChatContext, RealtimeModel, StopResponse
+from ..llm import LLM, ChatContext, RealtimeModel, StopResponse, function_tool
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
@@ -67,7 +68,6 @@ from .events import (
     ToolExecutionUpdatedEvent,
     UserState,
 )
-from .keyterm_detection import _detection_llm, _record_keyterms
 from .remote_session import ConsoleCall, SessionPort
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import SpeechHandle
@@ -87,7 +87,13 @@ __all__ = [
     "SessionConnectOptions",
     "SpeechSteeringOptions",
     "VoiceActivityVideoSampler",
+    "KeytermDetectionOptions",
+    "STTContextOptions",
+    "TextTransforms",
 ]
+
+TextTransforms = Literal["filter_markdown", "filter_emoji"]
+"""A transform the core applies to the text it sends to the TTS."""
 
 Userdata_T = TypeVar("Userdata_T", default=Any)
 Run_T = TypeVar("Run_T")
@@ -1013,3 +1019,35 @@ _HANDLERS: dict[str, Callable[[VoiceSession[Any], dict[str, Any]], None]] = {
     "close": VoiceSession._on_close,
     "amd_result": VoiceSession._on_amd_result,
 }
+
+
+@function_tool(name="record_keyterms")
+async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[str]) -> None:
+    """Update the STT keyterms based on the latest transcript.
+
+    Args:
+        pending: Distinctive terms seen but not yet trusted — tracked, not applied.
+        confirm: Pending terms the transcript has now corroborated — applied.
+        remove: Only a spelling the user corrected away; applied terms are otherwise sticky.
+    """
+    # only used to elicit a structured tool call; never executed
+
+
+def _detection_llm(stt_context: dict[str, Any] | None) -> LLM | None:
+    """The detection LLM ``stt_context_options`` asks for: the ``LLM`` given, else the model the
+    core names (``_core.resolve_keyterm_detection``) through the inference gateway. ``None`` with
+    detection off, or when the model cannot be created (detection is then skipped)."""
+    config = (stt_context or {}).get("keyterm_detection")
+    resolved = _core.resolve_keyterm_detection(config)
+    if not resolved["enabled"]:
+        return None
+    if (model := resolved["model"]) is None:
+        llm = config["llm"]  # type: ignore[index]
+        return llm if isinstance(llm, LLM) else None
+    try:
+        from ..inference import LLM as InferenceLLM
+
+        return InferenceLLM.from_model_string(model)
+    except Exception:  # noqa: BLE001 — never let detection setup break the session
+        logger.warning("keyterm detection: could not create detection LLM %r; skipping", model)
+        return None

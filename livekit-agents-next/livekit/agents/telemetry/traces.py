@@ -76,9 +76,9 @@ from ..utils import is_given
 from . import gen_ai, pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
+    from ..job import SessionReport
     from ..llm import ChatItem
     from ..observability import Tagger
-    from ..voice.report import SessionReport
 
 
 _SESSION_OPTION_KEY_ALIASES = {

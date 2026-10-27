@@ -4,7 +4,7 @@
 use lk_agents_host_derive::Host;
 
 // The Python `module` and `path` of every record here that names none of its own.
-#[crate::host(file(module = "keyterms", path = "livekit.agents.voice.keyterm_detection"))]
+#[crate::host(file(module = "keyterms", path = "livekit.agents.voice.agent_session"))]
 const _: () = ();
 
 /// `LLM | str | None`; an instance stays host-side.

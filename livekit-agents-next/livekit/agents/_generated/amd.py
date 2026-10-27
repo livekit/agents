@@ -61,6 +61,6 @@ class DetectionOptions(TypedDict, total=False):
 # looking for `Literal` and every foreign type in the re-export module, which imports
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
-AMDCategory.__module__ = "livekit.agents.voice.amd.classifier"
-AMDPredictionEvent.__module__ = "livekit.agents.voice.amd.classifier"
-DetectionOptions.__module__ = "livekit.agents.voice.amd.detector"
+AMDCategory.__module__ = "livekit.agents.voice.amd"
+AMDPredictionEvent.__module__ = "livekit.agents.voice.amd"
+DetectionOptions.__module__ = "livekit.agents.voice.amd"

@@ -1020,7 +1020,7 @@ pub trait SessionRoom: Send + Sync {
 }
 
 /// A host `rtc.Room`, seen through `_core_rtc.Room`, whose `_core_rtc` wraps it.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io._core_rtc.Room"))]
+#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io.Room"))]
 pub trait HostRoom: Send + Sync {
     /// The room, as the seam sees it.
     fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom>;

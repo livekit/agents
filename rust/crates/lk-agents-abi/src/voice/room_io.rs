@@ -11,7 +11,7 @@ use lk_agents_host_derive::Host;
 use std::time::Duration;
 
 // The Python `module` and `path` of every record here that names none of its own.
-#[crate::host(file(module = "room_io", path = "livekit.agents.voice.room_io.types"))]
+#[crate::host(file(module = "room_io", path = "livekit.agents.voice.room_io"))]
 const _: () = ();
 
 // `voice/room_io/types.py`'s option dataclasses; a `///` is the reference's docstring verbatim,

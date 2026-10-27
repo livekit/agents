@@ -423,7 +423,7 @@ pub struct SessionKwargs {
     pub turn_handling: Option<TurnHandlingKwargs>,
     #[python(
         ty = "NotGivenOr[STTContextOptions]",
-        type_import = "..voice.keyterm_detection:STTContextOptions"
+        type_import = ".keyterms:STTContextOptions"
     )]
     pub stt_context_options: HostValue,
     #[python(
@@ -438,7 +438,7 @@ pub struct SessionKwargs {
     #[python(
         ty = "NotGivenOr[Sequence[TextTransforms] | None]",
         type_import = "collections.abc:Sequence",
-        type_import = "..voice.transcription.text_transforms:TextTransforms"
+        type_import = "..voice.agent_session:TextTransforms"
     )]
     pub tts_text_transforms:
         lk_agents_abi::Maybe<Option<lk_agents_abi::voice::session_options::TextTransformSet>>,

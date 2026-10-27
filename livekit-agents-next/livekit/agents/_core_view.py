@@ -378,14 +378,14 @@ class _TextOutput:
 
 @functools.cache
 def _views() -> dict[type, Any]:
-    from .voice.room_io import _core_rtc
+    from .voice.room_io import Room
 
     return {
         io.AudioInput: _AudioInput,
         io.VideoInput: _VideoInput,
         io.AudioOutput: _AudioOutput,
         io.TextOutput: _TextOutput,
-        _core_rtc.Room: _core_rtc.Room.of,
+        Room: Room.of,
     }
 
 

@@ -15,12 +15,11 @@ from typing_extensions import TypedDict
 from ..types import NotGivenOr
 
 if TYPE_CHECKING:
-    from ..voice.agent_session import SessionConnectOptions
-    from ..voice.keyterm_detection import STTContextOptions
+    from ..voice.agent_session import SessionConnectOptions, TextTransforms
     from ..voice.tool_executor import ToolHandlingOptions
-    from ..voice.transcription.text_transforms import TextTransforms
     from ..voice.turn import EndpointingOptions, TurnDetectionMode, TurnHandlingOptions
     from .expressive import ExpressiveOptions
+    from .keyterms import STTContextOptions
     from collections.abc import Sequence
 
 
