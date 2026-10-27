@@ -64,7 +64,7 @@ def _local_inference_models() -> bool:
 
     li.init_vad()
 
-    # the EOT weights cost ~624 MB: a process without a multiprocessing parent (the forkserver,
+    # the EOT weights cost ~450 MB: a process without a multiprocessing parent (the forkserver,
     # a thread executor's worker) shares them across jobs, a spawned job process would not
     if value is not None or multiprocessing.parent_process() is None:
         li.init_eot()

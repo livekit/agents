@@ -181,6 +181,22 @@ class TestUserTurnStartPersistence:
         stream.on_start_of_turn.assert_called_once_with(audio_recognition._user_turn_start)
 
     @pytest.mark.asyncio
+    async def test_turn_without_a_known_start_keeps_the_detector_count(self):
+        """A turn opened by end of speech (its start of speech fell in the previous turn)
+        has no known start: the turn detector keeps counting from its last flush instead
+        of hearing a start of now."""
+        audio_recognition = self._create_audio_recognition()
+        stream = MagicMock()
+        audio_recognition._turn_detector_stream = stream
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.END_OF_SPEECH, speech_duration=3.0, silence_duration=0.6)
+        )
+
+        assert audio_recognition._user_turn_start is not None
+        stream.on_start_of_turn.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_speech_start_time_updates_per_burst(self):
         """
         `_speech_start_time` is per-burst by design (used as the start of OTEL

@@ -121,7 +121,7 @@ class _CloudTransport:
             )
         )
 
-    def on_start_of_turn(self, started_at: float) -> None:
+    def on_start_of_turn(self, turn_samples: int) -> None:
         pass
 
     def flush(self) -> None:
@@ -388,10 +388,9 @@ class _LocalTransport:
         self._buf = utils.AudioArrayBuffer(
             buffer_size=EOT_MAX_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
         )
-        # samples pushed since the last flush, and where in them the user turn started;
-        # the model takes the turn length as a feature, beyond the window it reads
-        self._num_samples = 0
-        self._turn_start: int | None = None
+        # the user turn length so far, counted since the last flush: the model takes it as a
+        # feature, beyond the window it reads
+        self._turn_samples = 0
         self._eot = _EOT()
         self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -404,8 +403,10 @@ class _LocalTransport:
         self._stream_ref = weakref.ref(stream)
 
     def run_inference(self, request_id: str) -> None:
-        turn_samples = self._num_samples - (self._turn_start or 0)
-        task = asyncio.create_task(self._predict(request_id, self._buf.read(), turn_samples))
+        pcm = self._buf.read()
+        # the turn covers at least the audio the model reads
+        turn_samples = max(self._turn_samples, len(pcm))
+        task = asyncio.create_task(self._predict(request_id, pcm, turn_samples))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -426,17 +427,15 @@ class _LocalTransport:
         stream._resolve_prediction(request_id, prob, inference_duration=inference_duration)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        self._num_samples += self._buf.push_frame(frame)
+        self._turn_samples += self._buf.push_frame(frame)
 
-    def on_start_of_turn(self, started_at: float) -> None:
-        elapsed = max(0.0, time.time() - started_at)
-        self._turn_start = max(0, self._num_samples - int(elapsed * DEFAULT_SAMPLE_RATE))
+    def on_start_of_turn(self, turn_samples: int) -> None:
+        self._turn_samples = min(self._turn_samples, turn_samples)
 
     def flush(self) -> None:
         if len(self._buf) > 0:
             self._buf.shift(len(self._buf))
-        self._num_samples = 0
-        self._turn_start = None
+        self._turn_samples = 0
 
     def detach(self) -> None:
         for task in list(self._tasks):
