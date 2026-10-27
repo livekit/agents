@@ -93,3 +93,4 @@ mod amd_releasing_turn_no_reply;
 mod amd_tap_opened_late;
 mod launch_held_by_unheard_speaker;
 mod handoff_refused_releases;
+mod voice_connection_reused;

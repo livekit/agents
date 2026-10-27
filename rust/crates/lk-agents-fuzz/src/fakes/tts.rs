@@ -119,6 +119,8 @@ struct Output {
     receiver: mpsc::UnboundedReceiver<Result<SynthesizedAudio, ProviderError>>,
     /// When the first audio may leave: the stream's open plus the voice's time to first audio.
     first_audio: Option<tokio::time::Instant>,
+    /// The first audio was handed over.
+    delivered: bool,
 }
 
 #[async_trait::async_trait]
@@ -170,7 +172,13 @@ impl Tts for FakeTts {
         });
         Ok((
             Box::new(InputSide(synthesis)),
-            Box::new(Output { slot, registry: self.registry.clone(), receiver, first_audio }),
+            Box::new(Output {
+                slot,
+                registry: self.registry.clone(),
+                receiver,
+                first_audio,
+                delivered: false,
+            }),
         ))
     }
 }
@@ -211,6 +219,9 @@ impl StreamSource<SynthesizedAudio> for Output {
         // is reported as soon as it is known.
         if let (Ok(Some(_)), Some(at)) = (&next, self.first_audio.take()) {
             tokio::time::sleep_until(at).await;
+        }
+        if matches!(next, Ok(Some(_))) && !std::mem::replace(&mut self.delivered, true) {
+            self.registry.record_delivered(self.slot);
         }
         next
     }

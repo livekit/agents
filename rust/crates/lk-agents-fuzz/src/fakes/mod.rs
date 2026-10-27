@@ -163,6 +163,11 @@ pub enum Record {
         at: Observed,
         sink: Sink,
     },
+    /// The product was handed a synthesis stream's first audio.
+    Delivered {
+        at: Observed,
+        slot: Slot,
+    },
     /// Which output a flushed segment belongs to. Not a stamped event: it is a fact about the
     /// segment the harness keeps for as long as the run lasts.
     Segment {
@@ -351,6 +356,11 @@ impl Registry {
     pub(super) fn record_generated(&self, generation: u32, chunk: u16) {
         let at = self.stamps.next();
         self.write(Record::Generated { at, generation, chunk });
+    }
+
+    fn record_delivered(&self, slot: Slot) {
+        let at = self.stamps.next();
+        self.write(Record::Delivered { at, slot });
     }
 
     fn record_produced(&self, tts: u32, chunk: u16, text: String) {

@@ -507,6 +507,9 @@ pub struct Recording {
     closed: Vec<(Observed, Kind, u32)>,
     results: Vec<(Observed, u32, Answer)>,
     produced: Vec<(Observed, u32, u16, String)>,
+    /// When the product was handed each source's first chunk of audio: a synthesis stream's, once
+    /// the voice's time to first audio passed, or a realtime generation's first delta.
+    delivered: BTreeMap<(Kind, u32), Observed>,
     /// Frames the driver forwarded into a provider stream, tag-decoded: the microphone-to-provider
     /// link, made visible so a rule can hold injected VAD and STT events against the audio.
     forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
@@ -522,6 +525,9 @@ pub struct Recording {
     livelock: Option<String>,
     /// Every task the session spawned, and how the end-of-run join found it.
     tasks: Vec<Task>,
+    /// How many times the run's only thread went idle: each is a wake-up of the session's work
+    /// on virtual time (a timer, a poll), the cost of a call that is doing nothing.
+    parks: u64,
     live: Live,
     index: Index,
 }
@@ -599,6 +605,10 @@ impl Recording {
         self.livelock.as_deref()
     }
 
+    pub fn parks(&self) -> u64 {
+        self.parks
+    }
+
     pub fn tasks(&self) -> &[Task] {
         &self.tasks
     }
@@ -631,6 +641,12 @@ impl Recording {
     /// Each chunk of audio a synthesis stream produced, with the text that caused it.
     pub fn produced(&self) -> &[(Observed, u32, u16, String)] {
         &self.produced
+    }
+
+    /// When the product was handed each source's first audio, by `(Kind::Tts | Kind::Generation,
+    /// nth)`.
+    pub fn delivered(&self) -> &BTreeMap<(Kind, u32), Observed> {
+        &self.delivered
     }
 
     /// What reached each provider stream from the microphone, in order.
@@ -735,8 +751,16 @@ impl Recording {
     }
 
     /// One audio delta a realtime generation delivered.
-    pub fn record_generated(&mut self, _at: Observed, generation: u32, chunk: u16) {
+    pub fn record_generated(&mut self, at: Observed, generation: u32, chunk: u16) {
         self.index.generated_chunks.insert((generation, chunk));
+        if chunk == 0 {
+            self.delivered.entry((Kind::Generation, generation)).or_insert(at);
+        }
+    }
+
+    /// The product was handed a source's first audio.
+    pub fn record_delivered(&mut self, at: Observed, kind: Kind, nth: u32) {
+        self.delivered.entry((kind, nth)).or_insert(at);
     }
 
     pub fn record_produced(&mut self, at: Observed, tts: u32, chunk: u16, text: String) {
@@ -809,6 +833,10 @@ impl Recording {
 
     pub fn record_task(&mut self, task: Task) {
         self.tasks.push(task);
+    }
+
+    pub fn set_parks(&mut self, parks: u64) {
+        self.parks = parks;
     }
 
     pub fn set_now(&mut self, now: Observed) {

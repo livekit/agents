@@ -182,6 +182,13 @@ impl Authored {
         self
     }
 
+    /// The product was handed the first audio of the n-th source of `kind`.
+    pub fn delivered(mut self, kind: Kind, nth: u32) -> Self {
+        let at = self.next();
+        self.recording.record_delivered(at, kind, nth);
+        self
+    }
+
     /// One frame the driver pushed to the n-th stream of a provider kind, decoded to its sources.
     pub fn forwarded(mut self, kind: Kind, nth: u32, tags: Vec<Tag>) -> Self {
         let at = self.next();

@@ -147,7 +147,7 @@ capped near a quarter of the seeds.
 
 ## 3. Promises and the rules that check them
 
-32 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
+34 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
 that must fail. Failures are counted per seed over 1,024 seeds, split by how random the run
 was: **conversation** (under 0.01 uniform moves per conversation move, 295 seeds), **mixed**
 (0.01 to 10, 437 seeds) and **uniform** (over 10, 292 seeds). A failure in a conversation seed
@@ -188,6 +188,8 @@ was a driver bug).
 | P5 | `provider_streams_closed` | every LLM, TTS and STT stream is closed by the end | 7 / 41 / 6 |
 | P1 | `speech_is_heard` | a speech pushes audio within 15 s of its creation and of the scheduler letting it go, ends, or waits on something that still holds; one that ended unheard was cut by the person, the host, the server or the close (section 13) | 0 / 0 / 0 (new 2026-10-26) |
 | P1 | `pause_resolves` | a pause for the person's speech resumes, is interrupted or ends within 4 s beyond the endpointing delay of the person going quiet (section 13) | 0 / 0 / 0 (new 2026-10-26) |
+| P1 | `first_audio_is_prompt` | once a speech may play, its first audio reaches the speaker within 100 ms of the product having it (the voice's first chunk after its calibrated time to first audio, the realtime server's first delta), unless the speech was paused, cut, its output replaced or the session closing (section 14) | 0 / 0 / 0 (new 2026-10-26) |
+| P5 | `idle_is_cheap` | a call wakes its thread at most 200 times per second of virtual time, averaged over the call (section 14) | 0 / 0 / 0 (new 2026-10-26) |
 | P4 | `items_carry_their_payload` | a pipeline reply names the models that timed it, a transcribed user turn the STT; a step cut short is recorded interrupted; items and metrics are stamped on the wall clock within the session; metrics carry their label, non-negative durations and their speech id (section 13) | 0 / 0 / 0 (new 2026-10-26) |
 | P5 | soak: residue | after a long call and release, nothing opened is still live | red (2026-10-25): seed 6 leaves a floor hold. Every call must reach its close: one that stopped before it fails the soak |
 

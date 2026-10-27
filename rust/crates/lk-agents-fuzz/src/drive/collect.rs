@@ -73,6 +73,7 @@ impl Run {
         }
         self.record.set_driver_finished(self.runtime.is_none());
         self.record.set_resources_left(self.api.resources().live());
+        self.record.set_parks(tokio::runtime::Handle::current().metrics().worker_park_count(0));
         self.record.set_now(now);
     }
 
@@ -115,6 +116,9 @@ impl Run {
                 }
                 Record::Produced { at, tts, chunk, text } => {
                     self.record.record_produced(at, tts, chunk, text);
+                }
+                Record::Delivered { at, slot } => {
+                    self.record.record_delivered(at, slot.kind, slot.nth);
                 }
                 Record::Generated { at, generation, chunk } => {
                     self.record.record_generated(at, generation % 255, chunk);
