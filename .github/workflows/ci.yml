@@ -100,3 +100,60 @@ jobs:
       - name: Test the agent-store client and the A2A turn engine
         working-directory: rust
         run: cargo test --locked -p lk-agents-storage -p lk-agents-a2a
+
+  # The Rust core and the package over it: the generated files match their declarations (every
+  # `_generated/` header says CI regenerates them), the core's provider and voice tests pass, and
+  # livekit-agents-next builds and runs its smoke call end to end.
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: core-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: core-
+
+      - name: Generated files match their declarations
+        working-directory: rust
+        run: cargo run --locked -q -p lk-agents-codegen -- --check
+
+      - name: The core's provider and voice tests
+        working-directory: rust
+        run: cargo test --locked -q -p lk-agents-abi -p lk-agents-inference -p lk-agents-voice
+
+      - name: Build livekit-agents-next
+        run: |
+          uv venv -p 3.12 .venv-next
+          uv pip install -p .venv-next/bin/python --no-config maturin pytest ruff
+          cd livekit-agents-next
+          VIRTUAL_ENV=../.venv-next ../.venv-next/bin/maturin develop --uv --release
+
+      # The plugin base classes are Python the generator writes from `lk-agents-codegen/src/bases.rs`:
+      # linted like hand-written code (the repository's ruff excludes `_generated/` otherwise).
+      - name: Lint the generated plugin bases
+        working-directory: livekit-agents-next/livekit/agents/_generated
+        run: |
+          ../../../../.venv-next/bin/ruff check llm.py stt.py tts.py vad.py realtime.py
+          ../../../../.venv-next/bin/ruff format --check llm.py stt.py tts.py vad.py realtime.py
+
+      - name: Smoke
+        run: .venv-next/bin/python livekit-agents-next/scripts/smoke.py
