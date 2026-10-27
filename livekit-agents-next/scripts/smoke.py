@@ -1741,6 +1741,12 @@ def error_events(provider: Any) -> list[bool]:
     return seen
 
 
+def metrics_events(provider: Any) -> list[Any]:
+    seen: list[Any] = []
+    provider.on("metrics_collected", seen.append)
+    return seen
+
+
 async def providers() -> None:
     """A provider called on its own retries per ``conn_options``, as the core's policy decides:
     each retried failure an ``error`` event marked recoverable, the last one not."""
@@ -1749,8 +1755,11 @@ async def providers() -> None:
     chat_ctx.add_message(role="user", content="hello")
     model = FlakyLLM(fails=2)
     seen = error_events(model)
+    measured = metrics_events(model)
     reply = await model.chat(chat_ctx=chat_ctx).collect()
     assert (reply.text, model.calls, seen) == ("You said: hello", 3, [True, True]), (reply, seen)
+    # a provider meters its own requests: one record for the request that answered
+    assert [type(m).__name__ for m in measured] == ["LLMMetrics"], measured
 
     model = FlakyLLM(fails=9)
     seen = error_events(model)
@@ -1763,8 +1772,10 @@ async def providers() -> None:
 
     voice = FlakyTTS(fails=1)
     seen = error_events(voice)
+    measured = metrics_events(voice)
     frame = await voice.synthesize("hi").collect()
     assert frame.duration > 0 and voice.attempts == {"hi": 2} and seen == [True], seen
+    assert [(type(m).__name__, m.characters_count) for m in measured] == [("TTSMetrics", 2)]
 
     # a retried stream is fed again what was pushed before the failure
     voice = FlakyTTS(fails=1, streaming=True)
@@ -1778,8 +1789,10 @@ async def providers() -> None:
 
     ears = FlakySTT(fails=1)
     seen = error_events(ears)
+    measured = metrics_events(ears)
     said = await ears.recognize([_square(0.0)], conn_options=QUICK_RETRIES)
     assert said.alternatives[0].text == "batch words" and seen == [True], seen
+    assert [type(m).__name__ for m in measured] == ["STTMetrics"], measured
 
     # the core runs a gateway client as its own, each session with its job's identity, unless a
     # subclass overrides what the core would bypass

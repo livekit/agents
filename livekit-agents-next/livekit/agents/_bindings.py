@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import weakref
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -106,6 +107,39 @@ class Attempts:
                 await asyncio.sleep(delay)
                 self.count += 1
                 again()
+
+
+def metrics_context(provider: Any, *, cancelled: bool = False) -> tuple[float, str, bool, str, str]:
+    """What a provider's metrics are stamped with: now, its label, model and provider."""
+    return (time.time(), provider.label, cancelled, provider.model, provider.provider)
+
+
+def emit_metrics(provider: Any, kind: str, record: dict[str, Any] | None) -> None:
+    """A request's metrics, folded by the core, as the provider's ``metrics_collected`` event."""
+    if record is None:
+        return
+    from ._generated import metrics
+
+    provider.emit("metrics_collected", getattr(metrics, kind).model_validate(record))
+
+
+async def recognize(stt: Any, buffer: Any, *, language: Any, conn_options: Any) -> Any:
+    """``STT.recognize``: ``_recognize_impl`` in attempts, its metrics once it answers."""
+    started = time.perf_counter()
+    attempts = Attempts("stt_batch", conn_options, stt._emit_error)
+    event = await attempts.run(
+        lambda: stt._recognize_impl(buffer, language=language, conn_options=conn_options)
+    )
+    frames = buffer if isinstance(buffer, list) else [buffer]
+    record = _core.stt_batch_metrics(
+        event,
+        started,
+        time.perf_counter(),
+        [f.duration for f in frames],
+        metrics_context(stt),
+    )
+    emit_metrics(stt, "STTMetrics", record)
+    return event
 
 
 def function_tools_executed_zipped(

@@ -690,8 +690,9 @@ pub enum Role {
     Hook {
         name: String,
         implementation: Option<String>,
-        /// `retry = "kind"`: the hook runs `impl` in attempts the core's retry policy for that
-        /// request kind decides (`_bindings.Attempts`); the framework's own call is one attempt.
+        /// `retry = "helper"`: the hook is `_bindings.<helper>`, which runs `impl` in the attempts
+        /// the core's retry policy decides and reports its metrics; the framework's own call is
+        /// one attempt.
         retry: Option<String>,
         unsupported: Option<String>,
         store: Option<(String, String)>,

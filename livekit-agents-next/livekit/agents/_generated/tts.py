@@ -320,6 +320,7 @@ class ChunkedStream(ABC):
         self._started_time: float = time.perf_counter()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._emitter: _core.AudioEmitter | None = None
+        self._metrics: _core.TtsMetricState | None = _core.TtsMetricState(False)
         self._core_attempts = _bindings.Attempts("tts_batch", conn_options, self._emit_error)
         self._synthesize_task = asyncio.create_task(
             self._core_attempts.run(self._attempt), name="TTS._synthesize_task"
@@ -379,7 +380,23 @@ class ChunkedStream(ABC):
         except StopAsyncIteration:
             if not self._synthesize_task.cancelled() and (exc := self._synthesize_task.exception()):
                 raise exc  # noqa: B904
+            if self._metrics is not None:
+                record = self._metrics.finish(
+                    time.perf_counter(),
+                    self._started_time,
+                    False,
+                    self._input_text,
+                    0,
+                    0,
+                    0.0,
+                    False,
+                    _bindings.metrics_context(self._tts),
+                )
+                self._metrics = None
+                _bindings.emit_metrics(self._tts, "TTSMetrics", record)
             raise StopAsyncIteration from None
+        if self._metrics is not None:
+            self._metrics.observe(time.perf_counter(), self._started_time, val)
         val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
         return val
 
@@ -418,6 +435,8 @@ class SynthesizeStream(ABC):
         self._input_log: list[str | SynthesizeStream.Flush] = []
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._emitter: _core.AudioEmitter | None = None
+        self._metrics = _core.TtsMetricState(True)
+        self._segment_text = ""
         self._core_attempts = _bindings.Attempts("tts_stream", conn_options, self._emit_error)
         self._task = asyncio.create_task(
             self._core_attempts.run(self._attempt, produced=self._produced, again=self._replay),
@@ -486,6 +505,7 @@ class SynthesizeStream(ABC):
             self._segment_open = True
             self._num_segments += 1
         self._pushed_text += token
+        self._segment_text += token
         self._input_log.append(token)
         self.input.send_nowait(token)
 
@@ -494,6 +514,9 @@ class SynthesizeStream(ABC):
         if self.input.closed:
             return
         self._segment_open = False
+        if self._segment_text:
+            self._metrics.queue_text(self._segment_text)
+            self._segment_text = ""
         self._input_log.append(self.Flush())
         self.input.send_nowait(self._input_log[-1])
 
@@ -517,6 +540,21 @@ class SynthesizeStream(ABC):
             raise StopAsyncIteration from None
         if self._started_time:
             val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
+        # a segment's last frame closes its metrics; the next segment is timed from its own start
+        if self._metrics.observe(time.perf_counter(), self._started_time, val):
+            record = self._metrics.finish(
+                time.perf_counter(),
+                self._started_time,
+                False,
+                "",
+                0,
+                0,
+                0.0,
+                False,
+                _bindings.metrics_context(self._tts),
+            )
+            _bindings.emit_metrics(self._tts, "TTSMetrics", record)
+            self._started_time = 0
         return val
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:

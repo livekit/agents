@@ -173,7 +173,7 @@ pub trait Stt: Send + Sync {
     /// - language: The language to recognize; the provider's default when not given.
     /// - conn_options: The timeout and retries of the request.
     // Always present. `language: None` is `NOT_GIVEN`, the provider's default.
-    #[python(hook = "recognize", impl = "_recognize_impl", retry = "stt_batch")]
+    #[python(hook = "recognize", impl = "_recognize_impl", retry = "recognize")]
     async fn recognize(
         &self,
         #[python(ty = "AudioBuffer", import = "..utils:AudioBuffer")] buffer: &[AudioFrame],

@@ -513,11 +513,12 @@ impl Writer<'_> {
                     let aw = if is_async { "await " } else { "" };
                     let call = format!("self.{imp}({args})");
                     match retry {
-                        Some(kind) if is_async && self.carries_conn(m) => {
+                        Some(helper) if is_async && self.carries_conn(m) => {
                             self.need("..", "_bindings");
-                            b.push_str(&format!(
-                                "        attempts = _bindings.Attempts(\"{kind}\", conn_options, self._emit_error)\n        return await attempts.run(\n            lambda: {call}\n        )\n"
-                            ));
+                            let call = format!("_bindings.{helper}(self, {args})");
+                            b.push_str("        ");
+                            b.push_str(&wrap_call("return await ", &call, 8));
+                            b.push('\n');
                         }
                         Some(_) => {
                             return Err(format!(
@@ -1057,8 +1058,10 @@ impl Writer<'_> {
             ("abc", "abstractmethod"),
             ("collections.abc", "AsyncIterable"),
             ("collections.abc", "AsyncIterator"),
+            ("", "time"),
             ("typing", "Any"),
             ("..", "_bindings"),
+            ("..", "_core"),
             (".._exceptions", "APIError"),
             ("..types", "APIConnectOptions"),
             ("..utils", "aio"),
@@ -1134,6 +1137,7 @@ impl Writer<'_> {
             ("pydantic", "BaseModel"),
             ("livekit", "rtc"),
             ("..", "_bindings"),
+            ("..", "_core"),
             (".._exceptions", "APIError"),
             ("..types", "APIConnectOptions"),
             ("..types", "NOT_GIVEN"),
@@ -1381,6 +1385,11 @@ const RECOGNIZE: &str = r#"
 
     def send(self, event: {Event}) -> None:
         """Hand ``event`` to the reader."""
+        record, final = _core.stt_stream_metrics(event, _bindings.metrics_context(self._stt))
+        if final:
+            # a recognition succeeded: the retry budget starts over
+            self._core_attempts.count = 0
+        _bindings.emit_metrics(self._stt, "STTMetrics", record)
         self._event_ch.send_nowait(event)
 
     @property
@@ -1436,6 +1445,7 @@ const CHUNKED: &str = r#"
         self._started_time: float = time.perf_counter()
         self._event_ch = aio.Chan[{Audio}]()
         self._emitter: _core.AudioEmitter | None = None
+        self._metrics: _core.TtsMetricState | None = _core.TtsMetricState(False)
         self._core_attempts = _bindings.Attempts("tts_batch", conn_options, self._emit_error)
         self._synthesize_task = asyncio.create_task(
             self._core_attempts.run(self._attempt), name="TTS._synthesize_task"
@@ -1472,7 +1482,23 @@ const CHUNKED: &str = r#"
         except StopAsyncIteration:
             if not self._synthesize_task.cancelled() and (exc := self._synthesize_task.exception()):
                 raise exc  # noqa: B904
+            if self._metrics is not None:
+                record = self._metrics.finish(
+                    time.perf_counter(),
+                    self._started_time,
+                    False,
+                    self._input_text,
+                    0,
+                    0,
+                    0.0,
+                    False,
+                    _bindings.metrics_context(self._tts),
+                )
+                self._metrics = None
+                _bindings.emit_metrics(self._tts, "TTSMetrics", record)
             raise StopAsyncIteration from None
+        if self._metrics is not None:
+            self._metrics.observe(time.perf_counter(), self._started_time, val)
         val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
         return val
 
@@ -1495,6 +1521,8 @@ const SYNTHESIZE: &str = r#"
         self._input_log: list[str | {Stream}.Flush] = []
         self._event_ch = aio.Chan[{Audio}]()
         self._emitter: _core.AudioEmitter | None = None
+        self._metrics = _core.TtsMetricState(True)
+        self._segment_text = ""
         self._core_attempts = _bindings.Attempts("tts_stream", conn_options, self._emit_error)
         self._task = asyncio.create_task(
             self._core_attempts.run(self._attempt, produced=self._produced, again=self._replay),
@@ -1540,6 +1568,7 @@ const SYNTHESIZE: &str = r#"
             self._segment_open = True
             self._num_segments += 1
         self._pushed_text += token
+        self._segment_text += token
         self._input_log.append(token)
         self.input.send_nowait(token)
 
@@ -1548,6 +1577,9 @@ const SYNTHESIZE: &str = r#"
         if self.input.closed:
             return
         self._segment_open = False
+        if self._segment_text:
+            self._metrics.queue_text(self._segment_text)
+            self._segment_text = ""
         self._input_log.append(self.Flush())
         self.input.send_nowait(self._input_log[-1])
 
@@ -1571,6 +1603,21 @@ const SYNTHESIZE: &str = r#"
             raise StopAsyncIteration from None
         if self._started_time:
             val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
+        # a segment's last frame closes its metrics; the next segment is timed from its own start
+        if self._metrics.observe(time.perf_counter(), self._started_time, val):
+            record = self._metrics.finish(
+                time.perf_counter(),
+                self._started_time,
+                False,
+                "",
+                0,
+                0,
+                0.0,
+                False,
+                _bindings.metrics_context(self._tts),
+            )
+            _bindings.emit_metrics(self._tts, "TTSMetrics", record)
+            self._started_time = 0
         return val
 
     def __aiter__(self) -> AsyncIterator[{Audio}]:
@@ -1618,6 +1665,7 @@ const CHAT: &str = r#"
         self._conn_options = conn_options
         self._event_ch = _{Provider}EventChannel()
         self._retry_on_chunk_sent = True
+        self._metrics = _core.LlmMetricState(time.perf_counter())
         self._core_attempts = _bindings.Attempts("llm", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -1626,6 +1674,7 @@ const CHAT: &str = r#"
     async def _run(self) -> None: ...
 
     async def _attempt(self) -> None:
+        self._metrics = _core.LlmMetricState(time.perf_counter())
         try:
             await self._run()
         except APIError as e:
@@ -1635,12 +1684,17 @@ const CHAT: &str = r#"
 
     async def _main_task(self) -> None:
         await self._core_attempts.run(self._attempt)
+        record = self._metrics.finish(
+            time.perf_counter(), False, _bindings.metrics_context(self._llm)
+        )
+        _bindings.emit_metrics(self._llm, "LLMMetrics", record)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._llm._emit_error(api_error, recoverable)
 
     def send(self, chunk: {Chunk}) -> None:
         """Hand ``chunk`` to the reader."""
+        self._metrics.observe(time.perf_counter(), chunk)
         self._event_ch.send_nowait(chunk)
 
     @property

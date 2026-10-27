@@ -235,10 +235,7 @@ class STT(
             language: The language to recognize; the provider's default when not given.
             conn_options: The timeout and retries of the request.
         """
-        attempts = _bindings.Attempts("stt_batch", conn_options, self._emit_error)
-        return await attempts.run(
-            lambda: self._recognize_impl(buffer, language=language, conn_options=conn_options)
-        )
+        return await _bindings.recognize(self, buffer, language=language, conn_options=conn_options)
 
     def stream(
         self,
@@ -496,6 +493,11 @@ class RecognizeStream(ABC):
 
     def send(self, event: SpeechEvent) -> None:
         """Hand ``event`` to the reader."""
+        record, final = _core.stt_stream_metrics(event, _bindings.metrics_context(self._stt))
+        if final:
+            # a recognition succeeded: the retry budget starts over
+            self._core_attempts.count = 0
+        _bindings.emit_metrics(self._stt, "STTMetrics", record)
         self._event_ch.send_nowait(event)
 
     @property

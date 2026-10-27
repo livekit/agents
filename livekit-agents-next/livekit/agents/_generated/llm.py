@@ -319,6 +319,7 @@ class LLMStream(ABC):
         self._conn_options = conn_options
         self._event_ch = _LLMEventChannel()
         self._retry_on_chunk_sent = True
+        self._metrics = _core.LlmMetricState(time.perf_counter())
         self._core_attempts = _bindings.Attempts("llm", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -327,6 +328,7 @@ class LLMStream(ABC):
     async def _run(self) -> None: ...
 
     async def _attempt(self) -> None:
+        self._metrics = _core.LlmMetricState(time.perf_counter())
         try:
             await self._run()
         except APIError as e:
@@ -336,12 +338,17 @@ class LLMStream(ABC):
 
     async def _main_task(self) -> None:
         await self._core_attempts.run(self._attempt)
+        record = self._metrics.finish(
+            time.perf_counter(), False, _bindings.metrics_context(self._llm)
+        )
+        _bindings.emit_metrics(self._llm, "LLMMetrics", record)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._llm._emit_error(api_error, recoverable)
 
     def send(self, chunk: ChatChunk) -> None:
         """Hand ``chunk`` to the reader."""
+        self._metrics.observe(time.perf_counter(), chunk)
         self._event_ch.send_nowait(chunk)
 
     @property
