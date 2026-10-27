@@ -4,12 +4,12 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use lk_agents_abi::voice::io::{AudioOutput, IoError, PlaybackTracker, Result};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Spawner, SpawnerExt};
+use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Spawner, SpawnerExt, unix_secs};
 use lk_agents_rtc::{
     ByteStreamWriter, ParticipantIdentity, RoomEvent, RpcHandler, RtcRoom, StreamBytesOptions,
 };
@@ -21,11 +21,6 @@ pub const RPC_PLAYBACK_STARTED: &str = "lk.playback_started";
 pub const AUDIO_STREAM_TOPIC: &str = "lk.audio_stream";
 
 const LOG: &str = "livekit.agents";
-
-/// `time.time()` on `clock`.
-fn wall(clock: &dyn Clock) -> f64 {
-    clock.wall().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
-}
 
 /// `utils.shortuuid("AUDIO_")`.
 fn stream_name() -> String {
@@ -158,7 +153,7 @@ impl Inner {
 
     /// `_handle_playback_started`.
     fn on_playback_started(&self) -> String {
-        self.tracker.report_started(wall(&*self.clock));
+        self.tracker.report_started(unix_secs(self.clock.wall()));
         "ok".to_owned()
     }
 
@@ -340,7 +335,7 @@ impl AudioOutput for DataStreamAudioOutput {
                 *self.inner.pushed.lock().unwrap_or_else(|p| p.into_inner()) = 0.0;
                 if !self.inner.wait_playback_start {
                     // approximated: the avatar does not report lk.playback_started
-                    self.inner.tracker.report_started(wall(&*self.inner.clock));
+                    self.inner.tracker.report_started(unix_secs(self.inner.clock.wall()));
                 }
                 w
             }
@@ -863,12 +858,12 @@ pub async fn wait_avatar_join(
             return Err(lk_agents_rtc::RtcError::NotConnected);
         }
     }
-    let started = wall(&*clock);
+    let started = unix_secs(clock.wall());
     lk_agents_rtc::wait_for_participant(Arc::clone(&room), Some(identity.clone()), None, true)
         .await?;
     let video = Some(vec![lk_agents_rtc::TRACK_KIND_VIDEO]);
     lk_agents_rtc::wait_for_track_publication(room, Some(identity), video, true, false).await?;
-    Ok((started, wall(&*clock)))
+    Ok((started, unix_secs(clock.wall())))
 }
 
 // ----------------------------------------------------------------------------- the receiver's binding

@@ -48,9 +48,7 @@ const PUMP_BUDGET: usize = 256;
 /// `_TICK_EPSILON` in `tests/virtual_time.py`: wall stamps stay strictly increasing.
 const TICK_EPSILON: Duration = Duration::from_micros(1);
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
-}
+use crate::lock;
 
 // --------------------------------------------------------------------- the float rule
 

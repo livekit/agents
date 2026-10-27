@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use super::RefRegistry;
 
@@ -33,10 +33,8 @@ impl<T: Send + 'static> RefRegistry for Store<T> {
     }
 }
 
-/// The critical sections cannot leave the containers inconsistent.
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
+// The critical sections cannot leave the containers inconsistent.
+use crate::lock;
 
 /// Keep it for the process: keys hold a `Weak` to its registry.
 pub struct PayloadTable<T> {

@@ -79,7 +79,6 @@ pub fn merge_capabilities(
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::fallback::AvailabilityChanged;
@@ -271,10 +270,8 @@ pub struct FallbackSession {
     restart_rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<bool>>,
 }
 
-/// `time.time()`: the policy's cooldowns compare these with each other only.
-fn now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
-}
+// `time.time()`: the policy's cooldowns compare these with each other only.
+use lk_agents_abi::unix_now as now;
 
 impl FallbackSession {
     fn lock(&self) -> std::sync::MutexGuard<'_, SessionState> {

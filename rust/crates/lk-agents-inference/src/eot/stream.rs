@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::TurnDetectorModel;
@@ -26,10 +25,7 @@ pub type MetricsCallback = Arc<dyn Fn(MetricsEvent) + Send + Sync>;
 
 const LOG: &str = "livekit.agents";
 
-/// `time.time()`.
-fn now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
-}
+use lk_agents_abi::unix_now as now;
 
 fn samples(frame: &AudioFrame) -> Vec<i16> {
     frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()

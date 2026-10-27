@@ -25,10 +25,6 @@ pub struct RetryingStt {
     clock: Arc<dyn Clock>,
 }
 
-fn wall_secs(clock: &dyn Clock) -> f64 {
-    clock.wall().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()
-}
-
 /// `_core.RetryingStt`: what a host STT bound to `conn_options` is to the core.
 #[crate::host(object(name = "RetryingStt", cell = "arc", as_dyn(Stt = as_stt)))]
 impl RetryingStt {
@@ -186,7 +182,7 @@ impl Stt for RetryingStt {
             current,
             failed,
             retries: 0,
-            began: wall_secs(&*self.clock),
+            began: crate::unix_secs(self.clock.wall()),
             offset,
             hook: None,
         };
@@ -321,7 +317,7 @@ impl StreamSource<SpeechEvent> for RetrySource {
             };
             self.close_current().await;
             // An attempt that outlived the connect timeout had connected: the budget restarts.
-            if wall_secs(&*self.clock) - self.began > self.options.timeout {
+            if crate::unix_secs(self.clock.wall()) - self.began > self.options.timeout {
                 self.retries = 0;
             }
             let failure = Failure {
@@ -335,7 +331,7 @@ impl StreamSource<SpeechEvent> for RetrySource {
             let delay = failure.decide(self.hook.as_ref())?;
             sleep(&*self.clock, delay).await;
             self.retries += 1;
-            let now = wall_secs(&*self.clock);
+            let now = crate::unix_secs(self.clock.wall());
             self.offset += now - self.began;
             self.began = now;
             match self.stt.stream(self.language.as_ref(), Some(self.offset)).await {

@@ -257,10 +257,6 @@ struct Call {
     fold: TtsMetricState,
 }
 
-fn wall_secs(clock: &dyn Clock) -> f64 {
-    clock.wall().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()
-}
-
 /// The sentence being synthesized, metered as its own call (`ChunkedStream`'s
 /// `_metrics_monitor_task`): the reference's adapter forwards each one's `TTSMetrics`.
 struct Ledger {
@@ -275,7 +271,7 @@ impl Ledger {
     /// The sentence's record; none for a failed one (`_current_attempt_has_error`).
     fn end_call(&mut self, cancelled: bool) {
         let Some(mut call) = self.call.take() else { return };
-        let now = wall_secs(&*self.clock);
+        let now = crate::unix_secs(self.clock.wall());
         let id = self.tts.id();
         let label = id.label.clone();
         let context = Context { timestamp: now, label, cancelled, metadata: Some(id.metadata()) };
@@ -364,7 +360,7 @@ impl AdapterSource {
                         let clock = Arc::clone(&self.clock);
                         if let Some(call) = self.ledger().call.as_mut() {
                             let start = call.start;
-                            call.fold.observe(&a, || wall_secs(&*clock) - start);
+                            call.fold.observe(&a, || crate::unix_secs(clock.wall()) - start);
                         }
                         return Ok(Some(a));
                     }
@@ -404,7 +400,7 @@ impl AdapterSource {
             if text.is_empty() {
                 continue;
             }
-            let start = wall_secs(&*self.clock);
+            let start = crate::unix_secs(self.clock.wall());
             self.current = Some(self.tts.synthesize(&text).await?);
             self.ledger().call = Some(Call { text, start, fold: TtsMetricState::for_host(false) });
         }

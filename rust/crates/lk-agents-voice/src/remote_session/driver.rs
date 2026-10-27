@@ -213,7 +213,7 @@ impl HostRuntime {
     #[host(method(name = "send_event"))]
     pub fn send_wire(&self, event: WireEvent, created_at: Option<f64>) -> Result<bool, String> {
         let Some(ev) = super::encode_wire(event)? else { return Ok(false) };
-        let at = created_at.unwrap_or_else(super::epoch_secs_now);
+        let at = created_at.unwrap_or_else(lk_agents_abi::unix_now);
         let ev = proto::AgentSessionEvent { created_at: None, event: Some(ev) };
         self.send_event(ev, at).map_err(|e| e.to_string())?;
         Ok(true)
@@ -225,7 +225,7 @@ impl HostRuntime {
         use prost::Message as _;
         let event = proto::AgentSessionEvent::decode(event)
             .map_err(|e| format!("not an AgentSessionEvent: {e}"))?;
-        self.send_event(event, created_at.unwrap_or_else(super::epoch_secs_now))
+        self.send_event(event, created_at.unwrap_or_else(lk_agents_abi::unix_now))
             .map_err(|e| e.to_string())
     }
 

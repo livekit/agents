@@ -63,10 +63,6 @@ fn duration_millis(d: Option<&pbjson_types::Duration>) -> i64 {
     d.map_or(0, |d| d.seconds * 1000 + i64::from(d.nanos) / 1_000_000)
 }
 
-fn wall_secs() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64()
-}
-
 #[derive(Default)]
 struct CloudState {
     send: Option<mpsc::UnboundedSender<proto::ClientMessage>>,
@@ -132,7 +128,7 @@ impl CloudTransport {
 
         let client_e2e_ms = duration_millis(stats.and_then(|s| s.client_e2e_latency.as_ref()));
         self.sink.metrics(EotInferenceMetrics {
-            timestamp: wall_secs(),
+            timestamp: lk_agents_abi::unix_now(),
             total_duration: client_e2e_ms as f64 / 1000.0,
             prediction_duration: inference_duration_ms as f64 / 1000.0,
             detection_delay: detection_delay_ms as f64 / 1000.0,

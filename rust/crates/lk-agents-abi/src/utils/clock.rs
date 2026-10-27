@@ -7,6 +7,16 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use tokio::sync::Notify;
 
+/// `t` as `time.time()` reads it: seconds since the Unix epoch, zero for anything before it.
+pub fn unix_secs(t: SystemTime) -> f64 {
+    t.duration_since(SystemTime::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// `time.time()`, for code with no clock of its own.
+pub fn unix_now() -> f64 {
+    unix_secs(SystemTime::now())
+}
+
 /// Nanoseconds since the session started. Not `Instant`, so tests can virtualise time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Ts(u64);
@@ -250,11 +260,7 @@ pub struct WallAnchor {
 
 impl WallAnchor {
     pub fn of(clock: &dyn Clock) -> Self {
-        let wall = clock
-            .wall()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or_default();
+        let wall = unix_secs(clock.wall());
         WallAnchor { wall, at: clock.now() }
     }
 

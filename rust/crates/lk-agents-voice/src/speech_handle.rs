@@ -260,9 +260,7 @@ impl PartialEq for SpeechHandle {
 
 impl Eq for SpeechHandle {}
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
-}
+use lk_agents_abi::lock;
 
 impl SpeechHandle {
     fn base(creation: Creation, allow_interruptions: bool, api: Api) -> Self {

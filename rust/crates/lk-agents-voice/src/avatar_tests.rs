@@ -300,7 +300,7 @@ async fn the_join_wait_starts_at_the_connection_and_ends_at_the_avatar_video() {
     let wait = tokio::spawn(wait_avatar_join(room.clone(), "avatar".into(), clock.clone()));
     clock.advance(Duration::from_secs(1));
     tokio::task::yield_now().await;
-    let connected_at = wall(&*clock);
+    let connected_at = lk_agents_abi::unix_secs(clock.wall());
     room.set_connection_state(lk_agents_rtc::ConnectionState::Connected);
     let avatar = room.add_participant("avatar", ParticipantKind::Agent);
     tokio::task::yield_now().await;

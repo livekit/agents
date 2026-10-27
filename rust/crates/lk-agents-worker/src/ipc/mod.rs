@@ -11,8 +11,8 @@
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
@@ -304,10 +304,7 @@ pub async fn write_frame<W: AsyncWrite + Unpin + ?Sized>(w: &mut W, data: &[u8])
 
 /// `utils.time_ms()`: wall-clock milliseconds, rounded.
 pub fn time_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| (d.as_secs_f64() * 1000.0 + 0.5) as i64)
-        .unwrap_or_default()
+    (lk_agents_abi::unix_now() * 1000.0 + 0.5) as i64
 }
 
 // --------------------------------------------------------------------------------- plumbing
@@ -320,9 +317,7 @@ type BoxWrite = Box<dyn AsyncWrite + Send + Unpin>;
 #[error("duplex closed")]
 pub struct Closed;
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
+use lk_agents_abi::lock;
 
 /// A one-way latch to wait on.
 struct Flag(watch::Sender<bool>);

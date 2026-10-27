@@ -3,7 +3,7 @@
 //! object with `update(frame) -> bool` and `deactivate()`.
 
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use lk_agents_abi::llm::realtime::{
     Event, GenerateReply, GenerateReplyFailed, HostRealtimeError, PushAudio, RealtimeError,
@@ -221,10 +221,6 @@ fn describe(py: Python<'_>, e: &PyErr) -> String {
     format!("{name}: {}", e.value(py))
 }
 
-fn wall_now() -> f64 {
-    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default()
-}
-
 impl PyDuplexSession {
     fn open(view: CancellingHandle, audio: CancellingHandle, label: String, spawner: &Arc<dyn Spawner>) -> Arc<Self> {
         let (lane, lane_rx) = mpsc::unbounded_channel();
@@ -317,7 +313,7 @@ impl PyDuplexSession {
                 continue;
             }
             let error = RealtimeModelError { label: label.clone(), message, recoverable: false, ..Default::default() };
-            let _ = tx.send(Some(DuplexEvent::Session(Event::HostError(HostRealtimeError { error, timestamp: wall_now() }))));
+            let _ = tx.send(Some(DuplexEvent::Session(Event::HostError(HostRealtimeError { error, timestamp: lk_agents_abi::unix_now() }))));
             let _ = view.await_call(|s| s.call_method0("_core_close_plugin")).await;
         }
     }

@@ -18,7 +18,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 use tokio::time::Instant;
 
-use super::{ConsoleSink, FrameDecoder, SessionTransport, epoch_secs_now, frame, proto};
+use super::{ConsoleSink, FrameDecoder, SessionTransport, frame, proto};
 use proto::agent_session_message::{Message, console_io};
 
 /// The rate the CLI captures and plays at.
@@ -266,7 +266,7 @@ impl AudioOutput for ConsoleIo {
             first
         };
         if first {
-            self.tracker.report_started(epoch_secs_now());
+            self.tracker.report_started(lk_agents_abi::unix_now());
         }
         self.send(Message::AudioOutput(console_io::AudioFrame {
             data: f.data.to_vec(),

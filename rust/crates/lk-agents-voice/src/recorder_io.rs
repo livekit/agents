@@ -6,7 +6,6 @@ use lk_agents_abi::voice::io::{AudioOutput, PlaybackEvent, PlaybackObserver};
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_media::recorder::AudioRecorder;
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
 
 /// A recorder, and the monotonic-to-wall anchor its stamps are converted against.
 #[derive(Clone)]
@@ -19,7 +18,7 @@ pub struct RecorderTap {
 
 impl RecorderTap {
     pub fn new(recorder: Arc<dyn AudioRecorder>, clock: Arc<dyn Clock>) -> Self {
-        let wall = clock.wall().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+        let wall = lk_agents_abi::unix_secs(clock.wall());
         let anchor = (wall, clock.now());
         RecorderTap { recorder, clock, anchor }
     }

@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use lk_agents_abi::python::log;
 use pyo3::prelude::*;
@@ -195,10 +195,6 @@ impl Inner {
     }
 }
 
-fn wall() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
-}
-
 #[pyclass(frozen, name = "LoopMonitor", module = "livekit.agents._core")]
 pub struct LoopMonitor {
     inner: Arc<Inner>,
@@ -328,7 +324,7 @@ fn build_report<'py>(
     let d = PyDict::new(py);
     d.set_item("duration", lag)?;
     // the block started no earlier than the last on-time tick
-    d.set_item("started_at", wall() - lag)?;
+    d.set_item("started_at", lk_agents_abi::unix_now() - lag)?;
     d.set_item("warn_threshold", inner.warn)?;
     d.set_item("severity", severity)?;
     d.set_item("gc_time", block.gc_time)?;

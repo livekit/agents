@@ -59,7 +59,7 @@ impl Timebase {
     }
 
     pub fn wall_secs(&self) -> f64 {
-        secs(self.clock.wall())
+        lk_agents_abi::unix_secs(self.clock.wall())
     }
 
     /// Both clocks, read together: the instant a step is handled at.
@@ -181,7 +181,7 @@ impl StepClock {
     }
 
     pub(crate) fn wall_secs(&self) -> f64 {
-        secs(self.wall())
+        lk_agents_abi::unix_secs(self.wall())
     }
 
     /// The wall time a session instant fell (or will fall) at.
@@ -195,10 +195,6 @@ impl StepClock {
     }
 
     pub(crate) fn wall_secs_at(&self, at: Ts) -> f64 {
-        secs(self.wall_at(at))
+        lk_agents_abi::unix_secs(self.wall_at(at))
     }
-}
-
-fn secs(wall: std::time::SystemTime) -> f64 {
-    wall.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }

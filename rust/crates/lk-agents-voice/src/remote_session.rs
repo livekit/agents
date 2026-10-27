@@ -497,7 +497,7 @@ impl SessionHost {
                 let agent_state = AgentState::from_wire(&agent_state).unwrap_or(AgentState::Idle);
                 let user_state = UserState::from_wire(&user_state).unwrap_or(UserState::Listening);
                 // `session._started_at or time.time()`
-                let started_at = started_at.filter(|t| *t != 0.0).unwrap_or_else(epoch_secs_now);
+                let started_at = started_at.filter(|t| *t != 0.0).unwrap_or_else(lk_agents_abi::unix_now);
                 (
                     None,
                     Response::GetSessionState(proto::session_response::GetSessionStateResponse {
@@ -586,10 +586,6 @@ impl SessionHost {
             )),
         }
     }
-}
-
-fn epoch_secs_now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
 /// Stamp an encoded event and wrap it in a message. A non-finite stamp is refused.
