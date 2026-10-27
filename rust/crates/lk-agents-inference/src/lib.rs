@@ -25,6 +25,7 @@ pub mod amd;
 pub mod avatar;
 
 pub mod llm;
+pub mod local_models;
 pub mod stt;
 pub mod testkit;
 pub mod token;

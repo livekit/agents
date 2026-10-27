@@ -144,11 +144,13 @@ class VoiceActivityVideoSampler:
 
 
 def _core_leg(leg: Any) -> Any:
-    """A gateway client or a fallback chain as the core's own (``_core.InferenceStt``,
-    ``_core.FallbackStt`` and the like), which the session drives directly rather than through
-    the Python wrapper."""
+    """A gateway client, a fallback chain or the local VAD as the core's own
+    (``_core.InferenceStt``, ``_core.FallbackStt``, ``_core.InferenceVad`` and the like), which the
+    session drives directly rather than through the Python wrapper."""
     if isinstance(leg, (inference.STT, inference.LLM, inference.TTS)):
         return leg._core_native()
+    if isinstance(leg, inference.VAD):
+        return leg._native
     if isinstance(
         leg, (stt.FallbackAdapter, stt.StreamAdapter, llm.FallbackAdapter, tts.FallbackAdapter)
     ):
@@ -421,7 +423,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             agent_host=frame["agent_host"],
             chat_ctx=to_core_items(self._chat_ctx.items),
             stt=_core_leg(frame.get("stt", self._stt)),
-            vad=frame.get("vad", self._vad),
+            vad=_core_leg(frame.get("vad", self._vad)),
             llm=None if isinstance(model, llm.RealtimeModel) else _core_leg(model),
             realtime=native,
             realtime_host=realtime,

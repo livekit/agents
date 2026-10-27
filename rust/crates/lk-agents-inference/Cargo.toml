@@ -80,6 +80,9 @@ rmcp.workspace = true
 sse-stream = "0.2"
 url = "2"
 log.workspace = true
+# `local_models`: the link-time slot a native provider of the local VAD and end-of-turn models
+# registers in.
+inventory.workspace = true
 
 # `eot`'s wire protocol -- `livekit.agent.{ClientMessage, ServerMessage}` -- is protobuf over the
 # same WebSocket seam this crate already owns, taken from the one protocol crate the workspace shares

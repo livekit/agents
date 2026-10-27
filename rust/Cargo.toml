@@ -90,7 +90,8 @@ base64       = "0.22"
 async-trait  = "0.1"
 pyo3         = "0.29"
 # The link-time table `#[lk_agents_abi::export]` submits to, so a binding's host module registers
-# every marked item from one call instead of a hand-kept list. Only the bindings may use it.
+# every marked item from one call instead of a hand-kept list. Only the bindings may use it, and
+# `lk-agents-inference::local_models`, where a native provider of the local models registers.
 inventory    = "0.3"
 # §10: MCP is the official Rust SDK, not a port. `lk-agents-inference::mcp` only. No `server`,
 # `macros` or `schemars` (we are a client); streamable HTTP over the workspace's reqwest and

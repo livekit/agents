@@ -54,15 +54,22 @@ def _local_inference_models() -> bool:
     if value is not None and value.strip().lower() in _FALSY:
         return False
 
+    # the EOT weights cost ~244 MB: a process without a multiprocessing parent (the forkserver,
+    # a thread executor's worker) shares them across jobs, a spawned job process would not
+    eot = value is not None or multiprocessing.parent_process() is None
+
     # the VAD and the turn detector's local end-of-turn model: constructing them later in a
-    # job is free once these singletons exist (~25 ms of GIL-held CPU otherwise)
+    # job is free once these singletons exist (~25 ms of GIL-held CPU otherwise). The core's
+    # own when the build links them natively
+    from .. import _core
+
+    if _core.local_models_init(vad=True, eot=eot):
+        return True
+
     import livekit.local_inference as li
 
     li.init_vad()
-
-    # the EOT weights cost ~244 MB: a process without a multiprocessing parent (the forkserver,
-    # a thread executor's worker) shares them across jobs, a spawned job process would not
-    if value is not None or multiprocessing.parent_process() is None:
+    if eot:
         li.init_eot()
     return True
 

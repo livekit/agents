@@ -1750,7 +1750,9 @@ class InferenceStt:
 
 
 class InferenceVad:
-    """`inference/vad.py`: Silero VAD with the ONNX model in the host and the machine in Rust."""
+    """`inference/vad.py`: Silero VAD, the machine in Rust and the model native when the build links
+    one, else the host's.
+    """
 
     def __init__(
         self,

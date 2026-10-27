@@ -1410,6 +1410,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "inventory",
  "jsonwebtoken 9.3.1",
  "livekit-protocol",
  "lk-agents-abi",

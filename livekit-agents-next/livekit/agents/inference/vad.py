@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import Executor
-
-from livekit.local_inference import VAD as SileroModel
+from typing import Any
 
 from .. import _core
 from .._generated import vad
@@ -15,9 +14,16 @@ from ..utils import aio, is_given
 __all__ = ["VAD", "VADModels"]
 
 
+def _silero_model() -> Any:
+    # the host's model, which the core asks for only when the build links no native one
+    from livekit.local_inference import VAD
+
+    return VAD()
+
+
 class VAD(vad.VAD):
-    """Silero voice activity detection: the model from ``livekit-local-inference``, the detection
-    machine in the core (``_core.InferenceVad``)."""
+    """Silero voice activity detection, the detection machine in the core (``_core.InferenceVad``)
+    and the model native to the core when the build links it, else ``livekit-local-inference``'s."""
 
     def __init__(
         self,
@@ -59,7 +65,7 @@ class VAD(vad.VAD):
             if is_given(deactivation_threshold)
             else max(activation_threshold - 0.15, 0.01),
         }
-        self._native = _core.InferenceVad(SileroModel, **self._opts)
+        self._native = _core.InferenceVad(_silero_model, **self._opts)
 
     @property
     def model(self) -> str:

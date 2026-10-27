@@ -218,7 +218,8 @@ lk_agents_abi::python::inventory::submit! {
 impl PyEotStream {
     /// `model` is the detector's starting model; `turn-detector-v1` connects to the gateway
     /// (`base_url`, credentials, `headers` called per connection, `timeout`/`max_retry`), the mini
-    /// model runs `livekit.local_inference.EOT()`, also after a cloud failure when
+    /// model runs natively when the build links it, else `livekit.local_inference.EOT()`, also
+    /// after a cloud failure when
     /// `local_fallback`. `on_metrics(dict)` hears each `EOTInferenceMetrics`.
     #[new]
     #[pyo3(signature = (
@@ -275,14 +276,16 @@ impl PyEotStream {
                     Arc::new(transport) as Arc<dyn EotTransport>
                 });
             }
-            let local = Python::attach(|py| -> PyResult<Py<PyAny>> {
-                Ok(py.import("livekit.local_inference")?.getattr("EOT")?.call0()?.unbind())
-            });
+            // The linked native model, else the host's.
+            let local = match crate::local_models::native() {
+                Some(native) => Ok((native.eot)()),
+                None => Python::attach(|py| -> PyResult<Arc<dyn LocalEotModel>> {
+                    let model = py.import("livekit.local_inference")?.getattr("EOT")?.call0()?.unbind();
+                    Ok(Arc::new(PyLocalEotModel { model }) as Arc<dyn LocalEotModel>)
+                }),
+            };
             TransportShell::mount(model.as_str(), shared.clone(), move |sink| match local {
-                Ok(model) => {
-                    let model = Arc::new(PyLocalEotModel { model }) as Arc<dyn LocalEotModel>;
-                    Arc::new(LocalTransport::new(model, sink)) as Arc<dyn EotTransport>
-                }
+                Ok(model) => Arc::new(LocalTransport::new(model, sink)) as Arc<dyn EotTransport>,
                 Err(e) => Arc::new(FailedTransport(e.to_string())) as Arc<dyn EotTransport>,
             })
         });

@@ -1,5 +1,7 @@
-//! `inference/vad.py` -- VAD backed by `livekit.local_inference`. The logic is in [`machine`];
-//! this gives it the `(Sink, Source)` shape and runs it on a task.
+//! `inference/vad.py`: the Silero VAD, its model from the linked native provider
+//! ([`crate::local_models`]) or else the host's `livekit.local_inference`. The logic is in
+//! [`machine`]; this gives it the `(Sink, Source)` shape and runs it on a task, and is the session's
+//! [`Vad`] as it is, with no host call per frame when the model is native.
 
 pub mod machine;
 #[cfg(feature = "python")]
@@ -7,7 +9,7 @@ mod python;
 
 use crate::abi::{AudioFrame, StreamSink, StreamSource};
 use async_trait::async_trait;
-use lk_agents_abi::{Spawner, SpawnerExt};
+use lk_agents_abi::{MediaRef, ProviderId, Spawner, SpawnerExt, Vad, VadCapabilities, VadEvent, VadEventType, VadSink, VadSource};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use machine::{VadMachine, VadModel, VadOptions, VadOutput};
 use std::sync::Arc;
@@ -71,11 +73,12 @@ impl NativeVad {
     }
 }
 
-/// `inference/vad.py`: Silero VAD with the ONNX model in the host and the machine in Rust.
+/// `inference/vad.py`: Silero VAD, the machine in Rust and the model native when the build links
+/// one, else the host's.
 ///
-/// `model_factory()` builds one model per stream (each needs its own LSTM state); a model has
-/// `predict(list[int])` and `reset()`.
-#[lk_agents_abi::host(object(name = "InferenceVad", cell = "arc", rust_name = InferenceVad))]
+/// `model_factory()` builds one host model per stream (each needs its own LSTM state); a model has
+/// `predict(list[int])` and `reset()`. Never called when the model is native.
+#[lk_agents_abi::host(object(name = "InferenceVad", cell = "arc", rust_name = InferenceVad, as_dyn(Vad = as_vad)))]
 impl NativeVad {
     #[host(new(kw_only = "min_speech_duration"))]
     #[allow(clippy::too_many_arguments)]
@@ -97,7 +100,12 @@ impl NativeVad {
             activation_threshold,
             deactivation_threshold,
         };
-        NativeVad::new(opts, model_factory, spawner)
+        NativeVad::new(opts, crate::local_models::vad_factory_or(model_factory), spawner)
+    }
+
+    /// The detector as the provider a session holds directly.
+    pub fn as_vad(self: &Arc<Self>) -> Arc<dyn Vad> {
+        Arc::clone(self) as Arc<dyn Vad>
     }
 
     /// `_VADStream.update_options` on a running stream: every option, applied before the next frame.
@@ -126,6 +134,59 @@ impl NativeVad {
     pub fn stream_for_host(&self) -> (VadSinkHandle, VadOutputSource) {
         self.stream_native()
     }
+}
+
+#[async_trait]
+impl Vad for NativeVad {
+    fn label(&self) -> String {
+        "livekit.agents.inference.vad.VAD".into()
+    }
+
+    fn capabilities(&self) -> VadCapabilities {
+        VadCapabilities { update_interval: machine::VAD_WINDOW_SAMPLES as f64 / machine::MODEL_SAMPLE_RATE as f64 }
+    }
+
+    fn id(&self) -> ProviderId {
+        ProviderId { label: self.label(), model: "silero".into(), provider: "livekit-local-inference".into() }
+    }
+
+    async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError> {
+        let (sink, source) = self.stream_native();
+        Ok((Box::new(sink), Box::new(VadEventSource(source))))
+    }
+}
+
+/// [`VadOutput`] as the session reads it: the event, with the speech it ended on.
+struct VadEventSource(VadOutputSource);
+
+#[async_trait]
+impl StreamSource<VadEvent> for VadEventSource {
+    async fn next(&mut self) -> Result<Option<VadEvent>, ProviderError> {
+        let Some(output) = self.0.next().await? else { return Ok(None) };
+        if output.slow_inference {
+            log::warn!(target: "livekit.agents", delay = output.extra_inference_time; "inference is slower than realtime");
+        }
+        let mut event = output.event;
+        // Only an end of speech's audio is read (a non-streaming STT recognizes it).
+        if event.kind == VadEventType::EndOfSpeech {
+            event.frames = speech_ref(output.frames);
+        }
+        Ok(Some(event))
+    }
+
+    async fn close(self: Box<Self>, deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
+        Box::new(self.0).close(deadline).await
+    }
+}
+
+#[cfg(feature = "python")]
+fn speech_ref(frames: Vec<AudioFrame>) -> Option<MediaRef> {
+    python::speech_ref(frames)
+}
+
+#[cfg(not(feature = "python"))]
+fn speech_ref(_frames: Vec<AudioFrame>) -> Option<MediaRef> {
+    None
 }
 
 /// The `_FlushSentinel` is `flush()` on the trait, so the channel carries both.
@@ -205,6 +266,51 @@ mod tests {
         fn create(&self) -> Box<dyn VadModel> {
             Box::new(Silent)
         }
+    }
+
+    /// Speech wherever the window is not silent.
+    struct Energy;
+
+    impl VadModel for Energy {
+        fn predict(&mut self, window: &[i16]) -> (f32, f64) {
+            (if window.iter().any(|s| *s != 0) { 1.0 } else { 0.0 }, 0.0)
+        }
+        fn reset(&mut self) {}
+    }
+
+    struct EnergyFactory;
+
+    impl VadModelFactory for EnergyFactory {
+        fn create(&self) -> Box<dyn VadModel> {
+            Box::new(Energy)
+        }
+    }
+
+    // Catches: the session's `Vad` (the detector held directly, not through the host) losing the
+    // machine's start and end of speech.
+    #[tokio::test]
+    async fn as_the_sessions_vad_it_reports_speech() {
+        let spawner: Arc<dyn Spawner> = Arc::new(lk_agents_abi::TokioSpawner::current());
+        let vad = Arc::new(NativeVad::new(VadOptions::default(), Arc::new(EnergyFactory), spawner)).as_vad();
+        assert_eq!(vad.capabilities().update_interval, 0.032);
+        let (sink, mut source) = vad.stream().await.unwrap();
+        let frame = |level: i16| AudioFrame {
+            data: std::iter::repeat_n(level.to_le_bytes(), 160).flatten().collect::<Vec<u8>>().into(),
+            sample_rate: 16000,
+            num_channels: 1,
+            samples_per_channel: 160,
+        };
+        for i in 0..200 {
+            sink.push(frame(if i < 100 { 1000 } else { 0 })).unwrap();
+        }
+        sink.end_input();
+        let mut kinds = Vec::new();
+        while let Ok(Some(ev)) = source.next().await {
+            if ev.kind != VadEventType::InferenceDone {
+                kinds.push(ev.kind);
+            }
+        }
+        assert_eq!(kinds, [VadEventType::StartOfSpeech, VadEventType::EndOfSpeech]);
     }
 
     // Catches: `end_input` doing nothing, so a caller reading the stream to its end waits forever

@@ -228,6 +228,8 @@
   "llm_normalize_tool_choice",
   "llm_unsupported_params",
   "llm_usage_chunk",
+  "local_models_init",
+  "local_models_native",
   "match_mood",
   "max_input_len",
   "mcp_check_result",

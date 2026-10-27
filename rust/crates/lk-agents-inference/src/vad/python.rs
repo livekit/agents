@@ -88,3 +88,17 @@ impl<'py> IntoPyObject<'py> for VadOutput {
         Ok(d)
     }
 }
+
+/// An end of speech's audio as the host list a non-streaming STT recognizes; `None` when empty.
+pub(super) fn speech_ref(frames: Vec<crate::abi::AudioFrame>) -> Option<lk_agents_abi::MediaRef> {
+    if frames.is_empty() {
+        return None;
+    }
+    Python::attach(|py| {
+        let list = PyList::empty(py);
+        for frame in &frames {
+            list.append(frame.into_pyobject(py).ok()?).ok()?;
+        }
+        Some(lk_agents_abi::python::intern_media(list.into_any().unbind()))
+    })
+}
