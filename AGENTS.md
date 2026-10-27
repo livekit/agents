@@ -113,7 +113,7 @@ specification; implementation cleanup must follow the agreed contracts.
   only on a repeat of the call after the person answered its read-back). The agent facing the
   person words questions and results unless they are `verbatim=True`.
 - **LiveSession** (`voice/agent_session.py`): the runtime a call's room attaches to: models, turn
-  detection, audio. `AgentSession` is a deprecated alias kept one release.
+  detection, audio.
 
 ### Key Directories
 ```

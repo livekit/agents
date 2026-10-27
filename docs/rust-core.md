@@ -15,7 +15,7 @@ Additional core architecture is in [planned-rust-core.md](planned-rust-core.md).
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | the worker control plane: registration, load and status, job assignment, the WebSocket and WebTransport transports, the endpoint streams cloud opens per HTTP request | process management and IPC (`ipc/`): the process pool, job processes, signals, the ASGI app the endpoint streams are served into |
 | the agent-db client: the `wsdb` protocol, the thread schema, every SQL statement, the lease and its renewal, the answer streams, the threads service client         | `storage/`: the developer-facing types, thread resolution, the A2A door                                                         |
-| the voice driver, the `Native*` inference clients and fallback adapters, MCP, media decode and encode, resampling                                                     | the developer surface: `Agent`, `AgentSession`, `LiveSession`, tools, tasks, `RunContext`, plugins                               |
+| the voice driver, the `Native*` inference clients and fallback adapters, MCP, media decode and encode, resampling                                                     | the developer surface: `Agent`, `LiveSession`, tools, tasks, `RunContext`, plugins                                               |
 
 Plugins stay Python. A Python provider reaches the core through a host
 proxy: the core calls the Python object behind a Rust trait (see "Host
