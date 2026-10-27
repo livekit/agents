@@ -248,6 +248,30 @@ impl PyProcSupervisor {
     }
 }
 
+/// `msg`, an InferenceRequest, run on the host (`_core_inference(method, data)`): its
+/// InferenceResponse, with the result or the error (logged when `log_failure`).
+async fn run_inference(host: &CancellingHandle, msg: &IpcMessage, log_failure: bool) -> IpcMessage {
+    let (method, request_id) = (msg.get_str("method").to_owned(), msg.get_str("request_id").to_owned());
+    let data = msg.get_bytes("data").unwrap_or_default().to_vec();
+    let out = host.await_call(|h| h.call_method1("_core_inference", (method, PyBytes::new(h.py(), &data)))).await;
+    let (data, error) = Python::attach(|py| match out {
+        Ok(out) if out.is_none(py) => (Value::Absent, String::new()),
+        Ok(out) => match out.extract::<Vec<u8>>(py) {
+            Ok(bytes) => (Value::Bytes(bytes), String::new()),
+            Err(e) => (Value::Absent, e.value(py).to_string()),
+        },
+        Err(e) => {
+            let error = e.value(py).to_string();
+            if log_failure {
+                py_log(Level::Error, "error running inference", Some(e));
+            }
+            (Value::Absent, error)
+        }
+    });
+    IpcMessage::new(super::INFERENCE_RESPONSE, vec![Value::Str(request_id), data, Value::Str(error)])
+        .expect("the schema's fields")
+}
+
 /// One message the process sent while supervised: an inference it asks for runs on the host's
 /// `_core_inference(method, data)` and is answered; an answer to one of ours resolves it.
 async fn on_proc_message(
@@ -264,31 +288,11 @@ async fn on_proc_message(
     match msg.id() {
         super::INFERENCE_RESPONSE => inferences.answered(&msg),
         super::INFERENCE_REQUEST => {
-            let str_of = |name: &str| match msg.get(name) {
-                Some(Value::Str(s)) => s.clone(),
-                _ => String::new(),
-            };
-            let (method, request_id) = (str_of("method"), str_of("request_id"));
-            let data = match msg.get("data") {
-                Some(Value::Bytes(data)) => data.clone(),
-                _ => Vec::new(),
-            };
+            while inflight.try_join_next().is_some() {}
             inflight.spawn(async move {
-                let r = host
-                    .await_call(|h| h.call_method1("_core_inference", (method, PyBytes::new(h.py(), &data))))
-                    .await;
-                let (data, error) = Python::attach(|py| match r {
-                    Ok(out) if out.is_none(py) => (Value::Absent, String::new()),
-                    Ok(out) => match out.extract::<Vec<u8>>(py) {
-                        Ok(bytes) => (Value::Bytes(bytes), String::new()),
-                        Err(e) => (Value::Absent, e.value(py).to_string()),
-                    },
-                    Err(e) => (Value::Absent, e.value(py).to_string()),
-                });
-                let reply = IpcMessage::new(super::INFERENCE_RESPONSE, vec![Value::Str(request_id), data, Value::Str(error)]);
-                if let Ok(reply) = reply {
-                    let _ = sup.send(&reply.encode()).await;
-                }
+                // the inference process logged its own failure
+                let reply = run_inference(&host, &msg, false).await;
+                let _ = sup.send(&reply.encode()).await;
             });
         }
         _ => {}
@@ -575,7 +579,12 @@ impl Child {
     }
 
     /// One message from the parent; `false` ends the serving.
-    async fn on_message(self: &Arc<Self>, host: &CancellingHandle, msg: IpcMessage) -> PyResult<bool> {
+    async fn on_message(
+        self: &Arc<Self>,
+        host: &CancellingHandle,
+        inferences: &tokio::sync::mpsc::UnboundedSender<IpcMessage>,
+        msg: IpcMessage,
+    ) -> PyResult<bool> {
         let str_of = |name: &str| msg.get_str(name).to_owned();
         match msg.id() {
             // answered once the loop ran a callback: the pong measures the loop's responsiveness
@@ -636,32 +645,9 @@ impl Child {
                 run.get().0.end(reason, false);
                 Ok(true)
             }
-            // the inference process runs it on the host (`_core_inference(method, data)`)
-            super::INFERENCE_REQUEST => {
-                let data = match msg.get("data") {
-                    Some(Value::Bytes(data)) => data.clone(),
-                    _ => Vec::new(),
-                };
-                let (method, request_id) = (str_of("method"), str_of("request_id"));
-                let out = host
-                    .await_call(|h| h.call_method1("_core_inference", (method, PyBytes::new(h.py(), &data))))
-                    .await;
-                let (data, error) = Python::attach(|py| match out {
-                    Ok(out) if out.is_none(py) => (Value::Absent, String::new()),
-                    Ok(out) => match out.extract::<Vec<u8>>(py) {
-                        Ok(bytes) => (Value::Bytes(bytes), String::new()),
-                        Err(e) => (Value::Absent, e.value(py).to_string()),
-                    },
-                    Err(e) => {
-                        let error = e.value(py).to_string();
-                        py_log(Level::Error, "error running inference", Some(e));
-                        (Value::Absent, error)
-                    }
-                });
-                let reply = IpcMessage::new(super::INFERENCE_RESPONSE, vec![Value::Str(request_id), data, Value::Str(error)])
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                Ok(self.send(reply).await.is_ok())
-            }
+            // the inference process runs them one at a time, beside the reads: a ping is
+            // answered while inferences queue (the reference ponged from its read task)
+            super::INFERENCE_REQUEST => Ok(inferences.send(msg).is_ok()),
             super::DUMP_STACK_TRACE_REQUEST => {
                 host.await_call(|h| h.call_method0("_core_dump_stacks")).await?;
                 Ok(true)
@@ -735,10 +721,22 @@ impl PyIpcClient {
     /// `_core_dump_stacks()`, each a coroutine. The inference requests still in flight at the end
     /// are cancelled.
     fn serve<'py>(&self, py: Python<'py>, host: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        let host = CancellingHandle::new(py, host)?;
+        let host = Arc::new(CancellingHandle::new(py, host)?);
         let child = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut stop = child.stop.subscribe();
+            let (queue, mut queued) = tokio::sync::mpsc::unbounded_channel::<IpcMessage>();
+            let inferring = {
+                let (child, host) = (child.clone(), host.clone());
+                tokio::spawn(async move {
+                    while let Some(msg) = queued.recv().await {
+                        let reply = run_inference(&host, &msg, true).await;
+                        if child.send(reply).await.is_err() {
+                            return;
+                        }
+                    }
+                })
+            };
             let served = async {
                 while let Ok(data) = child.client.recv().await {
                     let msg = match IpcMessage::decode(&data) {
@@ -748,7 +746,7 @@ impl PyIpcClient {
                             continue;
                         }
                     };
-                    if !child.on_message(&host, msg).await? {
+                    if !child.on_message(&host, &queue, msg).await? {
                         break;
                     }
                 }
@@ -758,6 +756,7 @@ impl PyIpcClient {
                 r = served => r,
                 _ = stop.wait_for(|stopped| *stopped) => Ok(()),
             };
+            inferring.abort();
             child.inferences.clear();
             outcome
         })
