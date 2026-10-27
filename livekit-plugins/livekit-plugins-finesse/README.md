@@ -11,8 +11,8 @@ pip install livekit-plugins-finesse
 
 ## Pre-requisites
 
-You'll need an API key from the [Finesse dashboard](https://finesse.flamapp.ai/dashboard)
-(**Settings → API keys**). Set it as an environment variable: `FINESSE_API_KEY`.
+You'll need an API key from the [API keys page](https://finesse.flamapp.ai/dashboard/settings?tab=api-keys) of the Finesse dashboard.
+Set it as an environment variable: `FINESSE_API_KEY`.
 
 ## Usage
 
