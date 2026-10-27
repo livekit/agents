@@ -316,6 +316,9 @@ class AudioRecognition:
         self._user_silence_ev.set()
 
         self._last_final_transcript_time: float | None = None
+        # Last frame pushed to STT: lets a commit tell a final that already covers the audio from one
+        # that predates speech the STT has not finalized yet.
+        self._last_audio_time: float | None = None
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
 
@@ -801,6 +804,7 @@ class AudioRecognition:
         speech). VAD, AMD and the interruption channel always receive ``frame``.
         """
         self._sample_rate = frame.sample_rate
+        self._last_audio_time = time.time()
         if self._stt_pipeline is not None:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
             if self._stt_pipeline.input_started_at is None:
@@ -1096,11 +1100,27 @@ class AudioRecognition:
 
         async def _commit_user_turn() -> None:
             can_flush = self._stt_pipeline is not None and self._stt_pipeline.manual_flush
-            if (
-                can_flush
-                or self._last_final_transcript_time is None
-                or (time.time() - self._last_final_transcript_time > 0.5)
-            ):
+            # A final that already covers every frame pushed so far is this turn's transcript. Flushing
+            # again asks STT for a final it will never send for audio it already closed, and the wait then
+            # runs to transcript_timeout even though nothing is pending.
+            final_covers_audio = (
+                self._last_final_transcript_time is not None
+                and not self._audio_interim_transcript
+                and (
+                    self._last_audio_time is None
+                    or self._last_audio_time <= self._last_final_transcript_time
+                )
+            )
+            # A manual-flush pipeline needs the explicit flush on every commit to keep its turn
+            # boundaries, so the short-circuit only applies to pipelines that finalize on their own.
+            flush_and_wait = can_flush or (
+                not final_covers_audio
+                and (
+                    self._last_final_transcript_time is None
+                    or (time.time() - self._last_final_transcript_time > 0.5)
+                )
+            )
+            if flush_and_wait:
                 self._final_transcript_received.clear()
 
                 if can_flush and self._stt_pipeline is not None:
