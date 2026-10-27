@@ -328,6 +328,8 @@ impl RealtimeMachine {
         // deletes and creates again under the same id), and the server refused it.
         let replay = self.expected_ctx();
         self.remote = RemoteChatContext::new();
+        // Diffed against the empty conversation of the new connection: the old update is in `replay`.
+        self.ctx_update = None;
         let (frames, update) = self.chat_ctx_events(&replay);
         step.frames.extend(frames);
         // The replay is tracked as an update until confirmed, so what is sent meanwhile is diffed

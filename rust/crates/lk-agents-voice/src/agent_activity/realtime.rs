@@ -868,7 +868,8 @@ impl Driver {
         // Answered in the same instant the timer fired: nothing owed.
         let Some((req_id, pending)) = t.take_by_key(key) else { return };
         if !t.ended() && !t.closing {
-            t.cancelled_requests.insert(req_id.clone());
+            // Not counted busy: ten seconds unanswered, the server may never create it (a socket
+            // that cannot reconnect); the session discards it by id if it does.
             self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
         }
         let error = RealtimeError::new(format!(

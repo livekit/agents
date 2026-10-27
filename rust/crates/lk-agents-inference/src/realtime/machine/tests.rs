@@ -867,3 +867,23 @@ fn a_cancel_names_the_response_it_means() {
     let step = recv(&mut m, at(2), response_created("resp_late", Some("response_create_1")));
     assert!(step.frames.contains(&json!({"type": "response.cancel", "response_id": "resp_late"})));
 }
+
+// Catches: a reconnect while a context update is unconfirmed replaying nothing (the replay diffed
+// against the update it was bringing the lost connection to, not the new connection's empty
+// conversation): a tool output then named a call the new server never had (seed 16467).
+#[test]
+fn a_reconnect_replays_an_unconfirmed_update_whole() {
+    let mut m = machine(OPENAI);
+    m.open(at(0));
+    recv(&mut m, at(0), item_added(None, "a", "first"));
+    let ctx = ChatContext::new(vec![msg("a", "first"), msg("b", "second")]);
+    m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: ctx }));
+    let step = m.reconnect(at(2));
+    let created: Vec<&str> = step
+        .frames
+        .iter()
+        .filter(|f| f["type"] == "conversation.item.create")
+        .filter_map(|f| f["item"]["id"].as_str())
+        .collect();
+    assert_eq!(created, ["a", "b"]);
+}
