@@ -147,7 +147,7 @@ capped near a quarter of the seeds.
 
 ## 3. Promises and the rules that check them
 
-28 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
+32 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
 that must fail. Failures are counted per seed over 1,024 seeds, split by how random the run
 was: **conversation** (under 0.01 uniform moves per conversation move, 295 seeds), **mixed**
 (0.01 to 10, 437 seeds) and **uniform** (over 10, 292 seeds). A failure in a conversation seed
@@ -186,6 +186,9 @@ was a driver bug).
 | P5 | `provider_failure_is_accounted` | every injected failure is retried, surfaced (on the speech or as its error event), abandoned with an interrupted speech, or closes the session | 9 / 23 / 35 |
 | P5 | `speech_error_is_injected` | a failed speech traces back to an injected failure or an explicit refusal | 1 / 6 / 19 |
 | P5 | `provider_streams_closed` | every LLM, TTS and STT stream is closed by the end | 7 / 41 / 6 |
+| P1 | `speech_is_heard` | a speech pushes audio within 15 s of its creation and of the scheduler letting it go, ends, or waits on something that still holds; one that ended unheard was cut by the person, the host, the server or the close (section 13) | 0 / 0 / 0 (new 2026-10-26) |
+| P1 | `pause_resolves` | a pause for the person's speech resumes, is interrupted or ends within 4 s beyond the endpointing delay of the person going quiet (section 13) | 0 / 0 / 0 (new 2026-10-26) |
+| P4 | `items_carry_their_payload` | a pipeline reply names the models that timed it, a transcribed user turn the STT; a step cut short is recorded interrupted; items and metrics are stamped on the wall clock within the session; metrics carry their label, non-negative durations and their speech id (section 13) | 0 / 0 / 0 (new 2026-10-26) |
 | P5 | soak: residue | after a long call and release, nothing opened is still live | red (2026-10-25): seed 6 leaves a floor hold. Every call must reach its close: one that stopped before it fails the soak |
 
 Every rule is exercised. Promises with no rule are listed per subsystem in section 5.
@@ -686,10 +689,9 @@ Each is a choice the search makes for every run that a real call does not.
 - Registered providers are checked to be released: `every_resource_released` requires the
   session's resource table (`lk_agents_abi::resources`) to be empty once the driver exited, and
   it is not a known finding, so it held on every seed of the survey.
-- A stuck agent is not caught by anything yet. The person now waits their own patience, so a
-  stuck agent shows as a long silence, but no rule says how long the agent may stay silent after
-  a turn it should answer. That rule needs the per-operation bounds `TEST_STRATEGY.md` leaves
-  undecided.
+- A stuck agent is caught by `speech_is_heard` (15 s of dead air with nothing to wait on) and a
+  stuck pause by `pause_resolves` (section 13). Both bounds are generous on purpose: they catch an
+  agent that stays silent, not one that answers slowly; latency has no rule.
 - No finite campaign shows an interaction is impossible. A `.` cell is a hole in the search; a
   `#` cell is a place the search goes, not proof the behaviour there is right.
 - Detection rate is unmeasured: known bugs have never been held out to check the search finds
@@ -762,8 +764,8 @@ Measured nowhere here, and each a separate source of production risk:
 - The binding from Python to the driver (`lk-agents-py`), plugins reached through host proxies.
 - Threads, lanes and leases in agent-db, the A2A text door, and a text turn landing on a lane
   while a call is live (`storage/live.py`).
-- Real provider behaviour: the fakes deliver exactly what the case says; nothing checks them
-  against a real STT, LLM or TTS.
+- Real provider behaviour beyond what was recorded: section 13 lists what each fake is
+  calibrated from and what it still cannot do.
 - `lk-agents-inference` (native gateway clients, fallback adapters), `lk-agents-media`,
   `lk-agents-rtc`.
 
@@ -833,6 +835,83 @@ Next:
 - **Generated**: add the phase columns of section 5, have each rule register the (promise,
   operation, phase) cells it judges, write sections 3 and 4 from what the survey observed, and
   fail a test when this file is stale (agent-store's `dst/COVERAGE.md` and `TestCoverageMatrix`).
+
+## 13. Fidelity and liveness
+
+Two real-room bugs passed this suite: a realtime barge-in that left the agent silent
+(c6881abb9) and chat items that lost their models (9024425d9). Both came from the same gaps: the
+fakes produced orders and timings no real provider produces, and no rule judged silence or a
+payload. This section is what closed them.
+
+### 13.1 What the fakes are calibrated from
+
+`corpus/record.py` records LiveKit Inference traffic as event kinds and relative timing, never
+what anybody said; `corpus/derive.py` turns the recordings into `corpus/calibration.json`
+(transition counts between event kinds, delay samples, shares), and `src/corpus.rs` draws from
+those samples per seed. Re-recording needs LiveKit Inference credentials: run `record.py`, then
+`derive.py`, and commit both the recordings and the calibration.
+
+| Fake | Calibrated from | Still cannot do |
+|---|---|---|
+| Realtime (`fakes/realtime/`) | The production native session (`lk-agents-inference`: its wire machine, pump and reconnects) over a socket whose far end simulates the OpenAI Realtime server, with the OpenAI Realtime docs as ground truth for ordering, cancel semantics and refusals. Recorded on `gpt-realtime` (turns, barge-in, backchannel, silence, client cancel, tool call, manual turns; server and semantic VAD; two takes each): speech start and stop lag, response creation after the stop and after `response.create`, item and first-audio latency, delta sizes, done after the last audio, input transcription after commit and its deltas per word, cancel lag, audio per character, the share of responses with function calls and rate limits, error latency | Other dialects (Gemini, xAI, Azure differences); images; the server's VAD does not hear the audio, the case says when it fires; session expiry; `conversation.item.retrieve` |
+| Recogniser (`search/conversation.rs`) | Per seed one of Deepgram nova-3, Deepgram Flux, AssemblyAI universal streaming: first words late, start of speech with them, usage before each final, Deepgram's cuts and empty finals, AssemblyAI's second final, Flux's preflights | Confidences and word timings from data; language detection; diarization; the real sockets' reconnects |
+| LLM (`fakes/llm.rs`) | `gpt-4.1-mini` streaming: the role on the first chunk, token chunks, a finish chunk, a usage chunk | Other providers' chunk shapes; refusals and content filters; malformed tool arguments as providers send them |
+| TTS (`fakes/tts.rs`) | Cartesia `sonic-3`: time to first audio | Audio per character; alignment; failures shaped like a real provider's (they are injected uniformly) |
+| VAD, room | Not calibrated: VAD probabilities are synthetic, the room is `FakeRtc` | Silero's real output; network loss and jitter |
+
+Every provider event the core consumes (`SpeechEventType`, `VadEventType`, the realtime wire and
+events) is a `Vocabulary` (`fakes/vocabulary.rs`): a variant no fake covers or explicitly skips
+is a compile error. `tests/conformance.rs` replays the recordings through the fakes and fails on
+an event kind, a response or utterance shape, a documented ordering or a delay the real provider
+never showed.
+
+### 13.2 Liveness and payload rules
+
+- `speech_is_heard`: from its creation, and again from when the scheduler let it go, a speech
+  pushes audio within 15 s, ends, or still waits on something that holds (a provider, tool, hook
+  or stream the case owes; authorization; the floor held by a playing speech, or one paused for
+  the person within `pause_resolves`' allowance; the developer's hold; the gap between speeches;
+  the person speaking; nobody in the room; a provider failing). A speech that ended unheard
+  (interrupted, or its realtime response cancelled) was cut by the person, the host, the server
+  or the close. With c6881abb9 reverted it fails survey seeds 405 and 661 and
+  `realtime_onset_reply_heard`.
+- `pause_resolves`: a pause for the person's speech resumes, is interrupted or ends within 4 s
+  beyond the endpointing delay in effect, counted from the first stretch the person stays quiet.
+  It does not catch c6881abb9 in the search (the person's next turn resolves the pause there);
+  it caught the late-verdict pause below (6 of 2,048 survey seeds with that fix reverted).
+- `items_carry_their_payload`: see section 3. With 9024425d9 reverted it fails 245 of the
+  1,024 survey seeds (170 replies naming no LLM, 75 user turns naming no STT) and
+  `turn_metrics_name_models`.
+
+Found by them and fixed, each with a regression test that fails with its fix reverted:
+
+| Defect | Test |
+|---|---|
+| Work the waiter pass started (a background tool's deferred reply, a filler's `say`) was scheduled only at the next unrelated wake: up to 15 s of dead air | `tool_reply_scheduled_at_once` |
+| A pause decided after the person stopped (a detector's late verdict) never armed its resume | `late_verdict_pause_resumes` |
+| The native realtime session stamped its metrics with seconds since the model was created and its items in 1970 | `realtime_metrics_wall_clock` (500 of 1,024 survey seeds with the fix reverted) |
+
+`livekit-agents-next/scripts/parity.py` now compares payloads whole against the reference: each
+message's metrics (the models it names, which timings it carries), each metrics record's kind,
+label, model and attribution, and the history's order by `created_at`. It found, and the core now
+matches the reference on: a `say` message naming the LLM and TTS and an `llm_node_ttfs`; a realtime
+message carrying an `llm_node_ttft`; a realtime turn's EOUMetrics naming no speech; a turn asking
+for no reply (`skip_reply`, or one AMD consumed) run through `on_user_turn_completed`
+(`skip_reply_turn_no_hook`). Five differences are listed in its `KNOWN` with their reasons:
+`eou_names_resolved_detector`, `fallback_stt_identity_at_bind`, `node_str_ttft`,
+`own_audio_tts_node_ttfb`, `keyterm_pass_unattributed`.
+
+The calibration itself found four more (c5be2a811): a realtime reply whose audio was cut
+reported its tools not running; a background tool's deferred reply on a realtime session was
+built as a pipeline reply; realtime tool follow-ups carried no `tool_choice`; a voiceless filler
+with interval 0 fired forever in one instant.
+
+Open: on a realtime session a filler's `say` speaks with no voice instead of being refused.
+
+### 13.3 Cost
+
+The survey (1,024 seeds) runs in 1.7 s and the campaign (4,096 seeds) in 6.3 s on a laptop,
+within the 2 s and 11 s they took before the calibration.
 
 ## Appendix: operation x phase, exact seeds
 
