@@ -386,3 +386,76 @@ async def test_a_cancel_during_a_step_stops_every_call() -> None:
     with pytest.raises(asyncio.CancelledError):
         await run
     assert sorted(stopped) == ["c1", "c2"]
+
+
+# ---------------------------------------------------------------------------------------------
+# several exact results are one text; an exact answer keeps the agent's output type
+# ---------------------------------------------------------------------------------------------
+
+ONE_TEXT_NOT_YET = "several exact results as one text, and the typed output kept: not built yet"
+
+
+@pytest.mark.rule("R23")
+@pytest.mark.xfail(strict=True, reason=ONE_TEXT_NOT_YET)
+async def test_the_turn_ending_results_of_one_step_are_one_exact_text(
+    door: Callable[..., Door],
+) -> None:
+    """Three verbatim results that end the turn: the answer is one text, the results in call
+    order, as one flagged part, and nothing is sent before it."""
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("first", "c1"), call("second", "c2"), call("third", "c3")])
+    )
+    desk = Agent(instructions="desk", llm=model)
+
+    def ending(text: str, delay: float) -> Any:
+        async def tool(ctx: RunContext) -> ToolResult:
+            await asyncio.sleep(delay)
+            return ToolResult(text, verbatim=True, reply_required=False)
+
+        return tool
+
+    desk.tool(name="first", description="First.")(ending("one", 0.2))
+    desk.tool(name="second", description="Second.")(ending("two", 0.0))
+    desk.tool(name="third", description="Third.")(ending("three", 0.1))
+
+    sent = await door(serving(desk)).send("go")
+
+    assert working(sent.frames) == []
+    assert answer_parts(sent.frames) == [("one\n\ntwo\n\nthree", True)]
+    assert len(model.requests) == 1
+
+
+@pytest.mark.rule("B46", "R23")
+@pytest.mark.xfail(strict=True, reason=ONE_TEXT_NOT_YET)
+async def test_an_exact_result_on_a_typed_agent_is_said_and_the_output_keeps_its_type(
+    door: Callable[..., Door],
+) -> None:
+    """On an agent whose output is a model, a verbatim result that would end the turn is said
+    as written, and the model goes on to produce the typed output."""
+    from pydantic import BaseModel
+
+    class Booking(BaseModel):
+        day: str
+
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("disclose", "c1")]),
+        Reply(tool_calls=[call("final_result", "c2", day="Tuesday")]),
+    )
+    desk = Agent(instructions="desk", llm=model, output_type=Booking)
+    outputs: list[object] = []
+
+    @desk.tool
+    async def disclose(ctx: RunContext) -> ToolResult:
+        """Disclose."""
+        return ToolResult(NOTICE, verbatim=True, reply_required=False)
+
+    async def handler(ctx: A2ASessionContext[Any]) -> object:
+        result = await desk.run(ctx.message, message_history=ctx.message_history)
+        outputs.append(result.output)
+        return result.output.model_dump() if isinstance(result.output, Booking) else None
+
+    sent = await door(handler).send("book me")
+
+    assert sent.state == "completed"
+    assert outputs == [Booking(day="Tuesday")]
+    assert working(sent.frames) == [(NOTICE, True)]

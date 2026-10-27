@@ -1020,3 +1020,60 @@ async def test_an_answer_in_several_flagged_parts_is_said_part_by_part(
             flagged.append((part.get("text", ""), exact))
     assert flagged == [("one", True), ("two", True), ("three", True)]
     assert len(model.requests) == 1
+
+
+@pytest.mark.rule("R23")
+@pytest.mark.xfail(strict=True, reason="several exact results as one text: not built yet")
+async def test_an_experts_exact_results_are_one_answer_said_as_written(
+    agentdb_workers: tuple[AgentDBStorage, AgentDBStorage],
+) -> None:
+    """The expert's step ends on three verbatim results: the front desk says them as one exact
+    text, joined in call order, with no model step and nothing said before it."""
+    clinic_storage, expert_storage = agentdb_workers
+    expert_model = ScriptedLLM(
+        Reply(tool_calls=[call("first", "e1"), call("second", "e2"), call("third", "e3")])
+    )
+    expert_agent = Agent(instructions="eligibility", llm=expert_model)
+    for name, text in (("first", "one"), ("second", "two"), ("third", "three")):
+
+        async def ending(ctx: RunContext, text: str = text) -> llm.ToolResult:
+            return llm.ToolResult(text, verbatim=True, reply_required=False)
+
+        expert_agent.tool(name=name, description=name)(ending)
+
+    async def expert_door(ctx: A2ASessionContext[Any]) -> object:
+        return (await expert_agent.run(ctx.message, message_history=ctx.message_history)).output
+
+    expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
+    expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(
+        expert_door
+    )
+    async with http_client(expert_server) as http:
+        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
+        model = ScriptedLLM(Reply(tool_calls=[call("ask", "c1", request="the policy")]))
+        front = Agent(instructions="front desk", tools=[delegate], llm=model)
+
+        async def desk(ctx: A2ASessionContext[Any]) -> object:
+            return (await front.run(ctx.message, message_history=ctx.message_history)).output
+
+        clinic, _ = make_server(clinic_storage, desk)
+        async with http_client(clinic) as clinic_http:
+            frames = [
+                r["result"]
+                for r in sse_results(
+                    await rpc(clinic_http, "message/stream", {"message": wire("policy?", "m1")})
+                )
+            ]
+        await delegate.aclose()
+
+    working = [
+        f
+        for f in frames
+        if f.get("statusUpdate", {}).get("status", {}).get("state") == "TASK_STATE_WORKING"
+    ]
+    assert working == []
+    last = [f["artifactUpdate"] for f in frames if f.get("artifactUpdate", {}).get("lastChunk")]
+    parts = last[-1]["artifact"]["parts"]
+    flags = [metadata_from_wire(p.get("metadata")).get("livekit/verbatim") for p in parts]
+    assert [p["text"] for p in parts] == ["one\n\ntwo\n\nthree"] and flags == [True]
+    assert len(model.requests) == 1
