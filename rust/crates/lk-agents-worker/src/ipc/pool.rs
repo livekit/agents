@@ -103,6 +103,39 @@ pub enum LaunchError<E> {
 
 pub struct ProcPool<H: PoolHost>(Arc<Inner<H>>);
 
+/// A launch waiting for a process, until it got one or was dropped.
+struct Waiting<'a, H: PoolHost>(&'a ProcPool<H>);
+
+impl<'a, H: PoolHost> Waiting<'a, H> {
+    fn new(pool: &'a ProcPool<H>) -> Self {
+        lock(&pool.0.state).waiting += 1;
+        Self(pool)
+    }
+}
+
+impl<H: PoolHost> Drop for Waiting<'_, H> {
+    fn drop(&mut self) {
+        lock(&self.0.0.state).waiting -= 1;
+    }
+}
+
+/// A process a launch took from the warm ones: closed when the launch is dropped before it ran.
+struct Taken<H: PoolHost> {
+    pool: ProcPool<H>,
+    proc: Option<H::Proc>,
+}
+
+impl<H: PoolHost> Drop for Taken<H> {
+    fn drop(&mut self) {
+        let (Some(proc), Ok(rt)) = (self.proc.take(), tokio::runtime::Handle::try_current()) else {
+            return;
+        };
+        let pool = self.pool.clone();
+        let close = rt.spawn(async move { pool.0.host.close(&proc).await });
+        self.pool.track(close);
+    }
+}
+
 impl<H: PoolHost> Clone for ProcPool<H> {
     fn clone(&self) -> Self {
         ProcPool(self.0.clone())
@@ -307,14 +340,20 @@ impl<H: PoolHost> ProcPool<H> {
         None
     }
 
-    /// Runs `job` on a warm process, retrying on a fresh one when the launch fails.
+    /// Runs `job` on a warm process, retrying on a fresh one when the launch fails. Cancel-safe:
+    /// a launch dropped while it waits for a process stops counting as waiting, and the process
+    /// it took and did not launch on is closed.
     pub async fn launch_job(&self, job_id: &str, job: H::Job) -> Result<(), LaunchError<H::Error>> {
         for attempt in 1..=MAX_LAUNCH_ATTEMPTS {
-            lock(&self.0.state).waiting += 1;
-            let proc = self.acquire(job_id).await;
-            lock(&self.0.state).waiting -= 1;
+            let proc = {
+                let _waiting = Waiting::new(self);
+                self.acquire(job_id).await
+            };
             let proc = proc.ok_or(LaunchError::NoProcess)?;
-            match self.0.host.launch(&proc, &job).await {
+            let mut taken = Taken { pool: self.clone(), proc: Some(proc.clone()) };
+            let launched = self.0.host.launch(&proc, &job).await;
+            taken.proc = None;
+            match launched {
                 Ok(()) => {
                     lock(&self.0.state).launched.push(proc.clone());
                     self.0.host.emit(PoolEvent::JobLaunched, &proc);
@@ -411,6 +450,8 @@ mod tests {
         next: AtomicUsize,
         fail_init: bool,
         fail_launch: AtomicUsize,
+        /// A launch never completes (to cancel it mid-way).
+        slow_launch: bool,
         events: Mutex<Vec<(PoolEvent, usize)>>,
         closed: Mutex<Vec<usize>>,
         exits: Notify,
@@ -432,6 +473,9 @@ mod tests {
             if self.fail_init { Err("init failed".into()) } else { Ok(()) }
         }
         async fn launch(&self, _: &usize, _: &()) -> Result<(), String> {
+            if self.slow_launch {
+                std::future::pending::<()>().await;
+            }
             let left = self.fail_launch.load(Ordering::SeqCst);
             if left > 0 {
                 self.fail_launch.store(left - 1, Ordering::SeqCst);
@@ -496,6 +540,37 @@ mod tests {
         assert!(matches!(pool.launch_job("j1", ()).await, Err(LaunchError::NoProcess)));
         assert_eq!(pool.jobs_waiting(), 0);
         assert!(pool.processes().is_empty());
+        pool.aclose().await;
+    }
+
+    // Catches: a cancelled launch leaving `waiting` raised (the pool kept that many extra processes
+    // warm) or the process it took open, neither warm nor running.
+    #[tokio::test]
+    async fn a_cancelled_launch_releases_its_wait_and_its_process() {
+        let host = Arc::new(Host::default());
+        let pool = pool(&host, 0);
+        pool.start().await;
+        let waiting = tokio::spawn({
+            let pool = pool.clone();
+            async move { pool.launch_job("j1", ()).await }
+        });
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        waiting.abort();
+        let _ = waiting.await;
+        assert_eq!(pool.jobs_waiting(), 0, "the cancelled launch still counts as waiting");
+
+        let slow = Arc::new(Host { slow_launch: true, ..Host::default() });
+        let pool = self::pool(&slow, 1);
+        pool.start().await;
+        let launching = tokio::spawn({
+            let pool = pool.clone();
+            async move { pool.launch_job("j1", ()).await }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        launching.abort();
+        let _ = launching.await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(slow.closed.lock().unwrap().contains(&0), "the process taken is closed");
         pool.aclose().await;
     }
 
