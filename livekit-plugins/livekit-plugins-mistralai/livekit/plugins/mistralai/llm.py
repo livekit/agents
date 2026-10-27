@@ -55,6 +55,7 @@ class _LLMOptions:
     frequency_penalty: float | None
     random_seed: int | None
     tool_choice: ToolChoice | None
+    store: bool | None = None
 
 
 @dataclass
@@ -95,6 +96,7 @@ class LLM(llm.LLM):
         random_seed: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        store: NotGivenOr[bool] = NOT_GIVEN,
         api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
     ) -> None:
         """Create a new instance of MistralAI LLM.
@@ -116,6 +118,10 @@ class LLM(llm.LLM):
                 (``"auto"``, ``"required"``, ``"none"``).
             max_completion_tokens: The max. number of tokens the LLM can
                 output.
+            store: Whether Mistral stores each conversation on its servers. The
+                Conversations API stores them by default; pass ``False`` to opt out.
+                The plugin sends the full chat context with every request, so it
+                never relies on a stored conversation.
             api_mode: Deprecated and ignored, the LLM always uses the Conversations API.
         """
         super().__init__()
@@ -130,6 +136,7 @@ class LLM(llm.LLM):
             max_completion_tokens=max_completion_tokens
             if is_given(max_completion_tokens)
             else None,
+            store=store if is_given(store) else None,
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
@@ -161,6 +168,7 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         random_seed: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        store: NotGivenOr[bool] = NOT_GIVEN,
         api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
@@ -179,6 +187,8 @@ class LLM(llm.LLM):
             self._opts.random_seed = random_seed
         if is_given(tool_choice):
             self._opts.tool_choice = tool_choice
+        if is_given(store):
+            self._opts.store = store
 
     def chat(
         self,
@@ -191,6 +201,8 @@ class LLM(llm.LLM):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra: dict[str, Any] = {}
+        if self._opts.store is not None:
+            extra["store"] = self._opts.store
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
