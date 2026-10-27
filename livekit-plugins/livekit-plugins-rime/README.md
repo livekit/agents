@@ -133,7 +133,7 @@ Python Rime SDK. Use Python 3.11 or later. TTS still supports Python 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra requires `rimelabs-sdk>=0.1.0a22`. For source development:
+The realtime extra requires `rimelabs-sdk>=0.1.0a23`. For source development:
 
 ```sh
 uv sync --package livekit-plugins-rime --extra realtime --inexact
@@ -176,7 +176,7 @@ session = AgentSession(llm=model)
 ### LiveKit compatibility
 
 Prism targets LiveKit's standard realtime interface from 1.7.1 onward. We test
-1.7.1, 1.8.6, and 1.8.8 with `rimelabs-sdk==0.1.0a22`. The package still requires
+1.7.1, 1.8.6, and 1.8.8 with `rimelabs-sdk==0.1.0a23`. The package still requires
 `livekit-agents>=1.8.8`; installation on 1.7.1 needs a release that permits it.
 
 LiveKit 1.7.1 fixes active-response cancellation through `SpeechHandle.interrupt()`.
