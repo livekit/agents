@@ -276,8 +276,6 @@ pub enum Timer {
     Close,
     /// `commit_user_turn`'s `transcript_timeout`: the commit promotes a held interim.
     Commit,
-    /// The end-of-turn hook's bound: the parked turn proceeds with no edits.
-    UserTurnCompleted,
     /// A callback the driver waits on: past it, the callback counts as failed.
     Hook(crate::agent_session::HookId),
     /// `audio_recognition._bounce_eou_task`.

@@ -250,7 +250,6 @@ impl AudioRecognition {
             // Owned by other machines; the driver routes them directly.
             Timer::Close
             | Timer::Commit
-            | Timer::UserTurnCompleted
             | Timer::Hook(_)
             | Timer::FalseInterruption
             | Timer::AecWarmup

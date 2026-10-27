@@ -443,6 +443,7 @@ impl DriverBuilder {
             dtmf: Default::default(),
             end_call: None,
             pending_turn: None,
+            waiting_turns: Default::default(),
             last_turn: None,
             live_speech_at_final: false,
             preemptive_turn: None,

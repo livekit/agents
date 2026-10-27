@@ -16,7 +16,7 @@ use crate::generation::GenEvent;
 use crate::room_io::StreamOpened;
 use crate::speech_handle::SpeechHandle;
 use crate::trace::{
-    CloseAct, CloseStep, CoreStep, HandoffStep, PlayoutStep, RoomStep, SpeechStep, Step, Journal,
+    CloseAct, CloseStep, CoreStep, PlayoutStep, RoomStep, SpeechStep, Step, Journal,
 };
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
@@ -646,21 +646,6 @@ impl Driver {
                     }
                 }
                 Timer::Commit => self.perform_pending_commit(now, out),
-                // The turn proceeds with no edits, once.
-                Timer::UserTurnCompleted => {
-                    if let Some(pending) = self.activity.pending_turn.take() {
-                        if let Some(hook) = pending.hook {
-                            self.activity.hooks.finish(hook);
-                            out.trace(HandoffStep::HookFinished {
-                                hook,
-                                kind: crate::agent_session::HookKind::OnUserTurnCompleted,
-                                how: crate::trace::HookEnd::TimedOut,
-                            });
-                        }
-                        self.finish_turn(now, pending.finished(now), Vec::new(), out);
-                        self.pump_schedule(now, out);
-                    }
-                }
                 Timer::Hook(id) => self.hook_timed_out(now, id, out),
                 // `PausedSpeech` owns this one.
                 Timer::FalseInterruption => self.on_false_interruption_timeout(now, out),

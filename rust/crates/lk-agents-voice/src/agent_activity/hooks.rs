@@ -99,12 +99,11 @@ impl Driver {
         self.issue_hook(now, HookCall::OnEnter { id, agent }, None, out);
     }
 
-    /// The turn parks on it until answer or bound.
+    /// The turn parks on it until answered, as long as that takes (`await on_user_turn_completed`).
     pub(crate) fn issue_turn_hook(
         &mut self,
         now: Ts,
         info: crate::audio_recognition::EndOfTurnInfo,
-        bound: Duration,
         out: &mut Out,
     ) {
         let id = self.activity.hooks.mint();
@@ -118,7 +117,6 @@ impl Driver {
         };
         if self.issue_hook(now, call, None, out) {
             self.activity.pending_turn = Some(PendingTurn { info, issued_at: now, hook: Some(id) });
-            out.machine().arm(Timer::UserTurnCompleted, now.saturating_add(bound));
         } else {
             self.finish_turn(now, info, Vec::new(), out);
         }
@@ -196,8 +194,8 @@ impl Driver {
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
-                    self.disarm(Timer::UserTurnCompleted, out);
-                    self.finish_turn(now, pending.finished(now), edits, out)
+                    self.finish_turn(now, pending.finished(now), edits, out);
+                    self.next_turn(now, out);
                 }
             }
             // The deferred tool reply's instructions, or the defaults when rendering failed.

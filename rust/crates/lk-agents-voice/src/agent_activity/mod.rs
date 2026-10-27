@@ -81,6 +81,8 @@ pub(crate) struct AgentActivity {
     pub(crate) end_call: Option<crate::workflows::end_call::EndCall>,
     /// The user turn parked on `on_user_turn_completed` (`_user_turn_completed_atask`).
     pub(crate) pending_turn: Option<crate::audio_recognition::PendingTurn>,
+    /// Decided turns waiting for `pending_turn`'s hook to return, in order.
+    pub(crate) waiting_turns: std::collections::VecDeque<crate::audio_recognition::EndOfTurnInfo>,
     /// So a preemptive generation can be keyed to the turn after it.
     pub(crate) last_turn: Option<crate::audio_recognition::TurnId>,
     /// A final arrived while the current speech was still uninterrupted: the preemptive

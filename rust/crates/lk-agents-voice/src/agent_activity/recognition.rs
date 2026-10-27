@@ -16,7 +16,7 @@ use crate::audio_recognition::{
 };
 use crate::generation::ReplySource;
 use crate::trace::{
-    CloseAct, CloseStep, CoreStep, HandoffStep, InputStep, InterruptCause, InterruptStep, Step,
+    CloseAct, CloseStep, CoreStep, InputStep, InterruptCause, InterruptStep, Step,
     TurnStep,
 };
 use lk_agents_abi::turn::detector::DetectorLeg as _;
@@ -385,21 +385,23 @@ impl Driver {
             return;
         }
         // The hook's seam: the user item is committed and the reply planned only once the host
-        // answers or the bound passes. A newer turn ends the older one's wait, with no edits.
-        if let Some(previous) = self.activity.pending_turn.take() {
-            self.disarm(Timer::UserTurnCompleted, out);
-            if let Some(hook) = previous.hook {
-                self.activity.hooks.finish(hook);
-                out.trace(HandoffStep::HookFinished {
-                    hook,
-                    kind: crate::agent_session::HookKind::OnUserTurnCompleted,
-                    how: crate::trace::HookEnd::TimedOut,
-                });
-            }
-            self.finish_turn(now, previous.finished(now), Vec::new(), out);
+        // answers. User code is never cancelled: a newer turn waits for the older one's hook.
+        self.activity.waiting_turns.push_back(info);
+        self.next_turn(now, out);
+    }
+
+    /// `_user_turn_completed_impl` once the previous turn's task is over: the waiting turns, in
+    /// order, until one parks on its hook.
+    pub(crate) fn next_turn(&mut self, now: Ts, out: &mut Out) {
+        while self.activity.pending_turn.is_none() {
+            let Some(info) = self.activity.waiting_turns.pop_front() else { return };
+            self.begin_turn(now, info, out);
         }
-        // `_user_turn_completed_impl`: a turn that asks for a reply while the current speech
-        // cannot be interrupted is dropped, before the hook and with no user item.
+    }
+
+    fn begin_turn(&mut self, now: Ts, info: EndOfTurnInfo, out: &mut Out) {
+        // A turn that asks for a reply while the current speech cannot be interrupted is dropped,
+        // before the hook and with no user item.
         if !info.skip_reply && self.current_handle().is_some_and(|h| !h.allow_interruptions()) {
             out.machine().emit(crate::events::SessionEvent::Diagnostic(
                 crate::events::DiagnosticEvent::warning(
@@ -413,10 +415,38 @@ impl Driver {
         }
         // A turn that asks for no reply commits its item without `on_user_turn_completed`, as
         // the reference returns before the hook.
-        match self.activity.hook_bound {
-            Some(bound) if !info.skip_reply => self.issue_turn_hook(now, info, bound, out),
-            _ => self.finish_turn(now, info, Vec::new(), out),
+        if self.activity.hook_bound.is_some() && !info.skip_reply {
+            self.issue_turn_hook(now, info, out);
+        } else {
+            self.finish_turn(now, info, Vec::new(), out);
         }
+    }
+
+    /// A turn a newer one arrived behind while its hook ran is outdated: its words are committed
+    /// with the hook's edits (none under `StopResponse`), and it is not answered.
+    fn supersede_turn(
+        &mut self,
+        info: EndOfTurnInfo,
+        edits: Vec<crate::agent::TurnEdit>,
+        out: &mut Out,
+    ) {
+        self.activity.last_turn = Some(info.turn_id);
+        let mut text = None;
+        for edit in edits {
+            match edit {
+                crate::agent::TurnEdit::StopResponse => return,
+                crate::agent::TurnEdit::UpdateUserMessage(t) => text = Some(t),
+                crate::agent::TurnEdit::UpdateInstructions(_)
+                | crate::agent::TurnEdit::ReplaceItems(_) => {}
+            }
+        }
+        let user = self.user_turn_item(&info, text.as_deref());
+        self.commit_item(
+            ChatItem::Message(user),
+            crate::agent::Source::UserTurn { turn: info.turn_id },
+            crate::agent::Visibility::Both,
+            out,
+        );
     }
 
     /// `StopResponse` ends it with no item and no reply; `skip_reply` commits the item and asks for
@@ -432,6 +462,10 @@ impl Driver {
         // the arriving frame.
         if self.in_window() {
             self.hold_user_turn(now, info, Some(edits), out);
+            return;
+        }
+        if !self.activity.waiting_turns.is_empty() {
+            self.supersede_turn(info, edits, out);
             return;
         }
         let mut applied = TurnEdits::default();

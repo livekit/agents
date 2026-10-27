@@ -95,7 +95,8 @@ Run_T = TypeVar("Run_T")
 # the hook running in this context, for `generate_reply(on_enter=)`
 _hook_name: contextvars.ContextVar[str] = contextvars.ContextVar("lk_hook_name")
 
-# on_user_turn_completed and on_exit are awaited by the core this long before it moves on
+# on_exit and the other callbacks are awaited by the core this long before it moves on;
+# on_user_turn_completed is awaited until it returns
 _HOOK_BOUND = 15.0
 
 # the session options and their defaults; the core resolves them (`_core.SessionOptions`)
