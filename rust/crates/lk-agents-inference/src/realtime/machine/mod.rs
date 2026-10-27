@@ -28,6 +28,8 @@ mod incoming;
 #[cfg(test)]
 mod tests;
 
+/// How many generated messages are remembered for truncation.
+pub(crate) const SPOKEN_REMEMBERED: usize = 32;
 /// How many calls a context update deleted are remembered.
 const DELETED_CALLS_REMEMBERED: usize = 64;
 /// `_schedule_stale_say_cleanup`'s `call_later(10.0, ...)`.
@@ -58,6 +60,9 @@ pub struct RealtimeMachine {
     /// the server no longer holds, and is refused (`invalid_tool_call_id`).
     /// The last few: an output answers a call the model just made.
     deleted_calls: VecDeque<String>,
+    /// The last messages this connection's server generated: only those hold audio to cut (one
+    /// a replay recreated holds its text).
+    spoken: VecDeque<String>,
     /// `_response_created_futures`: the requests whose response is not created yet. How long one
     /// may wait is the driver's to say (it times out with `CancelReply`).
     pending_replies: HashSet<String>,
@@ -123,6 +128,7 @@ impl RealtimeMachine {
             generation: Generation::None,
             closed_messages: HashSet::new(),
             deleted_calls: VecDeque::new(),
+            spoken: VecDeque::new(),
             pending_replies: HashSet::new(),
             discarded: HashSet::new(),
             discarded_responses: HashSet::new(),
@@ -349,6 +355,7 @@ impl RealtimeMachine {
         }
         self.say_tags.clear();
         self.discarded_responses.clear();
+        self.spoken.clear();
         self.stale_say.clear();
         step.merge(self.close_generation());
         // A reply asked for and not yet created is asked for again, now that the conversation it
@@ -470,10 +477,11 @@ impl RealtimeMachine {
                 step
             }
 
-            // The output of a call a context update took out of the conversation answers nothing
-            // the server holds: not sent.
+            // The output of a call the server does not hold (a context update took it out, or it
+            // was made on a session this one replaced) answers nothing: not sent, as the server
+            // would refuse it (`invalid_tool_call_id`). The next context update carries the pair.
             Command::PushItem(lk_agents_abi::llm::realtime::PushItem { item, .. })
-                if matches!(&*item, ChatItem::FunctionCallOutput(o) if self.deleted_calls.contains(&o.call_id)) =>
+                if matches!(&*item, ChatItem::FunctionCallOutput(o) if !self.holds_call(&o.call_id)) =>
             {
                 Step::default()
             }
@@ -579,6 +587,10 @@ impl RealtimeMachine {
                     return Step::default();
                 }
                 if has_audio && audio_end_ms > 0 {
+                    // A message the server holds as text (a replay recreated it) has no audio.
+                    if !self.spoken.contains(&message_id) {
+                        return Step::default();
+                    }
                     return Step::frame(wire::conversation_item_truncate(&message_id, audio_end_ms));
                 }
                 // Interrupted before any audio played (deleted), or text-only (rewritten): a
@@ -599,6 +611,16 @@ impl RealtimeMachine {
                 self.update_ctx(&ctx)
             }
         }
+    }
+
+    /// The conversation the server is being brought to has the call `call_id`.
+    fn holds_call(&self, call_id: &str) -> bool {
+        !self.deleted_calls.iter().any(|c| c == call_id)
+            && self
+                .expected_ctx()
+                .items
+                .iter()
+                .any(|i| matches!(i, ChatItem::FunctionCall(c) if c.call_id == call_id))
     }
 
     /// Bring the server to `chat_ctx`; an update still unconfirmed is superseded, its

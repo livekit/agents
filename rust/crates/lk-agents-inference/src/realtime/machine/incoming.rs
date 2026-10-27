@@ -1,7 +1,7 @@
 //! The server's side: every `Incoming` event, and what it does to the generation, the transcript
 //! and the mirrored conversation.
 
-use super::{Generation, MessageState, RealtimeMachine, Step};
+use super::{Generation, MessageState, RealtimeMachine, SPOKEN_REMEMBERED, Step};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
@@ -67,6 +67,10 @@ impl RealtimeMachine {
                 let response_id = Some(response_id.clone());
                 messages.insert(item_id.clone(), MessageState { open: true, ..Default::default() });
                 order.push(item_id.clone());
+                if self.spoken.len() == SPOKEN_REMEMBERED {
+                    self.spoken.pop_front();
+                }
+                self.spoken.push_back(item_id.clone());
                 let mut step = Step::event(Event::MessageStarted(MessageStarted {
                     message_id: item_id.clone(),
                     response_id: response_id.clone(),

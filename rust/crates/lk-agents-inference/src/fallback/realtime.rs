@@ -342,6 +342,13 @@ impl FallbackSession {
                 }
             }
         };
+        // Closed while the new model opened: it is closed too, never adopted.
+        if let Ok(session) = &opened
+            && self.lock().closed
+        {
+            session.aclose().await;
+            return;
+        }
         let mut st = self.lock();
         st.swapping = false;
         match opened {

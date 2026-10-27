@@ -687,6 +687,9 @@ pub enum InterruptCause {
     Closing,
     ScheduleRejected,
     UserTurn,
+    /// The realtime model was replaced (a fallback adapter's swap, `restart_session()`): what
+    /// played was the old model's.
+    ModelSwapped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

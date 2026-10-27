@@ -310,7 +310,21 @@ impl Generation<'_> {
         let text = super::tts::transformed(self.shared, &words);
         let segment = idx as u32;
         self.shared.trace(GenerationStep::TtsRequested { speech: self.handle.id(), segment, text });
-        let (sink, source) = tts.stream().await?;
+        // Opened as the pipeline's synthesis is: a failed open is retried on the same budget.
+        let mut attempt = crate::generation::Attempt::new(self.shared.conn.tts);
+        let (sink, source) = loop {
+            let error = match tts.stream().await {
+                Ok(pair) => break pair,
+                Err(error) => error,
+            };
+            let kind = crate::trace::ProviderKind::Tts;
+            let failed = |e, r| tts.failed(e, r);
+            match super::llm::retry(self.shared, self.handle, &mut attempt, kind, &error, &failed).await {
+                super::llm::Retried::Again => {}
+                super::llm::Retried::Interrupted => return Ok(()),
+                super::llm::Retried::GiveUp => return Err(DriverError::from(error)),
+            }
+        };
         let shared = self.shared;
         let mut transforms = (!shared.tts_transforms.is_empty())
             .then(|| lk_agents_voice::transcription::Pipeline::new(&shared.tts_transforms));

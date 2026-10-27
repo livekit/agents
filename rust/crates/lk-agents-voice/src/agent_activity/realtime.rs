@@ -62,7 +62,8 @@ pub(crate) mod realtime_state {
         /// Requests cancelled (`CancelReply`) before the server answered: a generation that still
         /// answers one is interrupted (`_realtime_reply_task`: "the response already landed").
         /// Forgotten once asked.
-        pub(super) cancelled_requests: BTreeSet<String>,
+        /// Each under its timer: a server that never answers frees the queue at its bound.
+        pub(super) cancelled_requests: BTreeMap<String, RequestKey>,
         /// A generation answering a request already settled: its `GenerationDone` is dropped.
         pub(super) discarded: Option<String>,
         /// The generation whose foreign deltas were warned about; reset when a generation opens.
@@ -848,7 +849,10 @@ impl Driver {
             out.machine().cancel(Timer::RealtimeRequest(pending.key));
             let asked = matches!(pending.phase, Phase::Sent(_));
             if cancel && asked && !self.activity.realtime_state.ended() {
-                self.activity.realtime_state.cancelled_requests.insert(req_id.clone());
+                // The server is busy with it until it answers, within a bound of its own.
+                let at = self.step.now.saturating_add(REQUEST_TIMEOUT);
+                out.machine().arm(Timer::RealtimeRequest(pending.key), at);
+                self.activity.realtime_state.cancelled_requests.insert(req_id.clone(), pending.key);
                 self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
             }
             self.settle(pending, how.clone(), out);
@@ -865,6 +869,13 @@ impl Driver {
             return;
         }
         let t = &mut self.activity.realtime_state;
+        // A cancelled request the server never answered: it no longer holds the next one back.
+        let cancelled = t.cancelled_requests.iter().find(|(_, k)| **k == key).map(|(id, _)| id.clone());
+        if let Some(id) = cancelled {
+            t.cancelled_requests.remove(&id);
+            let now = self.step.now;
+            return self.realtime_send_queued(now, out);
+        }
         // Answered in the same instant the timer fired: nothing owed.
         let Some((req_id, pending)) = t.take_by_key(key) else { return };
         if !t.ended() && !t.closing {
@@ -888,7 +899,9 @@ impl Driver {
             return;
         }
         // A cancelled request that will not generate is forgotten.
-        let _ = self.activity.realtime_state.cancelled_requests.remove(req_id);
+        if let Some(key) = self.activity.realtime_state.cancelled_requests.remove(req_id) {
+            out.machine().cancel(Timer::RealtimeRequest(key));
+        }
         // Unknown: already claimed by a `GenerationCreated`, or cancelled by the driver.
         if let Some(pending) = self.take_pending(req_id, out) {
             self.settle(pending, Settled::Failed(error), out);
@@ -915,7 +928,7 @@ impl Driver {
             // opened by the server itself: nothing plays it either, and left generating it holds
             // the server, which refuses the next reply asked meanwhile.
             let cancelled = orphaned
-                || req_id.as_deref().is_some_and(|id| t.cancelled_requests.remove(id))
+                || req_id.as_deref().and_then(|id| t.cancelled_requests.remove(id)).is_some()
                 || t.closing;
             t.discarded = Some(response_id.clone());
             if cancelled && !t.ended() {
@@ -1110,9 +1123,20 @@ impl Driver {
         }
         let state = self.session.states.agent_state();
         let busy = matches!(state, AgentState::Speaking | AgentState::Thinking);
-        let cut = self.interrupt_all(now, true, InterruptCause::Host, out).unwrap_or_default();
+        // The new server's VAD heard no onset: a turn the old one opened ends here, or nothing
+        // would ever end it.
+        if self.activity.audio_recognition.turn_detection_mode() == TurnDetectionMode::RealtimeLlm
+            && self.activity.audio_recognition.user_speaking()
+        {
+            let eff = self.activity.audio_recognition.on_server(now, ServerSpeech::Stopped);
+            out.machine().append(eff);
+        }
+        let cut = self.interrupt_all(now, true, InterruptCause::ModelSwapped, out).unwrap_or_default();
         let waiting = cut.into_iter().filter(|s| self.activity.speech_scheduler.contains(*s)).collect();
-        self.activity.realtime_state.swap = Some(Swap { waiting, regenerate: regenerate && busy });
+        let t = &mut self.activity.realtime_state;
+        // What the old session was asked and cancelled will never be answered.
+        t.cancelled_requests.clear();
+        t.swap = Some(Swap { waiting, regenerate: regenerate && busy });
         self.realtime_replay(now, None, out);
     }
 
