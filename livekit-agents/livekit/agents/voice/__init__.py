@@ -6,6 +6,7 @@ from .agent_session import (
     LatencyBudgetOptions,
     NonverbalOptions,
     RecordingOptions,
+    SessionConnectOptions,
     SpeechSteeringOptions,
     VoiceActivityVideoSampler,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "LatencyBudgetOptions",
     "NonverbalOptions",
     "RecordingOptions",
+    "SessionConnectOptions",
     "SpeechSteeringOptions",
     "RunOutputOptions",
     "VoiceActivityVideoSampler",

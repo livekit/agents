@@ -25,6 +25,7 @@ from ..llm import (
     LLMError,
     RealtimeModel,
     RealtimeModelError,
+    ToolChoice,
 )
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
@@ -36,6 +37,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
+    from .generation import ToolExecutionOutput
     from .tool_executor import UpdatePromptArgs, _ToolExecutor
 
 
@@ -66,6 +68,11 @@ class RunContext(Generic[Userdata_T]):
         # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
+
+        # set by the first update(): whether anything voices its output, and what the step
+        # that answers it may call
+        self._suppress_reply = False
+        self._reply_tool_choice: ToolChoice | None = None
 
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
@@ -175,6 +182,7 @@ class RunContext(Generic[Userdata_T]):
         message: str | Any,
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
+        silent: bool = False,
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -188,6 +196,10 @@ class RunContext(Generic[Userdata_T]):
             template: Per-call override — either a ``str.format()`` template or a
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
+            silent: Whether the user hears anything about this update. The message is
+                recorded for the model either way; True keeps it to the model alone, and
+                on the first update releases control without speaking. A realtime model
+                that cannot keep a tool result silent may still answer it.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -218,9 +230,13 @@ class RunContext(Generic[Userdata_T]):
 
         # first update keeps the original call_id
         update_step = len(self._updates)
-        pair = self._make_update_pair(
+        out = self._make_update_output(
             message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
         )
+        if silent:
+            # realtime providers read this to decide whether the output starts a turn
+            out.fnc_call_out.reply_required = False
+        pair = (out.fnc_call, out.fnc_call_out)
         self._updates.append(pair)
 
         if self._executor is None:
@@ -232,17 +248,22 @@ class RunContext(Generic[Userdata_T]):
                     id=pair[0].call_id,
                     call_id=self.function_call.call_id,
                     message=raw_message,
+                    silent=silent,
                 )
             ),
         )
 
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
+            self._suppress_reply = silent
+            # a report is not a result: a model free to call tools can answer
+            # "still searching" by calling the same tool again
+            self._reply_tool_choice = "none"
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+        await self._executor._enqueue_reply(self, [pair[0], pair[1]], tool_choice="none")
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]
@@ -268,10 +289,8 @@ class RunContext(Generic[Userdata_T]):
         except Exception:
             pass  # reply task's own errors aren't our concern
 
-    def _make_update_pair(
-        self, message: Any, *, call_id_suffix: str = ""
-    ) -> tuple[FunctionCall, FunctionCallOutput]:
-        """Synthesize a (FunctionCall, FunctionCallOutput) pair for a progress update.
+    def _make_update_output(self, message: Any, *, call_id_suffix: str = "") -> ToolExecutionOutput:
+        """Synthesize the tool output of a progress update, with a FunctionCall of its own.
 
         The new FunctionCall carries ``{call_id}{call_id_suffix}``; name/arguments/extra
         are copied. ``make_tool_output`` is reused so error handling matches dispatch.
@@ -284,8 +303,7 @@ class RunContext(Generic[Userdata_T]):
             arguments=self.function_call.arguments,
             extra=dict(self.function_call.extra),
         )
-        tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
-        return (fnc_call, tool_output.fnc_call_out)
+        return make_tool_output(fnc_call=fnc_call, output=message, exception=None)
 
 
 EventTypes = Literal[
@@ -511,6 +529,8 @@ class ToolCallUpdated(BaseModel):
     """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
     call_id: str
     message: str
+    silent: bool = False
+    """Kept to the model: the user hears nothing about it."""
 
 
 class ToolCallEnded(BaseModel):

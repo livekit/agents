@@ -28,6 +28,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit.agents import stt
+from livekit.agents.voice import audio_recognition
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
     _compute_end_of_turn_metrics,
@@ -64,6 +65,7 @@ def _make_recognition(
     ar._turn_transcript_received = False
     ar._transcription_timeout_handle = None
     ar._stt_request_ids = []
+    ar._stt_events = []
     ar._end_of_turn_task = None
     ar._audio_transcript = ""
     ar._audio_interim_transcript = ""
@@ -113,7 +115,9 @@ def _preflight_transcript(end_time: float) -> stt.SpeechEvent:
 
 
 @both_modes
-async def test_vad_anchor_survives_a_transcript_without_timestamps(mode: str) -> None:
+async def test_vad_anchor_survives_a_transcript_without_timestamps(
+    mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The reported regression: with the (default) VAD anchor discarded, a
     provider that sends no timestamps anchors the turn at transcript arrival and
     transcription_delay reports ~0 instead of the actual STT latency.
@@ -122,6 +126,8 @@ async def test_vad_anchor_survives_a_transcript_without_timestamps(mode: str) ->
     prefer, so the estimate would be nothing but ``now``.
     """
     now = time.time()
+    # the transcript is stamped with the same clock the anchor was derived from
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     vad_anchor = now - 0.6  # VAD end-of-speech, 0.6s of transcription latency ago
     ar._last_speaking_time = vad_anchor
@@ -162,10 +168,12 @@ async def test_usable_provider_timestamp_replaces_the_anchor_only_in_stt_mode(mo
 
 
 @both_modes
-async def test_skewed_provider_timestamp(mode: str) -> None:
+async def test_skewed_provider_timestamp(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
     # the provider's audio clock runs ahead of wall clock: end_time maps into the
     # future and the estimate clamps to `now`, zeroing the delay
     now = time.time()
+    # the clamp reads the clock again, so a slow runner would drift past the tolerance
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     vad_anchor = now - 0.6
     ar._last_speaking_time = vad_anchor

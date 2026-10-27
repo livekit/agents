@@ -6,7 +6,6 @@ import asyncio
 import base64
 import concurrent.futures
 import json
-import os
 import time
 import uuid
 import weakref
@@ -56,7 +55,7 @@ from livekit.agents import (
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
 
 from ...log import logger
@@ -88,7 +87,7 @@ RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
 )
 # Session recycling: restart before 8-min AWS limit or credential expiry
 # Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
-MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
+MAX_SESSION_DURATION_SECONDS = resolve_env_int("LK_SESSION_MAX_DURATION", 6 * 60)
 CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
 BARGE_IN_SIGNAL = '{ "interrupted" : true }'  # Nova Sonic's barge-in detection signal
 
@@ -117,7 +116,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "- Ensure that our communication remains in the same language as the user."
 )
 
-lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
+lk_bedrock_debug = resolve_env_int("LK_BEDROCK_DEBUG")
 
 # Shared credentials resolver instance to preserve cache across all sessions
 _shared_credentials_resolver: Boto3CredentialsResolver | None = None
@@ -461,6 +460,50 @@ class RealtimeModel(llm.RealtimeModel):
         """
         return cls(
             model="amazon.nova-2-sonic-v1:0",
+            modalities="mixed",
+            voice=voice,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            tool_choice=tool_choice,
+            region=region,
+            turn_detection=turn_detection,
+            generate_reply_timeout=generate_reply_timeout,
+        )
+
+    @classmethod
+    def with_nova_sonic_2_5(
+        cls,
+        *,
+        voice: NotGivenOr[SONIC2_VOICES | str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        region: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: TURN_DETECTION = "MEDIUM",
+        generate_reply_timeout: float = 10.0,
+    ) -> RealtimeModel:
+        """Create a RealtimeModel configured for Nova Sonic 2.5 (audio + text input).
+
+        Args:
+            voice (SONIC2_VOICES | str | NotGiven): Voice id for TTS output. Import SONIC2_VOICES from livekit.plugins.aws.experimental.realtime for supported values. Defaults to "tiffany".
+            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
+            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
+            max_tokens (int | NotGiven): Upper bound for tokens emitted. Defaults to DEFAULT_MAX_TOKENS.
+            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation.
+            region (str | NotGiven): AWS region. Defaults to "us-east-1".
+            turn_detection (TURN_DETECTION): Turn-taking sensitivity. Defaults to "MEDIUM".
+            generate_reply_timeout (float): Timeout for generate_reply() calls. Defaults to 10.0.
+
+        Returns:
+            RealtimeModel: Configured for Nova Sonic 2.5 with mixed modalities (audio + text input).
+
+        Example:
+            model = RealtimeModel.with_nova_sonic_2_5(voice="tiffany", max_tokens=10_000)
+        """
+        return cls(
+            model="amazon.nova-2-5-sonic",
             modalities="mixed",
             voice=voice,
             temperature=temperature,
@@ -1701,7 +1744,10 @@ class RealtimeSession(  # noqa: F811
 
         finally:
             logger.info("main output response stream processing task exiting")
-            self._is_sess_active.clear()
+            # A retry can replace this task before the old task reaches its
+            # cleanup block. Keep the session active for the replacement task.
+            if asyncio.current_task() is self._response_task:
+                self._is_sess_active.clear()
 
     async def _restart_session(self, ex: Exception) -> None:
         # Get restart attempts from current generation, or 0 if no generation

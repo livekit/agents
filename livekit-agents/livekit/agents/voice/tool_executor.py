@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import weakref
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -19,8 +19,10 @@ from ..llm.tool_context import (
     RawFunctionTool,
     StopResponse,
     Tool,
+    ToolChoice,
     ToolError,
     ToolFlag,
+    ToolResult,
     Toolset,
     function_tool,
 )
@@ -254,6 +256,22 @@ class _PendingUpdate:
     ctx: RunContext
     items: list[ChatItem]
     target: Agent  # agent that received the eager chat_ctx insert
+    tool_choice: ToolChoice | None
+    """What the reply may call: an update's request, or None for a result to act on."""
+
+
+def _reply_tool_choice(requests: Iterable[ToolChoice | None]) -> ToolChoice | None:
+    """The tool choice of one reply step answering several tool outputs.
+
+    The step honours a single shared request, and is otherwise unconstrained: outputs that
+    disagree cannot all be satisfied, and one of them wanting the tools is enough to need them.
+    """
+    distinct: list[ToolChoice | None] = []
+    for request in requests:
+        # a named choice is a dict, so this compares rather than hashes
+        if request not in distinct:
+            distinct.append(request)
+    return distinct[0] if len(distinct) == 1 else None
 
 
 class _ToolExecutor:
@@ -372,27 +390,17 @@ class _ToolExecutor:
                     first_update_fut.set_result(output)
                 return output
 
-            if output is None or isinstance(output, StopResponse):
-                return output
-
-            # the first update has already been returned to dispatch, so an Agent
-            # return now has no surface to carry an agent_task back
-            from .agent import Agent
-
-            if isinstance(output, Agent):
-                logger.error(
-                    f"tool `{fnc_name}` returned an Agent after ctx.update(); "
-                    "agent handoff after a progress update is not supported",
-                    extra={"call_id": call_id, "function": fnc_name},
-                )
-                raise RuntimeError("agent handoff after a progress update is not supported")
-
-            if isinstance(output, BaseException):
+            if isinstance(output, BaseException) and not isinstance(output, StopResponse):
                 if isinstance(output, ToolError):
+                    # Keep detail out of the message body so redaction can
+                    # drop it (a log body cannot be redacted).
                     logger.warning(
-                        "ToolError while executing tool: %s",
-                        output.message,
-                        extra={"function": fnc_name, "call_id": call_id},
+                        "ToolError while executing tool",
+                        extra={
+                            "function": fnc_name,
+                            "call_id": call_id,
+                            "lk.pii.error": output.message,
+                        },
                     )
                 else:
                     logger.error(
@@ -401,10 +409,24 @@ class _ToolExecutor:
                         exc_info=output,
                     )
 
-            # final return goes through the coalescer as a synthetic output
-            pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
+            # every final return, None included, goes through the coalescer as a synthetic
+            # output, so the model never waits on a result that won't come
+            final = run_ctx._make_update_output(output, call_id_suffix="_final")
+            if final.agent_task is not None:
+                # the first update already answered dispatch, so a returned handoff cannot apply
+                logger.error(
+                    f"tool `{fnc_name}` returned an Agent after ctx.update(); "
+                    "agent handoff after a progress update is not supported",
+                    extra={"call_id": call_id, "function": fnc_name},
+                )
+                output = ToolError("the agent handoff did not happen")
+                final = run_ctx._make_update_output(output, call_id_suffix="_final")
+
+            pair = (final.fnc_call, final.fnc_call_out)
             run_ctx._updates.append(pair)
-            await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+            # a return is a result to act on, unlike a report, so the reply that phrases it
+            # is as free to call something as the reply to an ordinary tool would be
+            await self._enqueue_reply(run_ctx, [pair[0], pair[1]], tool_choice=None)
             return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
@@ -446,6 +468,9 @@ class _ToolExecutor:
 
             # one terminal entry per call; deferred entries use the _final id
             from .agent import Agent
+
+            if isinstance(output, ToolResult):
+                output = output.output
 
             status: Literal["done", "error", "cancelled"]
             message: str | None
@@ -516,7 +541,13 @@ class _ToolExecutor:
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
-    async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
+    async def _enqueue_reply(
+        self,
+        ctx: RunContext,
+        items: list[ChatItem],
+        *,
+        tool_choice: ToolChoice | None = None,
+    ) -> None:
         # eager insert so a reply firing before delivery sees the items
         target = (
             self._owning_activity.agent
@@ -525,13 +556,18 @@ class _ToolExecutor:
         )
         chat_ctx = target.chat_ctx.copy()
         chat_ctx.insert(items)
-        await target.update_chat_ctx(chat_ctx)
+        # session tools are valid for any agent, but one not yet started filters by its own tools
+        await target.update_chat_ctx(
+            chat_ctx, exclude_invalid_function_calls=self._owning_activity is not None
+        )
         ctx.session.history.insert(items)
 
         if not any(item.type == "function_call_output" and item.reply_required for item in items):
             return
 
-        self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
+        self._pending_updates.append(
+            _PendingUpdate(ctx=ctx, items=items, target=target, tool_choice=tool_choice)
+        )
 
         if self._reply_task is None or self._reply_task.done():
             self._reply_task = asyncio.create_task(
@@ -545,18 +581,51 @@ class _ToolExecutor:
     async def _deliver_reply(self, session: AgentSession) -> None:
         from .agent_activity import ActivityClosedError
 
-        target_agent: Agent
-        try:
-            if self._owning_activity is not None:
-                await self._owning_activity.wait_for_idle()
-                target_agent = self._owning_activity.agent
-            else:
-                target_activity = await session.wait_for_idle()
-                target_agent = target_activity.agent
-        except ActivityClosedError:
-            logger.debug("dropping tool reply — owning activity closed")
-            self._pending_updates.clear()
-            return
+        while True:
+            try:
+                if self._owning_activity is not None:
+                    activity = self._owning_activity
+                    await activity.wait_for_idle()
+                else:
+                    activity = await session.wait_for_idle()
+
+                if not activity.scheduling_paused:
+                    break
+
+                # idle but paused: it resumes once an AgentTask returns, or closes at a handoff.
+                # the AgentTask may need another run to return, so release the current one
+                reply_task = asyncio.current_task()
+                run_state = session._global_run_state
+                suspended = False
+                if reply_task and run_state and run_state._unwatch_handle(reply_task):
+                    suspended = True
+                    run_state._mark_done_if_needed(None)
+
+                await activity._scheduling_resumed.wait()
+
+                # rejoin whichever run is active on resume, as AgentTask does with its parent
+                run_state = session._global_run_state
+                if suspended and reply_task and run_state and not run_state.done():
+                    run_state._watch_handle(reply_task)
+
+                if activity._closed:
+                    raise ActivityClosedError(f"activity {activity.agent.label} is closing")
+            except ActivityClosedError:
+                # a session-scoped reply follows a handoff in flight to the next agent;
+                # anything else (session close included) drops it
+                if (
+                    self._owning_activity is not None
+                    or session._is_closing()
+                    or not session._activity_lock.locked()
+                ):
+                    logger.debug("dropping tool reply — owning activity closed")
+                    self._pending_updates.clear()
+                    return
+
+                async with session._activity_lock:
+                    pass
+
+        target_agent = activity.agent
 
         # no await after this line
 
@@ -597,9 +666,10 @@ class _ToolExecutor:
         )
 
         call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
+        tool_choice = _reply_tool_choice(u.tool_choice for u in updates)
         speech = session.generate_reply(
             instructions=_render(template, {"call_ids": call_ids}),
-            tool_choice="none",
+            tool_choice=tool_choice if tool_choice is not None else NOT_GIVEN,
             chat_ctx=chat_ctx,
         )
         session._tool_execution_updated(

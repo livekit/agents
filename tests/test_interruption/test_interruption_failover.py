@@ -204,6 +204,88 @@ class TestWsCacheTimeout:
         assert len(unrecoverable_errors) == 1
 
 
+class TestWsConnectionReset:
+    @pytest.mark.asyncio
+    async def test_session_close_reset_is_ignored_during_teardown(self) -> None:
+        mock_session = AsyncMock(spec=aiohttp.ClientSession)
+        mock_ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+        mock_ws.closed = False
+        mock_ws.close_code = None
+        session_created = asyncio.Event()
+        session_close_attempted = asyncio.Event()
+        send_count = 0
+
+        async def _send_str(_data: str) -> None:
+            nonlocal send_count
+            send_count += 1
+            if send_count == 1:
+                session_created.set()
+                return
+            session_close_attempted.set()
+            raise ConnectionResetError("Cannot write to closing transport")
+
+        async def _receive() -> aiohttp.WSMessage:
+            await session_close_attempted.wait()
+            return aiohttp.WSMessage(type=aiohttp.WSMsgType.CLOSING, data=None, extra=None)
+
+        mock_ws.send_str = _send_str
+        mock_ws.send_bytes = AsyncMock()
+        mock_ws.receive = _receive
+        mock_ws.close = AsyncMock(return_value=True)
+        mock_session.ws_connect = AsyncMock(return_value=mock_ws)
+
+        detector = _create_detector(mock_session)
+        errors = _collect_errors(detector)
+        stream = detector.stream(conn_options=CONN_OPTIONS)
+
+        try:
+            await session_created.wait()
+            stream.end_input()
+            await asyncio.wait_for(stream._task, timeout=1.0)
+        finally:
+            await stream.aclose()
+
+        assert send_count == 2
+        assert errors == []
+        mock_ws.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_audio_send_reset_fails_instead_of_hanging(self) -> None:
+        mock_session = AsyncMock(spec=aiohttp.ClientSession)
+        mock_ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+        mock_ws.closed = False
+        mock_ws.close_code = None
+        mock_ws.send_str = AsyncMock()
+        mock_ws.send_bytes = AsyncMock(side_effect=ConnectionResetError("audio transport reset"))
+
+        async def _receive_hang() -> aiohttp.WSMessage:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        mock_ws.receive = _receive_hang
+        mock_ws.close = AsyncMock(return_value=True)
+        mock_session.ws_connect = AsyncMock(return_value=mock_ws)
+
+        detector = _create_detector(mock_session)
+        errors = _collect_errors(detector)
+        stream = detector.stream(conn_options=CONN_OPTIONS)
+        stream.push_frame(_AgentSpeechStartedSentinel())
+        stream.push_frame(
+            _OverlapSpeechStartedSentinel(speech_duration=0.5, started_at=time.time())
+        )
+        stream.push_frame(_make_audio_frame())
+
+        try:
+            with pytest.raises(ConnectionResetError, match="audio transport reset"):
+                await asyncio.wait_for(asyncio.shield(stream._task), timeout=1.0)
+        finally:
+            await stream.aclose()
+
+        assert mock_ws.send_bytes.await_count == 1
+        assert len(errors) == 1
+        assert errors[0].recoverable is False
+
+
 class TestWsSessionCreatedMissingThreshold:
     @pytest.mark.asyncio
     async def test_immediate_unrecoverable_when_server_omits_threshold(self) -> None:

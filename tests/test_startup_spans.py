@@ -457,6 +457,13 @@ async def test_session_lifecycle_spans_and_events(span_exporter: InMemorySpanExp
     actions.add_tts(0.5, ttfb=0.1, duration=0.2)
 
     session = create_session(actions, speed_factor=2.0)
+
+    def _on_close(_: object) -> None:
+        # a close handler's work (a transcript upload, say) belongs to the close
+        with tracer.start_as_current_span("rpc_call"):
+            pass
+
+    session.on("close", _on_close)
     await run_session(session, Agent(instructions="test"), drain_delay=1.0)
 
     [root] = _spans(span_exporter, "agent_session")
@@ -488,6 +495,15 @@ async def test_session_lifecycle_spans_and_events(span_exporter: InMemorySpanExp
     # run_session drains once before closing (a sibling); the close's own drain nests inside
     drains = _spans(span_exporter, "drain_agent_activity")
     assert any(d.parent is not None and d.parent.span_id == close.context.span_id for d in drains)
+    # the close covers the close event and room io too, and the session ends after all of it:
+    # nothing emitted while closing lands under an already ended span
+    [handler_work] = _spans(span_exporter, "rpc_call")
+    assert handler_work.parent is not None
+    assert handler_work.parent.span_id == close.context.span_id
+    assert close.end_time is not None and root.end_time is not None
+    assert handler_work.end_time is not None
+    assert handler_work.end_time <= close.end_time <= root.end_time
+    assert session._root_span_context is None
 
     # aclose() ran in this task and must not leave session_close current: the caller's later
     # spans (a shutdown callback's work, say) would nest under the ended close. start() leaves

@@ -933,6 +933,8 @@ class SpeechStream(stt.SpeechStream):
             self._speaking = False
             last_usage_event_time: float = 0.0
             async for resp in stream:
+                if resp.results or resp.speech_event_type:
+                    self._mark_provider_progress()
                 if resp.speech_event_type == (
                     cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
                     if self._config.version == 2
@@ -1001,6 +1003,7 @@ class SpeechStream(stt.SpeechStream):
                     self._on_end_of_speech()
 
                 if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
+                    self._mark_provider_progress()
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.RECOGNITION_USAGE,
@@ -1061,6 +1064,7 @@ class SpeechStream(stt.SpeechStream):
                 if e.code == 409:
                     if audio_pushed:
                         logger.debug("stream timed out, restarting.")
+                    raise APIConnectionError("Google STT stream timed out") from e
                 else:
                     raise APIStatusError(
                         f"{e.message} {e.details}", status_code=e.code or -1
@@ -1171,10 +1175,15 @@ def _streaming_recognize_response_to_speech_data(
 
     if text == "" or not words:
         if text and not words:
+            # No words to time the text with (e.g. chirp_3 forces
+            # enable_word_time_offsets=False): report the timing as unknown,
+            # like the REST path, instead of the stream offset. The SDK reads
+            # any end_time > 0 as the provider's end of speech, which would
+            # otherwise freeze the end-of-turn anchor in turn_detection="stt".
             data = stt.SpeechData(
                 language=lg,
-                start_time=start_time_offset,
-                end_time=start_time_offset,
+                start_time=0.0,
+                end_time=0.0,
                 confidence=confidence,
                 text=text,
             )

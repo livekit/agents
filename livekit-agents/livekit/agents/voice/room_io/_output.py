@@ -25,6 +25,7 @@ from ...types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+    CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS,
     TOPIC_TRANSCRIPTION,
     TimedString,
 )
@@ -318,6 +319,39 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 self._forwarding_idle.set()
 
 
+def _legacy_transcription_needed(room: rtc.Room) -> bool:
+    """True while some remote participant may still rely on the deprecated
+    ``rtc.Transcription`` data packet.
+
+    ``publish_transcription`` has no destination parameter, so this is all-or-nothing for the
+    room: the packet is dropped only once every considered participant advertises
+    ``client_protocol >= CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS``, meaning it rebuilds
+    transcription events from the ``lk.transcription`` stream channel instead.
+
+    The client protocol is read from the private ``_info``, because livekit-rtc exposes no
+    public property for it. There is no fallback: the field is ``required`` in the FFI
+    protobuf, and ``livekit`` is pinned to an exact version, so it is always present. A
+    rename must fail loudly here rather than report 0 for every participant, which would
+    silently keep legacy publishing on for good.
+
+    Only STANDARD participants -- user-created client SDK instances -- are considered. SIP,
+    INGRESS, AGENT (including avatar workers), CONNECTOR and BRIDGE participants never render
+    legacy transcripts, so their client protocol tells us nothing about whether the legacy
+    packet is still necessary. Counting them would also keep legacy publishing alive in every
+    telephony room for good: the Go SDK does not send a client protocol at all, so SIP and
+    INGRESS participants report 0 permanently. EGRESS participants join hidden and never
+    reach ``remote_participants``.
+    """
+    local_identity = room.local_participant.identity
+    return any(
+        p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+        and p._info.client_protocol < CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS
+        # not an avatar worker of ours that joined as STANDARD rather than AGENT
+        and p.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF) != local_identity
+        for p in room.remote_participants.values()
+    )
+
+
 class _ParticipantLegacyTranscriptionOutput:
     def __init__(
         self,
@@ -325,9 +359,16 @@ class _ParticipantLegacyTranscriptionOutput:
         *,
         is_delta_stream: bool = True,
         participant: rtc.Participant | str | None = None,
+        track: str | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
-        self._track_id: str | None = None
+        # the last status written to the log, so only transitions are logged. This never
+        # takes part in the decision itself.
+        self._legacy_status_logged: bool | None = None
+        # when set, the transcript is stamped with this track rather than whichever
+        # microphone track the linked participant happens to publish
+        self._pinned_track_id: str | None = track
+        self._track_id: str | None = track
         self._participant_identity: str | None = None
 
         # identity of the participant that on behalf of the current participant
@@ -352,6 +393,11 @@ class _ParticipantLegacyTranscriptionOutput:
         if self._participant_identity is None:
             return
 
+        if self._pinned_track_id is not None:
+            self.flush()
+            self._reset_state()
+            return
+
         # find track id from existing participants
         if self._participant_identity == self._room.local_participant.identity:
             for local_track in self._room.local_participant.track_publications.values():
@@ -368,6 +414,24 @@ class _ParticipantLegacyTranscriptionOutput:
                         break
 
         self.flush()
+        self._reset_state()
+
+    def set_track(self, track_sid: str | None) -> None:
+        """Stamp what follows with another track, closing the segment stamped with the last.
+
+        ``None`` restores resolving the track from the linked participant.
+        """
+        if self._pinned_track_id == track_sid:
+            return
+
+        self._pinned_track_id = track_sid
+        if track_sid is None:
+            # re-resolve from the participant
+            self.set_participant(self._participant_identity)
+            return
+
+        self.flush()
+        self._track_id = track_sid
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -405,8 +469,17 @@ class _ParticipantLegacyTranscriptionOutput:
             return
 
         clean_text = strip_all_markup(self._pushed_text)
+        # snapshot: the flush runs later, and a track or participant switch in between
+        # would otherwise stamp this segment's last packet with the new one
         self._flush_task = asyncio.create_task(
-            self._publish_transcription(self._current_id, clean_text, final=True)
+            self._publish_transcription(
+                self._current_id,
+                clean_text,
+                final=True,
+                participant_identity=self._participant_identity,
+                track_id=self._track_id,
+                represented_by=self._represented_by,
+            )
         )
         self._reset_state()
 
@@ -420,13 +493,48 @@ class _ParticipantLegacyTranscriptionOutput:
         if self._flush_task:
             await self._flush_task
 
-    async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
-        if self._participant_identity is None or self._track_id is None:
+    def _should_publish(self) -> bool:
+        needed = _legacy_transcription_needed(self._room)
+        if needed != self._legacy_status_logged:
+            self._legacy_status_logged = needed
+            logger.debug(
+                "legacy transcription publishing %s",
+                "enabled" if needed else "disabled",
+                extra={"participant": self._participant_identity},
+            )
+
+        return needed
+
+    async def _publish_transcription(
+        self,
+        id: str,
+        text: str,
+        final: bool,
+        *,
+        participant_identity: str | None = None,
+        track_id: str | None = None,
+        represented_by: str | None = None,
+    ) -> None:
+        """``participant_identity``/``track_id``/``represented_by`` pin the packet to the
+        segment it closes; without them the live fields are used, which a switch mid-segment
+        has already moved on."""
+        participant_identity = participant_identity or self._participant_identity
+        track_id = track_id or self._track_id
+        represented_by = represented_by or self._represented_by
+        if participant_identity is None or track_id is None:
+            return
+
+        # Gate here, not in capture_text: every legacy publish carries the whole accumulated
+        # segment under a stable id, so _pushed_text/_current_id must stay warm. A legacy
+        # client that joins mid-segment then gets the complete segment on the very next
+        # publish, and a client that only ever sees the final=True packet still gets a
+        # complete, correctly-closed segment.
+        if not self._should_publish():
             return
 
         transcription = rtc.Transcription(
-            participant_identity=self._represented_by or self._participant_identity,
-            track_sid=self._track_id,
+            participant_identity=represented_by or participant_identity,
+            track_sid=track_id,
             segments=[
                 rtc.TranscriptionSegment(
                     id=id,
@@ -454,6 +562,9 @@ class _ParticipantLegacyTranscriptionOutput:
         ):
             return
 
+        if self._pinned_track_id is not None:
+            return
+
         self._track_id = track.sid
         self._represented_by = participant.identity
 
@@ -465,6 +576,9 @@ class _ParticipantLegacyTranscriptionOutput:
             or self._participant_identity != self._room.local_participant.identity
             or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
+            return
+
+        if self._pinned_track_id is not None:
             return
 
         self._track_id = track.sid
@@ -491,9 +605,12 @@ class _ParticipantStreamTranscriptionOutput:
         participant: rtc.Participant | str | None = None,
         attributes: dict[str, str] | None = None,
         json_format: bool = False,
+        track: str | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
-        self._track_id: str | None = None
+        # see _ParticipantLegacyTranscriptionOutput
+        self._pinned_track_id: str | None = track
+        self._track_id: str | None = track
         self._participant_identity: str | None = None
         self._additional_attributes = attributes or {}
         self._writer: rtc.TextStreamWriter | None = None
@@ -517,13 +634,32 @@ class _ParticipantStreamTranscriptionOutput:
         if self._participant_identity is None:
             return
 
-        try:
-            self._track_id = find_micro_track_id(self._room, self._participant_identity)
-        except ValueError:
-            # track id is optional for TextStream when audio is not published
-            self._track_id = None
+        if self._pinned_track_id is None:
+            try:
+                self._track_id = find_micro_track_id(self._room, self._participant_identity)
+            except ValueError:
+                # track id is optional for TextStream when audio is not published
+                self._track_id = None
 
         self.flush()
+        self._reset_state()
+
+    def set_track(self, track_sid: str | None) -> None:
+        """Stamp what follows with another track, closing the segment stamped with the last.
+
+        ``None`` restores resolving the track from the linked participant.
+        """
+        if self._pinned_track_id == track_sid:
+            return
+
+        self._pinned_track_id = track_sid
+        if track_sid is None:
+            # re-resolve from the participant
+            self.set_participant(self._participant_identity)
+            return
+
+        self.flush()
+        self._track_id = track_sid
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -557,8 +693,10 @@ class _ParticipantStreamTranscriptionOutput:
         self,
         attributes: dict[str, str] | None = None,
         extra: dict[str, str] | None = None,
+        sender_identity: str | None = None,
     ) -> rtc.TextStreamWriter:
-        assert self._participant_identity is not None, "participant_identity is not set"
+        sender_identity = sender_identity or self._participant_identity
+        assert sender_identity is not None, "participant_identity is not set"
 
         if not attributes:
             attributes = {
@@ -578,7 +716,7 @@ class _ParticipantStreamTranscriptionOutput:
 
         return await self._room.local_participant.stream_text(
             topic=TOPIC_TRANSCRIPTION,
-            sender_identity=self._participant_identity,
+            sender_identity=sender_identity,
             attributes=attributes,
         )
 
@@ -631,10 +769,14 @@ class _ParticipantStreamTranscriptionOutput:
         writer: rtc.TextStreamWriter | None,
         extra_attributes: dict[str, str] | None = None,
         pending_text: str = "",
+        track_id: str | None = None,
+        sender_identity: str | None = None,
     ) -> None:
+        """``track_id``/``sender_identity`` belong to the segment being closed, taken when
+        the flush was scheduled rather than read now, which a switch has already moved on."""
         attributes = {ATTRIBUTE_TRANSCRIPTION_FINAL: "true"}
-        if self._track_id:
-            attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = self._track_id
+        if track_id:
+            attributes[ATTRIBUTE_TRANSCRIPTION_TRACK_ID] = track_id
         for key, val in (extra_attributes or {}).items():
             attributes.setdefault(key, val)
 
@@ -646,7 +788,9 @@ class _ParticipantStreamTranscriptionOutput:
                             await writer.write(pending_text)
                         await writer.aclose(attributes=attributes)
                 else:
-                    tmp_writer = await self._create_text_writer(attributes=attributes)
+                    tmp_writer = await self._create_text_writer(
+                        attributes=attributes, sender_identity=sender_identity
+                    )
                     await tmp_writer.write(self._latest_text)
                     await tmp_writer.aclose()
         except Exception as e:
@@ -671,8 +815,15 @@ class _ParticipantStreamTranscriptionOutput:
             tags = self._segment_tags
 
         pending_text = self._encode(remaining) if remaining else ""
+        # snapshot: see _ParticipantLegacyTranscriptionOutput.flush
         self._flush_atask = asyncio.create_task(
-            self._flush_task(curr_writer, expression_attribute(tags), pending_text)
+            self._flush_task(
+                curr_writer,
+                expression_attribute(tags),
+                pending_text,
+                track_id=self._track_id,
+                sender_identity=self._participant_identity,
+            )
         )
 
     async def aclose(self) -> None:
@@ -701,6 +852,9 @@ class _ParticipantStreamTranscriptionOutput:
         ):
             return
 
+        if self._pinned_track_id is not None:
+            return
+
         self._track_id = track.sid
 
     def _on_local_track_published(self, track: rtc.LocalTrackPublication, _: rtc.Track) -> None:
@@ -709,6 +863,9 @@ class _ParticipantStreamTranscriptionOutput:
             or self._participant_identity != self._room.local_participant.identity
             or track.source != rtc.TrackSource.SOURCE_MICROPHONE
         ):
+            return
+
+        if self._pinned_track_id is not None:
             return
 
         self._track_id = track.sid
@@ -724,7 +881,11 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
         participant: rtc.Participant | str | None = None,
         next_in_chain: io.TextOutput | None = None,
         json_format: bool = False,
+        track: str | None = None,
     ) -> None:
+        """``track`` stamps the transcript with that publication instead of resolving the
+        linked participant's microphone track, so a transcript can be attributed to a track
+        the participant is not publishing as their microphone."""
         super().__init__(label="RoomIO", next_in_chain=next_in_chain)
 
         self.__outputs: list[
@@ -734,12 +895,14 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
                 room=room,
                 is_delta_stream=is_delta_stream,
                 participant=participant,
+                track=track,
             ),
             _ParticipantStreamTranscriptionOutput(
                 room=room,
                 is_delta_stream=is_delta_stream,
                 participant=participant,
                 json_format=json_format,
+                track=track,
             ),
         ]
         self.__closed = False
@@ -747,6 +910,10 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
     def set_participant(self, participant: rtc.Participant | str | None) -> None:
         for source in self.__outputs:
             source.set_participant(participant)
+
+    def set_track(self, track_sid: str | None) -> None:
+        for source in self.__outputs:
+            source.set_track(track_sid)
 
     async def capture_text(self, text: str) -> None:
         await asyncio.gather(*[sink.capture_text(text) for sink in self.__outputs])
