@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared endpoint resolution for the Qwen3 WebSocket models."""
+"""Shared endpoint resolution for the Qwen3 and unified WebSocket models."""
 
 from __future__ import annotations
 

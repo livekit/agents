@@ -218,6 +218,36 @@ into the deployment (`REQUIRED_VOICES`) so every replica starts with it, or pass
 `session.config` for server fields newer than this plugin) apply to
 `model="qwen3-tts"` only.
 
+## Unified STT
+
+Baseten's unified STT server puts one streaming protocol in front of every
+speech-to-text model it serves (Whisper, Qwen3-ASR, and others), so one
+`model="unified"` works for any of them. Endpoints are the same
+`.../websocket` URLs shown above.
+
+```python
+stt = baseten.STT(model="unified", model_id="your-model-id")
+```
+
+Who ends a turn is set with `segmentation_mode`:
+
+| `segmentation_mode` | A turn ends when | Use it with |
+|---|---|---|
+| `server_vad` (default) | the server's VAD hears trailing silence | any `turn_detection` |
+| `client_flush` | LiveKit flushes the stream as it commits the user's turn | a turn detector or VAD in the `AgentSession` |
+
+Options that apply: `language` (a BCP-47 code such as `en` or `en-US`, or
+`auto`; unset takes the deployment's default), `enable_partial_transcripts`,
+`partial_transcript_interval_s` (default `0.5`; the server may raise it to its
+own floor), and under `server_vad` only, `vad_threshold` and
+`vad_min_silence_duration_ms` (unset takes the deployment's per-model
+defaults). Anything the server does not grant is logged as a warning, and the
+session carries on with what it did grant.
+
+Not available yet on the unified protocol: word-level timestamps,
+`language_options`, `pcm_mulaw` audio, and `vad_speech_pad_ms`. Sending
+`language` needs a server at v0.2.0 or newer.
+
 ## LLM (Large Language Model)
 
 The LLM plugin wraps Baseten's OpenAI-compatible inference endpoint.
