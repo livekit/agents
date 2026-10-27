@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 from order import OrderedCombo, OrderedHappy, OrderedRegular, OrderState
 from pydantic import Field
 
+from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -521,8 +522,12 @@ async def drive_thru_agent(ctx: JobContext) -> None:
                 method="set_cart_content",
                 payload=payload,
             )
-        except Exception:
-            logger.exception("cart push to %s failed", identity)
+        except Exception as e:
+            # only the playground renders the cart; other participants don't register the method
+            if not (
+                isinstance(e, rtc.RpcError) and e.code == rtc.RpcError.ErrorCode.UNSUPPORTED_METHOD
+            ):
+                logger.exception("cart push to %s failed", identity)
 
     async def _push_runner() -> None:
         nonlocal push_pending
