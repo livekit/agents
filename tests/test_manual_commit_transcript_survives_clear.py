@@ -185,3 +185,22 @@ async def test_a_retained_committed_turn_does_not_erase_the_next_turn() -> None:
 
     assert ar._hooks.on_end_of_turn.call_args[0][0].new_transcript == "hello there"
     assert ar._audio_transcript == "second question"
+
+
+async def test_a_later_final_in_the_committed_turn_is_not_delivered_twice() -> None:
+    """Text that arrives after the commit is kept, but the committed words are not re-sent."""
+    ar = _make_recognition(min_delay=0.3)
+    ar._last_final_transcript_time = time.time()
+
+    fut = ar._commit_user_turn(audio_detached=False, transcript_timeout=2.0)
+    assert await asyncio.wait_for(fut, timeout=2.0) == "hello there"
+    task = ar._end_of_turn_task
+    assert task is not None
+
+    # another FINAL lands before the endpointing delay ends
+    ar._audio_transcript = "hello there world"
+
+    await asyncio.wait_for(asyncio.shield(task), timeout=3.0)
+
+    assert ar._hooks.on_end_of_turn.call_args[0][0].new_transcript == "hello there"
+    assert ar._audio_transcript == "world"

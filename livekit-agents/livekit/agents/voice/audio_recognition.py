@@ -1900,13 +1900,16 @@ class AudioRecognition:
                 self._stt_request_ids = []
                 self._reset_transcription_timeout()
 
-                # clear the transcript if the user turn was committed, unless the live buffer has
-                # moved on since: a task retained across clear_user_turn() must not erase speech
-                # that started afterwards, and a later final still belongs to the next turn
-                if self._audio_transcript == turn_transcript:
-                    self._audio_transcript = ""
-                    self._final_transcript_confidence = []
-                    self._last_final_transcript_time = None
+                # Only the text this turn delivered is removed. A buffer that merely extends it
+                # is the same turn still finalizing, so keep the new words instead of handing
+                # them back to the next commit; a buffer that does not extend it belongs to the
+                # next turn and is left alone (issue #7806).
+                live_transcript = self._audio_transcript
+                if turn_transcript and live_transcript.startswith(turn_transcript):
+                    self._audio_transcript = live_transcript[len(turn_transcript) :].strip()
+                    if not self._audio_transcript:
+                        self._final_transcript_confidence = []
+                        self._last_final_transcript_time = None
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
