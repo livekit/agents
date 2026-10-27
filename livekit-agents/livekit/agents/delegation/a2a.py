@@ -21,7 +21,7 @@ import httpx
 from a2a.client.errors import A2AClientError
 from pydantic import JsonValue
 
-from ..llm.chat_context import ChatContext, ChatItem
+from ..llm.chat_context import ChatContext, ChatItem, FunctionCall
 from ..llm.tool_context import (
     FunctionTool,
     InputRequired,
@@ -32,6 +32,7 @@ from ..llm.tool_context import (
     function_tool,
 )
 from ..log import logger
+from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ..voice.agent_run import current_run_hooks
 from ..voice.events import RunContext
 from ..voice.run_result import RunUsage
@@ -43,10 +44,7 @@ from .delegate import (
     answer_message,
     report,
 )
-from .tool import DISPATCHED, record_delegation
-
-RESUBSCRIBE_ATTEMPTS = 3
-"""How many times a dropped answer stream is read again before the delegation fails."""
+from .tool import CONTEXT_ID_KEY, DISPATCHED, ENDPOINT_KEY, record_delegation
 
 ASK = (
     "State the request in full, with everything the person said that bears on it; the "
@@ -83,10 +81,13 @@ class A2ADelegate(Delegate, Toolset):
     ``contextId`` and the caller's lane as ``livekit/callerLane``, and writes its own lane of
     that session; outside a turn, with no session to name, it gets the conversation as a
     ``chat_ctx`` part and keeps a session of its own. Any other A2A server gets the request as
-    text and nothing else, and keeps a context of its own per caller session
+    text and nothing else, and keeps a context of its own. A context the expert keeps is
+    recorded on the delegating call, and the next delegation to the same expert reads it from
+    the conversation: one delegate serves every conversation in the process and keeps none
     (docs/multi-agent.md). ``token`` omitted, an expert on the project's own host
     (``LIVEKIT_URL``) gets a project token minted per request from ``LIVEKIT_API_KEY`` and
-    ``LIVEKIT_API_SECRET``; an expert anywhere else gets none.
+    ``LIVEKIT_API_SECRET``; an expert anywhere else gets none. A dropped answer stream is read
+    again up to ``conn_options.max_retry`` times.
     """
 
     def __init__(
@@ -97,13 +98,13 @@ class A2ADelegate(Delegate, Toolset):
         httpx_client: httpx.AsyncClient | None = None,
         name: str | None = None,
         announce: bool = True,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._url = url.rstrip("/")
         self._token = token
         self._httpx_client = httpx_client
+        self._conn_options = conn_options
         self._client: AgentClient | None = None
-        # a context the expert keeps of its own, per caller session
-        self._own_contexts: dict[str | None, str] = {}
         self._cancels: set[asyncio.Future[None]] = set()
         self._tool_name = name
         self._announce = announce
@@ -136,6 +137,12 @@ class A2ADelegate(Delegate, Toolset):
             request: the request, in full
         """
         session = ctx._session
+        history: ChatContext
+        if session is not None:
+            history = session.history
+        else:
+            assert ctx._run is not None
+            history = ctx._run.chat_ctx
         if session is not None and self._announce:
             await ctx.update(DISPATCHED)
         try:
@@ -144,7 +151,7 @@ class A2ADelegate(Delegate, Toolset):
                 progress=ctx.update,
                 say=ctx.say,
                 context_id=session.thread.id if session and session.thread else None,
-                message_history=_history_of(ctx),
+                message_history=history,
                 usage=ctx.usage,
                 caller_lane=session.thread.agent_name if session and session.thread else None,
             )
@@ -199,9 +206,10 @@ class A2ADelegate(Delegate, Toolset):
                 progress,
                 say or progress,
                 lambda: client.resubscribe(reply.task_id, thread_id=reply.thread_id or None),
+                self._conn_options,
             )
         except asyncio.CancelledError:
-            self._cancel_in_background(reply.task_id)
+            self._cancel_in_background(reply.task_id, reply.thread_id)
             raise
 
         if update.state == "failed":
@@ -241,32 +249,47 @@ class A2ADelegate(Delegate, Toolset):
         metadata: dict[str, JsonValue] = {KIND: KIND_DELEGATION}
         if shared is not None and caller_lane:
             metadata[CALLER_LANE] = caller_lane
-        reply = await client.send(
+        own = None
+        if shared is None:
+            # the context the expert keeps: the one the latest delegation to it recorded
+            items = (
+                message_history.items
+                if isinstance(message_history, ChatContext)
+                else message_history or []
+            )
+            own = next(
+                (
+                    item.extra[CONTEXT_ID_KEY]
+                    for item in reversed(items)
+                    if isinstance(item, FunctionCall)
+                    and item.extra.get(ENDPOINT_KEY) == self._url
+                    and item.extra.get(CONTEXT_ID_KEY)
+                ),
+                None,
+            )
+        return await client.send(
             prompt,
-            thread_id=shared or self._own_contexts.get(context_id),
+            thread_id=shared or own,
             metadata=metadata if offers else None,
             chat_ctx=_conversation(message_history) if offers and shared is None else None,
         )
 
-        if shared is None and reply.thread_id:
-            self._own_contexts[context_id] = reply.thread_id
-        return reply
-
-    def _cancel_in_background(self, task_id: str) -> None:
+    def _cancel_in_background(self, task_id: str, context_id: str) -> None:
         """The caller gave up (a barge-in, a closed call): tell the expert why, off the turn."""
         if not task_id:
             return
 
-        cancel = self.cancel(task_id, reason="caller-canceled")
+        cancel = self.cancel(task_id, context_id=context_id, reason="caller-canceled")
         self._cancels.add(asyncio.ensure_future(cancel))
 
-    async def cancel(self, task_id: str, *, reason: str = "") -> None:
-        """Ask the expert to stop a task; best-effort, a running tool finishes."""
+    async def cancel(self, task_id: str, *, context_id: str = "", reason: str = "") -> None:
+        """Ask the expert to stop a task of ``context_id``; best-effort, a running tool
+        finishes."""
         if self._client is None or not task_id:
             return
 
         try:
-            await self._client.cancel(task_id, reason=reason or None)
+            await self._client.cancel(task_id, thread_id=context_id or None, reason=reason or None)
         except Exception as e:
             logger.debug(
                 "the expert did not cancel the task",
@@ -308,22 +331,6 @@ class A2ADelegate(Delegate, Toolset):
         return Credentials(api_key, api_secret).project_token(identity="delegate")
 
 
-def _history_of(ctx: RunContext) -> ChatContext:
-    """The conversation as the expert may see it: the turns, no calls or instructions."""
-    history: ChatContext
-    if ctx._session is not None:
-        history = ctx._session.history
-    else:
-        assert ctx._run is not None
-        history = ctx._run.chat_ctx
-    return history.copy(
-        exclude_function_call=True,
-        exclude_handoff=True,
-        exclude_config_update=True,
-        exclude_instructions=True,
-    )
-
-
 def _conversation(
     message_history: ChatContext | Sequence[ChatItem] | None,
 ) -> ChatContext | None:
@@ -334,7 +341,10 @@ def _conversation(
     if not isinstance(message_history, ChatContext):
         message_history = ChatContext(list(message_history))
     return message_history.copy(
-        exclude_function_call=True, exclude_handoff=True, exclude_instructions=True
+        exclude_function_call=True,
+        exclude_handoff=True,
+        exclude_config_update=True,
+        exclude_instructions=True,
     )
 
 
@@ -343,13 +353,14 @@ async def _answer(
     progress: Progress | None,
     say: Progress | None,
     resubscribe: Callable[[], Reply],
+    conn_options: APIConnectOptions,
 ) -> tuple[TaskUpdate, str]:
     """Hands the progress to ``progress`` and the exact text to ``say`` as they arrive; returns
     the terminal update and its own text, never a progress line. A stream that drops is read
     again from the start with ``resubscribe``, and what was handed on is not handed on twice."""
     reported = 0
     updates = reply
-    for attempt in range(RESUBSCRIBE_ATTEMPTS + 1):
+    for attempt in range(conn_options.max_retry + 1):
         skip = reported
         try:
             async for update in updates:
@@ -368,8 +379,9 @@ async def _answer(
                 "an expert's answer stream dropped",
                 extra={"taskId": reply.task_id, "attempt": attempt, "error": str(e)},
             )
-        if not reply.task_id or attempt == RESUBSCRIBE_ATTEMPTS:
+        if not reply.task_id or attempt == conn_options.max_retry:
             break
+        await asyncio.sleep(conn_options._interval_for_retry(attempt))
         updates = resubscribe()
 
     raise DelegationFailed("the delegation ended without an answer")

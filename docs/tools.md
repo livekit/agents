@@ -158,6 +158,14 @@ activity starts, a call or a run, and `aclose()` when it ends. An
 `MCPToolset` connects to its server and lists its tools in `setup()`.
 Toolsets passed to `LiveSession(tools=)` live for the whole call.
 
+An agent is built once at import and shared by every conversation in the
+process ([agents.md](agents.md)), and so is every toolset on it. Nothing
+reachable from an agent holds per-conversation state: a toolset may hold
+process resources only, a client or a pool, and reads what belongs to a
+conversation from the `RunContext` and the history. `A2ADelegate` records
+the context a stock expert keeps on the delegating call and reads it back
+from the history ([multi-agent.md](multi-agent.md)).
+
 The clients in `deps` are per run by design; see
 [state-and-deps.md](state-and-deps.md).
 

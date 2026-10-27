@@ -121,11 +121,17 @@ async def test_a2a_delegate_outside_the_session_sends_the_conversation(
     history = ChatContext(
         [ChatMessage(role="user", content=["hi"]), ChatMessage(role="assistant", content=["hello"])]
     )
+    from livekit.agents.delegation import record_delegation
+    from livekit.agents.llm import FunctionCall
+
     delegate = expert(fare_expert)
     first = await delegate.run("what is the fare", message_history=history)
-    second = await delegate.run("what is the fare", message_history=history)
+    asked = FunctionCall(name="ask", call_id="c1", arguments="{}")
+    record_delegation(asked, first)
+    second = await delegate.run("what is the fare", message_history=[*history.items, asked])
     assert first.output == "the fare is 240 USD (caller history: 2)"
-    # outside a turn there is no session to name: a session of its own, kept across calls
+    # outside a turn there is no session to name: a session of its own, found again from the
+    # call that recorded it
     assert first.context_id.startswith("AT_") and second.context_id == first.context_id
 
 
@@ -679,23 +685,6 @@ async def test_an_expert_never_answers_with_its_progress(
     assert result.output == ""
 
 
-@pytest.mark.rule("R20", "B7")
-async def test_a_stock_experts_context_is_kept_per_caller_thread() -> None:
-    """Two caller threads on one delegate to a stock server: each keeps a context of its own,
-    and a thread's next request goes back to its own."""
-    plain = _Reasoner()
-    async with stock_server(plain) as app, stock_http(app) as http:
-        delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
-        await delegate.run("balance please", context_id="AT_first")
-        await delegate.run("balance please", context_id="AT_second")
-        await delegate.run("balance again", context_id="AT_first")
-        await delegate.aclose()
-
-    first, second, again = (m.context_id for m in plain.seen)
-    assert second != first
-    assert again == first
-
-
 STREAMED = ("SendStreamingMessage", "message/stream", "SubscribeToTask", "tasks/resubscribe")
 
 
@@ -768,7 +757,6 @@ async def test_a_dropped_answer_stream_is_read_again_and_the_answer_arrives(
 # ---------------------------------------------------------------------------------------------
 
 NOTICE = "Calls are recorded for quality."
-NO_STATE_YET = "the shared delegate and client keep no conversation: not built yet"
 
 
 def _flagged(text: str) -> pb.Part:
@@ -897,7 +885,6 @@ async def test_an_expert_with_no_answer_gives_the_model_an_empty_output() -> Non
 
 
 @pytest.mark.rule("R20", "B7")
-@pytest.mark.xfail(strict=True, reason=NO_STATE_YET)
 async def test_a_stock_experts_context_is_read_from_the_conversation() -> None:
     """One delegate shared by two conversations: each keeps the stock expert's context of its
     own, recorded on the delegating call, and its next delegation goes back to it."""
@@ -927,7 +914,6 @@ async def test_a_stock_experts_context_is_read_from_the_conversation() -> None:
 
 
 @pytest.mark.rule("R27")
-@pytest.mark.xfail(strict=True, reason=NO_STATE_YET)
 @pytest.mark.parametrize(("drops", "answered"), [(1, True), (2, False)])
 async def test_the_resubscribes_follow_the_delegates_connect_options(
     agentdb_storage: AgentDBStorage, drops: int, answered: bool
@@ -957,7 +943,6 @@ async def test_the_resubscribes_follow_the_delegates_connect_options(
 
 
 @pytest.mark.rule("B32")
-@pytest.mark.xfail(strict=True, reason=NO_STATE_YET)
 async def test_the_shared_client_names_no_thread_it_was_not_given(
     agentdb_storage: AgentDBStorage,
 ) -> None:

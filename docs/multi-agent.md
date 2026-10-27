@@ -121,11 +121,17 @@ the `contextId`, and the expert keeps its own lane in the caller's thread:
 its own history and state, beside the caller's. Inside `agent.run()` the
 delegate finds the run's thread by itself; `context_id=` names one
 explicitly. Any other A2A server gets the request as text and nothing else,
-and keeps a context of its own. The caller depends on nothing coming back
+and keeps a context of its own. That context is recorded on the delegating
+call as `lk.delegation.context_id`, next to the task id, and the next
+delegation to the same endpoint reads it from the latest such call in its
+history: one delegate serves every conversation in the process and keeps
+none of them. The caller depends on nothing coming back
 but core A2A: the working statuses are the progress, the artifact is the
 answer. See [a2a.md](a2a.md), "Writing an expert in another framework".
 
-`A2ADelegate(url, token=None, httpx_client=None, name=None, announce=True)`. With no `token`, an
+`A2ADelegate(url, token=None, httpx_client=None, name=None, announce=True, conn_options=DEFAULT_API_CONNECT_OPTIONS)`.
+An answer stream that drops is read again with `tasks/resubscribe` up to
+`conn_options.max_retry` times, `retry_interval` apart. With no `token`, an
 expert on the project's own host (the host of `LIVEKIT_URL`) gets a project
 token minted from `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`, which passes a
 `public=False` endpoint; an expert anywhere else gets none.
@@ -146,10 +152,11 @@ caller-canceled`.
 
 `record_delegation(function_call, result)` writes the expert's task on the
 call that delegated, in `FunctionCall.extra`: `lk.delegation.task_id`,
-`lk.delegation.endpoint`, `lk.delegation.transport` and
-`lk.delegation.profile`, so a dashboard joins the two lanes. The delegate's
-own tool records it by itself; a tool of your own that calls `delegate.run`
-calls it.
+`lk.delegation.context_id`, `lk.delegation.endpoint`,
+`lk.delegation.transport` and `lk.delegation.profile`, so a dashboard joins
+the two lanes and the next delegation finds a stock expert's context. The
+delegate's own tool records it by itself; a tool of your own that calls
+`delegate.run` calls it and passes the history as `message_history`.
 
 ## Endpoints versus deployments
 

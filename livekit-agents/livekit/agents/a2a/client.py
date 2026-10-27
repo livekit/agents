@@ -61,6 +61,8 @@ class AgentClient:
         client = AgentClient(endpoint_url, token=token)
         reply = await client.send("Where is my order?", thread_id=thread_id)
         async for update in reply: ...
+
+    One client serves many conversations, so it keeps none: every call names its thread.
     """
 
     def __init__(
@@ -72,7 +74,6 @@ class AgentClient:
     ) -> None:
         self._url = endpoint_url.rstrip("/")
         self._token = token
-        self._thread_id: str | None = None
         self._echo: Extensions | None = None
         self._http = httpx_client or httpx.AsyncClient(timeout=None)
         self._owns_http = httpx_client is None
@@ -157,9 +158,6 @@ class AgentClient:
         events = client.send_message(request, context=self._call_context(thread_id))
         updates = updates_from_events(events)
         first = await updates.__anext__()
-        if first.task_id:
-            self._thread_id = first.context_id or self._thread_id
-
         if first.task_id and first.state == "submitted":
             return Reply(first.task_id, first.context_id, updates)
 
@@ -174,9 +172,8 @@ class AgentClient:
         card offers the extension (plan 3.3.8); a stock server gets the stock request."""
         await self.connect()
         params: dict[str, JsonValue] = {"id": task_id}
-        context_id = thread_id or self._thread_id
-        if context_id and self.offers_extension:
-            params["contextId"] = context_id
+        if thread_id and self.offers_extension:
+            params["contextId"] = thread_id
         if reason:
             params["metadata"] = metadata_to_wire({REASON: reason})
 
@@ -188,9 +185,8 @@ class AgentClient:
         last frame, and the task as it is now when the replay ends without one. The task's
         session rides as ``contextId`` when the card offers the extension."""
         params: dict[str, JsonValue] = {"id": task_id}
-        context_id = thread_id or self._thread_id
-        if context_id and self.offers_extension:
-            params["contextId"] = context_id
+        if thread_id and self.offers_extension:
+            params["contextId"] = thread_id
 
         async def replay() -> AsyncIterator[pb.StreamResponse]:
             # the task as it is now comes first and is read last: a finished task's snapshot
@@ -204,7 +200,7 @@ class AgentClient:
             if snapshot is not None:
                 yield snapshot
 
-        return Reply(task_id, context_id or "", updates_from_events(replay()))
+        return Reply(task_id, thread_id or "", updates_from_events(replay()))
 
     async def _stream_rpc(
         self, method: str, params: dict[str, JsonValue]
@@ -270,7 +266,6 @@ class AgentClient:
     ) -> StoredMessage:
         msg = _as_stored_message(message)
 
-        # the session is the one named, never the last one: a delegate sends for many threads
         context_id = thread_id or msg.get("contextId")
         if context_id:
             msg["contextId"] = context_id
