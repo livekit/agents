@@ -31,6 +31,7 @@ use crate::{
     record::{Detail, Kind, Observed, Sink, Stamps},
 };
 
+mod avatar;
 mod eot;
 mod interruption;
 mod llm;
@@ -43,6 +44,7 @@ pub(crate) mod tools;
 mod tts;
 mod vad;
 
+pub use avatar::FakeAvatarWorker;
 pub use eot::FakeEot;
 pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{COMPLETION_TOKENS, FakeLlm, request_of};
@@ -50,7 +52,7 @@ pub use nodes::FakeNodes;
 pub use output::{
     room_camera,
     FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeSoundStream,
-    FakeTextOutput, Half, FakeAvatarWorker,
+    FakeTextOutput, Half,
     FakeVideoInput,
 };
 pub use realtime::{FakeRealtime, ServerSetup, Vad as RealtimeVad};

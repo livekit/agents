@@ -206,6 +206,9 @@ pub struct Setup {
     pub avatar: bool,
     /// The avatar reports when each segment starts playing (`wait_playback_start=True`).
     pub avatar_reports_start: bool,
+    /// The avatar generator's frame rate and its latency per frame (under one frame period).
+    pub avatar_fps: u64,
+    pub avatar_latency_ms: u64,
     /// Which recorded recogniser the person's transcripts behave like, by its index in
     /// `corpus::STT_MODELS`: its timing, its cuts, its quirks.
     pub stt_model: usize,
@@ -395,6 +398,8 @@ impl Default for Setup {
             background_audio: false,
             avatar: false,
             avatar_reports_start: false,
+            avatar_fps: 25,
+            avatar_latency_ms: 20,
             conn: None,
             chunked_tts: false,
         }
@@ -587,6 +592,8 @@ pub struct Run {
     background: Option<Arc<BackgroundAudioPlayer>>,
     /// The avatar worker the agent's voice streams to, in its own room.
     avatar: Option<Arc<fakes::FakeAvatarWorker>>,
+    /// The agent's sink streaming to it, whose give-up timer after a clear is a deadline.
+    avatar_sink: Option<Arc<lk_agents_voice::avatar::DataStreamAudioOutput>>,
     /// The next inline task id to mint. Per-`Run` and not process-global, so two runs of one case
     /// journal the same `task_0001`, `task_0002`, ... -- the determinism suite reads those ids.
     refs: Arc<dyn RefRegistry>,

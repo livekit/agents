@@ -728,6 +728,100 @@ async def avatar() -> None:
     print(f"avatar streams={len(streams)} bytes={size} played_in_room={room.played_bytes()}")
 
 
+async def avatar_runner() -> None:
+    print("== avatar runner")
+    from livekit.agents.voice.avatar import (
+        AudioReceiver,
+        AudioSegmentEnd,
+        AvatarOptions,
+        AvatarRunner,
+        VideoGenerator,
+    )
+
+    class Receiver(AudioReceiver):
+        def __init__(self) -> None:
+            super().__init__()
+            self.items: asyncio.Queue[rtc.AudioFrame | AudioSegmentEnd] = asyncio.Queue()
+            self.reports: list[tuple[str, float, bool]] = []
+
+        def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:
+            self.reports.append(("finished", round(playback_position, 3), interrupted))
+
+        async def notify_playback_started(self) -> None:
+            self.reports.append(("started", 0.0, False))
+
+        def __aiter__(self) -> Receiver:
+            return self
+
+        async def __anext__(self) -> rtc.AudioFrame | AudioSegmentEnd:
+            return await self.items.get()
+
+    class Generator(VideoGenerator):
+        def __init__(self) -> None:
+            self.out: asyncio.Queue[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd] = (
+                asyncio.Queue()
+            )
+            self.cleared = 0
+
+        async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
+            if isinstance(frame, rtc.AudioFrame):
+                await self.out.put(rtc.VideoFrame(2, 2, rtc.VideoBufferType.RGBA, bytes(16)))
+            await self.out.put(frame)
+
+        def clear_buffer(self) -> None:
+            self.cleared += 1
+            while not self.out.empty():
+                self.out.get_nowait()
+
+        async def __aiter__(self):  # type: ignore[override]
+            while True:
+                yield await self.out.get()
+
+    room = _core.FakeRoom(sample_rate=48000)
+    receiver, generator = Receiver(), Generator()
+    options = AvatarOptions(
+        video_width=2, video_height=2, video_fps=25, audio_sample_rate=24000, audio_channels=1
+    )
+    runner = AvatarRunner(room, audio_recv=receiver, video_gen=generator, options=options)
+    published: list[bool] = []
+    pushed: list[str] = []
+
+    async def publish() -> None:
+        published.append(True)
+
+    async def push(frame: rtc.VideoFrame | rtc.AudioFrame) -> None:
+        pushed.append(type(frame).__name__)
+
+    runner._media._core_publish = publish  # type: ignore[method-assign]
+    runner._media._core_push = push  # type: ignore[method-assign]
+    await runner.start()
+    assert not published, "a lazy runner publishes on its first frame"
+    frame = rtc.AudioFrame(bytes(960), 24000, 1, 480)
+    for _ in range(2):
+        receiver.items.put_nowait(frame)
+    receiver.items.put_nowait(AudioSegmentEnd())
+    await settle(room, 0.2)
+    assert published == [True], published
+    assert pushed == ["VideoFrame", "AudioFrame"] * 2, pushed
+    assert receiver.reports == [("started", 0.0, False), ("finished", 0.04, False)], (
+        receiver.reports
+    )
+
+    receiver.items.put_nowait(frame)
+    await settle(room, 0.1)
+    receiver.emit("clear_buffer")
+    await settle(room, 0.1)
+    assert generator.cleared == 1
+    assert receiver.reports[-1] == ("finished", 0.02, True), receiver.reports
+    await runner.aclose()
+    try:
+        await runner.wait_for_complete()
+        raise AssertionError("the loops were cut by aclose")
+    except asyncio.CancelledError:
+        pass
+    print(f"avatar runner pushed={len(pushed)} reports={receiver.reports}")
+
+
 class RecordingLLM(ScriptedLLM):
     """``ScriptedLLM`` keeping the ids of every context it is asked with."""
 
@@ -2128,6 +2222,7 @@ async def main() -> int:
 
     await nodes()
     await avatar()
+    await avatar_runner()
     await expressive()
     await background_audio()
     await amd()

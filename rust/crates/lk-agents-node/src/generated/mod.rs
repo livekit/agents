@@ -105,6 +105,7 @@
 //! - `lk_agents_abi::tokenize::search::Bm25::search`: parameter `docs`: Slice(Declared { name: "Document", by_ref: false }) borrows inside a container
 //! - `lk_agents_voice::io::CoreAudioSink::capture_frame`: parameter `frame`: `AudioFrame` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::avatar::DataStreamAudioOutput::for_host`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
+//! - `lk_agents_voice::avatar_runner::AvatarRunner::new`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)
 //! - `lk_agents_rtc::RoomEventBus`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::RpcHandler`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::ByteStreamSender`: `lk_agents_rtc` is not linked by lk-agents-node
@@ -174,6 +175,9 @@
 //! - `lk_agents_abi::voice::io::AudioOutput`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::voice::io::TextOutput`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::io::TextNode`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::avatar_runner::AvatarAudioReceiver`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::avatar_runner::AvatarVideoGenerator`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_voice::avatar_runner::AvatarMedia`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::Vad`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_rtc::RtcRoom`: `lk_agents_rtc` is not linked by lk-agents-node
 //! - `lk_agents_rtc::LocalParticipant`: `lk_agents_rtc` is not linked by lk-agents-node

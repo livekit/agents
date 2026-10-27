@@ -432,6 +432,33 @@ pub struct FakeLocalParticipant {
     state: Mutex<LocalState>,
     /// `false` holds every byte stream write, as a congested link does.
     byte_writes: tokio::sync::watch::Sender<bool>,
+    /// Everything sent over the data channel, in the order it went out.
+    sent: Arc<SentLog>,
+}
+
+/// What a participant sent, and how much: a peer relaying it waits on the count.
+#[derive(Default)]
+struct SentLog {
+    items: Mutex<Vec<Sent>>,
+    count: tokio::sync::watch::Sender<usize>,
+}
+
+impl SentLog {
+    fn push(&self, item: Sent) {
+        let mut items = self.items.lock().unwrap();
+        items.push(item);
+        self.count.send_replace(items.len());
+    }
+}
+
+/// One thing the participant sent over its reliable data channel, which a peer receives in this
+/// order: byte streams are named by their index in [`FakeLocalParticipant::byte_streams`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sent {
+    StreamOpened(usize),
+    StreamChunk(usize, Vec<u8>),
+    StreamClosed(usize),
+    Rpc { destination: ParticipantIdentity, method: String, payload: String },
 }
 
 #[derive(Default)]
@@ -461,12 +488,24 @@ impl FakeLocalParticipant {
             next_sid: AtomicU64::new(1),
             state: Mutex::new(LocalState::default()),
             byte_writes: tokio::sync::watch::channel(true).0,
+            sent: Arc::default(),
         }
     }
 
     /// Hold (`false`) or release byte stream writes: a write in flight awaits, as on a real link.
     pub fn flow_byte_writes(&self, flowing: bool) {
         self.byte_writes.send_replace(flowing);
+    }
+
+    /// What was sent over the data channel from the `from`-th send on, in order.
+    pub fn sent_since(&self, from: usize) -> Vec<Sent> {
+        let sent = self.sent.items.lock().unwrap();
+        sent.get(from..).map(<[Sent]>::to_vec).unwrap_or_default()
+    }
+
+    /// How many things were sent, changing with each send.
+    pub fn sent_count(&self) -> tokio::sync::watch::Receiver<usize> {
+        self.sent.count.subscribe()
     }
 
     pub fn attributes(&self) -> HashMap<String, String> {
@@ -652,13 +691,28 @@ impl LocalParticipant for FakeLocalParticipant {
     async fn stream_bytes(&self, opts: crate::StreamBytesOptions) -> Result<Box<dyn crate::ByteStreamWriter>> {
         self.check()?;
         let recorded = Arc::new(Mutex::new(RecordedByteStream { opts, chunks: Vec::new(), closed: false }));
-        self.state.lock().unwrap().byte_streams.push(recorded.clone());
-        Ok(Box::new(FakeByteStreamWriter { recorded, flowing: self.byte_writes.subscribe() }))
+        let index = {
+            let mut state = self.state.lock().unwrap();
+            state.byte_streams.push(recorded.clone());
+            state.byte_streams.len() - 1
+        };
+        self.sent.push(Sent::StreamOpened(index));
+        Ok(Box::new(FakeByteStreamWriter {
+            recorded,
+            flowing: self.byte_writes.subscribe(),
+            index,
+            sent: self.sent.clone(),
+        }))
     }
 
     async fn perform_rpc(&self, destination: ParticipantIdentity, method: String, payload: String) -> Result<(u32, String)> {
         self.check()?;
         let mut state = self.state.lock().unwrap();
+        self.sent.push(Sent::Rpc {
+            destination: destination.clone(),
+            method: method.clone(),
+            payload: payload.clone(),
+        });
         state.rpc_calls.push((destination, method, payload));
         Ok(state.rpc_reply.clone().unwrap_or((0, String::new())))
     }
@@ -672,6 +726,8 @@ impl LocalParticipant for FakeLocalParticipant {
 struct FakeByteStreamWriter {
     recorded: Arc<Mutex<RecordedByteStream>>,
     flowing: tokio::sync::watch::Receiver<bool>,
+    index: usize,
+    sent: Arc<SentLog>,
 }
 
 #[async_trait]
@@ -679,11 +735,13 @@ impl crate::ByteStreamWriter for FakeByteStreamWriter {
     async fn write(&self, data: &[u8]) -> Result<()> {
         let _ = self.flowing.clone().wait_for(|flowing| *flowing).await;
         self.recorded.lock().unwrap().chunks.push(data.to_vec());
+        self.sent.push(Sent::StreamChunk(self.index, data.to_vec()));
         Ok(())
     }
 
     async fn close(self: Box<Self>) -> Result<()> {
         self.recorded.lock().unwrap().closed = true;
+        self.sent.push(Sent::StreamClosed(self.index));
         Ok(())
     }
 }

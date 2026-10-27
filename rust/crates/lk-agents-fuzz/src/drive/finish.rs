@@ -208,8 +208,9 @@ impl Run {
         let playing = now + self.room_audio_queued().as_millis() as u64;
         // A voice still owing its first audio answers on its own clock.
         let voice = now + self.registry.voice_due_in().map_or(0, |d| d.as_millis() as u64);
-        let furthest =
-            self.deadlines().map(|(_, at)| at).max().unwrap_or(now).max(playing).max(voice);
+        // The avatar plays what it holds in real time before it reports it played.
+        let avatar = now + self.avatar_due_in().map_or(0, |d| d.as_millis() as u64);
+        let furthest = self.deadlines().map(|(_, at)| at).max().unwrap_or(now).max(playing).max(voice).max(avatar);
         Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
     }
 
@@ -222,6 +223,15 @@ impl Run {
         self.deadlines().any(|(periodic, at)| !periodic && at > now)
             || !self.room_audio_queued().is_zero()
             || self.registry.voice_due_in().is_some()
+            || self.avatar_due_in().is_some()
+    }
+
+    /// The avatar's playout still to come, or the agent's sink waiting out its give-up timer.
+    fn avatar_due_in(&self) -> Option<Duration> {
+        let now = self.time.now();
+        let timer = self.avatar_sink.as_ref().and_then(|sink| sink.wake_at()).map(|at| at.saturating_duration_since(now));
+        let playout = self.avatar.as_ref().and_then(|worker| worker.due_in());
+        playout.into_iter().chain(timer).max()
     }
 
     /// The agent's voice still queued in the room's speaker or the console's: either plays on the

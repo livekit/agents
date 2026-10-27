@@ -421,6 +421,53 @@ pub enum Breach {
     CancelledUnprompted { response: String, generation: Option<u32> },
 }
 
+/// What the avatar worker's runner was handed and did, as its receiver, its generator and its
+/// synchronizer saw it (`fakes::avatar`). A segment is a run of received audio, numbered by the
+/// receiver from zero; a frame's `from` is when the earliest audio in it was received.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AvatarStep {
+    /// The worker started: its generator's frame period and latency, and its synchronizer's
+    /// audio queue.
+    Started { period_ms: u64, latency_ms: u64, queue_ms: u64 },
+    /// The runner pulled an audio frame of this segment from the receiver.
+    Received { segment: u32 },
+    /// The runner pulled a segment end from the receiver.
+    ReceivedEnd,
+    /// The agent's `lk.clear_buffer` reached the runner.
+    Clear,
+    /// The generator cleared what it had buffered.
+    GeneratorCleared,
+    /// The generator yielded a frame to the runner.
+    Generated(AvatarFrameLabel),
+    /// The generator yielded the end of this segment.
+    GeneratedEnd { segment: u32 },
+    /// The runner pushed a frame into the synchronizer, which plays it at `plays_ms`.
+    Pushed { frame: AvatarFrameLabel, plays_ms: u64 },
+    /// The runner reported a segment's playback.
+    ReportedStarted,
+    ReportedFinished { interrupted: bool },
+    /// The run asked the worker to close.
+    CloseAsked,
+    /// The worker closed: what was still held or running.
+    Closed {
+        frames_left: usize,
+        pulls_after_close: u32,
+        media_closes: u32,
+        receiver_closed: bool,
+        io_in_flight: bool,
+    },
+}
+
+/// One generated frame: a video frame or the audio of tick `tick`, and the segment and the
+/// receive stamp of the audio it carries (none for an idle video frame).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AvatarFrameLabel {
+    pub video: bool,
+    pub tick: u64,
+    pub segment: Option<u32>,
+    pub from: Option<Observed>,
+}
+
 /// An answer the driver gave a caller.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Answer {
@@ -538,6 +585,7 @@ pub struct Recording {
     forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
     sink: Vec<(Observed, Sink)>,
     host: Vec<(Observed, Host)>,
+    avatar: Vec<(Observed, AvatarStep)>,
     journal: Vec<(Observed, Step)>,
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
@@ -658,6 +706,11 @@ impl Recording {
         &self.host
     }
 
+    /// What the avatar worker's runner did, in order.
+    pub fn avatar(&self) -> &[(Observed, AvatarStep)] {
+        &self.avatar
+    }
+
     /// What left the session.
     pub fn sink(&self) -> &[(Observed, Sink)] {
         &self.sink
@@ -757,6 +810,10 @@ impl Recording {
             }
         }
         self.host.push((at, event));
+    }
+
+    pub fn record_avatar(&mut self, at: Observed, step: AvatarStep) {
+        self.avatar.push((at, step));
     }
 
     pub fn record_sink(&mut self, at: Observed, sink: Sink) {

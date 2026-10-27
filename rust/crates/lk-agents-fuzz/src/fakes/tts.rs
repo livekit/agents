@@ -67,12 +67,9 @@ impl Synthesis {
         let Some(sender) = &state.sender else { return };
         let chunk = state.chunks;
         let sample = Tag::synthesized(self.nth(), chunk);
-        let frame = AudioFrame::new(
-            sample.to_le_bytes().repeat(SAMPLES_PER_CHUNK),
-            SAMPLE_RATE,
-            1,
-            SAMPLES_PER_CHUNK as u32,
-        );
+        // as long as the text takes to say: about 10 ms a character, as a voice speaks
+        let samples = SAMPLES_PER_CHUNK * text.chars().count().clamp(1, 12);
+        let frame = AudioFrame::new(sample.to_le_bytes().repeat(samples), SAMPLE_RATE, 1, samples as u32);
         if sender.send(Ok(SynthesizedAudio::new(frame, "synthesis"))).is_ok() {
             self.registry.record_produced(self.nth(), chunk, text);
             state.chunks += 1;

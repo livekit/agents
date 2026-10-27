@@ -9,7 +9,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use lk_agents_abi::voice::io::{AudioOutput, IoError, PlaybackTracker, Result};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Spawner, SpawnerExt, unix_secs};
+use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Spawner, SpawnerExt, Ts, unix_secs};
 use lk_agents_rtc::{
     ByteStreamWriter, ParticipantIdentity, RoomEvent, RpcHandler, RtcRoom, StreamBytesOptions,
 };
@@ -81,7 +81,8 @@ struct Inner {
     /// capture the playout drops mid-write leaves the stream to the segment's close.
     segment: Mutex<Option<Arc<Segment>>>,
     pushed: Mutex<f64>,
-    clear_timer: Mutex<Option<AbortHandle>>,
+    /// The give-up timer after a clear, and when it fires.
+    clear_timer: Mutex<Option<(AbortHandle, Ts)>>,
 }
 
 /// One segment's byte stream: opened by its first frame, in order behind the async lock.
@@ -171,7 +172,7 @@ impl Inner {
     /// `_handle_playback_finished`.
     fn on_playback_finished(&self, payload: &str) -> String {
         log::info!(target: LOG, caller_identity = self.destination.as_str(); "playback finished event received");
-        if let Some(timer) = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        if let Some((timer, _)) = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take() {
             timer.abort();
         }
         let ev: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
@@ -209,20 +210,21 @@ impl Inner {
             }
             None => self.clear_buffer_timeout,
         };
-        if let Some(timer) = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        if let Some((timer, _)) = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take() {
             timer.abort();
         }
         let Some(timeout) = timeout else { return };
         let me = Arc::clone(&self);
+        let at = self.clock.now().saturating_add(timeout);
         let timer = self.spawner.spawn_unboxed(async move {
-            let at = me.clock.now().saturating_add(timeout);
             me.clock.wait_until(at).await;
+            me.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take();
             log::warn!(target: LOG,
                 "didn't receive playback finished event after clear buffer, marking playout as done arbitrarily");
             me.tracker.report_finished(pushed, true, None);
             me.tracker.reset();
         });
-        *self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()) = Some(timer);
+        *self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()) = Some((timer, at));
     }
 }
 
@@ -304,6 +306,11 @@ impl DataStreamAudioOutput {
             clock,
             spawner,
         )
+    }
+
+    /// When the give-up timer after a clear fires, while one is armed.
+    pub fn wake_at(&self) -> Option<Ts> {
+        self.inner.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|(_, at)| *at)
     }
 
     /// The sink as the session's audio output (a native sink is not proxied).
@@ -809,59 +816,6 @@ impl DataStreamAudioReceiver {
 
 type RxRoutes = HashMap<String, HashMap<String, Weak<RxInner>>>;
 static RX_ROUTES: LazyLock<Mutex<RxRoutes>> = LazyLock::new(Mutex::default);
-
-// ----------------------------------------------------------------------------- the runner's bookkeeping
-
-/// `AvatarRunner`'s playback bookkeeping: what played of the segment, and whether one is playing,
-/// so the runner reports `lk.playback_started`/`lk.playback_finished` at the reference's moments.
-#[derive(Debug, Default)]
-pub struct AvatarPlayback {
-    position: f64,
-    playing: bool,
-}
-
-#[lk_agents_abi::host(object(cell = "mutex"))]
-impl AvatarPlayback {
-    #[host(new)]
-    pub fn new() -> Self {
-        AvatarPlayback::default()
-    }
-
-    /// Audio reached the video generator.
-    #[host(method)]
-    pub fn audio_received(&mut self) {
-        self.playing = true;
-    }
-
-    /// An audio frame went out to the room: `True` when it starts the segment's playback.
-    #[host(method)]
-    pub fn audio_played(&mut self, duration: f64) -> bool {
-        let started = self.position == 0.0 && duration > 0.0;
-        self.position += duration;
-        started
-    }
-
-    /// The generator ended the segment: its played length to report, if audio was playing.
-    #[host(method)]
-    pub fn segment_ended(&mut self) -> Option<f64> {
-        if !std::mem::take(&mut self.playing) {
-            return None;
-        }
-        Some(std::mem::take(&mut self.position))
-    }
-
-    /// `clear_buffer` arrived: whether audio was playing (the interrupted report is owed).
-    #[host(method)]
-    pub fn clear(&mut self) -> bool {
-        std::mem::take(&mut self.playing)
-    }
-
-    /// After the generator cleared: the interrupted segment's played length.
-    #[host(method)]
-    pub fn cleared(&mut self) -> f64 {
-        std::mem::take(&mut self.position)
-    }
-}
 
 // ----------------------------------------------------------------------------- the avatar's join
 

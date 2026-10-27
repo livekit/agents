@@ -181,6 +181,13 @@ impl Authored {
         self
     }
 
+    /// The avatar worker's runner did this, at `ms` of the session clock.
+    pub fn avatar_at(mut self, ms: u64, step: crate::record::AvatarStep) -> Self {
+        self.seq += 1;
+        self.recording.record_avatar(Observed::at(self.seq, ms), step);
+        self
+    }
+
     /// One chunk of audio the n-th synthesis stream produced.
     pub fn produced(mut self, tts: u32, chunk: u16, text: &str) -> Self {
         let at = self.next();

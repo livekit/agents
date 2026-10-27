@@ -14,7 +14,7 @@ pub use events::{
 };
 pub use fake::{
     ConnectCall, FakeAudioSource, FakeLocalParticipant, FakeRemoteParticipant, FakeRoom, FakeRtc,
-    FakeTrackPublication, FrameSynth, RecordedByteStream, RecordedTextStream, StreamRequests, subscribe_local,
+    FakeTrackPublication, FrameSynth, RecordedByteStream, RecordedTextStream, Sent, StreamRequests, subscribe_local,
     tokio_test_block,
 };
 /// Re-exported so the 50 fps audio legs need no copy at this boundary.

@@ -841,7 +841,9 @@ impl Run {
     /// The avatar worker and the agent hear what the other sent since the last look.
     pub(super) fn avatar_reports(&mut self) {
         if let Some(worker) = &self.avatar {
-            worker.relay(&self.room, super::start::AVATAR);
+            for (at, step) in worker.drain() {
+                self.record.record_avatar(at, step);
+            }
         }
     }
 
@@ -1054,7 +1056,10 @@ impl Run {
             player.close().await;
         }
         if exited && let Some(worker) = self.avatar.take() {
-            worker.close();
+            worker.close().await;
+            for (at, step) in worker.drain() {
+                self.record.record_avatar(at, step);
+            }
         }
         if exited {
             if let Some(closing) = self.closing.take() {

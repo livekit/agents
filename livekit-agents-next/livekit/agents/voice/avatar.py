@@ -2,7 +2,8 @@
 audio output, and the agent and an avatar worker exchanging audio over LiveKit DataStream: one
 byte stream per segment on ``lk.audio_stream``, ``lk.clear_buffer`` from the agent,
 ``lk.playback_started`` and ``lk.playback_finished`` back. Both DataStream ends run in the core
-(``_core.DataStreamAudioOutput``, ``_core.DataStreamAudioReceiver``)."""
+(``_core.DataStreamAudioOutput``, ``_core.DataStreamAudioReceiver``), as does the runner
+(``_core.AvatarRunner``): this module keeps the SDK's synchronizer and tracks it pushes into."""
 
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 from livekit import rtc
 from livekit.api import TwirpError
@@ -21,7 +22,6 @@ from .. import _core, utils
 from ..job import get_job_context
 from ..metrics import AvatarMetrics, Metadata
 from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import aio, log_exceptions
 from .events import ConversationItemAddedEvent
 from .io import AudioOutput, AudioOutputCapabilities
 
@@ -68,6 +68,25 @@ class AudioReceiver(ABC, rtc.EventEmitter[Literal["clear_buffer"]]):
     async def aclose(self) -> None:
         pass
 
+    # what `_core.AvatarRunner` calls (`AvatarAudioReceiver`)
+
+    async def _core_open_audio(self) -> None:
+        self._core_audio = self.__aiter__()
+
+    async def _core_next_audio(self) -> rtc.AudioFrame | AudioSegmentEnd | None:
+        return await anext(self._core_audio, None)
+
+    async def _core_notify_playback_started(self) -> None:
+        await _maybe_await(self.notify_playback_started())
+
+    async def _core_notify_playback_finished(
+        self, playback_position: float, interrupted: bool
+    ) -> None:
+        await _maybe_await(self.notify_playback_finished(playback_position, interrupted))
+
+    async def _core_aclose(self) -> None:
+        await self.aclose()
+
 
 class VideoGenerator(ABC):
     @abstractmethod
@@ -83,6 +102,26 @@ class VideoGenerator(ABC):
         self,
     ) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         """Continuously stream out video and audio frames, or AudioSegmentEnd when the audio segment ends"""  # noqa: E501
+
+    # what `_core.AvatarRunner` calls (`AvatarVideoGenerator`)
+
+    async def _core_push_audio(self, frame: rtc.AudioFrame | None) -> None:
+        await self.push_audio(AudioSegmentEnd() if frame is None else frame)
+
+    async def _core_clear_buffer(self) -> None:
+        await _maybe_await(self.clear_buffer())
+
+    async def _core_open_frames(self) -> None:
+        self._core_frames = self.__aiter__()
+
+    async def _core_next_frame(self) -> rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd | None:
+        return await anext(self._core_frames, None)
+
+
+async def _maybe_await(result: None | Coroutine[None, None, None]) -> None:
+    # a receiver or generator may answer synchronously or with a coroutine
+    if asyncio.iscoroutine(result):
+        await result
 
 
 TEvent = TypeVar("TEvent")
@@ -362,153 +401,65 @@ class AvatarRunner:
         self._video_gen = video_gen
         self._options = options
         self._queue_size_ms = _queue_size_ms
-
         self._audio_recv = audio_recv
-        # what played of the segment, and whether one is playing (the core's bookkeeping)
-        self._playback = _core.AvatarPlayback()
-        self._tasks: set[asyncio.Task[Any]] = set()
-
-        self._lock = asyncio.Lock()
-        self._audio_publication: rtc.LocalTrackPublication | None = None
-        self._video_publication: rtc.LocalTrackPublication | None = None
-        self._lazy_publish = _lazy_publish
-
-        # Audio/video sources
-        self._audio_source = rtc.AudioSource(
-            sample_rate=options.audio_sample_rate,
-            num_channels=options.audio_channels,
-            queue_size_ms=self._queue_size_ms,
+        self._media = _AvatarMedia(room, options, _queue_size_ms)
+        self._core = _core.AvatarRunner(
+            room,
+            receiver=audio_recv,
+            generator=video_gen,
+            media=self._media,
+            lazy_publish=_lazy_publish,
         )
-        self._video_source = rtc.VideoSource(width=options.video_width, height=options.video_height)
-        # AV synchronizer
-        self._av_sync = rtc.AVSynchronizer(
-            audio_source=self._audio_source,
-            video_source=self._video_source,
-            video_fps=options.video_fps,
-            video_queue_size_ms=self._queue_size_ms,
-        )
-        self._read_audio_task: asyncio.Task[None] | None = None
-        self._forward_video_atask: asyncio.Task[None] | None = None
-        self._room_connected_fut = asyncio.Future[None]()
 
     @property
     def av_sync(self) -> rtc.AVSynchronizer:
-        return self._av_sync
+        return self._media.av_sync
 
     async def start(self) -> None:
         """Start the worker"""
-
-        # start audio receiver
         await self._audio_recv.start()
-        self._audio_recv.on("clear_buffer", self._on_clear_buffer)
-
-        self._room.on("connection_state_changed", self._on_connection_state_changed)
-        if self._room.isconnected():
-            self._room_connected_fut.set_result(None)
-
-        if not self._lazy_publish:
-            await self._publish_track()
-
-        # start processing
-        self._read_audio_atask = asyncio.create_task(self._read_audio())
-        self._forward_video_atask = asyncio.create_task(self._forward_video())
+        self._audio_recv.on("clear_buffer", self._core.clear_buffer)
+        await self._core.start()
 
     async def wait_for_complete(self) -> None:
-        if not self._read_audio_atask or not self._forward_video_atask:
-            raise RuntimeError("AvatarRunner not started")
-
-        await asyncio.gather(
-            self._read_audio_atask,
-            self._forward_video_atask,
-        )
-
-    async def _publish_track(self) -> None:
-        async with self._lock:
-            await self._room_connected_fut
-
-            audio_track = rtc.LocalAudioTrack.create_audio_track("avatar_audio", self._audio_source)
-            audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-            self._audio_publication = await self._room.local_participant.publish_track(
-                audio_track, audio_options
-            )
-            await self._audio_publication.wait_for_subscription()
-
-            video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self._video_source)
-            video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
-            self._video_publication = await self._room.local_participant.publish_track(
-                video_track, video_options
-            )
-
-    @log_exceptions(logger=logger)
-    async def _read_audio(self) -> None:
-        async for frame in self._audio_recv:
-            if isinstance(frame, rtc.AudioFrame):
-                self._playback.audio_received()
-            await self._video_gen.push_audio(frame)
-
-    @log_exceptions(logger=logger)
-    async def _forward_video(self) -> None:
-        """Forward video to the room through the AV synchronizer"""
-
-        async for frame in self._video_gen:
-            if isinstance(frame, AudioSegmentEnd):
-                # notify the agent that the audio has finished playing
-                if (position := self._playback.segment_ended()) is not None:
-                    self._notify(
-                        self._audio_recv.notify_playback_finished(
-                            playback_position=position, interrupted=False
-                        )
-                    )
-                continue
-
-            if not self._video_publication:
-                await self._publish_track()
-
-            await self._av_sync.push(frame)
-            if isinstance(frame, rtc.AudioFrame) and self._playback.audio_played(frame.duration):
-                self._notify(self._audio_recv.notify_playback_started())
-
-    def _notify(self, notify_task: Any) -> None:
-        # a receiver may report asynchronously: never block the video forwarding on it
-        if asyncio.iscoroutine(notify_task):
-            task = asyncio.create_task(notify_task)
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
-
-    def _on_clear_buffer(self) -> None:
-        """Handle clearing the buffer and notify about interrupted playback"""
-
-        @log_exceptions(logger=logger)
-        async def _handle_clear_buffer(audio_playing: bool) -> None:
-            clear_task = self._video_gen.clear_buffer()
-            if asyncio.iscoroutine(clear_task):
-                await clear_task
-
-            if audio_playing:
-                notify_task = self._audio_recv.notify_playback_finished(
-                    playback_position=self._playback.cleared(), interrupted=True
-                )
-                if asyncio.iscoroutine(notify_task):
-                    await notify_task
-
-        task = asyncio.create_task(_handle_clear_buffer(self._playback.clear()))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    def _on_connection_state_changed(self, _: rtc.ConnectionState) -> None:
-        if self._room.isconnected() and not self._room_connected_fut.done():
-            self._room_connected_fut.set_result(None)
+        await self._core.wait_for_complete()
 
     async def aclose(self) -> None:
-        self._room.off("connection_state_changed", self._on_connection_state_changed)
+        await self._core.aclose()
 
-        await self._audio_recv.aclose()
-        if self._forward_video_atask:
-            await aio.cancel_and_wait(self._forward_video_atask)
-        if self._read_audio_atask:
-            await aio.cancel_and_wait(self._read_audio_atask)
-        await aio.cancel_and_wait(*self._tasks)
 
-        await self._av_sync.aclose()
-        await self._audio_source.aclose()
-        await self._video_source.aclose()
+class _AvatarMedia:
+    """What the core's runner pushes into: the avatar's tracks and its AV synchronizer."""
+
+    def __init__(self, room: rtc.Room, options: AvatarOptions, queue_size_ms: int) -> None:
+        self._room = room
+        self.audio_source = rtc.AudioSource(
+            sample_rate=options.audio_sample_rate,
+            num_channels=options.audio_channels,
+            queue_size_ms=queue_size_ms,
+        )
+        self.video_source = rtc.VideoSource(width=options.video_width, height=options.video_height)
+        self.av_sync = rtc.AVSynchronizer(
+            audio_source=self.audio_source,
+            video_source=self.video_source,
+            video_fps=options.video_fps,
+            video_queue_size_ms=queue_size_ms,
+        )
+
+    async def _core_publish(self) -> None:
+        audio_track = rtc.LocalAudioTrack.create_audio_track("avatar_audio", self.audio_source)
+        audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        publication = await self._room.local_participant.publish_track(audio_track, audio_options)
+        await publication.wait_for_subscription()
+
+        video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self.video_source)
+        video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+        await self._room.local_participant.publish_track(video_track, video_options)
+
+    async def _core_push(self, frame: rtc.VideoFrame | rtc.AudioFrame) -> None:
+        await self.av_sync.push(frame)
+
+    async def _core_aclose(self) -> None:
+        await self.av_sync.aclose()
+        await self.audio_source.aclose()
+        await self.video_source.aclose()

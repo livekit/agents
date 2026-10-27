@@ -92,6 +92,21 @@ impl Run {
         });
         let (llm_node, tts_node, stt_node) = nodes(setup, &llm, &tts, &stt);
         let providers = Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone() };
+        // The avatar worker is in the room before its stream is opened to it. Its reports cross
+        // as they are sent, so the sink gives up on one after a clear as in production.
+        let avatar_sink = (setup.avatar && console.is_none()).then(|| {
+            room.add_participant(AVATAR, ParticipantKind::Agent);
+            Arc::new(lk_agents_voice::avatar::DataStreamAudioOutput::new(
+                room.clone(),
+                AVATAR.into(),
+                Some(SAMPLE_RATE),
+                None,
+                Some(Duration::from_secs(2)),
+                setup.avatar_reports_start,
+                time.clock(),
+                tasks.clone(),
+            ))
+        });
         let api = Arc::new(
             SessionApi::host_new(
                 Arc::new(FixedRoom { rtc: room.clone(), time: time.clone() }),
@@ -169,24 +184,7 @@ impl Run {
                 },
                 match &console {
                     Some((io, _)) => Some(io.as_audio_output()),
-                    None if setup.avatar => {
-                        // The worker is in the room before its stream is opened to it.
-                        room.add_participant(AVATAR, ParticipantKind::Agent);
-                        let sink = lk_agents_voice::avatar::DataStreamAudioOutput::new(
-                            room.clone(),
-                            AVATAR.into(),
-                            Some(SAMPLE_RATE),
-                            None,
-                            // No give-up timer: the worker's report crosses at the run's next
-                            // look rather than in milliseconds, and a timer firing first would
-                            // hand that late report to the next segment.
-                            None,
-                            setup.avatar_reports_start,
-                            time.clock(),
-                            tasks.clone(),
-                        );
-                        Some(Arc::new(sink).as_output())
-                    }
+                    None if setup.avatar => avatar_sink.as_ref().map(|sink| sink.as_output()),
                     None => legs.is_none().then(|| {
                         fakes::FakeAudioOutput::new(
                             registry.clone(),
@@ -337,6 +335,7 @@ impl Run {
             next_request: 0,
             background: None,
             avatar: None,
+            avatar_sink,
             refs,
             legs: providers,
             setup: setup.clone(),
@@ -356,7 +355,19 @@ impl Run {
         }
         if setup.avatar {
             let name = format!("avatar-{schedule}");
-            run.avatar = Some(fakes::FakeAvatarWorker::start(run.time.clock(), &name).await);
+            let (fps, latency) = (setup.avatar_fps, setup.avatar_latency_ms);
+            let worker = fakes::FakeAvatarWorker::start(
+                run.room.clone(),
+                AVATAR,
+                run.time.clock(),
+                run.stamps.clone(),
+                &name,
+                schedule,
+                fps,
+                latency,
+            )
+            .await;
+            run.avatar = Some(worker);
         }
         // The person joins the call the agent just answered; the callee AMD awaits may not have.
         if setup.amd.map_or(legs.is_some(), |amd| amd.answer != AmdAnswer::Missing) {

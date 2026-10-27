@@ -134,6 +134,17 @@ pub fn io_error_to_node(e: lk_agents_abi::voice::io::IoError) -> JsError {
     JsError::new("RuntimeError", e.to_string())
 }
 
+/// `RunnerError` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/avatar_runner.rs`).
+#[allow(unreachable_patterns)]
+pub fn runner_error_to_node(e: lk_agents_voice::avatar_runner::RunnerError) -> JsError {
+    let kind = match &e {
+        lk_agents_voice::avatar_runner::RunnerError::Closed => "asyncio.CancelledError",
+        lk_agents_voice::avatar_runner::RunnerError::Failed(inner) => "=ProviderError",
+        _ => "RuntimeError",
+    };
+    JsError::new(kind, e.to_string())
+}
+
 /// `RoomRefused` as a host error (`#[host(error)]` in `rust/crates/lk-agents-voice/src/room_io/rooms.rs`).
 pub fn room_refused_to_node(e: lk_agents_voice::room_io::rooms::RoomRefused) -> JsError {
     JsError::new("ValueError", e.to_string())

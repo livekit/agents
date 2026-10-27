@@ -86,6 +86,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         background_audio: false,
         avatar: false,
         avatar_reports_start: false,
+        avatar_fps: 25,
+        avatar_latency_ms: 20,
         stt_model: 0,
         tts_latency: None,
         conn: None,
@@ -151,5 +153,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         interval_ms: DELAYS_MS[rng.usize(0..DELAYS_MS.len())],
     });
     setup.chunked_tts = rng.u8(0..100) < 30;
+    // drawn last, so every other part of a seed's setup stays what it was
+    setup.avatar_fps = if rng.bool() { 25 } else { 40 };
+    setup.avatar_latency_ms = rng.u64(1..1000 / setup.avatar_fps);
     setup
 }

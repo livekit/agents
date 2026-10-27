@@ -1528,46 +1528,43 @@ impl DataStreamAudioOutput {
     }
 }
 
-#[napi(js_name = "AvatarPlayback")]
-pub struct AvatarPlayback {
-    pub(crate) inner: std::sync::Mutex<lk_agents_voice::avatar::AvatarPlayback>,
+#[napi(js_name = "AvatarRunner")]
+pub struct AvatarRunner {
+    pub(crate) inner: std::sync::Arc<lk_agents_voice::avatar_runner::AvatarRunner>,
 }
 
 #[napi]
-impl AvatarPlayback {
-    #[napi(constructor)]
-    pub fn new() -> Self {
-        AvatarPlayback { inner: std::sync::Mutex::new(lk_agents_voice::avatar::AvatarPlayback::new()) }
+impl AvatarRunner {
+    #[napi(js_name = "start", ts_return_type = "Promise<void>")]
+    pub fn start<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+        let inner = std::sync::Arc::clone(&self.inner);
+        env.spawn_future_with_callback(async move { Ok(inner.start().await.map_err(crate::generated::errors::runner_error_to_node)) }, |env, out| match out {
+            Ok(out) => Ok(()),
+            Err(e) => Err(e.into_napi(env)),
+        })
     }
 
-    #[napi(js_name = "audioReceived")]
-    pub fn audio_received(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.audio_received();
+    #[napi(js_name = "waitForComplete", ts_return_type = "Promise<void>")]
+    pub fn wait_for_complete<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+        let inner = std::sync::Arc::clone(&self.inner);
+        env.spawn_future_with_callback(async move { Ok(inner.wait_for_complete().await.map_err(crate::generated::errors::runner_error_to_node)) }, |env, out| match out {
+            Ok(out) => Ok(()),
+            Err(e) => Err(e.into_napi(env)),
+        })
     }
 
-    #[napi(js_name = "audioPlayed")]
-    pub fn audio_played(&self, duration: f64) -> bool {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.audio_played(duration)
+    #[napi(js_name = "clearBuffer")]
+    pub fn clear_buffer(&self) {
+        self.inner.clear_buffer();
     }
 
-    #[napi(js_name = "segmentEnded")]
-    pub fn segment_ended(&self) -> Option<f64> {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.segment_ended()
-    }
-
-    #[napi(js_name = "clear")]
-    pub fn clear(&self) -> bool {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.clear()
-    }
-
-    #[napi(js_name = "cleared")]
-    pub fn cleared(&self) -> f64 {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.cleared()
+    #[napi(js_name = "aclose", ts_return_type = "Promise<void>")]
+    pub fn aclose<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+        let inner = std::sync::Arc::clone(&self.inner);
+        env.spawn_future_with_callback(async move { Ok(inner.aclose().await.map_err(crate::generated::errors::runner_error_to_node)) }, |env, out| match out {
+            Ok(out) => Ok(()),
+            Err(e) => Err(e.into_napi(env)),
+        })
     }
 }
 
