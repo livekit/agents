@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 pub(crate) use lk_agents_abi::RealtimeCommand as Command;
-use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{AudioByteStream, Maybe, Ts};
 use lk_agents_abi::{ChatContext, ChatItem, compute_chat_ctx_diff};
@@ -1089,8 +1088,8 @@ pub struct Step {
     pub events: Vec<Event>,
     /// Recycle the socket; the driver reconnects and calls [`RealtimeMachine::reconnect`].
     pub recycle: bool,
-    /// A terminal error: the driver must stop reconnecting.
-    pub fatal: Option<ApiError>,
+    /// A terminal error, reported once: the driver must stop reconnecting.
+    pub fatal: Option<RealtimeModelError>,
 }
 
 impl Step {

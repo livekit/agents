@@ -7,14 +7,13 @@ use std::time::SystemTime;
 
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::ApiError;
 use serde_json::Value;
 
 use crate::realtime::wire::{self, Incoming, TranscriptionCompleted};
 use lk_agents_abi::llm::realtime::{
     AudioDelta, Event, GenerateReplyFailed, GenerationCreated, GenerationDone, GenerationStatus,
     InputSpeechStopped, InputTranscription, MessageDone, MessageModalities, MessageStarted,
-    Modalities, RealtimeError, TextDelta,
+    Modalities, RealtimeError, RealtimeModelError, TextDelta,
 };
 
 impl RealtimeMachine {
@@ -486,12 +485,10 @@ impl RealtimeMachine {
                 self.dialect.provider_label,
                 done.error_type.as_deref().unwrap_or("unknown")
             );
-            if fatal {
-                // Raised in the reference: the driver reports it once, as unrecoverable.
-                step.fatal = Some(ApiError::new(message).with_retryable(false));
-            } else {
-                step.events.push(Event::Error(self.error(now, message, true)));
-            }
+            let error = RealtimeModelError { code: done.error_code.clone(), ..self.error(now, message, !fatal) };
+            log::error!(target: "livekit.agents", code = error.code.as_deref().unwrap_or(""); "{}", error.message);
+            // Raised in the reference when fatal: the session stops, and reports it once.
+            if fatal { step.fatal = Some(error) } else { step.events.push(Event::Error(error)) }
         }
         step
     }
@@ -536,13 +533,18 @@ impl RealtimeMachine {
             return step;
         }
 
-        let message = format!("{} returned an error", self.dialect.provider_label);
-        if fatal {
-            // Raised in the reference: the driver reports it once, as unrecoverable.
-            step.fatal = Some(ApiError::new(message).with_retryable(false));
-        } else {
-            step.events.push(Event::Error(self.error(now, message, true)));
-        }
+        // The server's own words and code: "returned an error" alone says nothing of a bad voice,
+        // a tool schema or the quota.
+        let message = format!("{} returned an error: {}", self.dialect.provider_label, err.message);
+        let error = RealtimeModelError { code: err.code.clone(), ..self.error(now, message, !fatal) };
+        log::error!(
+            target: "livekit.agents",
+            code = err.code.as_deref().unwrap_or(""),
+            error_type = err.type_.as_deref().unwrap_or("");
+            "{}", error.message
+        );
+        // Raised in the reference when fatal: the session stops, and reports it once.
+        if fatal { step.fatal = Some(error) } else { step.events.push(Event::Error(error)) }
         step
     }
 }

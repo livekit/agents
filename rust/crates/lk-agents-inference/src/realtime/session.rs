@@ -428,6 +428,11 @@ impl Pump {
         loop {
             let err = match self.connect_and_run(&mut commands, reconnecting, &mut num_retries).await {
                 Ok(Outcome::Closed) => return,
+                Ok(Outcome::Fatal(error)) => {
+                    let _ = self.events.send(Event::Error(error));
+                    self.close().await;
+                    return;
+                }
                 Ok(Outcome::Recycle) => {
                     reconnecting = true;
                     continue;
@@ -526,7 +531,7 @@ impl Pump {
             let deadline = self.shared.machine.lock().await.next_deadline();
             let sleep = deadline.map(|at| self.clock.wait_until(at));
 
-            let step = tokio::select! {
+            let mut step = tokio::select! {
                 biased;
                 msg = receiver.recv() => match msg {
                     Ok(WsMessage::Text(text)) => {
@@ -565,9 +570,9 @@ impl Pump {
                 }
             };
 
-            if let Some(err) = step.fatal.clone() {
+            if let Some(error) = step.fatal.take() {
                 self.dispatch(step, sender.as_ref()).await;
-                return Err(err);
+                return Ok(Outcome::Fatal(error));
             }
             let recycle = step.recycle;
             if !self.dispatch(step, sender.as_ref()).await {
@@ -633,6 +638,8 @@ impl Pump {
 enum Outcome {
     Recycle,
     Closed,
+    /// The server said the session cannot go on: no reconnect.
+    Fatal(lk_agents_abi::llm::realtime::RealtimeModelError),
 }
 
 // =============================================================================================

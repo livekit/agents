@@ -618,7 +618,11 @@ fn a_fatal_error_code_stops_the_reconnect_loop() {
             "message": "You exceeded your current quota",
         }}),
     );
-    assert!(step.fatal.is_some(), "the driver must not reconnect");
+    let fatal = step.fatal.as_ref().expect("the driver must not reconnect");
+    // The server's words and code reach the caller: the generic label alone says nothing.
+    assert_eq!(fatal.code.as_deref(), Some("insufficient_quota"));
+    assert!(fatal.message.ends_with("You exceeded your current quota"), "{}", fatal.message);
+    assert!(!fatal.recoverable);
     // raised, as the reference does: the driver reports it once, as unrecoverable
     assert!(!step.events.iter().any(|e| matches!(e, Event::Error(_))), "{:?}", step.events);
 
@@ -633,7 +637,7 @@ fn a_fatal_error_code_stops_the_reconnect_loop() {
         }}),
     );
     assert!(step.fatal.is_none());
-    assert!(matches!(&step.events[0], Event::Error(e) if e.recoverable));
+    assert!(matches!(&step.events[0], Event::Error(e) if e.recoverable && e.message.ends_with("try again")));
 }
 
 // Catches: committing a buffer of exactly 100 ms (OpenAI needs strictly more).
