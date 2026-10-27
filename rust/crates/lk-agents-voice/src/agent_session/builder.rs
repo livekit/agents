@@ -206,6 +206,7 @@ impl DriverBuilder {
         let activity =
             self.activity(eot, realtime, paused_speech, resolved_mode, requested_detection);
         let mut driver = Driver {
+            activity_changed: Default::default(),
             session,
             activity,
             input,
@@ -227,6 +228,7 @@ impl DriverBuilder {
         // The opening cycles run at the instant the session is built.
         driver.step.set(time.read());
         driver.publish_activity();
+        driver.flush_activity();
 
         driver.open_session(capture_run, forward_chat_context, keyterms);
         // `ivr_detection=True` is the IVR system's to start; the core starts no system.

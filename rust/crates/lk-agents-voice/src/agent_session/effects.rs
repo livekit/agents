@@ -492,6 +492,7 @@ impl Driver {
                 break;
             }
         }
+        self.flush_activity();
         let gate = crate::agent_session::SchedulingGate {
             paused: self.activity.speech_scheduler.is_paused(),
             handoff_draining: self.activity.handoff.draining() && self.session.closing.is_none(),

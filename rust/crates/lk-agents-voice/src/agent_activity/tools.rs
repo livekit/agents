@@ -408,8 +408,7 @@ impl Driver {
         let batch = Batch(std::mem::take(&mut self.activity.tools.pending));
         // "if the update is still the tail, the agent hasn't spoken since".
         let last_pending = batch.last_item_id();
-        let last_record =
-            self.session.chat_ctx.agent_chat_ctx().items.last().map(|i| i.id().to_owned());
+        let last_record = self.session.chat_ctx.last_agent_item_id().map(str::to_owned);
         let at_tail = last_pending.is_some() && last_pending == last_record;
         let call_ids = batch.update_ids();
         let id = self.activity.hooks.mint();

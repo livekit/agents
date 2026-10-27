@@ -27,6 +27,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// How many of the latest speeches the driver remembers once settled (their agent, end, tool
+/// steps): a late item or a reply planned behind one is never that far behind.
+const KEPT_SPEECHES: usize = 128;
+
 /// What the STT and VAD legs are fed: every model in the tree wants 16 kHz mono.
 pub const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 
@@ -439,13 +443,42 @@ impl Driver {
         }
     }
 
+    /// The activity changed: the snapshot the spawned work reads is rebuilt once, as the cycle's
+    /// effects are done ([`Driver::flush_activity`]), not per commit (a copy of the whole agent
+    /// context each time grew a long call's cost with its length squared).
     pub(crate) fn publish_activity(&self) {
+        self.activity_changed.set(true);
+    }
+
+    pub(crate) fn flush_activity(&mut self) {
+        if !self.activity_changed.replace(false) {
+            return;
+        }
+        self.prune_settled_speeches();
         self.shared.activity.send_replace(crate::agent_session::ActivitySnapshot {
             chat_ctx: self.session.chat_ctx.agent_chat_ctx(),
             instructions: self.activity.instructions.clone(),
             finished: self.activity.finished.clone(),
             tools_committed: self.activity.tools_committed.clone(),
         });
+    }
+
+    /// What the driver keeps per speech outlives it only while something may still ask: the
+    /// speech is live, a tool of it runs, or it is among the latest [`KEPT_SPEECHES`].
+    fn prune_settled_speeches(&mut self) {
+        let a = &mut self.activity;
+        if a.speech_agents.len() + a.finished.len() + a.tools_committed.len() < 2 * KEPT_SPEECHES {
+            return;
+        }
+        let Some(newest) = a.speech_agents.keys().next_back().copied() else { return };
+        let scheduler = &a.speech_scheduler;
+        let running: BTreeSet<SpeechId> = a.tools.running.iter().map(|r| r.speech).collect();
+        let keep = |s: &SpeechId| {
+            s.0 + KEPT_SPEECHES as u64 > newest.0 || scheduler.contains(*s) || running.contains(s)
+        };
+        a.speech_agents.retain(|s, _| keep(s));
+        a.finished.retain(|s| keep(s));
+        a.tools_committed.retain(|(s, _), _| keep(s));
     }
 
     /// The history records an agent leaves when it takes over: `AgentHandoff`, then

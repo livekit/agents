@@ -308,6 +308,8 @@ pub struct Driver {
     pub(crate) step: crate::agent_session::time::StepClock,
     pub(crate) stopped: bool,
     pub(super) opened: bool,
+    /// The activity changed this cycle: published once, as the cycle's effects are done.
+    pub(crate) activity_changed: std::cell::Cell<bool>,
 }
 
 impl Driver {

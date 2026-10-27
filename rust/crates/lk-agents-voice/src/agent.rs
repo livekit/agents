@@ -307,6 +307,15 @@ impl SessionChatCtx {
         )
     }
 
+    /// The id of the driving agent's last item, without building its view.
+    pub fn last_agent_item_id(&self) -> Option<&str> {
+        self.items
+            .iter()
+            .rev()
+            .find(|c| c.agent == self.agent && c.visibility.model())
+            .map(|c| c.item.id())
+    }
+
     /// A realtime server's mirror: the agent's view minus items the server created and minus agent
     /// records (`_detach_reusable_resources`).
     pub fn for_realtime(&self) -> ChatContext {
