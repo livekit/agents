@@ -142,6 +142,7 @@ upliftai = ["livekit-plugins-upliftai>=1.8.9"]
 vakyam = ["livekit-plugins-vakyam>=1.8.9"]
 gradium = ["livekit-plugins-gradium>=1.8.9"]
 xai = ["livekit-plugins-xai>=1.8.9"]
+zoom-ai = ["livekit-plugins-zoom-ai>=1.8.8"]
 phonic = ["livekit-plugins-phonic>=1.8.9"]
 did = ["livekit-plugins-did>=1.8.9"]
 
