@@ -165,3 +165,23 @@ async def test_clear_user_turn_cancels_a_turn_that_was_never_committed() -> None
     with pytest.raises(asyncio.CancelledError):
         await task
     assert not ar._hooks.on_end_of_turn.called
+
+
+async def test_a_retained_committed_turn_does_not_erase_the_next_turn() -> None:
+    """Once the live turn is replaced, the retained task must not clear the new turn's input."""
+    ar = _make_recognition(min_delay=0.3)
+    ar._last_final_transcript_time = time.time()
+
+    fut = ar._commit_user_turn(audio_detached=False, transcript_timeout=2.0)
+    assert await asyncio.wait_for(fut, timeout=2.0) == "hello there"
+    task = ar._end_of_turn_task
+    assert task is not None
+
+    ar._clear_user_turn()
+    # the next turn starts while the committed one is still waiting out the endpointing delay
+    ar._audio_transcript = "second question"
+
+    await asyncio.wait_for(asyncio.shield(task), timeout=3.0)
+
+    assert ar._hooks.on_end_of_turn.call_args[0][0].new_transcript == "hello there"
+    assert ar._audio_transcript == "second question"
