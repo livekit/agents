@@ -5,7 +5,7 @@ import dataclasses
 import functools
 from typing import Any
 
-from .. import _core, stt
+from .. import _bindings, _core, stt
 from .._generated import vad as vad_mod
 from .._generated.inference_stt import (
     AssemblyAIModels,
@@ -173,10 +173,13 @@ class STT(stt.STT):
             vad=self._vad,
         )
 
+    def _core_leg(self) -> Any:
+        """The core's own client, unless a subclass replaces what it would bypass."""
+        return self if _bindings.overrides(self, STT, "stream") else self._core_native()
+
     def _core_native(self) -> _core.InferenceStt:
-        """The client, identified as the current job's, as a session holds it."""
-        self._native.bind_identification(list(get_inference_headers().items()))
-        return self._native
+        """The client as a session of the current job holds it: its connections carry that job."""
+        return self._native.identified(list(get_inference_headers().items()))
 
     async def _recognize_impl(self, buffer: Any, **_: Any) -> stt.SpeechEvent:
         raise NotImplementedError(

@@ -190,7 +190,7 @@ impl SessionApi {
             agent: agent_turn_handling.as_ref().map(crate::turn::agent_layer),
         };
         let nodes = Nodes { llm: llm_node, tts: tts_node, stt: stt_node };
-        let stt = stt.map(|s| nodes.stt(stt_leg(s, vad.clone(), &conn.stt)));
+        let stt = stt.map(|s| nodes.stt(stt_leg(s, vad.clone(), &conn.stt, clock.clone())));
         let llm = llm.map(|l| nodes.llm(llm_leg(l, &conn.llm)));
         let tts = tts.map(|t| nodes.tts(tts_leg(t, clock.clone(), &conn.tts)));
         let vad_leg = vad.clone();
@@ -844,7 +844,7 @@ impl SessionApi {
             prompt: cfg.prompt.unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
             llm: llm_leg(llm, &self.conn.llm),
             tools_host: tools,
-            stt: stt.map(|s| stt_leg(s, None, &self.conn.stt)),
+            stt: stt.map(|s| stt_leg(s, None, &self.conn.stt, self.time.clock())),
             room: self.host.call_room.clone(),
             participant: participant_identity,
         };

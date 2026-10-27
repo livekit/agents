@@ -1781,6 +1781,20 @@ async def providers() -> None:
     said = await ears.recognize([_square(0.0)], conn_options=QUICK_RETRIES)
     assert said.alternatives[0].text == "batch words" and seen == [True], seen
 
+    # the core runs a gateway client as its own, each session with its job's identity, unless a
+    # subclass overrides what the core would bypass
+    from livekit.agents import _bindings, inference
+
+    class Logged(inference.LLM):
+        def chat(self, **kwargs: Any) -> llm.LLMStream:
+            return super().chat(**kwargs)
+
+    gateway = inference.LLM("openai/gpt-4.1-mini", api_key="k", api_secret="s")
+    first, second = _bindings.core_leg(gateway), _bindings.core_leg(gateway)
+    assert isinstance(first, _core.InferenceLlm) and first is not second, (first, second)
+    logged = Logged("openai/gpt-4.1-mini", api_key="k", api_secret="s")
+    assert _bindings.core_leg(logged) is logged
+
     # in a session, a voice that does not stream is retried sentence by sentence on the session's
     # tts_conn_options: each sentence's first attempt fails, and the whole reply is still spoken
     print("== a session's voice retries each sentence")

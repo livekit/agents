@@ -36,6 +36,13 @@ pub(crate) fn build(_py: Python<'_>, cfg: TtsClientConfig) -> PyResult<Inference
 
 #[pymethods]
 impl InferenceTts {
+    /// The client as a session serving the job `headers` (`get_inference_headers()`) identifies
+    /// holds it: the same options and pooled connections, its syntheses carrying that job.
+    fn identified(&self, headers: Vec<(String, String)>) -> PyResult<InferenceTts> {
+        lk_agents_abi::python::check_pid()?;
+        Ok(InferenceTts { inner: Arc::new(self.inner.identified(headers.into_iter().collect())) })
+    }
+
     /// Bind the session's clock: every stream opened from here runs in session time.
     fn bind_clock(&self, clock: &Bound<'_, PyAny>) -> PyResult<()> {
         let clock = session_clock(clock, "clock")?;

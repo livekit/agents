@@ -4,7 +4,7 @@ import asyncio
 import functools
 from typing import Any
 
-from .. import _core, tts
+from .. import _bindings, _core, tts
 from .._generated.inference_tts import (
     CartesiaModels,
     CartesiaOptions,
@@ -147,10 +147,15 @@ class TTS(tts.TTS):
             max_retry=self._conn.max_retry,
         )
 
+    def _core_leg(self) -> Any:
+        """The core's own client, unless a subclass replaces what it would bypass."""
+        return (
+            self if _bindings.overrides(self, TTS, "synthesize", "stream") else self._core_native()
+        )
+
     def _core_native(self) -> _core.InferenceTts:
-        """The client, identified as the current job's, as a session holds it."""
-        self._native.bind_identification(list(get_inference_headers().items()))
-        return self._native
+        """The client as a session of the current job holds it: its connections carry that job."""
+        return self._native.identified(list(get_inference_headers().items()))
 
     def _set_expressive(self, enabled: bool) -> None:
         super()._set_expressive(enabled)

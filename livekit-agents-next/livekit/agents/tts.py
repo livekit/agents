@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import functools
 import re
 import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
-from . import _core, tokenize, utils
+from . import _bindings, _core, tokenize, utils
 from ._generated.tts import (
     TTS,
     ChunkedStream,
@@ -145,16 +144,24 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
             num_channels=tts[0].num_channels,
         )
 
-    @functools.cached_property
+    @property
     def _native(self) -> _core.FallbackTts:
-        # built on first use: the chain lives on the running loop; a member without a duplex
-        # path streams through the core's sentence adapter
-        return _core.FallbackTts(
-            self._tts_instances,
-            max_retry_per_tts=self._max_retry_per_tts,
-            sample_rate=self.sample_rate,
-            on_availability=self,
+        # one per running loop: its members are called on the loop the chain was built on; a
+        # member without a duplex path streams through the core's sentence adapter
+        return _bindings.on_loop(
+            self,
+            lambda: _core.FallbackTts(
+                [_bindings.core_leg(t) for t in self._tts_instances],
+                max_retry_per_tts=self._max_retry_per_tts,
+                sample_rate=self.sample_rate,
+                on_availability=self,
+            ),
         )
+
+    def _core_leg(self) -> Any:
+        if _bindings.overrides(self, FallbackAdapter, "synthesize", "stream"):
+            return self
+        return self._native
 
     def _core_availability_changed(self, ev: dict[str, Any]) -> None:
         self.emit(
@@ -169,7 +176,8 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
 
     @property
     def _active(self) -> TTS:
-        return self._tts_instances[self._native.active_index if "_native" in vars(self) else 0]
+        chains = _bindings.built_on_loop(self)
+        return self._tts_instances[chains[0].active_index if chains else 0]
 
     @property
     def model(self) -> str:
@@ -199,8 +207,8 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         self._tts_instances[0].prewarm()
 
     async def aclose(self) -> None:
-        if "_native" in vars(self):
-            await self._native.aclose()
+        for chain in _bindings.built_on_loop(self):
+            await chain.aclose()
 
 
 def _initialize(output_emitter: AudioEmitter, tts: TTS, *, stream: bool) -> None:

@@ -41,7 +41,8 @@ lk_agents_abi::python::inventory::submit! {
 
 /// The gateway LLM: a client per request, since the reference overrides the timeout per request.
 pub struct GatewayLlm {
-    opts: std::sync::Mutex<LlmOptions>,
+    /// Shared by every session's view of one client (`identified`).
+    opts: Arc<std::sync::Mutex<LlmOptions>>,
     images: Arc<lk_agents_abi::llm::provider_format::PreResolved>,
     http: Arc<dyn crate::transport::HttpTransport>,
     /// `RealClock` until a session binds its own.
@@ -72,7 +73,7 @@ impl InferenceLlm {
             lk_agents_abi::llm::provider_format::SerializedImage,
         )>::new()));
         let inner = GatewayLlm {
-            opts: std::sync::Mutex::new(opts),
+            opts: Arc::new(std::sync::Mutex::new(opts)),
             images,
             http,
             clock: lk_agents_abi::BoundClock::new(),
@@ -148,12 +149,22 @@ impl InferenceLlm {
         Ok(())
     }
 
-    /// `get_inference_headers()` of the job the client now serves; every later request a session
-    /// makes carries them, with a fresh session id.
-    fn bind_identification(&self, headers: Vec<(String, String)>) -> PyResult<()> {
+    /// The client as a session serving the job `headers` (`get_inference_headers()`) identifies
+    /// holds it: the same options and transport, its requests carrying that job (two sessions
+    /// sharing an instance bill each its own job).
+    fn identified(&self, headers: Vec<(String, String)>) -> PyResult<InferenceLlm> {
         check_pid()?;
-        self.inner.identity.bind(headers.into_iter().collect());
-        Ok(())
+        let inner = &self.inner;
+        let view = GatewayLlm {
+            opts: Arc::clone(&inner.opts),
+            images: Arc::clone(&inner.images),
+            http: Arc::clone(&inner.http),
+            clock: Arc::clone(&inner.clock),
+            identity: BoundIdentity::default(),
+            spawner: Arc::clone(&inner.spawner),
+        };
+        view.identity.bind(headers.into_iter().collect());
+        Ok(InferenceLlm { inner: Arc::new(view) })
     }
 
     #[getter]

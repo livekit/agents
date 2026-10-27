@@ -67,7 +67,23 @@ impl Default for SttOptions {
     }
 }
 
+/// One gateway STT client as one session holds it: the shared client, and the identity of the
+/// job that session serves (two sessions sharing an instance bill each its own job).
 pub struct NativeStt {
+    shared: Arc<SttShared>,
+    identity: BoundIdentity,
+}
+
+impl std::ops::Deref for NativeStt {
+    type Target = SttShared;
+
+    fn deref(&self) -> &SttShared {
+        &self.shared
+    }
+}
+
+/// What every session's view of one client shares: its options, connections and open streams.
+pub struct SttShared {
     opts: Mutex<SttOptions>,
     capabilities: Mutex<SttCapabilities>,
     /// Framework-managed keyterms, merged into `extra` at connect and by `session.update`.
@@ -75,7 +91,6 @@ pub struct NativeStt {
     keyterms_unsupported_warned: std::sync::atomic::AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
-    identity: BoundIdentity,
     clock: Arc<dyn Clock>,
     /// The Speechmatics path: a client-side VAD whose end-of-speech sends `session.finalize`.
     vad: Mutex<Option<Arc<dyn crate::abi::Vad>>>,
@@ -96,24 +111,32 @@ pub struct NativeStt {
     as_dyn(Stt = as_stt),
     stub = "def __init__(self, *args: Any, **kwargs: Any) -> None: ...",
     stub = "def set_vad(self, vad: Any | None = None) -> None: ...",
-    stub = "def bind_identification(self, headers: list[tuple[str, str]]) -> None: ..."
+    stub = "def identified(self, headers: list[tuple[str, str]]) -> InferenceStt: ..."
 ))]
 impl NativeStt {
     pub fn new(opts: SttOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         let capabilities =
             options::capabilities(opts.model.as_deref(), &opts.fallback, Some(&opts.extra_kwargs));
-        NativeStt {
+        let shared = SttShared {
             opts: Mutex::new(opts),
             capabilities: Mutex::new(capabilities),
             session_keyterms: Mutex::new(Vec::new()),
             keyterms_unsupported_warned: Default::default(),
             ws,
             spawner,
-            identity: BoundIdentity::default(),
             clock: Arc::new(RealClock::new()),
             vad: Mutex::new(None),
             live: Mutex::new(Vec::new()),
-        }
+        };
+        NativeStt { shared: Arc::new(shared), identity: BoundIdentity::default() }
+    }
+
+    /// The same client as a session serving another job holds it: its connections carry that
+    /// job's identification.
+    pub fn identified(&self, headers: Headers) -> NativeStt {
+        let view = NativeStt { shared: Arc::clone(&self.shared), identity: BoundIdentity::default() };
+        view.identity.bind(headers);
+        view
     }
 
     /// `get_inference_headers()`: the job's `X-LiveKit-*` identity; each connection gets a fresh
@@ -123,18 +146,16 @@ impl NativeStt {
         self
     }
 
-    /// The identity of the job the client now serves, bound by the host that hands it to a session.
-    pub fn bind_identification(&self, headers: Headers) {
-        self.identity.bind(headers);
-    }
 
     /// The client as the provider a session holds directly.
     pub fn as_stt(self: &Arc<Self>) -> Arc<dyn Stt> {
         Arc::clone(self) as Arc<dyn Stt>
     }
 
+    /// Before the client is shared.
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
-        self.clock = clock;
+        Arc::get_mut(&mut self.shared).expect("a client is clocked before it is shared").clock =
+            clock;
         self
     }
 

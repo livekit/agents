@@ -2189,11 +2189,6 @@ impl InferenceTts {
         self.inner.set_expressive(expressive);
     }
 
-    #[napi(js_name = "bindIdentification")]
-    pub fn bind_identification(&self, headers: Vec<(String, String)>) {
-        self.inner.bind_identification(headers);
-    }
-
     #[napi(getter, js_name = "sampleRate")]
     pub fn sample_rate(&self) -> u32 {
         self.inner.sample_rate()

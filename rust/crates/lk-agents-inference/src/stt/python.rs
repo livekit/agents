@@ -111,12 +111,11 @@ impl InferenceStt {
         Ok(())
     }
 
-    /// `get_inference_headers()` of the job the client now serves; every later connection carries
-    /// them, with a fresh session id.
-    fn bind_identification(&self, headers: Vec<(String, String)>) -> PyResult<()> {
+    /// The client as a session serving the job `headers` (`get_inference_headers()`) identifies
+    /// holds it: the same options, keyterms and open streams, its connections carrying that job.
+    fn identified(&self, headers: Vec<(String, String)>) -> PyResult<InferenceStt> {
         check_pid()?;
-        self.inner.bind_identification(headers.into_iter().collect());
-        Ok(())
+        Ok(InferenceStt { inner: Arc::new(self.inner.identified(headers.into_iter().collect())) })
     }
 }
 

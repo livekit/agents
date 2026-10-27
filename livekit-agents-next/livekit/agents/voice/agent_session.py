@@ -24,7 +24,7 @@ from typing_extensions import TypedDict, TypeVar
 
 from livekit import rtc
 
-from .. import _core, inference, llm, stt, tts
+from .. import _bindings, _core, inference, llm, stt, tts
 from .._core_view import (
     TurnDetector,
     chat_request,
@@ -149,21 +149,6 @@ class VoiceActivityVideoSampler:
     def __init__(self, *, speaking_fps: float = 1.0, silent_fps: float = 0.3) -> None:
         self.speaking_fps = speaking_fps
         self.silent_fps = silent_fps
-
-
-def _core_leg(leg: Any) -> Any:
-    """A gateway client, a fallback chain or the local VAD as the core's own
-    (``_core.InferenceStt``, ``_core.FallbackStt``, ``_core.InferenceVad`` and the like), which the
-    session drives directly rather than through the Python wrapper."""
-    if isinstance(leg, (inference.STT, inference.LLM, inference.TTS)):
-        return leg._core_native()
-    if isinstance(leg, inference.VAD):
-        return leg._native
-    if isinstance(
-        leg, (stt.FallbackAdapter, stt.StreamAdapter, llm.FallbackAdapter, tts.FallbackAdapter)
-    ):
-        return leg._native
-    return leg
 
 
 class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
@@ -442,12 +427,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             agent=frame["agent"],
             agent_host=frame["agent_host"],
             chat_ctx=to_core_items(self._chat_ctx.items),
-            stt=_core_leg(frame.get("stt", self._stt)),
-            vad=_core_leg(frame.get("vad", self._vad)),
-            llm=None if isinstance(model, llm.RealtimeModel) else _core_leg(model),
+            stt=_bindings.core_leg(frame.get("stt", self._stt)),
+            vad=_bindings.core_leg(frame.get("vad", self._vad)),
+            llm=None if isinstance(model, llm.RealtimeModel) else _bindings.core_leg(model),
             realtime=native,
             realtime_host=realtime,
-            tts=_core_leg(frame.get("tts", self._tts)),
+            tts=_bindings.core_leg(frame.get("tts", self._tts)),
             host_audio_input=self._input.audio,
             host_video_input=self._input.video,
             host_audio_output=self._output.audio,
@@ -470,7 +455,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_unrecoverable_errors=self._conn_options.max_unrecoverable_errors,
             interruption_detector=self._interruption_detector(agent, frame, model),
             stt_context=self._stt_context,
-            keyterm_llm=_core_leg(keyterm_llm) if keyterm_llm is not None else None,
+            keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
             keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
             **{node: frame[node] for node in _NODES if node in frame},
             remote_session=SessionPort(self) if hosting else None,
@@ -735,13 +720,13 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_given(agent._use_tts_aligned_transcript):
             frame["use_tts_aligned_transcript"] = agent._use_tts_aligned_transcript
         if is_given(agent._vad):
-            frame["vad"] = _core_leg(agent._vad)
+            frame["vad"] = _bindings.core_leg(agent._vad)
         # every leg a node may wrap is given, so the previous frame's node never stays on it
         binding = _VoiceBinding(self, agent)
         for leg in ("stt", "llm", "tts"):
             value = getattr(binding, leg)
             if is_given(getattr(agent, f"_{leg}")) or not isinstance(value, llm.RealtimeModel):
-                frame[leg] = _core_leg(value)
+                frame[leg] = _bindings.core_leg(value)
         return {**frame, **self._nodes(agent)}
 
     def _nodes(self, agent: Agent) -> dict[str, Any]:

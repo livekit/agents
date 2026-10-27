@@ -98,7 +98,7 @@ impl TranscriptMachine {
             request_id: self.request_id_of(data),
             alternatives: vec![self.speech_data(data)],
             recognition_usage: None,
-            speech_start_time: None,
+            ..SpeechEvent::new(SpeechEventType::PreflightTranscript)
         };
         Processed { events: vec![event], ..Default::default() }
     }
@@ -123,6 +123,8 @@ impl TranscriptMachine {
                 alternatives: vec![speech_data],
                 recognition_usage: None,
                 speech_start_time: None,
+                created_at: None,
+                speech_end_time: None,
             });
             return out;
         }
@@ -138,6 +140,8 @@ impl TranscriptMachine {
                     ..Default::default()
                 }),
                 speech_start_time: None,
+                created_at: None,
+                speech_end_time: None,
             });
             self.speech_duration = 0.0;
         }
@@ -148,6 +152,8 @@ impl TranscriptMachine {
             alternatives: vec![speech_data],
             recognition_usage: None,
             speech_start_time: None,
+            created_at: None,
+            speech_end_time: None,
         });
 
         if self.speaking {

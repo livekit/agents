@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 from typing import Any, Literal, cast, get_args
 
 import httpx2 as httpx
@@ -7,7 +8,7 @@ import openai
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 from openai.types.shared.reasoning_effort import ReasoningEffort
 
-from .. import _core, llm
+from .. import _bindings, _core, llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from .._generated.inference_llm import (
     ChatCompletionOptions,
@@ -129,25 +130,34 @@ class LLM(llm.LLM):
         super().__init__()
         creds = Credentials.resolve(base_url, api_key, api_secret)
         self._inference_class = inference_class
-        self._native = _core.InferenceLlm(
-            model,
-            base_url=creds.base_url,
-            api_key=creds.api_key,
-            api_secret=creds.api_secret,
-            provider=provider,
-            inference_class=inference_class,
-            extra_kwargs=dict(extra_kwargs or {}),
-        )
+        self._config = {
+            "model": model,
+            "base_url": creds.base_url,
+            "api_key": creds.api_key,
+            "api_secret": creds.api_secret,
+            "provider": provider,
+            "inference_class": inference_class,
+            "extra_kwargs": dict(extra_kwargs or {}),
+        }
+
+    @functools.cached_property
+    def _native(self) -> _core.InferenceLlm:
+        # built on first use, after a fork: nothing of the core starts at construction
+        config = dict(self._config)
+        return _core.InferenceLlm(config.pop("model"), **config)
 
     @classmethod
     def from_model_string(cls, model: str) -> LLM:
         return cls(model)
 
+    def _core_leg(self) -> Any:
+        """The core's own client, unless a subclass replaces what it would bypass."""
+        return self if _bindings.overrides(self, LLM, "chat") else self._core_native()
+
     def _core_native(self) -> _core.InferenceLlm:
-        """The client, identified as the current job's, as a session holds it."""
+        """The client as a session of the current job holds it: its requests carry that job."""
         headers = get_inference_headers(inference_class=self._inference_class)
-        self._native.bind_identification(list(headers.items()))
-        return self._native
+        return self._native.identified(list(headers.items()))  # type: ignore[no-any-return]
 
     def update_options(
         self,

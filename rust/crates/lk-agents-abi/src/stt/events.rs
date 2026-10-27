@@ -139,20 +139,7 @@ pub struct RecognitionUsage {
     zero_defaults,
     module = "stt",
     path = "livekit.agents.stt",
-    name = "SpeechEvent",
-    // Wall-clock times the host stamps; the core has no wall clock.
-    host_field(
-        name = "created_at",
-        ty = "float",
-        default_factory = "time.time",
-        doc = "Wall-clock time when this event was created."
-    ),
-    host_field(
-        name = "speech_end_time",
-        ty = "float | None",
-        default = "None",
-        doc = "Wall-clock time when the recognized speech ended, when known."
-    )
+    name = "SpeechEvent"
 )]
 #[node(interface)]
 #[binding(emit, extract)]
@@ -167,6 +154,12 @@ pub struct SpeechEvent {
     /// server-reported wall-clock time of speech onset, when the provider sends
     /// a separate speech-start signal carrying onset timing.
     pub speech_start_time: Option<f64>,
+    /// Wall-clock time when this event was created.
+    // `None` for an event the core minted: the host stamps it as it reads it.
+    #[python(ty = "float", default_factory = "time.time")]
+    pub created_at: Option<f64>,
+    /// Wall-clock time when the recognized speech ended, when known.
+    pub speech_end_time: Option<f64>,
 }
 
 impl SpeechEvent {
@@ -177,6 +170,8 @@ impl SpeechEvent {
             alternatives: Vec::new(),
             recognition_usage: None,
             speech_start_time: None,
+            created_at: None,
+            speech_end_time: None,
         }
     }
 

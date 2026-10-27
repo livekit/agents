@@ -76,11 +76,26 @@ impl Default for TtsOptions {
     }
 }
 
+/// One gateway TTS client as one session holds it: the shared client, and the identity of the
+/// job that session serves (two sessions sharing an instance bill each its own job).
 pub struct NativeTts {
+    shared: Arc<TtsShared>,
+    identity: BoundIdentity,
+}
+
+impl std::ops::Deref for NativeTts {
+    type Target = TtsShared;
+
+    fn deref(&self) -> &TtsShared {
+        &self.shared
+    }
+}
+
+/// What every session's view of one client shares: its options and its pooled connections.
+pub struct TtsShared {
     opts: Mutex<TtsOptions>,
     /// `_expressive`: the framework sets it before a synthesis opens.
     expressive: AtomicBool,
-    identity: BoundIdentity,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
     /// Bound into, not rebuilt, so `update_options` state survives a session binding its own.
@@ -167,15 +182,23 @@ pub struct TtsClientConfig {
 
 impl NativeTts {
     pub fn new(opts: TtsOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
-        NativeTts {
+        let shared = TtsShared {
             opts: Mutex::new(opts),
             expressive: AtomicBool::new(false),
-            identity: BoundIdentity::default(),
             ws,
             spawner,
             clock: lk_agents_abi::BoundClock::new(),
             connections: Arc::default(),
-        }
+        };
+        NativeTts { shared: Arc::new(shared), identity: BoundIdentity::default() }
+    }
+
+    /// The same client as a session serving another job holds it: its syntheses carry that job's
+    /// identification.
+    pub fn identified(&self, headers: Headers) -> NativeTts {
+        let view = NativeTts { shared: Arc::clone(&self.shared), identity: BoundIdentity::default() };
+        view.identity.bind(headers);
+        view
     }
 
     /// `prewarm()`: a configured socket waits in the pool for the first synthesis.
@@ -236,7 +259,8 @@ impl NativeTts {
     as_dyn(Tts = as_tts),
     stub = "def __init__(self, *args: Any, **kwargs: Any) -> None: ...",
     stub = "def bind_clock(self, clock: SessionClock) -> None: ...",
-    stub = "def prewarm(self, *, headers: list[tuple[str, str]] | None = None) -> None: ..."
+    stub = "def prewarm(self, *, headers: list[tuple[str, str]] | None = None) -> None: ...",
+    stub = "def identified(self, headers: list[tuple[str, str]]) -> InferenceTts: ..."
 ))]
 impl NativeTts {
     /// `_set_expressive`: whether syntheses opened from here batch sentences for markup and drop
@@ -246,12 +270,6 @@ impl NativeTts {
         self.expressive.store(expressive, Ordering::SeqCst);
     }
 
-    /// `get_inference_headers()` of the job the client now serves; every later synthesis carries
-    /// them, with a fresh session id.
-    #[host(method)]
-    pub fn bind_identification(&self, headers: Vec<(String, String)>) {
-        self.identity.bind(headers.into_iter().collect());
-    }
 
     pub fn model(&self) -> String {
         self.opts.lock().unwrap().model.clone()

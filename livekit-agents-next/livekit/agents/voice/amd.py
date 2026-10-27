@@ -14,7 +14,7 @@ import os
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
-from .. import _core, inference
+from .. import _bindings, _core, inference
 from .._generated.amd import AMDCategory, AMDPredictionEvent, DetectionOptions
 from ..llm import LLM as _LLM
 from ..llm.tool_context import function_tool
@@ -215,8 +215,6 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         if session.options["ivr_detection"]:
             logger.warning("session level ivr_detection will be disabled when AMD is used")
 
-        from .agent_session import _core_leg
-
         provided = self._detection_options
         config: dict[str, Any] = {
             key: provided[name]  # type: ignore[literal-required]
@@ -232,9 +230,9 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
         config["ivr_detection"] = self._ivr_detection
         session._running.attach_amd(
             config,
-            _core_leg(llm),
+            _bindings.core_leg(llm),
             tools=CLASSIFIER_TOOLS,
-            stt=_core_leg(self._stt) if self._stt is not None else None,
+            stt=_bindings.core_leg(self._stt) if self._stt is not None else None,
             participant_identity=self._participant_identity,
         )
         self._attached = True

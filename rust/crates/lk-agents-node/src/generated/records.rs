@@ -336,6 +336,12 @@ pub struct SpeechEvent {
     /// a separate speech-start signal carrying onset timing.
     #[napi(ts_type = "number | null")]
     pub speech_start_time: Option<f64>,
+    /// Wall-clock time when this event was created.
+    #[napi(ts_type = "number")]
+    pub created_at: Option<f64>,
+    /// Wall-clock time when the recognized speech ended, when known.
+    #[napi(ts_type = "number | null")]
+    pub speech_end_time: Option<f64>,
 }
 
 impl From<&lk_agents_abi::SpeechEvent> for SpeechEvent {
@@ -346,6 +352,8 @@ impl From<&lk_agents_abi::SpeechEvent> for SpeechEvent {
             alternatives: Some(v.alternatives.iter().map(|v| crate::generated::records::SpeechData::from(v)).collect::<Vec<_>>()),
             recognition_usage: v.recognition_usage.as_ref().map(|v| crate::generated::records::RecognitionUsage::from(v)),
             speech_start_time: v.speech_start_time,
+            created_at: v.created_at,
+            speech_end_time: v.speech_end_time,
         }
     }
 }

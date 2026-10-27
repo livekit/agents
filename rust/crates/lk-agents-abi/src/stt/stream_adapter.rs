@@ -10,7 +10,7 @@ use super::stt::{Stt, SttCapabilities, SttSink, SttSource};
 use crate::errors::ProviderError;
 use crate::tokenize::language::LanguageCode;
 use crate::types::identity::ProviderId;
-use crate::utils::clock::Ts;
+use crate::utils::clock::{Clock, Ts};
 use crate::utils::stream::{Closed, StreamSource};
 use crate::vad::events::VadEventType;
 use crate::vad::vad::{Vad, VadSource};
@@ -19,18 +19,26 @@ use crate::{ApiConnectOptions, AudioFrame};
 pub struct SttStreamAdapter {
     stt: Arc<dyn Stt>,
     vad: Arc<dyn Vad>,
+    /// What an utterance's `speech_end_time` is read off.
+    clock: Arc<dyn Clock>,
 }
 
 impl SttStreamAdapter {
-    pub fn new(stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self {
-        SttStreamAdapter { stt, vad }
+    pub fn new(stt: Arc<dyn Stt>, vad: Arc<dyn Vad>, clock: Arc<dyn Clock>) -> Self {
+        SttStreamAdapter { stt, vad, clock }
     }
 
     /// Itself when it streams; over `vad` when it does not and there is one (`Agent.stt_node`'s
     /// default); as it is otherwise, its stream refused when opened.
-    pub fn adapted(stt: Arc<dyn Stt>, vad: Option<Arc<dyn Vad>>) -> Arc<dyn Stt> {
+    pub fn adapted(
+        stt: Arc<dyn Stt>,
+        vad: Option<Arc<dyn Vad>>,
+        clock: Arc<dyn Clock>,
+    ) -> Arc<dyn Stt> {
         match vad {
-            Some(vad) if !stt.capabilities().streaming => Arc::new(SttStreamAdapter::new(stt, vad)),
+            Some(vad) if !stt.capabilities().streaming => {
+                Arc::new(SttStreamAdapter::new(stt, vad, clock))
+            }
             _ => stt,
         }
     }
@@ -41,9 +49,13 @@ impl SttStreamAdapter {
 impl SttStreamAdapter {
     /// The wrapped STT's recognitions run under the default `conn_options`, as the reference's.
     #[host(new)]
-    pub fn for_host(stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self {
+    pub fn for_host(
+        stt: Arc<dyn Stt>,
+        vad: Arc<dyn Vad>,
+        #[host(ambient)] clock: Arc<dyn Clock>,
+    ) -> Self {
         let stt = stt.with_conn_options(&ApiConnectOptions::default()).unwrap_or(stt);
-        SttStreamAdapter::new(stt, vad)
+        SttStreamAdapter::new(stt, vad, clock)
     }
 
     /// The adapter as the provider a session holds (not proxied).
@@ -117,7 +129,7 @@ impl Stt for SttStreamAdapter {
     /// The options go to the wrapped STT's recognitions; the adapter's stream does not retry.
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         let stt = self.stt.with_conn_options(conn).unwrap_or_else(|| Arc::clone(&self.stt));
-        Some(Arc::new(SttStreamAdapter::new(stt, Arc::clone(&self.vad))))
+        Some(Arc::new(SttStreamAdapter::new(stt, Arc::clone(&self.vad), Arc::clone(&self.clock))))
     }
 
     async fn recognize(
@@ -139,6 +151,8 @@ impl Stt for SttStreamAdapter {
                 stt: Arc::clone(&self.stt),
                 language: language.cloned(),
                 utterance: None,
+                speech_end: None,
+                clock: Arc::clone(&self.clock),
             };
             (sink as SttSink, Box::new(source) as SttSource)
         });
@@ -153,6 +167,10 @@ struct AdapterSource {
     language: Option<LanguageCode>,
     /// The utterance the last end of speech closed, not yet recognized.
     utterance: Option<Vec<AudioFrame>>,
+    /// When the last utterance ended, wall seconds: the VAD's report less its silence and its
+    /// inference time, as the reference reads it.
+    speech_end: Option<f64>,
+    clock: Arc<dyn Clock>,
 }
 
 #[async_trait]
@@ -161,7 +179,8 @@ impl StreamSource<SpeechEvent> for AdapterSource {
         loop {
             if let Some(frames) = self.utterance.take() {
                 let event = self.stt.recognize(&frames, self.language.as_ref()).await?;
-                if let Some(transcript) = recognized(event) {
+                if let Some(mut transcript) = recognized(event) {
+                    transcript.speech_end_time = transcript.speech_end_time.or(self.speech_end);
                     return Ok(Some(transcript));
                 }
             }
@@ -171,9 +190,15 @@ impl StreamSource<SpeechEvent> for AdapterSource {
                     return Ok(Some(SpeechEvent::new(SpeechEventType::StartOfSpeech)));
                 }
                 VadEventType::EndOfSpeech => {
+                    let ended = crate::unix_secs(self.clock.wall())
+                        - event.silence_duration
+                        - event.inference_duration;
+                    self.speech_end = Some(ended);
                     self.utterance =
                         Some(event.frames.map(|f| f.audio_frames()).unwrap_or_default());
-                    return Ok(Some(SpeechEvent::new(SpeechEventType::EndOfSpeech)));
+                    let mut end = SpeechEvent::new(SpeechEventType::EndOfSpeech);
+                    end.speech_end_time = Some(ended);
+                    return Ok(Some(end));
                 }
                 VadEventType::InferenceDone => {}
             }
@@ -193,6 +218,7 @@ fn recognized(event: SpeechEvent) -> Option<SpeechEvent> {
     }
     let mut transcript = SpeechEvent::new(SpeechEventType::FinalTranscript);
     transcript.alternatives.push(best);
+    transcript.speech_end_time = event.speech_end_time;
     Some(transcript)
 }
 
@@ -287,7 +313,7 @@ mod tests {
             StartOfSpeech,
             EndOfSpeech,
         ]));
-        let adapter = SttStreamAdapter::adapted(stt, Some(vad));
+        let adapter = SttStreamAdapter::adapted(stt, Some(vad), Arc::new(crate::utils::clock::SimClock::new()));
         let caps = adapter.capabilities();
         assert!(caps.streaming && !caps.interim_results && caps.keyterms);
         let (_sink, mut source) = adapter.stream(None, None).await.unwrap().unwrap();

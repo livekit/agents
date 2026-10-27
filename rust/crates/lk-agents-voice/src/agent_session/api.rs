@@ -454,8 +454,8 @@ impl SessionApi {
         };
         let models = ModelRefs {
             llm: map(llm, |l| r.register_llm(nodes.llm(llm_leg(l, &self.conn.llm)))),
-            tts: map(tts, |t| r.register_tts(nodes.tts(tts_leg(t, clock, &self.conn.tts)))),
-            stt: map(stt, |s| r.register_stt(nodes.stt(stt_leg(s, vad_now, &self.conn.stt)))),
+            tts: map(tts, |t| r.register_tts(nodes.tts(tts_leg(t, clock.clone(), &self.conn.tts)))),
+            stt: map(stt, |s| r.register_stt(nodes.stt(stt_leg(s, vad_now, &self.conn.stt, clock.clone())))),
             vad: map(vad, |v| r.register_vad(v)),
         };
         {
@@ -1253,9 +1253,10 @@ fn stt_leg(
     stt: Arc<dyn Stt>,
     vad: Option<Arc<dyn Vad>>,
     conn: &lk_agents_abi::ApiConnectOptions,
+    clock: Arc<dyn Clock>,
 ) -> Arc<dyn Stt> {
     let stt = stt.with_conn_options(conn).unwrap_or(stt);
-    lk_agents_abi::stt::stream_adapter::SttStreamAdapter::adapted(stt, vad)
+    lk_agents_abi::stt::stream_adapter::SttStreamAdapter::adapted(stt, vad, clock)
 }
 
 fn llm_leg(llm: Arc<dyn Llm>, conn: &lk_agents_abi::ApiConnectOptions) -> Arc<dyn Llm> {

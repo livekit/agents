@@ -4,11 +4,10 @@ declarations) and the adapters, whose fallback chain is the core's (``_core.Fall
 from __future__ import annotations
 
 import asyncio
-import functools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
-from . import _core, utils
+from . import _bindings, _core, utils
 from ._generated.stt import (
     STT,
     RecognitionUsage,
@@ -54,18 +53,12 @@ class SpeakerContext(Protocol):
     def to_instructions(self) -> str: ...
 
 
-def _speech_event_from_core(ev: dict[str, Any], *, offset: float = 0.0) -> SpeechEvent:
-    """An event the core emits as a dict, its times shifted by ``offset``."""
-    alternatives = []
-    for alt in ev.pop("alternatives"):
-        alt["start_time"] += offset
-        alt["end_time"] += offset
-        for word in alt["words"] or []:
-            word.start_time = (word.start_time or 0.0) + offset
-            word.end_time = (word.end_time or 0.0) + offset
-            word.start_time_offset = offset
-        alternatives.append(SpeechData(**alt))
+def _speech_event_from_core(ev: dict[str, Any]) -> SpeechEvent:
+    """An event the core emits as a dict; one the core minted is stamped as it is read."""
+    alternatives = [SpeechData(**alt) for alt in ev.pop("alternatives")]
     usage = ev.pop("recognition_usage")
+    if ev.get("created_at") is None:
+        ev.pop("created_at", None)
     return SpeechEvent(
         **ev,
         alternatives=alternatives,
@@ -127,11 +120,22 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
             )
         )
 
-    @functools.cached_property
+    @property
     def _native(self) -> _core.FallbackStt:
-        # built on first use: the chain lives on the running loop
-        stts = [t._native if isinstance(t, StreamAdapter) else t for t in self._stt_instances]
-        return _core.FallbackStt(stts, on_availability=self, **self._opts)
+        # one per running loop: its members are called on the loop the chain was built on
+        return _bindings.on_loop(
+            self,
+            lambda: _core.FallbackStt(
+                [_bindings.core_leg(t) for t in self._stt_instances],
+                on_availability=self,
+                **self._opts,
+            ),
+        )
+
+    def _core_leg(self) -> Any:
+        if _bindings.overrides(self, FallbackAdapter, "stream", "recognize", "_recognize_impl"):
+            return self
+        return self._native
 
     def _core_availability_changed(self, ev: dict[str, Any]) -> None:
         self.emit(
@@ -146,7 +150,8 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
 
     @property
     def _active(self) -> STT:
-        return self._stt_instances[self._native.active_index if "_native" in vars(self) else 0]
+        chains = _bindings.built_on_loop(self)
+        return self._stt_instances[chains[0].active_index if chains else 0]
 
     @property
     def model(self) -> str:
@@ -191,8 +196,8 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         self._stt_instances[0].prewarm()
 
     async def aclose(self) -> None:
-        if "_native" in vars(self):
-            await self._native.aclose()
+        for chain in _bindings.built_on_loop(self):
+            await chain.aclose()
 
 
 class StreamAdapterWrapper(RecognizeStream):
@@ -244,10 +249,20 @@ class StreamAdapter(STT):
         self._vad = vad
         self._stt = stt
 
-    @functools.cached_property
+    @property
     def _native(self) -> _core.SttStreamAdapter:
-        # built on first use, on the running loop
-        return _core.SttStreamAdapter(self._stt, self._vad)
+        # one per running loop, as the fallback chain's
+        return _bindings.on_loop(
+            self,
+            lambda: _core.SttStreamAdapter(
+                _bindings.core_leg(self._stt), _bindings.core_leg(self._vad)
+            ),
+        )
+
+    def _core_leg(self) -> Any:
+        if _bindings.overrides(self, StreamAdapter, "stream", "recognize"):
+            return self
+        return self._native
 
     @property
     def wrapped_stt(self) -> STT:

@@ -63,9 +63,10 @@ class SpeechData:
 
 class SpeechEvent:
     def __init__(self, type, request_id='r', alternatives=(), recognition_usage=None,
-                 speech_start_time=None):
+                 speech_start_time=None, created_at=None, speech_end_time=None):
         self.type = type; self.request_id = request_id; self.alternatives = list(alternatives)
         self.recognition_usage = recognition_usage; self.speech_start_time = speech_start_time
+        self.created_at = created_at; self.speech_end_time = speech_end_time
 
 class VADEvent:
     def __init__(self, type='inference_done', frames=None, **kw):

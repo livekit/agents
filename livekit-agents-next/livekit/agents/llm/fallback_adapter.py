@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import functools
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
-from .. import _core
+from .. import _bindings, _core
 from .._generated.llm import LLM, ChatChunk, LLMStream
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import is_given
 from .chat_context import ChatContext, MetricsMetadata
 from .tool_context import Tool, ToolChoice
 
@@ -56,10 +56,20 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             "sticky": sticky,
         }
 
-    @functools.cached_property
+    @property
     def _native(self) -> _core.FallbackLlm:
-        # built on first use: the chain lives on the running loop
-        return _core.FallbackLlm(self._llm_instances, on_availability=self, **self._opts)
+        # one per running loop: its members are called on the loop the chain was built on
+        return _bindings.on_loop(
+            self,
+            lambda: _core.FallbackLlm(
+                [_bindings.core_leg(t) for t in self._llm_instances],
+                on_availability=self,
+                **self._opts,
+            ),
+        )
+
+    def _core_leg(self) -> Any:
+        return self if _bindings.overrides(self, FallbackAdapter, "chat") else self._native
 
     def _core_availability_changed(self, ev: dict[str, Any]) -> None:
         self.emit(
@@ -74,7 +84,8 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
 
     @property
     def _active(self) -> LLM:
-        return self._llm_instances[self._native.active_index if "_native" in vars(self) else 0]
+        chains = _bindings.built_on_loop(self)
+        return self._llm_instances[chains[0].active_index if chains else 0]
 
     @property
     def model(self) -> str:
@@ -105,9 +116,11 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             # the core's chain retries and falls back: the stream does not retry on top of it
             conn_options=replace(conn_options, max_retry=0),
             request={
-                "parallel_tool_calls": parallel_tool_calls if parallel_tool_calls else None,
-                "tool_choice": tool_choice if tool_choice else None,
-                "extra_kwargs": extra_kwargs if extra_kwargs else None,
+                "parallel_tool_calls": parallel_tool_calls
+                if is_given(parallel_tool_calls)
+                else None,
+                "tool_choice": tool_choice if is_given(tool_choice) else None,
+                "extra_kwargs": extra_kwargs if is_given(extra_kwargs) else None,
             },
         )
 
@@ -116,8 +129,8 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
 
     async def aclose(self) -> None:
         await super().aclose()
-        if "_native" in vars(self):
-            await self._native.aclose()
+        for chain in _bindings.built_on_loop(self):
+            await chain.aclose()
 
 
 class FallbackLLMStream(LLMStream):

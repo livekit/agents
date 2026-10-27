@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
@@ -18,6 +19,40 @@ if TYPE_CHECKING:
 
 
 _T = TypeVar("_T")
+
+
+def on_loop(owner: Any, build: Callable[[], _T]) -> _T:
+    """``build()`` once per running event loop: a core object over host providers calls them on
+    the loop it was built on, so an object shared by two loops (two jobs on threads, per-test
+    loops) gets one each."""
+    built = owner.__dict__.setdefault("_core_by_loop", weakref.WeakKeyDictionary())
+    loop = asyncio.get_running_loop()
+    if (native := built.get(loop)) is None:
+        native = built[loop] = build()
+    return native  # type: ignore[no-any-return]
+
+
+def built_on_loop(owner: Any) -> list[Any]:
+    """What ``on_loop`` built for ``owner``, the running loop's first."""
+    built = dict(owner.__dict__.get("_core_by_loop", {}))
+    try:
+        mine = built.pop(asyncio.get_running_loop(), None)
+    except RuntimeError:
+        mine = None
+    return ([mine] if mine is not None else []) + list(built.values())
+
+
+def core_leg(provider: Any) -> Any:
+    """The provider as the core runs it: its own core object when it has one (``_core_leg``),
+    else the provider itself, which the core calls through its plugin surface."""
+    leg = getattr(provider, "_core_leg", None)
+    return leg() if leg is not None else provider
+
+
+def overrides(obj: Any, base: type, *names: str) -> bool:
+    """Whether ``obj``'s class replaces any of ``base``'s ``names``: the core object would bypass
+    it, so the provider is run through its plugin surface instead."""
+    return any(getattr(type(obj), n) is not getattr(base, n) for n in names)
 
 
 class Attempts:
