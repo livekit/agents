@@ -94,7 +94,7 @@ use lk_agents_abi::voice::session_options::{EndpointingMode, InterruptionMode, T
 mod apply;
 mod collect;
 mod finish;
-mod queue;
+pub mod queue;
 mod start;
 
 pub use apply::BUDGET_MS;

@@ -489,6 +489,13 @@ fn record_outcome(run: &Run, outcome: &mut Outcome) {
     outcome.edges = names.windows(2).map(|w| (w[0].clone(), w[1].clone())).collect();
     outcome.opened = opened_by_input(&run.record);
     outcome.cells = cells_by_input(&run.record);
+    if super::queue::armed() {
+        let mut journal: Vec<String> =
+            run.record.journal().iter().map(|(at, s)| format!("{} {s:?}", at.at_ms)).collect();
+        journal.extend(outcome.failures.iter().map(|f| format!("{} {:?}", f.contract, f.subject)));
+        journal.sort();
+        super::queue::note_journal(journal);
+    }
 }
 
 /// The phases of a conversation, in COVERAGE.md's column order.

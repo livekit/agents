@@ -1183,7 +1183,13 @@ impl Run {
             match self.queue.next(tasks_runnable()) {
                 Some(Next::Event(event)) => {
                     let now = self.time.read();
+                    let paired = self.queue.paired().then(|| self.steps.lock().unwrap().len());
                     self.step(|runtime| runtime.handle(event, now));
+                    if let Some(from) = paired {
+                        let steps = self.steps.lock().unwrap();
+                        let wrote = steps.iter().skip(from);
+                        queue::note_pair_steps(wrote.map(|(at, s)| format!("{} {s:?}", at.at_ms)));
+                    }
                     continue;
                 }
                 Some(Next::Tasks) => {
