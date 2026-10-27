@@ -50,6 +50,8 @@ You're on a phone call, so talk like a person, not a document:
 - Say numbers, prices, dates, and times as words, the way people say them ("seventy-nine dollars", "seven thirty Tuesday morning"). Never read out ids or codes. Call cars by model: "your X3", "your 3 Series".
 - Never say you've done something, or that you're about to, without calling its tool in that same reply. "Let me check" means calling the tool now, in this reply.
 - Only state a price, time, recall, cause, or booking that a tool gave you.
+- Only a tool's result says whether something is done. Until one says it's booked, approved, moved, or cancelled, never say it is, or that they're "all set", "I have you down", or "updated". When a result says it isn't done yet, do what its next says.
+- One call per thing: never call the same tool twice at once for the same repair, service, or time, and never with answers that disagree.
 - When a tool refuses, fix what it says with your tools. Tell the caller only what changes for them, as the rule itself: never "the system".
 - The caller can't see anything: never "does that look right".
 - You handle everything yourself. There's nobody to transfer to, and no callbacks to promise or messages to pass on.
@@ -121,7 +123,8 @@ class Nick(Agent):
             raise ToolError(f"Don't hang up yet: {missing}")
         if caller_spoke_last(items):
             raise ToolError(
-                "Answer what they just said with a short goodbye, then end_call."
+                "Not hung up yet. Answer what they just said with a short goodbye, and call "
+                "end_call again in that same reply."
             )
         ctx.speech_handle.add_done_callback(lambda _: ctx.session.shutdown())
 
@@ -235,8 +238,8 @@ class ServiceAdvisor(Nick):
             where: Where it seems to come from, in their words.
             when: When it happens.
             since: How long it's been going on, in their words.
-            warning_lights: Which lights are on, or "none" when they said there are none.
-            recent_work: Recent work, new tires, an accident, or "none" when they said there's been none.
+            warning_lights: Which lights are on, or "no warning lights" when they said there are none.
+            recent_work: Recent work, new tires, an accident, or "nothing recent" when they said there's been none.
         """
         with _desk_rules():
             problem = await self._desk.describe_problem(
@@ -471,6 +474,13 @@ class ServiceAdvisor(Nick):
             else f"No loaner: they're only for warranty or recall visits over "
             f"{LOANER_MIN_HOURS:g} hours.",
             changedSinceBooked=desk.changed_since_booked(),
+            next="It isn't booked yet: call book_visit now and read back what it returns."
+            if car
+            and visit.services
+            and visit.slot
+            and visit.ride
+            and (visit.booked is None or desk.changed_since_booked())
+            else None,
         )
 
 
@@ -509,7 +519,8 @@ class RepairCallback(Nick):
         self, ctx: RunContext, repair_id: RepairId, decision: RepairDecision
     ) -> str:
         """Record what the customer wants done about one repair. Approving one whose price they
-        haven't heard returns it to read back first; call again once they agree.
+        haven't heard returns it to read back first; call again once they agree. One call per
+        repair: "front now, rear next time" is front_brakes approved and rear_brakes next_visit.
 
         Args:
             repair_id: The repair.
@@ -557,7 +568,8 @@ class RepairCallback(Nick):
         Args:
             ride: shuttle (the free shuttle picks them up) or self (they, or whoever's
                 collecting it, come in).
-            shuttle_from: For the shuttle: where to pick them up, in their words.
+            shuttle_from: For the shuttle: where to pick them up, in their words, like "home"
+                or "work". That's enough: never ask for an address.
             collected_by: Someone else collecting the car for them.
         """
         with _desk_rules():
