@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import weakref
 from collections.abc import Callable, Generator
 
@@ -66,9 +65,9 @@ class SpeechHandle:
         return self
 
     async def wait_for_playout(self) -> None:
-        # a session that closed under the speech has nothing left to play
-        with contextlib.suppress(RuntimeError):
-            await self._core.wait_for_playout()
+        from .agent_session import _origin
+
+        await self._core.wait_for_playout(origin=_origin())
 
     async def _wait_for_generation(self, step_idx: int = -1) -> None:
         await self._core.wait_for_generation(None if step_idx < 0 else step_idx)

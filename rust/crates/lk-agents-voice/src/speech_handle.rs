@@ -11,7 +11,8 @@ use tokio::sync::watch;
 /// it a wedged generation leaves the handle un-done and every `wait_for_playout()` hangs.
 pub const INTERRUPTION_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The `extra` key a tool sets to opt out of the self-wait guard.
+/// The `extra` key marking a call that detached (`RunContext.update()`): its speech no longer
+/// waits on it.
 pub const TOOL_NON_BLOCKING_EXTRA_KEY: &str = "__livekit_agents_tool_non_blocking";
 /// `SpeechHandle.SPEECH_PRIORITY_{LOW,NORMAL,HIGH}`, as `(low, normal, high)`. Minted beside the
 /// scheduler's heap key that reads them, so a host copy cannot drift and silently reorder.
@@ -55,6 +56,14 @@ pub enum SpeechRefused {
          allow_interruptions= to say()/generate_reply() instead"
     )]
     NotCreated,
+    #[error(
+        "cannot call `SpeechHandle.wait_for_playout()` from inside the function tool `{name}` that \
+         owns this SpeechHandle. This creates a circular wait: the speech handle is waiting for \
+         the function tool to complete, while the function tool is simultaneously waiting for the \
+         speech handle.\nTo wait for the assistant’s spoken response prior to running this tool, \
+         use `RunContext.wait_for_playout()` instead."
+    )]
+    SelfWait { name: String },
 }
 
 /// The exception a speech failed with: the host's own object when a provider raised one (read,
@@ -203,6 +212,8 @@ struct Inner {
     /// The host's own object for the speech (its `SpeechHandle`), so every event, tool and hook
     /// that names the speech hands back the object `say()` / `generate_reply()` returned.
     host: Option<lk_agents_abi::HostRef>,
+    /// The tools this speech waits on, as `(call_id, name)`: running and not yet detached.
+    blocking_tools: Vec<(String, String)>,
 }
 
 /// `SpeechHandle`: one speech's id, state and outcome, shared by the loop that runs the speech and
@@ -279,6 +290,7 @@ impl SpeechHandle {
                 watchdog_armed: false,
                 user_metrics: None,
                 host: None,
+                blocking_tools: Vec::new(),
             }),
         }
     }
@@ -599,9 +611,37 @@ impl SpeechHandle {
         }
     }
 
-    /// `wait_for_playout()`, and so `__await__`. The self-wait guard is the binding shim's.
+    /// `wait_for_playout()`, and so `__await__`; see [`wait_for_playout_for_host`] for the
+    /// self-wait guard.
+    ///
+    /// [`wait_for_playout_for_host`]: Self::wait_for_playout_for_host
     pub async fn wait_for_playout(&self) {
         self.wait_for_done().await;
+    }
+
+    /// The speech waits on tool call `call_id` (`name`) until [`tool_returned`]: from its start
+    /// until it answers, or detaches with its first update.
+    ///
+    /// [`tool_returned`]: Self::tool_returned
+    pub(crate) fn tool_blocking(&self, call_id: &str, name: &str) {
+        lock(&self.inner).blocking_tools.push((call_id.to_owned(), name.to_owned()));
+    }
+
+    pub(crate) fn tool_returned(&self, call_id: &str) {
+        let mut inner = lock(&self.inner);
+        if let Some(i) = inner.blocking_tools.iter().position(|(c, _)| c == call_id) {
+            inner.blocking_tools.remove(i);
+        }
+    }
+
+    /// The tool `origin` names, when this speech is waiting on it: awaiting the speech from inside
+    /// it would wait forever.
+    fn self_wait(&self, origin: Option<&str>) -> Result<(), SpeechRefused> {
+        let Some(call_id) = origin.and_then(|o| o.strip_prefix("tool:")) else { return Ok(()) };
+        match lock(&self.inner).blocking_tools.iter().find(|(c, _)| c == call_id) {
+            Some((_, name)) => Err(SpeechRefused::SelfWait { name: name.clone() }),
+            None => Ok(()),
+        }
     }
 
     /// `_item_added`.
@@ -782,12 +822,19 @@ impl SpeechHandle {
         Ok(())
     }
 
-    /// `wait_for_playout()`, and therefore `__await__`. The self-wait guard is not here: it reads
-    /// the ambient tool frame, so it belongs on the shim's `__await__`.
-    #[host(method(name = "wait_for_playout"))]
-    pub async fn wait_for_playout_for_host(&self) -> Result<(), SpeechRefused> {
-        self.wait_created().await?;
-        self.wait_for_playout().await;
+    /// `wait_for_playout()`, and therefore `__await__`, from `origin` (`"tool:<call_id>"` inside a
+    /// tool). Raises the reference's `RuntimeError` from inside a tool this speech waits on;
+    /// otherwise never raises: a speech the session ended before creating, or a handle constructed
+    /// directly, has nothing to play.
+    #[host(method(name = "wait_for_playout", kw_only, defaults(origin = None)))]
+    pub async fn wait_for_playout_for_host(
+        &self,
+        origin: Option<String>,
+    ) -> Result<(), SpeechRefused> {
+        self.self_wait(origin.as_deref())?;
+        if self.wait_created().await.is_ok() {
+            self.wait_for_playout().await;
+        }
         Ok(())
     }
 

@@ -127,8 +127,13 @@ impl ToolStep {
                 let _ = started_tx.send(());
                 // The host reports, the driver decides (`decide`).
                 let outcome = match work {
+                    // The speech waits on the body until it answers or detaches: awaiting the
+                    // speech from inside it is refused meanwhile.
                     Ok(runner) => {
-                        crate::tool_executor::decide(runner.answer(&one, &host_speech, step).await)
+                        handle.tool_blocking(&one.call_id, &one.name);
+                        let answer = runner.answer(&one, &host_speech, step).await;
+                        handle.tool_returned(&one.call_id);
+                        crate::tool_executor::decide(answer)
                     }
                     // Never run: answered in the reference executor's words so the model corrects.
                     Err(available) => ToolOutcome::Error(

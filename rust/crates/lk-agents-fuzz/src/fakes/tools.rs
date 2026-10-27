@@ -36,6 +36,8 @@ impl FakeTools {
 pub enum Body {
     Answer(ToolAnswer),
     AfterIdle(ToolAnswer),
+    /// `await ctx.speech_handle` first: refused, or the body waits on its own speech forever.
+    AwaitOwnSpeech(ToolAnswer),
 }
 
 #[async_trait::async_trait]
@@ -46,13 +48,12 @@ impl HostToolRunner for FakeTools {
         speech: &lk_agents_abi::CoreObject,
         _step: u32,
     ) -> Result<RawToolAnswer, HostError> {
-        let speech = speech
-            .0
-            .downcast_ref::<SpeechHandle>()
-            .and_then(SpeechHandle::created)
-            .expect("a tool runs in a created speech")
-            .0;
-        Ok(raw(self.answer(call, speech).await))
+        let handle = Arc::clone(&speech.0)
+            .downcast::<SpeechHandle>()
+            .ok()
+            .filter(|h| h.created().is_some())
+            .expect("a tool runs in a created speech");
+        Ok(raw(self.answer(call, &handle).await))
     }
 
     fn cancel(&self, call_id: &str) {
@@ -63,7 +64,8 @@ impl HostToolRunner for FakeTools {
 }
 
 impl FakeTools {
-    async fn answer(&self, call: &FunctionCall, speech: u64) -> ToolAnswer {
+    async fn answer(&self, call: &FunctionCall, handle: &SpeechHandle) -> ToolAnswer {
+        let speech = handle.id().0;
         let (sender, receiver) = oneshot::channel();
         let slot = self.registry.register(
             Kind::Tool,
@@ -88,6 +90,11 @@ impl FakeTools {
                 {
                     session.release_idle_hold(hold);
                 }
+                answer
+            }
+            Ok(Body::AwaitOwnSpeech(answer)) => {
+                let origin = format!("tool:{}", call.call_id);
+                let _ = handle.wait_for_playout_for_host(Some(origin)).await;
                 answer
             }
             Err(_) => ToolAnswer::Cancelled,
@@ -127,9 +134,11 @@ fn raw(answer: ToolAnswer) -> RawToolAnswer {
 /// One answer to a registered tool body. False when the body was already cancelled.
 pub(super) fn deliver(sender: oneshot::Sender<Body>, what: &Input) -> bool {
     let Input::ToolAnswered { answer, text: AgentText(text), .. } = what else { return false };
-    if let Answer::AfterIdle = answer {
-        let returned = ToolAnswer::Returned { value: None };
-        return sender.send(Body::AfterIdle(returned)).is_ok();
+    let returned = ToolAnswer::Returned { value: None };
+    match answer {
+        Answer::AfterIdle => return sender.send(Body::AfterIdle(returned)).is_ok(),
+        Answer::AwaitOwnSpeech => return sender.send(Body::AwaitOwnSpeech(returned)).is_ok(),
+        _ => {}
     }
     let answer = match answer {
         Answer::Return => ToolAnswer::Returned { value: None },
@@ -140,7 +149,7 @@ pub(super) fn deliver(sender: oneshot::Sender<Body>, what: &Input) -> bool {
         Answer::StopResponse => ToolAnswer::Raised(ToolRaise::StopResponse),
         Answer::Cancelled => ToolAnswer::Cancelled,
         Answer::Detached => ToolAnswer::Detached { message: text.clone(), raw: text.clone() },
-        Answer::AfterIdle => unreachable!("answered above"),
+        Answer::AfterIdle | Answer::AwaitOwnSpeech => unreachable!("answered above"),
     };
     sender.send(Body::Answer(answer)).is_ok()
 }

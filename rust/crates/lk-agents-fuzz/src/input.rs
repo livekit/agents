@@ -387,8 +387,10 @@ plain_enum! {
     /// What a tool body answers with. `Detached` is `ctx.update()`: the step is answered with a
     /// progress message and the tool keeps running, its real end coming later as a deferred reply.
     /// `AfterIdle` is `async with ctx.foreground()` inside the body: the tool asks the agent to go
-    /// idle, from its own origin, holds the floor and returns once it has.
-    ToolAnswer { Return, Value, Error, StopResponse, Cancelled, Detached, AfterIdle }
+    /// idle, from its own origin, holds the floor and returns once it has. `AwaitOwnSpeech` is
+    /// `await ctx.speech_handle` inside the body, refused because that speech waits on the tool,
+    /// then returns.
+    ToolAnswer { Return, Value, Error, StopResponse, Cancelled, Detached, AfterIdle, AwaitOwnSpeech }
 }
 plain_enum! {
     /// Something the realtime server did of its own accord: its VAD heard the person start or
