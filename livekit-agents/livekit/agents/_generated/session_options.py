@@ -16,7 +16,7 @@ from ..types import NotGivenOr
 
 if TYPE_CHECKING:
     from ..voice.agent_session import SessionConnectOptions
-    from ..voice.keyterm_detection import KeytermsOptions, STTContextOptions
+    from ..voice.keyterm_detection import STTContextOptions
     from ..voice.tool_executor import ToolHandlingOptions
     from ..voice.transcription.text_transforms import TextTransforms
     from ..voice.turn import EndpointingOptions, TurnDetectionMode, TurnHandlingOptions
@@ -48,8 +48,6 @@ class SessionKwargs(TypedDict):
     """`float | None`: `None` disables the timeout, `0` arms it with nothing left to wait."""
     session_close_transcript_timeout: float
     conn_options: NotGivenOr[SessionConnectOptions]
-    keyterms_options: NotGivenOr[KeytermsOptions]
-    """Deprecated; `stt_context_options` supersedes it silently when both are given."""
 
 
 class UpdateKwargs(TypedDict):

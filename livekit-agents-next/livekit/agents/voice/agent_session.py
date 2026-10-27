@@ -102,7 +102,6 @@ _HOOK_BOUND = 15.0
 _OPTION_DEFAULTS: dict[str, Any] = {
     "turn_handling": NOT_GIVEN,
     "stt_context_options": NOT_GIVEN,
-    "keyterms_options": NOT_GIVEN,
     "tool_handling": NOT_GIVEN,
     "max_tool_steps": 3,
     "use_tts_aligned_transcript": NOT_GIVEN,
@@ -195,7 +194,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._options = _core.SessionOptions(
             {**_OPTION_DEFAULTS, **options, "conn_options": conn_options}
         )
-        stt_context = options.get("stt_context_options", options.get("keyterms_options"))
+        stt_context = options.get("stt_context_options", NOT_GIVEN)
         self._stt_context = stt_context if is_given(stt_context) else None
 
         self._stt = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt or None

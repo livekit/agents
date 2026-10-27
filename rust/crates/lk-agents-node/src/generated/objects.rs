@@ -317,7 +317,8 @@ impl ExitSignals {
     }
 }
 
-/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved configuration comes back as the dict `session.options` views.
+/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved
+/// configuration comes back as the dict `session.options` views.
 #[napi(js_name = "SessionOptions")]
 pub struct SessionOptions {
     pub(crate) inner: lk_agents_voice::agent_activity::options::HostOptions,
@@ -328,11 +329,6 @@ impl SessionOptions {
     #[napi(js_name = "setAecWarmup")]
     pub fn set_aec_warmup(&self, duration: Option<f64>) {
         self.inner.set_aec_warmup(duration);
-    }
-
-    #[napi(getter, js_name = "sttContextSource")]
-    pub fn stt_context_source(&self) -> String {
-        self.inner.stt_context_source().to_string()
     }
 
     #[napi(getter, js_name = "turnDetectionExplicit")]

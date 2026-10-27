@@ -30,7 +30,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for DetectionLlm {
 
 /// Configuration for automatic keyterm detection.
 ///
-/// Lives under the ``keyterm_detection`` key of :class:`KeytermsOptions`. Absent or
+/// Lives under the ``keyterm_detection`` key of :class:`STTContextOptions`. Absent or
 /// ``{"enabled": False}`` keeps detection off.
 //
 // The `///` is the reference's docstring verbatim; it is what the docs render. `total=False`: one
@@ -120,28 +120,6 @@ pub struct SttContextConfig {
     /// Defaults to ``True``; only STTs that advertise the ``chat_context`` capability act on it.
     #[python(ty = "bool")]
     pub forward_chat_context: Option<bool>,
-}
-
-/// Keyterm biasing for STTs that accept a term list.
-///
-/// .. deprecated:: v2.0
-///     Use :class:`STTContextOptions` (``AgentSession(stt_context_options=...)``) instead;
-///     its ``keyterms`` and ``keyterm_detection`` keys are identical.
-//
-// The reference's docstring, verbatim. Its two keys are declared beside `STTContextOptions`'.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
-    name = "KeytermsOptions"
-)]
-pub struct KeytermsConfig {
-    /// Static keyterms applied wherever the STT accepts a term list; never touched by detection.
-    #[python(ty = "list[str]")]
-    pub keyterms: Option<Vec<String>>,
-    /// LLM-based keyterm extraction, for STTs that accept a term list.
-    #[python(ty = "KeytermDetectionOptions")]
-    pub keyterm_detection: Option<KeytermDetectionConfig>,
 }
 
 /// One LLM answer: three disjoint lists of terms.

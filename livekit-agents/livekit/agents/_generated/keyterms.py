@@ -16,7 +16,7 @@ from ..llm import LLM
 class KeytermDetectionOptions(TypedDict, total=False):
     """Configuration for automatic keyterm detection.
 
-    Lives under the ``keyterm_detection`` key of :class:`KeytermsOptions`. Absent or
+    Lives under the ``keyterm_detection`` key of :class:`STTContextOptions`. Absent or
     ``{"enabled": False}`` keeps detection off.
     """
 
@@ -63,20 +63,6 @@ class STTContextOptions(TypedDict, total=False):
     """
 
 
-class KeytermsOptions(TypedDict, total=False):
-    """Keyterm biasing for STTs that accept a term list.
-
-    .. deprecated:: v2.0
-        Use :class:`STTContextOptions` (``AgentSession(stt_context_options=...)``) instead;
-        its ``keyterms`` and ``keyterm_detection`` keys are identical.
-    """
-
-    keyterms: list[str]
-    """Static keyterms applied wherever the STT accepts a term list; never touched by detection."""
-    keyterm_detection: KeytermDetectionOptions
-    """LLM-based keyterm extraction, for STTs that accept a term list."""
-
-
 # --- the frozen public paths -----------------------------------------------------------------
 #
 # Assigned here rather than in each class body: pydantic resolves annotations against
@@ -86,4 +72,3 @@ class KeytermsOptions(TypedDict, total=False):
 # reporting `_generated.*` for a name whose import path never moved.
 KeytermDetectionOptions.__module__ = "livekit.agents.voice.keyterm_detection"
 STTContextOptions.__module__ = "livekit.agents.voice.keyterm_detection"
-KeytermsOptions.__module__ = "livekit.agents.voice.keyterm_detection"

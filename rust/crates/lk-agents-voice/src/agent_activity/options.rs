@@ -19,11 +19,6 @@ pub use lk_agents_abi::voice::session_options::{
 };
 use std::time::Duration;
 
-/// The one message every deprecated-kwarg diagnostic carries; the kwarg and hint are fields.
-pub const DEPRECATED_KWARG: &str = "deprecated AgentSession keyword";
-
-const STT_CONTEXT_HINT: &str = "Use stt_context_options=STTContextOptions(...) instead";
-
 /// `_RECORDING_ALL_ON`. Note `redaction: false`: "all on" is about the four capture keys.
 pub const RECORDING_ALL_ON: RecordingOptions =
     RecordingOptions { audio: true, traces: true, logs: true, transcript: true, redaction: false };
@@ -277,10 +272,6 @@ impl ConfigStack {
     }
 }
 
-fn deprecation(kwarg: &'static str, hint: &'static str) -> DiagnosticEvent {
-    DiagnosticEvent::warning(DEPRECATED_KWARG).with("kwarg", kwarg).with("hint", hint)
-}
-
 /// The `turn_handling` this session runs on, as written.
 pub fn session_turn_handling(kw: &SessionKwargs) -> TurnHandlingKwargs {
     kw.turn_handling.unwrap_or_default()
@@ -291,20 +282,9 @@ pub fn turn_detection_explicit(kw: &SessionKwargs) -> bool {
     session_turn_handling(kw).turn_detection.is_some()
 }
 
-/// Where the session's STT context came from: `stt_context_options` **silently** supersedes the
-/// deprecated `keyterms_options` (mapped through `_stt_context_from_keyterms_options`); neither
-/// given resolves `None`.
-pub fn stt_context_source(kw: &SessionKwargs) -> &'static str {
-    match (kw.stt_context_options, kw.keyterms_options) {
-        (HostValue::Given, _) => "stt_context_options",
-        (HostValue::NotGiven, HostValue::Given) => "keyterms_options",
-        (HostValue::NotGiven, HostValue::NotGiven) => "none",
-    }
-}
-
-/// **The session layer** and its diagnostics: what it leaves unsaid falls to `defaults(legs)`.
+/// **The session layer**: what it leaves unsaid falls to `defaults(legs)`.
 /// Past this line nothing is `f64`.
-pub fn session_layer(kw: &SessionKwargs) -> (AgentSessionOptions, Vec<DiagnosticEvent>) {
+pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
     let SessionKwargs {
         turn_handling: _,
         stt_context_options: _,
@@ -320,13 +300,7 @@ pub fn session_layer(kw: &SessionKwargs) -> (AgentSessionOptions, Vec<Diagnostic
         transcription_timeout,
         session_close_transcript_timeout,
         conn_options: _,
-        keyterms_options,
     } = kw.clone();
-
-    let mut diagnostics = Vec::new();
-    if keyterms_options.is_given() {
-        diagnostics.push(deprecation("keyterms_options", STT_CONTEXT_HINT));
-    }
 
     let mut o = turn_handling_layer(&session_turn_handling(kw));
     o.turn.ivr_detection = Some(ivr_detection);
@@ -338,7 +312,7 @@ pub fn session_layer(kw: &SessionKwargs) -> (AgentSessionOptions, Vec<Diagnostic
     o.timers.transcription_timeout = Maybe::Given(transcription_timeout.map(secs));
     o.timers.aec_warmup = nullable(aec_warmup_duration, secs);
     o.timers.session_close_transcript_timeout = Some(secs(session_close_transcript_timeout));
-    (o, diagnostics)
+    o
 }
 
 /// What `update_options(..)` says.
@@ -623,10 +597,11 @@ pub fn resolve_interruption_detector(inputs: &InterruptionGateInputs) -> Interru
     InterruptionGate::Build
 }
 
-/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved configuration comes back as the dict `session.options` views.
+/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved
+/// configuration comes back as the dict `session.options` views.
 ///
 /// Before the driver holds them: the raw kwargs, the session layer they became (plus every
-/// `update_options` so far), and the diagnostics not yet emitted.
+/// `update_options` so far).
 #[lk_agents_abi::class(name = "SessionOptions")]
 pub struct HostOptions {
     state: std::sync::Mutex<HostOptionsState>,
@@ -637,8 +612,6 @@ struct HostOptionsState {
     /// `expressive=`, then each `update_options(expressive=)`.
     expressive: Expressive,
     session: AgentSessionOptions,
-    /// Diagnostics (deprecated kwargs) not yet emitted; the session takes them at construction.
-    diagnostics: Vec<DiagnosticEvent>,
 }
 
 impl HostOptions {
@@ -650,32 +623,23 @@ impl HostOptions {
         self.lock().session
     }
 
-    /// The diagnostics earned so far, once.
-    pub fn take_diagnostics(&self) -> Vec<DiagnosticEvent> {
-        std::mem::take(&mut self.lock().diagnostics)
-    }
-
     /// The session's `expressive=` as of now.
     pub fn expressive(&self) -> Expressive {
         self.lock().expressive.clone()
     }
 }
 
-/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved configuration comes back as the dict `session.options` views.
+/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved
+/// configuration comes back as the dict `session.options` views.
 #[lk_agents_abi::host(object(name = "SessionOptions"))]
 impl HostOptions {
     /// Read the kwargs once; keep the session layer.
     #[host(new)]
     pub fn new(kwargs: SessionKwargs) -> Self {
-        let (session, diagnostics) = session_layer(&kwargs);
+        let session = session_layer(&kwargs);
         let expressive = kwargs.expressive.clone();
         HostOptions {
-            state: std::sync::Mutex::new(HostOptionsState {
-                kwargs,
-                expressive,
-                session,
-                diagnostics,
-            }),
+            state: std::sync::Mutex::new(HostOptionsState { kwargs, expressive, session }),
         }
     }
 
@@ -703,12 +667,6 @@ impl HostOptions {
     pub fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions {
         let stack = ConfigStack { session: self.session(), agent: None };
         resolved_session_options(&stack.resolve(&LegSet::from(legs)), &stack.session)
-    }
-
-    /// Which STT-context kwarg won: `"stt_context_options"`, `"keyterms_options"` or `"none"`.
-    #[host(getter)]
-    pub fn stt_context_source(&self) -> &'static str {
-        stt_context_source(&self.lock().kwargs)
     }
 
     /// `"turn_detection" in turn_handling`.

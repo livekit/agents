@@ -123,7 +123,6 @@ from .voice.amd import AMD, AMDCategory, AMDPredictionEvent
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.keyterm_detection import (
     KeytermDetectionOptions,
-    KeytermsOptions,
     STTContextOptions,
 )
 from .voice.run_result import (
@@ -307,7 +306,6 @@ __all__ = [
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
     "UserTurnLimitOptions",
-    "KeytermsOptions",
     "KeytermDetectionOptions",
     "STTContextOptions",
     "UserTurnExceededEvent",

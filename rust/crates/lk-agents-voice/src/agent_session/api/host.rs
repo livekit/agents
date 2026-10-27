@@ -176,10 +176,7 @@ impl SessionApi {
             session: options.map(|o| o.expressive()).unwrap_or_default(),
             agent: agent_expressive.given(),
         };
-        let (session_layer, diagnostics) = match options {
-            Some(o) => (o.session(), o.take_diagnostics()),
-            None => (crate::agent_activity::options::AgentSessionOptions::default(), Vec::new()),
-        };
+        let session_layer = options.map(|o| o.session()).unwrap_or_default();
         let forward_chat_context =
             stt_context.as_ref().and_then(|cfg| cfg.forward_chat_context).unwrap_or(true);
         let keyterms = stt_context.map(|cfg| crate::keyterm_detection::KeytermSetup {
@@ -386,12 +383,6 @@ impl SessionApi {
             #[cfg(feature = "dst")]
             probe: Mutex::new(None),
         };
-        // The reference's `@deprecate_params` warnings, as `Diagnostic` events, not Python logs.
-        if let Some(events) = &on_event {
-            for d in diagnostics {
-                events.event(&HostWire::Diagnostic(d.wire()));
-            }
-        }
         api.host = HostParts {
             events: on_event,
             hooks,

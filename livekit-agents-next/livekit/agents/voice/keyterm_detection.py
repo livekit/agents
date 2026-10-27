@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from .. import _core
-from .._generated.keyterms import KeytermDetectionOptions, KeytermsOptions, STTContextOptions
+from .._generated.keyterms import KeytermDetectionOptions, STTContextOptions
 from ..llm import LLM, function_tool
 from ..log import logger
 
-__all__ = ["KeytermDetectionOptions", "KeytermsOptions", "STTContextOptions"]
+__all__ = ["KeytermDetectionOptions", "STTContextOptions"]
 
 
 @function_tool(name="record_keyterms")
