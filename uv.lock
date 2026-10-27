@@ -3375,7 +3375,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "mistralai", extras = ["realtime"], specifier = ">=2.0.0,<3.0.0" },
+    { name = "mistralai", extras = ["realtime"], specifier = ">=3.5.0,<4.0.0" },
 ]
 
 [[package]]
@@ -4165,11 +4165,11 @@ wheels = [
 
 [[package]]
 name = "mistralai"
-version = "2.10.1"
+version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "eval-type-backport" },
-    { name = "httpx" },
+    { name = "httpx2" },
     { name = "jsonpath-python" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-semantic-conventions" },
@@ -4177,9 +4177,9 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ca/db/a80c4ab96b1fec9529115dafaa3f14b28d0407fe1cb9b051ec2df9336fb7/mistralai-2.10.1.tar.gz", hash = "sha256:43b61643ba4f120463e5faf7305a6f40eb29f8e3a21321893969e56c20ed3fbc", size = 590127, upload-time = "2026-09-15T08:12:30.79Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/37/893316c192ded60ed2190617b2be38d85b40ca6718c68646078d21c8e81d/mistralai-3.5.0.tar.gz", hash = "sha256:4543d240dc8b89a7009467fdc1848aaa2421515118983a4474eb9e37bb097bc4", size = 747818, upload-time = "2026-10-25T19:53:53.516Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/98/f64b54166a607ece4e5c8494c843ac1f9c7c0af6f1014272cc420fe1d519/mistralai-2.10.1-py3-none-any.whl", hash = "sha256:443b306392ae1e86edaec39dbafcf79deb735799a00abef4611531004e22b1b2", size = 1392946, upload-time = "2026-09-15T08:12:28.704Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/99/d658c482f3054895c10969abd54fd6e42e8279615d45e29007021793ab03/mistralai-3.5.0-py3-none-any.whl", hash = "sha256:41837ed438d878bd405d09f4650430e023ea7b67a8d44e4e4be86aa1c912e4b6", size = 1752572, upload-time = "2026-10-25T19:53:51.412Z" },
 ]
 
 [package.optional-dependencies]

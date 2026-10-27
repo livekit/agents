@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
+import httpx2  # mistralai raises httpx2.TimeoutException from its http client
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
@@ -312,7 +312,7 @@ class LLMStream(llm.LLMStream):
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError(retryable=retryable) from e
         except APIStatusError as e:
             raise APIStatusError(
@@ -414,7 +414,7 @@ class LLMStream(llm.LLMStream):
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
-        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError(retryable=retryable) from e
         except APIStatusError as e:
             raise APIStatusError(
