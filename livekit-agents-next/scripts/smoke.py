@@ -64,6 +64,7 @@ TOOL_CALLS = [
     ("order", "look_up_order", lambda text: {}),
     ("keypad", "send_dtmf_events", lambda text: {"events": ["1", "#"]}),
     ("bye", "end_call", lambda text: {}),
+    ("book", "book", lambda text: {"day": "Monday"}),
 ]
 
 
@@ -935,6 +936,50 @@ async def filler() -> None:
     assert steps == [0, 1], steps
     assert spoken.count("One moment please.") == 2, spoken
     assert "The tool said: shipped" in spoken, spoken
+    await session.aclose()
+
+
+async def tool_outcomes() -> None:
+    """A toolset that lists its tools in ``setup()`` (as an MCP server's does) runs them, and a
+    tool that requires approval asks its read-back, then runs on the repeat after the answer."""
+    print("== tool outcomes")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+
+    @function_tool
+    async def look_up_order(ctx: RunContext) -> str:
+        """Look up the caller's order."""
+        return "shipped"
+
+    @function_tool(needs_approval=True)
+    async def book(ctx: RunContext, day: str) -> str:
+        """Book an appointment."""
+        return f"booked {day}"
+
+    class Late(llm.Toolset):
+        async def setup(self) -> Late:
+            self._tools = [look_up_order]
+            return self
+
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    agent = Agent(instructions="You book.", tools=[Late(id="late"), book])
+    await session.start(agent, room=room)
+    session.generate_reply(user_input="where is my order?")
+    await settle(room, 4)
+    session.generate_reply(user_input="book me on monday")
+    await settle(room, 4)
+    session.generate_reply(user_input="yes, book it")
+    await settle(room, 4)
+    spoken = [text for topic, text in room.text_streams() if topic == "lk.transcription"]
+    print(f"tool outcomes spoken={spoken}")
+    assert "The tool said: shipped" in spoken, spoken
+    readback = "Please confirm: Book an appointment (day='Monday'). Yes or no?"
+    assert readback in spoken, spoken
+    assert "The tool said: booked Monday" in spoken, spoken
+    outputs = [i.output for i in session.history.items if i.type == "function_call_output"]
+    assert any(o.startswith("not run yet: the person answered 'yes, book it'") for o in outputs), (
+        outputs
+    )
     await session.aclose()
 
 
@@ -1822,6 +1867,7 @@ async def main() -> int:
     await background_audio()
     await amd()
     await filler()
+    await tool_outcomes()
     await keyterms()
     await room_camera()
     await console()
