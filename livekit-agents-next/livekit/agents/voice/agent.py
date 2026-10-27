@@ -255,16 +255,19 @@ class Agent(Generic[Context_T, Output_T]):
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        """A read-only view of the history the running activity works on.
+        """A copy of the context the running agent works on: its own view of the
+        conversation, not the session's history of every agent.
 
-        The history belongs to the session; this resolves through the activity bound in the
-        current context, so it is only available inside the agent's hooks and tools.
+        This resolves through the activity bound in the current context, so it is only available
+        inside the agent's hooks and tools.
 
         Raises:
             RuntimeError: If the agent is not running in this context.
         """
         binding = self._get_binding_or_raise()
-        return binding.session.history if isinstance(binding, _VoiceBinding) else binding.chat_ctx
+        if isinstance(binding, _VoiceBinding):
+            return binding.session._agent_chat_ctx()
+        return binding.chat_ctx
 
     @property
     def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:

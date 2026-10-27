@@ -43,9 +43,12 @@ pub enum HookCall {
         id: HookId,
         agent: String,
     },
-    /// The decided turn parks until answer or bound.
+    /// The decided turn parks until answered. `chat_ctx` is a copy of `agent`'s own context
+    /// (`Agent.chat_ctx`) for the hook to edit for this reply.
     OnUserTurnCompleted {
         id: HookId,
+        agent: String,
+        chat_ctx: Vec<lk_agents_abi::ChatItem>,
         turn: crate::audio_recognition::TurnId,
         new_transcript: String,
         transcript_confidence: f64,

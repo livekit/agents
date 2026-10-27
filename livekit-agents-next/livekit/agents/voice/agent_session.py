@@ -654,6 +654,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._core is not None:
             self._core.update_agent(**self._frame(agent))
 
+    def _agent_chat_ctx(self) -> ChatContext:
+        """The driving agent's own context, as the core keeps it."""
+        return ChatContext([from_core_item(i) for i in self._running.agent_chat_ctx()])
+
     def _update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         """Replace the context the running agent works on."""
         self._running.update_chat_ctx(to_core_items(chat_ctx.items))
@@ -923,18 +927,22 @@ class _AgentHooks:
             await self._session._amd.aclose()
 
     async def _core_on_user_turn_completed(
-        self, new_transcript: str, transcript_confidence: float
+        self,
+        agent: Agent,
+        chat_ctx: list[_core.ChatItem],
+        new_transcript: str,
+        transcript_confidence: float,
     ) -> tuple[str | None, list[_core.ChatItem] | None, bool]:
         session = self._session
-        turn_ctx = session.history.copy()
+        turn_ctx = ChatContext([from_core_item(i) for i in chat_ctx])
         message = llm.ChatMessage(
             role="user", content=[new_transcript], transcript_confidence=transcript_confidence
         )
         before = [i.id for i in turn_ctx.items]
         stop = False
-        with _in_hook("on_user_turn_completed", session, session.current_agent):
+        with _in_hook("on_user_turn_completed", session, agent):
             try:
-                await session.current_agent.on_user_turn_completed(turn_ctx, message)
+                await agent.on_user_turn_completed(turn_ctx, message)
             except StopResponse:
                 stop = True
         changed = [i.id for i in turn_ctx.items] != before

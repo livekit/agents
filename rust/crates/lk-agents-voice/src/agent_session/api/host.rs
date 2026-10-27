@@ -1285,6 +1285,16 @@ impl SessionApi {
         }
     }
 
+    /// `Agent.chat_ctx` of the driving agent: its own view of the conversation, not the session's
+    /// history of every agent. Empty before `start()`.
+    #[host(method)]
+    pub fn agent_chat_ctx(&self) -> Vec<lk_agents_abi::ChatItem> {
+        match &*self.lock() {
+            Stage::Running(r) => r.activity.borrow().chat_ctx.items.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     /// `KeytermDetector.set_static_keyterms` / `update_options(keyterms=)`: the user's list,
     /// replaced; the detected set stays and the effective list is pushed to the STT at once.
     #[host(method(send = Command::SetStaticKeyterms(terms)))]

@@ -232,6 +232,7 @@ impl DriverBuilder {
         // `ivr_detection=True` is the IVR system's to start; the core starts no system.
         let ivr_detection = driver.session.config.effective.turn.ivr_detection();
         let keyterms_pushed = driver.shared.keyterms.subscribe();
+        let activity = driver.shared.activity.subscribe();
         let peer = PeerHandle {
             queue: queue.clone(),
             events: ev_tx,
@@ -250,6 +251,7 @@ impl DriverBuilder {
                 events: ev_rx,
                 answers: answers_rx,
                 keyterms: keyterms_pushed,
+                activity,
                 peer,
                 ivr_detection,
             },

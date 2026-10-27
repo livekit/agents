@@ -274,6 +274,8 @@ pub enum Host {
         id: HookId,
         kind: lk_agents_voice::agent_session::HookKind,
         speech: Option<u64>,
+        /// The ids of the context `on_user_turn_completed` is handed; empty for the others.
+        ctx_ids: Vec<String>,
     },
     Room(RoomIoEvent),
 }
@@ -1024,5 +1026,11 @@ pub fn step_name(step: &Step) -> String {
 
 /// The hook a call names, for the projection the recording keeps.
 pub fn hook_of(call: &HookCall) -> Host {
-    Host::Hook { id: call.id(), kind: call.kind(), speech: None }
+    let ctx_ids = match call {
+        HookCall::OnUserTurnCompleted { chat_ctx, .. } => {
+            chat_ctx.iter().map(|i| i.id().to_owned()).collect()
+        }
+        _ => Vec::new(),
+    };
+    Host::Hook { id: call.id(), kind: call.kind(), speech: None, ctx_ids }
 }

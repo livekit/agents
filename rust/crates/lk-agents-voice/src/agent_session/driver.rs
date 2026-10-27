@@ -136,6 +136,8 @@ pub struct SessionHandle {
     pub answers: Rx<(RequestId, Answer)>,
     /// The last keyterm list pushed to the recogniser; `None` before any push.
     pub keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
+    /// The driving agent's context and state, as last published.
+    pub activity: tokio::sync::watch::Receiver<crate::agent_session::ActivitySnapshot>,
     /// What a system runs on; the host starts the systems it configures on this after `start()`.
     pub peer: PeerHandle,
     pub ivr_detection: bool,

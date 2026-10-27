@@ -110,6 +110,8 @@ impl Driver {
         let id = self.activity.hooks.mint();
         let call = HookCall::OnUserTurnCompleted {
             id,
+            agent: self.activity.agent.clone(),
+            chat_ctx: self.session.chat_ctx.agent_chat_ctx().items,
             turn: info.turn_id,
             new_transcript: info.new_transcript.clone(),
             transcript_confidence: info.transcript_confidence,

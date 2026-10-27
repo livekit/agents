@@ -185,7 +185,8 @@ impl SessionApi {
             builder.room_io_events = room_io.events();
 
             let (mut runtime, handle) = builder.start().await?;
-            let SessionHandle { api, events, answers, keyterms, peer, ivr_detection } = handle;
+            let SessionHandle { api, events, answers, keyterms, activity, peer, ivr_detection } =
+                handle;
             #[cfg(feature = "dst")]
             let (host_event, queue_owner) = probe.unzip();
             // The IVR navigator's task, subscribed before the opening cycle.
@@ -229,6 +230,7 @@ impl SessionApi {
                 api,
                 calls,
                 keyterms,
+                activity,
                 peer,
                 amd: None,
                 tasks,
@@ -654,6 +656,8 @@ struct Running {
     calls: Calls,
     /// `session.keyterms`, as the driver last pushed them.
     keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
+    /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
+    activity: tokio::sync::watch::Receiver<crate::agent_session::ActivitySnapshot>,
     peer: PeerHandle,
     /// One per session.
     amd: Option<crate::amd::detector::AmdHandle>,
@@ -838,11 +842,13 @@ pub trait SessionHooks: Send + Sync {
     ) -> Result<Vec<lk_agents_abi::ToolSpec>, HostError>;
     /// The session closes: what runs beside it (AMD) closes first.
     async fn closing(&self) -> Result<(), HostError>;
-    /// `Agent.on_user_turn_completed(turn_ctx, new_message)` on the current agent: the message's
-    /// text as the hook left it, the turn's items when it changed them, and whether it raised
-    /// `StopResponse`.
+    /// `agent.on_user_turn_completed(turn_ctx, new_message)`, `turn_ctx` built from `chat_ctx`
+    /// (a copy of the agent's own context): the message's text as the hook left it, the turn's
+    /// items when it changed them, and whether it raised `StopResponse`.
     async fn on_user_turn_completed(
         &self,
+        agent: &lk_agents_abi::HostRef,
+        chat_ctx: Vec<lk_agents_abi::ChatItem>,
         new_transcript: &str,
         transcript_confidence: f64,
     ) -> Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError>;
@@ -916,22 +922,27 @@ async fn answer_hook(
             }
             None => Ok(HookOutcome::Failed),
         },
-        HookCall::OnUserTurnCompleted { new_transcript, transcript_confidence, .. } => hooks
-            .on_user_turn_completed(&new_transcript, transcript_confidence)
-            .await
-            .map(|(user_text, items, stop)| {
-                let mut edits = Vec::new();
-                if stop {
-                    edits.push(TurnEdit::StopResponse);
-                }
-                if let Some(user_text) = user_text.filter(|t| *t != new_transcript) {
-                    edits.push(TurnEdit::UpdateUserMessage(user_text));
-                }
-                if let Some(items) = items {
-                    edits.push(TurnEdit::ReplaceItems(items));
-                }
-                HookOutcome::Turn(edits)
-            }),
+        HookCall::OnUserTurnCompleted {
+            agent, chat_ctx, new_transcript, transcript_confidence, ..
+        } => match agents.get(&agent) {
+            Some(agent) => hooks
+                .on_user_turn_completed(&agent, chat_ctx, &new_transcript, transcript_confidence)
+                .await
+                .map(|(user_text, items, stop)| {
+                    let mut edits = Vec::new();
+                    if stop {
+                        edits.push(TurnEdit::StopResponse);
+                    }
+                    if let Some(user_text) = user_text.filter(|t| *t != new_transcript) {
+                        edits.push(TurnEdit::UpdateUserMessage(user_text));
+                    }
+                    if let Some(items) = items {
+                        edits.push(TurnEdit::ReplaceItems(items));
+                    }
+                    HookOutcome::Turn(edits)
+                }),
+            None => Ok(HookOutcome::Failed),
+        },
         HookCall::FunctionToolsExecuted { event, .. } => {
             use lk_agents_abi::ChatItem;
             let calls = event.function_calls.into_iter().map(ChatItem::FunctionCall).collect();
