@@ -44,7 +44,7 @@ def run_app(server: AgentServer | WorkerOptions, *, jupyter_url: str | None = No
 
         server = AgentServer.from_server_options(server)
 
-    server._job_executor_type = JobExecutorType.THREAD
+    server.update_options(job_executor_type=JobExecutorType.THREAD)
 
     # create user and agent tokens
     if jupyter_url:
@@ -69,9 +69,9 @@ def run_app(server: AgentServer | WorkerOptions, *, jupyter_url: str | None = No
             ) from None
 
     else:
-        ws_url = server._ws_url
-        api_key = server._api_key
-        api_secret = server._api_secret
+        ws_url = server._config.ws_url
+        api_key = server._config.api_key
+        api_secret = server._config.api_secret
 
         # manually create the user_token and agent_token using the provided api key and secret
         room_name = f"jupyter-room-{uuid.uuid4()}"

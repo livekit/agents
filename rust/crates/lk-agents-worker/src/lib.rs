@@ -33,6 +33,7 @@ mod load;
 #[cfg(test)]
 mod load_tests;
 pub mod protocol;
+pub mod server;
 mod state;
 pub mod transport;
 mod worker;

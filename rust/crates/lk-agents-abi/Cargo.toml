@@ -21,6 +21,7 @@ doctest = false
 
 [dependencies]
 fancy-regex = "0.19.0"
+rand = "0.9"
 regex = "1.13.1"
 async-trait.workspace = true
 # Two reasons, both narrow. `RealtimeModelError.timestamp` is a `Ts`, the pure tier's monotonic

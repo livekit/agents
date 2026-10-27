@@ -33,18 +33,16 @@ def cpu_count() -> float:
 
 # --- the worker ----------------------------------------------------------------------------------
 
-class WorkerHostProtocol(Protocol):
-    """What ``Worker`` calls back into, in the generator's ``open(kind, args)`` shape.
-
-    ``kind`` is one of ``"job_request"`` (args: a ``JobRequest`` dict, result: a decision dict),
-    ``"launch_job"`` (a ``RunningJobInfo`` dict, result: the LiveKit job id), ``"terminate_job"``
-    (``{"job_id"}``), ``"load"`` (``{}``, result: a float or ``None`` for the CPU monitor) and
-    ``"endpoint"`` (the preamble fields plus ``"stream"``, an ``EndpointStream``; served to
-    completion). The awaitable runs on the loop that constructed the worker and is cancelled when
-    Rust drops the operation.
+class ServerHostProtocol(Protocol):
+    """What ``ServerRuntime`` calls back into, in the generator's ``open(kind, args)`` shape: the
+    worker's callbacks (``job_request``, ``launch_job``, ``terminate_job``, ``load``, ``endpoint``)
+    and the server's (``start``: the job processes from the resolved options; ``started``,
+    ``registered``, ``idle_processes``, ``worker_load``, ``health``, ``close_websockets``,
+    ``join_jobs``, ``close``). The awaitable runs on the loop that constructed the runtime and is
+    cancelled when Rust drops the operation.
     """
 
-    def open(self, kind: str, args: dict[str, Any]) -> Awaitable[Any]: ...
+    def open(self, kind: str, args: Any) -> Awaitable[Any]: ...
 
 class EndpointStream:
     """One exchange stream of the endpoint data plane, positioned after its preamble."""
@@ -65,14 +63,70 @@ class EndpointServer:
         self, code: int = 1001, reason: str = "worker draining"
     ) -> Awaitable[None]: ...
 
-class Worker:
-    def __init__(self, options: dict[str, Any], host: WorkerHostProtocol) -> None: ...
-    def run(self) -> Awaitable[None]: ...
+def normalize_log_level(level: Any) -> str | tuple[str, str]:
+    """A log level uppercased (``ValueError`` for an unknown one); a split one as ``(dev, prod)``."""
+
+def endpoint_url_base(ws_url: str, agent_name: str, deployment: str) -> str | None: ...
+
+class ServerConfig:
+    """``AgentServer``'s options, resolved against the environment; writable until it starts."""
+
+    def __init__(self, options: dict[str, Any]) -> None: ...
+    def update(self, options: dict[str, Any]) -> None: ...
+    @property
+    def ws_url(self) -> str: ...
+    @property
+    def api_key(self) -> str: ...
+    @property
+    def api_secret(self) -> str: ...
+    @property
+    def agent_name(self) -> str: ...
+    @property
+    def deployment(self) -> str: ...
+    @property
+    def cloud(self) -> bool: ...
+    @property
+    def drain_timeout(self) -> float: ...
+    @property
+    def log_level(self) -> str | tuple[str, str]: ...
+    @property
+    def simulation(self) -> bool: ...
+    @simulation.setter
+    def simulation(self, value: bool) -> None: ...
+
+class ServerRuntime:
+    """``AgentServer``'s lifecycle over a ``ServerHostProtocol``."""
+
+    def __init__(self, config: ServerConfig, host: ServerHostProtocol) -> None: ...
+    @property
+    def worker_id(self) -> str: ...
+    @property
+    def draining(self) -> bool: ...
+    @property
+    def http_port(self) -> int: ...
+    def run(
+        self,
+        *,
+        devmode: bool,
+        unregistered: bool,
+        has_rtc: bool,
+        has_text_doors: bool,
+        publisher: bool,
+        routes: list[dict[str, Any]],
+        has_load_fnc: bool,
+    ) -> Awaitable[None]: ...
     def drain(self, timeout: float | None = None) -> Awaitable[None]: ...
-    def next_notification(self) -> Awaitable[dict[str, Any]]: ...
-    def close(self) -> None: ...
-    def job_status(self, job_id: str, status: int) -> None: ...
-    def snapshot(self) -> dict[str, Any]: ...
+    def aclose(self) -> Awaitable[None]: ...
+    def job_status(self, job_id: str, status: str) -> None: ...
+    def simulate_job(
+        self,
+        room: str,
+        *,
+        fake_job: bool,
+        agent_identity: str | None = None,
+        room_info: bytes | None = None,
+        token: str | None = None,
+    ) -> Awaitable[None]: ...
 
 # --- the job process IPC (worker ipc/) -----------------------------------------------------------
 

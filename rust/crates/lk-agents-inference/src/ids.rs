@@ -1,20 +1,6 @@
 //! `utils.misc.shortuuid` and `inference/_utils.create_inference_request_id`.
 
-use rand::RngCore;
-
-/// `prefix + uuid.uuid4().hex[:12]`: twelve hex characters, all before the version nibble, so six
-/// random bytes are equivalent.
-pub fn shortuuid(prefix: &str) -> String {
-    let mut bytes = [0u8; 6];
-    rand::rng().fill_bytes(&mut bytes);
-    let mut out = String::with_capacity(prefix.len() + 12);
-    out.push_str(prefix);
-    for b in bytes {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{b:02x}");
-    }
-    out
-}
+pub use lk_agents_abi::utils::strings::shortuuid;
 
 /// Which kind of logical request an id is minted for (`Literal["tts", "eot"]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

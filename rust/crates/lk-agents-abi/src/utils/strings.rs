@@ -49,6 +49,21 @@ pub(crate) fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+/// `utils.shortuuid(prefix)`: `prefix + uuid.uuid4().hex[:12]`, twelve hex characters, all before
+/// the version nibble, so six random bytes are equivalent.
+pub fn shortuuid(prefix: &str) -> String {
+    use rand::RngCore;
+    use std::fmt::Write as _;
+    let mut bytes = [0u8; 6];
+    rand::rng().fill_bytes(&mut bytes);
+    let mut out = String::with_capacity(prefix.len() + 12);
+    out.push_str(prefix);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

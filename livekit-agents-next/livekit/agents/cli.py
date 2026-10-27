@@ -181,7 +181,7 @@ def _run_worker(server: AgentServer, args: dict[str, Any]) -> None:
     """``start``: the worker until a signal, then drained (not in dev) and closed."""
     if args["options"]:
         server.update_options(**args["options"])
-    server._simulation = args["simulation"]
+    server._config.simulation = args["simulation"]
     devmode = args["dev"]
     colored = devmode or args["log_format"] == "colored"
     style = "json" if not colored else "compact" if args["simulation"] else "dev"
@@ -241,7 +241,8 @@ async def _serve(server: AgentServer, devmode: bool, cli_addr: str | None) -> No
     """The worker, beside the dev channel to the ``lk`` CLI at ``cli_addr`` when given."""
     channel = None
     if cli_addr:
-        dev = _core.dev_channel(cli_addr, server._agent_name, server._ws_url, _DevServer(server))
+        config = server._config
+        dev = _core.dev_channel(cli_addr, config.agent_name, config.ws_url, _DevServer(server))
         channel = asyncio.ensure_future(dev)
     try:
         await server.run(devmode=devmode, unregistered=False)
@@ -328,7 +329,7 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
 
     setup_logging("DEBUG", "console")
     ConsoleCall.addr, ConsoleCall.record = connect_addr, record
-    server._job_executor_type = JobExecutorType.THREAD
+    server.update_options(job_executor_type=JobExecutorType.THREAD)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

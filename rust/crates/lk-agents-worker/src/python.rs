@@ -18,29 +18,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use lk_agents_abi::RealClock;
 use lk_agents_abi::python::{
     CancelPythonTask, capture_host, check_pid, pyo3_async_runtimes, schedule_coroutine,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{IntoPyDict, PyDict, PyList};
+use std::sync::atomic::{AtomicBool, Ordering};
 use pyo3_async_runtimes::TaskLocals;
 
 use crate::transport::{AgentEndpointKind, EndpointReader, EndpointWriter, HttpStreamResetCode};
 use crate::{
     EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, HostError, JobDecision, JobId, LOG,
-    ServerType, TransportConfig, Worker, WorkerCommand, WorkerConfig, WorkerHandle, WorkerHost,
-    WorkerNotification, WorkerOptions, WorkerTransport, protocol,
+    ServerType, TransportConfig, Worker, WorkerCommand, WorkerHandle, WorkerHost,
+    WorkerNotification, protocol,
 };
-
-/// Seconds as a `Duration`; negative or non-finite is `None`.
-fn secs(v: Option<f64>) -> Option<Duration> {
-    match v {
-        Some(s) if s.is_finite() && s >= 0.0 => Some(Duration::from_secs_f64(s)),
-        _ => None,
-    }
-}
 
 // --------------------------------------------------------------------- EndpointStream
 
@@ -481,9 +473,12 @@ lk_agents_abi::register_host!(class PyEndpointServer);
 
 // --------------------------------------------------------------------- the host
 
+#[derive(Clone)]
 struct PyWorkerHost {
-    obj: Py<PyAny>,
+    obj: Arc<Py<PyAny>>,
     locals: TaskLocals,
+    /// The user gave a `load_fnc` the worker may call (not on Cloud).
+    user_load: bool,
 }
 
 impl PyWorkerHost {
@@ -536,6 +531,9 @@ impl WorkerHost for PyWorkerHost {
     }
 
     async fn user_load(&self) -> Option<f32> {
+        if !self.user_load {
+            return None;
+        }
         // A raising `load_fnc` must not read as idle (that over-schedules); `None` falls back to
         // the CPU monitor.
         let v = self.open("load", |py| Ok(PyDict::new(py).into_any())).await.ok()?;
@@ -603,10 +601,10 @@ fn parse_decision(py: Python<'_>, v: &Bound<'_, PyAny>) -> Result<JobDecision, S
     )
 }
 
-// --------------------------------------------------------------------- options
+// --------------------------------------------------------------------- the routes
 
-/// One manifest entry from `options["endpoints"]`: `{"path", "methods", "kind", "public"}`, with
-/// `kind` `"http"` (default) or `"text"` for a session endpoint (plan 9.1).
+/// One manifest entry: `{"path", "methods", "kind", "public"}`, with `kind` `"http"` (default) or
+/// `"text"` for a session endpoint (plan 9.1).
 fn endpoint_from_py(item: &Bound<'_, PyAny>) -> PyResult<protocol::AgentEndpoint> {
     let d = item.cast::<PyDict>().map_err(|_| PyValueError::new_err("endpoints: expected dicts"))?;
     let path: String = d
@@ -633,202 +631,615 @@ fn endpoint_from_py(item: &Bound<'_, PyAny>) -> PyResult<protocol::AgentEndpoint
     Ok(protocol::AgentEndpoint { path, methods, kind: kind as i32, public })
 }
 
-/// `options` as [`WorkerOptions`]. Python has already resolved option and environment precedence,
-/// so every string is passed explicitly (an empty one disables the environment fallback).
-fn options_from_py(options: &Bound<'_, PyDict>) -> PyResult<WorkerOptions> {
-    fn get<'py, T>(d: &Bound<'py, PyDict>, key: &str, default: T) -> PyResult<T>
-    where
-        T: for<'a> FromPyObject<'a, 'py>,
-        for<'a> <T as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
-    {
-        match d.get_item(key)? {
-            Some(v) if !v.is_none() => v.extract::<T>().map_err(|e| {
-                let e: PyErr = e.into();
-                PyValueError::new_err(format!("options[{key:?}]: {e}"))
-            }),
-            _ => Ok(default),
-        }
+fn env_flag(name: &str) -> bool {
+    matches!(std::env::var(name).unwrap_or_default().to_lowercase().as_str(), "1" | "true" | "yes")
+}
+
+/// The transport the routes need: the endpoint data plane rides WebTransport; without routes the
+/// WebSocket control connection suffices (`LIVEKIT_WORKER_WEBTRANSPORT` asks for it anyway).
+fn transport_for(routes: bool) -> TransportConfig {
+    if routes || env_flag("LIVEKIT_WORKER_WEBTRANSPORT") {
+        TransportConfig::WebTransport { insecure: env_flag("LIVEKIT_WORKER_INSECURE") }
+    } else {
+        TransportConfig::WebSocket { heartbeat: HEARTBEAT_INTERVAL }
     }
-    let d = WorkerConfig::default();
-    let permissions = match options.get_item("permissions")? {
-        Some(p) if !p.is_none() => p.extract()?,
-        _ => crate::WorkerPermissions::default(),
-    };
-    let endpoints = match options.get_item("endpoints")? {
-        Some(list) if !list.is_none() => list
-            .cast::<PyList>()
-            .map_err(|_| PyValueError::new_err("options[\"endpoints\"]: expected a list"))?
-            .iter()
-            .map(|item| endpoint_from_py(&item))
-            .collect::<PyResult<Vec<_>>>()?,
-        _ => Vec::new(),
-    };
-    let heartbeat_secs: Option<f64> = get(options, "heartbeat_secs", None)?;
-    let load_threshold: Option<f32> = get(options, "load_threshold", None)?;
-    let num_idle_processes: Option<u32> = get(options, "num_idle_processes", None)?;
-    let drain_timeout: Option<f64> = get(options, "drain_timeout", Some(3600.0))?;
-    let worker_token: Option<String> = get(options, "worker_token", None)?;
-    let headers: Vec<(String, String)> = get(options, "headers", Vec::new())?;
-    let webtransport: bool = get(options, "webtransport", !endpoints.is_empty())?;
-    let worker_url: Option<String> = get(options, "worker_url", None)?;
-    Ok(WorkerOptions {
-        ws_url: Some(get(options, "ws_url", String::new())?),
-        worker_url: Some(worker_url.unwrap_or_default()),
-        agent_name: Some(get(options, "agent_name", String::new())?),
-        deployment: Some(get(options, "deployment", String::new())?),
-        server_type: if get(options, "publisher", false)? {
-            ServerType::Publisher
-        } else {
-            ServerType::Room
-        },
-        version: get(options, "version", "0.0.0".to_owned())?,
-        permissions,
-        endpoints,
-        load_threshold: load_threshold.map(EnvOption::Fixed).unwrap_or(d.load_threshold),
-        num_idle_processes: Some(
-            num_idle_processes.map(EnvOption::Fixed).unwrap_or(d.num_idle_processes),
-        ),
-        devmode: get(options, "devmode", false)?,
-        simulation: get(options, "simulation", false)?,
-        drain_timeout: secs(drain_timeout),
-        worker_token: Some(worker_token.unwrap_or_default()),
-        headers,
-        api_key: Some(get(options, "api_key", String::new())?),
-        api_secret: Some(get(options, "api_secret", String::new())?),
-        max_retry: get(options, "max_retry", 16)?,
-        transport: if webtransport {
-            TransportConfig::WebTransport { insecure: get(options, "insecure", false)? }
-        } else {
-            TransportConfig::WebSocket {
-                heartbeat: heartbeat_secs
-                    .map(|s| Duration::from_secs_f64(s.max(1.0)))
-                    .unwrap_or(HEARTBEAT_INTERVAL),
-            }
-        },
-        ..WorkerOptions::default()
+}
+
+// --------------------------------------------------------------------- ServerConfig
+
+use crate::server::{self, LOG_LEVELS, ServerSettings, ServerStatus};
+
+/// A value, or a `ServerEnvOption` (anything with `dev_default` and `prod_default`).
+fn env_option<'py, T>(v: &Bound<'py, PyAny>) -> PyResult<EnvOption<T>>
+where
+    T: for<'a> FromPyObject<'a, 'py>,
+    for<'a> <T as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
+{
+    let extract = |v: Bound<'py, PyAny>| v.extract::<T>().map_err(Into::into);
+    if v.hasattr("dev_default")? {
+        return Ok(EnvOption::Split {
+            dev: extract(v.getattr("dev_default")?)?,
+            prod: extract(v.getattr("prod_default")?)?,
+        });
+    }
+    Ok(EnvOption::Fixed(extract(v.clone())?))
+}
+
+/// A value as given, or a split one as `(dev, prod)`.
+fn env_option_py<'py, T>(py: Python<'py>, o: EnvOption<T>) -> PyResult<Bound<'py, PyAny>>
+where
+    T: IntoPyObject<'py> + Copy,
+    (T, T): IntoPyObject<'py>,
+{
+    use pyo3::IntoPyObjectExt as _;
+    match o {
+        EnvOption::Fixed(v) => v.into_bound_py_any(py),
+        EnvOption::Split { dev, prod } => (dev, prod).into_bound_py_any(py),
+    }
+}
+
+fn log_level(level: &str) -> PyResult<&'static str> {
+    let upper = server::normalize_log_level(level).map_err(PyValueError::new_err)?;
+    Ok(LOG_LEVELS.iter().copied().find(|l| *l == upper).unwrap_or("INFO"))
+}
+
+/// `log_level` normalised: uppercased, and refused when it names no level.
+fn log_levels(v: &Bound<'_, PyAny>) -> PyResult<EnvOption<&'static str>> {
+    Ok(match env_option::<String>(v)? {
+        EnvOption::Fixed(l) => EnvOption::Fixed(log_level(&l)?),
+        EnvOption::Split { dev, prod } => {
+            EnvOption::Split { dev: log_level(&dev)?, prod: log_level(&prod)? }
+        }
     })
 }
 
-// --------------------------------------------------------------------- Worker
-
-type Conn = Worker<Box<dyn WorkerTransport>, PyWorkerHost, RealClock>;
-
-/// The Rust worker runtime, as seen from Python.
-#[pyclass(name = "Worker", module = "livekit.agents._core")]
-pub struct PyWorker {
-    /// Taken by `run()`. A second `run()` is an error rather than a second socket.
-    conn: std::sync::Mutex<Option<Box<Conn>>>,
-    handle: WorkerHandle,
-    notifications: Arc<tokio::sync::Mutex<tokio::sync::broadcast::Receiver<WorkerNotification>>>,
+/// `ServerOptions.log_level`'s check: the level uppercased, a split one as `(dev, prod)`.
+#[pyfunction]
+fn normalize_log_level<'py>(py: Python<'py>, level: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    env_option_py(py, log_levels(level)?)
 }
 
-fn queue_full<T>(_: T) -> PyErr {
-    PyRuntimeError::new_err("worker stopped or command queue full")
+lk_agents_abi::register_host!(fn normalize_log_level);
+
+/// `AgentServer._endpoint_url_base`.
+#[pyfunction]
+fn endpoint_url_base(ws_url: &str, agent_name: &str, deployment: &str) -> Option<String> {
+    server::endpoint_url_base(ws_url, agent_name, deployment)
+}
+
+lk_agents_abi::register_host!(fn endpoint_url_base);
+
+/// The given options written over `s`; an unknown one is refused.
+fn apply(s: &mut ServerSettings, options: &Bound<'_, PyDict>) -> PyResult<()> {
+    fn text(v: &Bound<'_, PyAny>) -> PyResult<String> {
+        Ok(v.extract::<Option<String>>()?.unwrap_or_default())
+    }
+    for (key, v) in options.iter() {
+        let key: String = key.extract()?;
+        let wrap = |e: PyErr| PyValueError::new_err(format!("{key}: {e}"));
+        match key.as_str() {
+            "ws_url" => s.ws_url = text(&v)?,
+            "api_key" => s.api_key = text(&v)?,
+            "api_secret" => s.api_secret = text(&v)?,
+            "agent_name" => s.agent_name = text(&v)?,
+            "host" => s.host = text(&v)?,
+            "port" => s.port = env_option(&v).map_err(wrap)?,
+            "load_threshold" => s.load_threshold = env_option(&v).map_err(wrap)?,
+            "num_idle_processes" => s.num_idle_processes = env_option(&v).map_err(wrap)?,
+            "drain_timeout" => s.drain_timeout = v.extract::<Option<f64>>()?.unwrap_or(0.0),
+            "max_retry" => s.max_retry = v.extract()?,
+            "permissions" => s.permissions = v.extract()?,
+            "http_proxy" => s.http_proxy = v.extract()?,
+            "log_level" => s.log_level = log_levels(&v)?,
+            "prometheus_port" => s.prometheus_port = v.extract()?,
+            "prometheus_multiproc_dir" => s.prometheus_multiproc_dir = v.extract()?,
+            "version" => s.version = v.extract()?,
+            "job_executor_type" => s.job_executor_type = v.extract()?,
+            "multiprocessing_context" => s.multiprocessing_context = v.extract()?,
+            "job_memory_warn_mb" => s.job_memory_warn_mb = v.extract()?,
+            "job_memory_limit_mb" => s.job_memory_limit_mb = v.extract()?,
+            "shutdown_process_timeout" => s.shutdown_process_timeout = v.extract()?,
+            "session_end_timeout" => s.session_end_timeout = v.extract()?,
+            "initialize_process_timeout" => s.initialize_process_timeout = v.extract()?,
+            other => return Err(PyValueError::new_err(format!("unknown server option {other:?}"))),
+        }
+    }
+    Ok(())
+}
+
+/// `AgentServer`'s options (`_core.ServerConfig`): what it was given, with the environment read
+/// where an option was left empty. Writable until the server starts.
+#[pyclass(name = "ServerConfig", module = "livekit.agents._core")]
+pub struct PyServerConfig {
+    settings: Arc<std::sync::Mutex<ServerSettings>>,
+    running: Arc<AtomicBool>,
+}
+
+impl PyServerConfig {
+    fn get(&self) -> std::sync::MutexGuard<'_, ServerSettings> {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 #[pymethods]
-impl PyWorker {
-    /// Construct on the host event loop. `options` is a dict (see the module docs for the keys);
-    /// `host.open(kind, args)` serves every callback. Rust signs authorization for each
-    /// connection attempt from `api_key`/`api_secret`.
+impl PyServerConfig {
+    /// `options`: `AgentServer`'s arguments by name; `http_proxy` left out reads `HTTPS_PROXY`,
+    /// else `HTTP_PROXY`.
     #[new]
-    fn new(py: Python<'_>, options: &Bound<'_, PyDict>, host: Py<PyAny>) -> PyResult<Self> {
+    fn new(options: &Bound<'_, PyDict>) -> PyResult<Self> {
+        let mut s = ServerSettings::default();
+        let env = |name: &str| std::env::var(name).ok();
+        s.http_proxy = ServerSettings::env_proxy(env);
+        apply(&mut s, options)?;
+        Ok(PyServerConfig {
+            settings: Arc::new(std::sync::Mutex::new(s.with_env(env))),
+            running: Arc::default(),
+        })
+    }
+
+    /// `update_options`: the given options, before the server starts.
+    fn update(&self, options: &Bound<'_, PyDict>) -> PyResult<()> {
+        if self.running.load(Ordering::Acquire) {
+            return Err(PyRuntimeError::new_err("cannot update options after starting the server"));
+        }
+        apply(&mut self.get(), options)
+    }
+
+    #[getter]
+    fn ws_url(&self) -> String {
+        self.get().ws_url.clone()
+    }
+
+    #[getter]
+    fn api_key(&self) -> String {
+        self.get().api_key.clone()
+    }
+
+    #[getter]
+    fn api_secret(&self) -> String {
+        self.get().api_secret.clone()
+    }
+
+    #[getter]
+    fn agent_name(&self) -> String {
+        self.get().agent_name.clone()
+    }
+
+    #[getter]
+    fn deployment(&self) -> String {
+        self.get().deployment.clone()
+    }
+
+    /// Hosted on Cloud (`LIVEKIT_WORKER_TOKEN` set).
+    #[getter]
+    fn cloud(&self) -> bool {
+        self.get().cloud()
+    }
+
+    #[getter]
+    fn drain_timeout(&self) -> f64 {
+        self.get().drain_timeout
+    }
+
+    /// A level, or `(dev, prod)`.
+    #[getter]
+    fn log_level<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        env_option_py(py, self.get().log_level)
+    }
+
+    #[getter]
+    fn simulation(&self) -> bool {
+        self.get().simulation
+    }
+
+    #[setter]
+    fn set_simulation(&self, value: bool) {
+        self.get().simulation = value;
+    }
+}
+
+lk_agents_abi::register_host!(class PyServerConfig);
+
+// --------------------------------------------------------------------- ServerRuntime
+
+#[derive(PartialEq)]
+enum Phase {
+    Idle,
+    Running,
+    Closed,
+}
+
+struct Life {
+    phase: Phase,
+    worker: Option<WorkerHandle>,
+    conn: Option<tokio::task::JoinHandle<()>>,
+    load: Option<tokio::task::AbortHandle>,
+    health: Option<tokio::task::AbortHandle>,
+}
+
+/// How a run ended: `Ok` once closed, the connection's error when it failed.
+type Outcome = tokio::sync::watch::Sender<Option<Result<(), String>>>;
+
+/// The health listener's view of the host.
+struct HostHealth(PyWorkerHost);
+
+#[async_trait]
+impl server::HealthProbe for HostHealth {
+    async fn health(&self) -> (bool, usize) {
+        match self.0.open("health", |py| Ok(PyDict::new(py).into_any())).await {
+            Ok(v) => Python::attach(|py| v.extract::<(bool, usize)>(py)).unwrap_or((true, 0)),
+            Err(_) => (true, 0),
+        }
+    }
+}
+
+fn empty(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    Ok(PyDict::new(py).into_any())
+}
+
+/// `AgentServer`'s lifecycle (`_core.ServerRuntime`), over the host's `open(kind, args)`: the
+/// worker's callbacks, and `start` (the job processes, from the resolved options), `started`,
+/// `registered`, `idle_processes`, `worker_load`, `health`, `close_websockets`, `join_jobs` and
+/// `close`.
+#[pyclass(name = "ServerRuntime", module = "livekit.agents._core")]
+pub struct PyServer {
+    settings: Arc<std::sync::Mutex<ServerSettings>>,
+    running: Arc<AtomicBool>,
+    host: PyWorkerHost,
+    life: Arc<tokio::sync::Mutex<Life>>,
+    status: Arc<ServerStatus>,
+    worker_id: Arc<std::sync::Mutex<String>>,
+    draining: Arc<AtomicBool>,
+    http_port: Arc<std::sync::atomic::AtomicU16>,
+    outcome: Arc<Outcome>,
+    /// The registered worker, for the job statuses the host reports.
+    worker: Arc<std::sync::Mutex<Option<WorkerHandle>>>,
+}
+
+impl PyServer {
+    fn settings(&self) -> ServerSettings {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn id(&self) -> String {
+        self.worker_id.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+#[pymethods]
+impl PyServer {
+    /// Constructed on the host's loop, where every `open` runs.
+    #[new]
+    fn new(py: Python<'_>, config: &PyServerConfig, host: Py<PyAny>) -> PyResult<Self> {
         check_pid()?;
         if !host.bind(py).hasattr("open")? {
             return Err(PyValueError::new_err("host object has no open(kind, args)"));
         }
         let locals = TaskLocals::with_running_loop(py)?.copy_context(py)?;
-        let options = options_from_py(options)?;
-        let (conn, handle) = Worker::new(options, PyWorkerHost { obj: host, locals });
-        Ok(PyWorker {
-            conn: std::sync::Mutex::new(Some(Box::new(conn))),
-            notifications: Arc::new(tokio::sync::Mutex::new(handle.subscribe())),
-            handle,
+        Ok(PyServer {
+            settings: config.settings.clone(),
+            running: config.running.clone(),
+            host: PyWorkerHost { obj: Arc::new(host), locals, user_load: true },
+            life: Arc::new(tokio::sync::Mutex::new(Life {
+                phase: Phase::Idle,
+                worker: None,
+                conn: None,
+                load: None,
+                health: None,
+            })),
+            status: Arc::default(),
+            worker_id: Arc::new(std::sync::Mutex::new("unregistered".into())),
+            draining: Arc::default(),
+            http_port: Arc::default(),
+            outcome: Arc::new(tokio::sync::watch::channel(None).0),
+            worker: Arc::default(),
         })
     }
 
-    /// Connect, register, and serve until closed. Awaitable; resolves when the worker stops.
-    fn run<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    #[getter]
+    fn worker_id(&self) -> String {
+        self.id()
+    }
+
+    #[getter]
+    fn draining(&self) -> bool {
+        self.draining.load(Ordering::Acquire)
+    }
+
+    /// The health listener's port; 0 without one.
+    #[getter]
+    fn http_port(&self) -> u16 {
+        self.http_port.load(Ordering::Acquire)
+    }
+
+    /// Start the job processes (the host's `start`), the health listener and the load loop,
+    /// register unless `unregistered`, and serve until `aclose()`; raises when the connection fails
+    /// for good. `routes` is the endpoint manifest; `publisher` the voice door's job type.
+    #[pyo3(signature = (*, devmode, unregistered, has_rtc, has_text_doors, publisher, routes, has_load_fnc))]
+    #[allow(clippy::too_many_arguments)]
+    fn run<'py>(
+        &self,
+        py: Python<'py>,
+        devmode: bool,
+        unregistered: bool,
+        has_rtc: bool,
+        has_text_doors: bool,
+        publisher: bool,
+        routes: &Bound<'py, PyList>,
+        has_load_fnc: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let mut conn = self
-            .conn
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .ok_or_else(|| PyRuntimeError::new_err("this worker has already been run"))?;
+        let endpoints =
+            routes.iter().map(|item| endpoint_from_py(&item)).collect::<PyResult<Vec<_>>>()?;
+        let mut s = self.settings();
+        let (life, running, outcome) =
+            (self.life.clone(), self.running.clone(), self.outcome.clone());
+        let (status, worker_id, http_port) =
+            (self.status.clone(), self.worker_id.clone(), self.http_port.clone());
+        let mut host = self.host.clone();
+        let reporting = self.worker.clone();
+        let server_type = if publisher { ServerType::Publisher } else { ServerType::Room };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            conn.run().await.map_err(|e| PyRuntimeError::new_err(e.to_string()))
+            let mut guard = life.lock().await;
+            if guard.phase != Phase::Idle {
+                return Err(PyRuntimeError::new_err("worker is already running"));
+            }
+            if !has_rtc && !has_text_doors {
+                return Err(PyRuntimeError::new_err(
+                    "No RTC session entrypoint has been registered.\n\
+                     Define one using the @server.rtc_session() decorator, for example:\n    \
+                     @server.rtc_session()\n    async def my_agent(ctx: JobContext):\n        ...\n",
+                ));
+            }
+            if s.cloud() {
+                if has_load_fnc {
+                    log::warn!(target: LOG,
+                        "custom load_fnc is not supported when hosting on Cloud, reverting to default");
+                }
+                if s.load_threshold != server::DEFAULT_LOAD_THRESHOLD {
+                    log::warn!(target: LOG,
+                        "custom load_threshold is not supported when hosting on Cloud, reverting to default");
+                    s.load_threshold = server::DEFAULT_LOAD_THRESHOLD;
+                }
+            }
+            host.user_load = has_load_fnc && !s.cloud();
+            if s.simulation {
+                log::info!(target: LOG, "simulation mode enabled: worker load limit disabled");
+            }
+            if !unregistered {
+                s.check_registration(!endpoints.is_empty()).map_err(PyValueError::new_err)?;
+            }
+            running.store(true, Ordering::Release);
+            s.prometheus_multiproc_dir =
+                server::prepare_prometheus_dir(s.prometheus_multiproc_dir.as_deref());
+            let start = s.clone();
+            host.open("start", move |py| {
+                let d = PyDict::new(py);
+                d.set_item("devmode", devmode)?;
+                d.set_item("text_only", !has_rtc)?;
+                d.set_item("env", start.child_env().into_py_dict(py)?)?;
+                d.set_item("num_idle_processes", start.num_idle_processes.get(devmode))?;
+                d.set_item("job_executor_type", &start.job_executor_type)?;
+                d.set_item("multiprocessing_context", &start.multiprocessing_context)?;
+                d.set_item("initialize_process_timeout", start.initialize_process_timeout)?;
+                d.set_item("shutdown_process_timeout", start.shutdown_process_timeout)?;
+                d.set_item("session_end_timeout", start.session_end_timeout)?;
+                d.set_item("job_memory_warn_mb", start.job_memory_warn_mb)?;
+                d.set_item("job_memory_limit_mb", start.job_memory_limit_mb)?;
+                d.set_item("http_proxy", &start.http_proxy)?;
+                d.set_item("host", &start.host)?;
+                d.set_item("prometheus_port", start.prometheus_port)?;
+                Ok(d.into_any())
+            })
+            .await
+            .map_err(lk_agents_abi::python::raise_host_error)?;
+            let settings = Arc::new(s.clone());
+            if !s.simulation {
+                let (listener, port) = server::bind_health(&s.host, s.port.get(devmode))
+                    .await
+                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                http_port.store(port, Ordering::Release);
+                log::info!(target: LOG, "HTTP server listening on {}:{port}", s.host);
+                let probe = Arc::new(HostHealth(host.clone()));
+                let serve =
+                    server::serve_health(listener, settings.clone(), server_type, status.clone(), probe);
+                guard.health = Some(tokio::spawn(serve).abort_handle());
+            }
+            if !unregistered {
+                let worker_url = std::env::var("LIVEKIT_WORKER_URL").ok().filter(|u| !u.is_empty());
+                let transport = transport_for(!endpoints.is_empty());
+                let options = s.worker_options(devmode, server_type, endpoints.clone(), transport, worker_url);
+                if !endpoints.is_empty() {
+                    let routes: Vec<String> =
+                        endpoints.iter().map(|e| format!("{} {}", e.methods.join(","), e.path)).collect();
+                    let routes = routes.join(", ");
+                    log::info!(target: LOG, routes = routes.as_str(); "serving agent endpoints");
+                }
+                let (mut conn, handle) = Worker::new(options, host.clone());
+                let mut notes = handle.subscribe();
+                let (registered, failed, outcome) = (host.clone(), status.clone(), outcome.clone());
+                let worker_id = worker_id.clone();
+                *reporting.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle.clone());
+                guard.worker = Some(handle);
+                guard.conn = Some(tokio::spawn(async move {
+                    let forward = async {
+                        while let Ok(note) = notes.recv().await {
+                            match note {
+                                WorkerNotification::Registered(r) => {
+                                    *worker_id.lock().unwrap_or_else(|e| e.into_inner()) =
+                                        r.worker_id.clone();
+                                    let _ = registered
+                                        .open("registered", move |py| Ok(r.into_pyobject(py)?.into_any()))
+                                        .await;
+                                }
+                                WorkerNotification::Stopped(_) => break,
+                                _ => {}
+                            }
+                        }
+                    };
+                    let (result, ()) = tokio::join!(conn.run(), forward);
+                    if let Err(e) = result {
+                        failed.connection_failed.store(true, Ordering::Release);
+                        log::error!(target: LOG, "worker connection failed: {e}");
+                        outcome.send_if_modified(|o| {
+                            o.is_none().then(|| *o = Some(Err(e.to_string()))).is_some()
+                        });
+                    }
+                }));
+            }
+            let (load_host, load_status, worker) = (host.clone(), status.clone(), guard.worker.clone());
+            guard.load = Some(
+                tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(crate::UPDATE_LOAD_INTERVAL);
+                    loop {
+                        tick.tick().await;
+                        if let Some(worker) = &worker {
+                            let snapshot = worker.snapshot();
+                            load_status.set_load(snapshot.worker_load);
+                            if let Some(target) = snapshot.target_idle_processes {
+                                let _ = load_host
+                                    .open("idle_processes", move |py| Ok(target.into_pyobject(py)?.into_any()))
+                                    .await;
+                            }
+                        }
+                        let load = load_status.load();
+                        let _ = load_host
+                            .open("worker_load", move |py| Ok(load.into_pyobject(py)?.into_any()))
+                            .await;
+                    }
+                })
+                .abort_handle(),
+            );
+            guard.phase = Phase::Running;
+            let _ = host.open("started", empty).await;
+            drop(guard);
+            let mut ended = outcome.subscribe();
+            let result = ended
+                .wait_for(Option::is_some)
+                .await
+                .map(|o| o.clone().unwrap_or(Ok(())))
+                .unwrap_or(Ok(()));
+            result.map_err(PyRuntimeError::new_err)
         })
     }
 
-    /// Completes when all pending requests and jobs drain, or raises `TimeoutError`.
+    /// Stop taking jobs and wait for the running ones, within `timeout` seconds (0 or `None`: no
+    /// deadline; `TimeoutError` past it). Once; a server never run has nothing to drain.
     #[pyo3(signature = (timeout=None))]
     fn drain<'py>(&self, py: Python<'py>, timeout: Option<f64>) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let handle = self.handle.clone();
-        let timeout = timeout
-            .map(Duration::try_from_secs_f64)
-            .transpose()
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let (life, draining, host, id) =
+            (self.life.clone(), self.draining.clone(), self.host.clone(), self.id());
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.drain(timeout).await.map_err(|e| {
-                if e == "drain timed out" {
-                    pyo3::exceptions::PyTimeoutError::new_err(e)
-                } else {
-                    PyRuntimeError::new_err(e)
+            let guard = life.lock().await;
+            if guard.phase != Phase::Running || draining.swap(true, Ordering::AcqRel) {
+                return Ok(());
+            }
+            let shown = timeout.map(|t| t.to_string()).unwrap_or_else(|| "None".into());
+            log::info!(target: LOG, id = id.as_str(), timeout = shown.as_str(); "draining worker");
+            // clients of an open WebSocket get a close frame and reconnect to another worker
+            let _ = host.open("close_websockets", empty).await;
+            let deadline = timeout.filter(|t| *t > 0.0).map(Duration::from_secs_f64);
+            let timed_out = || pyo3::exceptions::PyTimeoutError::new_err("drain timed out");
+            match &guard.worker {
+                Some(worker) => worker.drain(deadline).await.map_err(|e| {
+                    if e == "drain timed out" { timed_out() } else { PyRuntimeError::new_err(e) }
+                }),
+                None => {
+                    let joined = host.open("join_jobs", empty);
+                    let joined = match deadline {
+                        Some(d) => tokio::time::timeout(d, joined).await.map_err(|_| timed_out())?,
+                        None => joined.await,
+                    };
+                    joined.map(|_| ()).map_err(lk_agents_abi::python::raise_host_error)
                 }
-            })
+            }
         })
     }
 
-    /// Ordered runtime notifications (`kind`: `registered`, `drain_finished`, `drain_timed_out`,
-    /// `stopped`), separate from host operations and current state.
-    fn next_notification<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let notifications = self.notifications.clone();
+    /// Stop the connection and the load loop, close the host's job processes (`close`), then the
+    /// health listener; `run()` returns. A server never run, or already closed, does nothing.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        check_pid()?;
+        let (life, running, outcome, host, id) = (
+            self.life.clone(),
+            self.running.clone(),
+            self.outcome.clone(),
+            self.host.clone(),
+            self.id(),
+        );
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let event = notifications
-                .lock()
-                .await
-                .recv()
-                .await
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-            Python::attach(|py| {
-                let d = match &event {
-                    WorkerNotification::Registered(v) => v.into_pyobject(py)?,
-                    WorkerNotification::DrainFinished(v) => v.into_pyobject(py)?,
-                    WorkerNotification::DrainTimedOut(v) => v.into_pyobject(py)?,
-                    WorkerNotification::Stopped(v) => v.into_pyobject(py)?,
-                };
-                Ok::<_, PyErr>(d.unbind())
-            })
+            let mut guard = life.lock().await;
+            if guard.phase != Phase::Running {
+                return Ok(());
+            }
+            guard.phase = Phase::Closed;
+            log::info!(target: LOG, id = id.as_str(); "shutting down worker");
+            if let Some(worker) = guard.worker.take() {
+                let _ = worker.send(WorkerCommand::Close);
+            }
+            if let Some(conn) = guard.conn.take() {
+                let _ = conn.await;
+            }
+            if let Some(load) = guard.load.take() {
+                load.abort();
+            }
+            let closed = host.open("close", empty).await;
+            if let Some(health) = guard.health.take() {
+                health.abort();
+            }
+            running.store(false, Ordering::Release);
+            outcome.send_if_modified(|o| o.is_none().then(|| *o = Some(Ok(()))).is_some());
+            closed.map(|_| ()).map_err(lk_agents_abi::python::raise_host_error)
         })
     }
 
-    /// Stop reconnecting and return from `run()`. Not `drain`: this does not wait for jobs.
-    fn close(&self) -> PyResult<()> {
-        check_pid()?;
-        if self.handle.snapshot().finished.is_some() {
-            return Ok(());
+    /// A job process's status (`running`, `failed`, `success`), by the LiveKit job id; nothing
+    /// before registration.
+    fn job_status(&self, job_id: String, status: &str) {
+        let status = match status {
+            "failed" => protocol::JobStatus::JsFailed,
+            "success" => protocol::JobStatus::JsSuccess,
+            _ => protocol::JobStatus::JsRunning,
+        };
+        if let Some(worker) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let _ = worker.send(WorkerCommand::JobStatus { job_id, status });
         }
-        self.handle.send(WorkerCommand::Close).map_err(queue_full)
     }
 
-    /// Report status using the LiveKit job ID, not a process identifier.
-    fn job_status(&self, job_id: String, status: i32) -> PyResult<()> {
+    /// Launch a job under `room` without a dispatch (`simulate_job`); `room_info` is a
+    /// `models.Room`'s bytes.
+    #[pyo3(signature = (room, *, fake_job, agent_identity=None, room_info=None, token=None))]
+    fn simulate_job<'py>(
+        &self,
+        py: Python<'py>,
+        room: String,
+        fake_job: bool,
+        agent_identity: Option<String>,
+        room_info: Option<Vec<u8>>,
+        token: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let status = protocol::JobStatus::try_from(status)
-            .map_err(|_| PyValueError::new_err(format!("unknown job status {status}")))?;
-        self.handle.send(WorkerCommand::JobStatus { job_id, status }).map_err(queue_full)
-    }
-
-    /// `worker_id`, `draining`, `active_jobs`, `reserved_slots`, `worker_load`,
-    /// `target_idle_processes`, `drain_outcome`, `finished`.
-    fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        self.handle.snapshot().into_pyobject(py)
+        let room_info = room_info.map(|b| server::decode_room(&b)).transpose().map_err(PyValueError::new_err)?;
+        let info = server::simulated_job(
+            &self.settings(),
+            &self.id(),
+            &room,
+            fake_job,
+            agent_identity,
+            room_info,
+            token,
+        )
+        .map_err(PyValueError::new_err)?;
+        let (life, host) = (self.life.clone(), self.host.clone());
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let _guard = life.lock().await;
+            host.launch_job(info).await.map(|_| ()).map_err(lk_agents_abi::python::raise_host_error)
+        })
     }
 }
 
-lk_agents_abi::register_host!(class PyWorker);
+lk_agents_abi::register_host!(class PyServer);
 lk_agents_abi::register_host!(class PyEndpointStream);
 
 #[cfg(test)]
@@ -896,7 +1307,7 @@ mod tests {
     }
 
     // Catches: a manifest entry's kind or methods lost between Python and the register message,
-    // or endpoints not selecting the WebTransport transport the data plane needs.
+    // or routes not selecting the WebTransport transport the data plane needs.
     #[test]
     fn endpoints_reach_the_manifest_with_their_kind_and_select_webtransport() {
         attach(|py| {
@@ -908,24 +1319,18 @@ mod tests {
             http.set_item("path", "/items/{id}").unwrap();
             http.set_item("methods", vec!["GET", "HEAD"]).unwrap();
             http.set_item("public", true).unwrap();
-            let options = PyDict::new(py);
-            options.set_item("endpoints", vec![text, http]).unwrap();
-            let o = options_from_py(&options).unwrap();
-            assert_eq!(o.endpoints.len(), 2);
-            assert_eq!(o.endpoints[0].kind, AgentEndpointKind::AekText as i32);
-            assert_eq!(o.endpoints[1].kind, AgentEndpointKind::AekHttp as i32);
-            assert_eq!(o.endpoints[1].methods, vec!["GET", "HEAD"]);
-            assert!(o.endpoints[1].public && !o.endpoints[0].public);
-            assert!(matches!(o.transport, TransportConfig::WebTransport { .. }));
+            let text = endpoint_from_py(text.as_any()).unwrap();
+            let http = endpoint_from_py(http.as_any()).unwrap();
+            assert_eq!(text.kind, AgentEndpointKind::AekText as i32);
+            assert_eq!(http.kind, AgentEndpointKind::AekHttp as i32);
+            assert_eq!(http.methods, vec!["GET", "HEAD"]);
+            assert!(http.public && !text.public);
+            assert!(matches!(transport_for(true), TransportConfig::WebTransport { .. }));
 
             let bad = PyDict::new(py);
             bad.set_item("path", "/x").unwrap();
             bad.set_item("kind", "grpc").unwrap();
-            options.set_item("endpoints", vec![bad]).unwrap();
-            assert!(options_from_py(&options).is_err(), "an unknown kind must be refused");
-
-            let none = PyDict::new(py);
-            assert!(matches!(options_from_py(&none).unwrap().transport, TransportConfig::WebSocket { .. }));
+            assert!(endpoint_from_py(bad.as_any()).is_err(), "an unknown kind must be refused");
         });
     }
 }
