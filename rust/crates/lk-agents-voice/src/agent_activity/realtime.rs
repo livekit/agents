@@ -69,6 +69,11 @@ pub(crate) mod realtime_state {
     }
 
     impl RealtimeSessionState {
+        /// The model speaks a text it is given (`say()`).
+        pub fn says(&self) -> bool {
+            self.caps.supports_say
+        }
+
         pub fn new(caps: RealtimeCapabilities) -> Self {
             RealtimeSessionState { caps, ..RealtimeSessionState::default() }
         }

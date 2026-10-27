@@ -2,12 +2,13 @@
 //! tool reply, and the fillers (`RunContext.with_filler`).
 
 use crate::agent::{Source, Visibility};
+use crate::agent_activity::realtime::Request;
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::closing::SESSION_CLOSING;
 use crate::agent_session::effects::{Effect, Out, Timer};
 use crate::agent_session::{Driver, FillerSource, HookCall, HookId, ToolUpdate};
-use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus};
+use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::{ReplySource, TurnInstructions};
 use crate::tool_executor::{
@@ -17,6 +18,10 @@ use crate::tool_executor::{
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
 use std::time::Duration;
+
+/// `_FillerScheduler`'s log when its `say` raised: the filler ends there.
+const FILLER_STOPPED: &str =
+    "filler stopped on an error, no further filler will play for this tool call";
 
 impl Driver {
     // ------------------------------------------------------------------ the running set
@@ -423,7 +428,8 @@ impl Driver {
             return;
         };
         out.trace(GenerationStep::FillerStarted { filler: id, speech });
-        let run = FillerRun { sched, call_id, speech, source, asking: None, armed: None, fired_at: None };
+        let run =
+            FillerRun { sched, call_id, speech, source, asking: None, armed: None, fired_at: None };
         self.activity.tools.fillers.insert(id, run);
         self.pump_fillers(now, out);
     }
@@ -506,24 +512,47 @@ impl Driver {
         spoke: bool,
         out: &mut Out,
     ) {
-        let said = text.map(|text| {
-            self.start_speech(
-                now,
-                SpeechSpec::new(
-                    SpeechKind::Say,
-                    ReplySource::Text(text),
-                    self.session.config.effective.turn.interruption.enabled(),
-                ),
-                out,
-            )
-        });
-        let speech = said.as_ref().map(|handle| handle.id());
+        let realtime = self.activity.rt_session.is_some();
+        // The reference's `say` raises with no voice to speak the text (no TTS, no realtime model
+        // that says) while audio plays, which ends the filler.
+        if text.is_some()
+            && self.session.tts.is_none()
+            && self.session.outputs.plays_audio()
+            && !(realtime && self.activity.realtime_state.says())
+        {
+            out.machine().emit(SessionEvent::Diagnostic(
+                DiagnosticEvent::error(FILLER_STOPPED)
+                    .with("error", crate::agent_activity::speech::SAY_WITHOUT_TTS_REFUSED),
+            ));
+            self.end_filler(id, FillerEnd::Refused, out);
+            return;
+        }
+        let (speech, interrupted) = match text {
+            // On a realtime session the say is the model's, as the host's `say()`.
+            Some(text) if realtime => {
+                let request = Request::Say { text, add_to_chat_ctx: true };
+                (self.realtime_request(now, request, None, None, out), false)
+            }
+            Some(text) => {
+                let handle = self.start_speech(
+                    now,
+                    SpeechSpec::new(
+                        SpeechKind::Say,
+                        ReplySource::Text(text),
+                        self.session.config.effective.turn.interruption.enabled(),
+                    ),
+                    out,
+                );
+                (Some(handle.id()), handle.interrupted())
+            }
+            None => (None, false),
+        };
         let produced = spoke || speech.is_some();
         out.trace(GenerationStep::FillerFired { filler: id, step, spoke: produced, speech });
         // A say refused while scheduling drains is interrupted at birth and leaves the session
         // idle, so the next fire would come in the same instant. The reference's `say` raises
         // there, which ends the filler.
-        if said.is_some_and(|handle| handle.interrupted()) {
+        if interrupted {
             self.end_filler(id, FillerEnd::Refused, out);
             return;
         }

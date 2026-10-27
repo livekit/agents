@@ -34,6 +34,7 @@ mod path_needs_both_switches;
 mod pause_outlives_its_speech;
 mod preemptive_parked;
 mod preemptive_reply_latency;
+mod filler_refused_on_realtime;
 mod filler_without_voice_ends;
 mod realtime_close_interrupts;
 mod realtime_cut_reply_tool_runs;
