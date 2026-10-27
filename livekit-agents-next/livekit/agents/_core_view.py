@@ -1,10 +1,11 @@
-"""What the Rust core calls on a host object, and the values it crosses with.
+"""What the Rust core calls on a host object that is not a generated base, and the values it
+crosses with.
 
-A core proxy calls ``_core_<method>`` on the object it was handed. An object without that surface
-(every plugin and io leg) is seen through ``duck(obj, cls)``: ``cls`` names the base class the
-core expects, and the view here answers for it over the object's public API. Records the core
-reads by attribute (``SpeechEvent``, ``ChatChunk``, ``SynthesizedAudio``, the capabilities) are
-the plugin's own objects; chat items cross as ``_core.ChatItem``.
+A core proxy calls ``_core_<method>`` on the object it was handed. The provider bases (``stt.STT``,
+``tts.TTS``, ``llm.LLM``, ``vad.VAD``, ``llm.RealtimeModel`` and their streams) carry that
+surface themselves, generated with them; an io leg or a room is seen through ``duck(obj, cls)``,
+``cls`` naming the base class the core expects, and the duplex and turn-detection views here
+answer over a plugin's public API. Chat items cross as ``_core.ChatItem``.
 """
 
 from __future__ import annotations

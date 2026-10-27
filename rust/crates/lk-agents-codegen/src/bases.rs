@@ -90,8 +90,8 @@ fn py_doc(doc: &[String]) -> Vec<String> {
             while let Some(i) = rest.find('`') {
                 out.push_str(&rest[..i]);
                 let tail = &rest[i..];
-                if tail.starts_with("``") {
-                    let end = tail[2..].find("``").map_or(tail.len(), |j| j + 4);
+                if let Some(quoted) = tail.strip_prefix("``") {
+                    let end = quoted.find("``").map_or(tail.len(), |j| j + 4);
                     out.push_str(&tail[..end]);
                     rest = &tail[end..];
                 } else if let Some(j) = tail[1..].find('`') {
@@ -240,13 +240,10 @@ impl Writer<'_> {
                 self.need("..", "_core");
                 "_core.ChatRequest".to_owned()
             }
-            "LlmStream" | "SttSource" | "TtsSource" => m
-                .stream
-                .as_ref()
-                .map(|s| s.name.clone())
-                .ok_or_else(|| format!("{}: a stream return needs stream(name = ..)", m.rust))?,
+            // Not a record: a stream alias (`TtsSource`), the class the method returns.
             other => self
                 .record(other)
+                .or_else(|| m.stream.as_ref().map(|s| s.name.clone()))
                 .ok_or_else(|| format!("{}: `{other}` has no Python name", m.rust))?,
         })
     }
@@ -597,12 +594,22 @@ impl Writer<'_> {
         }
         self.need("typing_extensions", "Self");
         self.need("types", "TracebackType");
-        let task = self.p.methods.iter().any(|m| self.impl_is_task(m));
-        if task {
+        b.push_str("\n    async def aclose(self) -> None:\n        \"\"\"Close the provider and everything it opened.\"\"\"\n");
+        let tasks: Vec<String> = self
+            .p
+            .methods
+            .iter()
+            .filter(|m| self.impl_is_task(m))
+            .filter_map(|m| match &m.role {
+                Role::Hook { name, .. } => Some(self.task_attr(name)),
+                _ => None,
+            })
+            .collect();
+        for task in tasks {
             self.need("..utils", "aio");
-            b.push_str("\n    async def aclose(self) -> None:\n        \"\"\"Close the provider and everything it opened.\"\"\"\n        if self._prewarm_task is not None:\n            await aio.cancel_and_wait(self._prewarm_task)\n");
-        } else {
-            b.push_str("\n    async def aclose(self) -> None:\n        \"\"\"Close the provider and everything it opened.\"\"\"\n");
+            b.push_str(&format!(
+                "        if self.{task} is not None:\n            await aio.cancel_and_wait(self.{task})\n"
+            ));
         }
         b.push_str(ACONTEXT);
         Ok(())
@@ -630,7 +637,7 @@ impl Writer<'_> {
                 self.need("typing", "Any");
                 "Any".to_owned()
             }
-            (Role::Init, Some(r)) if self.from_items(r) => {
+            (Role::Init, Some(r)) if self.read_as_dict(r) => {
                 self.need("typing", "Any");
                 "dict[str, Any]".to_owned()
             }
@@ -644,7 +651,7 @@ impl Writer<'_> {
             Role::Label => "return self.label".to_owned(),
             Role::Init => {
                 let ret = m.ret.as_deref().unwrap_or_default();
-                if self.from_items(ret) {
+                if self.read_as_dict(ret) {
                     self.need("", "dataclasses");
                     format!("return dataclasses.asdict(self.{})", m.rust)
                 } else {
@@ -716,7 +723,7 @@ impl Writer<'_> {
     }
 
     /// Whether the core reads the record as a dict (`#[binding(from_items)]`).
-    fn from_items(&self, rust: &str) -> bool {
+    fn read_as_dict(&self, rust: &str) -> bool {
         let Ok(t) = syn::parse_str::<syn::Type>(rust) else { return false };
         let Some(name) = last_ident(&t) else { return false };
         self.decls.iter().any(|d| d.rust_name == name && d.targets.iter().any(|t| t.from_items))
