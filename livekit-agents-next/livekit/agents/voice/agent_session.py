@@ -655,19 +655,22 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def wait_for_idle(self) -> None:
         await self._running.wait_for_idle()
 
-    def update_agent(self, agent: Agent) -> None:
-        """Hand the conversation to ``agent``; the session and its history stay."""
+    def update_agent(self, agent: Agent, *, chat_ctx: ChatContext | None = None) -> None:
+        """Hand the conversation to ``agent``; the session and its history stay. ``chat_ctx`` is
+        the context ``agent`` works on instead of the conversation carried forward."""
         self._agent = agent
-        if self._core is not None:
-            self._core.update_agent(**self._frame(agent))
+        if self._core is None:
+            if chat_ctx is not None:
+                self._chat_ctx = chat_ctx.copy()
+            return
+        frame = self._frame(agent)
+        if chat_ctx is not None:
+            frame["chat_ctx"] = to_core_items(chat_ctx.items)
+        self._core.update_agent(**frame)
 
     def _agent_chat_ctx(self) -> ChatContext:
         """The driving agent's own context, as the core keeps it."""
         return ChatContext([from_core_item(i) for i in self._running.agent_chat_ctx()])
-
-    def _update_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        """Replace the context the running agent works on."""
-        self._running.update_chat_ctx(to_core_items(chat_ctx.items))
 
     def update_options(self, **update: Any) -> None:
         """Change the turn options and ``expressive`` of a session (``UpdateKwargs``)."""
