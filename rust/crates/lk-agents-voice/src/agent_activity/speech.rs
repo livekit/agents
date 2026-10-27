@@ -31,8 +31,8 @@ use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatContext, ChatMessage, Modality, Role, SpawnerExt, Ts};
 use std::sync::Arc;
 
-/// A `say(stream)` / `say(audio=)` refused on a realtime model (the wire carries one text item).
-pub(crate) const SAY_SHAPE_REFUSED_ON_REALTIME: &str = "say(stream) or say(audio=) on a realtime model: the wire takes one text item and owns its own synthesis";
+/// A `say(stream)` the realtime model would speak itself (no TTS): the wire carries one text item.
+pub(crate) const SAY_SHAPE_REFUSED_ON_REALTIME: &str = "say(stream) on a realtime model with no TTS: the wire takes one text item";
 
 /// A text `say()` with no TTS while audio output is attached and enabled, refused before a handle
 /// exists (`AgentActivity.say`'s first `RuntimeError`).
@@ -144,17 +144,18 @@ impl Driver {
                     out,
                 );
             }
+            // The model speaks a `say` only with no TTS to (`AgentActivity.say`); with one, a
+            // realtime session's `say` is synthesised like a pipeline's, audio and streams too.
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call }
-                if self.activity.rt_session.is_some() =>
+                if !matches!(text, SayText::Audio { .. }) && self.realtime_says() =>
             {
-                // The wire carries a string; a streamed `say` is refused by name, as in the
-                // reference.
+                // The wire carries a string; a streamed `say` is refused by name.
                 let SayText::Text(text) = text else {
                     out.trace(CoreStep::PortFailure(SAY_SHAPE_REFUSED_ON_REALTIME));
                     self.fail_waiter(
                         call,
                         SpeechKind::Say,
-                        "say(stream) / say(audio=) is not supported on a realtime model",
+                        "say(stream) is not supported on a realtime model without a TTS",
                         out,
                     );
                     return;

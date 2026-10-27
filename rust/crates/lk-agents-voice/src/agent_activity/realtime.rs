@@ -516,6 +516,14 @@ pub(crate) fn spawn_event_pump(
 }
 
 impl Driver {
+    /// A text `say()` is the realtime model's to speak: it says, and there is no TTS
+    /// (`AgentActivity.say`); otherwise the TTS speaks it, as on a pipeline.
+    pub(crate) fn realtime_says(&self) -> bool {
+        self.activity.rt_session.is_some()
+            && self.session.tts.is_none()
+            && self.activity.realtime_state.says()
+    }
+
     /// A command for the realtime socket, as an effect; none without a session. Per-frame
     /// `PushAudio` never comes through here.
     pub(crate) fn rt_send(&self, cmd: lk_agents_abi::RealtimeCommand, out: &mut Out) {
@@ -686,11 +694,6 @@ impl Driver {
             return None;
         }
         let cmd = match &request {
-            Request::Say { .. } if !t.caps.supports_say => {
-                let error = RealtimeError::new("say() on a realtime model that has no say");
-                self.settle_request(request, call, Settled::Failed(error), out);
-                return None;
-            }
             Request::Say { text, add_to_chat_ctx } => RealtimeCommand::Say(rt::Say {
                 req_id: req_id.clone(),
                 text: text.clone(),

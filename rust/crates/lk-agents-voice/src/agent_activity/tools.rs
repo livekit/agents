@@ -605,13 +605,10 @@ impl Driver {
         spoke: bool,
         out: &mut Out,
     ) {
-        let realtime = self.activity.rt_session.is_some();
+        let realtime = self.realtime_says();
         // The reference's `say` raises with no voice to speak the text (no TTS, no realtime model
         // that says) while audio plays, which ends the filler.
-        if text.is_some()
-            && self.session.tts.is_none()
-            && self.session.outputs.plays_audio()
-            && !(realtime && self.activity.realtime_state.says())
+        if text.is_some() && self.session.tts.is_none() && self.session.outputs.plays_audio() && !realtime
         {
             out.machine().emit(SessionEvent::Diagnostic(
                 DiagnosticEvent::error(FILLER_STOPPED)
@@ -621,7 +618,7 @@ impl Driver {
             return;
         }
         let (speech, interrupted) = match text {
-            // On a realtime session the say is the model's, as the host's `say()`.
+            // Spoken by the model when it says and there is no TTS, as the host's `say()`.
             Some(text) if realtime => {
                 let request = Request::Say { text, add_to_chat_ctx: true };
                 (self.realtime_request(now, request, None, None, out), false)
