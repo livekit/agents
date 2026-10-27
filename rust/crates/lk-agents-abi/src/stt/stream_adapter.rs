@@ -102,6 +102,10 @@ impl Stt for SttStreamAdapter {
         self.stt.prewarm();
     }
 
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.stt.failed(error, recoverable);
+    }
+
     fn update_keyterms(&self, keyterms: &[String]) {
         self.stt.update_keyterms(keyterms);
     }

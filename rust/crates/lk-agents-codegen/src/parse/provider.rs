@@ -83,7 +83,7 @@ pub fn provider(
     }))
 }
 
-const ROLES: &[&str] = &["label", "init", "identity", "hook", "conn", "markup", "chat", "value"];
+const ROLES: &[&str] = &["label", "init", "identity", "hook", "conn", "markup", "chat", "value", "report"];
 
 fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
     let rust = f.sig.ident.to_string();
@@ -98,6 +98,7 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
             "identity",
             "hook",
             "impl",
+            "retry",
             "unsupported",
             "store",
             "default",
@@ -106,6 +107,7 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
             "markup",
             "chat",
             "value",
+            "report",
             "when",
             "stream.",
             "params",
@@ -135,6 +137,7 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
         "hook" => Role::Hook {
             name: meta_str(&m, "hook").unwrap_or_else(|| rust.clone()),
             implementation: meta_str(&m, "impl"),
+            retry: meta_str(&m, "retry"),
             unsupported: meta_str(&m, "unsupported"),
             store: match (meta_str(&m, "store"), meta_str(&m, "default")) {
                 (Some(attr), Some(default)) => Some((attr, default)),
@@ -149,6 +152,7 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
         "conn" => Role::Conn { retry: meta_str(&m, "conn.retry") },
         "markup" => Role::Markup,
         "chat" => Role::Chat { name: meta_str(&m, "chat").unwrap_or_else(|| rust.clone()) },
+        "report" => Role::Report,
         "value" => {
             Role::Value(meta_str(&m, "value").ok_or_else(|| format!("{at}: value = \"expr\""))?)
         }

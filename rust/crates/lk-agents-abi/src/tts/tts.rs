@@ -233,7 +233,12 @@ pub trait Tts: Send + Sync {
         None
     }
 
-    /// Synthesize `text` in one attempt; inside a session the framework retries it.
+    // The framework's report of a failed attempt of a call it retries: the provider's `error`
+    // event, `recoverable` while the call is retried. A wrapper forwards it.
+    #[python(report)]
+    fn failed(&self, _error: ProviderError, _recoverable: bool) {}
+
+    /// Synthesize `text`, its attempts retried per `conn_options`.
     ///
     /// Args:
     /// - text: What to say.
@@ -244,7 +249,7 @@ pub trait Tts: Send + Sync {
         stream(
             name = "ChunkedStream",
             kind = "chunked",
-            doc = "One synthesis of a whole text: ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, pushing the provider's audio into the ``AudioEmitter`` it is given; it runs one attempt, which the framework retries inside a session."
+            doc = "One synthesis of a whole text: ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, pushing the provider's audio into the ``AudioEmitter`` it is given; its attempts are retried per ``conn_options``."
         )
     )]
     async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError>;
@@ -263,7 +268,7 @@ pub trait Tts: Send + Sync {
         stream(
             name = "SynthesizeStream",
             kind = "synthesize",
-            doc = "A live synthesis: text in through ``push_text``, ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, reading ``input`` and pushing the provider's audio into the ``AudioEmitter`` it is given; it runs one attempt, which the framework retries inside a session."
+            doc = "A live synthesis: text in through ``push_text``, ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, reading ``input`` and pushing the provider's audio into the ``AudioEmitter`` it is given; its attempts are retried per ``conn_options``."
         )
     )]
     async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError>;

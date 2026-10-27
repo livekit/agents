@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self
 
 from .. import _bindings, _core
+from .._exceptions import APIError
 from ..language import LanguageCode
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -226,14 +227,17 @@ class STT(
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
-        """Recognize a recording in one attempt; inside a session the framework retries it.
+        """Recognize a recording, its attempts retried per ``conn_options``.
 
         Args:
             buffer: The audio to recognize.
             language: The language to recognize; the provider's default when not given.
             conn_options: The timeout and retries of the request.
         """
-        return await self._recognize_impl(buffer, language=language, conn_options=conn_options)
+        attempts = _bindings.Attempts("stt_batch", conn_options, self._emit_error)
+        return await attempts.run(
+            lambda: self._recognize_impl(buffer, language=language, conn_options=conn_options)
+        )
 
     def stream(
         self,
@@ -295,8 +299,11 @@ class STT(
     def _core_push_conversation_item(self, role: str, text: str) -> None:
         self._push_conversation_item(role, text)
 
+    def _core_failed(self, error: Exception, recoverable: bool) -> None:
+        self._emit_error(error, recoverable)
+
     def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
-        return _core.RetryingStt(_STTConn(self, APIConnectOptions(**conn)), self, **conn)
+        return _core.RetryingStt(_STTConn(self, APIConnectOptions(**conn)), **conn)
 
     async def _core_recognize(
         self,
@@ -304,7 +311,7 @@ class STT(
         language: str | None,
         conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
-        return await self.recognize(
+        return await self._recognize_impl(
             buffer, language=NOT_GIVEN if language is None else language, conn_options=conn
         )
 
@@ -317,12 +324,10 @@ class STT(
         if not self.capabilities.streaming:
             return None
         out = self.stream(language=NOT_GIVEN if language is None else language, conn_options=conn)
+        out._core_attempts.core = True
         if start_time_offset is not None:
             out.start_time_offset = start_time_offset
         return out
-
-    def _core_failed(self, error: Exception, recoverable: bool) -> None:
-        self._emit_error(error, recoverable)
 
 
 class _STTConn:
@@ -365,8 +370,8 @@ class RecognizeStream(ABC):
         """
         Args:
             stt: The provider this stream recognizes for.
-            conn_options: The timeout and retries of the connection; the stream runs one attempt,
-                which the framework retries inside a session.
+            conn_options: The timeout and retries of the connection: a failed connection is
+                reopened, the audio it had not taken read by the next.
             sample_rate: The rate the audio is resampled to before recognition; the input's own
                 rate when not given.
         """
@@ -381,6 +386,7 @@ class RecognizeStream(ABC):
         self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
+        self._core_attempts = _bindings.Attempts("stt_stream", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -420,7 +426,24 @@ class RecognizeStream(ABC):
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
-        await self._run()
+        started = time.time()
+
+        # each attempt moves the timeline on by the time the last one ran, so a reconnected
+        # stream's timestamps stay linear
+        async def attempt() -> None:
+            nonlocal started
+            now = time.time()
+            self._start_time_offset += now - started
+            self._start_time = started = now
+            try:
+                await self._run()
+            except APIError:
+                # an attempt that outlived the connect timeout had connected: a fresh budget
+                if time.time() - started > self._conn_options.timeout:
+                    self._core_attempts.count = 0
+                raise
+
+        await self._core_attempts.run(attempt)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt._emit_error(api_error, recoverable)

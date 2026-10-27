@@ -153,6 +153,11 @@ pub trait Stt: Send + Sync {
     #[python(hook = "_push_conversation_item")]
     fn push_conversation_item(&self, _role: &str, _text: &str) {}
 
+    // The framework's report of a failed attempt of a call it retries: the provider's `error`
+    // event, `recoverable` while the call is retried. A wrapper forwards it.
+    #[python(report)]
+    fn failed(&self, _error: ProviderError, _recoverable: bool) {}
+
     // A view of this provider whose calls carry `conn` -- how a fallback chain gives each entry
     // its per-attempt retry budget and timeout. `None`: the provider takes no per-call options,
     // and the chain uses it as it is. A host STT is retried by the core (`RetryingStt`).
@@ -161,14 +166,14 @@ pub trait Stt: Send + Sync {
         None
     }
 
-    /// Recognize a recording in one attempt; inside a session the framework retries it.
+    /// Recognize a recording, its attempts retried per `conn_options`.
     ///
     /// Args:
     /// - buffer: The audio to recognize.
     /// - language: The language to recognize; the provider's default when not given.
     /// - conn_options: The timeout and retries of the request.
     // Always present. `language: None` is `NOT_GIVEN`, the provider's default.
-    #[python(hook = "recognize", impl = "_recognize_impl")]
+    #[python(hook = "recognize", impl = "_recognize_impl", retry = "stt_batch")]
     async fn recognize(
         &self,
         #[python(ty = "AudioBuffer", import = "..utils:AudioBuffer")] buffer: &[AudioFrame],

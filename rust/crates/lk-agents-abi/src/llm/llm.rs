@@ -263,8 +263,12 @@ pub trait Llm: Send + Sync {
         None
     }
 
-    /// Open a completion of `chat_ctx`, in one attempt; inside a session the framework retries
-    /// it.
+    // The framework's report of a failed attempt of a call it retries: the provider's `error`
+    // event, `recoverable` while the call is retried. A wrapper forwards it.
+    #[python(report)]
+    fn failed(&self, _error: ProviderError, _recoverable: bool) {}
+
+    /// Open a completion of `chat_ctx`, its attempts retried per `conn_options`.
     ///
     /// Args:
     /// - chat_ctx: The conversation to complete.
@@ -280,7 +284,7 @@ pub trait Llm: Send + Sync {
         stream(
             name = "LLMStream",
             kind = "chat",
-            doc = "One completion: ``ChatChunk`` out.\n\nPlugins implement ``_run``, sending the provider's chunks to ``_event_ch``; it runs one attempt, which the framework retries inside a session."
+            doc = "One completion: ``ChatChunk`` out.\n\nPlugins implement ``_run``, sending the provider's chunks to ``_event_ch``; its attempts are retried per ``conn_options``."
         )
     )]
     async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError>;

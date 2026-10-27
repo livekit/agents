@@ -31,7 +31,9 @@ from livekit.agents import (
     VAD,
     Agent,
     AMDCategory,
+    APIConnectionError,
     APIConnectOptions,
+    APIStatusError,
     AudioConfig,
     BackgroundAudioPlayer,
     BuiltinAudioClip,
@@ -1643,6 +1645,143 @@ async def decoder() -> None:
         assert rates == {expected}, (asked, rates)
 
 
+QUICK_RETRIES = APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=5.0)
+
+
+class FlakyLLM(ScriptedLLM):
+    """Answers once ``fails`` attempts have failed with a 503."""
+
+    def __init__(self, fails: int) -> None:
+        super().__init__()
+        self.fails = fails
+        self.calls = 0
+
+    def chat(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        conn_options: APIConnectOptions = QUICK_RETRIES,
+        **_: Any,
+    ) -> llm.LLMStream:
+        return _FlakyStream(self, chat_ctx=chat_ctx, tools=[], conn_options=conn_options)
+
+
+class _FlakyStream(_Stream):
+    async def _run(self) -> None:
+        flaky = self._llm
+        assert isinstance(flaky, FlakyLLM)
+        flaky.calls += 1
+        if flaky.calls <= flaky.fails:
+            raise APIStatusError("unavailable", status_code=503)
+        await super()._run()
+
+
+class FlakyTTS(SilentTTS):
+    """Fails each sentence's first ``fails`` attempts with a 503; streams when ``streaming``."""
+
+    def __init__(self, fails: int, *, streaming: bool = False) -> None:
+        super().__init__()
+        self._capabilities = tts.TTSCapabilities(streaming=streaming)
+        self.fails = fails
+        self.attempts: dict[str, int] = {}
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = QUICK_RETRIES
+    ) -> tts.ChunkedStream:
+        return _FlakyChunked(tts=self, input_text=text, conn_options=conn_options)
+
+    def stream(self, *, conn_options: APIConnectOptions = QUICK_RETRIES) -> tts.SynthesizeStream:
+        return _FlakySynthesis(tts=self, conn_options=conn_options)
+
+    def attempt(self, text: str) -> None:
+        self.attempts[text] = self.attempts.get(text, 0) + 1
+        if self.attempts[text] <= self.fails:
+            raise APIStatusError("unavailable", status_code=503)
+
+
+class _FlakyChunked(_Chunked):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        assert isinstance(self._tts, FlakyTTS)
+        self._tts.attempt(self.input_text)
+        await super()._run(output_emitter)
+
+
+class _FlakySynthesis(tts.SynthesizeStream):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id=shortuuid("req_"),
+            sample_rate=SAMPLE_RATE,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+        text = "".join([t async for t in self.input if isinstance(t, str)])
+        assert isinstance(self._tts, FlakyTTS)
+        self._tts.attempt(text)
+        output_emitter.start_segment(segment_id=shortuuid("seg_"))
+        output_emitter.push(b"\x00\x00" * (SAMPLE_RATE // 50 * max(1, len(text))))
+        output_emitter.end_segment()
+
+
+class FlakySTT(BatchSTT):
+    def __init__(self, fails: int) -> None:
+        super().__init__()
+        self.fails = fails
+
+    async def _recognize_impl(self, buffer: object, **kw: object) -> stt.SpeechEvent:
+        if len(self.utterances) < self.fails:
+            self.utterances.append(0.0)
+            raise APIStatusError("unavailable", status_code=503)
+        return await super()._recognize_impl(buffer, **kw)
+
+
+def error_events(provider: Any) -> list[bool]:
+    seen: list[bool] = []
+    provider.on("error", lambda ev: seen.append(ev.recoverable))
+    return seen
+
+
+async def providers() -> None:
+    """A provider called on its own retries per ``conn_options``, as the core's policy decides:
+    each retried failure an ``error`` event marked recoverable, the last one not."""
+    print("== standalone provider retries")
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hello")
+    model = FlakyLLM(fails=2)
+    seen = error_events(model)
+    reply = await model.chat(chat_ctx=chat_ctx).collect()
+    assert (reply.text, model.calls, seen) == ("You said: hello", 3, [True, True]), (reply, seen)
+
+    model = FlakyLLM(fails=9)
+    seen = error_events(model)
+    try:
+        await model.chat(chat_ctx=chat_ctx).collect()
+        raise AssertionError("an exhausted budget raises")
+    except APIConnectionError as e:
+        assert "after 3 attempts" in str(e), e
+    assert (model.calls, seen) == (3, [True, True, False]), (model.calls, seen)
+
+    voice = FlakyTTS(fails=1)
+    seen = error_events(voice)
+    frame = await voice.synthesize("hi").collect()
+    assert frame.duration > 0 and voice.attempts == {"hi": 2} and seen == [True], seen
+
+    # a retried stream is fed again what was pushed before the failure
+    voice = FlakyTTS(fails=1, streaming=True)
+    seen = error_events(voice)
+    stream = voice.stream()
+    stream.push_text("hello ")
+    stream.push_text("world")
+    stream.end_input()
+    assert [ev async for ev in stream] and voice.attempts == {"hello world": 2}, voice.attempts
+    assert seen == [True], seen
+
+    ears = FlakySTT(fails=1)
+    seen = error_events(ears)
+    said = await ears.recognize([_square(0.0)], conn_options=QUICK_RETRIES)
+    assert said.alternatives[0].text == "batch words" and seen == [True], seen
+
+
 async def llm_prewarm() -> None:
     """The gateway LLM is prewarmed as the session starts (``GET /models``, the reference's
     ``models.list()``), so a call's first reply finds a connection open."""
@@ -1956,6 +2095,7 @@ async def main() -> int:
     await cli()
     await decoder()
     await llm_prewarm()
+    await providers()
     job_logs()
     return 0
 

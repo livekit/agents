@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self
 
 from .. import _bindings, _core
-from .._exceptions import APIError, APIStatusError
+from .._exceptions import APIError
 from ..llm.chat_context import ChatRole
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
@@ -196,8 +196,7 @@ class LLM(
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
-        """Open a completion of ``chat_ctx``, in one attempt; inside a session the framework retries
-        it.
+        """Open a completion of ``chat_ctx``, its attempts retried per ``conn_options``.
 
         Args:
             chat_ctx: The conversation to complete.
@@ -250,13 +249,16 @@ class LLM(
     def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
         return _LLMConn(self, APIConnectOptions(**conn))
 
+    def _core_failed(self, error: Exception, recoverable: bool) -> None:
+        self._emit_error(error, recoverable)
+
     async def _core_chat(
         self, req: _core.ChatRequest, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> LLMStream:
         from .._core_view import chat_request
 
         chat_ctx, tools = chat_request(req)
-        return self.chat(
+        out = self.chat(
             chat_ctx=chat_ctx,
             conn_options=conn,
             tools=tools,
@@ -266,6 +268,8 @@ class LLM(
             ),
             extra_kwargs=req.extra or NOT_GIVEN,
         )
+        out._core_attempts.core = True
+        return out
 
 
 class _LLMConn:
@@ -296,8 +300,8 @@ class _LLMEventChannel(aio.Chan[ChatChunk]):
 class LLMStream(ABC):
     """One completion: ``ChatChunk`` out.
 
-    Plugins implement ``_run``, sending the provider's chunks to ``_event_ch``; it runs one attempt,
-    which the framework retries inside a session.
+    Plugins implement ``_run``, sending the provider's chunks to ``_event_ch``; its attempts are
+    retried per ``conn_options``.
     """
 
     def __init__(
@@ -314,26 +318,23 @@ class LLMStream(ABC):
         self._conn_options = conn_options
         self._event_ch = _LLMEventChannel()
         self._retry_on_chunk_sent = True
+        self._core_attempts = _bindings.Attempts("llm", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
     async def _run(self) -> None: ...
 
-    async def _main_task(self) -> None:
+    async def _attempt(self) -> None:
         try:
             await self._run()
         except APIError as e:
-            # 499 (Client Closed Request) - close gracefully without raising
-            if isinstance(e, APIStatusError) and e.status_code == 499:
-                return
             if not self._retry_on_chunk_sent and self._event_ch.output_sent:
                 e.retryable = False
-            self._emit_error(e, recoverable=False)
             raise
-        except Exception as e:
-            self._emit_error(e, recoverable=False)
-            raise
+
+    async def _main_task(self) -> None:
+        await self._core_attempts.run(self._attempt)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._llm._emit_error(api_error, recoverable)

@@ -109,7 +109,8 @@ pub(super) async fn perform_tts_inference(
         if produced {
             attempt.produced_output();
         }
-        match retry(shared, handle, &mut attempt, ProviderKind::Tts, &error).await {
+        let failed = |e, r| tts.failed(e, r);
+        match retry(shared, handle, &mut attempt, ProviderKind::Tts, &error, &failed).await {
             Retried::Again => {}
             Retried::Interrupted => {
                 return Err(Lost { lost: false, opening: text, synchronized: None, played: false });

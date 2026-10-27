@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import functools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from .. import _core
@@ -102,7 +102,8 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             self,
             chat_ctx=chat_ctx,
             tools=tools or [],
-            conn_options=conn_options,
+            # the core's chain retries and falls back: the stream does not retry on top of it
+            conn_options=replace(conn_options, max_retry=0),
             request={
                 "parallel_tool_calls": parallel_tool_calls if parallel_tool_calls else None,
                 "tool_choice": tool_choice if tool_choice else None,

@@ -121,6 +121,10 @@ impl Llm for Node<dyn Llm> {
         self.below.prewarm();
     }
 
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.below.failed(error, recoverable);
+    }
+
     async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
         let stream = self.host.llm_node(req).await.map_err(final_error)?;
         Ok(Box::new(Final(stream)))
@@ -143,6 +147,10 @@ impl Tts for Node<dyn Tts> {
 
     fn prewarm(&self) {
         self.below.prewarm();
+    }
+
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.below.failed(error, recoverable);
     }
 
     fn sample_rate(&self) -> u32 {
@@ -195,6 +203,10 @@ impl Stt for Node<dyn Stt> {
 
     fn prewarm(&self) {
         self.below.prewarm();
+    }
+
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.below.failed(error, recoverable);
     }
 
     fn update_keyterms(&self, keyterms: &[String]) {

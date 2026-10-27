@@ -688,16 +688,21 @@ pub enum Role {
     Hook {
         name: String,
         implementation: Option<String>,
+        /// `retry = "kind"`: the hook runs `impl` in attempts the core's retry policy for that
+        /// request kind decides (`_bindings.Attempts`); the framework's own call is one attempt.
+        retry: Option<String>,
         unsupported: Option<String>,
         store: Option<(String, String)>,
     },
     /// `conn`: the provider under one `conn_options`; `retry = "Class"` wraps it in that core
-    /// retry loop, which reports each failed attempt to `_core_failed`.
+    /// retry loop, which reports each failed attempt to the provider (`report`).
     Conn { retry: Option<String> },
     /// `markup`: `markup._provider_key()`, the nested `Markup` class plugins override.
     Markup,
     /// `chat`: a `_core.ChatRequest` read into the hook's keywords.
     Chat { name: String },
+    /// `report`: the framework's report of a failed attempt, the provider's `error` event.
+    Report,
     /// `value = "expr"`: the `_core_` method answers a Python expression.
     Value(String),
 }

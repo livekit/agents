@@ -202,7 +202,8 @@ class StreamAdapterWrapper(RecognizeStream):
     def __init__(
         self, *, stt: STT, native: _core.FallbackStt | _core.SttStreamAdapter, language: Any
     ) -> None:
-        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS)
+        # the core's chain reconnects: the stream does not retry on top of it
+        super().__init__(stt=stt, conn_options=APIConnectOptions(max_retry=0))
         self._native = native
         self._language = language if language else None
 

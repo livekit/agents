@@ -20,8 +20,8 @@ from livekit import rtc
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self
 
-from .. import _core
-from .._exceptions import APIError, APIStatusError
+from .. import _bindings, _core
+from .._exceptions import APIError
 from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -187,7 +187,7 @@ class TTS(
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        """Synthesize ``text`` in one attempt; inside a session the framework retries it.
+        """Synthesize ``text``, its attempts retried per ``conn_options``.
 
         Args:
             text: What to say.
@@ -269,15 +269,22 @@ class TTS(
     def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
         return _TTSConn(self, APIConnectOptions(**conn))
 
+    def _core_failed(self, error: Exception, recoverable: bool) -> None:
+        self._emit_error(error, recoverable)
+
     async def _core_synthesize(
         self, text: str, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return self.synthesize(text, conn_options=conn)
+        out = self.synthesize(text, conn_options=conn)
+        out._core_attempts.core = True
+        return out
 
     async def _core_stream(
         self, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        return self.stream(conn_options=conn)
+        out = self.stream(conn_options=conn)
+        out._core_attempts.core = True
+        return out
 
 
 class _TTSConn:
@@ -301,7 +308,7 @@ class ChunkedStream(ABC):
     """One synthesis of a whole text: ``SynthesizedAudio`` out.
 
     Plugins implement ``_run``, pushing the provider's audio into the ``AudioEmitter`` it is given;
-    it runs one attempt, which the framework retries inside a session.
+    its attempts are retried per ``conn_options``.
     """
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
@@ -311,7 +318,11 @@ class ChunkedStream(ABC):
         # the full text is submitted to the provider at creation time
         self._started_time: float = time.perf_counter()
         self._event_ch = aio.Chan[SynthesizedAudio]()
-        self._synthesize_task = asyncio.create_task(self._attempt(), name="TTS._synthesize_task")
+        self._emitter: _core.AudioEmitter | None = None
+        self._core_attempts = _bindings.Attempts("tts_batch", conn_options, self._emit_error)
+        self._synthesize_task = asyncio.create_task(
+            self._core_attempts.run(self._attempt), name="TTS._synthesize_task"
+        )
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
     @property
@@ -333,7 +344,9 @@ class ChunkedStream(ABC):
     async def _run(self, output_emitter: _core.AudioEmitter) -> None: ...
 
     async def _attempt(self) -> None:
-        output_emitter = _core.AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
+        self._emitter = output_emitter = _core.AudioEmitter(
+            label=self._tts.label, dst_ch=self._event_ch
+        )
         try:
             await self._run(output_emitter)
             output_emitter.end_input()
@@ -341,14 +354,11 @@ class ChunkedStream(ABC):
             await output_emitter.join()
             if problem := self._invalid(output_emitter):
                 raise APIError(problem)
-        except APIError as e:
-            # 499 (Client Closed Request) - close gracefully without raising
-            if isinstance(e, APIStatusError) and e.status_code == 499:
-                return
-            self._emit_error(e, recoverable=False)
-            raise
         finally:
             await output_emitter.aclose()
+
+    def _produced(self) -> bool:
+        return self._emitter is not None and self._emitter.pushed_duration() > 0.0
 
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
         return _core.validate_synthesis(self._input_text, output_emitter.pushed_duration(), None)  # type: ignore[no-any-return]
@@ -391,7 +401,7 @@ class SynthesizeStream(ABC):
     """A live synthesis: text in through ``push_text``, ``SynthesizedAudio`` out.
 
     Plugins implement ``_run``, reading ``input`` and pushing the provider's audio into the
-    ``AudioEmitter`` it is given; it runs one attempt, which the framework retries inside a session.
+    ``AudioEmitter`` it is given; its attempts are retried per ``conn_options``.
     """
 
     class Flush:
@@ -402,9 +412,16 @@ class SynthesizeStream(ABC):
         self._tts = tts
         self._conn_options = conn_options
         self.input = aio.Chan[str | SynthesizeStream.Flush]()
-        """The text ``_run`` reads, a ``Flush`` at the end of each segment."""
+        """The text ``_run`` reads, a ``Flush`` at the end of each segment; a retry reads it
+        again from the start."""
+        self._input_log: list[str | SynthesizeStream.Flush] = []
         self._event_ch = aio.Chan[SynthesizedAudio]()
-        self._task = asyncio.create_task(self._attempt(), name="TTS._main_task")
+        self._emitter: _core.AudioEmitter | None = None
+        self._core_attempts = _bindings.Attempts("tts_stream", conn_options, self._emit_error)
+        self._task = asyncio.create_task(
+            self._core_attempts.run(self._attempt, produced=self._produced, again=self._replay),
+            name="TTS._main_task",
+        )
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._started_time: float = 0
         self._pushed_text: str = ""
@@ -418,7 +435,9 @@ class SynthesizeStream(ABC):
     async def _run(self, output_emitter: _core.AudioEmitter) -> None: ...
 
     async def _attempt(self) -> None:
-        output_emitter = _core.AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
+        self._emitter = output_emitter = _core.AudioEmitter(
+            label=self._tts.label, dst_ch=self._event_ch
+        )
         try:
             await self._run(output_emitter)
             output_emitter.end_input()
@@ -426,14 +445,19 @@ class SynthesizeStream(ABC):
             await output_emitter.join()
             if problem := self._invalid(output_emitter):
                 raise APIError(problem)
-        except APIError as e:
-            # 499 (Client Closed Request) - close gracefully without raising
-            if isinstance(e, APIStatusError) and e.status_code == 499:
-                return
-            self._emit_error(e, recoverable=False)
-            raise
         finally:
             await output_emitter.aclose()
+
+    def _produced(self) -> bool:
+        return self._emitter is not None and self._emitter.pushed_duration() > 0.0
+
+    def _replay(self) -> None:
+        ended = self.input.closed
+        self.input = aio.Chan[str | SynthesizeStream.Flush]()
+        for item in self._input_log:
+            self.input.send_nowait(item)
+        if ended:
+            self.input.close()
 
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
         return _core.validate_synthesis(  # type: ignore[no-any-return]
@@ -461,6 +485,7 @@ class SynthesizeStream(ABC):
             self._segment_open = True
             self._num_segments += 1
         self._pushed_text += token
+        self._input_log.append(token)
         self.input.send_nowait(token)
 
     def flush(self) -> None:
@@ -468,7 +493,8 @@ class SynthesizeStream(ABC):
         if self.input.closed:
             return
         self._segment_open = False
-        self.input.send_nowait(self.Flush())
+        self._input_log.append(self.Flush())
+        self.input.send_nowait(self._input_log[-1])
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
@@ -530,6 +556,7 @@ class _ChunkedStreamFromStream(ChunkedStream):
             stream=False,
         )
         async with self._tts.stream(conn_options=self._conn_options) as stream:
+            stream._core_attempts.core = self._core_attempts.core
             stream.push_text(self._input_text)
             stream.end_input()
             async for ev in stream:

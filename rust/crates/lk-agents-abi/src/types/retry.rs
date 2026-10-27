@@ -129,13 +129,6 @@ pub fn validate_synthesis(
     None
 }
 
-/// Who [`RetryingStt`](crate::stt::retry::RetryingStt) reports a failed attempt to:
-/// `_core_failed(error, recoverable)`, the plugin's `error` event.
-#[crate::host(proxy)]
-pub trait AttemptReport: Send + Sync {
-    fn failed(&self, error: crate::errors::ProviderError, recoverable: bool);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

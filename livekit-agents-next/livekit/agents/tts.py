@@ -10,7 +10,7 @@ import contextlib
 import functools
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from . import _core, tokenize, utils
@@ -186,12 +186,14 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> FallbackChunkedStream:
-        return FallbackChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        # the core's chain retries and falls back: the stream does not retry on top of it
+        no_retry = replace(conn_options, max_retry=0)
+        return FallbackChunkedStream(tts=self, input_text=text, conn_options=no_retry)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> FallbackSynthesizeStream:
-        return FallbackSynthesizeStream(tts=self, conn_options=conn_options)
+        return FallbackSynthesizeStream(tts=self, conn_options=replace(conn_options, max_retry=0))
 
     def prewarm(self) -> None:
         self._tts_instances[0].prewarm()
@@ -322,6 +324,8 @@ class StreamAdapterWrapper(SynthesizeStream):
 
     def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
+        # each sentence is retried by the core's adapter, not the whole stream
+        self._core_attempts.conn = replace(conn_options, max_retry=0)
         # fixed for this synthesis: the framework sets it before stream()
         self._expressive = tts._wrapped_tts._expressive
 

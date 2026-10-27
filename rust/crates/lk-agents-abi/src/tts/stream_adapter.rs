@@ -110,6 +110,10 @@ impl Tts for StreamAdapter {
         self.tts.prewarm();
     }
 
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.tts.failed(error, recoverable);
+    }
+
     /// Verbatim from `stream_adapter.py:33`.
     fn capabilities(&self) -> TtsCapabilities {
         TtsCapabilities { streaming: true, aligned_transcript: true }

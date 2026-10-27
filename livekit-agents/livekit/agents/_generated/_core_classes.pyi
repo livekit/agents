@@ -1588,7 +1588,6 @@ class RetryingStt:
     def __init__(
         self,
         stt: Any,
-        report: Any,
         *,
         max_retry: int,
         retry_interval: float,

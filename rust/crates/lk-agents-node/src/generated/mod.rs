@@ -186,7 +186,6 @@
 //! - `lk_agents_abi::Stt`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::Llm`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::EotDetector`: not yet: a bare proxy (every method calls `_core_<method>`)
-//! - `lk_agents_abi::types::retry::AttemptReport`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_inference::fallback::ChainObserver`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::llm::realtime::HostRealtime`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_abi::llm::realtime::HostRealtimeSession`: not yet: a bare proxy (every method calls `_core_<method>`)

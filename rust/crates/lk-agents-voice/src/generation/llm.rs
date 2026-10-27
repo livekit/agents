@@ -153,7 +153,8 @@ async fn perform_llm_inference(
                 }
             }
         };
-        match retry(shared, handle, &mut attempt, ProviderKind::Llm, &error).await {
+        let failed = |e, r| llm.failed(e, r);
+        match retry(shared, handle, &mut attempt, ProviderKind::Llm, &error, &failed).await {
             Retried::Again => continue,
             // What an interrupted retry reports: this stream's metrics, or none if it never opened.
             Retried::Interrupted => {
@@ -319,8 +320,10 @@ pub(super) async fn retry(
     attempt: &mut Attempt,
     leg: ProviderKind,
     error: &ProviderError,
+    provider: &(dyn Fn(ProviderError, bool) + Sync),
 ) -> Retried {
     let decision = attempt.failed(error.retryable());
+    provider(error.clone(), matches!(decision, Retry::After { .. }));
     // Every failed attempt is the reference's `error` event: `recoverable` while retried, terminal
     // when the budget gives up.
     shared.report(GenEvent::ProviderFailed {

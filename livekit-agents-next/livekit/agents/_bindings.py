@@ -2,13 +2,75 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import asyncio
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from pydantic import BaseModel
+
+from . import _core
+from ._exceptions import APIConnectionError, APIError, APIStatusError
+from .log import logger
 
 if TYPE_CHECKING:
     from ._generated.events import FunctionToolsExecutedEvent
     from .llm import FunctionCall, FunctionCallOutput
+
+
+_T = TypeVar("_T")
+
+
+class Attempts:
+    """A provider call's attempts under ``conn``, retried as the core decides
+    (``_core.provider_retry``), each failure an ``error`` event.
+
+    A call the framework opened itself (``core``) runs once and reports nothing: the core retries
+    it and reports its failures to the provider.
+    """
+
+    def __init__(self, kind: str, conn: Any, emit_error: Callable[[Exception, bool], None]) -> None:
+        self.kind = kind
+        self.conn = conn
+        self.emit_error = emit_error
+        self.core = False
+        self.count = 0
+        """Failed attempts since the last success; a stream resets it on a final transcript."""
+
+    async def run(
+        self,
+        attempt: Callable[[], Awaitable[_T]],
+        *,
+        produced: Callable[[], bool] = lambda: False,
+        again: Callable[[], None] = lambda: None,
+    ) -> _T:
+        """``attempt`` until it succeeds; ``produced``: the failed attempt delivered output,
+        ``again``: called before each retry."""
+        while True:
+            try:
+                return await attempt()
+            except Exception as e:
+                action, delay, message = _core.provider_retry(
+                    self.kind,
+                    0 if self.core else self.conn.max_retry,
+                    self.conn.retry_interval,
+                    self.count,
+                    isinstance(e, APIError) and e.retryable,
+                    e.status_code if isinstance(e, APIStatusError) else None,
+                    produced(),
+                )
+                if action == "stop":
+                    return cast(_T, None)
+                if self.core:
+                    raise
+                self.emit_error(e, action == "retry")
+                if action == "exhausted":
+                    raise APIConnectionError(message or str(e)) from e
+                if action == "raise":
+                    raise
+                logger.warning(f"{self.kind} attempt failed: {e}, retrying in {delay}s")
+                await asyncio.sleep(delay)
+                self.count += 1
+                again()
 
 
 def function_tools_executed_zipped(

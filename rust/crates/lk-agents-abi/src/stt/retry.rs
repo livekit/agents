@@ -13,14 +13,13 @@ use super::stt::{Stt, SttCapabilities, SttSink, SttSource};
 use crate::errors::{ProviderError, chained_connection_error};
 use crate::tokenize::language::LanguageCode;
 use crate::types::identity::ProviderId;
-use crate::types::retry::{AttemptReport, RequestKind, RetryDecision, decide};
+use crate::types::retry::{RequestKind, RetryDecision, decide};
 use crate::utils::clock::Ts;
 use crate::utils::stream::{Closed, RetryReport, StreamSink, StreamSource};
 use crate::{ApiConnectOptions, AudioFrame, Clock, HOST_TEARDOWN_TIMEOUT};
 
 pub struct RetryingStt {
     inner: Arc<dyn Stt>,
-    report: Arc<dyn AttemptReport>,
     options: ApiConnectOptions,
     clock: Arc<dyn Clock>,
 }
@@ -29,18 +28,17 @@ pub struct RetryingStt {
 #[crate::host(object(name = "RetryingStt", cell = "arc", as_dyn(Stt = as_stt)))]
 impl RetryingStt {
     /// `stt` is attempted under `max_retry`, `retry_interval` and `timeout`; every failed attempt
-    /// is reported to `report` (`_core_failed(error, recoverable)`, the plugin's `error` event).
+    /// is reported to it ([`Stt::failed`], the plugin's `error` event).
     #[host(new(kw_only = "max_retry"))]
     pub fn for_host(
         stt: Arc<dyn Stt>,
-        report: Arc<dyn AttemptReport>,
         max_retry: u32,
         retry_interval: f64,
         timeout: f64,
         #[host(ambient)] clock: Arc<dyn Clock>,
     ) -> Result<Self, crate::types::connect::ApiConnectOptionsError> {
         let options = ApiConnectOptions::new(max_retry, retry_interval, timeout)?;
-        Ok(RetryingStt { inner: stt, report, options, clock })
+        Ok(RetryingStt { inner: stt, options, clock })
     }
 
     /// The retried STT as the provider the core holds (not proxied).
@@ -54,7 +52,7 @@ struct Failure<'a> {
     kind: RequestKind,
     retries: u32,
     error: ProviderError,
-    report: &'a dyn AttemptReport,
+    report: &'a dyn Stt,
     label: &'a str,
     options: &'a ApiConnectOptions,
 }
@@ -126,6 +124,10 @@ impl Stt for RetryingStt {
         self.inner.push_conversation_item(role, text);
     }
 
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        self.inner.failed(error, recoverable);
+    }
+
     /// The host view rebinds, and comes back retried under the new options.
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         self.inner.with_conn_options(conn)
@@ -147,7 +149,7 @@ impl Stt for RetryingStt {
                 kind: RequestKind::SttBatch,
                 retries,
                 error,
-                report: &*self.report,
+                report: &*self.inner,
                 label: &label,
                 options: &self.options,
             };
@@ -173,7 +175,6 @@ impl Stt for RetryingStt {
         };
         let source = RetrySource {
             stt: Arc::clone(&self.inner),
-            report: Arc::clone(&self.report),
             options: self.options.clone(),
             clock: Arc::clone(&self.clock),
             label: self.inner.label(),
@@ -269,7 +270,6 @@ impl StreamSink<AudioFrame> for InputSink {
 
 struct RetrySource {
     stt: Arc<dyn Stt>,
-    report: Arc<dyn AttemptReport>,
     options: ApiConnectOptions,
     clock: Arc<dyn Clock>,
     label: String,
@@ -324,7 +324,7 @@ impl StreamSource<SpeechEvent> for RetrySource {
                 kind: RequestKind::SttStream,
                 retries: self.retries,
                 error,
-                report: &*self.report,
+                report: &*self.stt,
                 label: &self.label,
                 options: &self.options,
             };
@@ -368,6 +368,8 @@ mod tests {
     struct Flaky {
         opened: Mutex<Vec<f64>>,
         heard: Arc<Mutex<Vec<usize>>>,
+        /// Each reported failure's `recoverable`.
+        reports: Mutex<Vec<bool>>,
     }
 
     struct Count(Arc<Mutex<Vec<usize>>>, usize);
@@ -412,6 +414,9 @@ mod tests {
         fn capabilities(&self) -> SttCapabilities {
             SttCapabilities { streaming: true, ..SttCapabilities::default() }
         }
+        fn failed(&self, _: ProviderError, recoverable: bool) {
+            self.reports.lock().unwrap().push(recoverable);
+        }
         async fn recognize(
             &self,
             _: &[AudioFrame],
@@ -433,18 +438,9 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct Reports(Mutex<Vec<bool>>);
-
-    impl AttemptReport for Reports {
-        fn failed(&self, _: ProviderError, recoverable: bool) {
-            self.0.lock().unwrap().push(recoverable);
-        }
-    }
-
-    fn retrying(inner: Arc<Flaky>, reports: Arc<Reports>, max_retry: u32) -> RetryingStt {
+    fn retrying(inner: Arc<Flaky>, max_retry: u32) -> RetryingStt {
         let clock: Arc<dyn Clock> = Arc::new(crate::utils::clock::SimClock::new());
-        RetryingStt::for_host(inner, reports, max_retry, 2.0, 10.0, clock).unwrap()
+        RetryingStt::for_host(inner, max_retry, 2.0, 10.0, clock).unwrap()
     }
 
     // Catches: a retried stream that loses what was pushed while no attempt was open, reports the
@@ -452,8 +448,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_failed_attempt_is_reopened_and_hears_what_came_meanwhile() {
         let inner = Arc::new(Flaky::default());
-        let reports = Arc::new(Reports::default());
-        let stt = retrying(Arc::clone(&inner), Arc::clone(&reports), 3);
+        let stt = retrying(Arc::clone(&inner), 3);
         let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
         let hooked = Arc::new(Mutex::new(0));
         let calls = Arc::clone(&hooked);
@@ -462,7 +457,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         sink.push(AudioFrame::new(vec![0u8; 4], 16_000, 1, 2)).unwrap();
         assert_eq!(next.await.unwrap().unwrap(), Some(SpeechEventType::FinalTranscript));
-        assert_eq!(*reports.0.lock().unwrap(), vec![true]);
+        assert_eq!(*inner.reports.lock().unwrap(), vec![true]);
         assert_eq!(*hooked.lock().unwrap(), 1);
         let opened = inner.opened.lock().unwrap().clone();
         assert_eq!(opened.len(), 2);
@@ -477,10 +472,10 @@ mod tests {
         // Exhausting it raises the host's chained connection error, so the interpreter must exist.
         #[cfg(feature = "python")]
         pyo3::Python::initialize();
-        let reports = Arc::new(Reports::default());
-        let stt = retrying(Arc::new(Flaky::default()), Arc::clone(&reports), 1);
+        let inner = Arc::new(Flaky::default());
+        let stt = retrying(Arc::clone(&inner), 1);
         let error = stt.recognize(&[], None).await.unwrap_err();
         assert_eq!(error.message(), "failed to recognize speech after 2 attempts");
-        assert_eq!(*reports.0.lock().unwrap(), vec![true, false]);
+        assert_eq!(*inner.reports.lock().unwrap(), vec![true, false]);
     }
 }

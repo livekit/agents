@@ -236,6 +236,7 @@ impl Writer<'_> {
                 "dict[str, Any]".to_owned()
             }
             "ProviderId" => "dict[str, str]".to_owned(),
+            "ProviderError" => "Exception".to_owned(),
             "ChatRequest" => {
                 self.need("..", "_core");
                 "_core.ChatRequest".to_owned()
@@ -350,9 +351,6 @@ impl Writer<'_> {
         self.idiom(&mut b)?;
         for m in &p.methods {
             self.core(&mut b, m)?;
-        }
-        if let Some(Role::Conn { retry: Some(_) }) = self.conn().map(|m| m.role.clone()) {
-            b.push_str("\n    def _core_failed(self, error: Exception, recoverable: bool) -> None:\n        self._emit_error(error, recoverable)\n");
         }
         let realtime =
             p.methods.iter().find(|m| m.stream.as_ref().is_some_and(|x| x.kind == "realtime"));
@@ -491,7 +489,7 @@ impl Writer<'_> {
                     "{\"model_name\": self.model, \"model_provider\": self.provider}",
                 );
             }
-            Role::Hook { name, implementation, unsupported, store } => {
+            Role::Hook { name, implementation, retry, unsupported, store } => {
                 // A stream is opened, not awaited.
                 let is_async = m.is_async && m.stream.is_none();
                 let def = if is_async { "async def" } else { "def" };
@@ -513,7 +511,22 @@ impl Writer<'_> {
                     docstring(b, &m.doc, 8);
                     let args = self.forward_args(m);
                     let aw = if is_async { "await " } else { "" };
-                    b.push_str(&format!("        return {aw}self.{imp}({args})\n"));
+                    let call = format!("self.{imp}({args})");
+                    match retry {
+                        Some(kind) if is_async && self.carries_conn(m) => {
+                            self.need("..", "_bindings");
+                            b.push_str(&format!(
+                                "        attempts = _bindings.Attempts(\"{kind}\", conn_options, self._emit_error)\n        return await attempts.run(\n            lambda: {call}\n        )\n"
+                            ));
+                        }
+                        Some(_) => {
+                            return Err(format!(
+                                "{}: retry needs an awaited call with conn_options",
+                                m.rust
+                            ));
+                        }
+                        None => b.push_str(&format!("        return {aw}{call}\n")),
+                    }
                     return Ok(());
                 }
                 let params = self.hook_params(m, false)?;
@@ -549,7 +562,7 @@ impl Writer<'_> {
             }
             Role::Markup => self.markup(b, m)?,
             Role::Chat { name } => self.chat_hook(b, m, name)?,
-            Role::Conn { .. } | Role::Value(_) => {}
+            Role::Conn { .. } | Role::Value(_) | Role::Report => {}
         }
         Ok(())
     }
@@ -652,10 +665,19 @@ impl Writer<'_> {
                 "return {\"label\": self.label, \"model\": self.model, \"provider\": self.provider}"
                     .to_owned()
             }
-            Role::Hook { name, .. } => {
+            Role::Hook { name, implementation, retry, .. } => {
                 let aw = if m.is_async && m.stream.is_none() { "await " } else { "" };
                 let args = self.hook_args(m, "conn");
-                let call = format!("self.{name}({args})");
+                // The framework's call is one attempt: it retries it itself.
+                let target = match (retry, implementation) {
+                    (Some(_), Some(imp)) => imp,
+                    _ => name,
+                };
+                let call = format!("self.{target}({args})");
+                // A stream the framework opens runs one attempt and reports nothing (`_core_attempts`).
+                let driven = m.stream.as_ref().is_some_and(|x| {
+                    matches!(x.kind.as_str(), "recognize" | "synthesize" | "chunked")
+                });
                 let guard = m.when.as_ref().map(|cap| {
                     format!("if not self.capabilities.{cap}:\n            return None\n        ")
                 });
@@ -668,11 +690,14 @@ impl Writer<'_> {
                 if attach {
                     s.push_str(&wrap_call(&format!("out = {aw}"), &call, 8));
                     s.push_str("\n        out._core_attach(tools)\n        return out");
-                } else if attrs.is_empty() {
+                } else if attrs.is_empty() && !driven {
                     let ret = if m.ret.is_some() { "return " } else { "" };
                     s.push_str(&wrap_call(&format!("{ret}{aw}"), &call, 8));
                 } else {
                     s.push_str(&wrap_call(&format!("out = {aw}"), &call, 8));
+                    if driven {
+                        s.push_str("\n        out._core_attempts.core = True");
+                    }
                     for a in attrs {
                         s.push_str(&format!(
                             "\n        if {0} is not None:\n            out.{0} = {0}",
@@ -689,12 +714,13 @@ impl Writer<'_> {
                 match retry {
                     Some(r) => {
                         self.need("..", "_core");
-                        format!("return _core.{r}({view}, self, **conn)")
+                        format!("return _core.{r}({view}, **conn)")
                     }
                     None => format!("return {view}"),
                 }
             }
             Role::Markup => "return self.markup._provider_key()".to_owned(),
+            Role::Report => "self._emit_error(error, recoverable)".to_owned(),
             Role::Chat { name } => self.chat_core(m, name)?,
             Role::Value(expr) => format!("return {expr}"),
         };
@@ -913,7 +939,7 @@ impl Writer<'_> {
     /// The request's context, offered tools and options as the hook's keywords.
     fn chat_core(&mut self, _m: &ProviderMethod, name: &str) -> Result<String, String> {
         Ok(format!(
-            "from .._core_view import chat_request\n\n        chat_ctx, tools = chat_request(req)\n        return self.{name}(\n            chat_ctx=chat_ctx,\n            conn_options=conn,\n            tools=tools,\n            tool_choice=NOT_GIVEN if req.tool_choice is None else req.tool_choice,\n            parallel_tool_calls=(\n                NOT_GIVEN if req.parallel_tool_calls is None else req.parallel_tool_calls\n            ),\n            extra_kwargs=req.extra or NOT_GIVEN,\n        )"
+            "from .._core_view import chat_request\n\n        chat_ctx, tools = chat_request(req)\n        out = self.{name}(\n            chat_ctx=chat_ctx,\n            conn_options=conn,\n            tools=tools,\n            tool_choice=NOT_GIVEN if req.tool_choice is None else req.tool_choice,\n            parallel_tool_calls=(\n                NOT_GIVEN if req.parallel_tool_calls is None else req.parallel_tool_calls\n            ),\n            extra_kwargs=req.extra or NOT_GIVEN,\n        )\n        out._core_attempts.core = True\n        return out"
         ))
     }
 
@@ -1028,8 +1054,8 @@ impl Writer<'_> {
             ("collections.abc", "AsyncIterable"),
             ("collections.abc", "AsyncIterator"),
             ("typing", "Any"),
+            ("..", "_bindings"),
             (".._exceptions", "APIError"),
-            (".._exceptions", "APIStatusError"),
             ("..types", "APIConnectOptions"),
             ("..utils", "aio"),
             ("?..llm.chat_context", "ChatContext"),
@@ -1068,9 +1094,9 @@ impl Writer<'_> {
             ("abc", "abstractmethod"),
             ("collections.abc", "AsyncIterator"),
             ("livekit", "rtc"),
+            ("..", "_bindings"),
             ("..", "_core"),
             (".._exceptions", "APIError"),
-            (".._exceptions", "APIStatusError"),
             ("..log", "logger"),
             ("..types", "APIConnectOptions"),
             ("..types", "USERDATA_TIMED_TRANSCRIPT"),
@@ -1103,6 +1129,8 @@ impl Writer<'_> {
             ("collections.abc", "AsyncIterator"),
             ("pydantic", "BaseModel"),
             ("livekit", "rtc"),
+            ("..", "_bindings"),
+            (".._exceptions", "APIError"),
             ("..types", "APIConnectOptions"),
             ("..types", "NOT_GIVEN"),
             ("..types", "NotGivenOr"),
@@ -1224,8 +1252,8 @@ const RECOGNIZE: &str = r#"
         """
         Args:
             stt: The provider this stream recognizes for.
-            conn_options: The timeout and retries of the connection; the stream runs one attempt,
-                which the framework retries inside a session.
+            conn_options: The timeout and retries of the connection: a failed connection is
+                reopened, the audio it had not taken read by the next.
             sample_rate: The rate the audio is resampled to before recognition; the input's own
                 rate when not given.
         """
@@ -1240,6 +1268,7 @@ const RECOGNIZE: &str = r#"
         self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
+        self._core_attempts = _bindings.Attempts("stt_stream", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -1279,7 +1308,24 @@ const RECOGNIZE: &str = r#"
     async def _run(self) -> None: ...
 
     async def _main_task(self) -> None:
-        await self._run()
+        started = time.time()
+
+        # each attempt moves the timeline on by the time the last one ran, so a reconnected
+        # stream's timestamps stay linear
+        async def attempt() -> None:
+            nonlocal started
+            now = time.time()
+            self._start_time_offset += now - started
+            self._start_time = started = now
+            try:
+                await self._run()
+            except APIError:
+                # an attempt that outlived the connect timeout had connected: a fresh budget
+                if time.time() - started > self._conn_options.timeout:
+                    self._core_attempts.count = 0
+                raise
+
+        await self._core_attempts.run(attempt)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt._emit_error(api_error, recoverable)
@@ -1349,7 +1395,8 @@ const RECOGNIZE: &str = r#"
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
 "#;
 
-/// What both syntheses share: one attempt run against an `AudioEmitter`; retries are the core's.
+/// What both syntheses share: each attempt run against a fresh `AudioEmitter`, retried by
+/// `_core_attempts`.
 const SYNTHESIS: &str = r#"
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._tts._emit_error(api_error, recoverable)
@@ -1358,7 +1405,9 @@ const SYNTHESIS: &str = r#"
     async def _run(self, output_emitter: _core.AudioEmitter) -> None: ...
 
     async def _attempt(self) -> None:
-        output_emitter = _core.AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
+        self._emitter = output_emitter = _core.AudioEmitter(
+            label=self._tts.label, dst_ch=self._event_ch
+        )
         try:
             await self._run(output_emitter)
             output_emitter.end_input()
@@ -1366,14 +1415,11 @@ const SYNTHESIS: &str = r#"
             await output_emitter.join()
             if problem := self._invalid(output_emitter):
                 raise APIError(problem)
-        except APIError as e:
-            # 499 (Client Closed Request) - close gracefully without raising
-            if isinstance(e, APIStatusError) and e.status_code == 499:
-                return
-            self._emit_error(e, recoverable=False)
-            raise
         finally:
             await output_emitter.aclose()
+
+    def _produced(self) -> bool:
+        return self._emitter is not None and self._emitter.pushed_duration() > 0.0
 "#;
 
 /// The one-shot synthesis's idiom.
@@ -1385,7 +1431,11 @@ const CHUNKED: &str = r#"
         # the full text is submitted to the provider at creation time
         self._started_time: float = time.perf_counter()
         self._event_ch = aio.Chan[{Audio}]()
-        self._synthesize_task = asyncio.create_task(self._attempt(), name="TTS._synthesize_task")
+        self._emitter: _core.AudioEmitter | None = None
+        self._core_attempts = _bindings.Attempts("tts_batch", conn_options, self._emit_error)
+        self._synthesize_task = asyncio.create_task(
+            self._core_attempts.run(self._attempt), name="TTS._synthesize_task"
+        )
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
     @property
@@ -1436,15 +1486,30 @@ const SYNTHESIZE: &str = r#"
         self._tts = tts
         self._conn_options = conn_options
         self.input = aio.Chan[str | {Stream}.Flush]()
-        """The text ``_run`` reads, a ``Flush`` at the end of each segment."""
+        """The text ``_run`` reads, a ``Flush`` at the end of each segment; a retry reads it
+        again from the start."""
+        self._input_log: list[str | {Stream}.Flush] = []
         self._event_ch = aio.Chan[{Audio}]()
-        self._task = asyncio.create_task(self._attempt(), name="TTS._main_task")
+        self._emitter: _core.AudioEmitter | None = None
+        self._core_attempts = _bindings.Attempts("tts_stream", conn_options, self._emit_error)
+        self._task = asyncio.create_task(
+            self._core_attempts.run(self._attempt, produced=self._produced, again=self._replay),
+            name="TTS._main_task",
+        )
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._started_time: float = 0
         self._pushed_text: str = ""
         self._segment_open = False
         self._num_segments = 0
 {SYNTHESIS}
+    def _replay(self) -> None:
+        ended = self.input.closed
+        self.input = aio.Chan[str | {Stream}.Flush]()
+        for item in self._input_log:
+            self.input.send_nowait(item)
+        if ended:
+            self.input.close()
+
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
         return _core.validate_synthesis(  # type: ignore[no-any-return]
             self._pushed_text,
@@ -1471,6 +1536,7 @@ const SYNTHESIZE: &str = r#"
             self._segment_open = True
             self._num_segments += 1
         self._pushed_text += token
+        self._input_log.append(token)
         self.input.send_nowait(token)
 
     def flush(self) -> None:
@@ -1478,7 +1544,8 @@ const SYNTHESIZE: &str = r#"
         if self.input.closed:
             return
         self._segment_open = False
-        self.input.send_nowait(self.Flush())
+        self._input_log.append(self.Flush())
+        self.input.send_nowait(self._input_log[-1])
 
     def end_input(self) -> None:
         """Mark the end of input, no more text will be pushed"""
@@ -1521,6 +1588,7 @@ class _ChunkedStreamFromStream({Chunked}):
             stream=False,
         )
         async with self._tts.stream(conn_options=self._conn_options) as stream:
+            stream._core_attempts.core = self._core_attempts.core
             stream.push_text(self._input_text)
             stream.end_input()
             async for ev in stream:
@@ -1546,26 +1614,23 @@ const CHAT: &str = r#"
         self._conn_options = conn_options
         self._event_ch = _{Provider}EventChannel()
         self._retry_on_chunk_sent = True
+        self._core_attempts = _bindings.Attempts("llm", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
     async def _run(self) -> None: ...
 
-    async def _main_task(self) -> None:
+    async def _attempt(self) -> None:
         try:
             await self._run()
         except APIError as e:
-            # 499 (Client Closed Request) - close gracefully without raising
-            if isinstance(e, APIStatusError) and e.status_code == 499:
-                return
             if not self._retry_on_chunk_sent and self._event_ch.output_sent:
                 e.retryable = False
-            self._emit_error(e, recoverable=False)
             raise
-        except Exception as e:
-            self._emit_error(e, recoverable=False)
-            raise
+
+    async def _main_task(self) -> None:
+        await self._core_attempts.run(self._attempt)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._llm._emit_error(api_error, recoverable)
