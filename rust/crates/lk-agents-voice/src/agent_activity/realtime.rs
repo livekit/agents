@@ -928,9 +928,12 @@ impl Driver {
         if matches!(pending, Some(None)) || orphaned || self.activity.realtime_state.closing {
             let t = &mut self.activity.realtime_state;
             // Cancelled while the request was in flight: the response landed anyway, and only an
-            // interrupt reaches it now.
-            let cancelled =
-                orphaned || req_id.as_deref().is_some_and(|id| t.cancelled_requests.remove(id));
+            // interrupt reaches it now. A reply the client asked for, answered while closing:
+            // nothing plays it either, and left generating it holds the server, which refuses
+            // the next reply asked meanwhile.
+            let cancelled = orphaned
+                || req_id.as_deref().is_some_and(|id| t.cancelled_requests.remove(id))
+                || (t.closing && req_id.is_some());
             t.discarded = Some(response_id.clone());
             if cancelled && !t.ended() {
                 let response_id = Some(response_id.clone());

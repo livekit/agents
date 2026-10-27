@@ -38,6 +38,7 @@ mod filler_refused_on_realtime;
 mod filler_without_voice_ends;
 mod realtime_cancelled_tail;
 mod realtime_close_interrupts;
+mod realtime_reply_answered_closing;
 mod realtime_context_edits;
 mod realtime_cut_reply_tool_runs;
 mod realtime_items_filled;
