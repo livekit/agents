@@ -60,6 +60,41 @@ pub trait Clock: Send + Sync {
     fn wall(&self) -> SystemTime;
 }
 
+/// A value that says which clock the host objects handed with it are on (a session, a fake room):
+/// a binding scopes it over the conversions after it, so a proxy built next uses that clock.
+pub trait HostClock {
+    fn host_clock(&self) -> std::sync::Arc<dyn Clock>;
+}
+
+impl<T: HostClock + ?Sized> HostClock for std::sync::Arc<T> {
+    fn host_clock(&self) -> std::sync::Arc<dyn Clock> {
+        (**self).host_clock()
+    }
+}
+
+/// The host loop's own clock when it runs on virtual time, else `None` (an ambient value).
+#[derive(Clone, Default)]
+pub struct LoopClock(pub Option<std::sync::Arc<dyn Clock>>);
+
+/// `_core.SessionClock`: the handle a session hands the native clients a host provider is built
+/// on (`obj._bind_session_clock(clock)`), so a session on a virtual clock times a stalled gateway
+/// out in its own seconds, not wall ones.
+#[crate::class(name = "SessionClock")]
+#[derive(Clone)]
+pub struct SessionClock(pub std::sync::Arc<dyn Clock>);
+
+#[crate::host(object(name = "SessionClock", pid = false, as_dyn(Clock = clock)))]
+impl SessionClock {
+    pub fn clock(&self) -> std::sync::Arc<dyn Clock> {
+        self.0.clone()
+    }
+
+    #[host(method(name = "__repr__"))]
+    pub fn host_repr(&self) -> String {
+        format!("SessionClock(now={:?})", self.0.now())
+    }
+}
+
 /// 2024-01-01T00:00:00Z.
 pub fn simulated_epoch() -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200)

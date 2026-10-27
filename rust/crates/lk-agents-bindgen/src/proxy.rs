@@ -325,6 +325,14 @@ pub fn proxy(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<TokenStream>
         bodies.push(quote!(#sig { #body }));
     }
     let async_trait = p.async_trait.then(|| quote!(#[::async_trait::async_trait]));
+    // A `clock` proxy says which clock it is on.
+    let on_clock = p.clock.then(|| {
+        quote! {
+            impl<B: #rt::HostBridge> ::lk_agents_abi::HostClock for #name<B> {
+                fn host_clock(&self) -> #clock_ty { ::std::clone::Clone::clone(&self.clock) }
+            }
+        }
+    });
     let doc = format!(" `{tr_ident}` over a host object's `_core_*` surface (`#[host(proxy)]`).");
     Ok(quote! {
         #[cfg(feature = "python")]
@@ -351,6 +359,7 @@ pub fn proxy(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<TokenStream>
             impl<B: #rt::HostBridge> #tr_ident for #name<B> {
                 #(#bodies)*
             }
+            #on_clock
             impl #rt::HostProxy for dyn #tr_ident {
                 fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, clock: ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
                     let _ = &clock;
@@ -368,6 +377,54 @@ pub fn proxy(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<TokenStream>
                 }
             }
         };
+    })
+}
+
+/// `#[host(native(..))]` on a trait no host object implements directly: a registered native class
+/// (`as_dyn`) crosses as itself; anything else is refused with `refused = ".."`, or is that other
+/// trait's proxy behind a local adapter, `through(Proxied = Adapter::new)`
+/// (`fn(Arc<dyn Proxied>) -> Adapter`, `Adapter: Trait`).
+pub fn native(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<TokenStream> {
+    let m = Metas::parse(attr)?;
+    let at = &tr.ident;
+    for x in &m.0 {
+        if !(x.key == "native" || x.key == "native.refused" || x.key.starts_with("native.through.")) {
+            return Err(syn::Error::new_spanned(at, format!("native({}) has no meaning", x.key.trim_start_matches("native."))));
+        }
+    }
+    let rt = quote!(::lk_agents_abi::python);
+    let clock_ty = quote!(::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Clock>>);
+    let through: Vec<_> = m.under("native.through.").collect();
+    let (from_host, view) = match (through.as_slice(), m.text("native.refused")?) {
+        ([(proxied, adapter)], None) => {
+            let proxied: syn::Path = syn::parse_str(proxied).map_err(|_| syn::Error::new_spanned(at, "through(Trait = Adapter::new)"))?;
+            let adapter: syn::Path = crate::meta::rust_of(adapter)
+                .and_then(|v| syn::parse_str(&v).ok())
+                .ok_or_else(|| syn::Error::new_spanned(at, "through(Trait = Adapter::new): the adapter is a path"))?;
+            (
+                quote!(::std::result::Result::Ok(::std::sync::Arc::new(#adapter(<dyn #proxied as #rt::HostProxy>::from_host(obj, clock)?)))),
+                quote!(::std::result::Result::Ok(::std::boxed::Box::new(#adapter(::std::sync::Arc::from(<dyn #proxied as #rt::HostProxy>::view(handle, clock)?))))),
+            )
+        }
+        ([], Some(refused)) => (
+            quote!({ let _ = clock; ::std::result::Result::Err(::pyo3::exceptions::PyTypeError::new_err(#refused)) }),
+            quote!({ let _ = (handle, clock); ::std::result::Result::Err(::pyo3::exceptions::PyTypeError::new_err(#refused)) }),
+        ),
+        _ => return Err(syn::Error::new_spanned(at, "native(..) takes one `through(Trait = adapter)` or `refused = \"..\"`")),
+    };
+    Ok(quote! {
+        #[cfg(feature = "python")]
+        impl #rt::HostProxy for dyn #at {
+            fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, clock: #clock_ty) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+                if let ::std::option::Option::Some(native) = #rt::native::<dyn #at>(obj) {
+                    return ::std::result::Result::Ok(native);
+                }
+                #from_host
+            }
+            fn view(handle: #rt::HostHandle, clock: #clock_ty) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
+                #view
+            }
+        }
     })
 }
 

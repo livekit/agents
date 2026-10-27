@@ -265,9 +265,9 @@ fn briefing(instructions: Option<InstructionsArg>, conversation: Option<Vec<(Str
     let sections = [("_conversation_history", TemplateValue::plain(history.unwrap_or_default()))];
     match instructions {
         Some(InstructionsArg::Fixed(i)) => i,
-        Some(InstructionsArg::Workflow(w)) => {
-            w.resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections).instructions
-        }
+        Some(InstructionsArg::Workflow(w)) => WorkflowInstructions::from(w)
+            .resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections)
+            .instructions,
         None => WorkflowInstructions::default()
             .resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections)
             .instructions,

@@ -191,10 +191,10 @@ pub fn wire_enum(name: &syn::Ident) -> TokenStream {
 /// `#[host(error ..)]`: `HostException`, picked by `lk_agents_abi::python`'s autoref dispatch.
 pub fn error(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream> {
     let m = crate::Metas::parse(attr)?;
-    m.only("error", &["error", "error.kind", "error.with", "error.original"])?;
-    let (ident, generics, variants) = match item {
-        syn::Item::Enum(e) => (&e.ident, &e.generics, Some(&e.variants)),
-        syn::Item::Struct(s) => (&s.ident, &s.generics, None),
+    m.only("error", &["error", "error.kind", "error.with", "error.original", "error.declare"])?;
+    let (ident, generics, variants, attrs) = match item {
+        syn::Item::Enum(e) => (&e.ident, &e.generics, Some(&e.variants), &e.attrs),
+        syn::Item::Struct(s) => (&s.ident, &s.generics, None, &s.attrs),
         other => return Err(syn::Error::new_spanned(other, "#[host(error)] is for an enum or a struct")),
     };
     if !generics.params.is_empty() {
@@ -202,6 +202,40 @@ pub fn error(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream> {
     }
     let kind = m.text("error.kind")?;
     let with = m.path("error.with")?;
+    // `declare = "RuntimeError"`: `kind` is a class of `_core`'s own, derived from that builtin.
+    let declared = match (m.text("error.declare")?, kind) {
+        (Some(base), Some(class)) if !class.contains('.') => {
+            let doc = crate::summary(&crate::doc(attrs)).join(" ");
+            Some((format_ident!("{class}"), format_ident!("Py{base}"), doc))
+        }
+        (Some(_), _) => {
+            return Err(syn::Error::new_spanned(ident, "`declare` names the base of the class `kind` names, undotted"));
+        }
+        (None, _) => None,
+    };
+    if let Some((class, base, doc)) = &declared {
+        let class_name = class.to_string();
+        return Ok(quote! {
+            #[cfg(feature = "python")]
+            const _: () = {
+                ::pyo3::create_exception!(_core, #class, ::pyo3::exceptions::#base, #doc);
+                impl ::lk_agents_abi::python::HostException for #ident {
+                    fn to_py_err(&self) -> ::pyo3::PyErr { #class::new_err(::std::string::ToString::to_string(self)) }
+                }
+                ::lk_agents_abi::python::inventory::submit! {
+                    ::lk_agents_abi::python::Registration(|m| {
+                        use ::pyo3::types::PyModuleMethods as _;
+                        m.add(#class_name, m.py().get_type::<#class>())
+                    })
+                }
+            };
+            #[allow(dead_code)]
+            impl #ident {
+                /// The host exception class `#[host(kind)]` names for this value.
+                pub fn host_kind(&self) -> &str { #class_name }
+            }
+        });
+    }
     // The kind table's own reading, for a binding that names the class instead of raising it.
     let mut host_kind = None;
     let body = if m.flag("error.original") {
@@ -390,6 +424,10 @@ pub fn object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<TokenStream
                             fn into_pyobject(self, py: ::pyo3::Python<'py>) -> ::pyo3::PyResult<::pyo3::Bound<'py, #rust_name>> {
                                 ::pyo3::Bound::new(py, #rust_name { inner: ::std::clone::Clone::clone(self) })
                             }
+                        }
+                        // A `CoreObject` holding this type crosses as this class, over a clone.
+                        ::lk_agents_abi::python::inventory::submit! {
+                            ::lk_agents_abi::python::CoreObjectClass { to_host: ::lk_agents_abi::python::core_object_to_host::<#core> }
                         }
                     }
                 });

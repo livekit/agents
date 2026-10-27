@@ -99,12 +99,6 @@ pub fn format_dtmf_symbols(symbols: Vec<String>) -> Result<String, String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DtmfResult(pub GetDtmfResult);
 
-// A workflow's collected value reaches the host (`CoreObject`) as its class, over a clone.
-#[cfg(feature = "python")]
-lk_agents_abi::python::inventory::submit! {
-    lk_agents_abi::python::CoreObjectClass { to_host: lk_agents_abi::python::core_object_to_host::<DtmfResult> }
-}
-
 /// GetDtmfResult(user_input: 'str')
 #[lk_agents_abi::host(object(
     name = "GetDtmfResult",

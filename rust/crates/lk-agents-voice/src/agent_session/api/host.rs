@@ -2,7 +2,7 @@
 //! `AgentSession` call, each assembling, opening, closing or sending one command.
 
 use super::{
-    CLOSE_TIMEOUT, CommandRefused, HostMetricsRecord, HostParts,
+    CLOSE_TIMEOUT, CommandRefused, HostParts,
     InterruptionPortFactory, ModelRefs, NodeFactory, NotAnImage, NotInterruptible, OpenRefused,
     Ready, Reply, SessionApi, SessionBuildError, SessionEvents, SessionRefused, SessionRoom,
     SessionJob, SessionRunner, Stage, StartFailed, UnknownCloseReason, UpdateAgentArgs,
@@ -16,7 +16,6 @@ use crate::agent_session::commands::{
     ToolUpdate, TurnCommand,
 };
 use crate::agent_session::nodes::Nodes;
-use crate::agent_session::time::Timebase;
 use crate::agent_session::{Answer, CommitSuperseded, HostEvent};
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
@@ -515,8 +514,8 @@ impl SessionApi {
 
     /// The session's clock, as the handle a provider's `_bind_session_clock` takes.
     #[host(getter)]
-    pub fn session_clock(&self) -> Timebase {
-        self.time.clone()
+    pub fn session_clock(&self) -> lk_agents_abi::SessionClock {
+        lk_agents_abi::SessionClock(self.time.clock())
     }
 
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
@@ -1224,8 +1223,10 @@ impl SessionApi {
     /// A metrics record only a plugin can measure, emitted as `metrics_collected`. Engine-computed
     /// kinds are refused (they would count twice).
     #[host(method)]
-    pub fn host_metrics(&self, record: HostMetricsRecord) -> Result<(), CommandRefused> {
-        let HostMetricsRecord(record) = record;
+    pub fn host_metrics(
+        &self,
+        record: lk_agents_abi::metrics::base::AgentMetrics,
+    ) -> Result<(), CommandRefused> {
         use lk_agents_abi::metrics::base::AgentMetrics as M;
         match &record {
             M::Llm(_) | M::Tts(_) | M::Stt(_) | M::Eou(_) => {

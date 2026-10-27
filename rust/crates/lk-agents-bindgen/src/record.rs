@@ -101,6 +101,21 @@ enum Body {
     Struct(Vec<Field>),
     Union(Vec<Variant>),
     Unit,
+    /// `#[binding(untagged)]`: the first arm the object fits, in declaration order.
+    Untagged(Vec<Arm>),
+}
+
+/// An arm of an untagged union: a member read by its own `FromPyObject`, `None`
+/// (`#[binding(none)]`), or anything left (`#[binding(rest)]`, the last arm).
+struct Arm {
+    ident: syn::Ident,
+    fits: Fits,
+}
+
+enum Fits {
+    Member(syn::Type),
+    None,
+    Rest,
 }
 
 struct Record {
@@ -185,7 +200,7 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
     let node = Metas::named(&input.attrs, "node")?;
     b.only(
         &format!("#[binding] on {ident}"),
-        &["emit", "extract", "class", "new", "from_items", "fields_only", "from", "tag", "tag_value", "tag_const", "default", "skip_if_none", "read_tag", "model_dump"],
+        &["emit", "extract", "class", "new", "from_items", "fields_only", "from", "tag", "tag_value", "tag_const", "default", "skip_if_none", "read_tag", "model_dump", "untagged"],
     )?;
     let inherit = RecordDefaults::of(&input.attrs)?;
     let from = b.path("from")?;
@@ -215,6 +230,7 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
             }
             Body::Struct(fields)
         }
+        syn::Data::Enum(e) if b.flag("untagged") => Body::Untagged(arms(e)?),
         syn::Data::Enum(e) if e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit)) => Body::Unit,
         syn::Data::Enum(e) => {
             let mut vs = Vec::new();
@@ -253,6 +269,31 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
         body,
         targets,
     })
+}
+
+fn arms(e: &syn::DataEnum) -> syn::Result<Vec<Arm>> {
+    let mut arms = Vec::new();
+    for (i, v) in e.variants.iter().enumerate() {
+        let vb = Metas::named(&v.attrs, "binding")?;
+        vb.only(&format!("#[binding] on {}", v.ident), &["none", "rest"])?;
+        let last = i + 1 == e.variants.len();
+        let fits = match &v.fields {
+            syn::Fields::Unnamed(u) if u.unnamed.len() == 1 => Fits::Member(u.unnamed[0].ty.clone()),
+            syn::Fields::Unit if vb.flag("none") => Fits::None,
+            syn::Fields::Unit if vb.flag("rest") && last => Fits::Rest,
+            syn::Fields::Unit if vb.flag("rest") => {
+                return Err(syn::Error::new_spanned(&v.ident, "`rest` takes what no arm before it fits: it is the last arm"));
+            }
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    &v.ident,
+                    "an untagged arm carries one member, or is a unit marked #[binding(none)] or #[binding(rest)]",
+                ));
+            }
+        };
+        arms.push(Arm { ident: v.ident.clone(), fits });
+    }
+    Ok(arms)
 }
 
 fn field(f: &syn::Field, inherit: RecordDefaults) -> syn::Result<Field> {
@@ -409,6 +450,15 @@ pub fn record(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 });
             }
             out.extend(tags(&r));
+        }
+        Body::Untagged(arms) => {
+            for t in &r.targets {
+                out.extend(match t.kind {
+                    Kind::Emit => emit_untagged(&r, arms),
+                    Kind::Extract => extract_untagged(&r, arms),
+                    Kind::Class => return Err(syn::Error::new_spanned(&r.ident, "a union is not a class")),
+                });
+            }
         }
         Body::Union(vs) => {
             for t in &r.targets {
@@ -921,6 +971,70 @@ fn emit_union(r: &Record, vs: &[Variant]) -> syn::Result<TokenStream> {
             }
         }
     })
+}
+
+/// Each arm as its member, `None` for a unit arm.
+fn emit_untagged(r: &Record, arms: &[Arm]) -> TokenStream {
+    let ident = &r.ident;
+    let arms = arms.iter().map(|a| {
+        let ai = &a.ident;
+        match &a.fits {
+            Fits::Member(_) => quote!(#ident::#ai(x) => ::pyo3::IntoPyObject::into_pyobject(x, py)?.into_any()),
+            Fits::None | Fits::Rest => quote!(#ident::#ai => py.None().into_bound(py)),
+        }
+    });
+    quote! {
+        impl<'py> ::pyo3::IntoPyObject<'py> for &#ident {
+            type Target = ::pyo3::PyAny;
+            type Output = ::pyo3::Bound<'py, ::pyo3::PyAny>;
+            type Error = ::pyo3::PyErr;
+            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
+                ::std::result::Result::Ok(match self { #(#arms,)* })
+            }
+        }
+        impl<'py> ::pyo3::IntoPyObject<'py> for #ident {
+            type Target = ::pyo3::PyAny;
+            type Output = ::pyo3::Bound<'py, ::pyo3::PyAny>;
+            type Error = ::pyo3::PyErr;
+            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
+                ::pyo3::IntoPyObject::into_pyobject(&self, py)
+            }
+        }
+    }
+}
+
+/// The first arm the object fits; when none does, the last member's error.
+fn extract_untagged(r: &Record, arms: &[Arm]) -> TokenStream {
+    let ident = &r.ident;
+    let unfit = format!("{ident}: the value fits no arm");
+    let tries = arms.iter().map(|a| {
+        let ai = &a.ident;
+        match &a.fits {
+            Fits::Member(ty) => quote! {
+                match obj.extract::<#ty>() {
+                    ::std::result::Result::Ok(v) => return ::std::result::Result::Ok(#ident::#ai(v)),
+                    ::std::result::Result::Err(e) => last = ::std::option::Option::Some(::std::convert::Into::<::pyo3::PyErr>::into(e)),
+                }
+            },
+            Fits::None => quote! {
+                if obj.is_none() {
+                    return ::std::result::Result::Ok(#ident::#ai);
+                }
+            },
+            Fits::Rest => quote!(return ::std::result::Result::Ok(#ident::#ai);),
+        }
+    });
+    quote! {
+        impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for #ident {
+            type Error = ::pyo3::PyErr;
+            #[allow(unreachable_code, unused_assignments, unused_mut)]
+            fn extract(obj: ::pyo3::Borrowed<'a, 'py, ::pyo3::PyAny>) -> ::pyo3::PyResult<Self> {
+                let mut last: ::std::option::Option<::pyo3::PyErr> = ::std::option::Option::None;
+                #(#tries)*
+                ::std::result::Result::Err(last.unwrap_or_else(|| ::pyo3::exceptions::PyValueError::new_err(#unfit)))
+            }
+        }
+    }
 }
 
 fn extract_union(r: &Record, t: &Target, vs: &[Variant]) -> syn::Result<TokenStream> {

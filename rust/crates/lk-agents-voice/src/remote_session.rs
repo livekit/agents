@@ -141,7 +141,7 @@ pub fn encode_wire(ev: WireEvent) -> Result<Option<proto::agent_session_event::E
             delay: Some(encode_duration_secs(v.delay)),
         }),
         WireEvent::EotPrediction(v) => Event::EotPrediction(pb::EotPrediction {
-            // `as f32`, as pyo3's own `f32` extraction does.
+            // `as f32`, as the reference narrows a float to the proto's `float`.
             probability: v.probability as f32,
             threshold: v.threshold as f32,
             inference_duration: Some(encode_duration_secs(v.inference_duration)),

@@ -37,6 +37,19 @@ fn params_inner(
     for p in &sig.params {
         let label = p.label.as_deref().unwrap_or(&p.name);
         let n = arg(&p.name);
+        // `#[host(ambient)]`: the runtime's own value (`host_error::Ambient`), no JS argument.
+        if let Some(ty) = &p.ambient {
+            if ty.contains("Spawner") {
+                return Err(format!("parameter `{label}`: not yet: an ambient `Spawner`"));
+            }
+            out.push(P {
+                decl: String::new(),
+                prelude: Vec::new(),
+                call: "crate::host_error::ambient()".to_owned(),
+                fallible: false,
+            });
+            continue;
+        }
         // `#[host(lenient)]`: a wrong-typed value reads as the default, as pyo3's
         // `extract().unwrap_or_default()`.
         if p.lenient {
@@ -262,7 +275,7 @@ pub(super) fn body(
     if fallible {
         args.push("env: Env".to_owned());
     }
-    args.extend(ps.iter().map(|p| p.decl.clone()));
+    args.extend(ps.iter().filter(|p| !p.decl.is_empty()).map(|p| p.decl.clone()));
     let ty = if fallible { format!("napi::Result<{ret_ty}>") } else { ret_ty.to_owned() };
     let arrow = if ty == "()" { String::new() } else { format!(" -> {ty}") };
     let mut b = format!("{pad}pub fn {ident}({}){arrow} {{\n", args.join(", "));

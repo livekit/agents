@@ -61,34 +61,6 @@ pub enum SpeechRefused {
     SelfWait { name: String },
 }
 
-/// The exception a speech failed with: the host's own object when a provider raised one (read,
-/// not released: a second `exception()` must still find it), else a `RuntimeError` of the message.
-pub struct SpeechException(pub ProviderError);
-
-#[cfg(feature = "python")]
-impl<'py> pyo3::IntoPyObject<'py> for SpeechException {
-    type Target = pyo3::PyAny;
-    type Output = pyo3::Bound<'py, pyo3::PyAny>;
-    type Error = pyo3::PyErr;
-
-    fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        let runtime_error = |msg: String| {
-            pyo3::exceptions::PyRuntimeError::new_err(msg).value(py).clone().into_any()
-        };
-        Ok(match &self.0 {
-            ProviderError::Host { error, .. } => match error
-                .host_ref
-                .clone()
-                .and_then(|r| lk_agents_abi::python::resolve_captured(py, r))
-            {
-                Some(obj) => obj.into_bound(py),
-                None => runtime_error(error.to_string()),
-            },
-            other => runtime_error(other.to_string()),
-        })
-    }
-}
-
 /// A [`SpeechId`] on the wire, `speech_{n}`: `Display` mints it and `FromStr` reads it back.
 impl std::fmt::Display for SpeechId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -779,13 +751,13 @@ impl SpeechHandle {
         Ok(())
     }
 
-    /// The exception the speech failed with, as the original Python object.
+    /// The exception the speech failed with: the host's own object when a provider raised one.
     #[host(method(name = "exception"))]
-    pub fn exception_for_host(&self) -> Result<Option<SpeechException>, SpeechRefused> {
+    pub fn exception_for_host(&self) -> Result<Option<ProviderError>, SpeechRefused> {
         if self.created().is_none() {
             return Ok(None);
         }
-        Ok(self.exception()?.map(SpeechException))
+        Ok(self.exception()?)
     }
 
     /// `interrupt(force=)` (`speech_handle.py:185`), synchronous and in the reference's order. If

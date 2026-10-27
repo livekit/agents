@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 267 core items bound (119 functions and consts, 75 classes, 72 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 278 core items bound (119 functions and consts, 75 classes, 83 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -43,8 +43,8 @@
 //! - `lk_agents_voice::speech_handle::SpeechHandle::host`: return: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_voice::speech_handle::SpeechHandle::set_host`: parameter `host`: not yet: a `HostRef` (a host object in the side table)
 //! - `lk_agents_voice::speech_handle::SpeechHandle::chat_items`: return: not yet: returning an exposed class
-//! - `lk_agents_voice::speech_handle::SpeechHandle::exception_for_host`: return: `SpeechException` is not a #[derive(Host)] type or a #[host(wire_enum)]
-//! - `lk_agents_voice::speech_handle::SpeechHandle::interrupt_for_host`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)
+//! - `lk_agents_voice::speech_handle::SpeechHandle::exception_for_host`: return: `ProviderError` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_voice::speech_handle::SpeechHandle::interrupt_for_host`: parameter `spawner`: not yet: an ambient `Spawner`
 //! - `lk_agents_voice::workflows::dtmf::DtmfResult::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::workflows::dtmf::DtmfResult::from_dtmf_inputs`: return: `Self` outside a constructor
 //! - `lk_agents_voice::workflows::warm_transfer::HostWarmTransfer::new`: parameter `instructions`: `InstructionsArg` is not a #[derive(Host)] type or a #[host(wire_enum)]
@@ -54,7 +54,7 @@
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_time_of_birth`: return: `Time` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_eq`: not yet: `__eq__` is a Python protocol method
 //! - `lk_agents_abi::voice::workflows::GetDOBResult::host_repr`: not yet: `__repr__` is a Python protocol method
-//! - `lk_agents_voice::agent_session::Timebase::host_repr`: not yet: `__repr__` is a Python protocol method
+//! - `lk_agents_abi::SessionClock::host_repr`: not yet: `__repr__` is a Python protocol method
 //! - `lk_agents_voice::agent_session::SessionApi::host_new`: parameter `room`: not yet: `Arc<dyn SessionRoom>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::session_clock`: return: not yet: returning an exposed class
 //! - `lk_agents_voice::agent_session::SessionApi::audio_input`: return: not yet: `Arc<ParticipantAudioInput>` (a shared handle to an exposed class)
@@ -81,16 +81,15 @@
 //! - `lk_agents_voice::agent_session::SessionApi::say`: return: not yet: `Arc<SpeechHandle>` (a shared handle to an exposed class)
 //! - `lk_agents_voice::agent_session::SessionApi::say_stream`: parameter `text`: not yet: a stream half returned as a stream class
 //! - `lk_agents_voice::agent_session::SessionApi::say_audio`: parameter `audio`: not yet: a stream half returned as a stream class
-//! - `lk_agents_voice::agent_session::SessionApi::host_metrics`: parameter `record`: `HostMetricsRecord` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_session::SessionApi::agent_chat_ctx`: return: not yet: returning an exposed class
 //! - `lk_agents_media::StreamBuffer::len`: not yet: `__len__` is a Python protocol method
-//! - `lk_agents_voice::remote_session::driver::HostRuntime::new`: parameter `clock`: not yet: `Arc<dyn Clock>` (a host object behind a proxy)
+//! - `lk_agents_voice::remote_session::driver::HostRuntime::new`: parameter `spawner`: not yet: an ambient `Spawner`
 //! - `lk_agents_voice::remote_session::driver::HostRuntime::set_port`: parameter `port`: not yet: `Arc<dyn SessionPort>` (a host object behind a proxy)
 //! - `lk_agents_voice::remote_session::driver::HostRuntime::send_wire`: arm `FunctionToolsExecuted`: `FunctionToolsExecutedWire` is not declared
 //! - `lk_agents_voice::remote_session::driver::HostRuntime::start`: parameter `transport`: not yet: `Arc<dyn SessionTransport>` (a host object behind a proxy)
-//! - `lk_agents_voice::remote_session::driver::ClientRuntime::new`: parameter `clock`: not yet: `Arc<dyn Clock>` (a host object behind a proxy)
+//! - `lk_agents_voice::remote_session::driver::ClientRuntime::new`: parameter `spawner`: not yet: an ambient `Spawner`
 //! - `lk_agents_voice::remote_session::driver::ClientRuntime::start`: parameter `transport`: not yet: `Arc<dyn SessionTransport>` (a host object behind a proxy)
-//! - `lk_agents_voice::remote_session::console::ConsoleIo::new`: parameter `spawner`: not yet: `Arc<dyn Spawner>` (a host object behind a proxy)
+//! - `lk_agents_voice::remote_session::console::ConsoleIo::new`: parameter `spawner`: not yet: an ambient `Spawner`
 //! - `lk_agents_abi::tts::markup::Markup::llm_instructions`: field `nonverbal_sounds`: `NonverbalSounds` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_abi::ChatContent::text`: return: `Self` outside a constructor
 //! - `lk_agents_abi::ChatContent::image_url`: return: `Self` outside a constructor

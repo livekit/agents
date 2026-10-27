@@ -9,7 +9,7 @@ use std::task::{Context, Poll, Waker};
 
 use lk_agents_abi::voice::session_options::UpdateKwargs;
 use lk_agents_rtc::{ConnectionState, DisconnectReason, RtcRoom};
-use lk_agents_voice::agent_session::{Command, CommitSuperseded, DrainRefused, HostMetricsRecord};
+use lk_agents_voice::agent_session::{Command, CommitSuperseded, DrainRefused};
 
 use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
 
@@ -615,7 +615,7 @@ impl Run {
                 let Some(id) = self.hook_id(Ref::new(hook.nth)) else { return false };
                 self.answer_hook(id, *answer, text.clone())
             }
-            Input::HostMetrics {} => api.host_metrics(HostMetricsRecord(vad_metrics())).is_ok(),
+            Input::HostMetrics {} => api.host_metrics(vad_metrics()).is_ok(),
             Input::Ivr { input, silence, text: UserText(text) } => match input {
                 IvrInput::Start => api.ivr_start(secs(*silence), None, None).is_ok(),
                 IvrInput::SeedTranscript => api.ivr_final(text).is_ok(),

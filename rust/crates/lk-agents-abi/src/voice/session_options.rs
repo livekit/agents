@@ -696,6 +696,14 @@ pub struct RecordingOverrides {
     pub redaction: Option<bool>,
 }
 
+/// `start(record=True | False | {...})`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
+#[binding(extract, untagged)]
+pub enum RecordingRequest {
+    All(bool),
+    Granular(RecordingOverrides),
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Instructions {
     pub common: String,

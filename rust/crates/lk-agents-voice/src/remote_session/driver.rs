@@ -18,7 +18,7 @@ use super::{
 };
 use proto::agent_session_message::Message;
 
-/// The Python logger every line here lands on (`pyo3-log` maps the target to the logger name).
+/// The log target every line here lands on (the host maps it to its logger name).
 const LOG: &str = "livekit.agents";
 
 /// `SessionHost` (`remote_session.py:321`), running. Events queue from construction and one writer

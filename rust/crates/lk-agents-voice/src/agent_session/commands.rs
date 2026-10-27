@@ -410,9 +410,8 @@ impl From<crate::tool_executor::ToolReport> for ToolUpdate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HoldId(pub u64);
 
-/// Why a `WaitForIdle`/`WaitForIdleAndHold` was answered without reaching idle: `_core.SessionClosing`,
-/// which the shim raises as `ActivityClosedError`.
-#[lk_agents_abi::host(error(kind = "livekit.agents._core.SessionClosing"))]
+/// `wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing.
+#[lk_agents_abi::host(error(kind = "SessionClosing", declare = "RuntimeError"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
 pub enum IdleRefused {
     /// The session closed (or its loop ended) first: the reference's `ActivityClosedError`.
@@ -644,21 +643,4 @@ impl std::fmt::Debug for AgentUpdate {
             .field("call", &self.call)
             .finish()
     }
-}
-
-// `IdleRefused`'s `#[host(error(kind = "livekit.agents._core.SessionClosing"))]` names this class.
-#[cfg(feature = "python")]
-pyo3::create_exception!(
-    _core,
-    SessionClosing,
-    pyo3::exceptions::PyRuntimeError,
-    "`wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing. The shim raises `ActivityClosedError`."
-);
-
-#[cfg(feature = "python")]
-lk_agents_abi::python::inventory::submit! {
-    lk_agents_abi::python::Registration(|m| {
-        use pyo3::types::PyModuleMethods as _;
-        m.add("SessionClosing", m.py().get_type::<SessionClosing>())
-    })
 }

@@ -14,3 +14,15 @@ pub struct StartPlan {
     /// `records_anything` on the resolved options.
     pub records: bool,
 }
+
+/// What a filler's callable answered: nothing, its text to say, or anything else (a speech it
+/// scheduled itself).
+#[derive(Debug, Clone, PartialEq, Eq, Host)]
+#[binding(extract, untagged)]
+pub enum FillerReply {
+    #[binding(none)]
+    Declined,
+    Text(String),
+    #[binding(rest)]
+    Spoke,
+}

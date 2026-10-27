@@ -904,28 +904,7 @@ pub trait SessionHooks: Send + Sync {
     fn hook_failed(&self, hook: &str, error: Option<lk_agents_abi::errors::CapturedError>);
 }
 
-/// What a filler's callable answered: its text to say, a speech it scheduled itself, or nothing.
-pub enum FillerReply {
-    Text(String),
-    Spoke,
-    Declined,
-}
-
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for FillerReply {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use pyo3::types::PyAnyMethods as _;
-        Ok(if obj.is_none() {
-            FillerReply::Declined
-        } else if let Ok(text) = obj.extract::<String>() {
-            FillerReply::Text(text)
-        } else {
-            FillerReply::Spoke
-        })
-    }
-}
+pub use lk_agents_abi::voice::session_effects::FillerReply;
 
 /// Runs the hook `call` asks for through `hooks` and answers it. Calls the host first, before any
 /// other await, so a caller polling it once has handed the call to the host loop in event order.
@@ -1007,7 +986,8 @@ async fn answer_hook(
 }
 
 /// Timers and playout must share one clock: a fake room brings its own virtual clock, a host
-/// `rtc.Room` is a [`HostRoom`] on the wall clock.
+/// `rtc.Room` is a [`HostRoom`] on the wall clock. A native room crosses as itself (`as_dyn`).
+#[lk_agents_abi::host(native(through(HostRoom = HostedRoom::new)))]
 pub trait SessionRoom: Send + Sync {
     fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom>;
     fn timebase(&self) -> Timebase;
@@ -1017,29 +997,24 @@ pub trait SessionRoom: Send + Sync {
     }
 }
 
-/// A host `rtc.Room`, seen through `_core_rtc.Room`, whose `_core_rtc` wraps it.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io.Room"))]
-pub trait HostRoom: Send + Sync {
+/// A host `rtc.Room`, seen through `_core_rtc.Room`, whose `_core_rtc` wraps it, on the caller's
+/// clock (else the ambient one: the wall clock, or the running loop's on virtual time).
+#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io.Room", clock))]
+pub trait HostRoom: lk_agents_abi::HostClock + Send + Sync {
     /// The room, as the seam sees it.
     fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom>;
 }
 
-/// On the clock the proxy was built on, else the ambient one (the wall clock, or the running
-/// loop's on virtual time).
-#[cfg(feature = "python")]
-struct HostedRoom(Arc<dyn HostRoom>, Timebase);
+/// A host room on the clock its proxy was built on.
+pub struct HostedRoom(Arc<dyn HostRoom>, Timebase);
 
-#[cfg(feature = "python")]
 impl HostedRoom {
-    fn new(room: Arc<dyn HostRoom>, clock: Option<Arc<dyn lk_agents_abi::Clock>>) -> Self {
-        let clock = clock.unwrap_or_else(
-            <Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient,
-        );
-        HostedRoom(room, Timebase::of_clock(clock))
+    pub fn new(room: Arc<dyn HostRoom>) -> Self {
+        let time = Timebase::of_clock(room.host_clock());
+        HostedRoom(room, time)
     }
 }
 
-#[cfg(feature = "python")]
 impl SessionRoom for HostedRoom {
     fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom> {
         self.0.rtc()
@@ -1050,59 +1025,17 @@ impl SessionRoom for HostedRoom {
     }
 }
 
-/// A native room (registered by its `as_dyn`) as itself, anything else as a host room.
-#[cfg(feature = "python")]
-impl lk_agents_abi::python::HostProxy for dyn SessionRoom {
-    fn from_host(
-        obj: &pyo3::Bound<'_, pyo3::PyAny>,
-        clock: Option<Arc<dyn lk_agents_abi::Clock>>,
-    ) -> pyo3::PyResult<Arc<Self>> {
-        if let Some(native) = lk_agents_abi::python::native::<dyn SessionRoom>(obj) {
-            return Ok(native);
-        }
-        let host =
-            <dyn HostRoom as lk_agents_abi::python::HostProxy>::from_host(obj, clock.clone())?;
-        Ok(Arc::new(HostedRoom::new(host, clock)))
-    }
-
-    fn view(
-        handle: lk_agents_abi::python::HostHandle,
-        clock: Option<Arc<dyn lk_agents_abi::Clock>>,
-    ) -> pyo3::PyResult<Box<Self>> {
-        let host = <dyn HostRoom as lk_agents_abi::python::HostProxy>::view(handle, clock.clone())?;
-        Ok(Box::new(HostedRoom::new(Arc::from(host), clock)))
-    }
-}
-
-/// The session's clock scopes the host objects converted after the room (`HostClock`).
-#[cfg(feature = "python")]
-impl lk_agents_abi::python::HostClock for dyn SessionRoom {
+/// The session's clock scopes the host objects converted after the room.
+impl lk_agents_abi::HostClock for dyn SessionRoom {
     fn host_clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
         self.timebase().clock()
     }
 }
 
-/// The session's clock scopes the host providers its commands take (`HostClock`).
-#[cfg(feature = "python")]
-impl lk_agents_abi::python::HostClock for SessionApi {
+/// The session's clock scopes the host providers its commands take.
+impl lk_agents_abi::HostClock for SessionApi {
     fn host_clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
         self.time().clock()
-    }
-}
-
-/// `ValueError` for any other object (a newer package's metric type too).
-pub struct HostMetricsRecord(pub lk_agents_abi::metrics::base::AgentMetrics);
-
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for HostMetricsRecord {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        lk_agents_abi::metrics::base::AgentMetrics::extract_known(&obj.to_owned())?
-            .map(HostMetricsRecord)
-            .ok_or_else(|| {
-                pyo3::exceptions::PyValueError::new_err("host_metrics: not an AgentMetrics record")
-            })
     }
 }
 

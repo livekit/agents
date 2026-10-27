@@ -55,6 +55,8 @@ fn items(
             syn::Item::Struct(s) if group.is_some() || has_host_derive(&s.attrs) => {
                 out.push(strukt(label, at(s.span()), s, consts, group.or(file))?)
             }
+            // An untagged union is a crossing shape only: no host model, typed as its members.
+            syn::Item::Enum(e) if flag(&e.attrs, "binding", "untagged") => {}
             syn::Item::Enum(e) if group.is_some() || has_host_derive(&e.attrs) => {
                 out.push(enom(label, at(e.span()), e, group.or(file))?)
             }

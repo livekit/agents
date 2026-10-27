@@ -125,8 +125,8 @@ pub use utils::bound_clock::BoundClock;
 pub use utils::lock;
 pub use utils::byte_stream::{AudioByteStream, Frame};
 pub use utils::clock::{
-    Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, simulated_epoch, timeout,
-    unix_now, unix_secs,
+    Clock, Elapsed, HostClock, LoopClock, RealClock, SessionClock, SimClock, Ts, VirtualClock,
+    WallAnchor, simulated_epoch, timeout, unix_now, unix_secs,
 };
 pub use utils::duplex::{WebSocketSink, WebSocketStream};
 pub use utils::filters::{ExpFilter, FilterError, MovingAverage};

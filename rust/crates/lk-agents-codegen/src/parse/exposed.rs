@@ -205,6 +205,10 @@ pub fn exposed_with(
             }
             syn::Item::Trait(tr) => {
                 let Some(m) = host_attr_strict(label, &tr.attrs)? else { continue };
+                // A native-only trait has no host surface to describe.
+                if m.first().is_some_and(|x| x.key.split('.').next() == Some("native")) {
+                    continue;
+                }
                 want_head(&format!("{label}: trait {}", tr.ident), &m, "proxy")?;
                 let host = meta_str(&m, "proxy.host");
                 out.providers.extend(super::provider::provider(label, tr, host.as_deref(), text)?);

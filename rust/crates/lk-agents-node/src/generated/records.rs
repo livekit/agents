@@ -2155,6 +2155,100 @@ impl TryFrom<DtmfOutcomeWire> for lk_agents_abi::voice::workflows::DtmfOutcomeWi
     }
 }
 
+/// `metrics/base.py:224`'s `AgentMetrics` union, in the reference's order.
+pub enum AgentMetrics {
+    Stt(SttMetrics),
+    Llm(LlmMetrics),
+    Tts(TtsMetrics),
+    Vad(VadMetrics),
+    Eou(EouMetrics),
+    EotInference(EotInferenceMetrics),
+    RealtimeModel(RealtimeModelMetrics),
+    Interruption(InterruptionMetrics),
+    Avatar(AvatarMetrics),
+}
+
+impl napi::bindgen_prelude::TypeName for AgentMetrics {
+    fn type_name() -> &'static str {
+        "AgentMetrics"
+    }
+
+    fn value_type() -> napi::ValueType {
+        napi::ValueType::Object
+    }
+}
+
+impl napi::bindgen_prelude::ToNapiValue for AgentMetrics {
+    unsafe fn to_napi_value(env: napi::sys::napi_env, val: Self) -> napi::Result<napi::sys::napi_value> {
+        match val {
+            AgentMetrics::Stt(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            AgentMetrics::Llm(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            AgentMetrics::Tts(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            AgentMetrics::Vad(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            AgentMetrics::Eou(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            AgentMetrics::EotInference(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            AgentMetrics::RealtimeModel(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            AgentMetrics::Interruption(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+            AgentMetrics::Avatar(v) => unsafe { napi::bindgen_prelude::ToNapiValue::to_napi_value(env, v) },
+        }
+    }
+}
+
+impl From<&lk_agents_abi::metrics::base::AgentMetrics> for AgentMetrics {
+    fn from(v: &lk_agents_abi::metrics::base::AgentMetrics) -> Self {
+        match v {
+            lk_agents_abi::metrics::base::AgentMetrics::Stt(x) => AgentMetrics::Stt(SttMetrics::from(x)),
+            lk_agents_abi::metrics::base::AgentMetrics::Llm(x) => AgentMetrics::Llm(LlmMetrics::from(x)),
+            lk_agents_abi::metrics::base::AgentMetrics::Tts(x) => AgentMetrics::Tts(TtsMetrics::from(x)),
+            lk_agents_abi::metrics::base::AgentMetrics::Vad(x) => AgentMetrics::Vad(VadMetrics::from(x)),
+            lk_agents_abi::metrics::base::AgentMetrics::Eou(x) => AgentMetrics::Eou(EouMetrics::from(x)),
+            lk_agents_abi::metrics::base::AgentMetrics::EotInference(x) => AgentMetrics::EotInference(EotInferenceMetrics::from(x)),
+            lk_agents_abi::metrics::base::AgentMetrics::RealtimeModel(x) => AgentMetrics::RealtimeModel(RealtimeModelMetrics::from(x)),
+            lk_agents_abi::metrics::base::AgentMetrics::Interruption(x) => AgentMetrics::Interruption(InterruptionMetrics::from(x)),
+            lk_agents_abi::metrics::base::AgentMetrics::Avatar(x) => AgentMetrics::Avatar(AvatarMetrics::from(x)),
+        }
+    }
+}
+
+impl napi::bindgen_prelude::FromNapiValue for AgentMetrics {
+    unsafe fn from_napi_value(env: napi::sys::napi_env, value: napi::sys::napi_value) -> napi::Result<Self> {
+        let obj = unsafe { <napi::bindgen_prelude::Object as napi::bindgen_prelude::FromNapiValue>::from_napi_value(env, value)? };
+        let tag: String = obj.get_named_property("type")?;
+        match tag.as_str() {
+            "stt_metrics" => Ok(AgentMetrics::Stt(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "llm_metrics" => Ok(AgentMetrics::Llm(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "tts_metrics" => Ok(AgentMetrics::Tts(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "vad_metrics" => Ok(AgentMetrics::Vad(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "eou_metrics" => Ok(AgentMetrics::Eou(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "eot_inference_metrics" => Ok(AgentMetrics::EotInference(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "realtime_model_metrics" => Ok(AgentMetrics::RealtimeModel(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "interruption_metrics" => Ok(AgentMetrics::Interruption(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            "avatar_metrics" => Ok(AgentMetrics::Avatar(unsafe { napi::bindgen_prelude::FromNapiValue::from_napi_value(env, value)? })),
+            other => Err(napi::Error::new(napi::Status::InvalidArg, format!("AgentMetrics: unknown type `{other}`"))),
+        }
+    }
+}
+
+impl napi::bindgen_prelude::ValidateNapiValue for AgentMetrics {}
+
+impl TryFrom<AgentMetrics> for lk_agents_abi::metrics::base::AgentMetrics {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: AgentMetrics) -> Result<Self, Self::Error> {
+        Ok(match v {
+            AgentMetrics::Stt(x) => lk_agents_abi::metrics::base::AgentMetrics::Stt(x.try_into()?),
+            AgentMetrics::Llm(x) => lk_agents_abi::metrics::base::AgentMetrics::Llm(x.try_into()?),
+            AgentMetrics::Tts(x) => lk_agents_abi::metrics::base::AgentMetrics::Tts(x.try_into()?),
+            AgentMetrics::Vad(x) => lk_agents_abi::metrics::base::AgentMetrics::Vad(x.try_into()?),
+            AgentMetrics::Eou(x) => lk_agents_abi::metrics::base::AgentMetrics::Eou(x.try_into()?),
+            AgentMetrics::EotInference(x) => lk_agents_abi::metrics::base::AgentMetrics::EotInference(x.try_into()?),
+            AgentMetrics::RealtimeModel(x) => lk_agents_abi::metrics::base::AgentMetrics::RealtimeModel(x.try_into()?),
+            AgentMetrics::Interruption(x) => lk_agents_abi::metrics::base::AgentMetrics::Interruption(x.try_into()?),
+            AgentMetrics::Avatar(x) => lk_agents_abi::metrics::base::AgentMetrics::Avatar(x.try_into()?),
+        })
+    }
+}
+
 /// `rtc.TranscriptionSegment`.
 #[napi(object, js_name = "TranscriptionSegment")]
 pub struct TranscriptionSegment {
@@ -3036,6 +3130,388 @@ impl From<DtmfStopped> for lk_agents_abi::voice::workflows::DtmfStopped {
     }
 }
 
+#[napi(object, js_name = "SttMetrics")]
+pub struct SttMetrics {
+    #[napi(js_name = "type", ts_type = "'stt_metrics'")]
+    pub r#type: String,
+    pub label: String,
+    pub request_id: String,
+    pub timestamp: f64,
+    /// The request duration in seconds, 0.0 if the STT is streaming.
+    pub duration: f64,
+    /// The duration of the pushed audio in seconds, or 0.0 when unknown.
+    pub audio_duration: f64,
+    /// Whether the STT is streaming (e.g using websocket).
+    pub streamed: bool,
+    /// Total input tokens, including both audio and text (for token-based billing).
+    pub input_tokens: u32,
+    /// Total output tokens (for token-based billing).
+    pub output_tokens: u32,
+    /// Sum of input and output tokens.
+    pub total_tokens: u32,
+    /// Audio input tokens, a subset of input_tokens when reported by the provider.
+    pub input_audio_tokens: u32,
+    /// Time in seconds to acquire the connection. (WebSocket only)
+    pub acquire_time: f64,
+    /// Whether the connection was reused from a pool. (WebSocket only)
+    pub connection_reused: bool,
+    pub metadata: Option<crate::generated::records::Metadata>,
+}
+
+impl From<&lk_agents_abi::metrics::base::SttMetrics> for SttMetrics {
+    fn from(v: &lk_agents_abi::metrics::base::SttMetrics) -> Self {
+        SttMetrics {
+            r#type: "stt_metrics".to_owned(),
+            label: v.label.to_string(),
+            request_id: v.request_id.to_string(),
+            timestamp: v.timestamp,
+            duration: v.duration,
+            audio_duration: v.audio_duration,
+            streamed: v.streamed,
+            input_tokens: v.input_tokens,
+            output_tokens: v.output_tokens,
+            total_tokens: v.total_tokens,
+            input_audio_tokens: v.input_audio_tokens,
+            acquire_time: v.acquire_time,
+            connection_reused: v.connection_reused,
+            metadata: v.metadata.as_ref().map(|v| crate::generated::records::Metadata::from(v)),
+        }
+    }
+}
+
+impl TryFrom<SttMetrics> for lk_agents_abi::metrics::base::SttMetrics {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: SttMetrics) -> Result<Self, Self::Error> {
+        Ok(lk_agents_abi::metrics::base::SttMetrics {
+            label: v.label,
+            request_id: v.request_id,
+            timestamp: v.timestamp,
+            duration: v.duration,
+            audio_duration: v.audio_duration,
+            streamed: v.streamed,
+            input_tokens: v.input_tokens,
+            output_tokens: v.output_tokens,
+            total_tokens: v.total_tokens,
+            input_audio_tokens: v.input_audio_tokens,
+            acquire_time: v.acquire_time,
+            connection_reused: v.connection_reused,
+            metadata: v.metadata.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
+        })
+    }
+}
+
+#[napi(object, js_name = "VadMetrics")]
+pub struct VadMetrics {
+    #[napi(js_name = "type", ts_type = "'vad_metrics'")]
+    pub r#type: String,
+    pub label: String,
+    pub timestamp: f64,
+    pub idle_time: f64,
+    pub inference_duration_total: f64,
+    pub inference_count: u32,
+    pub metadata: Option<crate::generated::records::Metadata>,
+}
+
+impl From<&lk_agents_abi::metrics::base::VadMetrics> for VadMetrics {
+    fn from(v: &lk_agents_abi::metrics::base::VadMetrics) -> Self {
+        VadMetrics {
+            r#type: "vad_metrics".to_owned(),
+            label: v.label.to_string(),
+            timestamp: v.timestamp,
+            idle_time: v.idle_time,
+            inference_duration_total: v.inference_duration_total,
+            inference_count: v.inference_count,
+            metadata: v.metadata.as_ref().map(|v| crate::generated::records::Metadata::from(v)),
+        }
+    }
+}
+
+impl TryFrom<VadMetrics> for lk_agents_abi::metrics::base::VadMetrics {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: VadMetrics) -> Result<Self, Self::Error> {
+        Ok(lk_agents_abi::metrics::base::VadMetrics {
+            label: v.label,
+            timestamp: v.timestamp,
+            idle_time: v.idle_time,
+            inference_duration_total: v.inference_duration_total,
+            inference_count: v.inference_count,
+            metadata: v.metadata.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
+        })
+    }
+}
+
+#[napi(object, js_name = "EouMetrics")]
+pub struct EouMetrics {
+    #[napi(js_name = "type", ts_type = "'eou_metrics'")]
+    pub r#type: String,
+    pub timestamp: f64,
+    /// Amount of time between the end of speech from VAD and the decision to end the user's turn.
+    /// Set to 0.0 if the end of speech was not detected.
+    pub end_of_utterance_delay: f64,
+    /// Time taken to obtain the transcript after the end of the user's speech.
+    /// Set to 0.0 if the end of speech was not detected.
+    pub transcription_delay: f64,
+    /// Time taken to invoke the user's `Agent.on_user_turn_completed` callback.
+    pub on_user_turn_completed_delay: f64,
+    pub speech_id: Option<String>,
+    pub metadata: Option<crate::generated::records::Metadata>,
+}
+
+impl From<&lk_agents_abi::metrics::base::EouMetrics> for EouMetrics {
+    fn from(v: &lk_agents_abi::metrics::base::EouMetrics) -> Self {
+        EouMetrics {
+            r#type: "eou_metrics".to_owned(),
+            timestamp: v.timestamp,
+            end_of_utterance_delay: v.end_of_utterance_delay,
+            transcription_delay: v.transcription_delay,
+            on_user_turn_completed_delay: v.on_user_turn_completed_delay,
+            speech_id: v.speech_id.as_ref().map(|v| v.to_string()),
+            metadata: v.metadata.as_ref().map(|v| crate::generated::records::Metadata::from(v)),
+        }
+    }
+}
+
+impl TryFrom<EouMetrics> for lk_agents_abi::metrics::base::EouMetrics {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: EouMetrics) -> Result<Self, Self::Error> {
+        Ok(lk_agents_abi::metrics::base::EouMetrics {
+            timestamp: v.timestamp,
+            end_of_utterance_delay: v.end_of_utterance_delay,
+            transcription_delay: v.transcription_delay,
+            on_user_turn_completed_delay: v.on_user_turn_completed_delay,
+            speech_id: v.speech_id,
+            metadata: v.metadata.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
+        })
+    }
+}
+
+/// Per-inference metrics emitted by the EOT model on each prediction.
+#[napi(object, js_name = "EotInferenceMetrics")]
+pub struct EotInferenceMetrics {
+    #[napi(js_name = "type", ts_type = "'eot_inference_metrics'")]
+    pub r#type: String,
+    pub timestamp: f64,
+    /// Earliest audio creation time in an inference to response receive time.
+    pub total_duration: f64,
+    /// Latest audio creation time in an inference to response receive time.
+    pub detection_delay: f64,
+    /// Server side model inference time.
+    pub prediction_duration: f64,
+    /// Number of inference requests made during one inference.
+    pub num_requests: u32,
+    pub metadata: Option<crate::generated::records::Metadata>,
+}
+
+impl From<&lk_agents_abi::metrics::base::EotInferenceMetrics> for EotInferenceMetrics {
+    fn from(v: &lk_agents_abi::metrics::base::EotInferenceMetrics) -> Self {
+        EotInferenceMetrics {
+            r#type: "eot_inference_metrics".to_owned(),
+            timestamp: v.timestamp,
+            total_duration: v.total_duration,
+            detection_delay: v.detection_delay,
+            prediction_duration: v.prediction_duration,
+            num_requests: v.num_requests,
+            metadata: v.metadata.as_ref().map(|v| crate::generated::records::Metadata::from(v)),
+        }
+    }
+}
+
+impl TryFrom<EotInferenceMetrics> for lk_agents_abi::metrics::base::EotInferenceMetrics {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: EotInferenceMetrics) -> Result<Self, Self::Error> {
+        Ok(lk_agents_abi::metrics::base::EotInferenceMetrics {
+            timestamp: v.timestamp,
+            total_duration: v.total_duration,
+            detection_delay: v.detection_delay,
+            prediction_duration: v.prediction_duration,
+            num_requests: v.num_requests,
+            metadata: v.metadata.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
+        })
+    }
+}
+
+#[napi(object, js_name = "RealtimeModelMetrics")]
+pub struct RealtimeModelMetrics {
+    #[napi(js_name = "type", ts_type = "'realtime_model_metrics'")]
+    pub r#type: String,
+    pub label: String,
+    pub request_id: String,
+    /// The timestamp of the response creation.
+    pub timestamp: f64,
+    /// The duration of the response from created to done in seconds.
+    pub duration: f64,
+    /// The duration of the session connection in seconds (for session-based billing like xAI).
+    pub session_duration: f64,
+    /// Time to first audio token in seconds. -1 if no audio token was sent.
+    pub ttft: f64,
+    /// Whether the request was cancelled.
+    pub cancelled: bool,
+    /// The number of input tokens used in the Response, including text and audio tokens.
+    pub input_tokens: u32,
+    /// The number of output tokens sent in the Response, including text and audio tokens.
+    pub output_tokens: u32,
+    /// The total number of tokens in the Response.
+    pub total_tokens: u32,
+    /// The number of tokens per second.
+    pub tokens_per_second: f64,
+    /// Details about the input tokens used in the Response.
+    pub input_token_details: crate::generated::records::InputTokenDetails,
+    /// Details about the output tokens used in the Response.
+    pub output_token_details: crate::generated::records::OutputTokenDetails,
+    /// Time in seconds to acquire the connection. (WebSocket only)
+    pub acquire_time: f64,
+    /// Whether the connection was reused from a pool. (WebSocket only)
+    pub connection_reused: bool,
+    pub metadata: Option<crate::generated::records::Metadata>,
+}
+
+impl From<&lk_agents_abi::metrics::base::RealtimeModelMetrics> for RealtimeModelMetrics {
+    fn from(v: &lk_agents_abi::metrics::base::RealtimeModelMetrics) -> Self {
+        RealtimeModelMetrics {
+            r#type: "realtime_model_metrics".to_owned(),
+            label: v.label.to_string(),
+            request_id: v.request_id.to_string(),
+            timestamp: v.timestamp,
+            duration: v.duration,
+            session_duration: v.session_duration,
+            ttft: v.ttft,
+            cancelled: v.cancelled,
+            input_tokens: v.input_tokens,
+            output_tokens: v.output_tokens,
+            total_tokens: v.total_tokens,
+            tokens_per_second: v.tokens_per_second,
+            input_token_details: crate::generated::records::InputTokenDetails::from(&v.input_token_details),
+            output_token_details: crate::generated::records::OutputTokenDetails::from(&v.output_token_details),
+            acquire_time: v.acquire_time,
+            connection_reused: v.connection_reused,
+            metadata: v.metadata.as_ref().map(|v| crate::generated::records::Metadata::from(v)),
+        }
+    }
+}
+
+impl TryFrom<RealtimeModelMetrics> for lk_agents_abi::metrics::base::RealtimeModelMetrics {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: RealtimeModelMetrics) -> Result<Self, Self::Error> {
+        Ok(lk_agents_abi::metrics::base::RealtimeModelMetrics {
+            label: v.label,
+            request_id: v.request_id,
+            timestamp: v.timestamp,
+            duration: v.duration,
+            session_duration: v.session_duration,
+            ttft: v.ttft,
+            cancelled: v.cancelled,
+            input_tokens: v.input_tokens,
+            output_tokens: v.output_tokens,
+            total_tokens: v.total_tokens,
+            tokens_per_second: v.tokens_per_second,
+            input_token_details: v.input_token_details.try_into()?,
+            output_token_details: v.output_token_details.try_into()?,
+            acquire_time: v.acquire_time,
+            connection_reused: v.connection_reused,
+            metadata: v.metadata.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
+        })
+    }
+}
+
+#[napi(object, js_name = "InterruptionMetrics")]
+pub struct InterruptionMetrics {
+    #[napi(js_name = "type", ts_type = "'interruption_metrics'")]
+    pub r#type: String,
+    pub timestamp: f64,
+    /// Latest RTT (Round Trip Time) time taken to perform the inference, in seconds.
+    pub total_duration: f64,
+    /// Latest time taken to perform the inference from the model side, in seconds.
+    pub prediction_duration: f64,
+    /// Latest total time from the onset of the speech to the final prediction, in seconds.
+    pub detection_delay: f64,
+    /// Number of interruptions detected, incrementally counted.
+    pub num_interruptions: u32,
+    /// Number of backchannels detected, incrementally counted.
+    pub num_backchannels: u32,
+    /// Number of requests sent to the interruption detection model, incrementally counted.
+    pub num_requests: u32,
+    pub metadata: Option<crate::generated::records::Metadata>,
+}
+
+impl From<&lk_agents_abi::metrics::base::InterruptionMetrics> for InterruptionMetrics {
+    fn from(v: &lk_agents_abi::metrics::base::InterruptionMetrics) -> Self {
+        InterruptionMetrics {
+            r#type: "interruption_metrics".to_owned(),
+            timestamp: v.timestamp,
+            total_duration: v.total_duration,
+            prediction_duration: v.prediction_duration,
+            detection_delay: v.detection_delay,
+            num_interruptions: v.num_interruptions,
+            num_backchannels: v.num_backchannels,
+            num_requests: v.num_requests,
+            metadata: v.metadata.as_ref().map(|v| crate::generated::records::Metadata::from(v)),
+        }
+    }
+}
+
+impl TryFrom<InterruptionMetrics> for lk_agents_abi::metrics::base::InterruptionMetrics {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: InterruptionMetrics) -> Result<Self, Self::Error> {
+        Ok(lk_agents_abi::metrics::base::InterruptionMetrics {
+            timestamp: v.timestamp,
+            total_duration: v.total_duration,
+            prediction_duration: v.prediction_duration,
+            detection_delay: v.detection_delay,
+            num_interruptions: v.num_interruptions,
+            num_backchannels: v.num_backchannels,
+            num_requests: v.num_requests,
+            metadata: v.metadata.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
+        })
+    }
+}
+
+#[napi(object, js_name = "AvatarMetrics")]
+pub struct AvatarMetrics {
+    #[napi(js_name = "type", ts_type = "'avatar_metrics'")]
+    pub r#type: String,
+    pub timestamp: f64,
+    /// Delay between forwarding the first audio frame to the avatar and the playback started.
+    pub playback_latency: f64,
+    /// Time when the avatar session was started.
+    pub session_started_time: Option<f64>,
+    /// Time when the avatar participant joined and started video track.
+    pub avatar_joined_time: Option<f64>,
+    pub metadata: Option<crate::generated::records::Metadata>,
+}
+
+impl From<&lk_agents_abi::metrics::base::AvatarMetrics> for AvatarMetrics {
+    fn from(v: &lk_agents_abi::metrics::base::AvatarMetrics) -> Self {
+        AvatarMetrics {
+            r#type: "avatar_metrics".to_owned(),
+            timestamp: v.timestamp,
+            playback_latency: v.playback_latency,
+            session_started_time: v.session_started_time,
+            avatar_joined_time: v.avatar_joined_time,
+            metadata: v.metadata.as_ref().map(|v| crate::generated::records::Metadata::from(v)),
+        }
+    }
+}
+
+impl TryFrom<AvatarMetrics> for lk_agents_abi::metrics::base::AvatarMetrics {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: AvatarMetrics) -> Result<Self, Self::Error> {
+        Ok(lk_agents_abi::metrics::base::AvatarMetrics {
+            timestamp: v.timestamp,
+            playback_latency: v.playback_latency,
+            session_started_time: v.session_started_time,
+            avatar_joined_time: v.avatar_joined_time,
+            metadata: v.metadata.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
+        })
+    }
+}
+
 #[napi(object, js_name = "Metadata")]
 pub struct Metadata {
     pub model_name: Option<String>,
@@ -3090,6 +3566,95 @@ impl From<FunctionToolCall> for lk_agents_abi::FunctionToolCall {
             arguments: v.arguments,
             call_id: v.call_id,
             extra: v.extra,
+        }
+    }
+}
+
+#[napi(object, js_name = "InputTokenDetails")]
+pub struct InputTokenDetails {
+    pub audio_tokens: u32,
+    pub text_tokens: u32,
+    pub image_tokens: u32,
+    pub cached_tokens: u32,
+    pub cached_tokens_details: Option<crate::generated::records::CachedTokenDetails>,
+}
+
+impl From<&lk_agents_abi::metrics::base::InputTokenDetails> for InputTokenDetails {
+    fn from(v: &lk_agents_abi::metrics::base::InputTokenDetails) -> Self {
+        InputTokenDetails {
+            audio_tokens: v.audio_tokens,
+            text_tokens: v.text_tokens,
+            image_tokens: v.image_tokens,
+            cached_tokens: v.cached_tokens,
+            cached_tokens_details: v.cached_tokens_details.as_ref().map(|v| crate::generated::records::CachedTokenDetails::from(v)),
+        }
+    }
+}
+
+impl TryFrom<InputTokenDetails> for lk_agents_abi::metrics::base::InputTokenDetails {
+    type Error = crate::host_error::JsError;
+
+    fn try_from(v: InputTokenDetails) -> Result<Self, Self::Error> {
+        Ok(lk_agents_abi::metrics::base::InputTokenDetails {
+            audio_tokens: v.audio_tokens,
+            text_tokens: v.text_tokens,
+            image_tokens: v.image_tokens,
+            cached_tokens: v.cached_tokens,
+            cached_tokens_details: v.cached_tokens_details.map(|v| Ok::<_, crate::host_error::JsError>(v.try_into()?)).transpose()?,
+        })
+    }
+}
+
+#[napi(object, js_name = "OutputTokenDetails")]
+pub struct OutputTokenDetails {
+    pub text_tokens: u32,
+    pub audio_tokens: u32,
+    pub image_tokens: u32,
+}
+
+impl From<&lk_agents_abi::metrics::base::OutputTokenDetails> for OutputTokenDetails {
+    fn from(v: &lk_agents_abi::metrics::base::OutputTokenDetails) -> Self {
+        OutputTokenDetails {
+            text_tokens: v.text_tokens,
+            audio_tokens: v.audio_tokens,
+            image_tokens: v.image_tokens,
+        }
+    }
+}
+
+impl From<OutputTokenDetails> for lk_agents_abi::metrics::base::OutputTokenDetails {
+    fn from(v: OutputTokenDetails) -> Self {
+        lk_agents_abi::metrics::base::OutputTokenDetails {
+            text_tokens: v.text_tokens,
+            audio_tokens: v.audio_tokens,
+            image_tokens: v.image_tokens,
+        }
+    }
+}
+
+#[napi(object, js_name = "CachedTokenDetails")]
+pub struct CachedTokenDetails {
+    pub audio_tokens: u32,
+    pub text_tokens: u32,
+    pub image_tokens: u32,
+}
+
+impl From<&lk_agents_abi::metrics::base::CachedTokenDetails> for CachedTokenDetails {
+    fn from(v: &lk_agents_abi::metrics::base::CachedTokenDetails) -> Self {
+        CachedTokenDetails {
+            audio_tokens: v.audio_tokens,
+            text_tokens: v.text_tokens,
+            image_tokens: v.image_tokens,
+        }
+    }
+}
+
+impl From<CachedTokenDetails> for lk_agents_abi::metrics::base::CachedTokenDetails {
+    fn from(v: CachedTokenDetails) -> Self {
+        lk_agents_abi::metrics::base::CachedTokenDetails {
+            audio_tokens: v.audio_tokens,
+            text_tokens: v.text_tokens,
+            image_tokens: v.image_tokens,
         }
     }
 }

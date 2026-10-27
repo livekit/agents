@@ -112,53 +112,15 @@ impl WorkflowInstructions {
     }
 }
 
-/// The `instructions: WorkflowInstructions | Instructions | str` parameter; `NOT_GIVEN` is `None`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InstructionsArg {
-    Workflow(WorkflowInstructions),
-    /// The `Instructions` and `str` arms, passed through without a template.
-    Fixed(Instructions),
-}
+pub use lk_agents_abi::voice::workflows::{InstructionsArg, WorkflowInstructionsArg};
 
-/// The `instructions` argument as the host passes it: a `WorkflowInstructions` (it carries
-/// `persona` and `extra`) fills the built-in template, anything else is fixed instructions.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for InstructionsArg {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use lk_agents_abi::python::MaybeNull;
-        use pyo3::types::PyAnyMethods as _;
-        if obj.hasattr("persona")? && obj.hasattr("extra")? {
-            let persona: MaybeNull<Instructions> = obj.getattr("persona")?.extract()?;
-            let extra: Instructions = obj.getattr("extra")?.extract()?;
-            return Ok(InstructionsArg::Workflow(WorkflowInstructions {
-                persona: match persona {
-                    MaybeNull::Given(persona) => Some(TemplateValue::Modal(persona)),
-                    MaybeNull::NotGiven | MaybeNull::Null => None,
-                },
-                extra: Some(TemplateValue::Modal(extra)),
-            }));
+/// The host's sections, substituted modally.
+impl From<WorkflowInstructionsArg> for WorkflowInstructions {
+    fn from(w: WorkflowInstructionsArg) -> Self {
+        WorkflowInstructions {
+            persona: w.persona.given().map(TemplateValue::Modal),
+            extra: Some(TemplateValue::Modal(w.extra)),
         }
-        Ok(InstructionsArg::Fixed(obj.extract()?))
-    }
-}
-
-impl From<&str> for InstructionsArg {
-    fn from(s: &str) -> Self {
-        InstructionsArg::Fixed(Instructions::plain(s))
-    }
-}
-
-impl From<Instructions> for InstructionsArg {
-    fn from(i: Instructions) -> Self {
-        InstructionsArg::Fixed(i)
-    }
-}
-
-impl From<WorkflowInstructions> for InstructionsArg {
-    fn from(w: WorkflowInstructions) -> Self {
-        InstructionsArg::Workflow(w)
     }
 }
 

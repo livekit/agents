@@ -13,7 +13,7 @@ use lk_agents_abi::Vocabulary;
 pub use lk_agents_abi::voice::session_options::{
     Expressive, DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides,
     HostValue, InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions,
-    RecordingOverrides, ResolvedEndpointing, ResolvedInterruption, ResolvedPreemptiveGeneration,
+    RecordingOverrides, RecordingRequest, ResolvedEndpointing, ResolvedInterruption, ResolvedPreemptiveGeneration,
     ResolvedSessionOptions, ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet,
     TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs,
 };
@@ -432,30 +432,6 @@ pub fn resolved_session_options(
         transcription_timeout: transcription_timeout.resolved().map(secs),
         aec_warmup_duration: aec_warmup.resolved().map(secs),
         session_close_transcript_timeout: secs(session_close_transcript_timeout.resolved()),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecordingRequest {
-    All(bool),
-    Granular(RecordingOverrides),
-}
-
-/// `record=True | False | {...}`, read once; `bool` first, so a bool gets the right error.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for RecordingRequest {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        if let Ok(b) = obj.extract::<bool>() {
-            return Ok(RecordingRequest::All(b));
-        }
-        let dict = obj.cast::<pyo3::types::PyDict>().map_err(|_| {
-            pyo3::exceptions::PyValueError::new_err(
-                "record must be a bool or a RecordingOptions dict",
-            )
-        })?;
-        Ok(RecordingRequest::Granular(dict.extract::<RecordingOverrides>()?))
     }
 }
 

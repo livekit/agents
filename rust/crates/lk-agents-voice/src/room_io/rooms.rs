@@ -11,21 +11,8 @@ use lk_agents_rtc::{
     RtcRoom, StreamInfo, UnknownDisconnectReason,
 };
 
-#[cfg(feature = "python")]
 use crate::agent_session::SessionRoom;
 use crate::agent_session::Timebase;
-
-/// The running asyncio loop's clock when it is on virtual time.
-#[cfg(feature = "python")]
-fn loop_clock() -> Option<Arc<dyn lk_agents_abi::Clock>> {
-    let runtime = pyo3::Python::try_attach(lk_agents_abi::python::LoopRuntime::current).flatten();
-    runtime.map(|rt| rt.clock())
-}
-
-#[cfg(not(feature = "python"))]
-fn loop_clock() -> Option<Arc<dyn lk_agents_abi::Clock>> {
-    None
-}
 
 /// 20 ms, the frame the room's own tests push. Not configurable: everything downstream rebuffers.
 const FRAME_MS: u32 = 20;
@@ -64,13 +51,19 @@ pub struct ScriptedRoom {
 
 #[lk_agents_abi::host(object(name = "FakeRoom", as_dyn(RtcRoom = room, SessionRoom = session_room)))]
 impl ScriptedRoom {
-    /// `sample_rate` is what the room carries; 48 kHz is what a real WebRTC track publishes.
+    /// `sample_rate` is what the room carries; 48 kHz is what a real WebRTC track publishes. On
+    /// the host loop's virtual clock when it has one, else on a virtual clock of its own.
     #[host(new(defaults(name = "fake".to_owned(), sample_rate = 48_000)))]
-    pub fn new(name: String, sample_rate: u32) -> Result<Self, RoomRefused> {
+    pub fn new(
+        name: String,
+        sample_rate: u32,
+        #[host(ambient)] loop_clock: lk_agents_abi::LoopClock,
+    ) -> Result<Self, RoomRefused> {
         if sample_rate == 0 || !sample_rate.is_multiple_of(1_000) {
             return Err(RoomRefused::SampleRate);
         }
-        let time = loop_clock()
+        let time = loop_clock
+            .0
             .map(Timebase::of_clock)
             .unwrap_or_else(|| Timebase::from_virtual(Arc::new(VirtualClock::new())));
         let rtc = FakeRtc::new(time.clock());
@@ -95,14 +88,14 @@ impl ScriptedRoom {
     }
 
     /// The room and its clock, as a session is built on them.
-    pub fn session_room(&self) -> Arc<dyn crate::agent_session::SessionRoom> {
+    pub fn session_room(&self) -> Arc<dyn SessionRoom> {
         Arc::new(crate::agent_session::FixedRoom { rtc: self.room(), time: self.timebase() })
     }
 
     /// The room's virtual clock as the handle a provider's `_bind_session_clock` takes.
     #[host(getter)]
-    pub fn session_clock(&self) -> Timebase {
-        self.timebase()
+    pub fn session_clock(&self) -> lk_agents_abi::SessionClock {
+        lk_agents_abi::SessionClock(self.time.clock())
     }
 
     #[host(getter)]
@@ -243,17 +236,15 @@ pub struct OfflineRoom {
 #[lk_agents_abi::host(object(as_dyn(RtcRoom = room, SessionRoom = session_room)))]
 impl OfflineRoom {
     #[host(new(defaults(name = "console".to_owned())))]
-    pub fn new(name: String) -> Result<Self, RoomRefused> {
+    pub fn new(
+        name: String,
+        #[host(ambient)] clock: Arc<dyn lk_agents_abi::Clock>,
+    ) -> Result<Self, RoomRefused> {
         if name.is_empty() {
             return Err(RoomRefused::NoName);
         }
         // One clock, shared: the room gets the timebase's clock (`FakeRtc::offline` says why).
-        #[cfg(feature = "python")]
-        let time = Timebase::of_clock(
-            <Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient(),
-        );
-        #[cfg(not(feature = "python"))]
-        let time = Timebase::real();
+        let time = Timebase::of_clock(clock);
         let (rtc, room) = FakeRtc::offline(&name, time.clock());
         Ok(OfflineRoom { _rtc: rtc, room, time })
     }
@@ -269,7 +260,7 @@ impl OfflineRoom {
     }
 
     /// The room and its clock, as a session is built on them: an offline one.
-    pub fn session_room(&self) -> Arc<dyn crate::agent_session::SessionRoom> {
+    pub fn session_room(&self) -> Arc<dyn SessionRoom> {
         let room = crate::agent_session::FixedRoom { rtc: self.room(), time: self.timebase() };
         Arc::new(Offline(room))
     }
@@ -283,7 +274,7 @@ impl OfflineRoom {
 /// [`OfflineRoom`] as a session sees it: no call behind it.
 struct Offline(crate::agent_session::FixedRoom);
 
-impl crate::agent_session::SessionRoom for Offline {
+impl SessionRoom for Offline {
     fn rtc(&self) -> Arc<dyn RtcRoom> {
         self.0.rtc()
     }

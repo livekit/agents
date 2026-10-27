@@ -86,6 +86,27 @@ pub fn commit_superseded_to_node(e: lk_agents_voice::agent_session::CommitSupers
     JsError::new("CancelledError", e.to_string())
 }
 
+/// `#[host(ambient)]`: the runtime's own value. Node runs on the wall clock, with no virtual loop.
+pub trait Ambient {
+    fn ambient() -> Self;
+}
+
+impl Ambient for std::sync::Arc<dyn lk_agents_abi::Clock> {
+    fn ambient() -> Self {
+        std::sync::Arc::new(lk_agents_abi::RealClock::new())
+    }
+}
+
+impl Ambient for lk_agents_abi::LoopClock {
+    fn ambient() -> Self {
+        lk_agents_abi::LoopClock(None)
+    }
+}
+
+pub fn ambient<T: Ambient>() -> T {
+    T::ambient()
+}
+
 /// `#[host(lenient)]`: a JS value that is not a `T` reads as `T::default()`, never an error --
 /// pyo3's `extract().unwrap_or_default()`.
 pub fn lenient<T: napi::bindgen_prelude::FromNapiValue + Default>(v: &napi::bindgen_prelude::Unknown<'_>) -> T {

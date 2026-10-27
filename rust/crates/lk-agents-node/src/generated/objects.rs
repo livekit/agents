@@ -613,7 +613,7 @@ impl LlmResponseState {
 
 #[napi(js_name = "SessionClock")]
 pub struct SessionClock {
-    pub(crate) inner: lk_agents_voice::agent_session::Timebase,
+    pub(crate) inner: lk_agents_abi::SessionClock,
 }
 
 #[napi]
@@ -846,6 +846,15 @@ impl VoiceSession {
     #[napi(js_name = "releaseUserTurn")]
     pub fn release_user_turn(&self) {
         self.inner.release_user_turn();
+    }
+
+    #[napi(js_name = "hostMetrics")]
+    pub fn host_metrics(&self, env: Env, #[napi(ts_arg_type = "SttMetrics | LlmMetrics | TtsMetrics | VadMetrics | EouMetrics | EotInferenceMetrics | RealtimeModelMetrics | InterruptionMetrics | AvatarMetrics")] record: crate::generated::records::AgentMetrics) -> napi::Result<()> {
+        crate::host_error::run(&env, || {
+            let record = record.try_into()?;
+            self.inner.host_metrics(record).map_err(crate::generated::errors::command_refused_to_node)?;
+            Ok(())
+        })
     }
 
     #[napi(js_name = "ivrFinal")]
@@ -1754,7 +1763,7 @@ impl FakeRoom {
         crate::host_error::run(&env, || {
             let name = name.unwrap_or("fake".to_owned());
             let sample_rate = sample_rate.unwrap_or(48_000);
-            Ok(FakeRoom { inner: lk_agents_voice::room_io::rooms::ScriptedRoom::new(name, sample_rate).map_err(crate::generated::errors::room_refused_to_node)? })
+            Ok(FakeRoom { inner: lk_agents_voice::room_io::rooms::ScriptedRoom::new(name, sample_rate, crate::host_error::ambient()).map_err(crate::generated::errors::room_refused_to_node)? })
         })
     }
 
@@ -1854,7 +1863,7 @@ impl OfflineRoom {
     pub fn new(env: Env, name: Option<String>) -> napi::Result<Self> {
         crate::host_error::run(&env, || {
             let name = name.unwrap_or("console".to_owned());
-            Ok(OfflineRoom { inner: lk_agents_voice::room_io::rooms::OfflineRoom::new(name).map_err(crate::generated::errors::room_refused_to_node)? })
+            Ok(OfflineRoom { inner: lk_agents_voice::room_io::rooms::OfflineRoom::new(name, crate::host_error::ambient()).map_err(crate::generated::errors::room_refused_to_node)? })
         })
     }
 

@@ -135,15 +135,11 @@ thread_local! {
     static CLOCK_SCOPE: std::cell::RefCell<Vec<std::sync::Arc<dyn crate::Clock>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// A value that says which clock the host objects handed with it are on (a session, a fake room).
-/// A wrapper scopes it over the conversions after it, so a proxy built next uses that clock.
-pub trait HostClock {
-    fn host_clock(&self) -> std::sync::Arc<dyn crate::Clock>;
-}
+pub use crate::HostClock;
 
-impl<T: HostClock + ?Sized> HostClock for std::sync::Arc<T> {
-    fn host_clock(&self) -> std::sync::Arc<dyn crate::Clock> {
-        (**self).host_clock()
+impl Ambient for crate::LoopClock {
+    fn ambient() -> Self {
+        crate::LoopClock(Python::try_attach(super::LoopRuntime::current).flatten().map(|rt| rt.clock()))
     }
 }
 
@@ -724,22 +720,13 @@ where
 
 // --------------------------------------------------------------------- a clock handed to a host provider
 
-/// Submitted (`inventory`) by the crate owning `_core.SessionClock`, so a crate below can bind one.
-pub struct SessionClockClass(pub for<'py> fn(Python<'py>, std::sync::Arc<dyn crate::Clock>) -> PyResult<Bound<'py, PyAny>>);
-
-inventory::collect!(SessionClockClass);
-
 /// Duck-typed: a plugin with its own sockets declares no `_bind_session_clock`. An error from a
 /// declared hook propagates.
 pub fn bind_host_provider(py: Python<'_>, obj: &Bound<'_, PyAny>, clock: &std::sync::Arc<dyn crate::Clock>) -> PyResult<()> {
     if !obj.hasattr("_bind_session_clock")? {
         return Ok(());
     }
-    let class = inventory::iter::<SessionClockClass>
-        .into_iter()
-        .next()
-        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no `_core.SessionClock` class is registered"))?;
-    let handle = (class.0)(py, std::sync::Arc::clone(clock))?;
+    let handle = Bound::new(py, crate::SessionClock(std::sync::Arc::clone(clock)))?;
     obj.call_method1("_bind_session_clock", (handle,))?;
     Ok(())
 }

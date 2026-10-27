@@ -215,7 +215,7 @@ pub fn host(attr: TokenStream, item: TokenStream) -> TokenStream {
 use lk_agents_bindgen::to_snake;
 
 /// What each item takes, for a head on the wrong item.
-const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy` on a trait, \
+const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy`/`native` on a trait, \
     `stream` on a type, `client`/`kwargs` on a struct, `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
     `file` on `const _`, or `group` on an inline mod";
 
@@ -234,7 +234,7 @@ fn expand_host(
         (&parsed, head.as_deref()),
         (I::Fn(_) | I::Const(_) | I::Impl(_), Some("export"))
             | (I::Impl(_), Some("object"))
-            | (I::Trait(_), Some("proxy"))
+            | (I::Trait(_), Some("proxy" | "native"))
             | (I::Type(_) | I::Struct(_), Some("stream"))
             | (I::Struct(_), Some("client" | "kwargs"))
             | (I::Enum(_) | I::Struct(_), Some("error" | "string"))
@@ -298,6 +298,7 @@ fn expand(
         (I::Enum(e), Some("string")) => Ok(lk_agents_bindgen::string(&e.ident)),
         (I::Struct(st), Some("string")) => Ok(lk_agents_bindgen::string(&st.ident)),
         (I::Trait(t), Some("proxy")) => lk_agents_bindgen::proxy(attr, t),
+        (I::Trait(t), Some("native")) => lk_agents_bindgen::native(attr, t),
         (I::Type(_) | I::Struct(_), Some("stream")) => lk_agents_bindgen::stream(attr, parsed),
         (I::Struct(st), Some("client")) => lk_agents_bindgen::client(attr, st),
         (I::Struct(st), Some("kwargs")) => lk_agents_bindgen::kwargs(attr, st),

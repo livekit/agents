@@ -307,6 +307,24 @@ pub struct TwilioDial {
     pub original_caller_number: Option<String>,
 }
 
+/// `WorkflowInstructions` as the host passes it: the two fields a workflow's template reads.
+#[derive(Clone, PartialEq, Eq, Host)]
+#[binding(extract)]
+pub struct WorkflowInstructionsArg {
+    /// `NOT_GIVEN` keeps the workflow's built-in persona; `""` removes the section.
+    pub persona: crate::Maybe<crate::voice::session_options::Instructions>,
+    pub extra: crate::voice::session_options::Instructions,
+}
+
+/// A workflow's `instructions: WorkflowInstructions | Instructions | str`: a
+/// `WorkflowInstructions` fills the built-in template, anything else is fixed instructions.
+#[derive(Clone, PartialEq, Eq, Host)]
+#[binding(extract, untagged)]
+pub enum InstructionsArg {
+    Workflow(WorkflowInstructionsArg),
+    Fixed(crate::voice::session_options::Instructions),
+}
+
 // A workflow's collected value reaches the host (`CoreObject`) as its class, over a clone.
 #[cfg(feature = "python")]
 const _: () = {
@@ -318,5 +336,4 @@ const _: () = {
     inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetCardNumberResult> } }
     inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetSecurityCodeResult> } }
     inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetExpirationDateResult> } }
-    inventory::submit! { CoreObjectClass { to_host: core_object_to_host::<GetDOBResult> } }
 };

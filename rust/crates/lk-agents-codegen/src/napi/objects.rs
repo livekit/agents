@@ -189,7 +189,7 @@ fn reply_method(
     let ts = format!("Promise<{inner_ts}>");
     b.push_str(&napi_attr("", &camel(&m.name), Some(&ts), pad));
     let mut args = vec!["&self".to_owned(), "env: &'env Env".to_owned()];
-    args.extend(ps.iter().map(|p| p.decl.clone()));
+    args.extend(ps.iter().filter(|p| !p.decl.is_empty()).map(|p| p.decl.clone()));
     b.push_str(&format!(
         "{pad}pub fn {}<'env>({}) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, {ret_ty}>> {{\n",
         raw(&m.name),
@@ -239,7 +239,7 @@ fn async_method(
     b.push_str(&napi_attr("", &camel(&m.name), Some(&ts), pad));
     let js = if m.sig.params.iter().any(|p| p.name == "env") { "js_env" } else { "env" };
     let mut args = vec!["&self".to_owned(), format!("{js}: &'env Env")];
-    args.extend(ps.iter().map(|p| p.decl.clone()));
+    args.extend(ps.iter().filter(|p| !p.decl.is_empty()).map(|p| p.decl.clone()));
     b.push_str(&format!(
         "{pad}pub fn {}<'env>({}) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, {ret_ty}>> {{\n",
         raw(&m.name),

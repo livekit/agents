@@ -22,7 +22,7 @@ mod tests;
 
 pub use python::{class, error, export_const, export_fn, export_impl, object, string, wire_enum};
 pub use kwargs::{client, kwargs};
-pub use proxy::proxy;
+pub use proxy::{native, proxy};
 pub use record::{RecordDefaults, record};
 pub use stream::stream;
 
