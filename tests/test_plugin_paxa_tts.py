@@ -23,6 +23,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    tokenize,
 )
 from livekit.plugins import paxa
 from livekit.plugins.paxa._utils import (
@@ -44,6 +45,9 @@ _SECRET = "customer-secret-marker"
 # Paxa's live server starts a leg when its buffer ends a sentence or a frame carries a
 # newline, or once the buffer reaches 400 characters.
 _SENTENCE_END = re.compile(r"[.!?…。！？][\"'”’」』)）]*\s*$")
+# Paxa's direction tags. A buffer of these alone starts no leg, and Paxa sends nothing
+# back for it.
+_TAGS = re.compile(r"\[[^\]]*\]|<[^>]*>")
 # Labels for a POST /v1/tts reply that is not the mono pcm a 16 kHz request asked for.
 _MISLABELED = {
     "rate_ignored": "audio/pcm;rate=24000;channels=1",
@@ -132,12 +136,17 @@ class _LiveSession:
             )
             return True
         if kind == "text":
+            if self.script.get("ignore_text"):
+                return True
             self._buffer += frame["text"]
             if (
                 "\n" in frame["text"]
                 or _SENTENCE_END.search(self._buffer)
                 or len(self._buffer) >= 400
             ):
+                if not _TAGS.sub("", self._buffer).strip():
+                    # The tags stay in the buffer and open the next leg.
+                    return True
                 return await self._leg(ws)
             return True
         if kind == "end":
@@ -154,6 +163,8 @@ class _LiveSession:
         seq = self._seq
         text, self._buffer = self._buffer, ""
         self.legs.append(text)
+        # Paxa admits and charges a leg before it starts, which can take a moment.
+        await asyncio.sleep(self.script.get("charge_delay", {}).get(seq, 0.0))
         self.leg_in_flight = True
         try:
             await ws.send_json(
@@ -340,6 +351,18 @@ async def _speak(tts: paxa.TTS, text: str, **conn: Any) -> tuple[bytes, set[str]
         stream.push_text(text[i : i + 4])
     stream.end_input()
     return await _drain(stream, tts.sample_rate)
+
+
+class _LineTokenizer(tokenize.SentenceTokenizer):
+    """Ends a sentence at each newline, so a stream can send a frame of tags alone."""
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        return [line for line in text.split("\n") if line.strip()]
+
+    def stream(self, *, language: str | None = None) -> tokenize.SentenceStream:
+        return tokenize.BufferedSentenceStream(
+            tokenizer=self.tokenize, min_token_len=1, min_ctx_len=1
+        )
 
 
 # Configuration
@@ -771,6 +794,57 @@ async def test_stream_times_out_when_the_session_never_starts(paxa_api: _FakePax
     await tts.aclose()
 
 
+async def test_stream_times_out_when_a_frame_never_starts_a_leg(paxa_api: _FakePaxa) -> None:
+    paxa_api.live_scripts.append({"ignore_text": True})
+    tts = paxa_api.tts()
+    stream = tts.stream(conn_options=_options(timeout=0.3))
+    # The LLM is still writing, but the sentence already sent is owed a leg.
+    stream.push_text("Hello there, nice to meet you. And")
+    with pytest.raises(APITimeoutError):
+        await asyncio.wait_for(_drain(stream), timeout=5)
+    await tts.aclose()
+
+
+async def test_stream_gives_a_frame_sent_late_in_a_silence_the_whole_timeout(
+    paxa_api: _FakePaxa,
+) -> None:
+    paxa_api.live_scripts.append({"charge_delay": {2: 0.5}})
+    tts = paxa_api.tts()
+    stream = tts.stream(conn_options=_options(timeout=1.0))
+    stream.push_text("Hello there, welcome to the cafe. What would")
+    await _eventually(lambda: bool(paxa_api.sessions) and bool(paxa_api.sessions[0].pcm))
+    # The LLM goes quiet for most of the timeout, then Paxa takes a moment to charge the
+    # last sentence's leg.
+    await asyncio.sleep(0.8)
+    stream.push_text(" you like to drink today?")
+    stream.end_input()
+    audio, _ = await _drain(stream)
+    await tts.aclose()
+
+    session = paxa_api.sessions[0]
+    assert len(session.legs) == 2
+    _assert_audio_is(audio, b"".join(session.pcm))
+
+
+async def test_stream_waits_out_a_silence_after_a_frame_of_tags_alone(
+    paxa_api: _FakePaxa,
+) -> None:
+    tts = paxa_api.tts(tokenizer=_LineTokenizer())
+    stream = tts.stream(conn_options=_options(timeout=0.3))
+    stream.push_text("[laughs]\nHello")
+    await _eventually(lambda: bool(paxa_api.sessions) and len(paxa_api.sessions[0].frames) == 2)
+    # Paxa sends nothing back for tags alone, so this silence is the LLM's to keep.
+    await asyncio.sleep(0.8)
+    stream.push_text(" there.\n")
+    stream.end_input()
+    audio, _ = await _drain(stream)
+    await tts.aclose()
+
+    session = paxa_api.sessions[0]
+    assert session.legs == ["[laughs]\nHello there.\n"]
+    _assert_audio_is(audio, b"".join(session.pcm))
+
+
 async def test_stream_interruption_closes_the_session(paxa_api: _FakePaxa) -> None:
     paxa_api.live_scripts.append({"stall_mid_leg": True})
     tts = paxa_api.tts()
@@ -862,11 +936,13 @@ def test_pcm_content_type_must_match_the_request() -> None:
 def test_frame_gate_waits_for_each_leg_and_never_stalls() -> None:
     gate = _FrameGate()
     assert gate.can_send(0.0)
-    gate.sent(0.0)
+    gate.sent(0.0, "Hello there.\n")
     assert not gate.can_send(0.1)
     assert gate.wait_time(0.1) == pytest.approx(0.4)
     # A frame that starts no leg, such as tags alone, does not hold the next one back.
     assert gate.can_send(0.6)
+    # Past the grace, only new text or an event from Paxa gives the sender work.
+    assert gate.wait_time(0.6) is None
 
     gate.leg_started(1)
     assert not gate.can_send(10.0)
@@ -874,3 +950,22 @@ def test_frame_gate_waits_for_each_leg_and_never_stalls() -> None:
     assert not gate.leg_flushed(0)
     assert gate.leg_flushed(1)
     assert gate.can_send(10.0)
+
+
+def test_frame_gate_owes_a_leg_to_each_frame_with_something_to_say() -> None:
+    gate = _FrameGate()
+    # Tags alone start no leg, an unfinished tag included, and Paxa sends nothing back.
+    for text in ("[laughs]\n", " [sighs] <emph></emph> \n", "[whisper\n"):
+        gate.sent(0.0, text)
+    assert gate.owed_since is None
+
+    gate.sent(1.0, "[whispering] Hello.\n")
+    gate.sent(2.0, "And you?\n")
+    assert gate.owed_since == 1.0
+    gate.leg_started(1)
+    assert gate.owed_since is None
+
+    for text in ("สวัสดีครับ\n", "...\n", "3 < 5\n"):
+        gate = _FrameGate()
+        gate.sent(3.0, text)
+        assert gate.owed_since == 3.0

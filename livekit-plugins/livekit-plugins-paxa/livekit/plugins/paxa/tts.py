@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 import weakref
 from dataclasses import dataclass, replace
@@ -73,6 +74,9 @@ _MAX_FRAME_CHARS = 2000
 # How long a sent frame may go without starting a leg (a frame of tags alone starts
 # none) before the next frame goes out anyway.
 _LEG_START_GRACE = 0.5
+# A direction tag, or one still open at a frame's end. Paxa starts no leg for a frame of
+# these alone, and sends nothing back for it.
+_TAG_RE = re.compile(r"\[[^\]]*(?:\]|$)|<[^>]*(?:>|$)")
 
 
 @dataclass
@@ -304,7 +308,8 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class _FrameGate:
-    """Decides when the next text frame may go out on a live session.
+    """Decides when the next text frame may go out on a live session, and tracks the
+    frames Paxa owes a leg.
 
     Paxa runs one synthesis leg at a time and closes a session that queues 32 frames
     behind one. A frame therefore goes out once the previous frame has started a leg and
@@ -313,6 +318,8 @@ class _FrameGate:
 
     def __init__(self) -> None:
         self.open_leg: int | None = None
+        # When the first frame still owed a leg went out.
+        self.owed_since: float | None = None
         self._unacked = 0
         self._last_sent = 0.0
 
@@ -322,17 +329,23 @@ class _FrameGate:
         return self._unacked == 0 or now - self._last_sent >= _LEG_START_GRACE
 
     def wait_time(self, now: float) -> float | None:
-        """Seconds until ``can_send`` turns true without a server event, if it will."""
+        """Seconds until ``can_send`` turns true without a server event, if that is
+        still ahead."""
         if self.open_leg is None and self._unacked:
-            return max(0.0, self._last_sent + _LEG_START_GRACE - now)
+            grace_left = self._last_sent + _LEG_START_GRACE - now
+            if grace_left > 0:
+                return grace_left
         return None
 
-    def sent(self, now: float) -> None:
+    def sent(self, now: float, text: str) -> None:
         self._unacked += 1
         self._last_sent = now
+        if self.owed_since is None and _TAG_RE.sub("", text).strip():
+            self.owed_since = now
 
     def leg_started(self, seq: int) -> None:
         self._unacked = 0
+        self.owed_since = None
         self.open_leg = seq
 
     def leg_flushed(self, seq: int) -> bool:
@@ -377,7 +390,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         text_or_end = asyncio.Event()
         has_text = False
         input_done = False
-        end_sent = False
+        end_sent_at: float | None = None
         started = False
         connection_id: str | None = None
 
@@ -407,7 +420,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             wake.set()
 
         async def _send_loop(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal end_sent
+            nonlocal end_sent_at
             try:
                 await ws.send_str(json.dumps(self._start_frame()))
                 while True:
@@ -423,11 +436,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                         await ws.send_str(
                             json.dumps({"type": "text", "text": text + "\n"}, ensure_ascii=False)
                         )
-                        gate.sent(time.monotonic())
+                        gate.sent(time.monotonic(), text)
 
                     if input_done and not pending:
                         await ws.send_str(json.dumps({"type": "end"}))
-                        end_sent = True
+                        end_sent_at = time.monotonic()
                         return
             except (aiohttp.ClientError, ConnectionError):
                 # The socket is gone. The receive loop reports why it closed.
@@ -435,15 +448,23 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _recv_loop(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal started, connection_id
+            timeout = self._conn_options.timeout
+            wait = timeout
             while True:
                 try:
-                    msg = await ws.receive(timeout=self._conn_options.timeout)
+                    msg = await ws.receive(timeout=wait)
                 except asyncio.TimeoutError:
                     # Silence is expected while the LLM is still writing; it is a failure
                     # only while Paxa owes the session a response.
-                    if not started or gate.open_leg is not None or end_sent:
+                    if not started or gate.open_leg is not None:
+                        raise APITimeoutError("Paxa TTS live session timed out") from None
+                    owed = [t for t in (gate.owed_since, end_sent_at) if t is not None]
+                    # A frame or the end sent late in the silence gets the whole timeout.
+                    wait = min(owed) + timeout - time.monotonic() if owed else timeout
+                    if wait <= 0:
                         raise APITimeoutError("Paxa TTS live session timed out") from None
                     continue
+                wait = timeout
 
                 if msg.type == aiohttp.WSMsgType.BINARY:
                     if not started:
