@@ -53,6 +53,15 @@ impl Rule for SynthesizedSpeechIsPlayed {
             if voice_lost {
                 continue;
             }
+            // The output threw its playback away while the speech's audio waited in it: nothing
+            // of it played, the speech none the wiser (a cut reports where playback stood).
+            let done = speech.done_at().unwrap_or(r.now());
+            let reset = inputs.accepted().any(|a| {
+                a.at > asked && a.at <= done && matches!(a.input, crate::input::Input::SinkReset { .. })
+            });
+            if reset {
+                continue;
+            }
             check.expect(
                 &speech,
                 trace.audio_played(),

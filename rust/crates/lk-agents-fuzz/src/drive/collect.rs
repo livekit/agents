@@ -126,6 +126,13 @@ impl Run {
                 Record::Breach { at, socket, breach } => {
                     self.record.record_breach(at, socket, breach);
                 }
+                Record::Heard { at, generation, ms, whole } => {
+                    self.record.record_heard(at, generation % 255, ms, whole);
+                }
+                Record::Held { at, socket, items } => {
+                    let items = items.into_iter().map(|(g, ms)| (g % 255, ms)).collect();
+                    self.record.record_held(at, socket, items);
+                }
                 Record::Forwarded { at, slot, tags } => {
                     self.record.record_forwarded(at, slot.kind, slot.nth, tags);
                 }

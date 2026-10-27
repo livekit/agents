@@ -158,6 +158,8 @@ pub struct Playout {
     /// A host source: a cut is reported a few scheduler hops after the clear, as the report of
     /// one crosses back from the host's own loop.
     lagging: bool,
+    /// Where what the person heard of a realtime generation is written down.
+    registry: Option<Arc<Registry>>,
 }
 
 /// Hops a lagging output takes to report a cut: more than the driver yields for it.
@@ -175,14 +177,57 @@ struct PlayoutState {
     started: BTreeSet<u32>,
     /// How much of each started segment the speaker has reported played so far.
     played: BTreeMap<u32, Duration>,
+    /// The frames the open segment took, by realtime generation (none for other audio).
+    frames: Vec<(Option<u32>, Duration)>,
+    /// The frames each flushed segment holds.
+    flushed_frames: BTreeMap<u32, Vec<(Option<u32>, Duration)>>,
+    /// Per realtime generation: the audio captured, and how much of it a segment's end settled.
+    captured_by: BTreeMap<u32, Duration>,
+    settled_by: BTreeMap<u32, Duration>,
 }
 
 impl Playout {
     /// One more frame. True when it is the first of a new segment, which then needs an identity.
-    fn captured(&self, duration: Duration) -> bool {
+    fn captured(&self, duration: Duration, generation: Option<u32>) -> bool {
         let mut state = self.state.lock().unwrap();
         state.duration += duration;
+        state.frames.push((generation, duration));
+        if let Some(g) = generation {
+            *state.captured_by.entry(g).or_default() += duration;
+        }
         state.open.is_none()
+    }
+
+    /// What the person heard of each realtime generation in `frames`: the first `played` of it;
+    /// and whether every frame of it captured so far has now played or been cut.
+    fn heard(&self, frames: Vec<(Option<u32>, Duration)>, mut played: Duration) {
+        let mut by: BTreeMap<u32, Duration> = BTreeMap::new();
+        let mut settled: BTreeMap<u32, Duration> = BTreeMap::new();
+        for (generation, len) in frames {
+            let heard = len.min(played);
+            played -= heard;
+            if let Some(g) = generation {
+                *by.entry(g).or_default() += heard;
+                *settled.entry(g).or_default() += len;
+            }
+        }
+        let whole: BTreeMap<u32, bool> = {
+            let mut state = self.state.lock().unwrap();
+            settled
+                .into_iter()
+                .map(|(g, len)| {
+                    let done = state.settled_by.entry(g).or_default();
+                    *done += len;
+                    let done = *done;
+                    (g, done >= state.captured_by.get(&g).copied().unwrap_or_default())
+                })
+                .collect()
+        };
+        if let Some(registry) = &self.registry {
+            for (g, d) in by {
+                registry.record_heard(g, d.as_millis() as u64, whole[&g]);
+            }
+        }
     }
 
     /// The segment the frames since the last flush belong to.
@@ -198,6 +243,8 @@ impl Playout {
         let segment = state.open.take()?;
         let position = std::mem::take(&mut state.duration);
         state.flushed.insert(segment, position);
+        let frames = std::mem::take(&mut state.frames);
+        state.flushed_frames.insert(segment, frames);
         Some(segment)
     }
 
@@ -223,11 +270,21 @@ impl Playout {
             if !state.started.contains(&segment) {
                 return false;
             }
+            // A speaker plays no more than the segment holds.
+            let captured = match state.flushed.get(&segment) {
+                Some(position) => *position,
+                None => state.duration,
+            };
             let so_far = state.played.entry(segment).or_default();
             let offset = *so_far;
+            let played = played.min(captured.saturating_sub(offset));
+            if played.is_zero() {
+                return false;
+            }
             *so_far += played;
-            offset
+            (offset, played)
         };
+        let (offset, played) = offset;
         self.tracker.playback_progressed(at, offset, played);
         true
     }
@@ -246,15 +303,17 @@ impl Playout {
     /// This segment finished playing. True when it was flushed and still owed; a segment still
     /// taking frames cannot have finished, and one already reported is not reported twice.
     pub(super) fn report(&self, segment: u32) -> bool {
-        let position = {
+        let (position, frames) = {
             let mut state = self.state.lock().unwrap();
             state.started.remove(&segment);
             state.played.remove(&segment);
+            let frames = state.flushed_frames.remove(&segment).unwrap_or_default();
             match state.flushed.remove(&segment) {
-                Some(position) => position,
+                Some(position) => (position, frames),
                 None => return false,
             }
         };
+        self.heard(frames, position);
         self.tracker.playback_finished(PlaybackFinished {
             playback_position: position,
             ..Default::default()
@@ -262,18 +321,30 @@ impl Playout {
     }
 
     /// The product threw away the buffer: every segment still outstanding, open or flushed, is
-    /// reported interrupted at the position captured for it, the way a real output does.
+    /// reported interrupted where the speaker had played it to (nothing of one not started), the
+    /// way a real output does.
     fn cleared(&self) -> Vec<u32> {
         let cut: Vec<(u32, Duration)> = {
             let mut state = self.state.lock().unwrap();
-            let mut cut: Vec<(u32, Duration)> =
-                std::mem::take(&mut state.flushed).into_iter().collect();
+            let mut outstanding: Vec<(u32, Vec<(Option<u32>, Duration)>)> = std::mem::take(&mut state.flushed)
+                .into_keys()
+                .map(|s| (s, state.flushed_frames.remove(&s).unwrap_or_default()))
+                .collect();
             if let Some(open) = state.open.take() {
-                cut.push((open, std::mem::take(&mut state.duration)));
+                state.duration = Duration::ZERO;
+                outstanding.push((open, std::mem::take(&mut state.frames)));
             }
+            let played = std::mem::take(&mut state.played);
             state.started.clear();
-            state.played.clear();
-            cut
+            drop(state);
+            outstanding
+                .into_iter()
+                .map(|(segment, frames)| {
+                    let position = played.get(&segment).copied().unwrap_or_default();
+                    self.heard(frames, position);
+                    (segment, position)
+                })
+                .collect()
         };
         let finished: Vec<PlaybackFinished> = cut
             .iter()
@@ -313,8 +384,12 @@ pub struct FakeAudioOutput {
 
 impl FakeAudioOutput {
     pub fn new(registry: Arc<Registry>, pausable: bool, lagging: bool) -> Arc<Self> {
-        let playout =
-            Arc::new(Playout { tracker: Arc::default(), state: Mutex::default(), lagging });
+        let playout = Arc::new(Playout {
+            tracker: Arc::default(),
+            state: Mutex::default(),
+            lagging,
+            registry: Some(registry.clone()),
+        });
         let id = registry.new_audio_output(playout.clone());
         Arc::new(FakeAudioOutput { id, registry, playout, pausable })
     }
@@ -345,7 +420,11 @@ impl AudioOutput for FakeAudioOutput {
     async fn capture(&self, frame: &AudioFrame) -> io::Result<()> {
         // The first frame after a flush opens a segment, as the driver's tracker counts them;
         // the case reports on it from here on, so it needs its identity now, not at the flush.
-        if self.playout.captured(Duration::from_secs_f64(frame.duration())) {
+        let generation = frame.data.as_chunks::<2>().0.iter().find_map(|s| match Tag::decode(i16::from_le_bytes(*s)) {
+            Tag::Generated { generation, .. } => Some(generation),
+            _ => None,
+        });
+        if self.playout.captured(Duration::from_secs_f64(frame.duration()), generation) {
             let control = Control::Segment(self.playout.clone());
             let segment = self.registry.register(Kind::Segment, Detail::None, control).nth;
             self.playout.opened(segment);

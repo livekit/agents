@@ -326,6 +326,20 @@ impl Authored {
         self
     }
 
+    /// The person heard `ms` of a realtime generation's audio.
+    pub fn heard(mut self, generation: u32, ms: u64) -> Self {
+        let at = self.next();
+        self.recording.record_heard(at, generation, ms, true);
+        self
+    }
+
+    /// A realtime socket's server held these messages as its connection closed.
+    pub fn held(mut self, socket: u32, items: Vec<(u32, u64)>) -> Self {
+        let at = self.next();
+        self.recording.record_held(at, socket, items);
+        self
+    }
+
     /// As [`Self::breach`], in the same instant as the fact before it.
     pub fn breach_at_once(mut self, socket: u32, breach: Breach) -> Self {
         let at = Observed::at(self.seq + 1, self.seq + self.later_ms);

@@ -161,6 +161,20 @@ pub enum Record {
         socket: u32,
         breach: crate::record::Breach,
     },
+    /// The person heard so much of a realtime generation's audio; `whole`: every frame of it
+    /// captured so far has played or been cut.
+    Heard {
+        at: Observed,
+        generation: u32,
+        ms: u64,
+        whole: bool,
+    },
+    /// What a realtime socket's server held as a connection closed.
+    Held {
+        at: Observed,
+        socket: u32,
+        items: Vec<(u32, u64)>,
+    },
     /// Frames the driver pushed into a provider stream, as the tags they carried.
     Forwarded {
         at: Observed,
@@ -394,6 +408,16 @@ impl Registry {
     pub(super) fn record_breach(&self, socket: u32, breach: crate::record::Breach) {
         let at = self.stamps.next();
         self.write(Record::Breach { at, socket, breach });
+    }
+
+    pub(super) fn record_heard(&self, generation: u32, ms: u64, whole: bool) {
+        let at = self.stamps.next();
+        self.write(Record::Heard { at, generation, ms, whole });
+    }
+
+    pub(super) fn record_held(&self, socket: u32, items: Vec<(u32, u64)>) {
+        let at = self.stamps.next();
+        self.write(Record::Held { at, socket, items });
     }
 
     fn record_produced(&self, tts: u32, chunk: u16, text: String) {

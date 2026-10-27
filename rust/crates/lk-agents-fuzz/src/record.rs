@@ -580,6 +580,12 @@ pub struct Recording {
     delivered: BTreeMap<(Kind, u32), Observed>,
     /// What each realtime socket's server refused or answered wrongly, by socket.
     breaches: Vec<(Observed, u32, Breach)>,
+    /// Realtime audio the person heard, by generation (`Tag::generated`'s id) and milliseconds:
+    /// what the speaker reported played of it, as each segment finished or was cut.
+    heard_generations: Vec<(Observed, u32, u64, bool)>,
+    /// What a realtime socket's server held as the client closed a connection: each assistant
+    /// message it generated, by generation, with the milliseconds of audio it keeps.
+    held: Vec<(Observed, u32, Vec<(u32, u64)>)>,
     /// Frames the driver forwarded into a provider stream, tag-decoded: the microphone-to-provider
     /// link, made visible so a rule can hold injected VAD and STT events against the audio.
     forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
@@ -858,6 +864,24 @@ impl Recording {
     /// The n-th realtime socket's server refused a frame, or answered from the wrong state.
     pub fn record_breach(&mut self, at: Observed, socket: u32, breach: Breach) {
         self.breaches.push((at, socket, breach));
+    }
+
+    /// The person heard `ms` of a realtime generation's audio.
+    pub fn record_heard(&mut self, at: Observed, generation: u32, ms: u64, whole: bool) {
+        self.heard_generations.push((at, generation, ms, whole));
+    }
+
+    /// The n-th realtime socket's server held these messages as its connection closed.
+    pub fn record_held(&mut self, at: Observed, socket: u32, items: Vec<(u32, u64)>) {
+        self.held.push((at, socket, items));
+    }
+
+    pub fn heard_generations(&self) -> &[(Observed, u32, u64, bool)] {
+        &self.heard_generations
+    }
+
+    pub fn held(&self) -> &[(Observed, u32, Vec<(u32, u64)>)] {
+        &self.held
     }
 
     pub fn record_produced(&mut self, at: Observed, tts: u32, chunk: u16, text: String) {

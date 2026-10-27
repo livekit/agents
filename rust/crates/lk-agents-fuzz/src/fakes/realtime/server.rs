@@ -71,6 +71,9 @@ pub const REFUSALS: &[&str] = &[
 /// The nominal length of a full audio delta, as the corpus has nearly all of them.
 const DELTA_MS: u64 = 400;
 
+/// What a delta's PCM is long: the client plays this much of it.
+const PCM_MS: u64 = (SAMPLES_PER_CHUNK as u64 * 1000) / super::super::SAMPLE_RATE as u64;
+
 /// What the server is told to do of its own accord: the person's speech as its VAD hears it, and
 /// the ways a real server goes wrong. Mirrors `RtEvent`, which is how a case says it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,6 +142,13 @@ struct Item {
     call_id: Option<String>,
     /// Audio delivered for an assistant message, nominal ms: what truncation is judged against.
     audio_ms: u64,
+    /// The same audio as the client plays it (a delta's PCM is shorter than its nominal length):
+    /// what the item keeps of it, a truncation cutting it where the client says.
+    pcm_ms: u64,
+    /// Where a truncation cut it: audio the server had generated and not yet delivered is cut too.
+    cut_ms: Option<u64>,
+    /// The generation that made it (`Hooks::created`'s id), for the server's own messages.
+    source: Option<u32>,
 }
 
 impl Item {
@@ -149,6 +159,9 @@ impl Item {
             role: role.map(str::to_owned),
             call_id: call_id.map(str::to_owned),
             audio_ms: 0,
+            pcm_ms: 0,
+            cut_ms: None,
+            source: None,
         }
     }
 
@@ -351,6 +364,7 @@ impl Server {
                 }
                 if let Some(i) = self.items.iter_mut().find(|i| i.id == item) {
                     i.audio_ms += DELTA_MS;
+                    i.pcm_ms = (i.pcm_ms + PCM_MS).min(i.cut_ms.unwrap_or(u64::MAX));
                 }
                 self.voiced = true;
                 hooks.produced(source, chunk);
@@ -370,7 +384,9 @@ impl Server {
         if resp.is_some() && frame["type"] == "conversation.item.added" {
             frame["previous_item_id"] = json!(self.items.last().map(|i| i.id.clone()));
             let id = frame["item"]["id"].as_str().unwrap_or_default().to_owned();
-            self.items.push(Item::of(&id, &frame["item"]));
+            let mut item = Item::of(&id, &frame["item"]);
+            item.source = resp.and_then(|r| self.responses[r as usize].source);
+            self.items.push(item);
         }
         let ty = frame["type"].as_str().unwrap_or_default();
         if ty == "input_audio_buffer.speech_started" {
@@ -664,6 +680,8 @@ impl Server {
                     return self.refuse(now, "invalid_value", why, false, true, frame);
                 }
                 self.items[at].audio_ms = end.min(audio);
+                self.items[at].pcm_ms = end.min(self.items[at].pcm_ms);
+                self.items[at].cut_ms = Some(end);
                 let ev = self.event_id();
                 let lag = self.answer_lag(now);
                 self.after(now, lag, None, json!({"type": "conversation.item.truncated", "event_id": ev, "item_id": id, "content_index": 0, "audio_end_ms": end}));
@@ -1145,6 +1163,12 @@ impl Server {
     fn put(&mut self, t: Ts, resp: Option<u32>, body: Body) {
         self.seq += 1;
         self.pending.insert((t, self.seq), Pending { resp, body });
+    }
+
+    /// The assistant messages it generated and still holds: by generation, the audio each keeps.
+    pub fn held(&self) -> Vec<(u32, u64)> {
+        let assistant = |i: &&Item| i.role.as_deref() == Some("assistant") && i.kind == "message";
+        self.items.iter().filter(assistant).filter_map(|i| Some((i.source?, i.pcm_ms))).collect()
     }
 
     /// Whether a response is being generated.

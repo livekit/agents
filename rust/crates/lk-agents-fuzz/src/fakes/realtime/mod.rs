@@ -440,11 +440,15 @@ impl WsSender for Sender {
     }
 
     async fn close(&self) {
-        let mine = {
+        let held = {
             let state = self.socket.state.lock().unwrap();
-            state.open && state.connection == self.connection
+            let mine = state.open && state.connection == self.connection;
+            mine.then(|| state.server.as_ref().map(Server::held).unwrap_or_default())
         };
-        if mine {
+        if let Some(held) = held {
+            if let Some(slot) = self.socket.slot.get() {
+                self.socket.registry.record_held(slot.nth, held);
+            }
             self.socket.hang_up(false);
         }
     }
