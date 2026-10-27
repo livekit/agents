@@ -67,7 +67,6 @@ from .types import (
     recording_enabled,
 )
 from .utils import http_context, is_given, wait_for_participant
-from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
@@ -633,7 +632,6 @@ class JobContext:
             span.set_attributes(telemetry_utils.participant_attributes(participant))
             return participant
 
-    @deprecate_params({"e2ee": "Use `encryption` instead."})
     async def connect(
         self,
         *,
@@ -641,8 +639,6 @@ class JobContext:
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
         single_peer_connection: bool | None = None,
-        # deprecated
-        e2ee: rtc.E2EEOptions | None = None,
     ) -> None:
         """Connect to the room. This method should be called only once.
 
@@ -655,7 +651,7 @@ class JobContext:
         await self._run.connect(
             functools.partial(
                 self._connect,
-                encryption or e2ee,
+                encryption,
                 auto_subscribe,
                 rtc_config,
                 single_peer_connection,
