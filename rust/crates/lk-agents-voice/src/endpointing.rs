@@ -100,6 +100,8 @@ pub struct Dynamic {
     agent_ended_at: Option<Ts>,
     /// `_speaking`: between the user's start and end of speech.
     speaking: bool,
+    /// `_agent_speaking`: between the agent's start and end of speech.
+    agent_speaking: bool,
 }
 
 impl Dynamic {
@@ -119,6 +121,7 @@ impl Dynamic {
             agent_started_at: None,
             agent_ended_at: None,
             speaking: false,
+            agent_speaking: false,
         }
     }
 
@@ -166,18 +169,28 @@ impl Dynamic {
     }
 
     fn on_start_of_agent_speech(&mut self, at: Ts) {
+        // The agent started over an open utterance: the stored end is the previous utterance's,
+        // so it moves to just before the agent, keeping the overlap out of the statistics.
+        if !self.agent_speaking
+            && self.speaking
+            && let (Some(start), Some(end)) = (self.utterance_started_at, self.utterance_ended_at)
+            && end < start
+        {
+            self.utterance_ended_at = Some(at.saturating_sub(OVERLAP_BACKDATE));
+        }
         self.agent_started_at = Some(at);
         self.agent_ended_at = None;
-        self.base.overlapping = false;
+        self.agent_speaking = true;
+        self.base.overlapping = self.speaking;
     }
 
     fn on_end_of_agent_speech(&mut self, at: Ts) {
-        // Agent timestamps survive until the next user utterance ends; the ordering check absorbs
-        // the duplicate call.
-        let stale = self.agent_ended_at.is_none_or(|e| Some(e) < self.agent_started_at);
-        if self.agent_started_at.is_some() && stale {
+        // Agent timestamps survive until the next user utterance ends, so the pause across an
+        // agent turn is not learned as an intra-user pause.
+        if self.agent_speaking {
             self.agent_ended_at = Some(at);
         }
+        self.agent_speaking = false;
         self.base.overlapping = false;
     }
 
@@ -186,16 +199,6 @@ impl Dynamic {
             // Duplicate: the interruption path and the VAD path both call this.
             return;
         }
-
-        // A VAD interruption fires before end-of-speech; retro-date the open utterance.
-        if overlapping
-            && let (Some(start), Some(end), Some(agent)) =
-                (self.utterance_started_at, self.utterance_ended_at, self.agent_started_at)
-            && end < start
-        {
-            self.utterance_ended_at = Some(agent.saturating_sub(OVERLAP_BACKDATE));
-        }
-
         self.utterance_started_at = Some(at);
         self.base.overlapping = overlapping;
         self.speaking = true;
@@ -235,8 +238,11 @@ impl Dynamic {
         }
 
         self.utterance_ended_at = Some(at);
-        self.agent_started_at = None;
-        self.agent_ended_at = None;
+        // An agent interval still open keeps its start until its end is recorded.
+        if !self.agent_speaking {
+            self.agent_started_at = None;
+            self.agent_ended_at = None;
+        }
         self.speaking = false;
         self.base.overlapping = false;
         learned
@@ -250,5 +256,32 @@ impl Dynamic {
             }
             (Some(_), None) | (None, Some(_)) | (None, None) => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(ms: u64) -> Ts {
+        Ts::from_nanos(ms * 1_000_000)
+    }
+
+    // Catches: the user's end of speech clearing an agent turn still open, so the pause across
+    // that turn was learned as an intra-user pause and `min_delay` crept up.
+    #[test]
+    fn a_pause_across_an_agent_turn_is_not_learned() {
+        let min = Duration::from_millis(500);
+        let mut d = Dynamic::new(min, Duration::from_secs(3), 0.9);
+        d.on_start_of_speech(at(0), false);
+        d.on_end_of_speech(at(1_000), false);
+        d.on_start_of_agent_speech(at(1_500));
+        // A cough over the agent, ended while it still speaks.
+        d.on_start_of_speech(at(3_000), true);
+        d.on_end_of_speech(at(3_200), false);
+        d.on_end_of_agent_speech(at(4_000));
+        d.on_start_of_speech(at(5_000), false);
+        assert_eq!(d.on_end_of_speech(at(6_000), false), None);
+        assert_eq!(d.min_delay(), min);
     }
 }
