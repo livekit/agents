@@ -72,6 +72,8 @@ pub struct TurnStats {
     /// `self.llm.metrics_metadata` / `self.tts.metrics_metadata`: a pipeline reply's providers.
     pub llm_metadata: Option<lk_agents_abi::MetricsMetadata>,
     pub tts_metadata: Option<lk_agents_abi::MetricsMetadata>,
+    /// `llm_gen_data.generated_extra`, the assistant message's `extra`.
+    pub llm_extra: Extra,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,6 +212,7 @@ impl TurnAccumulator {
                 ChatMessage::text(message_id, Role::Assistant, &self.forwarded_text, created_at);
             msg.interrupted = interrupted || self.tts_failed;
             msg.metrics = metrics;
+            msg.extra = stats.llm_extra;
             msg
         });
 

@@ -259,6 +259,7 @@ async fn pipeline_reply_task_impl(
             llm_started_at: Some(llm_gen_data.started_at),
             llm_metadata: ctx.providers.llm.as_ref().map(|llm| llm.id().metrics_metadata()),
             tts_metadata: ctx.providers.tts.as_ref().map(|tts| tts.id().metrics_metadata()),
+            llm_extra: llm_gen_data.extra,
         },
         _ => TurnStats::default(),
     };

@@ -220,6 +220,9 @@ async fn read_llm_stream(
             for raw in &delta.tool_calls {
                 tools.dispatch(shared, handle, ctx, mint_call(shared, raw));
             }
+            if let Some(extra) = &delta.extra {
+                data.extra.extend(extra.clone());
+            }
             if let Some(text) = &delta.content {
                 if !text.is_empty() {
                     let now = shared.time.wall_secs();
@@ -259,6 +262,8 @@ pub(super) struct LlmGenerationData {
     pub(super) metrics: LlmMetricState,
     /// A model chunk came, not only an `llm_node`'s own text: there was a model call to meter.
     called: bool,
+    /// `generated_extra`: every delta's provider extra, merged; lands on the assistant message.
+    pub(super) extra: lk_agents_abi::Extra,
 }
 
 impl LlmGenerationData {
@@ -270,6 +275,7 @@ impl LlmGenerationData {
             started_at,
             metrics: LlmMetricState::for_host(started_at),
             called: false,
+            extra: lk_agents_abi::Extra::new(),
         }
     }
 
