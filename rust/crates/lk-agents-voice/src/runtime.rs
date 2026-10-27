@@ -8,7 +8,7 @@ use crate::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use crate::trace::ChannelEndCause;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
-use lk_agents_abi::{AbortHandle, AudioFrame, SpawnerExt};
+use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AbortHandle, AudioFrame, SpawnerExt};
 use std::sync::Arc;
 
 pub struct Runtime {
@@ -16,11 +16,13 @@ pub struct Runtime {
     forwarder: AudioForwarder,
     /// Every source's events, in arrival order. Frames never come this way.
     pub queue: tokio::sync::mpsc::UnboundedReceiver<Event>,
-    /// The microphone's frames, straight from its reader.
-    pub frames: tokio::sync::mpsc::UnboundedReceiver<AudioFrame>,
+    /// The microphone's frames, straight from its reader: a second of audio. A full queue holds
+    /// the reader back, as the reference's forwarding loop awaits each frame, so the loss falls to
+    /// the input's own drop-oldest queue and the session never grows without limit.
+    pub frames: tokio::sync::mpsc::Receiver<AudioFrame>,
     /// Where the data plane's reports and a reader's end join the queue.
     reports: Tx,
-    frames_tx: tokio::sync::mpsc::UnboundedSender<AudioFrame>,
+    frames_tx: tokio::sync::mpsc::Sender<AudioFrame>,
     /// The microphone, its id and its reader.
     source: Option<(ResourceId, AbortHandle)>,
 }
@@ -32,7 +34,7 @@ impl Runtime {
         queue: (Tx, tokio::sync::mpsc::UnboundedReceiver<Event>),
         source: Option<ResourceId>,
     ) -> Self {
-        let (frames_tx, frames) = tokio::sync::mpsc::unbounded_channel();
+        let (frames_tx, frames) = tokio::sync::mpsc::channel(AUDIO_QUEUE_FRAMES);
         let (reports, queue) = queue;
         let mut runtime =
             Runtime { driver, forwarder, queue, frames, reports, frames_tx, source: None };
@@ -219,7 +221,7 @@ impl Drop for Runtime {
 /// closes. The input is the host's, not a `HostStream`: nothing to close, so no `Closed`.
 async fn read_audio(
     input: Arc<dyn AudioInput>,
-    frames: tokio::sync::mpsc::UnboundedSender<AudioFrame>,
+    frames: tokio::sync::mpsc::Sender<AudioFrame>,
     mut closing: tokio::sync::watch::Receiver<bool>,
     queue: Tx,
 ) {
@@ -234,8 +236,10 @@ async fn read_audio(
             _ = closing.wait_for(|c| *c) => break ChannelEndCause::Closing,
         };
         // A queue owner that is gone is a session that has returned: nothing to report to.
-        if frames.send(frame).is_err() {
-            return;
+        tokio::select! {
+            biased;
+            sent = frames.send(frame) => if sent.is_err() { return },
+            _ = closing.wait_for(|c| *c) => break ChannelEndCause::Closing,
         }
     };
     let end = ChannelEnd { leg: AUDIO_IN_LEG, cause, sink: None, closed: None, error: None };
