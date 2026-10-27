@@ -195,8 +195,19 @@ def build(stack: str, *, rebuild: bool) -> None:
         subprocess.run(["uv", "venv", "-q", "-p", "3.12", str(venv)], check=True)
     if stack == "ref":
         if fresh:
+            # outside the workspace's config: its overrides drop the published livekit-agents,
+            # which is this package's name
             subprocess.run(
-                ["uv", "pip", "install", "-q", "-e", str(REPO / "livekit-agents"), "pytest"],
+                [
+                    "uv",
+                    "pip",
+                    "install",
+                    "-q",
+                    "--no-config",
+                    "-e",
+                    str(REPO / "livekit-agents"),
+                    "pytest",
+                ],
                 check=True,
                 env=env,
             )
