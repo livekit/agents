@@ -2,20 +2,12 @@ from typing import Literal
 
 ChatModels = Literal[
     "mistral-large-latest",
+    "mistral-large-4",
     "mistral-large-2512",
-    "mistral-large-2411",
     "mistral-medium-latest",
-    "mistral-medium-2508",
-    "mistral-medium-2505",
+    "mistral-medium-3-5",
     "mistral-small-latest",
     "mistral-small-2603",
-    "mistral-small-2506",
-    "ministral-14b-latest",
-    "ministral-14b-2512",
-    "ministral-8b-latest",
-    "ministral-8b-2512",
-    "ministral-3b-latest",
-    "ministral-3b-2512",
 ]
 
 STTModels = Literal[
