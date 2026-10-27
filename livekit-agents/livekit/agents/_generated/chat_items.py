@@ -159,7 +159,6 @@ class ChatMessage(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
     metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
-    hash: bytes | None = Field(default=None, deprecated="hash is deprecated")
 
     @property
     def text_content(self) -> str | None:

@@ -58,7 +58,6 @@ impl Connect {
     pub fn shape(&self) -> WireShape {
         WireShape {
             azure: self.azure.is_some(),
-            azure_legacy: self.azure.as_ref().is_some_and(|a| a.api_version.is_some()),
             drop_model: matches!(self.auth, Auth::Inference { .. }),
         }
     }

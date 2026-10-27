@@ -807,7 +807,24 @@ class Call:
         )
         # emitted as each provider's stream settles, so their order against the state changes is
         # the scheduler's: counted per kind, not ordered
-        session.on("metrics_collected", lambda ev: self.metrics.append(metrics_view(ev.metrics)))
+        if _stack_name() == "next":
+            # the copy surfaces no per-record event (2.0 has ChatMessage.metrics and usage): its
+            # records are read where the session takes them from the core
+            from livekit.agents.voice import agent_session as live
+
+            core_metrics = live._HANDLERS["metrics_collected"]
+
+            def tap(s: Any, wire: dict[str, Any]) -> None:
+                core_metrics(s, wire)
+                if s is session:
+                    record = live._AGENT_METRICS.validate_python(wire["metrics"])
+                    self.metrics.append(metrics_view(record))
+
+            live._HANDLERS["metrics_collected"] = tap
+        else:
+            session.on(
+                "metrics_collected", lambda ev: self.metrics.append(metrics_view(ev.metrics))
+            )
         session.on(
             "session_usage_updated",
             lambda ev: self.metrics.append(f"usage_updated:{len(ev.usage.model_usage)}"),

@@ -12,7 +12,7 @@ from livekit import rtc
 from .. import _core
 from .aio.utils import cancel_and_wait
 
-# deprecated aliases
+# the buffer type and frame helpers plugins use
 AudioBuffer = list[rtc.AudioFrame] | rtc.AudioFrame
 
 combine_frames = rtc.combine_audio_frames

@@ -19,7 +19,6 @@ from .usage import (
     STTModelUsage,
     TTSModelUsage,
 )
-from .usage_collector import UsageCollector, UsageSummary
 from .utils import log_metrics
 
 __all__ = [
@@ -41,9 +40,6 @@ __all__ = [
     "ModelUsage",
     "AgentSessionUsage",
     "ModelUsageCollector",
-    # Deprecated - use ModelUsageCollector and ModelUsage instead
-    "UsageSummary",
-    "UsageCollector",
     "log_metrics",
 ]
 

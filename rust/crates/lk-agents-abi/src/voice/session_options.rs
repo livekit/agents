@@ -459,12 +459,6 @@ pub struct SessionKwargs {
         type_import = "..voice.agent_session:SessionConnectOptions"
     )]
     pub conn_options: HostValue,
-    /// Deprecated; `stt_context_options` supersedes it silently when both are given.
-    #[python(
-        ty = "NotGivenOr[KeytermsOptions]",
-        type_import = "..voice.keyterm_detection:KeytermsOptions"
-    )]
-    pub keyterms_options: HostValue,
 }
 
 /// `AgentSession.update_options(..)`'s option surface (`keyterms` stays host-side).
@@ -521,7 +515,7 @@ debug_record!(UserTurnLimitKwargs { ; max_words, max_duration });
 debug_record!(SessionKwargs {
     turn_handling, stt_context_options, tool_handling, max_tool_steps, min_consecutive_speech_delay,
     expressive, ivr_detection, user_away_timeout, transcription_timeout,
-    session_close_transcript_timeout, conn_options, keyterms_options;
+    session_close_transcript_timeout, conn_options;
     use_tts_aligned_transcript, tts_text_transforms, aec_warmup_duration
 });
 
@@ -926,7 +920,6 @@ mod host {
                 transcription_timeout: item(obj, OWNER, "transcription_timeout")?,
                 session_close_transcript_timeout: item(obj, OWNER, "session_close_transcript_timeout")?,
                 conn_options: item(obj, OWNER, "conn_options")?,
-                keyterms_options: item(obj, OWNER, "keyterms_options")?,
             })
         }
     }

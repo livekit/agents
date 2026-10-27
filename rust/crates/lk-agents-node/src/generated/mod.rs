@@ -1,6 +1,6 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 270 core items bound (121 functions and consts, 75 classes, 73 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 268 core items bound (121 functions and consts, 74 classes, 72 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
@@ -196,8 +196,6 @@
 //! - `NoiseCancellationParams (record NoiseCancellationParams)`: field `participant`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
 //! - `TextInputOptions (record TextInputOptions)`: field `text_input_cb`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
 //! - `AudioOutputOptions (record AudioOutputOptions)`: field `track_publish_options`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
-//! - `RoomInputOptions (record RoomInputOptions)`: field `noise_cancellation`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
-//! - `RoomOutputOptions (record RoomOutputOptions)`: field `audio_publish_options`: `crate::HostRef` has no Node shape (not a declared record, enum or JSON)
 //! - `TextInput (record TextInputEvent)`: field `participant`: `ParticipantIdentity` has no Node shape (not a declared record, enum or JSON)
 //! - `GetDOBResult (record GetDOBResult)`: field `date_of_birth`: `Date` has no Node shape (not a declared record, enum or JSON)
 

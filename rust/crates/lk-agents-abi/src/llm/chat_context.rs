@@ -352,8 +352,7 @@ pub struct MetricsReport {
     pub stt_metadata: Option<MetricsMetadata>,
 }
 
-// `chat_context.py:310`. The deprecated `hash` has no reader: a `host_field`. The text properties
-// keep their bodies in `_bindings` (`text_content` imports `strip_expr_markup` lazily: a cycle).
+// `chat_context.py:310`. The text properties keep their bodies in `_bindings` (`text_content` imports `strip_expr_markup` lazily: a cycle).
 #[derive(Debug, Clone, PartialEq, Host)]
 #[python(
     pydantic,
@@ -361,12 +360,6 @@ pub struct MetricsReport {
     tag = "type",
     tag_value = "message",
     tag_after = "id",
-    host_field(
-        name = "hash",
-        ty = "bytes | None",
-        default = "None",
-        deprecated_msg = "hash is deprecated"
-    ),
     property(
         name = "text_content",
         ret = "str | None",

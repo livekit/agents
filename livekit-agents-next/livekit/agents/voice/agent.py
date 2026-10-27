@@ -46,7 +46,6 @@ from ..llm.tool_context import (
     ToolFlag,
     function_tool,
 )
-from ..log import logger
 from ..types import NOT_GIVEN, APIConnectOptions, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .events import Context_T, UserTurnExceededEvent
@@ -54,7 +53,6 @@ from .turn import TurnHandlingOptions
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
-    from ..llm import mcp
     from .agent_run import AgentRun
     from .agent_session import ExpressiveOptions, VoiceSession
     from .events import RunContext
@@ -168,8 +166,6 @@ class Agent(Generic[Context_T, Output_T]):
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
-        # deprecated
-        mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
         # a plain Agent is named after the variable it is assigned to: the assigning frame's
@@ -215,16 +211,6 @@ class Agent(Generic[Context_T, Output_T]):
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         # the agent layer of the turn options, as written: the core resolves it over the session's
         self._turn_handling: TurnHandlingOptions = turn_handling if is_given(turn_handling) else {}
-
-        if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
-            mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)
-
-        self._mcp_servers = mcp_servers
-        if self._mcp_servers:
-            logger.warning(
-                "passing MCP servers to VoiceSession or Agent is deprecated "
-                "and will be removed in a future version. Use `MCPToolset` instead."
-            )
 
     @property
     def id(self) -> str:
@@ -742,19 +728,6 @@ class Agent(Generic[Context_T, Output_T]):
                 or its configuration.
         """
         return self._expressive
-
-    @property
-    def mcp_servers(self) -> NotGivenOr[list[mcp.MCPServer] | None]:
-        """
-        Retrieves the list of Model Context Protocol (MCP) servers providing external tools.
-
-        If this property was not set at Agent creation, but an ``VoiceSession`` provides MCP servers,
-        the session's MCP servers will be used at runtime instead.
-
-        Returns:
-            NotGivenOr[list[mcp.MCPServer]]: An optional list of MCP servers.
-        """  # noqa: E501
-        return self._mcp_servers
 
     @property
     def vad(self) -> NotGivenOr[vad.VAD | None]:

@@ -117,7 +117,6 @@ impl PyNativeRealtimeModel {
         modalities = None,
         azure_deployment = None,
         entra_token = None,
-        api_version = None,
         azure_defaults = false,
         api_secret = None,
         inference_provider = None,
@@ -138,7 +137,6 @@ impl PyNativeRealtimeModel {
         modalities: Option<Vec<String>>,
         azure_deployment: Option<String>,
         entra_token: Option<String>,
-        api_version: Option<String>,
         azure_defaults: bool,
         api_secret: Option<String>,
         inference_provider: Option<String>,
@@ -215,7 +213,7 @@ impl PyNativeRealtimeModel {
             opts.max_session_duration = v.map(Duration::from_secs_f64);
         }
 
-        let is_azure = azure_deployment.is_some() || entra_token.is_some() || api_version.is_some();
+        let is_azure = azure_deployment.is_some() || entra_token.is_some();
         let auth = if is_inference {
             Auth::Inference {
                 api_key: api_key.unwrap_or_default(),
@@ -231,7 +229,7 @@ impl PyNativeRealtimeModel {
         };
         let connect = Connect {
             base_url,
-            azure: is_azure.then_some(Azure { deployment: azure_deployment, api_version }),
+            azure: is_azure.then_some(Azure { deployment: azure_deployment }),
             auth,
             conn: ApiConnectOptions { max_retry, retry_interval, timeout },
         };

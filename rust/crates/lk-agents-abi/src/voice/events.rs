@@ -200,18 +200,6 @@ pub struct AgentFalseInterruption {
     #[binding(skip, extract_skip)]
     #[python(default_factory = "time.time")]
     pub created_at: f64,
-    // Deprecated, always `None` here; `#[python(deprecated)]` emits the warning shim.
-    #[binding(skip, extract_skip)]
-    #[python(
-        ty = "ChatMessage | None",
-        import = "..llm:ChatMessage",
-        default = "None",
-        deprecated
-    )]
-    pub message: (),
-    #[binding(skip, extract_skip)]
-    #[python(default = "None", deprecated)]
-    pub extra_instructions: Option<String>,
 }
 
 /// Emitted after a batch of function tools finishes executing.
@@ -247,17 +235,6 @@ pub struct FunctionToolsExecuted {
     #[host(rename = "_handoff_required")]
     #[python(private, default = "False")]
     pub handoff_required: bool,
-}
-
-/// Deprecated: use session_usage_updated for usage tracking.
-/// Per-turn latency metrics are available on ChatMessage.metrics.
-#[derive(Host)]
-#[python(pydantic, name = "MetricsCollectedEvent", tag = "type", tag_value = "metrics_collected")]
-pub struct MetricsCollected {
-    #[python(ty = "AgentMetrics", import = "..metrics:AgentMetrics")]
-    pub metrics: (),
-    #[python(default_factory = "time.time")]
-    pub created_at: f64,
 }
 
 #[derive(Host)]
@@ -565,7 +542,6 @@ pub enum AgentEvent {
     UserStateChanged(UserStateChanged),
     AgentStateChanged(AgentStateChanged),
     AgentFalseInterruption(AgentFalseInterruption),
-    MetricsCollected(MetricsCollected),
     SessionUsageUpdated(SessionUsageUpdated),
     ConversationItemAdded(ConversationItemAdded),
     FunctionToolsExecuted(FunctionToolsExecuted),

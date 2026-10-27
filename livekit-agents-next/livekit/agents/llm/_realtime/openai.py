@@ -11,7 +11,6 @@ import os
 from typing import TYPE_CHECKING, Any, Literal
 
 from ... import _core
-from ...log import logger
 from ...types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .. import realtime as llm_realtime
 from ..tool_context import ToolChoice
@@ -54,8 +53,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         entra_token: str | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
-        **kwargs: Any,
+        _azure_defaults: bool = False,
     ) -> None:
         """
         Initialize a Realtime model client for OpenAI or Azure OpenAI.
@@ -79,24 +77,11 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             entra_token (str | None): Azure Entra token auth (alternative to api_key).
             max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
             conn_options (APIConnectOptions): Retry/backoff and connection settings.
-            temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Raises:
             ValueError: If OPENAI_API_KEY is missing in non-Azure mode, or if Azure endpoint cannot be determined when in Azure mode.
         """
-        api_version: str | None = kwargs.get("api_version") or os.getenv("OPENAI_API_VERSION")
-        if kwargs.get("api_version"):
-            logger.warning(
-                "The `api_version` parameter is deprecated and will be removed on April 30, 2026."
-            )
-        elif os.getenv("OPENAI_API_VERSION"):
-            logger.warning(
-                "The OPENAI_API_VERSION environment variable is deprecated and will be removed "
-                "on April 30, 2026."
-            )
-        is_azure = (
-            api_version is not None or entra_token is not None or azure_deployment is not None
-        )
+        is_azure = entra_token is not None or azure_deployment is not None
 
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if api_key is None and not is_azure:
@@ -125,8 +110,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             modalities=modalities or None,
             azure_deployment=azure_deployment,
             entra_token=entra_token,
-            api_version=api_version,
-            azure_defaults=kwargs.get("_azure_defaults", False),
+            azure_defaults=_azure_defaults,
             timeout=conn_options.timeout,
             max_retry=conn_options.max_retry,
             retry_interval=conn_options.retry_interval,
@@ -175,8 +159,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         reasoning: NotGivenOr[Any] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
-        **kwargs: Any,
     ) -> RealtimeModel:
         """
         Create a RealtimeModel configured for Azure OpenAI.
@@ -197,22 +179,10 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models, e.g. ``RealtimeReasoning(effort="low")``.
             http_session (aiohttp.ClientSession | None): Unused; the core owns the connection.
             max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
-            temperature (float | NotGiven): Deprecated; ignored by Realtime v1.
 
         Raises:
             ValueError: If credentials are missing, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
         """
-        if kwargs.get("api_version"):
-            logger.warning(
-                "The `api_version` parameter in `with_azure` is deprecated and will be removed "
-                "on April 30, 2026."
-            )
-        elif os.getenv("OPENAI_API_VERSION"):
-            logger.warning(
-                "The OPENAI_API_VERSION environment variable is deprecated and will be removed "
-                "on April 30, 2026."
-            )
-
         api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         if api_key is None and entra_token is None:
             raise ValueError(
@@ -241,7 +211,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             reasoning=reasoning,
             api_key=api_key,
             azure_deployment=azure_deployment,
-            api_version=kwargs.get("api_version") or os.getenv("OPENAI_API_VERSION"),
             entra_token=entra_token,
             base_url=base_url,
             max_session_duration=max_session_duration,
@@ -261,7 +230,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         tracing: NotGivenOr[Any] = NOT_GIVEN,
         truncation: NotGivenOr[Any] = NOT_GIVEN,
         reasoning: NotGivenOr[Any] = NOT_GIVEN,
-        temperature: NotGivenOr[float] = NOT_GIVEN,  # deprecated, unused in v1
     ) -> None:
         """Change the model's options; every live session sends what changed."""
         self._native.update_options(

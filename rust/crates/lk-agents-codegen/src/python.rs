@@ -396,9 +396,6 @@ fn imports(
         if t.tag.is_some() {
             needs(&mut stdlib, "typing", "Literal");
         }
-        if t.host_fields.iter().any(|h| h.deprecated_msg.is_some()) {
-            needs_s(&mut third, "pydantic", "Field");
-        }
         if t.host_fields.iter().any(|h| h.private) {
             needs_s(&mut third, "pydantic", "PrivateAttr");
         }
@@ -430,9 +427,6 @@ fn imports(
             }
             if f.serializer.is_some() {
                 needs_s(&mut third, "pydantic", "field_serializer");
-            }
-            if f.deprecated_msg.is_some() {
-                needs_s(&mut third, "pydantic", "Field");
             }
             if let Some(factory) = &f.default_factory {
                 // A dotted name (`time.time`) imports its module; an expression such as
@@ -482,14 +476,6 @@ fn imports(
                         }
                     }
                 }
-            }
-            if f.deprecated {
-                match rel.iter_mut().find(|(m, _)| m == "..log") {
-                    Some((_, names)) if names.iter().any(|n| n == "logger") => {}
-                    Some((_, names)) => names.push("logger".to_owned()),
-                    None => rel.push(("..log".to_owned(), vec!["logger".to_owned()])),
-                }
-                needs(&mut stdlib, "typing", "Any");
             }
         }
         // A union member may be foreign.
@@ -918,12 +904,6 @@ fn class(all: &[Decl], d: &Decl) -> Result<String, String> {
             docstring(&mut b, &lines, 8);
         }
         b.push_str(&format!("        return _bindings.{}(self)\n", m.hook));
-        if let Some(setter) = &m.setter {
-            b.push('\n');
-            b.push_str(&format!("    @{}.setter\n", m.name));
-            b.push_str(&format!("    def {}(self, value: {}) -> None:\n", m.name, m.ret));
-            b.push_str(&format!("        _bindings.{setter}(self, value)\n"));
-        }
         body = true;
     }
 
@@ -942,23 +922,6 @@ fn class(all: &[Decl], d: &Decl) -> Result<String, String> {
         }
         b.push_str("    def __repr__(self) -> str:\n");
         b.push_str(&format!("        return _bindings.{hook}(self)\n"));
-        body = true;
-    }
-
-    let deprecated: Vec<&str> =
-        d.fields().iter().filter(|f| f.deprecated).map(|f| f.name.as_str()).collect();
-    if !deprecated.is_empty() {
-        let names = deprecated.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
-        b.push('\n');
-        b.push_str("    def __getattribute__(self, name: str) -> Any:\n");
-        b.push_str(&format!("        if name in [{names}]:\n"));
-        b.push_str("            logger.warning(\n");
-        b.push_str(&format!(
-            "                f\"{}.{{name}} is deprecated, automatic resume is now supported\"\n",
-            t.name
-        ));
-        b.push_str("            )\n");
-        b.push_str("        return super().__getattribute__(name)\n");
         body = true;
     }
 
@@ -1038,19 +1001,15 @@ fn host_field(b: &mut String, h: &HostField, dataclass: bool) {
         };
         b.push_str(&format!("    {}: {} = PrivateAttr({arg})\n", h.name, h.ty));
     } else {
-        let value = match (&h.default, &h.deprecated_msg) {
+        let value = match &h.default {
             // `dataclasses.field` in a dataclass: pydantic's `Field` there is a shared default.
-            (None, None) if h.default_factory.is_some() => {
+            None if h.default_factory.is_some() => {
                 let factory = h.default_factory.as_deref().unwrap_or_default();
                 let call = if dataclass { "field" } else { "Field" };
                 format!(" = {call}(default_factory={factory})")
             }
-            (d, Some(msg)) => {
-                let head = d.clone().unwrap_or_else(|| "...".to_owned());
-                format!(" = Field(default={head}, deprecated={msg:?})")
-            }
-            (Some(d), None) => format!(" = {d}"),
-            (None, None) => String::new(),
+            Some(d) => format!(" = {d}"),
+            None => String::new(),
         };
         b.push_str(&format!("    {}: {}{value}\n", h.name, h.ty));
     }
@@ -1079,16 +1038,6 @@ fn field(all: &[Decl], d: &Decl, f: &Field) -> Result<String, String> {
             (None, None) => "default=None".to_owned(),
         };
         return Ok(format!("{}: {ty} = PrivateAttr({arg})", f.name));
-    }
-    // pydantic's `deprecated=` turns every default form below into a `Field(..)` call.
-    if let Some(msg) = &f.deprecated_msg {
-        let head = match (&f.default, &f.default_factory) {
-            (_, Some(factory)) => format!("default_factory={factory}"),
-            (Some(dflt), None) => format!("default={dflt}"),
-            (None, None) => "...".to_owned(),
-        };
-        let excl = if f.exclude { ", exclude=True" } else { "" };
-        return Ok(format!("{}: {ty} = Field({head}, deprecated={msg:?}{excl})", f.name));
     }
     let dataclass = d.target(Host::Python).is_some_and(|t| t.kind == Kind::Dataclass);
     if dataclass && f.exclude {

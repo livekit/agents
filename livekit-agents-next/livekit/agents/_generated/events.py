@@ -32,8 +32,7 @@ from ..llm import (
     RealtimeModel,
     RealtimeModelError,
 )
-from ..log import logger
-from ..metrics import AgentMetrics, AgentSessionUsage
+from ..metrics import AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
 
@@ -126,15 +125,6 @@ class AgentFalseInterruptionEvent(BaseModel):
     resumed: bool
     """Whether the false interruption was resumed automatically."""
     created_at: float = Field(default_factory=time.time)
-    message: ChatMessage | None = None
-    extra_instructions: str | None = None
-
-    def __getattribute__(self, name: str) -> Any:
-        if name in ["message", "extra_instructions"]:
-            logger.warning(
-                f"AgentFalseInterruptionEvent.{name} is deprecated, automatic resume is now supported"
-            )
-        return super().__getattribute__(name)
 
 
 class FunctionToolsExecutedEvent(BaseModel):
@@ -173,16 +163,6 @@ class FunctionToolsExecutedEvent(BaseModel):
     @model_validator(mode="after")
     def verify_lists_length(self) -> Self:
         return _bindings.verify_lists_length(self)
-
-
-class MetricsCollectedEvent(BaseModel):
-    """Deprecated: use session_usage_updated for usage tracking.
-    Per-turn latency metrics are available on ChatMessage.metrics.
-    """
-
-    type: Literal["metrics_collected"] = "metrics_collected"
-    metrics: AgentMetrics
-    created_at: float = Field(default_factory=time.time)
 
 
 class SessionUsageUpdatedEvent(BaseModel):
@@ -328,7 +308,6 @@ AgentEvent = Annotated[
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent
-    | MetricsCollectedEvent
     | SessionUsageUpdatedEvent
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
@@ -356,7 +335,6 @@ EotPredictionEvent.__module__ = "livekit.agents.voice.events"
 _AgentBackchannelOpportunityEvent.__module__ = "livekit.agents.voice.events"
 AgentFalseInterruptionEvent.__module__ = "livekit.agents.voice.events"
 FunctionToolsExecutedEvent.__module__ = "livekit.agents.voice.events"
-MetricsCollectedEvent.__module__ = "livekit.agents.voice.events"
 SessionUsageUpdatedEvent.__module__ = "livekit.agents.voice.events"
 _TypeDiscriminator.__module__ = "livekit.agents.voice.events"
 ConversationItemAddedEvent.__module__ = "livekit.agents.voice.events"

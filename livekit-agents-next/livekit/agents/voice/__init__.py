@@ -19,7 +19,6 @@ from .events import (
     ConversationItemAddedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
-    MetricsCollectedEvent,
     RunContext,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
@@ -33,7 +32,7 @@ from .events import (
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
-from .keyterm_detection import KeytermDetectionOptions, KeytermsOptions, STTContextOptions
+from .keyterm_detection import KeytermDetectionOptions, STTContextOptions
 from .run_result import RunOutputOptions
 from .speech_handle import SpeechHandle
 from .transcription import text_transforms
@@ -52,7 +51,6 @@ __all__ = [
     "RunContext",
     "UserInputTranscribedEvent",
     "AgentEvent",
-    "MetricsCollectedEvent",
     "SessionUsageUpdatedEvent",
     "ConversationItemAddedEvent",
     "SpeechCreatedEvent",
@@ -70,7 +68,6 @@ __all__ = [
     "ToolCallEnded",
     "ToolReplyUpdated",
     "UserTurnExceededEvent",
-    "KeytermsOptions",
     "KeytermDetectionOptions",
     "STTContextOptions",
     "io",

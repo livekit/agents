@@ -317,7 +317,8 @@ impl ExitSignals {
     }
 }
 
-/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved configuration comes back as the dict `session.options` views.
+/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved
+/// configuration comes back as the dict `session.options` views.
 #[napi(js_name = "SessionOptions")]
 pub struct SessionOptions {
     pub(crate) inner: lk_agents_voice::agent_activity::options::HostOptions,
@@ -328,11 +329,6 @@ impl SessionOptions {
     #[napi(js_name = "setAecWarmup")]
     pub fn set_aec_warmup(&self, duration: Option<f64>) {
         self.inner.set_aec_warmup(duration);
-    }
-
-    #[napi(getter, js_name = "sttContextSource")]
-    pub fn stt_context_source(&self) -> String {
-        self.inner.stt_context_source().to_string()
     }
 
     #[napi(getter, js_name = "turnDetectionExplicit")]
@@ -894,26 +890,6 @@ impl ModelUsageCollector {
     pub fn flatten(&self) -> Vec<crate::generated::records::ModelUsage> {
         let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.flatten().into_iter().map(|v| crate::generated::records::ModelUsage::from(&v)).collect::<Vec<_>>()
-    }
-}
-
-/// `metrics.UsageCollector` -- the deprecated session-wide totals, with no per-model breakdown.
-#[napi(js_name = "UsageCollector")]
-pub struct UsageCollector {
-    pub(crate) inner: std::sync::Mutex<lk_agents_abi::metrics::UsageCollector>,
-}
-
-#[napi]
-impl UsageCollector {
-    #[napi(constructor)]
-    pub fn new() -> Self {
-        UsageCollector { inner: std::sync::Mutex::new(lk_agents_abi::metrics::UsageCollector::new()) }
-    }
-
-    #[napi(js_name = "summary")]
-    pub fn summary(&self) -> crate::generated::records::UsageSummary {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::generated::records::UsageSummary::from(&inner.summary())
     }
 }
 

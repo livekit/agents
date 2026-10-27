@@ -469,7 +469,6 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         transcription_timeout: setup.transcription_timeout_ms.map(secs),
         session_close_transcript_timeout: 2.0,
         conn_options: HostValue::NotGiven,
-        keyterms_options: HostValue::NotGiven,
     }
 }
 

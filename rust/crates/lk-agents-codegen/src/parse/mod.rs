@@ -570,10 +570,8 @@ fn field(
         exclude: flag(&f.attrs, "python", "exclude"),
         py_skip: flag(&f.attrs, "python", "skip"),
         private: flag(&f.attrs, "python", "private"),
-        deprecated_msg: str_arg(&f.attrs, "python", "deprecated_msg")?,
         imports: str_args(&f.attrs, "python", "import")?,
         type_imports: str_args(&f.attrs, "python", "type_import")?,
-        deprecated: flag(&f.attrs, "python", "deprecated"),
         emit_skip: flag(&f.attrs, "binding", "skip"),
         extract_default: flag(&f.attrs, "binding", "default") || inherit.default,
         // `flag` matches only the bare word, `str_arg`/`rust_arg` only the valued form.
@@ -818,7 +816,6 @@ fn host_fields(attrs: &[syn::Attribute], outer: &str) -> Vec<HostField> {
             name,
             ty,
             default: get("default"),
-            deprecated_msg: get("deprecated_msg"),
             default_factory: get("default_factory"),
             private: get("private").is_some(),
             doc: get("doc").unwrap_or_default(),
@@ -854,8 +851,6 @@ fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Vec<Member> {
             args: get("args").unwrap_or_default(),
             ret: get("ret").unwrap_or_else(|| "None".to_owned()),
             doc: get("doc").unwrap_or_default(),
-            // Explicit: an implicit setter would give every property a writable alias.
-            setter: get("setter"),
             name,
         });
     };

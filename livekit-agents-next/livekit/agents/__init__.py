@@ -97,7 +97,6 @@ from .voice import (
     ErrorEvent,
     ExpressiveOptions,
     FunctionToolsExecutedEvent,
-    MetricsCollectedEvent,
     ModelSettings,
     NonverbalOptions,
     RecordingOptions,
@@ -124,10 +123,8 @@ from .voice.amd import AMD, AMDCategory, AMDPredictionEvent
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.keyterm_detection import (
     KeytermDetectionOptions,
-    KeytermsOptions,
     STTContextOptions,
 )
-from .voice.room_io import RoomInputOptions, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
     ChatMessageEvent,
@@ -207,8 +204,6 @@ __all__ = [
     "ChatContext",
     "ChatItem",
     "room_io",
-    "RoomInputOptions",
-    "RoomOutputOptions",
     "ChatMessage",
     "ChatRole",
     "ChatContent",
@@ -227,7 +222,6 @@ __all__ = [
     "ToolCallUpdated",
     "ToolCallEnded",
     "ToolReplyUpdated",
-    "MetricsCollectedEvent",
     "SessionUsageUpdatedEvent",
     "FunctionToolsExecutedEvent",
     "FunctionCall",
@@ -312,7 +306,6 @@ __all__ = [
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
     "UserTurnLimitOptions",
-    "KeytermsOptions",
     "KeytermDetectionOptions",
     "STTContextOptions",
     "UserTurnExceededEvent",
