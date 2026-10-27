@@ -80,9 +80,11 @@ pub enum RoomEvent {
     Close {
         reason: DisconnectReason,
     },
-    /// A key pressed on a SIP participant's keypad (`sip_dtmf_received`): its symbol.
+    /// A key pressed on a SIP participant's keypad (`sip_dtmf_received`): its symbol, and who
+    /// pressed it.
     SipDtmf {
         digit: String,
+        participant: Option<ParticipantIdentity>,
     },
 }
 
@@ -135,7 +137,11 @@ impl fmt::Debug for RoomEvent {
                 f.debug_struct("ConnectionStateChanged").field("state", state).finish()
             }
             RoomEvent::Close { reason } => f.debug_struct("Close").field("reason", reason).finish(),
-            RoomEvent::SipDtmf { digit } => f.debug_struct("SipDtmf").field("digit", digit).finish(),
+            RoomEvent::SipDtmf { digit, participant } => f
+                .debug_struct("SipDtmf")
+                .field("digit", digit)
+                .field("participant", participant)
+                .finish(),
         }
     }
 }
@@ -240,10 +246,10 @@ impl RoomEventBus {
         self.emit(RoomEvent::Close { reason });
     }
 
-    /// `rtc.Room`'s `sip_dtmf_received(ev)`: `ev.digit`.
+    /// `rtc.Room`'s `sip_dtmf_received(ev)`: `ev.digit`, and `ev.participant`'s identity.
     #[host(method)]
-    pub fn sip_dtmf_received(&self, digit: String) {
-        self.emit(RoomEvent::SipDtmf { digit });
+    pub fn sip_dtmf_received(&self, digit: String, participant: Option<ParticipantIdentity>) {
+        self.emit(RoomEvent::SipDtmf { digit, participant });
     }
 }
 

@@ -576,7 +576,7 @@ pub async fn receive_dtmf(
             },
         };
         let Some(event) = next else { break };
-        let lk_agents_rtc::RoomEvent::SipDtmf { digit } = event else { continue };
+        let lk_agents_rtc::RoomEvent::SipDtmf { digit, .. } = event else { continue };
         if digit == stop.as_str() {
             break;
         }

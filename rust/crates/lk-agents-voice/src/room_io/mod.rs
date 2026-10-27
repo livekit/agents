@@ -99,6 +99,8 @@ pub enum RoomIoEvent {
     TextInput(TextInput),
     /// `job_ctx.delete_room(room_name)`, a request since deletion must outlive the session.
     DeleteRoomRequested(DeleteRoomRequested),
+    /// The linked participant pressed a keypad key: `reset_away_timer`. Not on the host stream.
+    KeyPressed,
 }
 
 pub struct RoomIo {
@@ -317,8 +319,11 @@ impl RoomIo {
             // The agent transcribes *itself*, so its transcript hangs off its own track.
             agent_tr.set_participant(Some(self.room.local().identity())).await;
         }
-        if let Some(out) = &self.audio_output {
-            let _ = out.start().await;
+        // As the reference's `_init_task`: a failed start leaves the room io never ready.
+        if let Some(out) = &self.audio_output
+            && out.start().await.is_err()
+        {
+            return;
         }
         self.ready.set(true);
     }
@@ -336,6 +341,8 @@ impl RoomIo {
             self.linked.send_replace(None);
             if self.room.participant(&identity).is_some() {
                 self.linked.send_replace(Some(identity.clone()));
+                let linked = ParticipantLinked { identity: identity.clone() };
+                let _ = self.events_tx.send(RoomIoEvent::ParticipantLinked(linked));
             }
         }
         *self.target.lock().unwrap() = Some(identity.clone());
@@ -431,7 +438,13 @@ impl RoomIo {
             | RoomEvent::ParticipantActive { .. }
             | RoomEvent::ParticipantAttributesChanged { .. }
             | RoomEvent::Close { .. }
-            | RoomEvent::SipDtmf { .. } => {}
+            | RoomEvent::SipDtmf { participant: None, .. } => {}
+            // `_on_sip_dtmf_received`: a key the linked participant pressed is activity.
+            RoomEvent::SipDtmf { participant: Some(who), .. } => {
+                if self.linked.borrow().as_ref() == Some(who) {
+                    let _ = self.events_tx.send(RoomIoEvent::KeyPressed);
+                }
+            }
         }
     }
 
@@ -682,6 +695,10 @@ impl Driver {
             RoomIoEvent::ParticipantLinked(_) => {
                 out.trace(RoomStep::Link(RoomLinkStep::Linked));
                 out.machine().append(self.session.states.on_link(now, true, closing));
+            }
+            RoomIoEvent::KeyPressed => {
+                out.machine().append(self.session.states.reset_away_timer(now, closing));
+                return;
             }
             RoomIoEvent::TextInput(_) | RoomIoEvent::DeleteRoomRequested(_) => {}
         }

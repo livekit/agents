@@ -465,6 +465,9 @@ pub struct ParticipantAudioInput {
     spawner: Arc<dyn Spawner>,
     config: AudioInputConfig,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
+    /// The publications whose pre-connect buffer was awaited once already: a track read again
+    /// (a participant switched back, a fallback) goes straight to its live audio.
+    pre_connect_done: Mutex<std::collections::HashSet<(ParticipantIdentity, TrackSid)>>,
     /// The one audio-in leg; drop-oldest (the output leg must not drop).
     reader: TrackReader<AudioFrame>,
 }
@@ -495,6 +498,7 @@ impl ParticipantAudioInput {
             spawner,
             config,
             pre_connect,
+            pre_connect_done: Mutex::default(),
             reader: TrackReader::new(BoundedLossy::audio()),
         })
     }
@@ -533,8 +537,11 @@ impl ParticipantAudioInput {
             // Forwarded to the host's stream; dropping it would silently lose AGC.
             auto_gain_control: self.config.auto_gain_control,
         });
-        let wants_pre_connect =
-            publication.audio_features().contains(&AudioTrackFeature::PreconnectBuffer);
+        let key = (participant.identity().clone(), publication.sid().clone());
+        let wants_pre_connect = publication
+            .audio_features()
+            .contains(&AudioTrackFeature::PreconnectBuffer)
+            && self.pre_connect_done.lock().unwrap().insert(key);
         let sid = publication.sid().clone();
 
         let this = self.clone();

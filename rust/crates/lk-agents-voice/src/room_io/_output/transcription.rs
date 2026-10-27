@@ -505,7 +505,7 @@ impl ParticipantTranscriptionOutput {
             | RoomEvent::ParticipantActive { participant: _ }
             | RoomEvent::ParticipantAttributesChanged { participant: _ }
             | RoomEvent::ParticipantDisconnected { participant: _, reason: _ }
-            | RoomEvent::SipDtmf { digit: _ } => {}
+            | RoomEvent::SipDtmf { digit: _, participant: _ } => {}
         }
     }
 

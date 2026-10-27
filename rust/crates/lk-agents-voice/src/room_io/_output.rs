@@ -535,7 +535,14 @@ impl ParticipantAudioOutput {
         *self.tasks.lock().unwrap() = vec![pump, watcher, progress];
 
         let (source, publication) =
-            self.room.local().publish_audio_track(self.config.publish.clone()).await?;
+            match self.room.local().publish_audio_track(self.config.publish.clone()).await {
+                Ok(published) => published,
+                Err(e) => {
+                    log::warn!(target: "livekit.agents", error = e.to_string().as_str();
+                        "failed to publish the agent's audio track");
+                    return Err(e.into());
+                }
+            };
         self.shared.lock().source = Some(source);
 
         publication.wait_for_subscription().await?;

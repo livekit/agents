@@ -204,3 +204,31 @@ impl AgentUserState {
         self.away_armed = false;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_session::effects::Effect;
+
+    fn armed(eff: &Effects) -> bool {
+        eff.as_slice().iter().any(|e| matches!(e, Effect::Arm(Timer::UserAway, _)))
+    }
+
+    // Catches: the away timer ignoring the room's link. The linked participant leaving must stop
+    // the window (no `on_user_away` into an empty room), a later state edge must not re-arm it,
+    // and a key pressed or a new link must bring an away user back.
+    #[test]
+    fn the_away_window_follows_the_link_and_the_keypad() {
+        let t = Ts::from_nanos(0);
+        let mut s = AgentUserState::new(Some(Duration::from_secs(15)));
+        assert!(armed(&s.reconcile_away_timer(t, false)));
+        let eff = s.on_link(t, false, false);
+        assert!(eff.as_slice().iter().any(|e| matches!(e, Effect::Cancel(Timer::UserAway))));
+        assert!(!armed(&s.reconcile_away_timer(t, false)), "re-armed with nobody linked");
+        assert!(armed(&s.on_link(t, true, false)), "a link restarts the window");
+        let _ = s.on_user_away(t);
+        assert_eq!(s.user, UserState::Away);
+        let _ = s.reset_away_timer(t, false);
+        assert_eq!(s.user, UserState::Listening, "a key pressed brings the user back");
+    }
+}

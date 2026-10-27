@@ -256,7 +256,9 @@ impl FakeRoom {
 
     /// A SIP participant presses `digit` on the keypad.
     pub fn press_dtmf(&self, digit: &str) {
-        self.bus.emit(RoomEvent::SipDtmf { digit: digit.to_owned() });
+        // The SDK names the SIP participant who pressed it: here the room's first, if any.
+        let participant = self.state.lock().unwrap().participants.first().map(|p| p.identity.clone());
+        self.bus.emit(RoomEvent::SipDtmf { digit: digit.to_owned(), participant });
     }
 
     pub fn close(&self, reason: DisconnectReason) {
