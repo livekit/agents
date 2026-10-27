@@ -766,3 +766,7 @@ pub fn resolve_interruption_detector_for_host(
     };
     resolve_interruption_detector(&inputs).verdict()
 }
+
+#[cfg(test)]
+#[path = "options_tests.rs"]
+pub(crate) mod tests;

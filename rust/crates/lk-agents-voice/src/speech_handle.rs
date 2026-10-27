@@ -908,3 +908,7 @@ impl std::fmt::Debug for SpeechHandle {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+#[path = "speech_handle_tests.rs"]
+mod tests;

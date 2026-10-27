@@ -64,11 +64,20 @@ fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> Recorded {
 
 /// A room-only session, every provider left out, through the host's constructor.
 fn unobserved(room: FixedRoom, hook_bound: Option<f64>) -> SessionApi {
+    assembled(room, hook_bound, None)
+}
+
+/// [`unobserved`], with the host's `SessionOptions` object when given.
+fn assembled(
+    room: FixedRoom,
+    hook_bound: Option<f64>,
+    options: Option<&crate::agent_activity::options::HostOptions>,
+) -> SessionApi {
     let spawner = Arc::new(lk_agents_abi::TokioSpawner::new(tokio::runtime::Handle::current()));
     #[rustfmt::skip]
     let api = SessionApi::host_new(
         Arc::new(room), None, None, "agent".into(), None, None, None, None, None, None, None, None,
-        None, None, None, true, 24_000, 24_000, None, None, None, false, None, true,
+        None, None, None, true, 24_000, 24_000, options, None, None, false, None, true,
         Some(crate::room_io::RoomIoConfig::default()), None, None, None, None, None, None,
         None, None,
         None, None, None, None, false, None, false, hook_bound, 3, None, None, None, Maybe::NotGiven, None,
@@ -456,4 +465,123 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
             }
         }
     }
+}
+
+/// A session opened over a host that answers every hook at once.
+async fn running(api: SessionApi) -> SessionApi {
+    let opening = api
+        .open(false, move |mut runner: SessionRunner| {
+            Box::pin(async move {
+                while let Some(ev) = runner.next_host_event().await {
+                    if let HostEvent::Hook(call) = ev {
+                        let _ = runner.api().send(Command::HookDone {
+                            id: call.id(),
+                            outcome: HookOutcome::Returned,
+                        });
+                    }
+                }
+            })
+        })
+        .expect("a ready session opens");
+    opening.await.expect("the loop starts");
+    api
+}
+
+/// A host stream of these items, then its end.
+struct Items<T>(std::collections::VecDeque<T>);
+
+#[async_trait::async_trait]
+impl<T: Send> lk_agents_abi::StreamSource<T> for Items<T> {
+    async fn next(&mut self) -> Result<Option<T>, ProviderError> {
+        Ok(self.0.pop_front())
+    }
+
+    async fn close(self: Box<Self>, _deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
+        lk_agents_abi::Closed::Clean
+    }
+}
+
+fn invalid<T>(r: Result<T, CommandRefused>) -> String {
+    match r {
+        Err(CommandRefused::Invalid(why)) => why,
+        Err(other) => panic!("expected an invalid-argument refusal, got {other:?}"),
+        Ok(_) => panic!("expected an invalid-argument refusal, got an answer"),
+    }
+}
+
+// Catches: a malformed host argument reaching the driver (a negative duration panics
+// `Duration::from_secs_f64` on the loop), or refused with a message that does not name it.
+#[tokio::test(start_paused = true)]
+async fn host_arguments_are_checked_before_anything_is_sent() {
+    let api = unobserved(fake_room("bad-arguments").1, None);
+    assert!(invalid(api.ivr_start(-1.0, None, None)).contains("max_silence"));
+    assert!(invalid(api.ivr_start(f64::NAN, None, None)).contains("max_silence"));
+    let filler = |delay, interval, speech: &str| {
+        api.filler_start("call".into(), speech, delay, interval, None, Some("hm".into()), None)
+    };
+    invalid(filler(-1.0, None, "speech_1"));
+    invalid(filler(f64::NAN, None, "speech_1"));
+    invalid(filler(0.5, Some(-1.0), "speech_1"));
+    assert!(invalid(filler(0.5, None, "nope")).contains("nope"));
+    assert!(invalid(api.set_io_enabled("microphone", true)).contains("microphone"));
+    assert!(invalid(api.dtmf_start(4, false, 4.0, "x".into())).contains("\"x\""));
+    assert!(invalid(api.dtmf_start(4, false, -1.0, "#".into())).contains("dtmf_input_timeout"));
+    use lk_agents_abi::metrics::base::{AgentMetrics, EouMetrics};
+    let eou = AgentMetrics::Eou(EouMetrics {
+        timestamp: 0.0,
+        end_of_utterance_delay: 0.0,
+        transcription_delay: 0.0,
+        on_user_turn_completed_delay: 0.0,
+        speech_id: None,
+        metadata: None,
+    });
+    assert!(invalid(api.host_metrics(HostMetricsRecord(eou))).contains("count it twice"));
+    assert!(api.aclose("bogus", false, false).is_err());
+    // Well-formed, but nothing runs yet.
+    assert!(matches!(api.set_io_enabled("audio_input", true), Err(CommandRefused::Session(_))));
+}
+
+// Catches: the host's rarer calls (a streamed or pre-synthesised `say`, the outbound-SIP warmup,
+// the reads `session.*` makes) refused or wrong on a running session.
+#[tokio::test(start_paused = true)]
+async fn rare_host_calls_reach_a_running_session() {
+    use crate::agent_activity::options::{HostOptions, tests::kwargs};
+    let options = HostOptions::new(kwargs(None));
+    let api = running(assembled(fake_room("rare-calls").1, None, Some(&options))).await;
+
+    assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
+    api.set_aec_warmup(None).unwrap();
+    assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
+    api.update_turn_options(Default::default()).unwrap();
+
+    let words = Items(["Hello ".to_owned(), "there.".to_owned()].into());
+    let streamed = api.say_stream(Box::new(words), None, true, None).unwrap();
+    streamed.wait_until_created().await.unwrap();
+    let frames = Items(Default::default());
+    let recorded = api.say_audio("Hi.".into(), Box::new(frames), None, true, None).unwrap();
+    recorded.wait_until_created().await.unwrap();
+    // Outside any speech: nothing to end; no output to set.
+    api.end_call(&SpeechHandle::detached(String::new(), true)).unwrap();
+    api.set_run_output(&streamed, None, None).unwrap();
+
+    assert_eq!(api.keyterms(), None);
+    assert!(!api.amd_listening());
+    assert!(!api.dtmf_reply_running());
+    assert!(api.usage().is_empty());
+    assert_eq!(api.linked_participant(), None);
+    api.unset_participant().await;
+
+    api.shutdown(false);
+    for _ in 0..20 {
+        settle().await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+    }
+    assert!(matches!(api.send(TurnCommand::Clear), Err(SessionRefused::Closed)));
+}
+
+// Catches: a session built with no `SessionOptions` answering a configuration it does not have.
+#[tokio::test(start_paused = true)]
+async fn a_session_without_options_resolves_none() {
+    let api = running(unobserved(fake_room("no-options").1, None)).await;
+    assert!(api.resolved_options().is_none());
 }
