@@ -190,14 +190,8 @@ impl SessionEvent {
                 HostWire::BackchannelConfirmed(w::BackchannelConfirmedWire {})
             }
             SessionEvent::OverlapInterruption(e) => HostWire::OverlapInterruption(*e),
-            SessionEvent::SpanStarted(e) => HostWire::SpanStarted(w::SpanStartedWire {
-                span: e.span,
-                start_time: e.start_time.map(|t| anchor.seconds(t)),
-            }),
-            SessionEvent::SpanEnded(e) => HostWire::SpanEnded(w::SpanEndedWire {
-                span: e.span,
-                end_time: e.end_time.map(|t| anchor.seconds(t)),
-            }),
+            SessionEvent::SpanStarted(e) => HostWire::SpanStarted((**e).clone()),
+            SessionEvent::SpanEnded(e) => HostWire::SpanEnded((**e).clone()),
             SessionEvent::AgentStateChanged { old, new } => {
                 HostWire::AgentStateChanged(w::AgentStateChanged {
                     old_state: *old,

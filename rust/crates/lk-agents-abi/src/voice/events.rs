@@ -9,7 +9,6 @@ use crate::voice::amd::AmdPrediction;
 use crate::voice::room_io::{
     DeleteRoomRequested, ParticipantLinked, ParticipantUnlinked, TextInput,
 };
-use crate::voice::session_effects::Span;
 
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "events", path = "livekit.agents.voice.events"))]
@@ -785,20 +784,47 @@ pub struct FloorChangedWire {
     pub speech_id: Option<String>,
 }
 
-/// `span_started`'s payload, emitted right before its state change. `start_time`: wall seconds.
-#[derive(Debug, Clone, Host)]
+/// `span_started`: open the OTel span `span_id` under `parent_id` (`None`: the host's ambient
+/// context, the job's; only the session's root span has none). Times are wall seconds.
+#[derive(Debug, Clone, PartialEq, Host)]
 #[binding(emit, tag = "type", tag_value = "span_started")]
 pub struct SpanStartedWire {
-    pub span: Span,
-    pub start_time: Option<f64>,
+    pub span_id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub start_time: f64,
+    pub attributes: crate::Extra,
 }
 
-/// `span_ended`'s payload. `end_time` is wall seconds, `None` for now.
-#[derive(Debug, Clone, Host)]
+/// `span_ended`: add `attributes` and `events`, set the error status when `error` is set, record
+/// each of `metrics`, end the span. An id the host does not hold is ignored.
+#[derive(Debug, Clone, PartialEq, Host)]
 #[binding(emit, tag = "type", tag_value = "span_ended")]
 pub struct SpanEndedWire {
-    pub span: Span,
-    pub end_time: Option<f64>,
+    pub span_id: String,
+    pub end_time: f64,
+    pub attributes: crate::Extra,
+    pub error: Option<String>,
+    pub events: Vec<SpanEvent>,
+    pub metrics: Vec<SpanMetric>,
+}
+
+/// A timestamped event added to the span before it ends (wall seconds).
+#[derive(Debug, Clone, PartialEq, Host)]
+#[binding(emit)]
+pub struct SpanEvent {
+    pub name: String,
+    pub time: f64,
+    pub attributes: crate::Extra,
+}
+
+/// A histogram measurement (seconds) recorded with the span's end, beside the job's attributes.
+#[derive(Debug, Clone, PartialEq, Host)]
+#[binding(emit)]
+pub struct SpanMetric {
+    pub instrument: String,
+    pub value: f64,
+    pub attributes: crate::Extra,
 }
 
 /// `context_carried`'s payload: item ids moved from `from_agent`'s context to `to_agent`'s.

@@ -24,6 +24,9 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import web
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -53,11 +56,37 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.llm._realtime import RealtimeModel as OpenAIRealtimeModel
+from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import shortuuid
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tests.trace_schema import check_trace, from_readable_spans  # noqa: E402
+
 SAMPLE_RATE = 24000
+
+# what the main session's trace holds, from the core's span records
+SESSION_SPANS = {
+    "agent_session",
+    "session_start",
+    "start_agent_activity",
+    "on_enter",
+    "agent_turn",
+    "agent_speaking",
+    "llm_node",
+    "llm_request",
+    "llm_request_run",
+    "tts_node",
+    "tts_request",
+    "tts_request_run",
+    "function_tool",
+    "user_turn",
+    "update_agent",
+    "drain_agent_activity",
+    "on_exit",
+    "session_close",
+}
 
 # (words in the user's message, the tool it calls, its arguments from the message)
 TOOL_CALLS = [
@@ -2135,6 +2164,10 @@ async def noise_cancellation() -> None:
 
 
 async def main() -> int:
+    spans = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(spans))
+    set_tracer_provider(provider)
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
     session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
@@ -2218,6 +2251,15 @@ async def main() -> int:
 
     print("== close")
     await session.aclose()
+
+    print("== trace")
+    finished = spans.get_finished_spans()
+    names = {s.name for s in finished}
+    print(f"spans: {sorted(names)}")
+    violations = check_trace(from_readable_spans(finished))
+    assert not violations, "trace shape violations:\n  " + "\n  ".join(violations)
+    assert SESSION_SPANS <= names, f"spans never emitted: {sorted(SESSION_SPANS - names)}"
+    spans.clear()
 
     print(f"played_bytes={room.played_bytes()} text_streams={len(room.text_streams())}")
     print("history:")

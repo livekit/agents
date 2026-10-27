@@ -651,6 +651,13 @@ impl Driver {
                 }
                 // The user state and away deadline are decided on the way to the host.
                 self.on_session_edge(now, &ev, out);
+                // The span edges this event makes go out right before it.
+                let mut spans = Vec::new();
+                let step = &self.step;
+                let wall = |at: Ts| step.wall_secs_at(at);
+                let agent = self.activity.agent.as_str();
+                self.session.trace.observe(wall(now), &wall, agent, &ev, &mut spans);
+                spans.into_iter().for_each(|span| self.emit_now(span));
                 let closed = matches!(ev, SessionEvent::Close { .. });
                 // The peers read what the host reads (`SystemTap::Session`), in the same order.
                 if !self.watch.is_empty() {

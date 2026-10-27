@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal
 
 import numpy as np
+from opentelemetry import trace
 from pydantic import TypeAdapter
 from typing_extensions import TypedDict, TypeVar
 
@@ -44,7 +45,9 @@ from ..llm import LLM, ChatContext, RealtimeModel, StopResponse, function_tool
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
-from ..telemetry.metrics import collect_usage
+from ..telemetry import trace_types
+from ..telemetry.metrics import collect_usage, record_span_metric
+from ..telemetry.traces import tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -242,9 +245,12 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "transcript": False,
             "redaction": False,
         }
-        # the job's telemetry parents its spans here; the core traces the session itself
-        self._root_span_context = None
-        self._session_start_context = None
+        # the core's span tree, materialised here: the open spans by the core's id, and the
+        # root's context the job's telemetry parents its own spans under
+        self._spans: dict[str, trace.Span] = {}
+        self._session_span: trace.Span | None = None
+        self._root_span_context: Any = None
+        self._loop_stalls: list[float] = []
         self._text_input_cb: TextInputCallback | None = None
         self._audio_input_options: AudioInputOptions | None = None
         # the session's audio recording, written by the core; finished once it closes
@@ -860,6 +866,54 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _core_error_message(self, wire: dict[str, Any]) -> str:
         return str(self._error_record(wire)[0])
 
+    def _on_span_started(self, wire: dict[str, Any]) -> None:
+        parent_id = wire["parent_id"]
+        parent = self._spans.get(parent_id) if parent_id is not None else None
+        context = trace.set_span_in_context(parent) if parent is not None else None
+        span = tracer.start_span(
+            wire["name"],
+            context=context
+            if parent_id is None or context is not None
+            else self._root_span_context,
+            attributes=wire["attributes"],
+            start_time=int(wire["start_time"] * 1e9),
+        )
+        self._spans[wire["span_id"]] = span
+        if parent_id is None:
+            self._session_span = span
+            self._root_span_context = trace.set_span_in_context(span)
+
+    def _on_span_ended(self, wire: dict[str, Any]) -> None:
+        if (span := self._spans.pop(wire["span_id"], None)) is None:
+            return
+        span.set_attributes(wire["attributes"])
+        for event in wire["events"]:
+            span.add_event(event["name"], event["attributes"], timestamp=int(event["time"] * 1e9))
+        if (error := wire["error"]) is not None:
+            span.set_status(trace.Status(trace.StatusCode.ERROR, error))
+        for metric in wire["metrics"]:
+            record_span_metric(metric["instrument"], metric["value"], metric["attributes"])
+        span.end(end_time=int(wire["end_time"] * 1e9))
+
+    def _record_loop_stall(self, duration: float, *, timestamp_ns: int) -> None:
+        """A blocked event loop on the agent_session span: one event per stall and a count,
+        total and max summary, so a session with stalls is findable from its list entry."""
+        if (span := self._session_span) is None or not span.is_recording():
+            return
+        self._loop_stalls.append(duration)
+        span.add_event(
+            "event_loop_blocked",
+            {trace_types.ATTR_BLOCKING_DURATION: duration},
+            timestamp=timestamp_ns,
+        )
+        span.set_attributes(
+            {
+                trace_types.ATTR_BLOCKING_COUNT: len(self._loop_stalls),
+                trace_types.ATTR_BLOCKING_TOTAL_DURATION: sum(self._loop_stalls),
+                trace_types.ATTR_BLOCKING_MAX_DURATION: max(self._loop_stalls),
+            }
+        )
+
     def _on_error(self, wire: dict[str, Any]) -> None:
         logger.error("session error", extra={"source": wire["source"], "error": str(wire["error"])})
         error, source = self._error_record(wire)
@@ -1107,6 +1161,8 @@ _HANDLERS: dict[str, Callable[[VoiceSession[Any], dict[str, Any]], None]] = {
     "amd_result": VoiceSession._on_amd_result,
     "text_input": VoiceSession._on_text_input,
     "delete_room_requested": VoiceSession._on_delete_room,
+    "span_started": VoiceSession._on_span_started,
+    "span_ended": VoiceSession._on_span_ended,
 }
 
 

@@ -38,6 +38,9 @@ pub enum Command {
     Dtmf(DtmfCommand),
     /// Answered by `RunStarted` or `RunRefused`, settled by `RunSettled`.
     Run(Box<crate::run_result::RunSpec>),
+    /// From `Origin::Amd`: the detector attached (`None`) or released its verdict; its `amd`
+    /// span is the session trace's.
+    AmdSpan(Option<lk_agents_abi::voice::amd::AmdPrediction>),
 }
 
 /// Monotonic within a session.
@@ -195,6 +198,7 @@ impl Command {
             Command::HostMetrics(_) => "Command::HostMetrics",
             Command::SetStaticKeyterms(_) => "Command::SetStaticKeyterms",
             Command::Run(_) => "Command::Run",
+            Command::AmdSpan(_) => "Command::AmdSpan",
             Command::Recorder(RecorderCommand::Attach(_)) => "Command::Recorder::Attach",
             Command::Recorder(RecorderCommand::Detach) => "Command::Recorder::Detach",
         }

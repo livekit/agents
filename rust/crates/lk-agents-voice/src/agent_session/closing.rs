@@ -91,6 +91,11 @@ impl Driver {
             return;
         }
         out.trace(CloseStep::Requested { reason, drain });
+        let mut spans = Vec::new();
+        let wall = self.step.wall_secs_at(now);
+        let error_type = error.as_ref().map(|e| e.source.as_str());
+        self.session.trace.closing(wall, reason.as_str(), drain, error_type, &mut spans);
+        spans.into_iter().for_each(|ev| out.machine().emit(ev));
         // The systems (AMD, IVR) close themselves on this, in this instant.
         self.watch.publish(crate::agent_session::SystemTap::CloseRequested);
         // The keyterm pass: the request in flight is cancelled, no push after this.
@@ -456,6 +461,7 @@ impl Driver {
             | Command::Close(_)
             | Command::HookDone { .. }
             | Command::HostMetrics(_)
+            | Command::AmdSpan(_)
             | Command::SetStaticKeyterms(_)
             | Command::Recorder(_)
             | Command::Ivr(_)

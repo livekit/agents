@@ -138,6 +138,12 @@ def collect_usage(metrics: Any) -> None:
             _histogram(name).record(value, attributes={**job, **attrs})
 
 
+def record_span_metric(name: str, value: float, attributes: dict[str, Any]) -> None:
+    """A duration the core measured with one of its spans (``gen_ai.invoke_agent.duration``,
+    ``gen_ai.execute_tool.duration``)."""
+    _histogram(name).record(value, attributes={**_job_attrs(), **attributes})
+
+
 def record_event_loop_blocked(duration: float, *, severity: str) -> None:
     attrs = _job_attrs()
     attrs["severity"] = severity

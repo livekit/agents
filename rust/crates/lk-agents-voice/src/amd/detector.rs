@@ -1,4 +1,6 @@
-use crate::agent_session::{IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand};
+use crate::agent_session::{
+    Command, IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand,
+};
 use crate::amd::classifier::{
     Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out, Start,
     TranscriptSource, Verdict,
@@ -269,6 +271,7 @@ impl AmdSystem {
             closed: false,
             listening: Arc::default(),
         };
+        let _ = system.peer.send(Origin::Amd, Command::AmdSpan(None));
         if let Some(stt) = stt {
             system.open_tap(stt);
             system.stt = SttLeg::Opening;
@@ -434,6 +437,7 @@ impl AmdSystem {
                 // The waiter is the host's (`execute()` awaits `amd_result`): nothing to wake here.
                 // `AMD.emit("amd_prediction")`; `_on_amd_prediction` then cancels the classification.
                 Effect::Prediction(p) => {
+                    let _ = self.peer.send(Origin::Amd, Command::AmdSpan(Some(p.clone())));
                     self.peer.emit(SessionEvent::AmdResult { verdict: p });
                     self.step(now, In::EndInput);
                 }

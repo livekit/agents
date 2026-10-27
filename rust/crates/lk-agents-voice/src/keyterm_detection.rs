@@ -811,32 +811,42 @@ impl Driver {
             out.machine().cancel(Timer::KeytermTimeout);
         }
         // Rides the session stream like the reply LLM's metrics, with no speech.
-        if let Some(m) = metrics {
+        if let Some(m) = &metrics {
             out.machine().emit(crate::events::SessionEvent::MetricsCollected {
-                metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Llm(*m)),
+                metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Llm((**m).clone())),
                 speech: None,
             });
         }
         if failed {
-            return self.keyterms_failed(now, req, out);
+            return self.keyterms_failed(now, req, metrics.as_deref(), out);
         }
         out.trace(InputStep::LegVerdict { leg: DetectorName::Keyterms, req });
         // Strict JSON; a malformed document is an empty update.
         let parsed =
             arguments.as_deref().and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok());
         let update = parse_record_keyterms(parsed.as_ref());
+        let before = self.session.keyterms.as_ref().map(|s| s.pass.keyterms()).unwrap_or_default();
         self.keyterms_step(now, KeytermIn::Answer { req, update }, out);
+        let after = self.session.keyterms.as_ref().map(|s| s.pass.keyterms()).unwrap_or_default();
+        let mut spans = Vec::new();
+        let wall = self.step.wall_secs_at(now);
+        let lists = Some((before.as_slice(), after.as_slice()));
+        self.session.trace.keyterm_answered(wall, lists, metrics.as_deref(), &mut spans);
+        spans.into_iter().for_each(|ev| out.machine().emit(ev));
     }
 
     /// `asyncio.wait_for(.., timeout)` expired: no change, the slot frees.
     pub(crate) fn on_keyterm_timeout(&mut self, now: Ts, out: &mut Out) {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
         let Some(req) = slot.time_out() else { return };
-        self.keyterms_failed(now, req, out);
+        self.keyterms_failed(now, req, None, out);
     }
 
-    fn keyterms_failed(&mut self, now: Ts, req: u64, out: &mut Out) {
+    fn keyterms_failed(&mut self, now: Ts, req: u64, request: Option<&LlmMetrics>, out: &mut Out) {
         out.trace(InputStep::LegFailed { leg: DetectorName::Keyterms, recoverable: true });
+        let mut spans = Vec::new();
+        self.session.trace.keyterm_answered(self.step.wall_secs_at(now), None, request, &mut spans);
+        spans.into_iter().for_each(|ev| out.machine().emit(ev));
         self.keyterms_step(now, KeytermIn::Failed { req }, out);
     }
 
@@ -885,6 +895,7 @@ impl Driver {
         // `asyncio.wait_for`'s bound on one pass.
         let timeout = std::time::Duration::from_secs_f64(slot.detection.timeout.max(0.0));
         out.machine().arm(Timer::KeytermTimeout, now.saturating_add(timeout));
+        self.session.trace.keyterm_requested(self.step.wall_secs_at(now));
         let request = slot.request(prompt, self.step.wall());
         let shared = Arc::clone(&self.shared);
         let handle =

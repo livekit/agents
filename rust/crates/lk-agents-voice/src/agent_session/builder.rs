@@ -90,6 +90,8 @@ pub struct DriverBuilder {
 impl DriverBuilder {
     /// `async` because the provider factories must run on the host loop.
     pub async fn start(mut self) -> Result<(crate::runtime::Runtime, SessionHandle), DriverError> {
+        // `agent_session` and `session_start` run from here.
+        let built = self.time.wall_secs();
         let keyterms = self.keyterms.take();
         let forward_chat_context = self.forward_chat_context;
         // An advertised tool with nothing to run it is refused here, not at the first call.
@@ -225,6 +227,7 @@ impl DriverBuilder {
             stopped: false,
             opened: false,
         };
+        driver.session.trace.built = built;
         // What the session opens with is released like anything handed over later.
         driver.session.providers = driver.providers_held();
         // The opening cycles run at the instant the session is built.

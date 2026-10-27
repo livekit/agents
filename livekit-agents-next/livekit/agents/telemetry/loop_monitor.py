@@ -22,7 +22,8 @@ emits them and records the metric. It observes a single loop without patching as
   CPU time. It also logs a warning and records a histogram measurement.
 
 Spans nest under the span the blocked task was in when sampled, else under the primary agent
-session's root span (``telemetry.traces.session_root_context``), else under ``job_entrypoint``. The worker
+session's root span (``telemetry.traces.session_root_context``), else under ``job_entrypoint``;
+the session span also carries a per-stall event plus a count / total / max summary. The worker
 process has no job to attach spans to and produces only the log and the metric. Output is rate
 limited so a pathologically blocked loop cannot flood the exporter.
 
@@ -60,7 +61,7 @@ from opentelemetry import context as otel_context, trace
 from .. import _core
 from ..log import logger
 from .metrics import record_event_loop_blocked
-from .traces import session_root_context, tracer
+from .traces import primary_session, session_root_context, tracer
 
 DEFAULT_WARN_THRESHOLD = 0.1
 """Blocks at or above this many seconds are reported as warnings."""
@@ -166,6 +167,12 @@ class EventLoopMonitor:
                 record_event_loop_blocked(report.duration, severity=report.severity)
             except Exception:
                 logger.exception("failed to record the blocked event loop metric")
+            # the session summary counts every stall too
+            if (session := primary_session()) is not None:
+                session._record_loop_stall(
+                    report.duration,
+                    timestamp_ns=int((report.started_at + report.duration) * 1_000_000_000),
+                )
             if span is not None:
                 _emit_span(report, *span)
             if log is not None:

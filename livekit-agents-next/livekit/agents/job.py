@@ -49,7 +49,7 @@ from .telemetry.traces import (
     _setup_cloud_tracer,
     _shutdown_telemetry,
     install_rpc_tracing,
-    session_span,
+    tracer,
 )
 from .types import (
     ATTRIBUTE_REDACTION_ENABLED,
@@ -620,11 +620,9 @@ class JobContext:
         if not self._room.isconnected():
             await self.connect()
 
-        # nests under session_start when the session is starting, else the ambient context
-        with session_span(
+        with tracer.detached_span(
             "wait_for_participant",
             attributes={trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
-            job_ctx=self,
         ) as span:
             participant = await wait_for_participant(self._room, identity=identity, kind=kind)
             span.set_attributes(telemetry_utils.participant_attributes(participant))
@@ -674,7 +672,7 @@ class JobContext:
             single_peer_connection=single_peer_connection,
         )
 
-        with session_span(
+        with tracer.detached_span(
             "room_connect",
             attributes={
                 trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
@@ -682,7 +680,6 @@ class JobContext:
                 trace_types.ATTR_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
                 trace_types.ATTR_ROOM_E2EE: encryption is not None,
             },
-            job_ctx=self,
         ) as connect_span:
             await self._room.connect(self._info.url, self._info.token, options=room_options)
             connect_span.set_attributes(

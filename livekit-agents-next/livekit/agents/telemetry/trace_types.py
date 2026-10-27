@@ -157,3 +157,8 @@ ATTR_BLOCKING_IMPORT = "lk.blocking.import"
 """The module a lazy import was loading when the loop thread was sampled: import it at warm-up."""
 ATTR_BLOCKING_SUPPRESSED = "lk.blocking.suppressed"
 """Reports dropped by rate limiting since the previous emitted span."""
+
+# summary on agent_session, so a session with stalls can be found without opening the trace
+ATTR_BLOCKING_COUNT = "lk.blocking.count"
+ATTR_BLOCKING_TOTAL_DURATION = "lk.blocking.total_duration"
+ATTR_BLOCKING_MAX_DURATION = "lk.blocking.max_duration"

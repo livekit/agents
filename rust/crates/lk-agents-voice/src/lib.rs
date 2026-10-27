@@ -23,6 +23,7 @@ pub mod room_io;
 pub mod run_result;
 pub mod runtime;
 pub mod speech_handle;
+pub mod telemetry;
 pub mod tool_executor;
 pub mod trace;
 pub mod transcription;

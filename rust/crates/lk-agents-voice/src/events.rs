@@ -411,10 +411,10 @@ pub enum SessionEvent {
         old: AgentState,
         new: AgentState,
     },
-    /// Open the `agent_speaking` span, right before its `AgentStateChanged`.
-    SpanStarted(lk_agents_abi::voice::session_effects::SpanStarted),
-    /// Close it: the edge out of `speaking`.
-    SpanEnded(lk_agents_abi::voice::session_effects::SpanEnded),
+    /// Open an OTel span (`telemetry.rs` decides the tree).
+    SpanStarted(Box<lk_agents_abi::voice::events::SpanStartedWire>),
+    /// End one.
+    SpanEnded(Box<lk_agents_abi::voice::events::SpanEndedWire>),
     /// `AgentSession.user_state` moved (the driver is the one writer). `at` is the edge's own
     /// back-dated instant, or the away timer's deadline.
     UserStateChanged {

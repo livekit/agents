@@ -35,7 +35,6 @@ pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use driver::*;
 pub use host_events::*;
-pub use lk_agents_abi::voice::session_effects::{Span, SpanEnded, SpanStarted};
 pub use time::*;
 
 /// `_DEFAULT_AEC_WARMUP_DURATION`, as a `Duration`.
@@ -82,6 +81,8 @@ pub(crate) struct VoiceSession {
     pub(crate) expressive: crate::generation::ExpressiveLayers,
     /// `session._amd._on_end_of_turn(info)` would answer `True`: the AMD's (`SkipReplies`).
     pub(crate) amd_skips_replies: bool,
+    /// The session's OTel span tree.
+    pub(crate) trace: crate::telemetry::SessionTrace,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -149,6 +150,7 @@ impl VoiceSession {
             providers: Default::default(),
             expressive: Default::default(),
             amd_skips_replies: false,
+            trace: Default::default(),
         }
     }
 
@@ -722,7 +724,7 @@ mod label_tests {
     }
 
     // Catches: the warmup armed on a `speaking` edge with no audio output, armed twice, or the
-    // span edge missing from the label's announcement.
+    // edge missing from the label's announcement.
     #[test]
     fn the_warmup_arms_once_and_only_with_an_audio_output() {
         let mut s = state(Some(Duration::from_secs(3)));
@@ -741,12 +743,9 @@ mod label_tests {
         assert!(
             matches!(
                 events.as_slice(),
-                [
-                    SessionEvent::SpanStarted(sp),
-                    SessionEvent::AgentStateChanged { new: AgentState::Speaking, .. },
-                ] if sp.span == Span::AgentSpeaking
+                [SessionEvent::AgentStateChanged { new: AgentState::Speaking, .. }]
             ),
-            "the span opens right before the edge it belongs to: {events:?}"
+            "{events:?}"
         );
 
         let _ = s.update_agent_state(t0, AgentState::Listening, true);

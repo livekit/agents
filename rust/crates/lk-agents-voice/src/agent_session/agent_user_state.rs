@@ -7,13 +7,11 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
 
 use super::effects::{Effects, Timer};
-use super::{Span, SpanEnded, SpanStarted};
 use crate::events::SessionEvent;
 
 pub(crate) struct AgentUserState {
     /// Moved only by [`AgentUserState::set_agent_state`].
     agent: AgentState,
-    speaking_span_open: bool,
     /// Moved only by [`AgentUserState::update_user_state`].
     user: UserState,
     /// `timers.user_away`: `None` is no away timer at all.
@@ -32,7 +30,6 @@ impl AgentUserState {
     pub(crate) fn new(away_timeout: Option<Duration>) -> Self {
         AgentUserState {
             agent: AgentState::Initializing,
-            speaking_span_open: false,
             user: UserState::Listening,
             away_timeout,
             away_armed: false,
@@ -54,8 +51,8 @@ impl AgentUserState {
         self.claims
     }
 
-    /// The previous state when it changed. Writes the span and state events itself, so no caller
-    /// can move the state without telling the host.
+    /// The previous state when it changed. Writes the state event itself, so no caller can move
+    /// the state without telling the host.
     pub(crate) fn set_agent_state(
         &mut self,
         next: AgentState,
@@ -63,16 +60,6 @@ impl AgentUserState {
     ) -> Option<AgentState> {
         if self.agent == next {
             return None;
-        }
-        let speaking = next == AgentState::Speaking;
-        if speaking != self.speaking_span_open {
-            self.speaking_span_open = speaking;
-            let span = Span::AgentSpeaking;
-            eff.emit(if speaking {
-                SessionEvent::SpanStarted(SpanStarted { span, start_time: None })
-            } else {
-                SessionEvent::SpanEnded(SpanEnded { span, end_time: None })
-            });
         }
         let old = std::mem::replace(&mut self.agent, next);
         eff.emit(SessionEvent::AgentStateChanged { old, new: next });

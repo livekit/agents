@@ -4,8 +4,8 @@ session's trace context and RPC spans.
 The job's trace is rooted at ``job_entrypoint`` and ``agent_session`` is a child of it. Code
 running on a task whose context predates the session (the event loop monitor's heartbeat above
 all) resolves the running session through the job (:func:`session_root_context`) so its spans
-nest under ``agent_session`` while one exists; :func:`session_span` nests startup work under
-``session_start`` while the session is starting.
+nest under ``agent_session`` while one exists. The session's own spans are the core's records,
+opened and ended by ``VoiceSession``.
 
 RPCs go through the room SDK's ``RpcInterceptor`` hook (``livekit-rtc`` >= 1.1.18): one
 interceptor per local participant turns each call into a span following the OpenTelemetry RPC
@@ -28,7 +28,6 @@ import threading
 import time
 import weakref
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence, Set
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -1779,22 +1778,6 @@ def session_root_context(job_ctx: JobContext | None = None) -> otel_context.Cont
     if session is not None and session._root_span_context is not None:
         return session._root_span_context
     return None
-
-
-@contextmanager
-def session_span(
-    name: str,
-    *,
-    attributes: dict[str, Any] | None = None,
-    job_ctx: JobContext | None = None,
-) -> Iterator[trace.Span]:
-    """A span for session work: under ``session_start`` while the primary session is starting,
-    else in the ambient context. Never made current (see ``detached_span``): ``room.connect()``
-    spawns tasks that live on. ``job_ctx`` resolves the session from any task or thread."""
-    session = primary_session(_current_job(job_ctx))
-    parent = session._session_start_context if session is not None else None
-    with tracer.detached_span(name, context=parent, attributes=attributes) as span:
-        yield span
 
 
 MAX_PAYLOAD_ATTR_LEN = 1024

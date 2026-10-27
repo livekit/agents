@@ -73,6 +73,10 @@ impl Driver {
             return false;
         }
         self.activity.hooks.wait_for(id, kind);
+        let mut spans = Vec::new();
+        let wall = self.step.wall_secs_at(now);
+        self.session.trace.hook_issued(wall, id, kind, &self.activity.agent, &mut spans);
+        spans.into_iter().for_each(|ev| out.machine().emit(ev));
         if let Some(wait) = wait {
             out.machine().arm(Timer::Hook(id), now.saturating_add(wait));
         }
@@ -143,6 +147,10 @@ impl Driver {
     /// The callback left `pending`, journalled and let go by the open run; `None` if not pending.
     fn finish_hook(&mut self, id: HookId, how: HookEnd, out: &mut Out) -> Option<HookKind> {
         let kind = self.activity.hooks.finish(id)?;
+        let mut spans = Vec::new();
+        let wall = self.step.wall_secs_at(self.step.now);
+        self.session.trace.hook_finished(wall, id, matches!(how, HookEnd::Failed), &mut spans);
+        spans.into_iter().for_each(|ev| out.machine().emit(ev));
         self.disarm(Timer::Hook(id), out);
         out.trace(HandoffStep::HookFinished { hook: id, kind, how });
         self.run_release(Owned::Hook(id), out);

@@ -339,6 +339,11 @@ impl Driver {
         // The away deadline runs from start: both are silent until somebody speaks.
         {
             let mut out = self.out();
+            let mut spans = Vec::new();
+            let wall = self.step.wall_secs_at(now);
+            let agent = self.activity.agent.clone();
+            self.session.trace.open(wall, &agent, &mut spans);
+            spans.into_iter().for_each(|ev| out.machine().emit(ev));
             // `start()`'s `_update_agent_state("listening")`: the host's first state edge.
             self.set_agent_state(now, AgentState::Listening, &mut out);
             let closing = self.session.closing_past_edge();
@@ -347,6 +352,9 @@ impl Driver {
                 self.attach_recorder(now, recorder, &mut out);
             }
             self.issue_on_enter(now, &mut out);
+            let mut spans = Vec::new();
+            self.session.trace.opened(self.step.wall_secs_at(now), &mut spans);
+            spans.into_iter().for_each(|ev| out.machine().emit(ev));
             self.execute(out);
         }
     }
@@ -588,6 +596,12 @@ impl Driver {
             Command::Close(close) => self.begin_closing(now, close, out),
             Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome, out),
             Command::Run(spec) => self.on_run(now, *spec, out),
+            Command::AmdSpan(verdict) => {
+                let mut spans = Vec::new();
+                let wall = self.step.wall_secs_at(now);
+                self.session.trace.amd(wall, verdict.as_ref(), &mut spans);
+                spans.into_iter().for_each(|ev| out.machine().emit(ev));
+            }
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into(), out),
             Command::HostMetrics(record) => {
                 out.machine().emit(crate::events::SessionEvent::MetricsCollected {
