@@ -59,7 +59,7 @@ async def test_turn_samples_count_from_the_turn_start_past_the_window(
 ) -> None:
     transport.push_frame(_frame(8000))  # silence before the user speaks
     transport.push_frame(_frame(4000))
-    transport.on_start_of_turn(4000)
+    transport.on_start_of_turn(0.25)
     for _ in range(2 * EOT_MAX_SAMPLES // 1600):
         transport.push_frame(_frame(1600))
 
@@ -71,7 +71,7 @@ async def test_turn_samples_count_from_the_turn_start_past_the_window(
 
 async def test_flush_forgets_the_turn_start(transport: _LocalTransport) -> None:
     transport.push_frame(_frame(16000))
-    transport.on_start_of_turn(1600)
+    transport.on_start_of_turn(0.1)
     transport.flush()
     transport.push_frame(_frame(6000))
 
@@ -85,7 +85,7 @@ async def test_turn_covers_at_least_the_audio_the_model_reads(
     transport: _LocalTransport,
 ) -> None:
     transport.push_frame(_frame(EOT_MAX_SAMPLES))
-    transport.on_start_of_turn(800)  # a start later than the window's first sample
+    transport.on_start_of_turn(0.05)  # a start later than the window's first sample
 
     _, turn_samples = await _predict(transport)
 
@@ -94,7 +94,7 @@ async def test_turn_covers_at_least_the_audio_the_model_reads(
 
 async def test_turn_longer_than_the_audio_clamps_to_flush(transport: _LocalTransport) -> None:
     transport.push_frame(_frame(1600))
-    transport.on_start_of_turn(16000)
+    transport.on_start_of_turn(1.0)
 
     _, turn_samples = await _predict(transport)
 

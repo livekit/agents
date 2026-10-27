@@ -50,8 +50,8 @@ class _FakeTransport:
     def push_frame(self, frame: Any) -> None:
         self.audio_events.append(("push_frame", frame.samples_per_channel))
 
-    def on_start_of_turn(self, turn_samples: int) -> None:
-        self.audio_events.append(("on_start_of_turn", turn_samples))
+    def on_start_of_turn(self, elapsed: float) -> None:
+        self.audio_events.append(("on_start_of_turn", elapsed))
 
     def flush(self) -> None:
         self.audio_events.append(("flush", None))
@@ -108,7 +108,7 @@ class TestAudioTurnDetectionRequests:
             await s._task
             assert s._fake_transport.audio_events == [
                 ("push_frame", 160),
-                ("on_start_of_turn", 4000),
+                ("on_start_of_turn", 0.25),
                 ("push_frame", 160),
                 ("flush", None),
             ]

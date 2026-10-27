@@ -52,7 +52,7 @@ class _StreamingTurnDetectionTransport(Protocol):
 
     def run_inference(self, request_id: str) -> None: ...
     def push_frame(self, frame: rtc.AudioFrame) -> None: ...
-    def on_start_of_turn(self, turn_samples: int) -> None: ...
+    def on_start_of_turn(self, elapsed: float) -> None: ...
     def flush(self) -> None: ...
 
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None: ...
@@ -96,7 +96,7 @@ class _BaseStreamingTurnDetectorStream:
 
     @dataclass
     class _StartOfTurnSentinel:
-        turn_samples: int
+        elapsed: float
 
     def __init__(
         self,
@@ -246,9 +246,7 @@ class _BaseStreamingTurnDetectorStream:
         # drain them much later, e.g. after a cloud reconnect backlog
         elapsed = max(0.0, time.time() - started_at)
         self._audio_ch.send_nowait(
-            _BaseStreamingTurnDetectorStream._StartOfTurnSentinel(
-                turn_samples=int(elapsed * self._opts.sample_rate)
-            )
+            _BaseStreamingTurnDetectorStream._StartOfTurnSentinel(elapsed=elapsed)
         )
 
     def end_input(self) -> None:
@@ -349,7 +347,7 @@ class _BaseStreamingTurnDetectorStream:
             if isinstance(item, _BaseStreamingTurnDetectorStream._FlushSentinel):
                 self._transport.flush()
             elif isinstance(item, _BaseStreamingTurnDetectorStream._StartOfTurnSentinel):
-                self._transport.on_start_of_turn(item.turn_samples)
+                self._transport.on_start_of_turn(item.elapsed)
             else:
                 self._transport.push_frame(item)
 

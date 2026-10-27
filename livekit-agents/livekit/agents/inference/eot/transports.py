@@ -121,7 +121,7 @@ class _CloudTransport:
             )
         )
 
-    def on_start_of_turn(self, turn_samples: int) -> None:
+    def on_start_of_turn(self, elapsed: float) -> None:
         pass
 
     def flush(self) -> None:
@@ -429,8 +429,8 @@ class _LocalTransport:
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         self._turn_samples += self._buf.push_frame(frame)
 
-    def on_start_of_turn(self, turn_samples: int) -> None:
-        self._turn_samples = min(self._turn_samples, turn_samples)
+    def on_start_of_turn(self, elapsed: float) -> None:
+        self._turn_samples = min(self._turn_samples, int(elapsed * DEFAULT_SAMPLE_RATE))
 
     def flush(self) -> None:
         if len(self._buf) > 0:
