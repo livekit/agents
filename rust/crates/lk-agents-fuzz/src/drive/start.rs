@@ -22,9 +22,7 @@ impl Run {
 
         // The host's own gate (`agent_session.py`) decides whether an adaptive detector is handed
         // over: a port under `Manual` turn detection, say, is a session no host ever assembles.
-        // The deprecated keywords have no interruption mode to ask for adaptive with.
         let adaptive = setup.interruption
-            && !setup.deprecated_turn
             && matches!(
                 resolve_interruption_detector(&InterruptionGateInputs {
                     stt: (setup.stt && setup.realtime.is_none())
@@ -433,8 +431,7 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
     let secs = |ms: u64| ms as f64 / 1000.0;
     let limit = setup.user_turn_max_words.is_some() || setup.user_turn_max_ms.is_some();
     SessionKwargs {
-        // A host writing the deprecated keywords writes no `turn_handling`: the core migrates them.
-        turn_handling: (!setup.deprecated_turn).then(|| TurnHandlingKwargs {
+        turn_handling: Some(TurnHandlingKwargs {
             turn_detection: turn_detection(setup.turn).map(TurnDetectionKwarg::Mode),
             endpointing: Some(EndpointingKwargs {
                 mode: Some(if setup.dynamic_endpointing {
@@ -472,25 +469,6 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         transcription_timeout: setup.transcription_timeout_ms.map(secs),
         session_close_transcript_timeout: 2.0,
         conn_options: HostValue::NotGiven,
-        deprecated: if setup.deprecated_turn {
-            DeprecatedTurnKwargs {
-                turn_detection: turn_detection(setup.turn)
-                    .map_or(Maybe::NotGiven, |mode| Maybe::Given(TurnDetectionKwarg::Mode(mode))),
-                min_endpointing_delay: Maybe::Given(0.4),
-                max_endpointing_delay: Maybe::Given(4.0),
-                false_interruption_timeout: Maybe::Given(Some(1.5)),
-                discard_audio_if_uninterruptible: Maybe::Given(true),
-                min_interruption_duration: Maybe::Given(0.4),
-                min_interruption_words: Maybe::Given(1),
-                allow_interruptions: Maybe::Given(true),
-                resume_false_interruption: Maybe::Given(true),
-                agent_false_interruption_timeout: Maybe::Given(Some(4.0)),
-                preemptive_generation: Maybe::Given(setup.preemptive),
-                ..DeprecatedTurnKwargs::default()
-            }
-        } else {
-            Default::default()
-        },
         keyterms_options: HostValue::NotGiven,
     }
 }

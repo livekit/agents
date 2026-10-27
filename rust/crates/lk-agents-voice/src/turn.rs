@@ -1,12 +1,11 @@
-//! `voice/turn.py`: `TurnHandlingOptions`, and `_migrate_turn_handling` from the deprecated
-//! keywords. One struct per group is both what a layer says (`None` and `NotGiven` are unsaid)
-//! and the resolved answer, where every leaf is said.
+//! `voice/turn.py`: `TurnHandlingOptions`. One struct per group is both what a layer says (`None`
+//! and `NotGiven` are unsaid) and the resolved answer, where every leaf is said.
 
 use crate::agent_activity::options::{AgentSessionOptions, option_group};
 use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::voice::session_options::{
-    DeprecatedTurnKwargs, EndpointingKwargs, EndpointingMode, InterruptionKwargs, InterruptionMode,
+    EndpointingKwargs, EndpointingMode, InterruptionKwargs, InterruptionMode,
     PreemptiveKwargs, TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
 };
 use std::time::Duration;
@@ -177,132 +176,6 @@ fn user_turn_limit_options(kw: &UserTurnLimitKwargs) -> UserTurnLimitOptions {
     UserTurnLimitOptions {
         max_words: nullable(kw.max_words, count),
         max_duration: nullable(kw.max_duration, secs),
-    }
-}
-
-/// `_migrate_turn_handling`: eleven deprecated kwargs to one **sparse** [`TurnHandlingKwargs`].
-/// Filling defaults would make them explicit and override an `Agent`'s own endpointing.
-pub fn migrate_turn_handling(kw: &DeprecatedTurnKwargs) -> TurnHandlingKwargs {
-    let DeprecatedTurnKwargs {
-        min_endpointing_delay,
-        max_endpointing_delay,
-        false_interruption_timeout,
-        turn_detection,
-        discard_audio_if_uninterruptible,
-        min_interruption_duration,
-        min_interruption_words,
-        allow_interruptions,
-        resume_false_interruption,
-        agent_false_interruption_timeout,
-        preemptive_generation,
-    } = *kw;
-
-    let mut out = TurnHandlingKwargs::default();
-
-    let endpointing = EndpointingKwargs {
-        mode: None,
-        min_delay: min_endpointing_delay.given(),
-        max_delay: max_endpointing_delay.given(),
-        alpha: None,
-    };
-    if !endpointing.is_empty() {
-        out.endpointing = Some(endpointing);
-    }
-
-    let interruption = InterruptionKwargs {
-        // `if allow_interruptions is False`: `True` writes nothing.
-        enabled: match allow_interruptions {
-            Maybe::Given(false) => Some(false),
-            Maybe::Given(true) | Maybe::NotGiven => None,
-        },
-        mode: None,
-        discard_audio_if_uninterruptible: discard_audio_if_uninterruptible.given(),
-        min_duration: min_interruption_duration.given(),
-        min_words: min_interruption_words.given(),
-        resume_false_interruption: resume_false_interruption.given(),
-        // The newer name wins, silently, when both are given: a plain overwrite in the reference.
-        false_interruption_timeout: match agent_false_interruption_timeout {
-            Maybe::Given(v) => Maybe::Given(v),
-            Maybe::NotGiven => false_interruption_timeout,
-        },
-        backchannel_boundary: Maybe::NotGiven,
-    };
-    if !interruption.is_empty() {
-        out.interruption = Some(interruption);
-    }
-
-    out.turn_detection = turn_detection.given();
-
-    if let Maybe::Given(enabled) = preemptive_generation {
-        out.preemptive_generation = Some(PreemptiveKwargs {
-            enabled: Some(enabled),
-            preemptive_tts: None,
-            max_speech_duration: None,
-            max_retries: None,
-        });
-    }
-
-    out
-}
-
-/// The deprecated `turn_detection=` as `migrate_turn_handling` takes it: what it means, and the
-/// caller's own object (a mode string too), written back as is. `None` is given: a `Null` kwarg and
-/// no object.
-#[derive(Debug, Clone)]
-pub struct TurnDetectionArg(pub TurnDetectionKwarg, pub Option<lk_agents_abi::HostRef>);
-
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for TurnDetectionArg {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use pyo3::types::PyAnyMethods as _;
-        let kwarg = obj.extract::<TurnDetectionKwarg>()?;
-        let object = if obj.is_none() { None } else { Some(lk_agents_abi::python::intern_host(obj.to_owned().unbind())) };
-        Ok(TurnDetectionArg(kwarg, object))
-    }
-}
-
-/// `voice/turn.py::_migrate_turn_handling`, for `Agent.__init__`, which stores the sparse dict.
-/// `turn_detection` is the caller's own object, written back as is.
-#[lk_agents_abi::host(export(name = "migrate_turn_handling", kw_only))]
-#[allow(clippy::too_many_arguments)]
-pub fn migrate_turn_handling_for_host(
-    min_endpointing_delay: Maybe<f64>,
-    max_endpointing_delay: Maybe<f64>,
-    false_interruption_timeout: Maybe<Option<f64>>,
-    turn_detection: Maybe<TurnDetectionArg>,
-    discard_audio_if_uninterruptible: Maybe<bool>,
-    min_interruption_duration: Maybe<f64>,
-    min_interruption_words: Maybe<i64>,
-    allow_interruptions: Maybe<bool>,
-    resume_false_interruption: Maybe<bool>,
-    agent_false_interruption_timeout: Maybe<Option<f64>>,
-    preemptive_generation: Maybe<bool>,
-) -> lk_agents_abi::voice::session_options::MigratedTurnHandling {
-    let (detection, object) = match turn_detection {
-        Maybe::NotGiven => (Maybe::NotGiven, None),
-        Maybe::Given(TurnDetectionArg(kwarg, object)) => (Maybe::Given(kwarg), Some(object)),
-    };
-    let out = migrate_turn_handling(&DeprecatedTurnKwargs {
-        min_endpointing_delay,
-        max_endpointing_delay,
-        false_interruption_timeout,
-        turn_detection: detection,
-        discard_audio_if_uninterruptible,
-        min_interruption_duration,
-        min_interruption_words,
-        allow_interruptions,
-        resume_false_interruption,
-        agent_false_interruption_timeout,
-        preemptive_generation,
-    });
-    // Keys, order and absences are the declaration's; only the caller's object is filled in.
-    lk_agents_abi::voice::session_options::MigratedTurnHandling {
-        endpointing: out.endpointing,
-        interruption: out.interruption,
-        turn_detection: object,
-        preemptive_generation: out.preemptive_generation,
     }
 }
 

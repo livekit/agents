@@ -186,8 +186,6 @@ pub type LegSet = SessionLegs;
 /// All keys are optional. Missing keys inherit from the session default
 /// (at the ``Agent`` level) or use the documented defaults
 /// (at the ``AgentSession`` level).
-//
-// Written back by `migrate_turn_handling`, which only fills `min_delay`/`max_delay`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
 #[python(
     typed_dict,
@@ -232,7 +230,7 @@ impl EndpointingKwargs {
 /// ``mode`` absent means the session picks the best available strategy.
 //
 // Nullable keys are `Maybe<Option<_>>`: absent, `None` ("off") and a value are three states. Field
-// order is the reference migration's key order (`order` gives the `TypedDict`'s).
+// order is the emitted dict's key order (`order` gives the `TypedDict`'s).
 #[derive(Clone, Copy, Default, PartialEq, Host)]
 #[python(
     typed_dict,
@@ -293,8 +291,6 @@ impl InterruptionKwargs {
 }
 
 /// Configuration for preemptive generation.
-//
-// `migrate_turn_handling` writes `enabled` only.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Host)]
 #[python(
     typed_dict,
@@ -412,53 +408,6 @@ pub struct TurnHandlingKwargs {
     pub user_turn_limit: Option<UserTurnLimitKwargs>,
 }
 
-/// `_migrate_turn_handling`'s answer as `Agent.__init__` stores it, with the caller's own
-/// `turn_detection` object back in it, in the reference's key order.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[binding(emit, skip_if_none)]
-pub struct MigratedTurnHandling {
-    pub endpointing: Option<EndpointingKwargs>,
-    pub interruption: Option<InterruptionKwargs>,
-    /// The caller's own value (a mode or a detector object), `None` for `turn_detection=None`,
-    /// absent when not given.
-    pub turn_detection: Option<Option<lk_agents_abi::HostRef>>,
-    pub preemptive_generation: Option<PreemptiveKwargs>,
-}
-
-/// The eleven deprecated `AgentSession.__init__` kwargs `_migrate_turn_handling` takes. The
-/// nullable ones are `Maybe<Option<f64>>`: explicit `None` means "off".
-#[derive(Clone, Copy, Default, PartialEq, Host)]
-#[python(typed_dict, module = "session_options", name = "DeprecatedTurnKwargs")]
-#[binding(extract, from_items, default)]
-pub struct DeprecatedTurnKwargs {
-    #[python(ty = "NotGivenOr[float]", import = "..types:NotGivenOr")]
-    pub min_endpointing_delay: lk_agents_abi::Maybe<f64>,
-    #[python(ty = "NotGivenOr[float]")]
-    pub max_endpointing_delay: lk_agents_abi::Maybe<f64>,
-    #[python(ty = "NotGivenOr[float | None]")]
-    pub false_interruption_timeout: lk_agents_abi::Maybe<Option<f64>>,
-    #[python(
-        ty = "NotGivenOr[TurnDetectionMode | None]",
-        type_import = "..voice.turn:TurnDetectionMode"
-    )]
-    pub turn_detection: lk_agents_abi::Maybe<TurnDetectionKwarg>,
-    #[python(ty = "NotGivenOr[bool]")]
-    pub discard_audio_if_uninterruptible: lk_agents_abi::Maybe<bool>,
-    #[python(ty = "NotGivenOr[float]")]
-    pub min_interruption_duration: lk_agents_abi::Maybe<f64>,
-    #[python(ty = "NotGivenOr[int]")]
-    pub min_interruption_words: lk_agents_abi::Maybe<i64>,
-    /// Tested `== Given(false)`, **not** `.is_given()`: `allow_interruptions=True` writes nothing.
-    #[python(ty = "NotGivenOr[bool]")]
-    pub allow_interruptions: lk_agents_abi::Maybe<bool>,
-    #[python(ty = "NotGivenOr[bool]")]
-    pub resume_false_interruption: lk_agents_abi::Maybe<bool>,
-    #[python(ty = "NotGivenOr[float | None]")]
-    pub agent_false_interruption_timeout: lk_agents_abi::Maybe<Option<f64>>,
-    #[python(ty = "NotGivenOr[bool]")]
-    pub preemptive_generation: lk_agents_abi::Maybe<bool>,
-}
-
 /// Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
 /// (`stt`, `llm`, `tools`, ...) are legs, not options.
 #[derive(Clone, PartialEq, Host)]
@@ -510,8 +459,6 @@ pub struct SessionKwargs {
         type_import = "..voice.agent_session:SessionConnectOptions"
     )]
     pub conn_options: HostValue,
-    /// The eleven deprecated turn kwargs, as one sub-dict.
-    pub deprecated: DeprecatedTurnKwargs,
     /// Deprecated; `stt_context_options` supersedes it silently when both are given.
     #[python(
         ty = "NotGivenOr[KeytermsOptions]",
@@ -538,12 +485,6 @@ pub struct UpdateKwargs {
     )]
     #[binding(default)]
     pub turn_detection: lk_agents_abi::Maybe<TurnDetectionKwarg>,
-    #[python(ty = "NotGivenOr[float]")]
-    #[binding(default)]
-    pub min_endpointing_delay: lk_agents_abi::Maybe<f64>,
-    #[python(ty = "NotGivenOr[float]")]
-    #[binding(default)]
-    pub max_endpointing_delay: lk_agents_abi::Maybe<f64>,
     #[python(ty = "NotGivenOr[bool | ExpressiveOptions]", type_import = ".expressive:ExpressiveOptions")]
     #[binding(default)]
     pub expressive: lk_agents_abi::Maybe<Expressive>,
@@ -577,24 +518,16 @@ debug_record!(InterruptionKwargs {
 
 debug_record!(UserTurnLimitKwargs { ; max_words, max_duration });
 
-debug_record!(DeprecatedTurnKwargs {
-    ;
-    min_endpointing_delay, max_endpointing_delay, false_interruption_timeout, turn_detection,
-    discard_audio_if_uninterruptible, min_interruption_duration, min_interruption_words,
-    allow_interruptions, resume_false_interruption, agent_false_interruption_timeout,
-    preemptive_generation
-});
-
 debug_record!(SessionKwargs {
     turn_handling, stt_context_options, tool_handling, max_tool_steps, min_consecutive_speech_delay,
     expressive, ivr_detection, user_away_timeout, transcription_timeout,
-    session_close_transcript_timeout, conn_options, deprecated, keyterms_options;
+    session_close_transcript_timeout, conn_options, keyterms_options;
     use_tts_aligned_transcript, tts_text_transforms, aec_warmup_duration
 });
 
 debug_record!(UpdateKwargs {
     endpointing_opts;
-    turn_detection, min_endpointing_delay, max_endpointing_delay, expressive
+    turn_detection, expressive
 });
 
 /// `LegSet` as the host states it before `start()`, so `session.options` can resolve early.
@@ -942,8 +875,6 @@ mod host {
                     _ => None,
                 },
                 turn_detection: match d.get_item("turn_detection")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
-                min_endpointing_delay: match d.get_item("min_endpointing_delay")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
-                max_endpointing_delay: match d.get_item("max_endpointing_delay")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
                 expressive: match d.get_item("expressive")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
             })
         }
@@ -995,7 +926,6 @@ mod host {
                 transcription_timeout: item(obj, OWNER, "transcription_timeout")?,
                 session_close_transcript_timeout: item(obj, OWNER, "session_close_transcript_timeout")?,
                 conn_options: item(obj, OWNER, "conn_options")?,
-                deprecated: item(obj, OWNER, "deprecated")?,
                 keyterms_options: item(obj, OWNER, "keyterms_options")?,
             })
         }

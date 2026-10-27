@@ -169,10 +169,6 @@ class Agent(Generic[Context_T, Output_T]):
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         # deprecated
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-        max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[mcp.MCPServer] | None] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
@@ -185,20 +181,6 @@ class Agent(Generic[Context_T, Output_T]):
                 self._defining_namespace = _assignment_namespace(sys._getframe(1))
             else:
                 self._id = misc.camel_to_snake_case(type(self).__name__)
-
-        turn_handling = (
-            cast(
-                TurnHandlingOptions,
-                _core.migrate_turn_handling(
-                    min_endpointing_delay=min_endpointing_delay,
-                    max_endpointing_delay=max_endpointing_delay,
-                    turn_detection=turn_detection,
-                    allow_interruptions=allow_interruptions,
-                ),
-            )
-            if not is_given(turn_handling)
-            else turn_handling
-        )
 
         self._instructions = instructions
         self._tools = [*tools, *find_function_tools(self)]
@@ -232,7 +214,7 @@ class Agent(Generic[Context_T, Output_T]):
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
         # the agent layer of the turn options, as written: the core resolves it over the session's
-        self._turn_handling = turn_handling
+        self._turn_handling: TurnHandlingOptions = turn_handling if is_given(turn_handling) else {}
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:
             mcp_servers = None  # treat empty list as None (but keep NOT_GIVEN)

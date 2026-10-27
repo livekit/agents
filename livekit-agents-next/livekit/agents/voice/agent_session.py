@@ -116,21 +116,6 @@ _OPTION_DEFAULTS: dict[str, Any] = {
     "session_close_transcript_timeout": 2.0,
 }
 
-# the deprecated turn kwargs the core migrates into `turn_handling`
-_DEPRECATED_TURN_KWARGS = (
-    "min_endpointing_delay",
-    "max_endpointing_delay",
-    "false_interruption_timeout",
-    "turn_detection",
-    "discard_audio_if_uninterruptible",
-    "min_interruption_duration",
-    "min_interruption_words",
-    "allow_interruptions",
-    "resume_false_interruption",
-    "agent_false_interruption_timeout",
-    "preemptive_generation",
-)
-
 
 class RecordingOptions(TypedDict, total=False):
     """Which recording features are active; keys default to ``True`` when not specified."""
@@ -201,15 +186,14 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 ``use_tts_aligned_transcript``, ``tts_text_transforms``,
                 ``min_consecutive_speech_delay``, ``expressive``, ``aec_warmup_duration``,
                 ``ivr_detection``, ``user_away_timeout``, ``transcription_timeout``,
-                ``session_close_transcript_timeout`` and the deprecated turn keywords.
+                ``session_close_transcript_timeout``.
         """
         super().__init__()
-        if unknown := options.keys() - _OPTION_DEFAULTS.keys() - set(_DEPRECATED_TURN_KWARGS):
+        if unknown := options.keys() - _OPTION_DEFAULTS.keys():
             raise TypeError(f"unexpected LiveSession options: {sorted(unknown)}")
-        deprecated = {k: options.pop(k, NOT_GIVEN) for k in _DEPRECATED_TURN_KWARGS}
         self._conn_options = conn_options or SessionConnectOptions()
         self._options = _core.SessionOptions(
-            {**_OPTION_DEFAULTS, **options, "deprecated": deprecated, "conn_options": conn_options}
+            {**_OPTION_DEFAULTS, **options, "conn_options": conn_options}
         )
         stt_context = options.get("stt_context_options", options.get("keyterms_options"))
         self._stt_context = stt_context if is_given(stt_context) else None
@@ -221,7 +205,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._vad = inference.VAD(model="silero") if not is_given(vad) else vad
         self._tools = tools if is_given(tools) else []
         turn_handling = options.get("turn_handling") or {}
-        detection = turn_handling.get("turn_detection", deprecated["turn_detection"])
+        detection = turn_handling.get("turn_detection", NOT_GIVEN)
         if not is_given(detection):
             # a realtime model keeps its server's turn detection unless one is named
             realtime = isinstance(self._llm, RealtimeModel)

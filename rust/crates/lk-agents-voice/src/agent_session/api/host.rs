@@ -677,12 +677,7 @@ impl SessionApi {
         &self,
         update: crate::agent_activity::options::UpdateKwargs,
     ) -> Result<(), SessionRefused> {
-        let (patch, diagnostics) = crate::agent_activity::options::update_layer(&update);
-        if let Some(events) = &self.host.events {
-            for d in diagnostics {
-                events.event(&HostWire::Diagnostic(d.wire()));
-            }
-        }
+        let patch = crate::agent_activity::options::update_layer(&update);
         if let Maybe::Given(expressive) = update.expressive {
             self.send(ActivityCommand::UpdateExpressive(expressive))?;
         }

@@ -317,8 +317,7 @@ impl ExitSignals {
     }
 }
 
-/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict (deprecated kwargs are
-/// migrated here), and the resolved configuration comes back as the dict `session.options` views.
+/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved configuration comes back as the dict `session.options` views.
 #[napi(js_name = "SessionOptions")]
 pub struct SessionOptions {
     pub(crate) inner: lk_agents_voice::agent_activity::options::HostOptions,

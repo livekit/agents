@@ -5,13 +5,13 @@ use crate::audio_recognition::TurnDetectionMode;
 use crate::events::DiagnosticEvent;
 use crate::turn::{
     EndpointingOptions, InterruptionOptions, PreemptiveGenerationOptions, TurnHandlingOptions,
-    UserTurnLimitOptions, count, endpointing_options, migrate_turn_handling, nullable, secs,
+    UserTurnLimitOptions, count, endpointing_options, nullable, secs,
     turn_handling_layer,
 };
 use lk_agents_abi::Maybe;
 use lk_agents_abi::Vocabulary;
 pub use lk_agents_abi::voice::session_options::{
-    DeprecatedTurnKwargs, Expressive, DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides,
+    Expressive, DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides,
     HostValue, InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions,
     RecordingOverrides, ResolvedEndpointing, ResolvedInterruption, ResolvedPreemptiveGeneration,
     ResolvedSessionOptions, ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet,
@@ -21,8 +21,6 @@ use std::time::Duration;
 
 /// The one message every deprecated-kwarg diagnostic carries; the kwarg and hint are fields.
 pub const DEPRECATED_KWARG: &str = "deprecated AgentSession keyword";
-
-const TURN_HANDLING_HINT: &str = "Use turn_handling=TurnHandlingOptions(...) instead";
 
 const STT_CONTEXT_HINT: &str = "Use stt_context_options=STTContextOptions(...) instead";
 
@@ -256,7 +254,7 @@ const fn by_audio_activity(detection: TurnDetection) -> bool {
 /// The layers, in the order they apply: `defaults(legs)` ⊕ `session` ⊕ `agent`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ConfigStack {
-    /// `__init__` (after the deprecated-kwarg migration), each `update_options` merged in.
+    /// `__init__`, each `update_options` merged in.
     pub session: AgentSessionOptions,
     /// The active `Agent`'s overrides; replaced whole by `update_agent`.
     pub agent: Option<AgentSessionOptions>,
@@ -283,46 +281,9 @@ fn deprecation(kwarg: &'static str, hint: &'static str) -> DiagnosticEvent {
     DiagnosticEvent::warning(DEPRECATED_KWARG).with("kwarg", kwarg).with("hint", hint)
 }
 
-/// One diagnostic per kwarg passed, as `@deprecate_params` warns; `allow_interruptions=True`
-/// still warns.
-pub fn deprecated_diagnostics(kw: &DeprecatedTurnKwargs) -> Vec<DiagnosticEvent> {
-    let DeprecatedTurnKwargs {
-        min_endpointing_delay,
-        max_endpointing_delay,
-        false_interruption_timeout,
-        turn_detection,
-        discard_audio_if_uninterruptible,
-        min_interruption_duration,
-        min_interruption_words,
-        allow_interruptions,
-        resume_false_interruption,
-        agent_false_interruption_timeout,
-        preemptive_generation,
-    } = kw;
-    let given: [(&'static str, bool); 11] = [
-        ("min_endpointing_delay", min_endpointing_delay.is_given()),
-        ("max_endpointing_delay", max_endpointing_delay.is_given()),
-        ("false_interruption_timeout", false_interruption_timeout.is_given()),
-        ("turn_detection", turn_detection.is_given()),
-        ("discard_audio_if_uninterruptible", discard_audio_if_uninterruptible.is_given()),
-        ("min_interruption_duration", min_interruption_duration.is_given()),
-        ("min_interruption_words", min_interruption_words.is_given()),
-        ("allow_interruptions", allow_interruptions.is_given()),
-        ("resume_false_interruption", resume_false_interruption.is_given()),
-        ("agent_false_interruption_timeout", agent_false_interruption_timeout.is_given()),
-        ("preemptive_generation", preemptive_generation.is_given()),
-    ];
-    given
-        .into_iter()
-        .filter(|(_, g)| *g)
-        .map(|(name, _)| deprecation(name, TURN_HANDLING_HINT))
-        .collect()
-}
-
-/// The `turn_handling` this session runs on: an explicit `turn_handling=` wins **whole** (the
-/// deprecated kwargs are then dropped, though they still warn), else the migration.
+/// The `turn_handling` this session runs on, as written.
 pub fn session_turn_handling(kw: &SessionKwargs) -> TurnHandlingKwargs {
-    kw.turn_handling.unwrap_or_else(|| migrate_turn_handling(&kw.deprecated))
+    kw.turn_handling.unwrap_or_default()
 }
 
 /// `"turn_detection" in turn_handling`: whether the caller named a detector, mode or `None`.
@@ -359,11 +320,10 @@ pub fn session_layer(kw: &SessionKwargs) -> (AgentSessionOptions, Vec<Diagnostic
         transcription_timeout,
         session_close_transcript_timeout,
         conn_options: _,
-        deprecated,
         keyterms_options,
     } = kw.clone();
 
-    let mut diagnostics = deprecated_diagnostics(&deprecated);
+    let mut diagnostics = Vec::new();
     if keyterms_options.is_given() {
         diagnostics.push(deprecation("keyterms_options", STT_CONTEXT_HINT));
     }
@@ -381,34 +341,11 @@ pub fn session_layer(kw: &SessionKwargs) -> (AgentSessionOptions, Vec<Diagnostic
     (o, diagnostics)
 }
 
-/// What `update_options(..)` says. The deprecated pair builds a **fresh** endpointing group
-/// (`EndpointingOptions()`), so the old form wins when both are passed. One diagnostic for the
-/// pair.
-pub fn update_layer(kw: &UpdateKwargs) -> (AgentSessionOptions, Vec<DiagnosticEvent>) {
-    let UpdateKwargs {
-        endpointing_opts,
-        turn_detection,
-        min_endpointing_delay,
-        max_endpointing_delay,
-        expressive: _,
-    } = kw.clone();
-    let mut diagnostics = Vec::new();
-    let endpointing = if min_endpointing_delay.is_given() || max_endpointing_delay.is_given() {
-        diagnostics.push(deprecation(
-            "min_endpointing_delay/max_endpointing_delay",
-            "use endpointing_opts instead",
-        ));
-        Some(EndpointingKwargs {
-            mode: None,
-            min_delay: min_endpointing_delay.given(),
-            max_delay: max_endpointing_delay.given(),
-            alpha: None,
-        })
-    } else {
-        endpointing_opts
-    };
+/// What `update_options(..)` says.
+pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
+    let UpdateKwargs { endpointing_opts, turn_detection, expressive: _ } = kw.clone();
     let mut o = AgentSessionOptions::default();
-    if let Some(e) = endpointing {
+    if let Some(e) = endpointing_opts {
         o.turn.endpointing = endpointing_options(&e);
     }
     o.turn.detection = match turn_detection {
@@ -418,7 +355,7 @@ pub fn update_layer(kw: &UpdateKwargs) -> (AgentSessionOptions, Vec<DiagnosticEv
         // A detector *object* is the host's to swap; it says nothing about the owner.
         Maybe::Given(TurnDetectionKwarg::Detector { streaming: _ }) => None,
     };
-    (o, diagnostics)
+    o
 }
 
 /// The resolved options as the host's `ResolvedSessionOptions`. `session` is read for
@@ -686,8 +623,7 @@ pub fn resolve_interruption_detector(inputs: &InterruptionGateInputs) -> Interru
     InterruptionGate::Build
 }
 
-/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict (deprecated kwargs are
-/// migrated here), and the resolved configuration comes back as the dict `session.options` views.
+/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved configuration comes back as the dict `session.options` views.
 ///
 /// Before the driver holds them: the raw kwargs, the session layer they became (plus every
 /// `update_options` so far), and the diagnostics not yet emitted.
@@ -725,11 +661,10 @@ impl HostOptions {
     }
 }
 
-/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict (deprecated kwargs are
-/// migrated here), and the resolved configuration comes back as the dict `session.options` views.
+/// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved configuration comes back as the dict `session.options` views.
 #[lk_agents_abi::host(object(name = "SessionOptions"))]
 impl HostOptions {
-    /// Read the kwargs once; migrate the deprecated ones; keep the session layer.
+    /// Read the kwargs once; keep the session layer.
     #[host(new)]
     pub fn new(kwargs: SessionKwargs) -> Self {
         let (session, diagnostics) = session_layer(&kwargs);
@@ -747,10 +682,9 @@ impl HostOptions {
     /// `update_options(..)` before the session runs, on the same `merge` the driver uses.
     #[host(method)]
     pub fn update(&self, update: UpdateKwargs) {
-        let (patch, diagnostics) = update_layer(&update);
+        let patch = update_layer(&update);
         let mut state = self.lock();
         state.session.merge(&patch);
-        state.diagnostics.extend(diagnostics);
         if let Maybe::Given(expressive) = update.expressive {
             state.expressive = expressive;
         }
@@ -777,7 +711,7 @@ impl HostOptions {
         stt_context_source(&self.lock().kwargs)
     }
 
-    /// `"turn_detection" in turn_handling`, after the deprecated `turn_detection=` migration.
+    /// `"turn_detection" in turn_handling`.
     #[host(getter)]
     pub fn turn_detection_explicit(&self) -> bool {
         turn_detection_explicit(&self.lock().kwargs)

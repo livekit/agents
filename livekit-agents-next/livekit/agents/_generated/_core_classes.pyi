@@ -171,20 +171,6 @@ def amd_auto_select_models(livekit_url: str, api_key: str, api_secret: str) -> b
 def resolve_keyterm_detection(config: Any | None = None) -> dict[str, Any]: ...
 def amd_resolve_max_endpointing_delay(provided: float | None, activity: float | None) -> float: ...
 def amd_constants() -> dict[str, Any]: ...
-def migrate_turn_handling(
-    *,
-    min_endpointing_delay: NotGivenOr[float] = ...,
-    max_endpointing_delay: NotGivenOr[float] = ...,
-    false_interruption_timeout: NotGivenOr[float | None] = ...,
-    turn_detection: NotGivenOr[Any] = ...,
-    discard_audio_if_uninterruptible: NotGivenOr[bool] = ...,
-    min_interruption_duration: NotGivenOr[float] = ...,
-    min_interruption_words: NotGivenOr[int] = ...,
-    allow_interruptions: NotGivenOr[bool] = ...,
-    resume_false_interruption: NotGivenOr[bool] = ...,
-    agent_false_interruption_timeout: NotGivenOr[float | None] = ...,
-    preemptive_generation: NotGivenOr[bool] = ...,
-) -> dict[str, Any]: ...
 def resolve_recording_options(record: Any) -> RecordingOptions: ...
 def rt_server_turn_detection(
     *,
@@ -622,9 +608,7 @@ class ExitSignals:
 
 
 class SessionOptions:
-    """`AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict (deprecated kwargs are
-    migrated here), and the resolved configuration comes back as the dict `session.options` views.
-    """
+    """`AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict, and the resolved configuration comes back as the dict `session.options` views."""
 
     def __init__(self, kwargs: Any) -> None: ...
     def update(self, update: Any) -> None: ...

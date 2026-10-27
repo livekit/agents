@@ -543,8 +543,7 @@ The legs a seed runs on, drawn per seed (`search/setup.rs`):
   the two rooms relayed by the run. The relay crosses at the run's next look, not in
   milliseconds, so these seeds run without the clear-buffer give-up timer.
 
-Also drawn: `tts_text_transforms`, the deprecated turn keywords (written instead of
-`turn_handling`, so the core migrates them), and the default `VoiceActivityVideoSampler`.
+Also drawn: `tts_text_transforms` and the default `VoiceActivityVideoSampler`.
 
 Drawn last in the setup, so a seed keeps the setup it had before they existed (2026-10-26):
 
@@ -730,7 +729,6 @@ text-mode rework), the remote-session client and `room_io/rooms.rs`. Before the 
 | `agent_session/` but the API | 2,735 | 86% | |
 | `agent_session/api*` | 1,297 | 79% | |
 | `room_io/_pre_connect_audio.rs` | 141 | 78% | (was 0%) |
-| `turn.rs` | 172 | 73% | the deprecated keywords' migration (was 45%) |
 | `background_audio.rs` | 569 | 71% | the player, beside room-legs seeds |
 | `speech_handle.rs` | 587 | 70% | |
 | `avatar.rs` | 561 | 72% | sink and worker receiver |

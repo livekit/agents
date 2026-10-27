@@ -10,7 +10,6 @@
 //! - `lk_agents_worker::cli::format_log_record`: parameter `record`: `LogFields` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_worker::cli::dev_channel`: parameter `server`: not yet: `Arc<dyn DevServer>` (a host object behind a proxy)
 //! - `lk_agents_voice::keyterm_detection::resolve_keyterm_detection`: field `llm`: `DetectionLlm` has no Node shape (not a declared record, enum or JSON)
-//! - `lk_agents_voice::turn::migrate_turn_handling_for_host`: parameter `turn_detection`: `TurnDetectionArg` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_activity::options::resolve_recording_options_for_host`: parameter `record`: `RecordingRequest` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_activity::options::resolve_interruption_detector_for_host`: parameter `agent_mode`: `InterruptionMode` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::workflows::dtmf::send_dtmf_events`: parameter `room`: not yet: `Arc<dyn RtcRoom>` (a host object behind a proxy)

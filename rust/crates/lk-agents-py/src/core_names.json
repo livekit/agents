@@ -238,7 +238,6 @@
   "mcp_render_result",
   "merge_realtime_capabilities",
   "metrics_log_fields",
-  "migrate_turn_handling",
   "min_reasoning_effort",
   "normalize_date_of_birth",
   "normalize_email_address",

@@ -24,25 +24,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-class DeprecatedTurnKwargs(TypedDict):
-    """The eleven deprecated `AgentSession.__init__` kwargs `_migrate_turn_handling` takes. The
-    nullable ones are `Maybe<Option<f64>>`: explicit `None` means "off".
-    """
-
-    min_endpointing_delay: NotGivenOr[float]
-    max_endpointing_delay: NotGivenOr[float]
-    false_interruption_timeout: NotGivenOr[float | None]
-    turn_detection: NotGivenOr[TurnDetectionMode | None]
-    discard_audio_if_uninterruptible: NotGivenOr[bool]
-    min_interruption_duration: NotGivenOr[float]
-    min_interruption_words: NotGivenOr[int]
-    allow_interruptions: NotGivenOr[bool]
-    """Tested `== Given(false)`, **not** `.is_given()`: `allow_interruptions=True` writes nothing."""
-    resume_false_interruption: NotGivenOr[bool]
-    agent_false_interruption_timeout: NotGivenOr[float | None]
-    preemptive_generation: NotGivenOr[bool]
-
-
 class SessionKwargs(TypedDict):
     """Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
     (`stt`, `llm`, `tools`, ...) are legs, not options.
@@ -67,8 +48,6 @@ class SessionKwargs(TypedDict):
     """`float | None`: `None` disables the timeout, `0` arms it with nothing left to wait."""
     session_close_transcript_timeout: float
     conn_options: NotGivenOr[SessionConnectOptions]
-    deprecated: DeprecatedTurnKwargs
-    """The eleven deprecated turn kwargs, as one sub-dict."""
     keyterms_options: NotGivenOr[KeytermsOptions]
     """Deprecated; `stt_context_options` supersedes it silently when both are given."""
 
@@ -79,8 +58,6 @@ class UpdateKwargs(TypedDict):
     endpointing_opts: NotGivenOr[EndpointingOptions]
     turn_detection: NotGivenOr[TurnDetectionMode | None]
     """`NotGivenOr[TurnDetectionMode | None]`: `None` reverts to automatic selection (`Auto`)."""
-    min_endpointing_delay: NotGivenOr[float]
-    max_endpointing_delay: NotGivenOr[float]
     expressive: NotGivenOr[bool | ExpressiveOptions]
 
 
