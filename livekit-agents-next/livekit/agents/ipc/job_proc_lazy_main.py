@@ -39,7 +39,6 @@ _T = TypeVar("_T")
 
 @dataclass
 class ProcStartArgs:
-    initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     session_end_timeout: float
@@ -54,7 +53,6 @@ def proc_main(args: ProcStartArgs) -> None:
     # a process forked from the forkserver inherits its core: this one is a job process
     _core.init(_core.Role.Job)
     job_proc = _JobProc(
-        args.initialize_process_fnc,
         args.job_entrypoint_fnc,
         args.session_end_fnc,
         session_end_timeout=args.session_end_timeout,
@@ -105,7 +103,6 @@ class _JobProc:
 
     def __init__(
         self,
-        initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Any],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         *,
@@ -116,7 +113,6 @@ class _JobProc:
     ) -> None:
         self._executor_type = executor_type
         self._user_arguments = user_arguments
-        self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
         self._simulation_end_fnc = simulation_end_fnc
@@ -135,8 +131,6 @@ class _JobProc:
         )
         # the framework's warm-up; a no-op under a forkserver, which imported it already
         from . import _preload  # noqa: F401
-
-        self._initialize_process_fnc(self._job_proc)
 
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
@@ -348,7 +342,6 @@ def _start_job_span(job_ctx: JobContext) -> trace.Span:
 
 @dataclass
 class ThreadStartArgs:
-    initialize_process_fnc: Callable[[JobProcess], Any]
     job_entrypoint_fnc: Callable[[JobContext], Any]
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     session_end_timeout: float
@@ -362,7 +355,6 @@ def thread_main(
 ) -> None:
     """main function for the job process when using the ThreadedJobRunner"""
     job_proc = _JobProc(
-        args.initialize_process_fnc,
         args.job_entrypoint_fnc,
         args.session_end_fnc,
         session_end_timeout=args.session_end_timeout,

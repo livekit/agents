@@ -17,22 +17,14 @@
 At session start the Spatius SDK resolves the ingress region through the global
 bootstrap API (when ``region="auto"``, the default) and exchanges the API key
 for a session token — two sequential HTTPS round trips on the room-join critical
-path. Wiring ``prewarm`` into the worker moves that work to process
-initialization, before a job is dispatched:
+path. Calling ``prewarm`` at the module level of the agent file moves that work to process
+start, before a job is dispatched:
 
 ```python
-from livekit import agents
 from livekit.plugins import spatius
 
-
-def prewarm(proc: agents.JobProcess) -> None:
-    spatius.prewarm(proc)
-
-
-if __name__ == "__main__":
-    agents.cli.run_app(
-        agents.WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm)
-    )
+# each job process imports the agent file before it takes a job
+spatius.prewarm()
 ```
 
 The spatius SDK caches the resolved region and the session token process-wide,
@@ -45,8 +37,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-
-from livekit.agents import JobProcess
 
 from .log import logger
 
@@ -61,10 +51,10 @@ _ENV_INGRESS_ENDPOINT = "SPATIUS_INGRESS_ENDPOINT"
 _AUTO_REGION = "auto"
 
 
-def prewarm(proc: JobProcess, *, prefetch_session_token: bool = True) -> None:
-    """Warm Spatius connection state for this job process.
+def prewarm(proc: object = None, *, prefetch_session_token: bool = True) -> None:
+    """Warm Spatius connection state for this process.
 
-    Pass to ``WorkerOptions(prewarm_fnc=...)``. Reads the same SPATIUS_*
+    Call it at the module level of the agent file. Reads the same SPATIUS_*
     environment variables as ``AvatarSession`` and delegates to
     ``spatius.prewarm()``, which resolves and caches the ``auto`` region, warms
     TLS to the console and ingress endpoints, and (by default) prefetches a
@@ -72,7 +62,7 @@ def prewarm(proc: JobProcess, *, prefetch_session_token: bool = True) -> None:
     both HTTPS round trips.
 
     Args:
-        proc: The job process being initialized.
+        proc: Unused; a 1.x ``prewarm_fnc`` passes the job process.
         prefetch_session_token: Prefetch and cache a session token. Assumes the
             Spatius backend allows a token to back more than one session; pass
             False if tokens are single-use.

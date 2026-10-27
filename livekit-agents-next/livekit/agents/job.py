@@ -903,7 +903,6 @@ class JobProcess:
     ) -> None:
         self._executor_type = executor_type
         self._mp_proc = mp.current_process()
-        self._userdata: dict[str, Any] = {}
         self._user_arguments = user_arguments
         self._http_proxy: str | None = http_proxy
 
@@ -914,10 +913,6 @@ class JobProcess:
     @property
     def pid(self) -> int | None:
         return self._mp_proc.pid
-
-    @property
-    def userdata(self) -> dict[Any, Any]:
-        return self._userdata
 
     @property
     def user_arguments(self) -> Any | None:

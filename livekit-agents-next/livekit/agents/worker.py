@@ -36,7 +36,6 @@ from .job import (
     JobAcceptArguments,
     JobContext,
     JobExecutorType,
-    JobProcess,
     JobRequest,
     RunningJobInfo,
 )
@@ -71,10 +70,6 @@ class WorkerPermissions:
     can_update_metadata: bool = True
     can_publish_sources: list[models.TrackSource] = field(default_factory=list)
     hidden: bool = False
-
-
-def _default_setup_fnc(proc: JobProcess) -> Any:
-    return
 
 
 Entrypoint = Callable[[JobContext], Awaitable[None]]
@@ -180,7 +175,7 @@ class AgentHandler:
 
 def _core_options(given: dict[str, Any]) -> dict[str, Any]:
     """The server options given by name, as the core takes them; the core has the defaults."""
-    skip = ("self", "__class__", "storage", "setup_fnc", "load_fnc")
+    skip = ("self", "__class__", "storage", "load_fnc")
     options = {k: v for k, v in given.items() if k not in skip and is_given(v)}
     if "job_executor_type" in options:
         options["job_executor_type"] = options["job_executor_type"].value
@@ -201,7 +196,6 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
         *,
         agent_name: NotGivenOr[str] = NOT_GIVEN,
         storage: AgentDBStorage | None = None,
-        setup_fnc: Callable[[JobProcess], Any] | None = None,
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         ws_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -229,7 +223,6 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
         utils.EventEmitter.__init__(self)
         self._config = _core.ServerConfig({**options, "version": __version__})
         self._storage = storage
-        self.setup_fnc = setup_fnc
         self.load_fnc = load_fnc
         self._rtc: RtcDoor | None = None
         # built here and not in run(): the @server.http decorators run at import time
@@ -433,7 +426,6 @@ class _ServerHost:
             await self._inference_executor.initialize()
         storage = self._server._storage
         self._proc_pool = ipc.proc_pool.ProcPool(
-            initialize_process_fnc=self._server.setup_fnc or _default_setup_fnc,
             job_entrypoint_fnc=(
                 CallThreadEntrypoint(door.entrypoint, storage) if storage else door.entrypoint
             ),

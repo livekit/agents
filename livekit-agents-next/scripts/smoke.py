@@ -1294,7 +1294,6 @@ async def job() -> None:
     import struct
 
     runner = _JobProc(
-        lambda _: None,
         entrypoint,
         None,
         session_end_timeout=5.0,
@@ -1975,10 +1974,6 @@ from livekit.agents.job import JobAcceptArguments, RunningJobInfo
 from livekit.protocol import agent, models
 
 
-def setup(proc):
-    pass
-
-
 async def entrypoint(ctx):
     pii = Agent(instructions="x", name="pii")
     logging.getLogger("livekit.agents").warning("from the job", extra={"lk.pii.output": pii})
@@ -1988,7 +1983,7 @@ async def entrypoint(ctx):
 async def main(style):
     cli.setup_logging("INFO", style)
     proc = ProcJobExecutor(
-        initialize_process_fnc=setup, job_entrypoint_fnc=entrypoint, session_end_fnc=None,
+        job_entrypoint_fnc=entrypoint, session_end_fnc=None,
         simulation_end_fnc=None, inference_executor=None, initialize_timeout=60,
         close_timeout=10, session_end_timeout=10, memory_warn_mb=0, memory_limit_mb=0,
         ping_interval=2.5, ping_timeout=60, high_ping_threshold=1, http_proxy=None,

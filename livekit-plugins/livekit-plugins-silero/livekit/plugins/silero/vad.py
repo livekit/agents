@@ -49,6 +49,10 @@ class _VADOptions:
     sample_rate: int
 
 
+# a process loads each model once
+_SESSIONS: dict[tuple[bool, str | None], onnxruntime.InferenceSession] = {}
+
+
 class VAD(agents.VAD):
     """
     Silero Voice Activity Detection (VAD) class.
@@ -79,23 +83,19 @@ class VAD(agents.VAD):
         sane defaults are used.
 
         **Note:**
-            This method is blocking and may take time to load the model into memory.
-            It is recommended to call this method inside your prewarm mechanism.
+            This method is blocking and may take time to load the model into memory. A process
+            loads the model once and later calls reuse it, so calling it at the module level of
+            the agent file (which each job process imports) loads it before the job runs.
 
         **Example:**
 
             ```python
-            def prewarm(proc: JobProcess):
-                proc.userdata["vad"] = silero.VAD.load()
+            vad = silero.VAD.load()
 
 
+            @server.rtc_session()
             async def entrypoint(ctx: JobContext):
-                vad = (ctx.proc.userdata["vad"],)
-                # your agent logic...
-
-
-            if __name__ == "__main__":
-                cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+                session = VoiceSession(vad=vad, ...)
             ```
 
         Args:
@@ -128,7 +128,11 @@ class VAD(agents.VAD):
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
 
-        session = onnx_model.new_inference_session(force_cpu, onnx_file_path=onnx_file_path or None)
+        model = (force_cpu, str(onnx_file_path) if is_given(onnx_file_path) else None)
+        if (session := _SESSIONS.get(model)) is None:
+            session = _SESSIONS[model] = onnx_model.new_inference_session(
+                force_cpu, onnx_file_path=onnx_file_path or None
+            )
         opts = _VADOptions(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,

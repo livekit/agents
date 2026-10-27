@@ -830,7 +830,6 @@ async def job_call(call: Call) -> None:
         in_job("session end")
 
     runner = _JobProc(
-        lambda _: None,
         entrypoint,
         session_end,
         session_end_timeout=5.0,

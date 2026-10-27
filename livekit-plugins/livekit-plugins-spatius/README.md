@@ -39,23 +39,15 @@ environment when constructor arguments are omitted.
 
 At session start, the Spatius SDK resolves the ingress region via the bootstrap API
 (with the default `region="auto"`) and exchanges the API key for a session token —
-two sequential HTTPS round trips on the room-join critical path. Register the
-plugin's `prewarm` function to move that work into process warm-up, before a job is
-dispatched:
+two sequential HTTPS round trips on the room-join critical path. Call the plugin's
+`prewarm` at the module level of the agent file to move that work to process start,
+before a job is dispatched:
 
 ```python
-from livekit import agents
 from livekit.plugins import spatius
 
-
-def prewarm(proc: agents.JobProcess):
-    spatius.prewarm(proc)
-
-
-if __name__ == "__main__":
-    agents.cli.run_app(
-        agents.WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm)
-    )
+# each job process imports the agent file before it takes a job
+spatius.prewarm()
 ```
 
 The spatius SDK caches the resolved region (5 minutes) and the prefetched session
@@ -66,4 +58,4 @@ DNS and the shared TLS session cache. Warm-up is best-effort and never fails
 process initialization; without it, everything resolves inline as before.
 
 Session-token prefetch assumes the Spatius backend allows a token to back more than
-one session; opt out with `spatius.prewarm(proc, prefetch_session_token=False)`.
+one session; opt out with `spatius.prewarm(prefetch_session_token=False)`.

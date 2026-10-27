@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from multiprocessing.context import BaseContext
 from typing import Any
 
-from ..job import JobContext, JobProcess, RunningJobInfo
+from ..job import JobContext, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
 from ..utils import shortuuid
@@ -22,7 +22,6 @@ class ProcJobExecutor(SupervisedProc):
     def __init__(
         self,
         *,
-        initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         simulation_end_fnc: Callable[[Any], Any] | None,
@@ -55,7 +54,6 @@ class ProcJobExecutor(SupervisedProc):
         self._user_args: Any | None = None
         self._job_status: JobStatus | None = None
         self._running_job: RunningJobInfo | None = None
-        self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
         self._simulation_end_fnc = simulation_end_fnc
@@ -99,7 +97,6 @@ class ProcJobExecutor(SupervisedProc):
                 levels[child.name] = child.level
 
         proc_args = ProcStartArgs(
-            initialize_process_fnc=self._initialize_process_fnc,
             job_entrypoint_fnc=self._job_entrypoint_fnc,
             session_end_fnc=self._session_end_fnc,
             simulation_end_fnc=self._simulation_end_fnc,

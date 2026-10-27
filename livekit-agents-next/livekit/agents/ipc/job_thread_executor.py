@@ -7,7 +7,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..job import JobContext, JobProcess
+from ..job import JobContext
 from ..utils import shortuuid
 from .inference_executor import InferenceExecutor
 from .job_proc_executor import ProcJobExecutor
@@ -55,7 +55,6 @@ class ThreadJobExecutor(ProcJobExecutor):
     def __init__(
         self,
         *,
-        initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         simulation_end_fnc: Callable[[Any], Any] | None,
@@ -69,7 +68,6 @@ class ThreadJobExecutor(ProcJobExecutor):
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         super().__init__(
-            initialize_process_fnc=initialize_process_fnc,
             job_entrypoint_fnc=job_entrypoint_fnc,
             session_end_fnc=session_end_fnc,
             simulation_end_fnc=simulation_end_fnc,
@@ -95,7 +93,6 @@ class ThreadJobExecutor(ProcJobExecutor):
         # parent closes once started
         self._thread = _JobThread(
             ThreadStartArgs(
-                initialize_process_fnc=self._initialize_process_fnc,
                 job_entrypoint_fnc=self._job_entrypoint_fnc,
                 session_end_fnc=self._session_end_fnc,
                 simulation_end_fnc=self._simulation_end_fnc,

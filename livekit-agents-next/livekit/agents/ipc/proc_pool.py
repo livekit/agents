@@ -6,7 +6,7 @@ from multiprocessing.context import BaseContext
 from typing import Any, Literal
 
 from .. import _core, utils
-from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
+from ..job import JobContext, JobExecutorType, RunningJobInfo
 from ..log import logger
 from . import inference_executor, job_proc_executor, job_thread_executor
 from .job_executor import JobExecutor
@@ -28,7 +28,6 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     def __init__(
         self,
         *,
-        initialize_process_fnc: Callable[[JobProcess], Any],
         job_entrypoint_fnc: Callable[[JobContext], Awaitable[None]],
         session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
         simulation_end_fnc: Callable[[Any], Any] | None,
@@ -47,7 +46,6 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         super().__init__()
         self._job_executor_type = job_executor_type
         self._executor_args: dict[str, Any] = {
-            "initialize_process_fnc": initialize_process_fnc,
             "job_entrypoint_fnc": job_entrypoint_fnc,
             "session_end_fnc": session_end_fnc,
             "simulation_end_fnc": simulation_end_fnc,
