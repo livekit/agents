@@ -838,6 +838,23 @@ impl Driver {
             Some(e) => crate::tool_executor::commit_of(&e.function_calls, &e.function_call_outputs),
             None => commit,
         };
+        // On a realtime session the outputs go to the server with the commit (the model's context
+        // lives there; the call is the server's own), before anything this commit lets go -- a
+        // reply that waited on these tools, the follow-up -- asks the server for a reply that must
+        // read them. Pushed while closing too (the server holds the call open until answered);
+        // only an ended socket takes nothing.
+        if let Some(rt) = &self.activity.rt_session
+            && !self.activity.realtime_state.ended()
+        {
+            let auto = rt.capabilities.auto_tool_reply_generation;
+            for item in commit.iter().filter(|i| matches!(i, ChatItem::FunctionCallOutput(_))) {
+                let push = lk_agents_abi::llm::realtime::PushItem {
+                    item: Box::new(item.clone()),
+                    reply_required: !auto,
+                };
+                self.rt_send(lk_agents_abi::RealtimeCommand::PushItem(push), out);
+            }
+        }
         // **Commit first**, so results survive even if the reply speech never runs. The call's
         // stamp is its dispatch, the output's its answer.
         let n = commit.len();

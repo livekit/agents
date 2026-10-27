@@ -147,7 +147,7 @@ capped near a quarter of the seeds.
 
 ## 3. Promises and the rules that check them
 
-34 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
+37 rules (`src/rules/`), each one guarantee with examples that must pass and counterexamples
 that must fail. Failures are counted per seed over 1,024 seeds, split by how random the run
 was: **conversation** (under 0.01 uniform moves per conversation move, 295 seeds), **mixed**
 (0.01 to 10, 437 seeds) and **uniform** (over 10, 292 seeds). A failure in a conversation seed
@@ -191,6 +191,9 @@ was a driver bug).
 | P1 | `first_audio_is_prompt` | once a speech may play, its first audio reaches the speaker within 100 ms of the product having it (the voice's first chunk after its calibrated time to first audio, the realtime server's first delta), unless the speech was paused, cut, its output replaced or the session closing (section 14) | 0 / 0 / 0 (new 2026-10-26) |
 | P5 | `idle_is_cheap` | a call wakes its thread at most 200 times per second of virtual time, averaged over the call (section 14) | 0 / 0 / 0 (new 2026-10-26) |
 | P4 | `items_carry_their_payload` | a pipeline reply names the models that timed it, a transcribed user turn the STT; a step cut short is recorded interrupted; items and metrics are stamped on the wall clock within the session; metrics carry their label, non-negative durations and their speech id (section 13) | 0 / 0 / 0 (new 2026-10-26) |
+| P2 | `realtime_reply_cancelled_with_cause` | the client never cancels the realtime server's reply to the person's turn before it heard of it, nor in the very moment it heard of it with nothing happening (section 13.4) | 0 / 0 / 0 (new 2026-10-26) |
+| P2 | `realtime_reply_reads_tool_output` | a realtime reply asked once a tool's results are committed is asked after the tool's output reached the server (section 13.4) | 0 / 0 / 0 (new 2026-10-26) |
+| P5 | `realtime_server_accepts_requests` | the realtime server refuses no frame the client had already been told was invalid; a refusal racing an event on the wire is the protocol's (section 13.4) | 22 of 1,024 seeds (new 2026-10-26; known: three open findings, section 13.4) |
 | P5 | soak: residue | after a long call and release, nothing opened is still live | red (2026-10-25): seed 6 leaves a floor hold. Every call must reach its close: one that stopped before it fails the soak |
 
 Every rule is exercised. Promises with no rule are listed per subsystem in section 5.
@@ -854,7 +857,7 @@ those samples per seed. Re-recording needs LiveKit Inference credentials: run `r
 
 | Fake | Calibrated from | Still cannot do |
 |---|---|---|
-| Realtime (`fakes/realtime/`) | The production native session (`lk-agents-inference`: its wire machine, pump and reconnects) over a socket whose far end simulates the OpenAI Realtime server, with the OpenAI Realtime docs as ground truth for ordering, cancel semantics and refusals. Recorded on `gpt-realtime` (turns, barge-in, backchannel, silence, client cancel, tool call, manual turns; server and semantic VAD; two takes each): speech start and stop lag, response creation after the stop and after `response.create`, item and first-audio latency, delta sizes, done after the last audio, input transcription after commit and its deltas per word, cancel lag, audio per character, the share of responses with function calls and rate limits, error latency | Other dialects (Gemini, xAI, Azure differences); images; the server's VAD does not hear the audio, the case says when it fires; session expiry; `conversation.item.retrieve` |
+| Realtime (`fakes/realtime/`) | The production native session (`lk-agents-inference`: its wire machine, pump and reconnects) over a socket whose far end is a stateful simulation of the OpenAI Realtime server (section 13.4), held to the real server's answers to the protocol's edge cases (`corpus/probes/`, `corpus/probe_realtime.py`) and, where the probes are silent, the docs. Recorded on `gpt-realtime` (turns, barge-in, backchannel, silence, client cancel, tool call, manual turns; server and semantic VAD; two takes each): speech start and stop lag, response creation after the stop and after `response.create`, item and first-audio latency, delta sizes, done after the last audio, input transcription after commit and its deltas per word, cancel lag, audio per character, the share of responses with function calls and rate limits, error latency; from the probes, the end of a cancelled reply after the cancel and the refusal latency | Other dialects (Gemini, xAI, Azure differences); images; the server's VAD does not judge the audio (it needs some, and the case says when it fires); what a reply says does not depend on what it read (only its usage does); session expiry |
 | Recogniser (`search/conversation.rs`) | Per seed one of Deepgram nova-3, Deepgram Flux, AssemblyAI universal streaming: first words late, start of speech with them, usage before each final, Deepgram's cuts and empty finals, AssemblyAI's second final, Flux's preflights | Confidences and word timings from data; language detection; diarization; the real sockets' reconnects |
 | LLM (`fakes/llm.rs`) | `gpt-4.1-mini` streaming: the role on the first chunk, token chunks, a finish chunk, a usage chunk | Other providers' chunk shapes; refusals and content filters; malformed tool arguments as providers send them |
 | TTS (`fakes/tts.rs`) | Cartesia `sonic-3`: time to first audio | Audio per character; alignment; failures shaped like a real provider's (they are injected uniformly) |
@@ -912,7 +915,90 @@ Open: on a realtime session a filler's `say` speaks with no voice instead of bei
 ### 13.3 Cost
 
 The survey (1,024 seeds) runs in 1.7 s and the campaign (4,096 seeds) in 6.3 s on a laptop,
-within the 2 s and 11 s they took before the calibration.
+within the 2 s and 11 s they took before the calibration. With the realtime server of 13.4 they
+take 1.2 to 1.4 s and 5.4 to 5.6 s.
+
+### 13.4 The realtime server and its probes
+
+`corpus/probe_realtime.py` drives the protocol's corners on the real server, through LiveKit
+Inference (`openai/gpt-realtime`, the `lk` project's credentials, as `record.py` does), and
+keeps each session's client frames and server events as a fixture in `corpus/probes/` (content
+as its length, ids as ordinals): every frame a server might refuse on an idle session, a reply
+asked over an active one, a cancel mid-audio and one in the same breath as a new reply,
+truncations past, at and inside a reply's audio, a reply asked before and after a tool's output
+and in the same breath as it, instructions and the voice changed mid-reply and after, server VAD
+told not to interrupt and not to reply, manual turns with a commit mid-reply and a clear, barge-in
+on both VADs over a reply still generating, replies back to back, and a socket closed mid-reply.
+`tests/conformance.rs` replays every fixture through the fake server frame by frame (a frame the
+probe sent on an event goes once the fake sent that event): each frame must get the real
+reaction (the acknowledgement or the error code, citing the frame or not, within the real delay's
+envelope), each onset over a reply must end it as the real one did, and the events must keep the
+documented order and the recorded response shapes.
+
+What the fake holds and enforces, from the probes:
+
+- **The conversation**: items by id and kind, placed where the server places them (a reply's
+  item when the server adds it, after a client item that arrived first), deleted, truncated (a
+  truncation cuts what the item holds; a later one is judged against the cut, within a
+  millisecond of rounding). A reply reads what the conversation holds when asked (its usage says
+  how much).
+- **One reply at a time**: `response.create` over an active one is refused
+  (`conversation_already_has_active_response`); a cancel frees the conversation at once, so a
+  reply asked in the same breath is created before the cancelled one's last audio delta and
+  `response.done`; a cancel with nothing active is `response_cancel_not_active`, naming an unknown
+  response `response_cancel_not_found`; a cancelled reply's call closes `incomplete` and stays
+  among its outputs.
+- **The refusals and their exact codes**: `input_audio_buffer_commit_empty` under 100 ms,
+  `item_create_duplicate_item_id`, `item_create_invalid_previous_item_id`, `invalid_tool_call_id`
+  (an output for a call the conversation does not hold), `missing_required_parameter` (assistant
+  audio content), `item_delete_invalid_item_id`, `item_retrieve_invalid_item_id`,
+  `item_truncate_invalid_item_id`, `unsupported_content_type` (truncating a user item),
+  `invalid_value` (past the audio, or an unknown client event, `output_audio_buffer.clear`
+  included), `cannot_update_voice` once audio was sent; some cite the frame, some do not, as the
+  real ones do. The server answers the client's frames in order.
+- **Its VAD over the audio sent**: an onset needs audio appended since the buffer was last
+  emptied; with `interrupt_response` it cancels the reply (`turn_detected`), without it the reply
+  completes and the turn is committed after it with no reply of its own.
+
+Every refusal, and two answers the real server gives from the wrong state, are recorded as a
+`Breach`, judged by three rules:
+
+- `realtime_server_accepts_requests`: no refusal the client knew better than to provoke (it had
+  been told the response it cancels was over, the one it asks over had been created, it emptied
+  the buffer itself; an item, truncation or event the server never takes). A refusal racing an
+  event on the wire is the protocol's.
+- `realtime_reply_reads_tool_output`: a reply asked once a tool's results are committed, while the
+  conversation ends in its call, is followed in the same breath by the output and by no other
+  reply: it read the call without its result. With the outputs pushed after the follow-up's
+  `response.create` (the current equivalent of 8a4f95729's bug) it fails 21 of the 1,024 survey
+  seeds and 76 of the 4,096 campaign seeds.
+- `realtime_reply_cancelled_with_cause`: a client cancel stops the server's reply to the person's
+  turn before any audio and with no onset told over it, in the moment the client heard of it with
+  no input, no time passing and no refusal to schedule its speech. With c6881abb9 reverted it
+  fails 5 of the 1,024 survey seeds and 22 of the 4,096 campaign seeds.
+
+Where the docs and the server disagree, the server wins: the docs say a cancel with nothing in
+progress is safe, the server refuses it; they give no minimum for a commit, the server wants
+100 ms; they say nothing of a reply asked right after a cancel, the server takes it and creates
+it before the cancelled reply ends; a truncation one millisecond past the audio is taken; a
+function call cut by a cancel is still among the reply's outputs, `incomplete`; the
+`previous_item_id` of an assistant message's `conversation.item.done` is sometimes `null`.
+
+Found by it and fixed, each with a regression test that fails with its fix reverted:
+
+| Defect | Test |
+|---|---|
+| On a reconnect the driver replayed its conversation onto the new connection after the session had replayed it itself: every item went twice, the server refused each second one | `realtime_reconnect` |
+| The native session counted the audio sent before a reconnect as still in the server's buffer, so a commit after it named nothing and was refused | `realtime_reconnect` |
+| A cancelled reply's late `response.done` closed the reply asked after it, whose audio was dropped, and its late deltas were played as the new reply's | `realtime_cancelled_tail` |
+| The tools' follow-up was asked over a reply the server was still generating, without the reference's `interrupt()` first: refused, the tools' result never spoken | `realtime_tool_follow_up_taken` |
+| The outputs reached the server only on the step's later wake, after the commit had let a waiting reply go, which read the call without its result (campaign seed 1978) | `realtime_outputs_before_next_reply` |
+
+Open, listed under `realtime_server_accepts_requests` in `check::KNOWN_FINDINGS`: a reply the host
+or a deferred tool asks for while the server generates its own reply to the person's turn is
+refused (the reference asks the same and is refused the same); a tool output for a call the
+developer's `update_chat_ctx` removed is refused (`invalid_tool_call_id`); a reconnect that crossed
+a chat-context update still in flight re-creates its items (`item_create_duplicate_item_id`).
 
 ## 14. Manually found bugs and what catches them
 

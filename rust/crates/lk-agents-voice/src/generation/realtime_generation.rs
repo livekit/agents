@@ -14,7 +14,7 @@ use crate::tool_executor::{NextStep, StepDecision};
 use lk_agents_abi::llm::realtime::Event;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, TextOutput};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::{AudioFrame, ChatItem, llm::realtime as rt};
+use lk_agents_abi::{AudioFrame, llm::realtime as rt};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -139,12 +139,7 @@ fn deliver_realtime(
     finished: Finished,
 ) -> StepOutcome {
     let speech = handle.id();
-    // The outputs go to the server (the model's context lives there); the call is the server's own.
-    let outputs: Vec<ChatItem> = decision
-        .commit
-        .into_iter()
-        .filter(|item| matches!(item, ChatItem::FunctionCallOutput(_)))
-        .collect();
+    // The outputs went to the server with the commit (`finish_tools`).
     let (ask, tool_choice) = match decision.next {
         NextStep::Reply(req) => (true, Some(req.tool_choice)),
         // The user barged in over the tool call: the answer is committed and not spoken.
@@ -156,7 +151,7 @@ fn deliver_realtime(
     }
     let step = handle.num_steps();
     let sent =
-        wake.send(RealtimeWake::ToolsDone { speech, step, outputs, ask, tool_choice }).is_ok();
+        wake.send(RealtimeWake::ToolsDone { speech, step, ask, tool_choice }).is_ok();
     if ask && sent { StepOutcome::Next(finished) } else { StepOutcome::Done(finished) }
 }
 

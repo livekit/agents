@@ -53,6 +53,10 @@ pub struct RealtimeMachine {
     tools: Vec<ToolSpec>,
 
     generation: Generation,
+    /// The messages of the generation the last `response.created` closed: the cancelled
+    /// response's tail still streams after it (`corpus/probes/probe-cancel_then_create.json`),
+    /// and is not the next generation's to play.
+    closed_messages: HashSet<String>,
     /// `_response_created_futures`, reduced to its deadline.
     pending_replies: HashMap<String, Ts>,
     /// `_discarded_event_ids`: requests abandoned before the server created their response. The
@@ -111,6 +115,7 @@ impl RealtimeMachine {
             remote: RemoteChatContext::new(),
             tools: Vec::new(),
             generation: Generation::None,
+            closed_messages: HashSet::new(),
             pending_replies: HashMap::new(),
             discarded: HashSet::new(),
             say_tags: VecDeque::new(),
@@ -300,6 +305,9 @@ impl RealtimeMachine {
         }
 
         step.merge(self.reset_input_turn_state());
+        // The new connection's buffer holds none of the audio sent to the old one: a commit now
+        // would name nothing and be refused (`input_audio_buffer_commit_empty`).
+        self.pushed = Duration::ZERO;
 
         let replay = self.remote.to_chat_ctx();
         self.remote = RemoteChatContext::new();

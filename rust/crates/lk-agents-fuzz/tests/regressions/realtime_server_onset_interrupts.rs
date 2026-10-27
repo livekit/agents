@@ -1,6 +1,6 @@
 //! The realtime server hearing the user start speaking interrupts the reply it is playing.
 use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, simulate};
-use lk_agents_fuzz::input::{Input, Millis, Ref, RtEvent};
+use lk_agents_fuzz::input::{Count, Input, Millis, Ref, RtEvent};
 use lk_agents_voice::trace::{GateOp, InterruptCause, InterruptStep, Step};
 
 // Catches: the server's `input_speech_started` taking the guarded interruption by audio activity,
@@ -19,6 +19,9 @@ fn a_server_speech_onset_interrupts_the_playing_reply() {
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         // Past the echo canceller's warm-up, which holds interruptions back.
         Input::Advance { ms: Millis(4_000) },
+        // The server's VAD hears only the audio it was sent.
+        Input::MicFrames { mic: Ref::new(0), chunks: Count(10) },
+        Input::Advance { ms: Millis(100) },
         Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::SpeechStarted },
         Input::Advance { ms: Millis(20) },
     ];

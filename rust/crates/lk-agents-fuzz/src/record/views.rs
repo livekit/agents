@@ -24,7 +24,8 @@ use lk_agents_voice::{
 };
 
 use super::{
-    Answer, Applied, Detail, Handle, Host, Id, Kind, Observed, Opened, Recording, Sink, Tag,
+    Answer, Applied, Breach, Detail, Handle, Host, Id, Kind, Observed, Opened, Recording, Sink,
+    Tag,
 };
 use crate::{check::Subject, input::Input};
 
@@ -969,6 +970,12 @@ impl<'a> InferenceView<'a> {
     /// The speech a request was made for, once the driver has said.
     pub fn request_for(&self, request: u32) -> Option<u64> {
         self.requests().into_iter().find(|q| q.nth() == request).and_then(|q| q.speech())
+    }
+
+    /// What each realtime socket's server refused of the driver, or answered from the wrong
+    /// state, by socket.
+    pub fn realtime_breaches(&self) -> &'a [(Observed, u32, Breach)] {
+        &self.r.breaches
     }
 
     /// Whether this realtime generation delivered this audio delta.

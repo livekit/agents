@@ -19,7 +19,7 @@ use lk_agents_abi::llm::realtime::{
 };
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
-    AudioFrame, ChatItem, ChatMessage, Role, Spawner, StreamSink, ToolChoice, Ts,
+    AudioFrame, ChatMessage, Role, Spawner, StreamSink, ToolChoice, Ts,
     llm::realtime as rt,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -424,7 +424,6 @@ pub enum RealtimeWake {
     ToolsDone {
         speech: SpeechId,
         step: u32,
-        outputs: Vec<ChatItem>,
         ask: bool,
         /// The follow-up's `tool_choice`, as the step decided it.
         tool_choice: Option<lk_agents_abi::ToolChoice>,
@@ -474,10 +473,10 @@ impl Driver {
                     out.signal(crate::agent_session::effects::Signal::CloseProgress);
                 }
             }
-            RealtimeWake::ToolsDone { speech, step, outputs, ask, tool_choice } => {
+            RealtimeWake::ToolsDone { speech, step, ask, tool_choice } => {
                 // Minted here whether asked or not: the id sequence does not depend on the answer.
                 let req_id = self.shared.mint_item_id();
-                self.realtime_tools_done(now, speech, step, outputs, ask, tool_choice, req_id, out);
+                self.realtime_tools_done(now, speech, step, ask, tool_choice, req_id, out);
             }
         }
     }
@@ -552,11 +551,10 @@ impl Driver {
             Event::Metrics(rt::RealtimeMetrics { metrics }) => {
                 out.machine().emit(crate::events::SessionEvent::MetricsCollected { metrics, speech: None });
             }
-            Event::SessionReconnected(_) => {
-                // The socket was recycled: the frame is replayed once onto the new connection.
-                let ctx = self.session.chat_ctx.for_realtime();
-                self.push_activity(Some(ctx), out);
-            }
+            // The session replays its conversation, instructions and tools onto the new connection
+            // itself (`_reconnect`); replaying them again from here re-created every item the
+            // replay had just restored, which the server refuses (`item_create_duplicate_item_id`).
+            Event::SessionReconnected(_) => {}
             Event::Error(err) => self.on_realtime_error(now, err, out),
         }
     }
@@ -1020,22 +1018,12 @@ impl Driver {
         now: Ts,
         speech: SpeechId,
         step: u32,
-        outputs: Vec<ChatItem>,
         ask: bool,
         tool_choice: Option<lk_agents_abi::ToolChoice>,
         req_id: String,
         out: &mut Out,
     ) {
         let auto = self.activity.realtime_state.caps.auto_tool_reply_generation;
-        for item in outputs {
-            // Pushed while closing too (the server holds the call open until answered); only an
-            // ended socket takes nothing.
-            if !self.activity.realtime_state.ended() {
-                let reply_required = ask && !auto;
-                let push = rt::PushItem { item: Box::new(item), reply_required };
-                self.rt_send(RealtimeCommand::PushItem(push), out);
-            }
-        }
         let t = &mut self.activity.realtime_state;
         if !ask || t.ended() || t.closing {
             self.activity.realtime_players.remove(&speech);
@@ -1050,6 +1038,12 @@ impl Driver {
                 || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent);
             let tool_choice =
                 if draining { Some(lk_agents_abi::ToolChoice::Forbidden) } else { tool_choice };
+            // `self._rt_session.interrupt()` first, as the reference does: a response the server
+            // is still generating (a turn it answered while the tools ran) would have it refuse
+            // the follow-up (`conversation_already_has_active_response`), and the tools' result
+            // would never be spoken. The server takes a reply asked right after a cancel
+            // (`corpus/probes/probe-cancel_then_create.json`).
+            self.rt_send(RealtimeCommand::Interrupt(rt::Interrupt { response_id: None }), out);
             let request = Request::ToolFollowUp { speech, step, tool_choice };
             self.send_request(now, req_id, request, None, None, out);
         }

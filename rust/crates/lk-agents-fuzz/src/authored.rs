@@ -22,7 +22,7 @@ use lk_agents_voice::{
 use crate::{
     input::Input,
     record::{
-        Answer, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Tag, Task,
+        Answer, Breach, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Tag, Task,
         TaskEnd,
     },
 };
@@ -303,6 +303,21 @@ impl Authored {
         let spawned = self.next();
         let site = std::panic::Location::caller();
         self.recording.record_task(Task { spawned, site, end });
+        self
+    }
+
+    /// The n-th realtime socket's server refused a frame, or answered from the wrong state.
+    pub fn breach(mut self, socket: u32, breach: Breach) -> Self {
+        let at = self.next();
+        self.recording.record_breach(at, socket, breach);
+        self
+    }
+
+    /// As [`Self::breach`], in the same instant as the fact before it.
+    pub fn breach_at_once(mut self, socket: u32, breach: Breach) -> Self {
+        let at = Observed::at(self.seq + 1, self.seq + self.later_ms);
+        self.seq += 1;
+        self.recording.record_breach(at, socket, breach);
         self
     }
 

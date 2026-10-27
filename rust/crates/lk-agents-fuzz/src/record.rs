@@ -400,6 +400,25 @@ impl Tag {
     }
 }
 
+/// A client frame the realtime server refused, or a request it answered from the wrong state
+/// (`fakes::realtime::server`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Breach {
+    /// Refused with an `error` event. `knowing`: when the client sent it, it had already been told
+    /// what makes it invalid (the response it cancels was done, the one it asks over had been
+    /// created, the item it names never was); otherwise it raced an event still on the wire.
+    Refused { event: String, code: &'static str, why: &'static str, knowing: bool },
+    /// A response asked for while the conversation ended in a function call without its output,
+    /// whose output the client sent afterwards: the reply read the conversation without it.
+    AskedBeforeOutput { response: String, request: Option<String>, call_id: String },
+    /// A client `response.cancel` stopped the server's answer to the person's turn (its VAD ended
+    /// the turn and replied), before any of its audio and with no onset told over it: the server
+    /// saw no reason for it.
+    /// `generation` is the reply as the run knows it (`Kind::Generation`), once the client was
+    /// told of it; `None` is a cancel landing on a reply the client never heard of.
+    CancelledUnprompted { response: String, generation: Option<u32> },
+}
+
 /// An answer the driver gave a caller.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Answer {
@@ -510,6 +529,8 @@ pub struct Recording {
     /// When the product was handed each source's first chunk of audio: a synthesis stream's, once
     /// the voice's time to first audio passed, or a realtime generation's first delta.
     delivered: BTreeMap<(Kind, u32), Observed>,
+    /// What each realtime socket's server refused or answered wrongly, by socket.
+    breaches: Vec<(Observed, u32, Breach)>,
     /// Frames the driver forwarded into a provider stream, tag-decoded: the microphone-to-provider
     /// link, made visible so a rule can hold injected VAD and STT events against the audio.
     forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
@@ -638,6 +659,11 @@ impl Recording {
         &self.results
     }
 
+    /// What the realtime server refused of the client, or answered from the wrong state.
+    pub fn breaches(&self) -> &[(Observed, u32, Breach)] {
+        &self.breaches
+    }
+
     /// Each chunk of audio a synthesis stream produced, with the text that caused it.
     pub fn produced(&self) -> &[(Observed, u32, u16, String)] {
         &self.produced
@@ -761,6 +787,11 @@ impl Recording {
     /// The product was handed a source's first audio.
     pub fn record_delivered(&mut self, at: Observed, kind: Kind, nth: u32) {
         self.delivered.entry((kind, nth)).or_insert(at);
+    }
+
+    /// The n-th realtime socket's server refused a frame, or answered from the wrong state.
+    pub fn record_breach(&mut self, at: Observed, socket: u32, breach: Breach) {
+        self.breaches.push((at, socket, breach));
     }
 
     pub fn record_produced(&mut self, at: Observed, tts: u32, chunk: u16, text: String) {

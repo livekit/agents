@@ -153,6 +153,12 @@ pub enum Record {
         generation: u32,
         chunk: u16,
     },
+    /// What the n-th realtime socket's server refused, or answered from the wrong state.
+    Breach {
+        at: Observed,
+        socket: u32,
+        breach: crate::record::Breach,
+    },
     /// Frames the driver pushed into a provider stream, as the tags they carried.
     Forwarded {
         at: Observed,
@@ -361,6 +367,11 @@ impl Registry {
     fn record_delivered(&self, slot: Slot) {
         let at = self.stamps.next();
         self.write(Record::Delivered { at, slot });
+    }
+
+    pub(super) fn record_breach(&self, socket: u32, breach: crate::record::Breach) {
+        let at = self.stamps.next();
+        self.write(Record::Breach { at, socket, breach });
     }
 
     fn record_produced(&self, tts: u32, chunk: u16, text: String) {

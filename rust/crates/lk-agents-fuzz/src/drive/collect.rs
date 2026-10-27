@@ -123,6 +123,9 @@ impl Run {
                 Record::Generated { at, generation, chunk } => {
                     self.record.record_generated(at, generation % 255, chunk);
                 }
+                Record::Breach { at, socket, breach } => {
+                    self.record.record_breach(at, socket, breach);
+                }
                 Record::Forwarded { at, slot, tags } => {
                     self.record.record_forwarded(at, slot.kind, slot.nth, tags);
                 }
