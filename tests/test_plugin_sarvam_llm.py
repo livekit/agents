@@ -615,6 +615,45 @@ def test_glm53_strips_wiki_grounding() -> None:
     assert not is_given(llm._opts.extra_body)
 
 
+def test_glm53_strips_wiki_grounding_from_extra_body() -> None:
+    llm = SarvamLLM(
+        model="glm5.3",
+        api_key="sk_test",
+        client=_fake_async_client(),
+        extra_body={"wiki_grounding": True, "seed": 7},
+    )
+    assert llm._opts.extra_body == {"seed": 7}
+
+
+def test_model_switch_drops_and_restores_wiki_grounding() -> None:
+    llm = SarvamLLM(
+        model="sarvam-105b",
+        api_key="sk_test",
+        client=_fake_async_client(),
+        wiki_grounding=True,
+        seed=7,
+    )
+
+    llm.update_options(model="glm5.3")
+    assert llm._opts.extra_body == {"seed": 7}
+
+    llm.update_options(model="sarvam-105b")
+    assert llm._opts.extra_body == {"seed": 7, "wiki_grounding": True}
+
+
+def test_model_switch_leaves_extra_body_unset_without_fields() -> None:
+    llm = SarvamLLM(
+        model="sarvam-105b",
+        api_key="sk_test",
+        client=_fake_async_client(),
+        wiki_grounding=True,
+    )
+
+    llm.update_options(model="glm5.3")
+
+    assert not is_given(llm._opts.extra_body)
+
+
 def test_conversations_rejects_image_input() -> None:
     """Conversations model does not support vision — image raises ValueError."""
     llm = SarvamLLM(

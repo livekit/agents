@@ -130,6 +130,13 @@ def _filter_extra_body(extra_body: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in extra_body.items() if k in _ALLOWED_EXTRA_BODY_PARAMS}
 
 
+def _body_for_model(extra_body: dict[str, Any], model: str) -> dict[str, Any]:
+    """Drop the fields *model* rejects from *extra_body*."""
+    if model in _WIKI_GROUNDING_MODELS:
+        return extra_body
+    return {k: v for k, v in extra_body.items() if k != "wiki_grounding"}
+
+
 def _has_image_content(chat_ctx: ChatContext) -> bool:
     """Return True if any user message in *chat_ctx* carries an image."""
     for msg in chat_ctx.messages():
@@ -214,13 +221,12 @@ class LLM(OpenAILLM):
         if is_given(presence_penalty):
             merged_body["presence_penalty"] = presence_penalty
 
-        # wiki_grounding — only for supported models
         if is_given(wiki_grounding):
-            if validated_model in _WIKI_GROUNDING_MODELS:
-                merged_body["wiki_grounding"] = wiki_grounding
-            # silently drop for unsupported models
+            merged_body["wiki_grounding"] = wiki_grounding
 
         filtered_body = _filter_extra_body(merged_body)
+        # wiki_grounding — only for supported models, however it was given
+        model_body = _body_for_model(filtered_body, validated_model)
 
         # reasoning_effort — only for supported models
         effective_reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN
@@ -240,13 +246,14 @@ class LLM(OpenAILLM):
             tool_choice=tool_choice,
             reasoning_effort=effective_reasoning_effort,
             extra_headers=merged_headers,
-            extra_body=filtered_body if filtered_body else NOT_GIVEN,
+            extra_body=model_body if model_body else NOT_GIVEN,
             timeout=timeout,
         )
 
-        # Track the API key and version for runtime model switching
+        # Track the API key, version and configured body for runtime model switching
         self._sarvam_api_key = sarvam_api_key
         self._sarvam_api_version = _api_version(validated_model)
+        self._sarvam_extra_body = filtered_body
 
     # ------------------------------------------------------------------
     # Public overrides
@@ -287,6 +294,9 @@ class LLM(OpenAILLM):
             self._sarvam_api_version = new_version
 
         self._opts.model = new_model
+        # rebuild from the configured body, so a model that takes wiki_grounding gets it back
+        model_body = _body_for_model(self._sarvam_extra_body, new_model)
+        self._opts.extra_body = model_body if model_body else NOT_GIVEN
 
     def chat(
         self,
