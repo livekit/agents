@@ -77,6 +77,19 @@ async def test_commit_waits_the_full_timeout_when_audio_arrived_after_the_final(
     ar._push_audio.assert_called()
 
 
+async def test_a_recent_final_that_predates_pushed_audio_still_waits() -> None:
+    """Age is not the signal: a final older than the pushed audio is stale however recent it is."""
+    ar = _recognition()
+    ar._last_final_transcript_time = time.time() - 0.1  # inside the 0.5s heuristic
+    ar._last_audio_time = time.time()  # but speech was pushed after it
+
+    started = time.monotonic()
+    fut = ar._commit_user_turn(audio_detached=True, transcript_timeout=0.4)
+    assert await asyncio.wait_for(fut, timeout=2.0) == "hello"
+    assert time.monotonic() - started >= 0.4
+    ar._push_audio.assert_called()
+
+
 async def test_commit_waits_when_an_interim_transcript_is_pending() -> None:
     """An interim means STT is still working on this utterance, so the final is still coming."""
     ar = _recognition(transcript="hello")

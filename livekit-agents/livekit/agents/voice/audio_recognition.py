@@ -1118,9 +1118,13 @@ class AudioRecognition:
             )
             # A manual-flush pipeline needs the explicit flush on every commit to keep its turn
             # boundaries, so the shorter wait only applies to pipelines that finalize on their own.
-            flush_and_wait = can_flush or (
-                self._last_final_transcript_time is None
-                or (time.time() - self._last_final_transcript_time > 0.5)
+            # A final that predates audio already pushed is stale whatever its age, so it cannot
+            # take the fast path either: that case used to return immediately and drop the speech
+            # the STT had not transcribed yet.
+            flush_and_wait = (
+                can_flush
+                or not final_covers_audio
+                or time.time() - self._last_final_transcript_time > 0.5
             )
             if flush_and_wait:
                 self._final_transcript_received.clear()
