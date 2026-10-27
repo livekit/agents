@@ -143,10 +143,21 @@ MULTILINGUAL_SENT_CASES = [
         "สวัสดีค่ะ ยินดีต้อนรับค่ะ วันนี้มีอะไรให้ช่วยไหมคะ",
         ["สวัสดีค่ะ", "ยินดีต้อนรับค่ะ", "วันนี้มีอะไรให้ช่วยไหมคะ"],
     ),
+    # a closing quote or bracket stays with the Thai sentence it ends, an opening one goes
+    # with the next sentence
+    ('วันนี้มีโต๊ะว่างค่ะ" กรุณาจองล่วงหน้า', ['วันนี้มีโต๊ะว่างค่ะ"', "กรุณาจองล่วงหน้า"]),
+    ("วันนี้มีโต๊ะว่างค่ะ” กรุณาจองล่วงหน้า", ["วันนี้มีโต๊ะว่างค่ะ”", "กรุณาจองล่วงหน้า"]),
+    ('วันนี้มีโต๊ะว่างค่ะ "กรุณาจองล่วงหน้า"', ["วันนี้มีโต๊ะว่างค่ะ", '"กรุณาจองล่วงหน้า"']),
+    ("วันนี้มีโต๊ะว่างค่ะ “กรุณาจองล่วงหน้า”", ["วันนี้มีโต๊ะว่างค่ะ", "“กรุณาจองล่วงหน้า”"]),
+    (
+        "วันนี้มีโต๊ะว่างค่ะ (กรุณาจองล่วงหน้า) ขอบคุณค่ะ",
+        ["วันนี้มีโต๊ะว่างค่ะ", "(กรุณาจองล่วงหน้า)", "ขอบคุณค่ะ"],
+    ),
     # but not the space after ฯ or ๆ, or next to Latin text and digits
     ("พรุ่งนี้กรุงเทพฯ มีฝนตก", ["พรุ่งนี้กรุงเทพฯ มีฝนตก"]),
     ("ค่อยๆ พูดนะครับ", ["ค่อยๆ พูดนะครับ"]),
     ("กรุณาเช็กใน Inbox ภายใน 5 นาที", ["กรุณาเช็กใน Inbox ภายใน 5 นาที"]),
+    ('กรุณาเช็กใน "Inbox" ภายใน 5 นาที', ['กรุณาเช็กใน "Inbox" ภายใน 5 นาที']),
 ]
 
 
@@ -214,6 +225,30 @@ async def test_streamed_sent_tokenizer_emits_thai_before_end_of_input(
     assert ev.token == "สวัสดีค่ะ ยินดีต้อนรับสู่ร้านค่ะ"
     stream.end_input()
     assert [ev.token async for ev in stream] == ["วันนี้มีโต๊ะว่างช่วงหกโมงเย็นค่ะ"]
+
+
+@pytest.mark.parametrize("tokenizer", [basic.SentenceTokenizer(), blingfire.SentenceTokenizer()])
+@pytest.mark.parametrize(
+    "first, rest",
+    [
+        ('วันนี้มีโต๊ะว่างช่วงหกโมงเย็นค่ะ"', "กรุณาจองล่วงหน้านะคะ"),
+        ("วันนี้มีโต๊ะว่างช่วงหกโมงเย็นค่ะ”", "กรุณาจองล่วงหน้านะคะ"),
+        ("วันนี้มีโต๊ะว่างช่วงหกโมงเย็นค่ะ", "“กรุณาจองล่วงหน้านะคะ”"),
+    ],
+)
+async def test_streamed_sent_tokenizer_emits_quoted_thai_before_end_of_input(
+    tokenizer: tokenize.SentenceTokenizer, first: str, rest: str
+):
+    # a quote next to the space between two Thai sentences must not hide the boundary
+    text = f"{first} {rest}"
+    stream = tokenizer.stream()
+    for i in range(0, len(text), 3):
+        stream.push_text(text[i : i + 3])
+
+    ev = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+    assert ev.token == first
+    stream.end_input()
+    assert [ev.token async for ev in stream] == [rest]
 
 
 WORDS_TEXT = "This is a test. Blabla another test! multiple consecutive spaces:     done"

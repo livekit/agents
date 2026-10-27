@@ -1,11 +1,13 @@
 import re
 
 # Thai has no sentence-ending punctuation: a sentence or clause ends with a space before
-# the next Thai word. This matches a Thai letter, vowel or tone mark followed by whitespace
-# and a consonant or leading vowel. ฯ (abbreviation) and ๆ (repetition) are left out, since
+# the next Thai word. This matches a Thai letter, vowel or tone mark, plus any closing
+# quotes/brackets it ends, followed by whitespace and a consonant or leading vowel, which
+# may open with a quote or bracket. ฯ (abbreviation) and ๆ (repetition) are left out, since
 # a space follows them inside a sentence too.
 THAI_SENTENCE_END_RE = re.compile(
-    r"[\u0e01-\u0e2e\u0e30-\u0e3a\u0e40-\u0e45\u0e47-\u0e4e](?=\s+[\u0e01-\u0e2e\u0e40-\u0e44])"
+    r"[\u0e01-\u0e2e\u0e30-\u0e3a\u0e40-\u0e45\u0e47-\u0e4e][\"'”’»)]*"
+    r"(?=\s+[\"'“‘«(]*[\u0e01-\u0e2e\u0e40-\u0e44])"
 )
 
 
