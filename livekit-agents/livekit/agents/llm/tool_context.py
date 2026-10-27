@@ -360,7 +360,7 @@ ASK_IN_OWN_WORDS = (
 DELIVERED = "delivered to the person as written: {text}"
 """What the model reads as the output of a verbatim result it did not write."""
 
-SAY_EXACTLY = (
+SAY_VERBATIM = (
     "Say this to the person word for word, as your whole reply, and change or add nothing: {text}"
 )
 """How a model that cannot speak text as written is asked to say exact text."""

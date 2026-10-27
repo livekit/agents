@@ -361,7 +361,7 @@ class RunContext(Generic[Deps_T, State_T]):
 
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
-            self._executor._speaker(self)._say_exactly(text)
+            self._executor._speaker(self)._say_verbatim(text)
             self._first_update_fut.set_result(ToolResult(pair[1].output, reply_required=False))
             self.function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return

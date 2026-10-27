@@ -391,7 +391,7 @@ class _ToolExecutor:
                 # the model reads that it was said
                 said = str(output.output)
                 if not first_update_fut.done():
-                    self._speaker(run_ctx)._say_exactly(said)
+                    self._speaker(run_ctx)._say_verbatim(said)
                     said = None
                 output = delivered(output)
 
@@ -623,7 +623,7 @@ class _ToolExecutor:
             if group:
                 self._reply(session, target_activity, group)
                 group = []
-            speech = target_activity._say_exactly(update.say)
+            speech = target_activity._say_verbatim(update.say)
 
             def _on_say_done(speech: SpeechHandle, update: _PendingUpdate = update) -> None:
                 if speech.interrupted and not speech.chat_items:

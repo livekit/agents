@@ -234,13 +234,12 @@ def _text(parts: Iterable[pb.Part]) -> str:
     return "\n".join(part.text for part in parts if part.WhichOneof("content") == "text")
 
 
-def _exact(part: pb.Part) -> pb.Part:
-    """``part``, flagged to reach the person exactly as written."""
+def _mark_verbatim(part: pb.Part) -> None:
+    """Flags ``part`` to reach the person exactly as written."""
     part.metadata.CopyFrom(struct(metadata_to_wire({VERBATIM: True})))
-    return part
 
 
-def _flagged(parts: Iterable[pb.Part]) -> bool:
+def _all_verbatim(parts: Iterable[pb.Part]) -> bool:
     """Whether the parts hold text and every text part is flagged ``livekit/verbatim``."""
     texts = [part for part in parts if part.WhichOneof("content") == "text"]
     return bool(texts) and all(
@@ -368,7 +367,7 @@ def working_event(
     message = message_to_pb(msg, exts=exts, context_id=context_id, task_id=task_id)
     if verbatim:
         for part in message.parts:
-            _exact(part)
+            _mark_verbatim(part)
     return pb.TaskStatusUpdateEvent(
         task_id=task_id,
         context_id=context_id,
@@ -394,7 +393,9 @@ def artifact_event(
     artifact = pb.Artifact(artifact_id=artifact_id, name=ANSWER_ARTIFACT_NAME)
     if text or not append:
         part = pb.Part(text=text)
-        artifact.parts.append(_exact(part) if verbatim else part)
+        if verbatim:
+            _mark_verbatim(part)
+        artifact.parts.append(part)
 
     return pb.TaskArtifactUpdateEvent(
         task_id=task_id,
@@ -426,7 +427,7 @@ def final_event(
         if verbatim and record.status == "input-required":
             for part in status_message.parts:
                 if part.WhichOneof("content") == "text":
-                    _exact(part)
+                    _mark_verbatim(part)
         event.status.message.CopyFrom(status_message)
 
     metadata = metadata_to_wire(record.data.metadata)
@@ -489,20 +490,20 @@ class _Answer:
 
     bodies: dict[str, str] = field(default_factory=dict)
     names: dict[str, str] = field(default_factory=dict)
-    exact: dict[str, bool] = field(default_factory=dict)
+    all_verbatim: dict[str, bool] = field(default_factory=dict)
     last: str | None = None
     """The artifact whose last chunk arrived last: the whole answer, not a partial."""
 
     def collect(self, artifact: pb.Artifact, append: bool, last_chunk: bool = False) -> None:
         chunk = _text(artifact.parts)
-        exact = _flagged(artifact.parts)
+        verbatim = _all_verbatim(artifact.parts)
         if append:
             chunk = self.bodies.get(artifact.artifact_id, "") + chunk
-        if append and artifact.artifact_id in self.exact:
+        if append and artifact.artifact_id in self.all_verbatim:
             # an empty closing chunk keeps what the chunks before it were
-            exact = self.exact[artifact.artifact_id] and (exact or not artifact.parts)
+            verbatim = self.all_verbatim[artifact.artifact_id] and (verbatim or not artifact.parts)
         self.bodies[artifact.artifact_id] = chunk
-        self.exact[artifact.artifact_id] = exact
+        self.all_verbatim[artifact.artifact_id] = verbatim
 
         if artifact.name:
             self.names[artifact.artifact_id] = artifact.name
@@ -524,7 +525,7 @@ class _Answer:
     def verbatim(self) -> bool:
         """Whether every part of the answer is flagged to reach the person as written."""
         ids = self._answer_ids()
-        return bool(ids) and all(self.exact.get(i, False) for i in ids)
+        return bool(ids) and all(self.all_verbatim.get(i, False) for i in ids)
 
 
 @dataclass
@@ -570,7 +571,7 @@ def _status_update(
             task_id=ids.task_id,
             context_id=ids.context_id,
             metadata=metadata,
-            verbatim=_flagged(event.status.message.parts),
+            verbatim=_all_verbatim(event.status.message.parts),
         )
 
     answer_text = answer.text()
@@ -580,7 +581,7 @@ def _status_update(
         task_id=ids.task_id,
         context_id=ids.context_id,
         metadata=metadata,
-        verbatim=answer.verbatim() if answer_text else _flagged(event.status.message.parts),
+        verbatim=answer.verbatim() if answer_text else _all_verbatim(event.status.message.parts),
     )
 
 

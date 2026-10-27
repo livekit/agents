@@ -400,8 +400,8 @@ class AgentRun(Generic[Run_T]):
             verbatim: bool = False,
         ) -> RunResult[Run_T]:
             record_said()
-            exact = input_required if input_required is not None else output
-            result._verbatim = exact if verbatim and isinstance(exact, str) else None
+            answer = input_required if input_required is not None else output
+            result._verbatim = answer if verbatim and isinstance(answer, str) else None
             result._run_output = output
             result._input_required = input_required
             result._interrupted = interrupted
