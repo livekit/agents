@@ -273,7 +273,7 @@ class SpeechStream(stt.SpeechStream):
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
-                self._event_ch.send_nowait(stt.stt._speech_event_from_core(ev))
+                self._event_ch.send_nowait(stt.adapters._speech_event_from_core(ev))
         finally:
             self._native = None
             await aio.cancel_and_wait(push)

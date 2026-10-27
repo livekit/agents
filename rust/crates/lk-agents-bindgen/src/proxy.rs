@@ -75,7 +75,7 @@ fn read(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<Proxy> {
         let mut params = Vec::new();
         for input in &mut sig.inputs {
             if let syn::FnArg::Typed(t) = input {
-                t.attrs.retain(|a| !is_host(a));
+                t.attrs.retain(|a| !is_host(a) && !a.path().is_ident("python"));
                 let syn::Pat::Ident(id) = &*t.pat else {
                     return Err(syn::Error::new_spanned(&t.pat, "a destructuring parameter has no name to convert"));
                 };

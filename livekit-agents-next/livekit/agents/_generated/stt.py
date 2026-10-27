@@ -9,14 +9,33 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
-from typing import Any, Literal
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
-from .. import _bindings
+from livekit import rtc
+from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import Self
+
+from .. import _bindings, _core
 from ..language import LanguageCode
-from ..types import TimedString
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+    TimedString,
+)
+from ..utils import AudioBuffer, aio, is_given
+from .chat_items import MetricsMetadata
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 
 @dataclass
@@ -121,6 +140,382 @@ class SpeechEvent:
     """Wall-clock time when the recognized speech ended, when known."""
 
 
+class STTError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["stt_error"] = "stt_error"
+    timestamp: float
+    label: str
+    error: Exception = Field(..., exclude=True)
+    recoverable: bool
+
+
+TEvent = TypeVar("TEvent")
+
+
+class STT(
+    ABC,
+    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
+    Generic[TEvent],
+):
+    """A speech-to-text provider.
+
+    Plugins implement ``_recognize_impl`` for batch recognition, and override ``stream()`` when the
+    service recognizes live audio.
+    """
+
+    def __init__(self, *, capabilities: STTCapabilities) -> None:
+        super().__init__()
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._capabilities = capabilities
+
+    @property
+    def label(self) -> str:
+        """The name logs and metrics give this instance: its class path."""
+        return self._label
+
+    @property
+    def capabilities(self) -> STTCapabilities:
+        """What this instance supports, fixed at construction."""
+        return self._capabilities
+
+    @property
+    def model(self) -> str:
+        """The model name; ``"unknown"`` until a plugin overrides it."""
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        """The provider name; ``"unknown"`` until a plugin overrides it."""
+        return "unknown"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """The model and provider labelling this instance's turn metrics."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
+    def prewarm(self) -> None:
+        """Open the connection to the service early; a provider with nothing to warm ignores it."""
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        """Set the session's keyterms: its configured ones and those confirmed in the conversation,
+        kept apart from the user's own. Providers with the ``keyterms`` capability override it.
+
+        Args:
+            keyterms: Every keyterm the session holds now.
+        """
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        """Feed a conversation turn to bias recognition. Providers with the ``chat_context``
+        capability override it.
+
+        Args:
+            ev: The turn, as the session announced it.
+        """
+
+    @abstractmethod
+    async def _recognize_impl(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+    ) -> SpeechEvent: ...
+
+    async def recognize(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> SpeechEvent:
+        """Recognize a recording in one attempt; inside a session the framework retries it.
+
+        Args:
+            buffer: The audio to recognize.
+            language: The language to recognize; the provider's default when not given.
+            conn_options: The timeout and retries of the request.
+        """
+        return await self._recognize_impl(buffer, language=language, conn_options=conn_options)
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> RecognizeStream:
+        """Open a stream recognizing live audio. Providers with the ``streaming`` capability
+        override it; any other is wrapped in a ``StreamAdapter``.
+
+        Args:
+            language: The language to recognize; the provider's default when not given.
+            conn_options: The timeout and retries of the connection.
+        """
+        raise NotImplementedError(
+            "streaming is not supported by this STT, please use a different STT or use a StreamAdapter"  # noqa: E501
+        )
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        self.emit(
+            "error",
+            STTError(
+                timestamp=time.time(),
+                label=self._label,
+                error=api_error,
+                recoverable=recoverable,
+            ),
+        )
+
+    async def aclose(self) -> None:
+        """Close the provider and everything it opened."""
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    def _core_label(self) -> str:
+        return self.label
+
+    def _core_capabilities(self) -> STTCapabilities:
+        return self.capabilities
+
+    def _core_id(self) -> dict[str, str]:
+        return {"label": self.label, "model": self.model, "provider": self.provider}
+
+    def _core_prewarm(self) -> None:
+        self.prewarm()
+
+    def _core_update_keyterms(self, keyterms: list[str]) -> None:
+        self._update_session_keyterms(keyterms)
+
+    def _core_push_conversation_item(self, role: str, text: str) -> None:
+        from ..llm import ChatMessage
+        from ..voice.events import ConversationItemAddedEvent
+
+        self._push_conversation_item(
+            ConversationItemAddedEvent(item=ChatMessage(role=role, content=[text]))
+        )
+
+    def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
+        return _core.RetryingStt(_STTConn(self, APIConnectOptions(**conn)), self, **conn)
+
+    async def _core_recognize(
+        self,
+        buffer: list[rtc.AudioFrame],
+        language: str | None,
+        conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> SpeechEvent:
+        return await self.recognize(
+            buffer, language=NOT_GIVEN if language is None else language, conn_options=conn
+        )
+
+    async def _core_stream(
+        self,
+        language: str | None,
+        start_time_offset: float | None,
+        conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> RecognizeStream | None:
+        if not self.capabilities.streaming:
+            return None
+        out = self.stream(language=NOT_GIVEN if language is None else language, conn_options=conn)
+        if start_time_offset is not None:
+            out.start_time_offset = start_time_offset
+        return out
+
+    def _core_failed(self, error: Exception, recoverable: bool) -> None:
+        self._emit_error(error, recoverable)
+
+
+class _STTConn:
+    """``STT`` as the framework holds it under one ``conn_options``."""
+
+    def __init__(self, provider: STT, conn: APIConnectOptions) -> None:
+        self._provider = provider
+        self._conn = conn
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider, name)
+
+    async def _core_recognize(
+        self, buffer: list[rtc.AudioFrame], language: str | None
+    ) -> SpeechEvent:
+        return await self._provider._core_recognize(buffer, language, self._conn)
+
+    async def _core_stream(
+        self, language: str | None, start_time_offset: float | None
+    ) -> RecognizeStream | None:
+        return await self._provider._core_stream(language, start_time_offset, self._conn)
+
+
+class RecognizeStream(ABC):
+    """A live recognition: audio in through ``push_frame``, ``SpeechEvent`` out.
+
+    Plugins implement ``_run``, reading ``_input_ch`` and sending to ``_event_ch``.
+    """
+
+    class _FlushSentinel:
+        """Marks the end of a segment in ``_input_ch``."""
+
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        conn_options: APIConnectOptions,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+    ) -> None:
+        """
+        Args:
+            stt: The provider this stream recognizes for.
+            conn_options: The timeout and retries of the connection; the stream runs one attempt,
+                which the framework retries inside a session.
+            sample_rate: The rate the audio is resampled to before recognition; the input's own
+                rate when not given.
+        """
+        self._stt = stt
+        self._conn_options = conn_options
+        self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
+        self._event_ch = aio.Chan[SpeechEvent]()
+        self._start_time = time.time()
+        self._start_time_offset = 0.0
+        self._context: BaseModel | None = None
+        self._needed_sr = sample_rate if is_given(sample_rate) else None
+        self._pushed_sr = 0
+        self._resampler: rtc.AudioResampler | None = None
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    @property
+    def context(self) -> BaseModel | None:
+        """Speaker metadata the plugin updates as it learns about the speaker."""
+        return self._context
+
+    @context.setter
+    def context(self, value: BaseModel | None) -> None:
+        self._context = value
+
+    @property
+    def start_time_offset(self) -> float:
+        """Where this stream's timestamps sit on the caller's input timeline, in seconds."""
+        return self._start_time_offset
+
+    @start_time_offset.setter
+    def start_time_offset(self, value: float) -> None:
+        if value < 0:
+            raise ValueError("start_time_offset must be non-negative")
+        self._start_time_offset = value
+
+    @property
+    def start_time(self) -> float:
+        """Wall-clock anchor of the stream; plugins may move it to when the first audio reached
+        the provider, so stream-relative times convert accurately."""
+        return self._start_time
+
+    @start_time.setter
+    def start_time(self, value: float) -> None:
+        if value < 0:
+            raise ValueError("start_time must be non-negative")
+        self._start_time = value
+
+    def _report_connection_acquired(self, acquire_time: float, connection_reused: bool) -> None:
+        """Connection timing; kept on the stream, the framework measures its own."""
+        self._acquire_time, self._connection_reused = acquire_time, connection_reused
+
+    @abstractmethod
+    async def _run(self) -> None: ...
+
+    async def _main_task(self) -> None:
+        await self._run()
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        self._stt._emit_error(api_error, recoverable)
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        """Push audio to be recognized."""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        if self._pushed_sr and self._pushed_sr != frame.sample_rate:
+            raise ValueError("the sample rate of the input frames must be consistent")
+        self._pushed_sr = frame.sample_rate
+        if self._needed_sr and self._needed_sr != frame.sample_rate and not self._resampler:
+            self._resampler = rtc.AudioResampler(
+                frame.sample_rate, self._needed_sr, quality=rtc.AudioResamplerQuality.HIGH
+            )
+        for f in self._resampler.push(frame) if self._resampler else [frame]:
+            self._input_ch.send_nowait(f)
+
+    def flush(self) -> None:
+        """Mark the end of the current segment."""
+        self._check_input_not_ended()
+        self._check_not_closed()
+        if self._resampler:
+            for frame in self._resampler.flush():
+                self._input_ch.send_nowait(frame)
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -> None:
+        """Mark the end of input: no more audio will be pushed."""
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -> None:
+        """Close the stream immediately."""
+        self._input_ch.close()
+        await aio.cancel_and_wait(self._task)
+
+    async def __anext__(self) -> SpeechEvent:
+        try:
+            val = await self._event_ch.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+            raise StopAsyncIteration from None
+        return val
+
+    def __aiter__(self) -> AsyncIterator[SpeechEvent]:
+        return self
+
+    def _check_not_closed(self) -> None:
+        if self._event_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")
+
+    def _check_input_not_ended(self) -> None:
+        if self._input_ch.closed:
+            cls = type(self)
+            raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    def _core_push(self, frame: rtc.AudioFrame) -> None:
+        self.push_frame(frame)
+
+    def _core_flush(self) -> None:
+        if not self._input_ch.closed:
+            self.flush()
+
+    def _core_end_input(self) -> None:
+        if not self._input_ch.closed:
+            self.end_input()
+
+
+SpeechStream = RecognizeStream
+
+
 # --- the frozen public paths -----------------------------------------------------------------
 #
 # Assigned here rather than in each class body: pydantic resolves annotations against
@@ -133,3 +528,6 @@ SpeechEventType.__module__ = "livekit.agents.stt.stt"
 SpeechData.__module__ = "livekit.agents.stt.stt"
 RecognitionUsage.__module__ = "livekit.agents.stt.stt"
 SpeechEvent.__module__ = "livekit.agents.stt.stt"
+STTError.__module__ = "livekit.agents.stt.stt"
+STT.__module__ = "livekit.agents.stt.stt"
+RecognizeStream.__module__ = "livekit.agents.stt.stt"

@@ -9,8 +9,9 @@ pub struct Out {
     pub text: String,
 }
 
-/// In the order the modules were first named.
-pub fn emit(decls: &[Decl]) -> Result<Vec<Out>, String> {
+/// In the order the modules were first named. `bases`: the plugin base classes, written after
+/// their module's records.
+pub fn emit(decls: &[Decl], bases: &[crate::bases::Bases]) -> Result<Vec<Out>, String> {
     let mut modules: Vec<String> = Vec::new();
     for d in decls {
         if let Some(t) = d.target(Host::Python)
@@ -19,7 +20,13 @@ pub fn emit(decls: &[Decl]) -> Result<Vec<Out>, String> {
             modules.push(t.module.clone());
         }
     }
-    let mut out: Vec<Out> = modules.iter().map(|m| module(decls, m)).collect::<Result<_, _>>()?;
+    let mut out: Vec<Out> = modules
+        .iter()
+        .map(|m| module(decls, m, bases.iter().find(|b| &b.module == m)))
+        .collect::<Result<_, _>>()?;
+    if let Some(b) = bases.iter().find(|b| !modules.contains(&b.module)) {
+        return Err(format!("{}: a base class's module holds no record", b.module));
+    }
     for d in decls {
         if let Some(m) = &d.dispatch {
             if modules.contains(m) || out.iter().any(|o| o.path == format!("{m}.py")) {
@@ -116,7 +123,7 @@ fn dispatch(decls: &[Decl], d: &Decl, module: &str) -> Result<Out, String> {
         }
     }
     let mut b = String::new();
-    header(&mut b, &[d]);
+    header(&mut b, &[d], &[]);
     b.push_str("from typing import Any\n\n");
     let mut by_module: Vec<(String, Vec<String>)> = Vec::new();
     for (_, class, m, _) in &events {
@@ -173,7 +180,7 @@ fn dispatch(decls: &[Decl], d: &Decl, module: &str) -> Result<Out, String> {
     Ok(Out { path: format!("{module}.py"), text: b })
 }
 
-fn module(decls: &[Decl], name: &str) -> Result<Out, String> {
+fn module(decls: &[Decl], name: &str, bases: Option<&crate::bases::Bases>) -> Result<Out, String> {
     let mine: Vec<&Decl> = decls
         .iter()
         .filter(|d| {
@@ -186,8 +193,10 @@ fn module(decls: &[Decl], name: &str) -> Result<Out, String> {
         decls.iter().filter(|d| d.target(Host::Python).is_some_and(|t| t.module == name)).collect();
 
     let mut b = String::new();
-    header(&mut b, &mine);
-    imports(&mut b, decls, &visible)?;
+    let extra: Vec<&str> =
+        bases.map(|x| x.sources.iter().map(String::as_str).collect()).unwrap_or_default();
+    header(&mut b, &mine, &extra);
+    imports(&mut b, decls, &visible, bases.map_or(&[][..], |x| &x.imports))?;
 
     // Two blank lines between top-level statements (PEP 8), exactly two under the imports when
     // a class follows; one when an alias (a `Literal` or a union) does, as isort wants it.
@@ -218,13 +227,17 @@ fn module(decls: &[Decl], name: &str) -> Result<Out, String> {
         blocks.push(block);
     }
     b.push_str(&blocks.join("\n\n"));
-    b.push_str(&modules(&visible));
+    if let Some(x) = bases {
+        b.push_str("\n\n");
+        b.push_str(&x.body);
+    }
+    b.push_str(&modules(&visible, bases.map_or(&[][..], |x| &x.paths)));
     Ok(Out { path: format!("{name}.py"), text: b })
 }
 
 /// The `__module__` fixups, after the definitions: in the class body pydantic would resolve
 /// annotations against the re-export module ("not fully defined" on first use).
-fn modules(visible: &[&Decl]) -> String {
+fn modules(visible: &[&Decl], classes: &[(String, String)]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for d in visible {
         let Some(t) = d.target(Host::Python) else { continue };
@@ -246,6 +259,9 @@ fn modules(visible: &[&Decl]) -> String {
         };
         lines.push(format!("{name}.__module__ = \"{path}\""));
     }
+    for (class, path) in classes {
+        lines.push(format!("{class}.__module__ = \"{path}\""));
+    }
     if lines.is_empty() {
         return String::new();
     }
@@ -262,11 +278,11 @@ fn modules(visible: &[&Decl]) -> String {
 }
 
 /// Names the distinct Rust sources, first-seen order, so the file says where to edit.
-fn header(b: &mut String, mine: &[&Decl]) {
+fn header(b: &mut String, mine: &[&Decl], extra: &[&str]) {
     let mut sources: Vec<&str> = Vec::new();
-    for d in mine {
-        if !sources.contains(&d.source.as_str()) {
-            sources.push(&d.source);
+    for s in mine.iter().map(|d| d.source.as_str()).chain(extra.iter().copied()) {
+        if !sources.contains(&s) {
+            sources.push(s);
         }
     }
     b.push_str("# GENERATED FILE -- DO NOT EDIT.\n#\n");
@@ -283,7 +299,12 @@ fn header(b: &mut String, mine: &[&Decl]) {
 
 /// Deterministic, grouped imports. Relative ones come from `#[python(from = "..")]`; a foreign
 /// type without one is assumed builtin.
-fn imports(b: &mut String, all: &[Decl], mine: &[&Decl]) -> Result<(), String> {
+fn imports(
+    b: &mut String,
+    all: &[Decl],
+    mine: &[&Decl],
+    extra: &[(String, String)],
+) -> Result<(), String> {
     let mut stdlib: Vec<(&'static str, Vec<String>)> = Vec::new();
     let mut third: Vec<(String, Vec<String>)> = Vec::new();
     let mut rel: Vec<(String, Vec<String>)> = Vec::new();
@@ -381,7 +402,9 @@ fn imports(b: &mut String, all: &[Decl], mine: &[&Decl]) -> Result<(), String> {
         if t.host_fields.iter().any(|h| h.private) {
             needs_s(&mut third, "pydantic", "PrivateAttr");
         }
-        for factory in t.host_fields.iter().filter(|h| !h.private).filter_map(|h| h.default_factory.as_deref()) {
+        for factory in
+            t.host_fields.iter().filter(|h| !h.private).filter_map(|h| h.default_factory.as_deref())
+        {
             if t.kind == Kind::Dataclass {
                 needs(&mut stdlib, "dataclasses", "field");
             } else {
@@ -494,6 +517,22 @@ fn imports(b: &mut String, all: &[Decl], mine: &[&Decl]) -> Result<(), String> {
         }
     }
 
+    for (module, name) in extra {
+        match module.as_str() {
+            "" => {
+                if !plain.contains(&name.as_str()) {
+                    plain.push(name.as_str());
+                }
+            }
+            // `?module`: for an annotation only, under `TYPE_CHECKING`.
+            m if m.starts_with('?') => needs_s(&mut deferred, &m[1..], name),
+            m if m.starts_with('.') => needs_s(&mut rel, m, name),
+            m => match STDLIB.iter().find(|s| **s == m) {
+                Some(std) => needs(&mut stdlib, std, name),
+                None => needs_s(&mut third, m, name),
+            },
+        }
+    }
     if !deferred.is_empty() {
         needs(&mut stdlib, "typing", "TYPE_CHECKING");
     }
@@ -516,6 +555,7 @@ fn imports(b: &mut String, all: &[Decl], mine: &[&Decl]) -> Result<(), String> {
     }
 
     let mut wrote = false;
+    plain.sort_unstable();
     for m in &plain {
         b.push_str(&format!("import {m}\n"));
         wrote = true;
@@ -594,8 +634,17 @@ fn from_import(b: &mut String, module: &str, names: &[String]) {
 }
 
 /// Absolute modules that belong in the stdlib import block; unlisted ones land in third-party.
-const STDLIB: &[&str] =
-    &["abc", "collections.abc", "dataclasses", "datetime", "enum", "pathlib", "typing", "uuid"];
+const STDLIB: &[&str] = &[
+    "abc",
+    "collections.abc",
+    "dataclasses",
+    "datetime",
+    "enum",
+    "pathlib",
+    "types",
+    "typing",
+    "uuid",
+];
 
 fn foreign_imports(
     t: &Ty,

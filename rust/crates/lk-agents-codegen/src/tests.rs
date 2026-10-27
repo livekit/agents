@@ -19,7 +19,7 @@ use crate::{ir, parse, python, stub};
 /// the state `Kind::TypedDict` was in.
 fn generate_python(src: &str) -> String {
     let decls = parse::file("test.rs", "lk_agents_abi", src).expect("the declaration parses");
-    python::emit(&decls)
+    python::emit(&decls, &[])
         .expect("the declaration generates")
         .into_iter()
         .map(|o| o.text)
@@ -33,7 +33,9 @@ fn refuse_python(src: &str) -> String {
         Ok(d) => d,
         Err(e) => return e,
     };
-    python::emit(&decls).err().unwrap_or_else(|| panic!("expected a refusal, got a generated file"))
+    python::emit(&decls, &[])
+        .err()
+        .unwrap_or_else(|| panic!("expected a refusal, got a generated file"))
 }
 
 /// The `_core` classes' stub, for the `class` kind.
@@ -585,7 +587,7 @@ fn a_string_slice_const_in_a_group_is_a_literal_and_a_union() {
 #[test]
 fn a_group_gives_its_structs_kind_module_path_and_total() {
     let decls = parse::file("test.rs", "lk_agents_abi", GROUP).expect("parses");
-    let py = python::emit(&decls).expect("generates");
+    let py = python::emit(&decls, &[]).expect("generates");
     assert_eq!(py.len(), 1);
     assert_eq!(py[0].path, "inference_stt.py");
     let out = &py[0].text;
@@ -665,7 +667,8 @@ fn a_routed_union_generates_its_dispatch_table_keyed_by_the_wire_kind() {
     assert!(e.contains("names no #[python(dispatch"), "{e}");
     let e = refuse_python(&ROUTED.replace("#[python(ignored)]", "#[python(event)]"));
     assert!(e.contains("needs a pydantic Python target"), "{e}");
-    let e = refuse_python(&ROUTED.replace("#[python(ignored)]", "#[python(ignored, mirror = \"_x\")]"));
+    let e =
+        refuse_python(&ROUTED.replace("#[python(ignored)]", "#[python(ignored, mirror = \"_x\")]"));
     assert!(e.contains("mirrors a state but is not an event"), "{e}");
 }
 
@@ -818,7 +821,7 @@ fn the_session_schema_renders_its_five_pydantic_row_models() {
     let src = include_str!("../../lk-agents-storage/src/schema.rs");
     let decls =
         parse::file("schema.rs", "lk_agents_storage::schema", src).expect("the schema parses");
-    let outs = python::emit(&decls).expect("the schema generates");
+    let outs = python::emit(&decls, &[]).expect("the schema generates");
     let module = |name: &str| {
         let file = format!("{name}.py");
         let found = outs.iter().find(|o| o.path.rsplit('/').next() == Some(file.as_str()));
@@ -865,4 +868,67 @@ fn a_host_field_default_factory_is_a_dataclass_field_with_its_import() {
     assert!(out.contains("created_at: float = field(default_factory=time.time)"), "{out}");
     assert!(out.contains("import time\n"), "{out}");
     assert!(out.contains("from dataclasses import dataclass, field"), "{out}");
+}
+
+/// A provider trait beside one record, as the generated module holds both.
+const PROVIDER: &str = r#"
+    #[derive(Host)]
+    #[python(dataclass, module = "m", path = "livekit.agents.m", name = "Caps")]
+    pub struct Caps { pub streaming: bool }
+
+    /// A provider.
+    #[crate::host(proxy(host = "livekit.agents.m.P"))]
+    #[python(provider(module = "m", path = "livekit.agents.m", events = "error", error(name = "PError", kind = "p_error")))]
+    pub trait P: Send + Sync {
+        /// Its name.
+        #[python(label)]
+        fn label(&self) -> String;
+        /// What it can do.
+        #[python(init)]
+        fn capabilities(&self) -> Caps;
+        #[python(conn)]
+        fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn P>> { None }
+        /// Ask it.
+        #[python(hook = "ask", impl = "_ask_impl")]
+        async fn ask(&self, text: &str, language: Option<&str>) -> Result<Caps, ProviderError>;
+        MARKER
+    }
+"#;
+
+fn generate_provider(src: &str) -> Result<String, String> {
+    let decls = parse::file("test.rs", "lk_agents_abi", src)?;
+    let exposed = parse::exposed("test.rs", "lk_agents_abi", src)?;
+    let bases = crate::bases::emit(&decls, &exposed.providers)?;
+    Ok(python::emit(&decls, &bases)?.into_iter().map(|o| o.text).collect())
+}
+
+// Catches: a trait method the base class does not answer reaching a runtime `AttributeError` on
+// `_core_<method>` instead of failing the codegen, which is what keeps the two from drifting.
+#[test]
+fn a_provider_method_without_a_python_role_is_refused() {
+    let err = generate_provider(&PROVIDER.replace("MARKER", "fn flush(&self);"))
+        .expect_err("an unanswered method is a codegen error");
+    assert!(err.contains("P::flush") && err.contains("what is this method"), "{err}");
+}
+
+// Catches: a `_core_` method missing for a trait method, `conn_options` not reaching the plugin
+// through the conn view, or an optional core argument passed as `None` where the plugin API
+// takes `NOT_GIVEN`.
+#[test]
+fn every_provider_method_gets_its_core_surface() {
+    let out = generate_provider(&PROVIDER.replace("MARKER", "")).expect("generates");
+    for core in ["_core_label", "_core_capabilities", "_core_with_conn_options", "_core_ask"] {
+        assert!(out.contains(&format!("def {core}(self")), "{core}: {out}");
+    }
+    // Wrapping aside.
+    let flat = out.split_whitespace().collect::<Vec<_>>().join(" ").replace("( ", "(");
+    for want in [
+        "async def _ask_impl(self, text: str, *, language: NotGivenOr[str] = NOT_GIVEN, conn_options: APIConnectOptions ) -> Caps: ...",
+        "return await self.ask(text, language=NOT_GIVEN if language is None else language, conn_options=conn )",
+        "return _PConn(self, APIConnectOptions(**conn))",
+        "return await self._provider._core_ask(text, language, self._conn)",
+        "P.__module__ = \"livekit.agents.m\"",
+    ] {
+        assert!(flat.contains(want), "{want}: {out}");
+    }
 }

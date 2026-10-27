@@ -373,12 +373,12 @@ impl<T: Send + Sync> crate::StreamSink<T> for HostSink<T> {
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        Python::attach(|py| self.handle.call_in_loop(py, "flush", None))
+        Python::attach(|py| self.handle.call_in_loop(py, "_core_flush", None))
     }
 
     /// A failure means the loop is gone, which the source reports as end of stream.
     fn end_input(&self) {
-        let _ = self.handle.call_soon("end_input", |py| Ok(PyTuple::empty(py)));
+        let _ = self.handle.call_soon("_core_end_input", |py| Ok(PyTuple::empty(py)));
     }
 }
 

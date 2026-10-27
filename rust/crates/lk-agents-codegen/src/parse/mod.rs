@@ -4,6 +4,7 @@
 
 mod exposed;
 mod meta;
+mod provider;
 mod signature;
 
 use crate::ir::*;
@@ -203,6 +204,7 @@ fn bare_target(host: Host, kind: Kind, module: &str, name: &str, path: Option<St
         constructor: false,
         order: Vec::new(),
         typed_dict_from: None,
+        from_items: false,
     }
 }
 
@@ -779,6 +781,7 @@ fn targets(
                     .unwrap_or_default(),
                 typed_dict_from: str_arg(attrs, outer, "typed_dict_from")?
                     .or_else(|| grouped.and_then(|g| g.typed_dict_from.clone())),
+                from_items: flag(attrs, outer, "from_items"),
             });
         }
     }

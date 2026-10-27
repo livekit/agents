@@ -8,11 +8,13 @@ use lk_agents_host_derive::Host;
 #[derive(Debug, Clone, PartialEq, Eq, Default, Host)]
 #[binding(extract, from_items)]
 pub struct ProviderId {
-    /// `f"{module}.{classname}"` for a plugin; whatever a native provider calls itself.
+    /// The name logs and metrics give a provider: a plugin's class path, whatever a native
+    /// provider calls itself.
     pub label: String,
-    /// The model name, or `"unknown"` -- the base-class default, never a stand-in for a name.
+    /// The model name; `"unknown"` until a plugin overrides it.
+    // Never a stand-in for a name.
     pub model: String,
-    /// The provider name, or `"unknown"`.
+    /// The provider name; `"unknown"` until a plugin overrides it.
     pub provider: String,
 }
 

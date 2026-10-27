@@ -309,9 +309,15 @@ fn expand(
 /// Every marker inside the item that rustc does not know: `#[host(..)]` on a method, parameter,
 /// field, variant or associated const -- and, inside a `group`, the record helpers (`python`,
 /// `node`, `binding`) on each struct, enum and const directly in it (a nested group strips its
-/// own). The item's own attributes are left alone: a second `#[host(stream)]` is its own call.
+/// own). A proxy trait's Python face (`#[python(..)]` on the trait, its methods and parameters,
+/// read by `lk-agents-codegen`) goes too. The item's other attributes are left alone: a second
+/// `#[host(stream)]` is its own call.
 fn strip(item: &mut syn::Item, group: bool) {
-    let words: &[&str] = if group { &["host", "python", "node", "binding"] } else { &["host"] };
+    let words: &[&str] = match item {
+        _ if group => &["host", "python", "node", "binding"],
+        syn::Item::Trait(_) => &["host", "python"],
+        _ => &["host"],
+    };
     let clean = |attrs: &mut Vec<syn::Attribute>| {
         attrs.retain(|a| {
             !a.path().segments.last().is_some_and(|s| words.iter().any(|w| s.ident == w))
@@ -346,6 +352,7 @@ fn strip(item: &mut syn::Item, group: bool) {
             }
         }
         syn::Item::Trait(t) => {
+            t.attrs.retain(|a| !a.path().is_ident("python"));
             for inner in &mut t.items {
                 if let syn::TraitItem::Fn(f) = inner {
                     clean(&mut f.attrs);
@@ -506,6 +513,13 @@ mod tests {
         )
         .to_string();
         assert!(!out.contains("soon") && !out.contains("lenient") && out.contains("kept"), "{out}");
+        let out = super::expand_host(
+            quote!(proxy(host = "a.B")),
+            quote! { #[python(provider(module = "b"))] pub trait T { #[python(hook)] fn f(&self, #[python(attr)] x: u8); } },
+            false,
+        )
+        .to_string();
+        assert!(!out.contains("python"), "the Python face is the codegen's: {out}");
         let out = super::expand_host(
             quote!(export),
             quote! { pub fn f(#[host(lenient)] x: u8) -> u8 { x } },

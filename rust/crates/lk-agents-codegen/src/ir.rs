@@ -239,6 +239,8 @@ pub struct Target {
     /// `#[python(typed_dict_from = "typing")]`, default `typing_extensions`: they are different
     /// classes before 3.13 and `is_typeddict()` tells them apart.
     pub typed_dict_from: Option<String>,
+    /// `#[binding(from_items)]`: the binding reads it as a dict, so a host hands it `asdict(..)`.
+    pub from_items: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,6 +503,7 @@ pub struct Exposed {
     pub kwargs: Vec<KwRecord>,
     pub streams: Vec<Stream>,
     pub proxies: Vec<Proxy>,
+    pub providers: Vec<Provider>,
 }
 
 impl Exposed {
@@ -522,6 +525,7 @@ impl Exposed {
         self.kwargs.extend(other.kwargs);
         self.streams.extend(other.streams);
         self.proxies.extend(other.proxies);
+        self.providers.extend(other.providers);
     }
 }
 
@@ -630,4 +634,103 @@ pub enum ProxyAction {
     /// `_core_<method>` on the host object: a no-arg getter is read once at construction, a sync
     /// `()` method is fire-and-forget, other sync methods are direct calls, `async` awaits.
     Core,
+}
+
+/// `#[python(provider(..))]` on a `#[host(proxy)]` trait: the Python base class plugins subclass,
+/// generated with the `_core_*` surface the proxy calls, so the two cannot drift.
+#[derive(Debug, Clone)]
+pub struct Provider {
+    pub source: String,
+    /// `proxy(host)`'s last segment, else `provider(name)`.
+    pub class: String,
+    /// The `_generated` module it is written into, after the module's records.
+    pub module: String,
+    /// The public module, as `__module__`.
+    pub path: String,
+    pub doc: Vec<String>,
+    /// `events = ".."`: the `rtc.EventEmitter` events; empty is no emitter.
+    pub events: Vec<String>,
+    /// `error(name = "..", kind = "..")`: the `error` event's class and its `type`, which
+    /// `_emit_error` emits.
+    pub error: Option<(String, String)>,
+    pub methods: Vec<ProviderMethod>,
+}
+
+/// One trait method: its `_core_<rust>` method, and the Python face its role gives it.
+#[derive(Debug, Clone)]
+pub struct ProviderMethod {
+    pub rust: String,
+    pub doc: Vec<String>,
+    pub role: Role,
+    pub params: Vec<ProviderParam>,
+    /// Verbatim; `None` returns nothing.
+    pub ret: Option<String>,
+    pub is_async: bool,
+    /// The trait gives it a body: the Python hook has a default.
+    pub has_default: bool,
+    /// `when = "cap"`: the `_core_` method answers `None` unless `capabilities.<cap>`.
+    pub when: Option<String>,
+    /// `params = ".."`: the hook's parameters, when they are not the core's (verbatim Python).
+    pub py_params: Option<String>,
+    /// `call = ".."`: what the `_core_` method passes the hook, built from the core's parameters.
+    pub py_call: Option<String>,
+    /// `import = "module:Name"`, repeatable: what `params` and `call` name; imported in the
+    /// `_core_` method (a module-level import of the session would be a cycle), and under
+    /// `TYPE_CHECKING` for an annotation.
+    pub imports: Vec<String>,
+    /// `stream(..)`: the class this method returns, generated after the provider.
+    pub stream: Option<StreamClass>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Role {
+    /// `label`: the class path.
+    Label,
+    /// `init`: a constructor keyword, stored, read by a property of the method's name.
+    Init,
+    /// `identity`: the `ProviderId` fields but `label` as properties plugins override, and
+    /// `metrics_metadata`.
+    Identity,
+    /// `hook = "name"` (default: the Rust name): a method plugins override. `impl = ".."`: the
+    /// hook calls that abstract method. `unsupported = ".."`: the default raises
+    /// `NotImplementedError` with that text. `store = "attr", default = ".."`: the default keeps
+    /// its one argument in `self.<attr>`, which holds `default` until then.
+    Hook {
+        name: String,
+        implementation: Option<String>,
+        unsupported: Option<String>,
+        store: Option<(String, String)>,
+    },
+    /// `conn`: the provider under one `conn_options`; `retry = "Class"` wraps it in that core
+    /// retry loop, which reports each failed attempt to `_core_failed`.
+    Conn { retry: Option<String> },
+    /// `markup`: `markup._provider_key()`, the nested `Markup` class plugins override.
+    Markup,
+    /// `chat`: a `_core.ChatRequest` read into the hook's keywords.
+    Chat { name: String },
+    /// `value = "expr"`: the `_core_` method answers a Python expression.
+    Value(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderParam {
+    pub name: String,
+    pub rust_ty: String,
+    /// `ty = ".."`: the hook's annotation, when it is not the core's.
+    pub py_ty: Option<String>,
+    /// `import = "module:Name"`: what `ty` names.
+    pub import: Option<String>,
+    /// `attr`: set on the method's result rather than passed to the hook.
+    pub attr: bool,
+}
+
+/// `stream(name = "..", kind = "..", alias = "..", doc = "..")` on the method returning it.
+#[derive(Debug, Clone)]
+pub struct StreamClass {
+    pub name: String,
+    /// The stream idiom: `recognize`, `synthesize`, `chunked`, `chat`, `vad`.
+    pub kind: String,
+    /// A deprecated second name.
+    pub alias: Option<String>,
+    pub doc: Vec<String>,
 }

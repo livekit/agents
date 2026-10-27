@@ -69,6 +69,8 @@ pub(super) struct KeytermSlot {
     llm: Option<Arc<dyn Llm>>,
     tools_host: Option<HostRef>,
     inflight: Option<(u64, AbortHandle)>,
+    /// Whether an STT without the `keyterms` capability was told so once already.
+    warned_unsupported: bool,
 }
 
 /// The `record_keyterms` spec (`keyterm_detection.STTContextOptions`): three string lists, forced.
@@ -104,6 +106,7 @@ impl KeytermSlot {
             llm: setup.llm,
             tools_host: setup.tools_host,
             inflight: None,
+            warned_unsupported: false,
         };
         (slot, initial)
     }
@@ -856,6 +859,14 @@ impl Driver {
 
     fn push_keyterms(&mut self, terms: Vec<String>, out: &mut Out) {
         if let Some(stt) = self.session.stt.as_ref().and_then(|s| self.shared.resources.stt(s.id)) {
+            // The reference's `STT._update_session_keyterms` default: said once, then ignored.
+            if !stt.capabilities().keyterms
+                && let Some(slot) = self.session.keyterms.as_mut()
+                && !std::mem::replace(&mut slot.warned_unsupported, true)
+            {
+                log::warn!(target: "livekit.agents", stt = stt.label().as_str();
+                    "keyterms are not supported by this STT, ignoring keyterms update");
+            }
             stt.update_keyterms(&terms);
         }
         out.trace(DetectorStep::KeytermsPushed { terms });

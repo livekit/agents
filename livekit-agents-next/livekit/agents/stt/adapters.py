@@ -13,10 +13,11 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from ..vad import VAD
 from .stt import (
     STT,
+    RecognitionUsage,
     RecognizeStream,
+    SpeechData,
     SpeechEvent,
     STTCapabilities,
-    _speech_event_from_core,
 )
 
 if TYPE_CHECKING:
@@ -29,6 +30,25 @@ __all__ = [
     "StreamAdapter",
     "StreamAdapterWrapper",
 ]
+
+
+def _speech_event_from_core(ev: dict[str, Any], *, offset: float = 0.0) -> SpeechEvent:
+    """An event the core emits as a dict, its times shifted by ``offset``."""
+    alternatives = []
+    for alt in ev.pop("alternatives"):
+        alt["start_time"] += offset
+        alt["end_time"] += offset
+        for word in alt["words"] or []:
+            word.start_time = (word.start_time or 0.0) + offset
+            word.end_time = (word.end_time or 0.0) + offset
+            word.start_time_offset = offset
+        alternatives.append(SpeechData(**alt))
+    usage = ev.pop("recognition_usage")
+    return SpeechEvent(
+        **ev,
+        alternatives=alternatives,
+        recognition_usage=RecognitionUsage(**usage) if usage else None,
+    )
 
 
 @dataclass
@@ -221,8 +241,8 @@ class StreamAdapter(STT):
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         self._stt._update_session_keyterms(keyterms)
 
-    def _push_conversation_item(self, item: ConversationItemAddedEvent) -> None:
-        self._stt._push_conversation_item(item)
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        self._stt._push_conversation_item(ev)
 
     async def _recognize_impl(
         self,

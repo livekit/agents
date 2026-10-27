@@ -2,6 +2,7 @@
 //! `--write` regenerates in place; `--check` exits 1 if any file would change (CI).
 //! The source lists are explicit, not a glob, so generated output never depends on file placement.
 
+mod bases;
 mod ir;
 mod napi;
 mod node;
@@ -106,10 +107,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
         "lk_agents_abi::llm::provider_format",
     ),
     ("rust/crates/lk-agents-abi/src/telemetry/report.rs", "lk_agents_abi::telemetry::report"),
-    (
-        "rust/crates/lk-agents-voice/src/workflows/mod.rs",
-        "lk_agents_voice::workflows",
-    ),
+    ("rust/crates/lk-agents-voice/src/workflows/mod.rs", "lk_agents_voice::workflows"),
     ("rust/crates/lk-agents-voice/src/background_audio.rs", "lk_agents_voice::background_audio"),
     ("rust/crates/lk-agents-voice/src/tool_executor.rs", "lk_agents_voice::tool_executor"),
     ("rust/crates/lk-agents-worker/src/auth.rs", "lk_agents_worker"),
@@ -124,10 +122,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
         "lk_agents_voice::agent_activity::options",
     ),
     ("rust/crates/lk-agents-voice/src/speech_handle.rs", "lk_agents_voice::speech_handle"),
-    (
-        "rust/crates/lk-agents-voice/src/workflows/dtmf.rs",
-        "lk_agents_voice::workflows::dtmf",
-    ),
+    ("rust/crates/lk-agents-voice/src/workflows/dtmf.rs", "lk_agents_voice::workflows::dtmf"),
     (
         "rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs",
         "lk_agents_voice::workflows::warm_transfer",
@@ -268,6 +263,8 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
 const PYTHON_PACKAGES: &[&str] =
     &["python/livekit-agents", "livekit-agents", "livekit-agents-next"];
 const PYTHON_GENERATED: &str = "livekit/agents/_generated";
+/// The package whose plugin base classes stay hand-written: the reference the copy is held to.
+const REFERENCE_PACKAGE: &str = "livekit-agents";
 const NODE_ROOT: &str = "node/src/generated";
 const NODE_BINDING_ROOT: &str = "rust/crates/lk-agents-node/src/generated";
 
@@ -331,10 +328,14 @@ fn run(check: bool) -> Result<usize, String> {
     }
 
     let mut stale = 0;
-    let python = python::emit(&decls)?;
+    let bases = bases::emit(&decls, &exposed.providers)?;
+    let with_bases = python::emit(&decls, &bases)?;
+    let records = python::emit(&decls, &[])?;
     let stub = stub::emit(&decls, &exposed)?;
     for package in python_packages {
         let python_root = root.join(package).join(PYTHON_GENERATED);
+        // The reference keeps its hand-written base classes.
+        let python = if package == REFERENCE_PACKAGE { &records } else { &with_bases };
         for out in python.iter().chain(&stub) {
             stale += put(&python_root.join(&out.path), &out.text, check)?;
         }

@@ -97,57 +97,113 @@ pub type SttSink = Box<dyn StreamSink<AudioFrame>>;
     output = SpeechEvent))]
 pub type SttSource = Box<dyn StreamSource<SpeechEvent>>;
 
-/// A speech-to-text provider. A host `stt.STT` is this trait through its bare `#[host(proxy)]`
-/// (`PyStt`): each method calls the base class's `_core_<method>`, which keeps the plugin API's
-/// quirks (`_recognize_impl`, `stream()`'s `NotImplementedError`, `conn_options`) host-side.
+// A host `stt.STT` is this trait through its bare `#[host(proxy)]` (`PyStt`): each method calls the
+// base class's `_core_<method>`, which `lk-agents-codegen` writes with the class from the
+// `#[python]` markers, keeping the plugin API's shape (`_recognize_impl`, `conn_options`) there.
+/// A speech-to-text provider.
+///
+/// Plugins implement `_recognize_impl` for batch recognition, and override `stream()` when the
+/// service recognizes live audio.
 #[crate::host(proxy(host = "livekit.agents.stt.STT", clock))]
+#[python(provider(
+    module = "stt",
+    path = "livekit.agents.stt.stt",
+    events = "metrics_collected, error",
+    error(name = "STTError", kind = "stt_error")
+))]
 #[async_trait]
 pub trait Stt: Send + Sync {
+    /// The name logs and metrics give this instance: its class path.
+    #[python(label)]
     fn label(&self) -> String;
 
-    /// Read per instance, at construction.
+    /// What this instance supports, fixed at construction.
+    #[python(init)]
     fn capabilities(&self) -> SttCapabilities;
 
-    /// `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
+    /// The model and provider labelling this instance's turn metrics.
+    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
+    #[python(identity)]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label(self.label())
     }
 
-    /// `prewarm()`: open the connection pool early; a provider with nothing to warm ignores it.
+    /// Open the connection to the service early; a provider with nothing to warm ignores it.
+    #[python(hook)]
     fn prewarm(&self) {}
 
-    /// `STT._update_session_keyterms(keyterms)`: the session's static plus confirmed detected
-    /// keyterms. The default drops it; an adapter forwards it.
+    /// Set the session's keyterms: its configured ones and those confirmed in the conversation,
+    /// kept apart from the user's own. Providers with the `keyterms` capability override it.
+    ///
+    /// Args:
+    /// - keyterms: Every keyterm the session holds now.
+    // The default drops it; an adapter forwards it.
+    #[python(hook = "_update_session_keyterms")]
     fn update_keyterms(&self, _keyterms: &[String]) {}
 
-    /// `STT._push_conversation_item`: a conversation turn's role and text, which an STT with the
-    /// `chat_context` capability uses to bias recognition. The default drops it; an adapter
-    /// forwards it.
+    /// Feed a conversation turn to bias recognition. Providers with the `chat_context`
+    /// capability override it.
+    ///
+    /// Args:
+    /// - ev: The turn, as the session announced it.
+    // The default drops it; an adapter forwards it. A host provider takes the session's event.
+    #[python(
+        hook = "_push_conversation_item",
+        params = "ev: ConversationItemAddedEvent",
+        call = "ConversationItemAddedEvent(item=ChatMessage(role=role, content=[text]))",
+        import = "..voice.events:ConversationItemAddedEvent",
+        import = "..llm:ChatMessage"
+    )]
     fn push_conversation_item(&self, _role: &str, _text: &str) {}
 
-    /// A view of this provider whose calls carry `conn` -- how a fallback chain gives each entry
-    /// its per-attempt retry budget and timeout. `None`: the provider takes no per-call options,
-    /// and the chain uses it as it is.
+    // A view of this provider whose calls carry `conn` -- how a fallback chain gives each entry
+    // its per-attempt retry budget and timeout. `None`: the provider takes no per-call options,
+    // and the chain uses it as it is. A host STT is retried by the core (`RetryingStt`).
+    #[python(conn(retry = "RetryingStt"))]
     fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn Stt>> {
         None
     }
 
-    /// `_recognize_impl`, always present. `language: None` is `NOT_GIVEN`, the provider's default.
+    /// Recognize a recording in one attempt; inside a session the framework retries it.
+    ///
+    /// Args:
+    /// - buffer: The audio to recognize.
+    /// - language: The language to recognize; the provider's default when not given.
+    /// - conn_options: The timeout and retries of the request.
+    // Always present. `language: None` is `NOT_GIVEN`, the provider's default.
+    #[python(hook = "recognize", impl = "_recognize_impl")]
     async fn recognize(
         &self,
-        buffer: &[AudioFrame],
+        #[python(ty = "AudioBuffer", import = "..utils:AudioBuffer")] buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
     ) -> Result<SpeechEvent, ProviderError>;
 
-    /// The duplex path, if this instance has one. `None` selects the STT stream adapter (VAD +
-    /// batch `recognize`); `Some(Err)` is a construction failure. `async` as on [`Tts`](crate::Tts).
+    /// Open a stream recognizing live audio. Providers with the `streaming` capability override
+    /// it; any other is wrapped in a `StreamAdapter`.
     ///
-    /// `start_time_offset`: the stream's `RecognizeStream.start_time_offset`, in seconds -- where
-    /// its timestamps sit on the caller's input timeline (a fallback leg opened mid-input). `None`
-    /// leaves the stream's own (`0`).
+    /// Args:
+    /// - language: The language to recognize; the provider's default when not given.
+    /// - conn_options: The timeout and retries of the connection.
+    // The duplex path, if this instance has one. `None` selects the STT stream adapter (VAD +
+    // batch `recognize`); `Some(Err)` is a construction failure. `async` as on [`Tts`](crate::Tts).
+    //
+    // `start_time_offset`: the stream's `RecognizeStream.start_time_offset`, in seconds -- where
+    // its timestamps sit on the caller's input timeline (a fallback leg opened mid-input). `None`
+    // leaves the stream's own (`0`).
+    #[python(
+        hook,
+        when = "streaming",
+        unsupported = "streaming is not supported by this STT, please use a different STT or use a StreamAdapter",
+        stream(
+            name = "RecognizeStream",
+            kind = "recognize",
+            alias = "SpeechStream",
+            doc = "A live recognition: audio in through ``push_frame``, ``SpeechEvent`` out.\n\nPlugins implement ``_run``, reading ``_input_ch`` and sending to ``_event_ch``."
+        )
+    )]
     async fn stream(
         &self,
         language: Option<&LanguageCode>,
-        start_time_offset: Option<f64>,
+        #[python(attr)] start_time_offset: Option<f64>,
     ) -> Option<Result<(SttSink, SttSource), ProviderError>>;
 }

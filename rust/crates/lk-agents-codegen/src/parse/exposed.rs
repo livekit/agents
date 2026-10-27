@@ -206,6 +206,8 @@ pub fn exposed_with(
             syn::Item::Trait(tr) => {
                 let Some(m) = host_attr_strict(label, &tr.attrs)? else { continue };
                 want_head(&format!("{label}: trait {}", tr.ident), &m, "proxy")?;
+                let host = meta_str(&m, "proxy.host");
+                out.providers.extend(super::provider::provider(label, tr, host.as_deref(), text)?);
                 out.proxies.push(proxy(label, module, text, &parsed, tr, &m, &al)?);
             }
             _ => {}
@@ -664,7 +666,7 @@ fn stream(
     })
 }
 
-fn span_text(text: &str, span: proc_macro2::Span) -> String {
+pub(super) fn span_text(text: &str, span: proc_macro2::Span) -> String {
     let (start, end) = (span.start(), span.end());
     let lines: Vec<&str> = text.lines().collect();
     let mut out = String::new();

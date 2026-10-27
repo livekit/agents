@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from . import _core, llm, stt, tts, vad
+from . import _core, llm, tts, vad
 from .llm.chat_context import AudioContent, ChatItem, ImageContent
 from .llm.tool_context import (
     FunctionTool,
@@ -56,54 +56,6 @@ class _Provider:
 
     def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
         return type(self)(self._obj, APIConnectOptions(**conn))
-
-
-class _Stt(_Provider):
-    _obj: stt.STT
-
-    def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
-        """A plugin runs one attempt, which the core retries within ``conn``; an adapter's
-        engine retries what it runs."""
-        view = _Stt(self._obj, APIConnectOptions(**conn))
-        if isinstance(self._obj, (stt.StreamAdapter, stt.FallbackAdapter)):
-            return view
-        return _core.RetryingStt(view, self._obj, **conn)
-
-    def _core_label(self) -> str:
-        return self._obj.label
-
-    def _core_capabilities(self) -> stt.STTCapabilities:
-        return self._obj.capabilities
-
-    def _core_id(self) -> dict[str, str]:
-        return _identity(self._obj)
-
-    def _core_prewarm(self) -> None:
-        self._obj.prewarm()
-
-    def _core_update_keyterms(self, keyterms: list[str]) -> None:
-        self._obj._update_session_keyterms(keyterms)
-
-    def _core_push_conversation_item(self, role: str, text: str) -> None:
-        from .voice.events import ConversationItemAddedEvent
-
-        item = llm.ChatMessage(role=role, content=[text])  # type: ignore[arg-type]
-        self._obj._push_conversation_item(ConversationItemAddedEvent(item=item))
-
-    async def _core_recognize(self, buffer: list[Any], language: str | None) -> stt.SpeechEvent:
-        return await self._obj.recognize(
-            buffer, language=language or NOT_GIVEN, conn_options=self._conn
-        )
-
-    async def _core_stream(
-        self, language: str | None, start_time_offset: float | None
-    ) -> _InputStream | None:
-        if not self._obj.capabilities.streaming:
-            return None
-        stream = self._obj.stream(language=language or NOT_GIVEN, conn_options=self._conn)
-        if start_time_offset is not None:
-            stream.start_time_offset = start_time_offset
-        return _InputStream(stream, stream.push_frame)
 
 
 class _Tts(_Provider):
@@ -176,11 +128,11 @@ class _InputStream:
         self._core_push = push
         self._ended = False
 
-    def flush(self) -> None:
+    def _core_flush(self) -> None:
         if not self._ended:
             self._stream.flush()
 
-    def end_input(self) -> None:
+    def _core_end_input(self) -> None:
         if not self._ended:
             self._ended = True
             self._stream.end_input()
@@ -713,7 +665,6 @@ def _views() -> dict[type, Any]:
     from .voice.room_io import _core_rtc
 
     return {
-        stt.STT: _Stt,
         tts.TTS: _Tts,
         vad.VAD: _Vad,
         llm.LLM: _Llm,
