@@ -113,8 +113,9 @@ scenarios:
 
       Goals:
       - Ask for two mayonnaise sauces in one request.
-      - Don't order anything else, and finish once the agent confirms.
-    agent_expectations: The agent adds two mayonnaise sauces and confirms both.
+      - Don't order anything else, and finish once the agent has added them.
+    agent_expectations: The agent adds two mayonnaise sauces in one go, without
+      asking the customer to confirm the count.
     tags:
       feature: quantities
     userdata:
@@ -129,9 +130,9 @@ scenarios:
 
       Goals:
       - Ask for a ketchup sauce and a McFlurry Oreo in one request.
-      - Don't order anything else, and finish once the agent confirms.
+      - Don't order anything else, and finish once the agent has added them.
     agent_expectations: The agent adds both a ketchup sauce and a McFlurry Oreo
-      and confirms both.
+      from the one request.
     tags:
       feature: quantities
     userdata:
