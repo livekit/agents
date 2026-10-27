@@ -178,7 +178,7 @@ class STT(stt.STT):
 
     def _core_native(self) -> _core.InferenceStt:
         """The client as a session of the current job holds it: its connections carry that job."""
-        return self._native.identified(list(get_inference_headers().items()))
+        return self._native.identified(list(get_inference_headers().items()), self)
 
     async def _recognize_impl(self, buffer: Any, **_: Any) -> stt.SpeechEvent:
         raise NotImplementedError(

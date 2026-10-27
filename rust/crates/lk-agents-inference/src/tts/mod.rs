@@ -81,6 +81,8 @@ impl Default for TtsOptions {
 pub struct NativeTts {
     shared: Arc<TtsShared>,
     identity: BoundIdentity,
+    /// The host provider this view serves: its `error` event is each failure the core reports.
+    reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
 }
 
 impl std::ops::Deref for NativeTts {
@@ -190,13 +192,19 @@ impl NativeTts {
             clock: lk_agents_abi::BoundClock::new(),
             connections: Arc::default(),
         };
-        NativeTts { shared: Arc::new(shared), identity: BoundIdentity::default() }
+        NativeTts { shared: Arc::new(shared), identity: BoundIdentity::default(), reporter: None }
     }
 
     /// The same client as a session serving another job holds it: its syntheses carry that job's
     /// identification.
-    pub fn identified(&self, headers: Headers) -> NativeTts {
-        let view = NativeTts { shared: Arc::clone(&self.shared), identity: BoundIdentity::default() };
+    /// `reporter` is the host provider whose `error` events this view's failures are.
+    pub fn identified(
+        &self,
+        headers: Headers,
+        reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
+    ) -> NativeTts {
+        let view =
+            NativeTts { shared: Arc::clone(&self.shared), identity: BoundIdentity::default(), reporter };
         view.identity.bind(headers);
         view
     }
@@ -260,7 +268,7 @@ impl NativeTts {
     stub = "def __init__(self, *args: Any, **kwargs: Any) -> None: ...",
     stub = "def bind_clock(self, clock: SessionClock) -> None: ...",
     stub = "def prewarm(self, *, headers: list[tuple[str, str]] | None = None) -> None: ...",
-    stub = "def identified(self, headers: list[tuple[str, str]]) -> InferenceTts: ..."
+    stub = "def identified(self, headers: list[tuple[str, str]], reporter: Any | None = None) -> InferenceTts: ..."
 ))]
 impl NativeTts {
     /// `_set_expressive`: whether syntheses opened from here batch sentences for markup and drop
@@ -383,6 +391,13 @@ impl NativeTts {
 
 #[async_trait]
 impl Tts for NativeTts {
+    /// The provider's `error` event, on the host provider this view serves.
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        if let Some(reporter) = &self.reporter {
+            reporter.failed(error, recoverable);
+        }
+    }
+
     fn label(&self) -> String {
         "livekit.agents.inference.tts.TTS".into()
     }

@@ -78,6 +78,8 @@ impl Default for SttOptions {
 pub struct NativeStt {
     shared: Arc<SttShared>,
     identity: BoundIdentity,
+    /// The host provider this view serves: its `error` event is each failure the core reports.
+    reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
 }
 
 impl std::ops::Deref for NativeStt {
@@ -117,7 +119,7 @@ pub struct SttShared {
     as_dyn(Stt = as_stt),
     stub = "def __init__(self, *args: Any, **kwargs: Any) -> None: ...",
     stub = "def set_vad(self, vad: Any | None = None) -> None: ...",
-    stub = "def identified(self, headers: list[tuple[str, str]]) -> InferenceStt: ..."
+    stub = "def identified(self, headers: list[tuple[str, str]], reporter: Any | None = None) -> InferenceStt: ..."
 ))]
 impl NativeStt {
     pub fn new(opts: SttOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
@@ -134,13 +136,19 @@ impl NativeStt {
             vad: Mutex::new(None),
             live: Mutex::new(Vec::new()),
         };
-        NativeStt { shared: Arc::new(shared), identity: BoundIdentity::default() }
+        NativeStt { shared: Arc::new(shared), identity: BoundIdentity::default(), reporter: None }
     }
 
     /// The same client as a session serving another job holds it: its connections carry that
     /// job's identification.
-    pub fn identified(&self, headers: Headers) -> NativeStt {
-        let view = NativeStt { shared: Arc::clone(&self.shared), identity: BoundIdentity::default() };
+    /// `reporter` is the host provider whose `error` events this view's failures are.
+    pub fn identified(
+        &self,
+        headers: Headers,
+        reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
+    ) -> NativeStt {
+        let view =
+            NativeStt { shared: Arc::clone(&self.shared), identity: BoundIdentity::default(), reporter };
         view.identity.bind(headers);
         view
     }
@@ -359,6 +367,13 @@ impl NativeStt {
 
 #[async_trait]
 impl Stt for NativeStt {
+    /// The provider's `error` event, on the host provider this view serves.
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        if let Some(reporter) = &self.reporter {
+            reporter.failed(error, recoverable);
+        }
+    }
+
     fn label(&self) -> String {
         "livekit.agents.inference.stt.STT".into()
     }

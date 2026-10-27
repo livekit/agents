@@ -50,6 +50,8 @@ pub struct GatewayLlm {
     identity: BoundIdentity,
     /// Runs `prewarm()`'s request.
     spawner: Arc<dyn lk_agents_abi::Spawner>,
+    /// The host `llm.LLM` this view serves: its `error` event is each failure the core reports.
+    reporter: Option<Arc<dyn Llm>>,
 }
 
 impl InferenceLlm {
@@ -79,6 +81,7 @@ impl InferenceLlm {
             clock: lk_agents_abi::BoundClock::new(),
             identity: BoundIdentity::default(),
             spawner,
+            reporter: None,
         };
         InferenceLlm { inner: Arc::new(inner) }
     }
@@ -104,6 +107,13 @@ impl GatewayLlm {
 
 #[async_trait::async_trait]
 impl Llm for GatewayLlm {
+    /// The provider's `error` event, on the host provider this view serves.
+    fn failed(&self, error: ProviderError, recoverable: bool) {
+        if let Some(reporter) = &self.reporter {
+            reporter.failed(error, recoverable);
+        }
+    }
+
     fn label(&self) -> String {
         "livekit.agents.inference.llm.LLM".into()
     }
@@ -152,8 +162,17 @@ impl InferenceLlm {
     /// The client as a session serving the job `headers` (`get_inference_headers()`) identifies
     /// holds it: the same options and transport, its requests carrying that job (two sessions
     /// sharing an instance bill each its own job).
-    fn identified(&self, headers: Vec<(String, String)>) -> PyResult<InferenceLlm> {
+    /// `reporter` is the host `llm.LLM` whose `error` events the session's failures are.
+    #[pyo3(signature = (headers, reporter = None))]
+    fn identified(
+        &self,
+        headers: Vec<(String, String)>,
+        reporter: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<InferenceLlm> {
         check_pid()?;
+        let reporter = reporter
+            .map(|r| <dyn Llm as lk_agents_abi::python::HostProxy>::from_host(&r, None))
+            .transpose()?;
         let inner = &self.inner;
         let view = GatewayLlm {
             opts: Arc::clone(&inner.opts),
@@ -162,6 +181,7 @@ impl InferenceLlm {
             clock: Arc::clone(&inner.clock),
             identity: BoundIdentity::default(),
             spawner: Arc::clone(&inner.spawner),
+            reporter,
         };
         view.identity.bind(headers.into_iter().collect());
         Ok(InferenceLlm { inner: Arc::new(view) })

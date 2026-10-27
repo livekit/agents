@@ -113,9 +113,18 @@ impl InferenceStt {
 
     /// The client as a session serving the job `headers` (`get_inference_headers()`) identifies
     /// holds it: the same options, keyterms and open streams, its connections carrying that job.
-    fn identified(&self, headers: Vec<(String, String)>) -> PyResult<InferenceStt> {
+    /// `reporter` is the host `stt.STT` whose `error` events the session's failures are.
+    #[pyo3(signature = (headers, reporter = None))]
+    fn identified(
+        &self,
+        headers: Vec<(String, String)>,
+        reporter: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<InferenceStt> {
         check_pid()?;
-        Ok(InferenceStt { inner: Arc::new(self.inner.identified(headers.into_iter().collect())) })
+        let reporter =
+            reporter.map(|r| <dyn lk_agents_abi::Stt as HostProxy>::from_host(&r, None)).transpose()?;
+        let view = self.inner.identified(headers.into_iter().collect(), reporter);
+        Ok(InferenceStt { inner: Arc::new(view) })
     }
 }
 

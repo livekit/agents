@@ -157,7 +157,7 @@ class LLM(llm.LLM):
     def _core_native(self) -> _core.InferenceLlm:
         """The client as a session of the current job holds it: its requests carry that job."""
         headers = get_inference_headers(inference_class=self._inference_class)
-        return self._native.identified(list(headers.items()))  # type: ignore[no-any-return]
+        return self._native.identified(list(headers.items()), self)  # type: ignore[no-any-return]
 
     def update_options(
         self,
