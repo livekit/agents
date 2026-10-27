@@ -348,7 +348,9 @@ class RoomIO:
 
     def unset_participant(self) -> None:
         self._participant_identity = None
-        self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        if self._participant_available_fut.done():
+            # startup may still be waiting on a pending one
+            self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
         self._agent_session._cancel_user_away_timer()
         if self._audio_input:
             self._audio_input.set_participant(None)
