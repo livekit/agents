@@ -355,7 +355,9 @@ async fn follow_up(
 }
 
 /// The first request of a reply created behind a playing or cut speech, planned once its item is on
-/// the record. Bounded, and cut short by interruption or closing.
+/// the record: the speech finished, or the step it was playing committed with its tools. Not the
+/// speech's end then: its follow-up step needs the floor this reply may hold. Bounded, and cut
+/// short by interruption or closing.
 async fn replan_after(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
@@ -363,7 +365,10 @@ async fn replan_after(
 ) -> crate::generation::Request {
     let crate::generation::Replan { after, spec } = replan;
     let bound = crate::speech_handle::INTERRUPTION_TIMEOUT + Duration::from_secs(1);
-    let frame = wait_frame(shared, handle, bound, |f| f.finished.contains(&after)).await;
+    let recorded = |f: &crate::agent_session::ActivitySnapshot| {
+        f.finished.contains(&after) || f.tools_committed.keys().any(|(speech, _)| *speech == after)
+    };
+    let frame = wait_frame(shared, handle, bound, recorded).await;
     let instructions = frame.instructions.render(Some(lk_agents_abi::Modality::Audio));
     spec.plan(&frame.chat_ctx, &instructions, shared.time.wall())
 }

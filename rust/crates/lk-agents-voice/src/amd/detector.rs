@@ -309,6 +309,15 @@ impl AmdSystem {
                 () = api.closed() => break,
             }
         }
+        // A tap that opened while the system was closing is still queued here: dropped with the
+        // channel it would never be closed, and a dropped host stream is never cancelled.
+        msgs.close();
+        while let Ok(msg) = msgs.try_recv() {
+            if let Msg::SttOpened(Ok((_sink, source))) = msg {
+                self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: TAP }));
+                self.discard_tap(source);
+            }
+        }
     }
 
     /// One item off the feed: what the reference's `AudioRecognition` hands the classifier.
