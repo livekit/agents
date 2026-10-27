@@ -688,7 +688,16 @@ fn apply(s: &mut ServerSettings, options: &Bound<'_, PyDict>) -> PyResult<()> {
             "prometheus_multiproc_dir" => s.prometheus_multiproc_dir = v.extract()?,
             "version" => s.version = v.extract()?,
             "job_executor_type" => s.job_executor_type = v.extract()?,
-            "multiprocessing_context" => s.multiprocessing_context = v.extract()?,
+            "multiprocessing_context" => {
+                let context: String = v.extract()?;
+                // a fork is safe from one thread only: off Linux the preloaded forkserver runs several
+                s.multiprocessing_context = if context == "forkserver" && !cfg!(target_os = "linux") {
+                    log::warn!(target: LOG, "the forkserver is used on Linux only, job processes are spawned");
+                    "spawn".into()
+                } else {
+                    context
+                };
+            }
             "job_memory_warn_mb" => s.job_memory_warn_mb = v.extract()?,
             "job_memory_limit_mb" => s.job_memory_limit_mb = v.extract()?,
             "shutdown_process_timeout" => s.shutdown_process_timeout = v.extract()?,
