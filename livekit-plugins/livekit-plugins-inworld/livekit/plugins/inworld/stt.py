@@ -329,6 +329,9 @@ class SpeechStream(stt.SpeechStream):
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
                 self._audio_duration_collector.flush()
+                # closeStream finalizes the last turn itself.
+                if self._input_ch.closed and self._input_ch.empty():
+                    continue
                 try:
                     await self._ws.send_str(json.dumps({"endTurn": {}}))
                 except Exception as e:
@@ -380,6 +383,8 @@ class SpeechStream(stt.SpeechStream):
                         continue
                     self._process_stream_event(data)
                     result = data.get("result", {})
+                    if self._closing_ws and "usage" in result:
+                        return
                     if "speechStarted" in result or "transcription" in result:
                         self._mark_provider_progress()
             if not (

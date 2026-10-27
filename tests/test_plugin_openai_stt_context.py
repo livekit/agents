@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from collections.abc import Callable
 from typing import Any
@@ -830,3 +831,87 @@ async def test_file_transcription_language_override_applies_to_one_call() -> Non
     assert 'name="language"\r\n\r\nen' in second
     assert default.alternatives[0].language == "en"
     assert instance._opts.languages == ["en"]
+
+
+@pytest.mark.parametrize("empty_commit", [False, True])
+async def test_end_input_drains_all_items_after_clear_ack(empty_commit: bool) -> None:
+    instance = _offline_stt(use_realtime=True, model="gpt-4o-mini-transcribe")
+    stream = instance.stream()
+    ws = await _connected(stream)
+    try:
+        # Server VAD can commit a turn before the caller ends input.
+        ws.incoming.put_nowait({"type": "input_audio_buffer.committed", "item_id": "prior"})
+        stream.push_frame(_silence())
+        stream.end_input()
+        await _wait_for("the input barrier", lambda: bool(_of_type(ws, "input_audio_buffer.clear")))
+        commit = _of_type(ws, "input_audio_buffer.commit")[-1]
+        if empty_commit:
+            ws.incoming.put_nowait(
+                {
+                    "type": "error",
+                    "error": {
+                        "code": "input_audio_buffer_commit_empty",
+                        "event_id": commit["event_id"],
+                    },
+                }
+            )
+        else:
+            ws.incoming.put_nowait({"type": "input_audio_buffer.committed", "item_id": "last"})
+        ws.incoming.put_nowait({"type": "input_audio_buffer.cleared"})
+        await asyncio.sleep(0.01)
+        assert not stream._task.done(), "committed audio still needs a transcript"
+        if not empty_commit:
+            ws.incoming.put_nowait(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "last",
+                    "transcript": "last",
+                }
+            )
+            await asyncio.sleep(0.01)
+            assert not stream._task.done(), "transcripts can finish out of order"
+        ws.incoming.put_nowait(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item_id": "prior",
+                "transcript": "prior",
+            }
+        )
+        await asyncio.wait_for(asyncio.shield(stream._task), 1)
+        texts = [
+            event.alternatives[0].text
+            async for event in stream
+            if event.type == SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        assert texts == (["prior"] if empty_commit else ["last", "prior"])
+    finally:
+        await stream.aclose()
+        await instance.aclose()
+
+
+@pytest.mark.parametrize("message", ["input_audio_buffer.commit", "input_audio_buffer.clear"])
+async def test_final_control_write_failure_is_retryable(message, monkeypatch):
+    from .stt_contract_cases import CASES_BY_NAME, assert_control_write_failure
+
+    await assert_control_write_failure(CASES_BY_NAME["openai"], monkeypatch, message, "end")
+
+
+async def test_remote_close_before_final_ack_is_an_error(monkeypatch):
+    from livekit.agents import APIError
+
+    from .stt_contract_cases import CASES_BY_NAME, make_provider
+
+    _, instance, transport = make_provider(CASES_BY_NAME["openai"], monkeypatch)
+    stream = instance.stream(
+        conn_options=dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
+    )
+    try:
+        stream.end_input()
+        await _wait_for("the socket", lambda: bool(transport.sockets))
+        await asyncio.sleep(0.01)
+        transport.sockets[0].server_close()
+        with pytest.raises(APIError):
+            await asyncio.wait_for(stream._task, 1)
+    finally:
+        await stream.aclose()
+        await instance.aclose()

@@ -918,3 +918,66 @@ async def test_recognize_language_override_applies_to_one_call() -> None:
     assert overridden.alternatives[0].language == "fr"
     assert default.alternatives[0].language == "en"
     assert batch_stt._opts.language_code == "en"
+
+
+@pytest.mark.parametrize("include_timestamps", [False, True])
+async def test_end_input_waits_for_all_commits(include_timestamps: bool) -> None:
+    ws = _FakeWS()
+    stream = _live_stream(
+        ws, include_timestamps=include_timestamps, include_language_detection=False
+    )
+    try:
+        stream.push_frame(_frame(300))
+        stream.flush()
+        stream.push_frame(_frame(300))
+        stream.end_input()
+        await _wait_until(lambda: sum(message["commit"] for message in ws.sent) == 2)
+        for text in ("first", "last"):
+            if include_timestamps:
+                ws.received.put_nowait(_committed_transcript(text))
+                await asyncio.sleep(0.01)
+                assert not stream._task.done(), "the basic copy is not the final acknowledgement"
+            ws.received.put_nowait(_committed_transcript(text, with_timestamps=include_timestamps))
+            await asyncio.sleep(0.01)
+            if text == "first":
+                assert not stream._task.done(), "a later commit is still pending"
+        await asyncio.wait_for(asyncio.shield(stream._task), 1)
+        texts = [
+            event.alternatives[0].text
+            async for event in stream
+            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        assert texts == ["first", "last"]
+        assert ws._closed.is_set()
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("failure", ["write", "close"])
+async def test_final_commit_failure_is_reported(failure: str) -> None:
+    ws = _FakeWS()
+    cause = aiohttp.ClientConnectionError("connection reset")
+    send = ws.send_str
+
+    async def send_commit(data: str) -> None:
+        if json.loads(data).get("commit") and failure == "write":
+            raise cause
+        await send(data)
+
+    ws.send_str = send_commit
+    stream = _live_stream(ws)
+    stream._conn_options = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
+    if failure == "close":
+
+        async def close_message():
+            await _wait_until(lambda: any(message.get("commit") for message in ws.sent))
+            return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1000, "")
+
+        ws.receive = close_message
+        ws.close_code = 1000
+    try:
+        stream.end_input()
+        with pytest.raises((APIConnectionError, APIStatusError)):
+            await asyncio.wait_for(stream._task, 1)
+    finally:
+        await stream.aclose()

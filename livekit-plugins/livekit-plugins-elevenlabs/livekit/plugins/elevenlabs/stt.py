@@ -552,6 +552,7 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         """Run the streaming transcription session"""
         closing_ws = False
+        pending_commits = 0
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
@@ -573,7 +574,7 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal closing_ws, pending_commits
 
             # Buffer audio into chunks of the configured duration.
             samples_per_chunk = self._opts.sample_rate * self._opts.audio_chunk_duration_ms // 1000
@@ -617,6 +618,8 @@ class SpeechStream(stt.SpeechStream):
 
                     if has_ended:
                         self._audio_duration_collector.flush()
+                        pending_commits += 1
+                        closing_ws = self._input_ch.closed and self._input_ch.empty()
                         await ws.send_str(
                             json.dumps(
                                 {
@@ -632,13 +635,13 @@ class SpeechStream(stt.SpeechStream):
 
                 closing_ws = True
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or self._session.closed:
+                if self._session.closed:
                     return
                 raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal pending_commits
 
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
@@ -651,7 +654,7 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
+                    if self._session.closed:
                         return
                     raise APIStatusError(
                         message="ElevenLabs STT connection closed unexpectedly",
@@ -666,6 +669,10 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     parsed = json.loads(msg.data)
                     self._process_stream_event(parsed)
+                    if parsed.get("message_type") == self._final_message_type:
+                        pending_commits = max(0, pending_commits - 1)
+                        if closing_ws and pending_commits == 0:
+                            return
                     if parsed.get("message_type") in (
                         "partial_transcript",
                         "committed_transcript",
@@ -682,6 +689,8 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                closing_ws = False
+                pending_commits = 0
                 self._last_partial_text = ""
                 if self._opts.previous_text:
                     # Must be the first input_audio_chunk on the connection.

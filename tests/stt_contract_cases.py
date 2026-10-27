@@ -205,6 +205,7 @@ CASES = [
     STTCase(
         "elevenlabs",
         plugin("elevenlabs.stt"),
+        completion_closes_socket=False,
         options={"use_realtime": True},
         progress={"message_type": "partial_transcript", "text": "words"},
         completion=(
@@ -283,7 +284,11 @@ CASES = [
         "inworld",
         plugin("inworld.stt"),
         progress={"result": {"speechStarted": {}}},
-        completion=({"result": {"transcription": {"transcript": "words", "isFinal": True}}},),
+        completion_closes_socket=False,
+        completion=(
+            {"result": {"transcription": {"transcript": "words", "isFinal": True}}},
+            {"result": {"usage": {"transcribedAudioMs": 100}}},
+        ),
         required_env=("INWORLD_API_KEY",),
     ),
     STTCase(
@@ -340,10 +345,14 @@ CASES = [
     STTCase(
         "openai",
         plugin("openai.stt"),
+        completion_closes_socket=False,
+        end_packet="input_audio_buffer.clear",
         options={"use_realtime": True},
         http_session=False,
         progress={"type": "input_audio_buffer.speech_started"},
         completion=(
+            {"type": "input_audio_buffer.committed", "item_id": "test"},
+            {"type": "input_audio_buffer.cleared"},
             {
                 "type": "conversation.item.input_audio_transcription.completed",
                 "item_id": "test",

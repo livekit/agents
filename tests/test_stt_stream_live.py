@@ -54,11 +54,14 @@ async def test_live_stream_flush_idle_and_completion(case):
             )
         )
         finals = asyncio.Queue()
+        received = []
 
         async def collect():
             async for event in stream:
                 if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-                    finals.put_nowait(event.alternatives[0].text)
+                    text = event.alternatives[0].text
+                    received.append(text)
+                    finals.put_nowait(text)
 
         collector = asyncio.create_task(collect())
         try:
@@ -77,7 +80,14 @@ async def test_live_stream_flush_idle_and_completion(case):
                         text = await finals.get()
                         words.update(re.findall(r"[a-z]+", text.lower()))
 
-                await asyncio.wait_for(wait_for_words(), 20)
+                try:
+                    await asyncio.wait_for(wait_for_words(), 20)
+                except asyncio.TimeoutError:
+                    if collector.done():
+                        collector.result()
+                    raise AssertionError(
+                        f"No final transcript for {name}; received: {received!r}"
+                    ) from None
                 assert not collector.done(), "flush ended the public stream"
                 if index == 0:
                     # No outbound audio for longer than the liveness window.
@@ -87,6 +97,10 @@ async def test_live_stream_flush_idle_and_completion(case):
             stream.end_input()
             # Consume through completion; stopping at the first final hides drain hangs.
             await asyncio.wait_for(collector, 17)
+        except Exception:
+            if collector.done() and not collector.cancelled():
+                collector.result()
+            raise
         finally:
             await stream.aclose()
             collector.cancel()
