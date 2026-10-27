@@ -24,6 +24,8 @@ url = "2"
 # The endpoint exchange's HTTP/1.1 request head (`endpoint.rs`).
 httparse = "1"
 livekit-token.workspace = true
+# The log lines' timestamps (`cli.rs`).
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 # `python` only. pyo3's attribute macros spell `::pyo3`, so the crate that expands them names it.
 pyo3 = { workspace = true, optional = true }
 

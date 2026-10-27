@@ -288,6 +288,35 @@ impl BackgroundAudioPlayer {
     }
 }
 
+#[napi(js_name = "ExitSignals")]
+pub struct ExitSignals {
+    pub(crate) inner: std::sync::Arc<lk_agents_worker::cli::ExitSignals>,
+}
+
+#[napi]
+impl ExitSignals {
+    #[napi(constructor)]
+    pub fn new(escalate: Option<bool>) -> Self {
+        let escalate = escalate.unwrap_or(true);
+        ExitSignals { inner: std::sync::Arc::new(lk_agents_worker::cli::ExitSignals::new(escalate)) }
+    }
+
+    #[napi(js_name = "signal")]
+    pub fn signal(&self, exit_served: bool) -> String {
+        self.inner.signal(exit_served).to_string()
+    }
+
+    #[napi(js_name = "served")]
+    pub fn served(&self) {
+        self.inner.served();
+    }
+
+    #[napi(js_name = "draining")]
+    pub fn draining(&self) {
+        self.inner.draining();
+    }
+}
+
 /// `AgentSession(**kwargs)`'s options: `kwargs` crosses once as a raw dict (deprecated kwargs are
 /// migrated here), and the resolved configuration comes back as the dict `session.options` views.
 #[napi(js_name = "SessionOptions")]

@@ -114,6 +114,7 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-voice/src/tool_executor.rs", "lk_agents_voice::tool_executor"),
     ("rust/crates/lk-agents-worker/src/auth.rs", "lk_agents_worker"),
     ("rust/crates/lk-agents-worker/src/config.rs", "lk_agents_worker"),
+    ("rust/crates/lk-agents-worker/src/cli.rs", "lk_agents_worker::cli"),
     ("rust/crates/lk-agents-inference/src/amd/detector.rs", "lk_agents_inference::amd"),
     ("rust/crates/lk-agents-voice/src/keyterm_detection.rs", "lk_agents_voice::keyterm_detection"),
     ("rust/crates/lk-agents-voice/src/amd/classifier.rs", "lk_agents_voice::amd::classifier"),

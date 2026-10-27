@@ -1359,6 +1359,131 @@ async def toolsets() -> None:
             raise AssertionError(f"{bad} was called")
 
 
+async def cli() -> None:
+    """What ``lk agent`` drives, short of a LiveKit server: the command line, the entrypoint's
+    server found in a package, the log lines (JSON and colored), the dev channel to a stand-in
+    CLI keeping a job across a reload, and the exit policy."""
+    import os
+    import struct
+    import tempfile
+    import traceback
+    from pathlib import Path
+
+    from livekit.agents import cli as agents_cli
+    from livekit.agents._exceptions import CLIError
+    from livekit.agents.job import JobAcceptArguments, RunningJobInfo
+    from livekit.protocol import agent as agent_proto
+    from livekit.protocol.agent_pb import agent_dev
+
+    print("== cli")
+    args = _core.parse_cli(["start", "agent.py", "--dev", "--reload-addr", "127.0.0.1:1"])
+    assert (args["entrypoint"], args["cli_addr"], args["log_format"]) == (
+        "agent.py",
+        "127.0.0.1:1",
+        "json",
+    ), args
+    for bad in (["start", "--cli-addr", "x"], ["console"], ["serve"]):
+        with contextlib.suppress(CLIError):
+            _core.parse_cli(bad)
+            raise AssertionError(f"{bad} parsed")
+
+    with tempfile.TemporaryDirectory() as root:
+        package = Path(root, "myapp")
+        package.mkdir()
+        (package / "__init__.py").write_text("")
+        (package / "agent.py").write_text(
+            "from livekit.agents import AgentServer\nserver = AgentServer()\n"
+        )
+        found = agents_cli._load_server(str(package / "agent.py"))
+        assert type(found).__name__ == "AgentServer", found
+        print(f"entrypoint {_core.entrypoint_module(str(package / 'agent.py'))[0]}")
+
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = logging.LogRecord("livekit.agents", logging.ERROR, __file__, 1, "x=%d", (3,), exc_info)
+    record.job_id = "AJ_1"
+    line = json.loads(agents_cli._LogFormatter("json", ensure_ascii=True).format(record))
+    assert (line["message"], line["level"], line["job_id"]) == ("x=3", "ERROR", "AJ_1"), line
+    assert "ValueError: boom" in line["exc_info"], line
+    colored = agents_cli._LogFormatter("compact", ensure_ascii=False).format(record)
+    assert "x=3" in colored and '{"job_id": "AJ_1"}' in colored and "boom" in colored, colored
+    assert traceback  # the record carries a real traceback
+
+    class Server:
+        """The worker's side of the dev channel."""
+
+        reloaded: list[RunningJobInfo] = []
+        active_jobs = [
+            RunningJobInfo(
+                accept_arguments=JobAcceptArguments(name="n", identity="i", metadata="m"),
+                job=agent_proto.Job(id="AJ_running"),
+                url="wss://x",
+                token="t",
+                worker_id="w",
+                fake_job=True,
+            )
+        ]
+
+        async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
+            self.reloaded.extend(jobs)
+
+    async def read(reader: asyncio.StreamReader) -> agent_dev.AgentDevMessage:
+        (length,) = struct.unpack("!I", await reader.readexactly(4))
+        return agent_dev.AgentDevMessage.FromString(await reader.readexactly(length))
+
+    def write(writer: asyncio.StreamWriter, msg: agent_dev.AgentDevMessage) -> None:
+        data = msg.SerializeToString()
+        writer.write(struct.pack("!I", len(data)) + data)
+
+    seen: list[str] = []
+    done = asyncio.Event()
+
+    async def lk_cli(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        seen.append((await read(reader)).server_info.agent_name)
+        assert (await read(reader)).HasField("get_running_jobs_request")
+        kept = agent_dev.RunningAgentJobInfo(job=agent_proto.Job(id="AJ_kept").SerializeToString())
+        write(
+            writer,
+            agent_dev.AgentDevMessage(
+                get_running_jobs_response=agent_dev.GetRunningAgentJobsResponse(jobs=[kept])
+            ),
+        )
+        write(
+            writer,
+            agent_dev.AgentDevMessage(
+                get_running_jobs_request=agent_dev.GetRunningAgentJobsRequest()
+            ),
+        )
+        await writer.drain()
+        running = (await read(reader)).get_running_jobs_response.jobs
+        seen.append(agent_proto.Job.FromString(running[0].job).id)
+        writer.close()
+        done.set()
+
+    stand_in = await asyncio.start_server(lk_cli, "127.0.0.1", 0)
+    port = stand_in.sockets[0].getsockname()[1]
+    server = Server()
+    await asyncio.wait_for(
+        _core.dev_channel(
+            f"127.0.0.1:{port}", "dev-agent", "wss://x", agents_cli._DevServer(server)
+        ),  # type: ignore[arg-type]
+        10,
+    )
+    await done.wait()
+    stand_in.close()
+    print(f"dev channel {seen}, reloaded {[j.job.id for j in server.reloaded]}")
+    assert seen == ["dev-agent", "AJ_running"], seen
+    assert [j.job.id for j in server.reloaded] == ["AJ_kept"], server.reloaded
+
+    exits = _core.ExitSignals(escalate=False)
+    assert exits.signal(False) == "schedule"
+    exits.served()
+    assert exits.signal(True) == "force"
+    assert os.getpid() > 0
+
+
 async def warm_transfer() -> None:
     """The warm transfer the core runs over a host: dialled over SIP and connected (the caller
     leaving then deletes their room), declined, and dialled through Twilio, whose rejected caller
@@ -1583,6 +1708,7 @@ async def main() -> int:
     await warm_transfer()
     await tools()
     await toolsets()
+    await cli()
     log_transport()
     return 0
 

@@ -1,12 +1,14 @@
 //! GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`); see `napi.rs` in `lk-agents-codegen`.
 //!
-//! The Node twin of `lk-agents-py/src/generated`: 267 core items bound (119 functions and consts, 74 classes, 73 records, 1 proxies).
+//! The Node twin of `lk-agents-py/src/generated`: 270 core items bound (121 functions and consts, 75 classes, 73 records, 1 proxies).
 //!
 //! Not bound, and why -- each is a gap in the generator or in a declaration, not in this crate:
 //!
 //! - `lk_agents_abi::tts::markup::summarize_plan_of`: parameter `items`: Vec(Declared { name: "ChatItem", by_ref: false }) borrows inside a container
 //! - `lk_agents_voice::workflows::card_expired`: parameter `today`: `Date` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::workflows::normalize_date_of_birth`: parameter `today`: `Date` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_worker::cli::format_log_record`: parameter `record`: `LogFields` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_worker::cli::dev_channel`: parameter `server`: not yet: `Arc<dyn DevServer>` (a host object behind a proxy)
 //! - `lk_agents_voice::keyterm_detection::resolve_keyterm_detection`: field `llm`: `DetectionLlm` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_voice::turn::migrate_turn_handling_for_host`: parameter `turn_detection`: `TurnDetectionArg` is not a #[derive(Host)] type or a #[host(wire_enum)]
 //! - `lk_agents_voice::agent_activity::options::resolve_recording_options_for_host`: parameter `record`: `RecordingRequest` is not a #[derive(Host)] type or a #[host(wire_enum)]
@@ -152,6 +154,7 @@
 //! - `lk_agents_voice::background_audio::FrameStream`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::background_audio::RandomDraw`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::tool_executor::HostToolRunner`: not yet: a bare proxy (every method calls `_core_<method>`)
+//! - `lk_agents_worker::cli::DevServer`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::workflows::warm_transfer::TransferHost`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::SessionEvents`: not yet: a bare proxy (every method calls `_core_<method>`)
 //! - `lk_agents_voice::agent_session::SessionJob`: not yet: a bare proxy (every method calls `_core_<method>`)

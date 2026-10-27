@@ -13,7 +13,7 @@ import nest_asyncio  # type: ignore
 from livekit import api
 from livekit.rtc.jupyter import display_room
 
-from .cli import cli, proto
+from . import cli
 from .job import JobExecutorType
 from .worker import AgentServer, WorkerOptions
 
@@ -127,5 +127,15 @@ def run_app(server: AgentServer | WorkerOptions, *, jupyter_url: str | None = No
 
         asyncio.run_coroutine_threadsafe(simulate_job(), asyncio.get_event_loop())
 
-    args = proto.CliArgs(log_level="DEBUG", url=ws_url, api_key=api_key, api_secret=api_secret)
-    cli._run_worker(server, args)
+    options = {"ws_url": ws_url, "api_key": api_key, "api_secret": api_secret}
+    cli._run_worker(
+        server,
+        {
+            "log_level": "DEBUG",
+            "log_format": "json",
+            "dev": False,
+            "cli_addr": None,
+            "simulation": False,
+            "options": {k: v for k, v in options.items() if v},
+        },
+    )

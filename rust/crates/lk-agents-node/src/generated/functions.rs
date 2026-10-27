@@ -202,6 +202,27 @@ pub fn update_load_interval() -> f64 {
     lk_agents_worker::UPDATE_LOAD_INTERVAL.as_secs_f64()
 }
 
+/// The command line `lk agent` passes, as the dict the host dispatches on: `command` (`start`,
+/// `console` or `download-files`), `entrypoint`, and for `start` `log_level`, `log_format`
+/// (`json` or `colored`), `dev`, `cli_addr` (also read as the legacy `--reload-addr`),
+/// `simulation` and `options` (the server's `ws_url`/`api_key`/`api_secret` given on the line);
+/// for `console` `connect_addr` and `record`.
+#[napi(js_name = "parseCli")]
+pub fn parse_cli(env: Env, argv: Vec<String>) -> napi::Result<serde_json::Value> {
+    crate::host_error::run(&env, || {
+        lk_agents_worker::cli::parse_cli(argv).map_err(crate::generated::errors::cli_error_to_node)
+    })
+}
+
+/// The entrypoint's module, as `(import string, directory to put on sys.path)`: `path`, or the
+/// first default file in the working directory; a file inside packages imports through them.
+#[napi(js_name = "entrypointModule")]
+pub fn entrypoint_module(env: Env, path: Option<String>) -> napi::Result<(String, String)> {
+    crate::host_error::run(&env, || {
+        lk_agents_worker::cli::entrypoint_module(path).map_err(crate::generated::errors::cli_error_to_node)
+    })
+}
+
 /// `is_evaluated_model` against the `"llm"` or `"stt"` table; any other kind is refused.
 #[napi(js_name = "amdIsEvaluatedModel")]
 pub fn amd_is_evaluated_model(env: Env, model: String, kind: String) -> napi::Result<bool> {

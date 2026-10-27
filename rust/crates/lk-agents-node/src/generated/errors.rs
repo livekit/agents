@@ -15,6 +15,11 @@ pub fn strict_error_to_node(e: lk_agents_abi::llm::provider_format::StrictError)
     JsError::new(kind, e.to_string())
 }
 
+/// `CliError` as a host error (`#[host(error)]` in `rust/crates/lk-agents-worker/src/cli.rs`).
+pub fn cli_error_to_node(e: lk_agents_worker::cli::CliError) -> JsError {
+    JsError::new("livekit.agents._exceptions.CLIError", e.to_string())
+}
+
 /// `McpError` as a host error (`#[host(error)]` in `rust/crates/lk-agents-inference/src/mcp/mod.rs`).
 #[allow(unreachable_patterns)]
 pub fn mcp_error_to_node(e: lk_agents_inference::mcp::McpError) -> JsError {
