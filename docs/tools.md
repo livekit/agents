@@ -74,8 +74,16 @@ delivered at idle in call order: consecutive updates as one reply, each
 `say` on its own, and a `say` the person cut off before any of it played
 is said at the next idle. A model with no TTS that cannot say text as
 written is asked to say it, with a warning that the wording is not
-guaranteed. In one step, verbatim results go out in call order, and the
-last one is the answer when no result of the step asks for a reply.
+guaranteed.
+
+The calls of one step run together, in text as on a call, and their
+outputs reach the model in call order once every call has returned; a
+cancel stops every call still running. Exact text a tool says, and a
+verbatim result that asks for a reply, go out when that tool returns. The
+verbatim results that end the turn are held: when nothing in the step asks
+for a reply, they are the answer, one part each in call order; when a
+result asks for a reply, or a tool hands off or asks a question, they are
+said in call order and the model goes on.
 
 ## Approval
 

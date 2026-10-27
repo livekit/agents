@@ -36,7 +36,6 @@ NOTICE = "Calls are recorded for quality."
 QUESTION = "What email address should the confirmation go to?"
 VERBATIM = "livekit/verbatim"
 
-STEP_NOT_YET = "a step's calls run together and its turn-ending results are one answer: not yet"
 RUST_ASK = (
     "rust ask HandlerOutput.messages/verbatim: the task row's history and flagged parts are "
     "written by the Rust commit"
@@ -176,44 +175,6 @@ async def test_a_verbatim_result_that_ends_the_turn_is_the_flagged_answer(
 
 
 @pytest.mark.rule("R23")
-async def test_the_verbatim_results_of_one_step_go_out_in_call_order(
-    door: Callable[..., Door],
-) -> None:
-    """Three verbatim results in one step, each ending the turn: every call runs, each result
-    but the last is sent at once in call order, and the last is the answer."""
-    model = ScriptedLLM(
-        Reply(tool_calls=[call("first", "c1"), call("second", "c2"), call("third", "c3")])
-    )
-    desk = Agent(instructions="desk", llm=model)
-    ran: list[str] = []
-
-    @desk.tool
-    async def first(ctx: RunContext) -> ToolResult:
-        """First."""
-        ran.append("first")
-        return ToolResult("one", verbatim=True, reply_required=False)
-
-    @desk.tool
-    async def second(ctx: RunContext) -> ToolResult:
-        """Second."""
-        ran.append("second")
-        return ToolResult("two", verbatim=True, reply_required=False)
-
-    @desk.tool
-    async def third(ctx: RunContext) -> ToolResult:
-        """Third."""
-        ran.append("third")
-        return ToolResult("three", verbatim=True, reply_required=False)
-
-    sent = await door(serving(desk)).send("go")
-
-    assert ran == ["first", "second", "third"]
-    assert working(sent.frames) == [("one", True), ("two", True)]
-    assert answer(sent.frames) == ("three", True)
-    assert len(model.requests) == 1
-
-
-@pytest.mark.rule("R23")
 async def test_a_question_asked_as_written_is_a_flagged_status_part(
     door: Callable[..., Door],
 ) -> None:
@@ -289,7 +250,6 @@ async def test_tasks_get_shows_an_exact_answer_flagged(door: Callable[..., Door]
 # ---------------------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason=STEP_NOT_YET)
 async def test_two_slow_tools_of_one_step_finish_in_the_time_of_one() -> None:
     """The calls of one step start together, so two slow tools take the time of the slower."""
     model = ScriptedLLM(
@@ -311,7 +271,6 @@ async def test_two_slow_tools_of_one_step_finish_in_the_time_of_one() -> None:
 
 
 @pytest.mark.rule("R22", "R23")
-@pytest.mark.xfail(strict=True, reason=STEP_NOT_YET)
 async def test_says_from_two_tools_of_one_step_go_out_as_they_finish(
     door: Callable[..., Door],
 ) -> None:
@@ -343,7 +302,6 @@ async def test_says_from_two_tools_of_one_step_go_out_as_they_finish(
 
 
 @pytest.mark.rule("R23")
-@pytest.mark.xfail(strict=True, reason=STEP_NOT_YET)
 async def test_the_turn_ending_results_of_one_step_are_one_answer_in_call_order(
     door: Callable[..., Door],
 ) -> None:
@@ -401,7 +359,6 @@ async def test_a_turn_ending_result_is_said_when_another_asks_for_a_reply(
     assert len(model.requests) == 2
 
 
-@pytest.mark.xfail(strict=True, reason=STEP_NOT_YET)
 async def test_a_cancel_during_a_step_stops_every_call() -> None:
     """The run is cancelled while its step's two calls run: both are cancelled."""
     model = ScriptedLLM(Reply(tool_calls=[call("wait", "c1"), call("wait", "c2")]))

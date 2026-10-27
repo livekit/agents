@@ -382,8 +382,6 @@ class AgentRun(Generic[Run_T]):
         def record(item: ChatItem) -> None:
             chat_ctx.insert(item)
             new_items.append(item)
-            if isinstance(item, FunctionCallOutput):
-                record_said()
 
         def record_said() -> None:
             said, self._said = self._said, []
@@ -403,7 +401,7 @@ class AgentRun(Generic[Run_T]):
         ) -> RunResult[Run_T]:
             record_said()
             exact = input_required if input_required is not None else output
-            result._verbatim = exact if verbatim and isinstance(exact, str) else None
+            result._verbatim = exact if verbatim and isinstance(exact, (str, list)) else None
             result._run_output = output
             result._input_required = input_required
             result._interrupted = interrupted
@@ -459,15 +457,23 @@ class AgentRun(Generic[Run_T]):
                 )
             return None
 
-        # a verbatim result that ends the turn: the answer, unless another verbatim result of
-        # its step follows it in call order or the step goes on to the model
-        held: str | None = None
+        # the verbatim results of a step that end the turn, in call order: the answer, one part
+        # each, unless a result of the step asks for a reply or a transition takes over
+        held: list[str] = []
 
         async def release_held() -> None:
-            nonlocal held
-            if held is not None:
-                text, held = held, None
-                await self._say(text, record=False)
+            while held:
+                await self._say(held.pop(0), record=False)
+
+        async def run_call(
+            fnc_call: FunctionCall, tool_ctx: ToolContext
+        ) -> ToolExecutionOutput | AgentTask[Any, Any]:
+            out = await self._execute(tool_ctx.get_function_tool(fnc_call.name), fnc_call)
+            said = out.raw_output if not isinstance(out, AgentTask) else None
+            if isinstance(said, ToolResult) and said.verbatim and said.reply_required:
+                # said when its tool returns; the model reads that it was
+                await self._say(_tool_text(said.output), record=False)
+            return out
 
         record(self._message)
         # a task that answers the person itself, a waiting graph, does before any model
@@ -527,12 +533,28 @@ class AgentRun(Generic[Run_T]):
                     continue
                 return finish(text)
 
-            replies = False
-            for i, fnc_call in enumerate(calls):
+            # the step's calls run together; their outputs are handled in call order once every
+            # call has returned, and a cancel stops every call still running
+            for fnc_call in calls:
                 self._usage.tool_calls += 1
                 record(fnc_call)
+            running = {
+                fnc_call.call_id: asyncio.ensure_future(run_call(fnc_call, tool_ctx))
+                for fnc_call in calls
+                if not (fnc_call.name == FINAL_RESULT_TOOL and wants_tool_output)
+            }
+            try:
+                await asyncio.gather(*running.values())
+            except BaseException:
+                await utils.aio.cancel_and_wait(*running.values())
+                raise
+            outs = {call_id: task.result() for call_id, task in running.items()}
 
-                if fnc_call.name == FINAL_RESULT_TOOL and wants_tool_output:
+            replies = False
+            final: tuple[Any] | None = None
+            for fnc_call in calls:
+                out = outs.get(fnc_call.call_id)
+                if out is None:
                     output, error = self._parse_final_result(fnc_call)
                     if error is None:
                         error = await self._validate(run_ctx, output)
@@ -544,41 +566,34 @@ class AgentRun(Generic[Run_T]):
                             is_error=error is not None,
                         )
                     )
-                    if error is None:
-                        return finish(output)
+                    if error is None and final is None:
+                        final = (output,)
                     continue
+                if isinstance(out, AgentTask):
+                    continue  # the call stays pending; the task takes the conversation
+                said = out.raw_output
+                if isinstance(said, ToolResult) and said.verbatim:
+                    if not said.reply_required:
+                        held.append(_tool_text(said.output))
+                    out.fnc_call_out.output = delivered(said).output
+                record(out.fnc_call_out)
+                replies = replies or out.fnc_call_out.reply_required
+            record_said()
 
-                tool = tool_ctx.get_function_tool(fnc_call.name)
-                out = await self._execute(tool, fnc_call)
+            if final is not None:
+                await release_held()
+                return finish(final[0])
+
+            for fnc_call in calls:
+                out = outs.get(fnc_call.call_id)
+                if out is None:
+                    continue
                 if isinstance(out, AgentTask):
                     await release_held()
-                    # the call stays pending; the task takes the conversation from here
-                    for skipped in calls[i + 1 :]:
-                        record(skipped)
-                        record(
-                            FunctionCallOutput(
-                                name=skipped.name,
-                                call_id=skipped.call_id,
-                                output=f"not run: {type(out).__name__} took the conversation",
-                                is_error=True,
-                            )
-                        )
                     entered = await self._push(out, fnc_call, record)
                     if is_transition(entered) and (ended := await act(entered, None)) is not None:
                         return ended
                     break
-                said = out.raw_output
-                if isinstance(said, ToolResult) and said.verbatim:
-                    # the person gets it as written, in call order; the model reads that they did
-                    await release_held()
-                    if said.reply_required:
-                        await self._say(_tool_text(said.output), record=False)
-                    else:
-                        held = _tool_text(said.output)
-                    out.fnc_call_out.output = delivered(said).output
-                record(out.fnc_call_out)
-                replies = replies or out.fnc_call_out.reply_required
-
                 if out.transition is not None:
                     await release_held()
                 if out.transition is not None and isinstance(agent, AgentTask):
@@ -597,10 +612,12 @@ class AgentRun(Generic[Run_T]):
                 if out.agent_task is not None:
                     self._hand_off(out.agent_task, record)
                 if isinstance(out.raw_exception, StopResponse):
-                    return finish(held, verbatim=held is not None)
+                    answer = held[0] if len(held) == 1 else list(held) or None
+                    return finish(answer, verbatim=answer is not None)
 
-            if held is not None and not replies:
-                return finish(held, verbatim=True)
+            if held and not replies:
+                answer = held[0] if len(held) == 1 else list(held)
+                return finish(answer, verbatim=True)
             await release_held()
 
         raise UnexpectedModelBehavior(

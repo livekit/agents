@@ -163,7 +163,7 @@ class RunResult(Generic[Run_T]):
         self._interrupted: bool = False
         self._pending_call: llm.FunctionCall | None = None
         self._answer_tool: str | None = None  # the tool the answer is handed to, if named
-        self._verbatim: str | None = None
+        self._verbatim: str | list[str] | None = None
         self._agent_stack: list[Ref] | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
@@ -192,10 +192,12 @@ class RunResult(Generic[Run_T]):
         return self._input_required
 
     @property
-    def verbatim(self) -> str | None:
+    def verbatim(self) -> str | list[str] | None:
         """The answer, or the question, when it reaches the person exactly as written: a verbatim
-        result the turn ended on, a question asked as written. ``None`` when the agent facing the
-        person words it; what was said as written before the end went out as it was said."""
+        result the turn ended on, a question asked as written. When a step's several verbatim
+        results end the turn, the answer is a list, one entry per result in call order, and so
+        is ``output``. ``None`` when the agent facing the person words it; what was said as
+        written before the end went out as it was said."""
         return self._verbatim
 
     @property

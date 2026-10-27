@@ -984,10 +984,6 @@ async def test_the_shared_client_names_no_thread_it_was_not_given(
 
 
 @pytest.mark.rule("R23")
-@pytest.mark.xfail(
-    strict=True,
-    reason="a step's turn-ending results are one answer, one part each: not built yet",
-)
 async def test_an_answer_in_several_flagged_parts_is_said_part_by_part(
     door: Callable[..., Door],
 ) -> None:
