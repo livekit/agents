@@ -30,7 +30,8 @@ scenarios:
       2. Agree to a diagnostic. If an open recall is mentioned, add it.
       3. Ask for Wednesday morning, and take the earliest time offered.
       4. Take the free shuttle.
-      5. Say yes to the read-back, then say that's all and goodbye.
+      5. When Nick reads the visit back and asks if it's right, say yes. Once he says it's
+         booked, say that's all and goodbye.
     agent_expectations: >
       Finds Alex's file, asks about the noise one question at a time, says what it may point to
       as a possibility, books a diagnostic with the recall for Wednesday, October 21 at 7:30 AM
@@ -57,7 +58,7 @@ scenarios:
       1. Ask what an oil change costs.
       2. Ask for Thursday afternoon and take the first time offered.
       3. Wait in the lounge.
-      4. Confirm the read-back and hang up.
+      4. When Nick reads the visit back and asks if it's right, say yes. Hang up once he says it's booked.
     agent_expectations: >
       Quotes the oil change at $79 from the menu, books it on the 330i for Thursday, October 22
       at 2:30 PM with the caller waiting in the lounge, after a read-back.
@@ -82,7 +83,7 @@ scenarios:
       1. Decline the recall if offered: "Not this time."
       2. Ask for Tuesday morning; take any time offered.
       3. Insist once on a loaner. When it's refused, take the shuttle.
-      4. Confirm the read-back and hang up.
+      4. When Nick reads the visit back and asks if it's right, say yes. Hang up once he says it's booked.
     agent_expectations: >
       Explains that loaners are only for warranty or recall visits over three hours, offers the
       free shuttle or the lounge instead, and books the oil change on the X3 on Tuesday,
@@ -107,10 +108,10 @@ scenarios:
       - It started last week. No warning lights. No recent work.
       DO, IN ORDER:
       1. Ask for warranty work.
-      2. Decline the recall: "Not today."
+      2. If Nick offers the recall, decline it: "Not today."
       3. Ask for Friday, and take the earliest time offered.
       4. Ask for a loaner.
-      5. Confirm the read-back and hang up.
+      5. When Nick reads the visit back and asks if it's right, say yes. Hang up once he says it's booked.
     agent_expectations: >
       Treats the failed liftgate on the in-warranty X3 as a warranty repair at no charge, offers a
       loaner because it's a warranty visit over three hours, and books it for Friday,
@@ -137,7 +138,7 @@ scenarios:
       1. Push back once that it should be covered.
       2. Accept a diagnostic. Decline the recall.
       3. Take the first Tuesday time offered, and wait in the lounge.
-      4. Confirm the read-back and hang up.
+      4. When Nick reads the visit back and asks if it's right, say yes. Hang up once he says it's booked.
     agent_expectations: >
       Says plainly that brakes are a wear item the warranty never covers, offers a diagnostic
       ($159) instead, and books the diagnostic on the X3 on Tuesday, October 20. Booking a
@@ -207,7 +208,7 @@ scenarios:
       1. Give the details as asked.
       2. Agree to a diagnostic.
       3. Ask for Tuesday afternoon and take the first time offered. Take the shuttle.
-      4. Confirm the read-back and hang up.
+      4. When Nick reads the visit back and asks if it's right, say yes. Hang up once he says it's booked.
     agent_expectations: >
       Sets up a new file for Jamie Chen, adds the 2021 X5, books a diagnostic on Tuesday,
       October 20 in the afternoon with the shuttle after a read-back.
@@ -234,7 +235,7 @@ scenarios:
       1. Ask whether it's okay to drive it in.
       2. Agree to a diagnostic. Decline the recall.
       3. Take the earliest time offered. Wait in the lounge.
-      4. Confirm the read-back and hang up.
+      4. When Nick reads the visit back and asks if it's right, say yes. Hang up once he says it's booked.
     agent_expectations: >
       Tells Alex right away, before anything else, not to drive it and to have it towed in, and
       that the desk can't arrange the tow. Books a diagnostic at the earliest time, Tuesday,
@@ -261,7 +262,7 @@ scenarios:
       1. Agree to a diagnostic, and say: "Don't do anything over five hundred dollars without calling me."
       2. Ask for Wednesday and take any time offered. Wait in the lounge.
       3. At the read-back, change your mind: "Actually, can we do Thursday instead?" Take any Thursday time.
-      4. Confirm the new read-back and hang up.
+      4. When Nick reads the new visit back, say yes. Hang up once he says it's booked.
     agent_expectations: >
       Notes the $500 limit without promising what anything will cost, moves the visit to
       Thursday, October 22 when asked at the read-back, reads it back again, and books the
@@ -344,10 +345,11 @@ scenarios:
     label: Wrong number
     instructions: |
       PERSONA: Pat, who has never heard of Alex Morgan.
-      OPENING LINE: "Sorry, I think you have the wrong number. There's no Alex here."
       DO, IN ORDER:
-      1. Ask what it's about.
-      2. Say goodbye.
+      1. When Nick asks for Alex, say "Sorry, I think you have the wrong number. There's no
+         Alex here."
+      2. Ask what it's about.
+      3. Say goodbye.
     agent_expectations: >
       Apologizes, shares nothing about the car, the repair, or the price, and ends the call
       politely.
@@ -362,9 +364,10 @@ scenarios:
     label: Driving, call back later
     instructions: |
       PERSONA: Alex Morgan, driving.
-      OPENING LINE: "Yes, this is Alex. I'm driving right now, can you call me back later?"
       DO, IN ORDER:
-      1. Say goodbye.
+      1. When Nick asks for Alex, say "Yes, this is Alex. I'm driving right now, can you call
+         me back later?"
+      2. Say goodbye.
     agent_expectations: >
       Doesn't push, says Alex can call the service desk back whenever suits, and ends the call
       without going over the findings.
