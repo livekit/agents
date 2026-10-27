@@ -1799,7 +1799,6 @@ pub struct RealtimeCapabilities {
     /// Whether session.say() can use the realtime session directly, without TTS.
     pub supports_say: bool,
     /// Whether the server generates the reply by itself when its turn detection ends a user turn.
-    /// Last: the reference has no such field, and positional arguments must keep its order.
     pub auto_turn_reply_generation: bool,
 }
 

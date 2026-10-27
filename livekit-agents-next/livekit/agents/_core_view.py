@@ -56,7 +56,7 @@ def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
 
 def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool | Toolset]]) -> Any:
     """``model`` as the core takes it: its own model for an OpenAI-protocol model or a fallback
-    chain, else the host view of a plugin's model."""
+    chain, else a plugin's model bound to the session's tools."""
     from .llm._realtime.openai import RealtimeModel as OpenAIRealtimeModel
     from .llm.realtime_fallback_adapter import RealtimeModelFallbackAdapter
 
@@ -66,7 +66,7 @@ def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool |
         return model._core_native([realtime_model(m, tools) for m in model._models])
     if isinstance(model, llm.DuplexRealtimeAdapter):
         return _core.DuplexRealtimeModel(Duplex(model, tools), audio_timeout=model._audio_timeout)
-    return Realtime(model, tools)
+    return model._core_with_tools(tools)
 
 
 def _forward_session_events(session: Any, put: Callable[[dict[str, Any]], None]) -> None:
@@ -206,156 +206,6 @@ _DUPLEX_UPDATES: dict[str, Callable[[_DuplexSession, dict[str, Any]], Awaitable[
     "update_tools": lambda v, cmd: v._session._update_tools(
         offered_tools(v._tools(), cmd["names"])
     ),
-}
-
-
-class Realtime:
-    """A plugin's ``RealtimeModel`` as the core's host realtime model. ``tools`` names the tool
-    objects the core refers to by name (the running frame's pool)."""
-
-    def __init__(self, model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool | Toolset]]):
-        self._model = model
-        self._tools = tools
-
-    def _core_label(self) -> str:
-        return self._model.label
-
-    def _core_capabilities(self) -> dict[str, Any]:
-        return dataclasses.asdict(self._model.capabilities)
-
-    async def _core_session(self, turn_detection_disabled: bool) -> _RealtimeSession:
-        session = self._model.session(turn_detection_disabled=turn_detection_disabled)
-        return _RealtimeSession(session, self._tools)
-
-
-class _RealtimeSession:
-    """A plugin's ``RealtimeSession`` flattened: the core orders the commands (updates one after
-    the other, a reply after the updates before it) and drains each generation through
-    ``_core_drain``; the session's callbacks report one ``kind``-tagged event at a time."""
-
-    def __init__(
-        self, session: llm.RealtimeSession, tools: Callable[[], Sequence[Tool | Toolset]]
-    ) -> None:
-        self._session = session
-        self._tools = tools
-        self._events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-        put = self._events.put_nowait
-        _forward_session_events(session, put)
-        session.on(
-            "generation_created",
-            lambda ev: (
-                None if ev.user_initiated else put({"kind": "server_generation", "generation": ev})
-            ),
-        )
-        session.on(
-            "remote_item_added",
-            lambda ev: put(
-                {
-                    "kind": "remote_item_added",
-                    "previous_item_id": ev.previous_item_id,
-                    "item": to_core_item(ev.item),
-                }
-            ),
-        )
-
-    def _core_send(self, cmd: dict[str, Any]) -> None:
-        _REALTIME_SENDS[cmd["kind"]](self._session, cmd)
-
-    async def _core_update(self, cmd: dict[str, Any]) -> None:
-        await _REALTIME_UPDATES[cmd["kind"]](self, cmd)
-
-    async def _core_request(self, cmd: dict[str, Any]) -> asyncio.Future[Any]:
-        if cmd["kind"] == "say":
-            return self._session.say(cmd["text"])
-        choice = cmd["tool_choice"]
-        return self._session.generate_reply(
-            instructions=cmd["instructions"] or NOT_GIVEN,
-            tool_choice=NOT_GIVEN if choice is None else choice,
-        )
-
-    async def _core_generation(
-        self, request: asyncio.Future[llm.GenerationCreatedEvent]
-    ) -> llm.GenerationCreatedEvent:
-        return await request
-
-    async def _core_cancel(self, request: asyncio.Future[Any]) -> None:
-        request.cancel()
-
-    async def _core_drain(self, ev: llm.GenerationCreatedEvent, req_id: str | None) -> None:
-        put = self._events.put_nowait
-        response_id = ev.response_id or ""
-        put({"kind": "generation_created", "response_id": response_id, "req_id": req_id})
-        ids = {"response_id": ev.response_id}
-
-        async def _message(msg: llm.MessageGeneration) -> None:
-            mid = {"message_id": msg.message_id, **ids}
-            put({"kind": "message_started", **mid})
-
-            async def _text() -> None:
-                async for delta in msg.text_stream:
-                    put({"kind": "text_delta", "delta": str(delta), **mid})
-
-            async def _audio() -> None:
-                async for frame in msg.audio_stream:
-                    put({"kind": "audio_delta", "frame": frame, **mid})
-
-            async def _modalities() -> None:
-                modalities = await msg.modalities
-                kind = "audio" if "audio" in modalities else "text"
-                put({"kind": "message_modalities", "modalities": kind, **mid})
-
-            await asyncio.gather(_text(), _audio(), _modalities())
-            put({"kind": "message_done", **mid})
-
-        async def _messages() -> None:
-            # each message forwards as it arrives, not once the server has sent them all
-            started = []
-            async for m in ev.message_stream:
-                started.append(asyncio.ensure_future(_message(m)))
-            await asyncio.gather(*started)
-
-        async def _calls() -> None:
-            async for call in ev.function_stream:
-                put({"kind": "function_call", "call": to_core_item(call)})
-
-        await asyncio.gather(_messages(), _calls())
-        put({"kind": "generation_done", "response_id": response_id})
-
-    async def _core_next_event(self) -> dict[str, Any] | None:
-        return await self._events.get()
-
-    async def _core_aclose(self) -> None:
-        await self._session.aclose()
-        self._events.put_nowait(None)
-
-
-async def _push_item(view: _RealtimeSession, cmd: dict[str, Any]) -> None:
-    ctx = view._session.chat_ctx.copy()
-    ctx.insert(from_core_item(cmd["item"]))
-    await view._session.update_chat_ctx(ctx)
-
-
-# the commands that apply at once, and the session updates the core awaits one after the other
-_REALTIME_SENDS: dict[str, Callable[[llm.RealtimeSession, dict[str, Any]], Any]] = {
-    "push_audio": lambda s, cmd: s.push_audio(cmd["frame"]),
-    "interrupt": lambda s, cmd: s.interrupt(),
-    "commit_audio": lambda s, cmd: s.commit_audio(),
-    "clear_audio": lambda s, cmd: s.clear_audio(),
-    "truncate": lambda s, cmd: s.truncate(
-        message_id=cmd["message_id"],
-        modalities=["audio", "text"] if cmd["has_audio"] else ["text"],
-        audio_end_ms=cmd["audio_end_ms"],
-        audio_transcript=NOT_GIVEN if cmd["audio_transcript"] is None else cmd["audio_transcript"],
-    ),
-}
-
-_REALTIME_UPDATES: dict[str, Callable[[_RealtimeSession, dict[str, Any]], Awaitable[None]]] = {
-    "update_instructions": lambda v, cmd: v._session.update_instructions(cmd["instructions"]),
-    "update_chat_ctx": lambda v, cmd: v._session.update_chat_ctx(
-        llm.ChatContext([from_core_item(i) for i in cmd["items"]])
-    ),
-    "push_item": _push_item,
-    "update_tools": lambda v, cmd: v._session.update_tools(offered_tools(v._tools(), cmd["names"])),
 }
 
 

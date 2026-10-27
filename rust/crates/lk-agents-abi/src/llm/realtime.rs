@@ -12,7 +12,14 @@ use lk_agents_host_derive::Host;
     dataclass,
     module = "realtime",
     path = "livekit.agents.llm.realtime",
-    name = "RealtimeCapabilities"
+    name = "RealtimeCapabilities",
+    // The host's alone: the core neither holds the model's speech back nor cuts it by itself.
+    host_field(
+        name = "supports_overlapping_speech",
+        ty = "bool",
+        default = "False",
+        doc = "Whether the model and the caller may speak at once, the model deciding when to yield"
+    )
 )]
 #[binding(extract, emit, from_items)]
 pub struct RealtimeCapabilities {
@@ -50,7 +57,7 @@ pub struct RealtimeCapabilities {
     #[python(default = "False")]
     pub supports_say: bool,
     /// Whether the server generates the reply by itself when its turn detection ends a user turn.
-    /// Last: the reference has no such field, and positional arguments must keep its order.
+    // Last: the reference has no such field, and positional arguments must keep its order.
     #[python(default = "False")]
     pub auto_turn_reply_generation: bool,
 }
@@ -680,20 +687,56 @@ pub struct Truncate {
     pub audio_transcript: Option<String>,
 }
 
-/// A host `RealtimeModel` (`llm/realtime.py`'s base class, or the session's `RealtimeBridge` over
-/// one): the model half, through its `_core_*` surface.
+// A host `RealtimeModel`, as a session binds it to its tools: the model half, through the
+// `_core_*` surface of the base class `lk-agents-codegen` writes from the `#[python]` markers.
+/// A realtime model: speech in, speech out, over one live session.
+///
+/// Plugins implement `session()`, returning a `RealtimeSession`.
 #[crate::host(proxy)]
+#[python(provider(
+    name = "RealtimeModel",
+    module = "realtime",
+    path = "livekit.agents.llm.realtime",
+    error(name = "RealtimeModelError", kind = "realtime_model_error")
+))]
 #[async_trait::async_trait]
 pub trait HostRealtime: Send + Sync {
+    /// The name logs and metrics give this instance: its class path.
+    #[python(label)]
     fn label(&self) -> String;
 
-    /// Read once: the audio path never takes the GIL to ask.
+    /// What this instance supports, fixed at construction.
+    // Read once: the audio path never takes the GIL to ask.
+    #[python(init)]
     fn capabilities(&self) -> RealtimeCapabilities;
 
-    /// Open the plugin session with the driver's `turn_detection_disabled`.
+    /// The model and provider labelling this instance's turn metrics.
+    #[python(identity)]
+    fn id(&self) -> crate::ProviderId {
+        crate::types::identity::ProviderId::of_label(self.label())
+    }
+
+    /// Create a new session, optionally with server-side turn detection disabled.
+    ///
+    /// The model itself is left unchanged and reusable.
+    ///
+    /// Args:
+    /// - turn_detection_disabled: Hand turn-taking to the framework; honored only by plugins
+    ///   reporting `can_disable_turn_detection`.
+    // Open the plugin session with the driver's `turn_detection_disabled`. The session's events and
+    // commands cross through `HostRealtimeSession`, which the session class answers.
+    #[python(
+        hook,
+        stream(
+            name = "RealtimeSession",
+            kind = "realtime",
+            proxy = "HostRealtimeSession",
+            doc = "One live session of a realtime model.\n\nPlugins implement its commands (``push_audio``, ``generate_reply``, ``truncate``, the updates) and emit its events (``input_speech_started``, ``generation_created``, ``error``)."
+        )
+    )]
     async fn session(
         &self,
-        turn_detection_disabled: bool,
+        #[python(default = "False")] turn_detection_disabled: bool,
     ) -> Result<std::sync::Arc<dyn HostRealtimeSession>, crate::errors::ProviderError>;
 }
 

@@ -725,6 +725,8 @@ pub struct ProviderParam {
     pub py_ty: Option<String>,
     /// `import = "module:Name"`: what `ty` names.
     pub import: Option<String>,
+    /// `default = ".."`: the hook takes it as a keyword with this default (verbatim Python).
+    pub default: Option<String>,
     /// `attr`: set on the method's result rather than passed to the hook.
     pub attr: bool,
 }
@@ -737,5 +739,7 @@ pub struct StreamClass {
     pub kind: String,
     /// A deprecated second name.
     pub alias: Option<String>,
+    /// `proxy = "Trait"`: the `#[host(proxy)]` trait the class answers (every method's `_core_`).
+    pub proxy: Option<String>,
     pub doc: Vec<String>,
 }

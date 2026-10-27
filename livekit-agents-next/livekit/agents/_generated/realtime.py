@@ -8,7 +8,28 @@
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
+import time
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterable, Callable, Sequence
 from dataclasses import dataclass
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+
+from livekit import rtc
+from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import Self
+
+from ..log import logger
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils import is_given
+from .chat_items import MetricsMetadata
+
+if TYPE_CHECKING:
+    from ..llm.chat_context import ChatContext
+    from ..llm.realtime import GenerationCreatedEvent
+    from ..llm.tool_context import Tool, ToolChoice, ToolContext, Toolset
 
 
 @dataclass
@@ -42,9 +63,455 @@ class RealtimeCapabilities:
     message is still added to the chat context.
     """
     auto_turn_reply_generation: bool = False
-    """Whether the server generates the reply by itself when its turn detection ends a user turn.
-    Last: the reference has no such field, and positional arguments must keep its order.
+    """Whether the server generates the reply by itself when its turn detection ends a user turn."""
+    supports_overlapping_speech: bool = False
+    """Whether the model and the caller may speak at once, the model deciding when to yield"""
+
+
+class RealtimeModelError(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["realtime_model_error"] = "realtime_model_error"
+    timestamp: float
+    label: str
+    error: Exception = Field(..., exclude=True)
+    recoverable: bool
+
+
+class RealtimeModel(ABC):
+    """A realtime model: speech in, speech out, over one live session.
+
+    Plugins implement ``session()``, returning a ``RealtimeSession``.
     """
+
+    def __init__(self, *, capabilities: RealtimeCapabilities) -> None:
+        self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._capabilities = capabilities
+
+    @property
+    def label(self) -> str:
+        """The name logs and metrics give this instance: its class path."""
+        return self._label
+
+    @property
+    def capabilities(self) -> RealtimeCapabilities:
+        """What this instance supports, fixed at construction."""
+        return self._capabilities
+
+    @property
+    def model(self) -> str:
+        """The model name; ``"unknown"`` until a plugin overrides it."""
+        return "unknown"
+
+    @property
+    def provider(self) -> str:
+        """The provider name; ``"unknown"`` until a plugin overrides it."""
+        return "unknown"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """The model and provider labelling this instance's turn metrics."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
+    @abstractmethod
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        """Create a new session, optionally with server-side turn detection disabled.
+
+        The model itself is left unchanged and reusable.
+
+        Args:
+            turn_detection_disabled: Hand turn-taking to the framework; honored only by plugins
+                reporting ``can_disable_turn_detection``.
+        """
+
+    async def aclose(self) -> None:
+        """Close the provider and everything it opened."""
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    def _core_label(self) -> str:
+        return self.label
+
+    def _core_capabilities(self) -> dict[str, Any]:
+        return dataclasses.asdict(self.capabilities)
+
+    def _core_id(self) -> dict[str, str]:
+        return {"label": self.label, "model": self.model, "provider": self.provider}
+
+    async def _core_session(
+        self, turn_detection_disabled: bool, tools: Callable[[], Sequence[Tool | Toolset]] = list
+    ) -> RealtimeSession:
+        out = self.session(turn_detection_disabled=turn_detection_disabled)
+        out._core_attach(tools)
+        return out
+
+    def _core_with_tools(self, tools: Callable[[], Sequence[Tool | Toolset]]) -> Any:
+        """The model as a session hands it to the framework: its sessions offer the tools
+        ``tools`` names."""
+        return _RealtimeModelTools(self, tools)
+
+
+class _RealtimeModelTools:
+    """``RealtimeModel`` as a session holds it: the tools its sessions offer."""
+
+    def __init__(
+        self, provider: RealtimeModel, tools: Callable[[], Sequence[Tool | Toolset]]
+    ) -> None:
+        self._provider = provider
+        self._tools = tools
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider, name)
+
+    async def _core_session(self, turn_detection_disabled: bool) -> RealtimeSession:
+        return await self._provider._core_session(turn_detection_disabled, self._tools)
+
+
+EventTypes = Literal[
+    "input_speech_started",  # serverside VAD (also used for interruptions)
+    "input_speech_stopped",  # serverside VAD
+    "input_audio_transcription_completed",
+    "generation_created",
+    "session_reconnected",
+    "metrics_collected",
+    "remote_item_added",
+    "error",
+]
+
+TEvent = TypeVar("TEvent")
+
+
+class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):
+    """One live session of a realtime model.
+
+    Plugins implement its commands (``push_audio``, ``generate_reply``, ``truncate``, the updates)
+    and emit its events (``input_speech_started``, ``generation_created``, ``error``).
+    """
+
+    def __init__(self, realtime_model: RealtimeModel) -> None:
+        super().__init__()
+        self._realtime_model = realtime_model
+
+    def _report_connection_acquired(self, acquire_time: float) -> None:
+        """Report connection timing as a RealtimeModelMetrics event with zero usage."""
+        from ..metrics.base import Metadata, RealtimeModelMetrics
+
+        self.emit(
+            "metrics_collected",
+            RealtimeModelMetrics(
+                request_id="",
+                timestamp=time.time(),
+                acquire_time=acquire_time,
+                connection_reused=False,
+                input_token_details=RealtimeModelMetrics.InputTokenDetails(),
+                output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
+                metadata=Metadata(
+                    model_name=self._realtime_model.model,
+                    model_provider=self._realtime_model.provider,
+                ),
+            ),
+        )
+
+    @property
+    def realtime_model(self) -> RealtimeModel:
+        return self._realtime_model
+
+    @property
+    def capabilities(self) -> RealtimeCapabilities:
+        """Capabilities of the session.
+
+        Defaults to the parent model's capabilities. Adapters that swap the underlying model
+        mid-session override this to report the currently active model's capabilities.
+        """
+        return self._realtime_model.capabilities
+
+    @property
+    @abstractmethod
+    def chat_ctx(self) -> ChatContext: ...
+
+    @property
+    @abstractmethod
+    def tools(self) -> ToolContext: ...
+
+    @abstractmethod
+    async def update_instructions(self, instructions: str) -> None: ...
+
+    @abstractmethod
+    async def update_chat_ctx(
+        self, chat_ctx: ChatContext
+    ) -> None: ...  # can raise RealtimeError on Timeout
+
+    @abstractmethod
+    async def update_tools(self, tools: list[Tool]) -> None: ...
+
+    @abstractmethod
+    def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None: ...
+
+    @abstractmethod
+    def push_audio(self, frame: rtc.AudioFrame) -> None: ...
+
+    @abstractmethod
+    def push_video(self, frame: rtc.VideoFrame) -> None: ...
+
+    @abstractmethod
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
+
+    # commit the input audio buffer to the server
+    @abstractmethod
+    def commit_audio(self) -> None: ...
+
+    # clear the input audio buffer to the server
+    @abstractmethod
+    def clear_audio(self) -> None: ...
+
+    # cancel the current generation (do nothing if no generation is in progress)
+    @abstractmethod
+    def interrupt(self) -> None: ...
+
+    # message_id is the ID of the message to truncate (inside the ChatCtx)
+    @abstractmethod
+    def truncate(
+        self,
+        *,
+        message_id: str,
+        modalities: list[Literal["text", "audio"]],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None: ...
+
+    @abstractmethod
+    async def aclose(self) -> None: ...
+
+    async def _update_session(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> None:
+        from ..llm.realtime import RealtimeError
+
+        if is_given(instructions):
+            try:
+                await self.update_instructions(instructions)
+            except RealtimeError:
+                logger.exception("failed to update the instructions")
+
+        if is_given(chat_ctx):
+            try:
+                await self.update_chat_ctx(chat_ctx)
+            except RealtimeError:
+                logger.exception("failed to update the chat_ctx")
+
+        if is_given(tools):
+            try:
+                await self.update_tools(tools)
+            except RealtimeError:
+                logger.exception("failed to update the tools")
+
+    def start_user_activity(self) -> None:
+        """notifies the model that user activity has started"""
+        pass
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement say(). use a TTS model instead"
+        )
+
+    def _core_attach(self, tools: Callable[[], Sequence[Tool | Toolset]]) -> None:
+        """Report this session's events to the framework, which offers it the tools ``tools``
+        names."""
+        from .._core_view import to_core_item
+
+        self._core_tools = tools
+        self._core_events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        put = self._core_events.put_nowait
+        self.on("input_speech_started", lambda _: put({"kind": "input_speech_started"}))
+        self.on(
+            "input_speech_stopped",
+            lambda ev: put(
+                {
+                    "kind": "input_speech_stopped",
+                    "user_transcription_enabled": ev.user_transcription_enabled,
+                }
+            ),
+        )
+        self.on(
+            "input_audio_transcription_completed",
+            lambda ev: put(
+                {
+                    "kind": "input_transcription",
+                    "item_id": ev.item_id,
+                    "transcript": ev.transcript,
+                    "is_final": ev.is_final,
+                    "confidence": ev.confidence,
+                    "turn_started_at": ev.turn_started_at,
+                }
+            ),
+        )
+        self.on("session_reconnected", lambda _: put({"kind": "session_reconnected"}))
+        self.on("metrics_collected", lambda ev: put({"kind": "metrics", "metrics": ev}))
+        self.on(
+            "error",
+            lambda ev: put(
+                {
+                    "kind": "error",
+                    "label": ev.label,
+                    "message": str(ev.error),
+                    "recoverable": ev.recoverable,
+                    "timestamp": ev.timestamp,
+                }
+            ),
+        )
+        self.on(
+            "generation_created",
+            lambda ev: (
+                None if ev.user_initiated else put({"kind": "server_generation", "generation": ev})
+            ),
+        )
+        self.on(
+            "remote_item_added",
+            lambda ev: put(
+                {
+                    "kind": "remote_item_added",
+                    "previous_item_id": ev.previous_item_id,
+                    "item": to_core_item(ev.item),
+                }
+            ),
+        )
+
+    def _core_send(self, cmd: dict[str, Any]) -> None:
+        match cmd["kind"]:
+            case "push_audio":
+                self.push_audio(cmd["frame"])
+            case "interrupt":
+                self.interrupt()
+            case "commit_audio":
+                self.commit_audio()
+            case "clear_audio":
+                self.clear_audio()
+            case "truncate":
+                transcript = cmd["audio_transcript"]
+                self.truncate(
+                    message_id=cmd["message_id"],
+                    modalities=["audio", "text"] if cmd["has_audio"] else ["text"],
+                    audio_end_ms=cmd["audio_end_ms"],
+                    audio_transcript=NOT_GIVEN if transcript is None else transcript,
+                )
+            case kind:
+                raise ValueError(f"unknown session command {kind!r}")
+
+    async def _core_update(self, cmd: dict[str, Any]) -> None:
+        from .._core_view import from_core_item, offered_tools
+        from ..llm.chat_context import ChatContext
+
+        match cmd["kind"]:
+            case "update_instructions":
+                await self.update_instructions(cmd["instructions"])
+            case "update_chat_ctx":
+                await self.update_chat_ctx(ChatContext([from_core_item(i) for i in cmd["items"]]))
+            case "push_item":
+                ctx = self.chat_ctx.copy()
+                ctx.insert(from_core_item(cmd["item"]))
+                await self.update_chat_ctx(ctx)
+            case "update_tools":
+                await self.update_tools(offered_tools(self._core_tools(), cmd["names"]))
+            case kind:
+                raise ValueError(f"unknown session update {kind!r}")
+
+    async def _core_request(self, cmd: dict[str, Any]) -> asyncio.Future[Any]:
+        if cmd["kind"] == "say":
+            return self.say(cmd["text"])
+        choice = cmd["tool_choice"]
+        return self.generate_reply(
+            instructions=cmd["instructions"] or NOT_GIVEN,
+            tool_choice=NOT_GIVEN if choice is None else choice,
+        )
+
+    async def _core_generation(
+        self, request: asyncio.Future[GenerationCreatedEvent]
+    ) -> GenerationCreatedEvent:
+        return await request
+
+    async def _core_cancel(self, request: asyncio.Future[Any]) -> None:
+        request.cancel()
+
+    async def _core_drain(self, ev: GenerationCreatedEvent, req_id: str | None) -> None:
+        from .._core_view import to_core_item
+
+        put = self._core_events.put_nowait
+        response_id = ev.response_id or ""
+        put({"kind": "generation_created", "response_id": response_id, "req_id": req_id})
+        ids = {"response_id": ev.response_id}
+
+        async def _message(msg: Any) -> None:
+            mid = {"message_id": msg.message_id, **ids}
+            put({"kind": "message_started", **mid})
+
+            async def _text() -> None:
+                async for delta in msg.text_stream:
+                    put({"kind": "text_delta", "delta": str(delta), **mid})
+
+            async def _audio() -> None:
+                async for frame in msg.audio_stream:
+                    put({"kind": "audio_delta", "frame": frame, **mid})
+
+            async def _modalities() -> None:
+                modalities = await msg.modalities
+                kind = "audio" if "audio" in modalities else "text"
+                put({"kind": "message_modalities", "modalities": kind, **mid})
+
+            await asyncio.gather(_text(), _audio(), _modalities())
+            put({"kind": "message_done", **mid})
+
+        async def _messages() -> None:
+            # each message forwards as it arrives, not once the server has sent them all
+            started = []
+            async for m in ev.message_stream:
+                started.append(asyncio.ensure_future(_message(m)))
+            await asyncio.gather(*started)
+
+        async def _calls() -> None:
+            async for call in ev.function_stream:
+                put({"kind": "function_call", "call": to_core_item(call)})
+
+        await asyncio.gather(_messages(), _calls())
+        put({"kind": "generation_done", "response_id": response_id})
+
+    async def _core_next_event(self) -> dict[str, Any] | None:
+        return await self._core_events.get()
+
+    async def _core_aclose(self) -> None:
+        await self.aclose()
+        self._core_events.put_nowait(None)
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
 
 # --- the frozen public paths -----------------------------------------------------------------
@@ -55,3 +522,6 @@ class RealtimeCapabilities:
 # none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
 # reporting `_generated.*` for a name whose import path never moved.
 RealtimeCapabilities.__module__ = "livekit.agents.llm.realtime"
+RealtimeModelError.__module__ = "livekit.agents.llm.realtime"
+RealtimeModel.__module__ = "livekit.agents.llm.realtime"
+RealtimeSession.__module__ = "livekit.agents.llm.realtime"

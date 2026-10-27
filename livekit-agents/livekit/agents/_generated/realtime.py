@@ -42,9 +42,9 @@ class RealtimeCapabilities:
     message is still added to the chat context.
     """
     auto_turn_reply_generation: bool = False
-    """Whether the server generates the reply by itself when its turn detection ends a user turn.
-    Last: the reference has no such field, and positional arguments must keep its order.
-    """
+    """Whether the server generates the reply by itself when its turn detection ends a user turn."""
+    supports_overlapping_speech: bool = False
+    """Whether the model and the caller may speak at once, the model deciding when to yield"""
 
 
 # --- the frozen public paths -----------------------------------------------------------------

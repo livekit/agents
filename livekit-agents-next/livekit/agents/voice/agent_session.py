@@ -24,7 +24,6 @@ from livekit import rtc
 
 from .. import _core, inference, llm, stt, tts, vad
 from .._core_view import (
-    Realtime,
     TurnDetector,
     chat_request,
     from_core_item,
@@ -425,8 +424,9 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if isinstance(model, llm.RealtimeModel)
             else None
         )
-        realtime = rt if isinstance(rt, Realtime) else None
-        native = None if isinstance(rt, Realtime) else rt
+        # a plugin's model is a host object, any other the core's own
+        realtime = rt if hasattr(rt, "_core_session") else None
+        native = None if hasattr(rt, "_core_session") else rt
         sampler = self._video_sampler
         keyterm_llm = _detection_llm(self._stt_context)
         self._room = room

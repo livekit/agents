@@ -211,7 +211,10 @@ impl Writer<'_> {
         if let Some(inner) = generic(t, "Vec") {
             return Ok(format!("list[{}]", self.ty(m, inner)?));
         }
-        if matches!(t, syn::Type::Tuple(_)) || generic(t, "Box").is_some() {
+        if matches!(t, syn::Type::Tuple(_))
+            || generic(t, "Box").is_some()
+            || generic(t, "Arc").is_some()
+        {
             return m
                 .stream
                 .as_ref()
@@ -354,10 +357,25 @@ impl Writer<'_> {
         if let Some(Role::Conn { retry: Some(_) }) = self.conn().map(|m| m.role.clone()) {
             b.push_str("\n    def _core_failed(self, error: Exception, recoverable: bool) -> None:\n        self._emit_error(error, recoverable)\n");
         }
+        let realtime =
+            p.methods.iter().find(|m| m.stream.as_ref().is_some_and(|x| x.kind == "realtime"));
+        if realtime.is_some() {
+            self.need("typing", "Any");
+            b.push_str(&format!(
+                "\n    def _core_with_tools(self, tools: Callable[[], Sequence[Tool | Toolset]]) -> Any:\n        \"\"\"The model as a session hands it to the framework: its sessions offer the tools\n        ``tools`` names.\"\"\"\n        return _{class}Tools(self, tools)\n"
+            ));
+        }
         self.paths.push((class.clone(), p.path.clone()));
         if self.conn().is_some() {
             b.push_str("\n\n");
             self.conn_view(&mut b)?;
+        }
+        if let Some(m) = realtime {
+            let session = m.stream.as_ref().map(|x| x.name.clone()).unwrap_or_default();
+            b.push_str(&format!(
+                "\n\nclass _{class}Tools:\n    \"\"\"``{class}`` as a session holds it: the tools its sessions offer.\"\"\"\n\n    def __init__(\n        self, provider: {class}, tools: Callable[[], Sequence[Tool | Toolset]]\n    ) -> None:\n        self._provider = provider\n        self._tools = tools\n\n    def __getattr__(self, name: str) -> Any:\n        return getattr(self._provider, name)\n\n    async def _core_{rust}(self, turn_detection_disabled: bool) -> {session}:\n        return await self._provider._core_{rust}(turn_detection_disabled, self._tools)\n",
+                rust = m.rust,
+            ));
         }
         for m in &p.methods {
             if let Some(s) = &m.stream {
@@ -389,7 +407,9 @@ impl Writer<'_> {
                 }
                 None => self.ty(m, &t)?,
             };
-            if optional {
+            if let Some(default) = &p.default {
+                kw.push(format!("{}: {ty} = {default}", p.name));
+            } else if optional {
                 self.need("..types", "NOT_GIVEN");
                 self.need("..types", "NotGivenOr");
                 kw.push(format!("{}: NotGivenOr[{ty}] = NOT_GIVEN", p.name));
@@ -419,7 +439,9 @@ impl Writer<'_> {
         let mut pos = Vec::new();
         let mut kw = Vec::new();
         for p in m.params.iter().filter(|p| !p.attr) {
-            if p.rust_ty.starts_with("Option<") {
+            if p.default.is_some() {
+                kw.push(format!("{0}={0}", p.name));
+            } else if p.rust_ty.starts_with("Option<") {
                 kw.push(format!("{0}=NOT_GIVEN if {0} is None else {0}", p.name));
             } else {
                 pos.push(p.name.clone());
@@ -565,7 +587,9 @@ impl Writer<'_> {
 
     /// The idioms every provider has: the error event, closing, the async context manager.
     fn idiom(&mut self, b: &mut String) -> Result<(), String> {
-        if let Some((name, _)) = self.p.error.clone() {
+        if let Some((name, _)) =
+            self.p.error.clone().filter(|_| self.p.events.iter().any(|e| e == "error"))
+        {
             self.need("", "time");
             b.push_str(&format!(
                 "\n    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:\n        self.emit(\n            \"error\",\n            {name}(\n                timestamp=time.time(),\n                label=self._label,\n                error=api_error,\n                recoverable=recoverable,\n            ),\n        )\n"
@@ -591,6 +615,10 @@ impl Writer<'_> {
         for p in &m.params {
             params.push(format!("{}: {}", p.name, self.core_ty(m, &p.rust_ty)?));
         }
+        if m.stream.as_ref().is_some_and(|x| x.kind == "realtime") {
+            self.tools_types();
+            params.push("tools: Callable[[], Sequence[Tool | Toolset]] = list".to_owned());
+        }
         let routed = self.carries_conn(m);
         if routed {
             self.need("..types", "APIConnectOptions");
@@ -601,6 +629,10 @@ impl Writer<'_> {
             (Role::Conn { .. }, _) => {
                 self.need("typing", "Any");
                 "Any".to_owned()
+            }
+            (Role::Init, Some(r)) if self.from_items(r) => {
+                self.need("typing", "Any");
+                "dict[str, Any]".to_owned()
             }
             (_, None) => "None".to_owned(),
             (_, Some(r)) => self.core_ty(m, r)?,
@@ -630,8 +662,12 @@ impl Writer<'_> {
                 let guard = m.when.as_ref().map(|cap| {
                     format!("if not self.capabilities.{cap}:\n            return None\n        ")
                 });
-                let attrs: Vec<&ProviderParam> = m.params.iter().filter(|p| p.attr).collect();
+                let mut attrs: Vec<&ProviderParam> = m.params.iter().filter(|p| p.attr).collect();
                 let mut s = guard.unwrap_or_default();
+                let attach = m.stream.as_ref().is_some_and(|x| x.kind == "realtime");
+                if attach {
+                    attrs.clear();
+                }
                 if m.py_call.is_some() {
                     let mut local: Vec<(&str, &str)> =
                         m.imports.iter().filter_map(|i| i.split_once(':')).collect();
@@ -642,7 +678,10 @@ impl Writer<'_> {
                     s.truncate(s.len() - 8);
                     s.push_str("\n        ");
                 }
-                if attrs.is_empty() {
+                if attach {
+                    s.push_str(&wrap_call(&format!("out = {aw}"), &call, 8));
+                    s.push_str("\n        out._core_attach(tools)\n        return out");
+                } else if attrs.is_empty() {
                     let ret = if m.ret.is_some() { "return " } else { "" };
                     s.push_str(&wrap_call(&format!("{ret}{aw}"), &call, 8));
                 } else {
@@ -730,6 +769,7 @@ impl Writer<'_> {
             "synthesize" => self.synthesis_stream(s, SYNTHESIZE)?,
             "chat" => self.chat_stream(s)?,
             "vad" => self.vad_stream(s)?,
+            "realtime" => self.realtime_session(m, s)?,
             other => return Err(format!("{}: no stream idiom `{other}`", m.rust)),
         };
         b.push_str(&text);
@@ -890,7 +930,84 @@ impl Writer<'_> {
         ))
     }
 
+    /// The annotations of a tool pool.
+    fn tools_types(&mut self) {
+        for (m, n) in [
+            ("collections.abc", "Callable"),
+            ("collections.abc", "Sequence"),
+            ("?..llm.tool_context", "Tool"),
+            ("?..llm.tool_context", "Toolset"),
+        ] {
+            self.need(m, n);
+        }
+    }
+
     // ------------------------------------------------------------------- the stream idioms
+
+    /// `stream(kind = "realtime", proxy = "Trait")`: the session plugins subclass, and the
+    /// flattened surface the core drives it through, which must answer every method of `Trait`.
+    fn realtime_session(&mut self, m: &ProviderMethod, s: &StreamClass) -> Result<String, String> {
+        for (module, n) in [
+            ("", "asyncio"),
+            ("", "time"),
+            ("abc", "abstractmethod"),
+            ("collections.abc", "AsyncIterable"),
+            ("typing", "Any"),
+            ("typing", "Generic"),
+            ("typing", "Literal"),
+            ("typing", "TypeVar"),
+            ("livekit", "rtc"),
+            ("..log", "logger"),
+            ("..types", "NOT_GIVEN"),
+            ("..types", "NotGivenOr"),
+            ("..utils", "is_given"),
+            ("?..llm.chat_context", "ChatContext"),
+            ("?..llm.realtime", "GenerationCreatedEvent"),
+            ("?..llm.tool_context", "Tool"),
+            ("?..llm.tool_context", "ToolChoice"),
+            ("?..llm.tool_context", "ToolContext"),
+        ] {
+            self.need(module, n);
+        }
+        self.tools_types();
+        let caps = m
+            .ret
+            .as_ref()
+            .and(self.p.methods.iter().find(|x| x.role == Role::Init))
+            .and_then(|x| x.ret.clone())
+            .ok_or_else(|| format!("{}: a realtime model has init capabilities", m.rust))?;
+        let caps = self.core_ty(m, &caps)?;
+        let event = if self.p.events.is_empty() { "TEvent = TypeVar(\"TEvent\")\n\n" } else { "" };
+        let text = REALTIME
+            .replace("{TEVENT}", event)
+            .replace("{Stream}", &s.name)
+            .replace("{Provider}", &self.p.class)
+            .replace("{Caps}", &caps);
+        let mut b = String::new();
+        let (head, body) = text.split_once("{DOC}").expect("the template has its docstring slot");
+        b.push_str(head);
+        docstring(&mut b, &s.doc, 4);
+        b.push_str(body);
+        // Every method of the session's proxy trait has its `_core_` here.
+        let trait_name =
+            s.proxy.as_ref().ok_or_else(|| format!("{}: stream(proxy = \"Trait\")", m.rust))?;
+        let proxy = self
+            .x
+            .proxies
+            .iter()
+            .find(|x| x.trait_path.rsplit("::").next() == Some(trait_name))
+            .ok_or_else(|| format!("{}: no #[host(proxy)] trait `{trait_name}`", m.rust))?;
+        for method in &proxy.methods {
+            let core = format!("def _core_{}(", method.name);
+            if !b.contains(&core) {
+                return Err(format!(
+                    "{}: `{}` answers no `{trait_name}::{}` (`_core_{}`)",
+                    m.rust, s.name, method.name, method.name
+                ));
+            }
+        }
+        Ok(b)
+    }
 
     /// `stream(kind = "vad")`: audio frames in, `VADEvent`s out; the plugin's `_main_task` is the
     /// detection.
@@ -1615,4 +1732,326 @@ const VAD: &str = r#"
         if self._input_ch.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+"#;
+
+/// The realtime session's idiom: its face, then the core's surface.
+const REALTIME: &str = r#"EventTypes = Literal[
+    "input_speech_started",  # serverside VAD (also used for interruptions)
+    "input_speech_stopped",  # serverside VAD
+    "input_audio_transcription_completed",
+    "generation_created",
+    "session_reconnected",
+    "metrics_collected",
+    "remote_item_added",
+    "error",
+]
+
+{TEVENT}
+class {Stream}(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):
+{DOC}
+    def __init__(self, realtime_model: {Provider}) -> None:
+        super().__init__()
+        self._realtime_model = realtime_model
+
+    def _report_connection_acquired(self, acquire_time: float) -> None:
+        """Report connection timing as a RealtimeModelMetrics event with zero usage."""
+        from ..metrics.base import Metadata, RealtimeModelMetrics
+
+        self.emit(
+            "metrics_collected",
+            RealtimeModelMetrics(
+                request_id="",
+                timestamp=time.time(),
+                acquire_time=acquire_time,
+                connection_reused=False,
+                input_token_details=RealtimeModelMetrics.InputTokenDetails(),
+                output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
+                metadata=Metadata(
+                    model_name=self._realtime_model.model,
+                    model_provider=self._realtime_model.provider,
+                ),
+            ),
+        )
+
+    @property
+    def realtime_model(self) -> {Provider}:
+        return self._realtime_model
+
+    @property
+    def capabilities(self) -> {Caps}:
+        """Capabilities of the session.
+
+        Defaults to the parent model's capabilities. Adapters that swap the underlying model
+        mid-session override this to report the currently active model's capabilities.
+        """
+        return self._realtime_model.capabilities
+
+    @property
+    @abstractmethod
+    def chat_ctx(self) -> ChatContext: ...
+
+    @property
+    @abstractmethod
+    def tools(self) -> ToolContext: ...
+
+    @abstractmethod
+    async def update_instructions(self, instructions: str) -> None: ...
+
+    @abstractmethod
+    async def update_chat_ctx(
+        self, chat_ctx: ChatContext
+    ) -> None: ...  # can raise RealtimeError on Timeout
+
+    @abstractmethod
+    async def update_tools(self, tools: list[Tool]) -> None: ...
+
+    @abstractmethod
+    def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None: ...
+
+    @abstractmethod
+    def push_audio(self, frame: rtc.AudioFrame) -> None: ...
+
+    @abstractmethod
+    def push_video(self, frame: rtc.VideoFrame) -> None: ...
+
+    @abstractmethod
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
+
+    # commit the input audio buffer to the server
+    @abstractmethod
+    def commit_audio(self) -> None: ...
+
+    # clear the input audio buffer to the server
+    @abstractmethod
+    def clear_audio(self) -> None: ...
+
+    # cancel the current generation (do nothing if no generation is in progress)
+    @abstractmethod
+    def interrupt(self) -> None: ...
+
+    # message_id is the ID of the message to truncate (inside the ChatCtx)
+    @abstractmethod
+    def truncate(
+        self,
+        *,
+        message_id: str,
+        modalities: list[Literal["text", "audio"]],
+        audio_end_ms: int,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
+    ) -> None: ...
+
+    @abstractmethod
+    async def aclose(self) -> None: ...
+
+    async def _update_session(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> None:
+        from ..llm.realtime import RealtimeError
+
+        if is_given(instructions):
+            try:
+                await self.update_instructions(instructions)
+            except RealtimeError:
+                logger.exception("failed to update the instructions")
+
+        if is_given(chat_ctx):
+            try:
+                await self.update_chat_ctx(chat_ctx)
+            except RealtimeError:
+                logger.exception("failed to update the chat_ctx")
+
+        if is_given(tools):
+            try:
+                await self.update_tools(tools)
+            except RealtimeError:
+                logger.exception("failed to update the tools")
+
+    def start_user_activity(self) -> None:
+        """notifies the model that user activity has started"""
+        pass
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement say(). use a TTS model instead"
+        )
+
+    def _core_attach(self, tools: Callable[[], Sequence[Tool | Toolset]]) -> None:
+        """Report this session's events to the framework, which offers it the tools ``tools``
+        names."""
+        from .._core_view import to_core_item
+
+        self._core_tools = tools
+        self._core_events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        put = self._core_events.put_nowait
+        self.on("input_speech_started", lambda _: put({"kind": "input_speech_started"}))
+        self.on(
+            "input_speech_stopped",
+            lambda ev: put(
+                {
+                    "kind": "input_speech_stopped",
+                    "user_transcription_enabled": ev.user_transcription_enabled,
+                }
+            ),
+        )
+        self.on(
+            "input_audio_transcription_completed",
+            lambda ev: put(
+                {
+                    "kind": "input_transcription",
+                    "item_id": ev.item_id,
+                    "transcript": ev.transcript,
+                    "is_final": ev.is_final,
+                    "confidence": ev.confidence,
+                    "turn_started_at": ev.turn_started_at,
+                }
+            ),
+        )
+        self.on("session_reconnected", lambda _: put({"kind": "session_reconnected"}))
+        self.on("metrics_collected", lambda ev: put({"kind": "metrics", "metrics": ev}))
+        self.on(
+            "error",
+            lambda ev: put(
+                {
+                    "kind": "error",
+                    "label": ev.label,
+                    "message": str(ev.error),
+                    "recoverable": ev.recoverable,
+                    "timestamp": ev.timestamp,
+                }
+            ),
+        )
+        self.on(
+            "generation_created",
+            lambda ev: (
+                None if ev.user_initiated else put({"kind": "server_generation", "generation": ev})
+            ),
+        )
+        self.on(
+            "remote_item_added",
+            lambda ev: put(
+                {
+                    "kind": "remote_item_added",
+                    "previous_item_id": ev.previous_item_id,
+                    "item": to_core_item(ev.item),
+                }
+            ),
+        )
+
+    def _core_send(self, cmd: dict[str, Any]) -> None:
+        match cmd["kind"]:
+            case "push_audio":
+                self.push_audio(cmd["frame"])
+            case "interrupt":
+                self.interrupt()
+            case "commit_audio":
+                self.commit_audio()
+            case "clear_audio":
+                self.clear_audio()
+            case "truncate":
+                transcript = cmd["audio_transcript"]
+                self.truncate(
+                    message_id=cmd["message_id"],
+                    modalities=["audio", "text"] if cmd["has_audio"] else ["text"],
+                    audio_end_ms=cmd["audio_end_ms"],
+                    audio_transcript=NOT_GIVEN if transcript is None else transcript,
+                )
+            case kind:
+                raise ValueError(f"unknown session command {kind!r}")
+
+    async def _core_update(self, cmd: dict[str, Any]) -> None:
+        from .._core_view import from_core_item, offered_tools
+        from ..llm.chat_context import ChatContext
+
+        match cmd["kind"]:
+            case "update_instructions":
+                await self.update_instructions(cmd["instructions"])
+            case "update_chat_ctx":
+                await self.update_chat_ctx(ChatContext([from_core_item(i) for i in cmd["items"]]))
+            case "push_item":
+                ctx = self.chat_ctx.copy()
+                ctx.insert(from_core_item(cmd["item"]))
+                await self.update_chat_ctx(ctx)
+            case "update_tools":
+                await self.update_tools(offered_tools(self._core_tools(), cmd["names"]))
+            case kind:
+                raise ValueError(f"unknown session update {kind!r}")
+
+    async def _core_request(self, cmd: dict[str, Any]) -> asyncio.Future[Any]:
+        if cmd["kind"] == "say":
+            return self.say(cmd["text"])
+        choice = cmd["tool_choice"]
+        return self.generate_reply(
+            instructions=cmd["instructions"] or NOT_GIVEN,
+            tool_choice=NOT_GIVEN if choice is None else choice,
+        )
+
+    async def _core_generation(
+        self, request: asyncio.Future[GenerationCreatedEvent]
+    ) -> GenerationCreatedEvent:
+        return await request
+
+    async def _core_cancel(self, request: asyncio.Future[Any]) -> None:
+        request.cancel()
+
+    async def _core_drain(self, ev: GenerationCreatedEvent, req_id: str | None) -> None:
+        from .._core_view import to_core_item
+
+        put = self._core_events.put_nowait
+        response_id = ev.response_id or ""
+        put({"kind": "generation_created", "response_id": response_id, "req_id": req_id})
+        ids = {"response_id": ev.response_id}
+
+        async def _message(msg: Any) -> None:
+            mid = {"message_id": msg.message_id, **ids}
+            put({"kind": "message_started", **mid})
+
+            async def _text() -> None:
+                async for delta in msg.text_stream:
+                    put({"kind": "text_delta", "delta": str(delta), **mid})
+
+            async def _audio() -> None:
+                async for frame in msg.audio_stream:
+                    put({"kind": "audio_delta", "frame": frame, **mid})
+
+            async def _modalities() -> None:
+                modalities = await msg.modalities
+                kind = "audio" if "audio" in modalities else "text"
+                put({"kind": "message_modalities", "modalities": kind, **mid})
+
+            await asyncio.gather(_text(), _audio(), _modalities())
+            put({"kind": "message_done", **mid})
+
+        async def _messages() -> None:
+            # each message forwards as it arrives, not once the server has sent them all
+            started = []
+            async for m in ev.message_stream:
+                started.append(asyncio.ensure_future(_message(m)))
+            await asyncio.gather(*started)
+
+        async def _calls() -> None:
+            async for call in ev.function_stream:
+                put({"kind": "function_call", "call": to_core_item(call)})
+
+        await asyncio.gather(_messages(), _calls())
+        put({"kind": "generation_done", "response_id": response_id})
+
+    async def _core_next_event(self) -> dict[str, Any] | None:
+        return await self._core_events.get()
+
+    async def _core_aclose(self) -> None:
+        await self.aclose()
+        self._core_events.put_nowait(None)
 "#;

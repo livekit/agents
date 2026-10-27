@@ -161,13 +161,14 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
             return Err(format!("{at}: a destructuring parameter has no Python name"));
         };
         let pm = python(&t.attrs);
-        only(&at, &pm, &["ty", "attr", "import"])?;
+        only(&at, &pm, &["ty", "attr", "import", "default"])?;
         let name = id.ident.to_string();
         params.push(ProviderParam {
             name: name.strip_prefix('_').unwrap_or(&name).to_owned(),
             rust_ty: span_text(text, t.ty.span()),
             py_ty: meta_str(&pm, "ty"),
             import: meta_str(&pm, "import"),
+            default: meta_str(&pm, "default"),
             attr: has(&pm, "attr"),
         });
     }
@@ -182,6 +183,7 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
             kind: meta_str(&m, "stream.kind")
                 .ok_or_else(|| format!("{at}: stream(kind = \"..\")"))?,
             alias: meta_str(&m, "stream.alias"),
+            proxy: meta_str(&m, "stream.proxy"),
             doc: meta_str(&m, "stream.doc")
                 .map(|d| d.lines().map(str::to_owned).collect())
                 .unwrap_or_default(),
