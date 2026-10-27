@@ -114,8 +114,9 @@ async def test_resize_buffer_during_speech(
         await stream.aclose()
 
 
+@pytest.mark.parametrize("resize", ["shrink", "grow"])
 async def test_resize_buffer_while_referenced(
-    vad_impl: inference_vad.VAD | silero_vad.VAD,
+    vad_impl: inference_vad.VAD | silero_vad.VAD, resize: str
 ) -> None:
     # ndarray.resize() refuses to resize a buffer that anything else references, and on
     # Python 3.14 it also refuses one only held by the stream, so resizing must copy.
@@ -125,15 +126,15 @@ async def test_resize_buffer_while_referenced(
             await _push_window(stream, value)
 
         held = stream._speech_buffer
-        vad_impl.update_options(max_buffered_speech=0.512)
+        samples = np.repeat(np.arange(1, 4, dtype=np.int16), _WINDOW_SAMPLES)
+        if resize == "shrink":
+            vad_impl.update_options(max_buffered_speech=0.016)
+            samples = samples[: int(0.080 * _SAMPLE_RATE)]
+        else:
+            vad_impl.update_options(max_buffered_speech=0.512)
+            samples = np.concatenate([samples, np.zeros(_WINDOW_SAMPLES, dtype=np.int16)])
         assert stream._speech_buffer is not held
 
-        samples = np.concatenate(
-            [
-                np.repeat(np.arange(1, 4, dtype=np.int16), _WINDOW_SAMPLES),
-                np.zeros(_WINDOW_SAMPLES, dtype=np.int16),
-            ]
-        )
         await _push_window(stream, 0)
         event = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
         assert event.type == vad.VADEventType.END_OF_SPEECH
