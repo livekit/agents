@@ -169,7 +169,7 @@ class PrismHistory:
 
     def observe(
         self,
-        payload: r.InputEvent | r.ResponseEvent | r.FaultEvent,
+        payload: r.InputEvent | r.ResponseEvent | r.ItemTruncated | r.FaultEvent,
         *,
         turn_started_at: float | None = None,
     ) -> None:
@@ -211,6 +211,18 @@ class PrismHistory:
             self._active.setdefault(payload.call.response_id, set()).add(payload.item_id)
         elif isinstance(payload, r.ResponseEnded):
             self._active.pop(payload.response.response_id, None)
+        elif isinstance(payload, r.ItemTruncated):
+            if payload.kept_text is None or payload.content_index != 0:
+                return
+            # The acknowledgment can arrive after a history edit. Only update
+            # an existing item whose current server identity still matches.
+            for local_id, server_id in self._ids.items():
+                if server_id != payload.item_id:
+                    continue
+                item = self._chat.get_by_id(local_id)
+                if isinstance(item, llm.ChatMessage) and item.role == "assistant":
+                    item.content = [payload.kept_text]
+                break
 
     async def sync(
         self, target: llm.ChatContext

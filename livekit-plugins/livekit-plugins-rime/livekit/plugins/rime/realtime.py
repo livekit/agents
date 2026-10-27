@@ -69,7 +69,15 @@ class PrismModelError(llm.RealtimeModelError):
 
 class RealtimeModel(
     llm.RealtimeModel,
-    rtc.EventEmitter[Literal["session_updated", "generation_created", "speech_stopped"]],
+    rtc.EventEmitter[
+        Literal[
+            "session_updated",
+            "generation_created",
+            "speech_stopped",
+            "item_truncated",
+            "response_ended",
+        ]
+    ],
 ):
     """Prism for one AgentSession. Requires the Rime SDK realtime extra and Python 3.11.
 
@@ -881,6 +889,9 @@ class RealtimeSession(llm.RealtimeSession):
             self._end(self._generations[payload.response.response_id])
             if self._active == payload.response:
                 self._active = None
+            self._model.emit("response_ended", payload)
+        elif isinstance(payload, r.ItemTruncated):
+            self._model.emit("item_truncated", payload)
         elif isinstance(payload, r.FaultEvent) and payload.error.request_id is None:
             self._emit_error(
                 PrismError(payload.error), recoverable=payload.error.scope != "session"

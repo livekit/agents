@@ -133,7 +133,7 @@ Python Rime SDK. Use Python 3.11 or later. TTS still supports Python 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra requires `rimelabs-sdk>=0.1.0a23`. For source development:
+The realtime extra requires `rimelabs-sdk>=0.1.0a24`. For source development:
 
 ```sh
 uv sync --package livekit-plugins-rime --extra realtime --inexact
@@ -176,7 +176,7 @@ session = AgentSession(llm=model)
 ### LiveKit compatibility
 
 Prism targets LiveKit's standard realtime interface from 1.7.1 onward. We test
-1.7.1, 1.8.6, and 1.8.8 with `rimelabs-sdk==0.1.0a23`. The package still requires
+1.7.1, 1.8.6, and 1.8.8 with `rimelabs-sdk==0.1.0a24`. The package still requires
 `livekit-agents>=1.8.8`; installation on 1.7.1 needs a release that permits it.
 
 LiveKit 1.7.1 fixes active-response cancellation through `SpeechHandle.interrupt()`.
@@ -297,6 +297,19 @@ The model emits `session_updated`, `generation_created`, and `speech_stopped`.
 provided, the settings revision, and the provider request ID.
 `PrismSpeechStoppedEvent` includes the speech end reason. Interim and final input
 transcripts use LiveKit's standard transcription events.
+
+The model also emits SDK `ItemTruncated` payloads as `item_truncated` and
+`ResponseEnded` payloads as `response_ended`. Available retained text updates
+the plugin's history only while the server item ID still matches. `kept_text=None`
+means unavailable; an empty string means no words remain. This text describes
+server history, not necessarily what was heard, and does not replace LiveKit's
+playback transcript. Acknowledgments during generation may have no retained text,
+with no later update guaranteed.
+
+`ResponseEnded.truncation` reports items excluded from that reply's prompt.
+It does not delete local history. `None` means no exclusions were reported or the
+information was unavailable. Read `items_left_out` and `first_kept_item_id` from
+the summary for diagnostics.
 
 `PrismError` retains the provider fault, code, scope, IDs, and `retryable`.
 `PrismModelError` also exposes retryability. Retryability describes whether an
