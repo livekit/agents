@@ -211,6 +211,14 @@ def build(stack: str, *, rebuild: bool) -> None:
                 check=True,
                 env=env,
             )
+        # a reference that did not install, or resolves to the copy, compares nothing
+        where = subprocess.run(
+            [str(python_of(stack)), "-c", "import livekit.agents as a; print(a.__file__)"],
+            capture_output=True,
+            text=True,
+        ).stdout
+        if str(REPO / "livekit-agents" / "") not in where:
+            sys.exit(f"the reference venv's livekit.agents is not livekit-agents/: {where!r}")
         return
     if fresh:
         # the dependencies, and a first build through PEP 517
