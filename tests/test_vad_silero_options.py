@@ -7,10 +7,13 @@ from typing import Any, cast
 import pytest
 
 pytest.importorskip("onnxruntime")
+pytest.importorskip("livekit.plugins.silero.vad")
 
 from livekit.plugins.silero.vad import VAD, VADStream, _VADOptions  # noqa: E402
 
-pytestmark = pytest.mark.plugin("silero")
+# Hermetic option handling, so it belongs with the unit category: the plugin category is the
+# cloud matrix, which is skipped for PRs from forks and does not list silero.
+pytestmark = pytest.mark.unit
 
 
 def _vad(**overrides: Any) -> VAD:
