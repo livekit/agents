@@ -8,6 +8,8 @@ question only when it is asked as written. Read on the wire and in what reaches 
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -34,6 +36,7 @@ NOTICE = "Calls are recorded for quality."
 QUESTION = "What email address should the confirmation go to?"
 VERBATIM = "livekit/verbatim"
 
+STEP_NOT_YET = "a step's calls run together and its turn-ending results are one answer: not yet"
 RUST_ASK = (
     "rust ask HandlerOutput.messages/verbatim: the task row's history and flagged parts are "
     "written by the Rust commit"
@@ -73,6 +76,13 @@ def answer(frames: list[dict[str, Any]]) -> tuple[str, bool]:
             last = artifact["artifactId"]
     parts = chunks.get(last, [])
     return "".join(p.get("text", "") for p in parts), bool(parts) and all(map(exact, parts))
+
+
+def answer_parts(frames: list[dict[str, Any]]) -> list[tuple[str, bool]]:
+    """The last chunk of the answer artifact: each text part, with its flag."""
+    last = [f["artifactUpdate"] for f in frames if f.get("artifactUpdate", {}).get("lastChunk")]
+    parts = last[-1]["artifact"].get("parts", []) if last else []
+    return [(p.get("text", ""), exact(p)) for p in parts]
 
 
 def first_index(frames: list[dict[str, Any]], key: str) -> int:
@@ -272,3 +282,150 @@ async def test_tasks_get_shows_an_exact_answer_flagged(door: Callable[..., Door]
 
     parts = sent.task["artifacts"][-1]["parts"]
     assert [(p["text"], exact(p)) for p in parts] == [(NOTICE, True)]
+
+
+# ---------------------------------------------------------------------------------------------
+# the calls of one step run together; its turn-ending results are one answer
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason=STEP_NOT_YET)
+async def test_two_slow_tools_of_one_step_finish_in_the_time_of_one() -> None:
+    """The calls of one step start together, so two slow tools take the time of the slower."""
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("slow", "c1"), call("slow", "c2")]),
+        Reply("Both done.", when=output_of("c2")),
+    )
+    desk = Agent(instructions="desk", llm=model)
+
+    @desk.tool
+    async def slow(ctx: RunContext) -> str:
+        """Slow."""
+        await asyncio.sleep(0.4)
+        return "done"
+
+    started = time.monotonic()
+    result = await desk.run("go")
+    assert result.output == "Both done."
+    assert time.monotonic() - started < 0.7
+
+
+@pytest.mark.rule("R22", "R23")
+@pytest.mark.xfail(strict=True, reason=STEP_NOT_YET)
+async def test_says_from_two_tools_of_one_step_go_out_as_they_finish(
+    door: Callable[..., Door],
+) -> None:
+    """Two tools of one step say exact text: each goes out when its tool says it, so the faster
+    tool's text comes first even though it was called second."""
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("late", "c1"), call("early", "c2")]),
+        Reply("Done."),
+    )
+    desk = Agent(instructions="desk", llm=model)
+
+    @desk.tool
+    async def late(ctx: RunContext) -> str:
+        """Late."""
+        await asyncio.sleep(0.3)
+        await ctx.say("from the slow tool")
+        return "ok"
+
+    @desk.tool
+    async def early(ctx: RunContext) -> str:
+        """Early."""
+        await ctx.say("from the fast tool")
+        return "ok"
+
+    sent = await door(serving(desk)).send("go")
+
+    assert working(sent.frames) == [("from the fast tool", True), ("from the slow tool", True)]
+    assert answer(sent.frames) == ("Done.", False)
+
+
+@pytest.mark.rule("R23")
+@pytest.mark.xfail(strict=True, reason=STEP_NOT_YET)
+async def test_the_turn_ending_results_of_one_step_are_one_answer_in_call_order(
+    door: Callable[..., Door],
+) -> None:
+    """Three verbatim results that end the turn: every call runs, nothing is sent before the
+    answer, and the answer is one artifact with one flagged part per result, in call order."""
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("first", "c1"), call("second", "c2"), call("third", "c3")])
+    )
+    desk = Agent(instructions="desk", llm=model)
+
+    def ending(text: str, delay: float) -> Any:
+        async def tool(ctx: RunContext) -> ToolResult:
+            await asyncio.sleep(delay)
+            return ToolResult(text, verbatim=True, reply_required=False)
+
+        return tool
+
+    desk.tool(name="first", description="First.")(ending("one", 0.2))
+    desk.tool(name="second", description="Second.")(ending("two", 0.0))
+    desk.tool(name="third", description="Third.")(ending("three", 0.1))
+
+    sent = await door(serving(desk)).send("go")
+
+    assert working(sent.frames) == []
+    assert answer_parts(sent.frames) == [("one", True), ("two", True), ("three", True)]
+    assert len(model.requests) == 1
+
+
+@pytest.mark.rule("R23")
+async def test_a_turn_ending_result_is_said_when_another_asks_for_a_reply(
+    door: Callable[..., Door],
+) -> None:
+    """A verbatim result that would end the turn, with a result after it that asks for a
+    reply: the first is said as written, and the model goes on."""
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("disclose", "c1"), call("look_up", "c2")]),
+        Reply("Your order shipped.", when=output_of("c2")),
+    )
+    desk = Agent(instructions="desk", llm=model)
+
+    @desk.tool
+    async def disclose(ctx: RunContext) -> ToolResult:
+        """Disclose."""
+        return ToolResult(NOTICE, verbatim=True, reply_required=False)
+
+    @desk.tool
+    async def look_up(ctx: RunContext) -> str:
+        """Look up."""
+        return "shipped"
+
+    sent = await door(serving(desk)).send("where is my order?")
+
+    assert working(sent.frames) == [(NOTICE, True)]
+    assert answer(sent.frames) == ("Your order shipped.", False)
+    assert len(model.requests) == 2
+
+
+@pytest.mark.xfail(strict=True, reason=STEP_NOT_YET)
+async def test_a_cancel_during_a_step_stops_every_call() -> None:
+    """The run is cancelled while its step's two calls run: both are cancelled."""
+    model = ScriptedLLM(Reply(tool_calls=[call("wait", "c1"), call("wait", "c2")]))
+    desk = Agent(instructions="desk", llm=model)
+    started: list[str] = []
+    stopped: list[str] = []
+
+    @desk.tool
+    async def wait(ctx: RunContext) -> str:
+        """Wait."""
+        started.append(ctx.function_call.call_id)
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            stopped.append(ctx.function_call.call_id)
+            raise
+        return "done"
+
+    run = asyncio.ensure_future(desk.run("go"))
+    for _ in range(100):
+        if len(started) == 2:
+            break
+        await asyncio.sleep(0.01)
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    assert sorted(stopped) == ["c1", "c2"]
