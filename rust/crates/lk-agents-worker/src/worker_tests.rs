@@ -218,6 +218,27 @@ async fn a_closed_connection_reconnects_and_the_machine_is_told() {
     assert_eq!(c.state().worker_id(), "W-2", "did not re-register on the new socket");
 }
 
+// Catches: the reconnect budget spent over the worker's lifetime instead of per outage (the
+// reference resets it on each connect): with `max_retry = 1`, an outage after a recovered one
+// still gets its retry.
+#[tokio::test(start_paused = true)]
+async fn a_connection_restores_the_retry_budget() {
+    let (mut c, wire, _h) = conn(
+        vec![
+            Step::ConnectFails,
+            Step::Serves(vec![
+                register_message("W-1"),
+                Err(TransportError::Closed("peer disconnected".into())),
+            ]),
+            Step::Serves(vec![register_message("W-2")]),
+        ],
+        1,
+    );
+    let _ = tokio::time::timeout(Duration::from_secs(30), c.run()).await;
+    assert_eq!(wire.lock().unwrap().attempts, 3);
+    assert_eq!(c.state().worker_id(), "W-2", "gave up after the second outage");
+}
+
 // Catches: `Drain` not reaching the machine while `run()` is in flight.
 #[tokio::test(start_paused = true)]
 async fn drain_reaches_a_running_connection_from_another_task() {

@@ -532,7 +532,13 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                     Ok(())
                 }
                 event = connection.next_event(self.transport.clone(), &self.cfg) => {
-                    event.map(|event| self.handle_connection_event(event, &mut connection.outbox))
+                    event.map(|event| {
+                        // the retry budget is per outage: a connection that opened restores it
+                        if matches!(event, ConnectionEvent::Connected) {
+                            retries = 0;
+                        }
+                        self.handle_connection_event(event, &mut connection.outbox)
+                    })
                 }
                 _ = tokio::time::sleep(timer) => {
                     let effects = self.state.tick(self.clock.now());
