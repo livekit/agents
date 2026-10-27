@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/inference/eot/transports.py
+  s_b6ebb92b33ee85::t_1296e24f2887cc 415
+tests/test_audio_turn_detector_fallback.py
+  s_b6ebb92b33ee85::t_e72de17df0deea 290-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3ed5a3f95d91a34a02d703c0b6fe1d48531d2595",
+  "prompts": {},
+  "sessions": {
+    "s_b6ebb92b33ee85": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ffd5347-5f1e-4331-bcb5-8dce87ae0dd4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
