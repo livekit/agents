@@ -478,6 +478,9 @@ mod tests {
     // message.
     #[tokio::test(start_paused = true)]
     async fn a_recognition_gives_up_after_its_budget() {
+        // Exhausting it raises the host's chained connection error, so the interpreter must exist.
+        #[cfg(feature = "python")]
+        pyo3::Python::initialize();
         let reports = Arc::new(Reports::default());
         let stt = retrying(Arc::new(Flaky::default()), Arc::clone(&reports), 1);
         let error = stt.recognize(&[], None).await.unwrap_err();

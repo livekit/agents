@@ -95,6 +95,7 @@ class CompletionUsage:
         self.prompt_cached_tokens = kw.get('prompt_cached_tokens', 0)
         self.cache_creation_tokens = kw.get('cache_creation_tokens', 0)
         self.cache_read_tokens = kw.get('cache_read_tokens', 0)
+        self.reasoning_tokens = kw.get('reasoning_tokens', 0)
         self.total_tokens = kw.get('total_tokens', 0)
         self.service_tier = kw.get('service_tier')
 

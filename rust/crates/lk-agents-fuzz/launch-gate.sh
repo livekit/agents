@@ -7,7 +7,8 @@
 #
 # `VOICE_GATE_SEEDS` sizes the large campaign (4096 by default, after the 1024 of the survey).
 # Verdicts depend on no clock but the simulation's; `VOICE_HANG_S` is the watchdog that ends a
-# run blocked for real (600 s by default).
+# run blocked for real (600 s by default). Needs cargo-nextest and the repository's venv
+# (`make install`), or `PYO3_PYTHON` naming a Python.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -44,6 +45,15 @@ cargo test -q -p lk-agents-voice
 # The provider clients the DST does not run: the gateway's TTS, STT and LLM, the host bridges.
 step "provider clients' unit tests"
 cargo test -q -p lk-agents-inference -p lk-agents-abi
+
+# The abi tests behind the binding's `python` feature (the host bridge, the value crossings, the
+# fork guard) against a live interpreter: the repository's venv unless `PYO3_PYTHON` names one. A
+# process per test (nextest), since some set process globals (the fork guard, cached host classes).
+step "abi tests against the interpreter"
+py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
+PYO3_PYTHON=$py PYTHONHOME=$("$py" -c 'import sys; print(sys.base_prefix)') \
+    cargo nextest run --cargo-quiet --status-level fail --final-status-level fail \
+    -p lk-agents-abi --features python
 
 step "fuzz suites: contract registry, probes, determinism, regressions"
 cargo test -q --release -p lk-agents-fuzz

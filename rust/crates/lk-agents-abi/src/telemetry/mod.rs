@@ -414,10 +414,12 @@ mod tests {
 
 
     #[test]
-    #[should_panic(expected = "no dot-delimited `pii` segment")]
+    #[cfg_attr(debug_assertions, should_panic(expected = "no dot-delimited `pii` segment"))]
     fn an_unmarked_sensitive_attribute_fails_a_test_rather_than_a_code_review() {
         let mut s = SpanBuilder::start("llm_node", FrameId::ROOT, None);
         s.pii_attr("lk.user_input", attr_str("my card number is"));
+        // A release build has no debug assertion: the attribute is dropped, never exported.
+        assert!(s.attributes.is_empty());
     }
 }
 

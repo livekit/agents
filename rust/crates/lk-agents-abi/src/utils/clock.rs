@@ -416,10 +416,8 @@ mod tests {
         // 2024-01-01, i.e. safely in the past but far past the UNIX epoch the nudge starts from.
         let sane = SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200);
         assert!(reads[0] > sane, "wall must be the OS clock, not the nudge origin");
-        assert!(
-            reads[0].duration_since(SystemTime::now()).is_err(),
-            "and it must not be in the future"
-        );
+        // Not after a later read: equal on a coarse clock (macOS counts microseconds).
+        assert!(reads[0] <= SystemTime::now(), "and it must not be in the future");
     }
 
     // Catches: the repeat/backwards branch of the nudge, which a live `wall()` read never hits.
