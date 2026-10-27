@@ -57,7 +57,7 @@ impl Rule for SpeechIsHeard {
         // Each speech's journalled interruption cause.
         let mut cut: BTreeMap<u64, InterruptCause> = BTreeMap::new();
         // When the scheduler first let each speech go.
-        let mut authorized: BTreeMap<u64, u64> = BTreeMap::new();
+        let mut authorized: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         // When the person was heard to start speaking.
         let mut cancelled: std::collections::BTreeSet<u64> = Default::default();
         // In occurrence order: an end and a start at one instant (the realtime server's
@@ -83,7 +83,7 @@ impl Rule for SpeechIsHeard {
                     cut.entry(speech.0).or_insert(*cause);
                 }
                 Step::Speech(SpeechStep::Authorized { speech }) => {
-                    authorized.entry(speech.0).or_insert(at.at_ms);
+                    authorized.entry(speech.0).or_default().push(at.at_ms);
                 }
                 // A realtime reply whose response the server cancelled ends `Completed` with
                 // nothing said: as cut as an interrupted one.
@@ -111,10 +111,14 @@ impl Rule for SpeechIsHeard {
             // The bound runs from the creation, and again from when the scheduler let it go: a
             // speech that waited its turn (the floor, the gap, authorization, the person) has the
             // whole bound once it may play.
-            let deadline = match authorized.get(&speech.id) {
-                Some(a) if *a <= created.at_ms + BOUND_MS => (*a).max(created.at_ms) + BOUND_MS,
-                _ => created.at_ms + BOUND_MS,
-            };
+            // Each step is let go again once its tools are done (a tool the case answers late):
+            // a let-go within the bound gives the whole bound again.
+            let mut deadline = created.at_ms + BOUND_MS;
+            for a in authorized.get(&speech.id).into_iter().flatten() {
+                if *a <= deadline {
+                    deadline = deadline.max((*a).max(created.at_ms) + BOUND_MS);
+                }
+            }
             if end <= deadline || closing.is_some_and(|c| c <= deadline) {
                 continue;
             }
@@ -217,6 +221,9 @@ fn host_cut(r: &Recording, created: u64, to: u64) -> bool {
             a.input,
             Input::Interrupt { .. }
                 | Input::InterruptSpeech { .. }
+                // Taking the speaker away cuts what plays, and on a realtime socket cancels the
+                // server's response in flight, an unasked one included.
+                | Input::SetAudioOutput { attach: false, .. }
                 | Input::RealtimeEvent {
                     event: RtEvent::Disconnected | RtEvent::ResponseFailed | RtEvent::ServerError,
                     ..

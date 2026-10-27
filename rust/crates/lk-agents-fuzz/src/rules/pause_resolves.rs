@@ -60,7 +60,9 @@ impl Rule for PauseResolves {
             }
             let resolved = journal[i + 1..].iter().find(|(_, s)| resolves(s, speech.0)).map(|(a, _)| *a);
             let until = resolved.map_or(end, |r| r.at_ms);
-            let bound = allowance_ms(journal, at.at_ms);
+            // The endpointing in effect while the turn decision owns the pause: a change made
+            // after the pause (a larger maximum delay) is waited on too.
+            let bound = allowance_ms(journal, at.at_ms).max(allowance_ms(journal, until));
             // The first stretch, from the pause to its resolution, in which the person stayed
             // quiet for the whole bound: speaking again cancels the resume, as it should.
             let Some(quiet) = quiet_stretch(journal, *at, until, bound) else {

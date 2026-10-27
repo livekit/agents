@@ -45,7 +45,9 @@ impl Rule for SpeechSettles {
             // waits for the user's silence. When the driver no longer takes the recogniser's end
             // (the turn detection left `stt` mid-utterance) and hears them speaking still, no
             // answer of the case's ends that wait.
-            if held_at_launch(r, &speech, answered) && end_unheard(r, answered) {
+            if held_at_launch(r, &speech, answered)
+                && (end_unheard(r, answered) || never_stopped(r, answered))
+            {
                 continue;
             }
             // Queued behind such a speech, never let go: it waits on the same person.
@@ -56,7 +58,7 @@ impl Rule for SpeechSettles {
                     .speeches()
                     .iter()
                     .any(|h| h.id == holder && held_at_launch(r, h, answered))
-                && end_unheard(r, answered)
+                && (end_unheard(r, answered) || never_stopped(r, answered))
             {
                 continue;
             }
@@ -102,6 +104,34 @@ fn held_at_launch(r: &Recording, speech: &SpeechView, answered: Observed) -> boo
         })
         .last()
         .unwrap_or(false)
+}
+
+/// The person the driver last heard start, on a detector's word (the VAD's, a realtime server's),
+/// is speaking still at `answered`: the case never sent that detector's end (`VadEnd`, the
+/// server's `speech_stopped`), here because it took the microphone away mid-utterance. A speech
+/// held at its launch waits on that person, as the reference's does.
+fn never_stopped(r: &Recording, answered: Observed) -> bool {
+    let Some((began, true)) = r
+        .journal_where(|step| match step {
+            Step::Emitted(SessionEvent::StartOfSpeech(ev)) => Some(ev.from_vad),
+            Step::Emitted(SessionEvent::EndOfSpeech(_)) => Some(false),
+            _ => None,
+        })
+        .filter(|(at, _)| *at <= answered)
+        .last()
+    else {
+        return false;
+    };
+    !r.applied().iter().any(|a| {
+        a.accepted
+            && a.at > began
+            && a.at <= answered
+            && matches!(
+                a.input,
+                Input::VadEnd { .. }
+                    | Input::RealtimeEvent { event: crate::input::RtEvent::SpeechStopped, .. }
+            )
+    })
 }
 
 /// The person the driver last heard start, on the recogniser's word, has not ended by
