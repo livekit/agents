@@ -5,7 +5,7 @@
 #
 #   rust/crates/lk-agents-fuzz/launch-gate.sh
 #
-# `VOICE_GATE_SEEDS` sizes the large campaign (4096 by default, after the 1024 of the survey).
+# `VOICE_GATE_SEEDS` sizes the large campaign (32768 by default, after the 1024 of the survey).
 # Verdicts depend on no clock but the simulation's; `VOICE_HANG_S` is the watchdog that ends a
 # run blocked for real (600 s by default). Needs cargo-nextest and the repository's venv
 # (`make install`), or `PYO3_PYTHON` naming a Python.
@@ -59,8 +59,8 @@ step "fuzz suites: contract registry, probes, determinism, regressions"
 cargo test -q --release -p lk-agents-fuzz
 
 campaign "survey, 1024 seeds" survey VOICE_SEEDS=1024
-campaign "campaign, ${VOICE_GATE_SEEDS:-4096} more seeds" survey \
-    VOICE_FIRST_SEED=1024 VOICE_SEEDS="${VOICE_GATE_SEEDS:-4096}"
+campaign "campaign, ${VOICE_GATE_SEEDS:-32768} more seeds" survey \
+    VOICE_FIRST_SEED=1024 VOICE_SEEDS="${VOICE_GATE_SEEDS:-32768}"
 campaign "soak" soak
 
 printf '\nlaunch gate passed\n'
