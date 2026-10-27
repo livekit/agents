@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from .translation_session import TranslationSession
 
 
-def translated_track_name(source_track_sid: str, language: str) -> str:
+def _translated_track_name(source_track_sid: str, language: str) -> str:
     """The name the translation of a track is published under, unless one is given.
 
     A track carries no attributes, only a name, so the name is what tells a listener whose
@@ -486,7 +486,7 @@ class TranslationRoomIO:
         if self._fixed_track_name or self._source_track_sid is None:
             return None
 
-        return translated_track_name(self._source_track_sid, self._language)
+        return _translated_track_name(self._source_track_sid, self._language)
 
     def _rename_output_track_soon(self) -> None:
         """Republish the translated track under its current name, in the background."""
