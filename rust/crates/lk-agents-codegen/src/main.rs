@@ -328,9 +328,14 @@ fn run(check: bool) -> Result<usize, String> {
     }
 
     let mut stale = 0;
-    let bases = bases::emit(&decls, &exposed.providers)?;
+    let bases = bases::emit(&decls, &exposed)?;
     let with_bases = python::emit(&decls, &bases)?;
-    let records = python::emit(&decls, &[])?;
+    let reference: Vec<ir::Decl> = decls
+        .iter()
+        .filter(|d| !d.target(ir::Host::Python).is_some_and(|t| t.with_bases))
+        .cloned()
+        .collect();
+    let records = python::emit(&reference, &[])?;
     let stub = stub::emit(&decls, &exposed)?;
     for package in python_packages {
         let python_root = root.join(package).join(PYTHON_GENERATED);

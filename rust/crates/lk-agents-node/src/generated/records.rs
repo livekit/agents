@@ -2309,31 +2309,20 @@ impl TryFrom<LlmMetrics> for lk_agents_abi::metrics::base::LlmMetrics {
     }
 }
 
-/// `tts.SynthesizedAudio` (`tts/tts.py:39-51`) plus the two fields a Python plugin carries in
-/// `rtc.AudioFrame.userdata` (`USERDATA_TIMED_TRANSCRIPT`, `USERDATA_TTS_STARTED_TIME`), lifted by
-/// the host class's `_core_*` views. Not what `Agent.tts_node` yields (a bare frame).
 #[napi(object, js_name = "SynthesizedAudio")]
 pub struct SynthesizedAudio {
-    /// A real `rtc.AudioFrame` both ways: `AudioFrame`'s twin is `construct`.
+    /// Synthesized audio frame
     pub frame: crate::providers::host::JsAudioFrame,
-    /// One segment can be made up of several requests.
+    /// Request ID (one segment could be made up of multiple requests)
     pub request_id: String,
-    /// Last frame of the segment.
+    /// Whether this is latest frame of the segment
     pub is_final: bool,
-    /// Segments are separated by a flush. Streaming only, `""` otherwise.
+    /// Segment ID, each segment is separated by a flush (streaming only)
     pub segment_id: String,
-    /// Streaming only, `""` otherwise.
+    /// Current segment of the synthesized audio (streaming only)
     pub delta_text: String,
-    /// `USERDATA_TTS_STARTED_TIME`: when the text was first sent to the provider, in wall-clock
-    /// seconds (a host's `perf_counter()` stamp is converted where it is read).
-    /// `None` when absent (`generation.py:426` branches on it); `0.0` is legitimate.
-    /// Read off `_core_started_time`, the host class's view of the frame's `userdata`.
     pub started_time: Option<f64>,
-    /// `USERDATA_TIMED_TRANSCRIPT`: the words this frame covers. Empty is the common case.
-    /// Host `TimedString`s both ways; read off `_core_timed_transcript` (the `userdata` list, words
-    /// only -- a plain `str` there is skipped, as `generation.py:432-434` does).
     pub timed_transcript: Vec<crate::generated::records::TimedString>,
-    /// What `frame.data` holds. Host plugins always deliver PCM, so it does not cross.
     pub encoding: String,
 }
 
@@ -2445,11 +2434,11 @@ impl TryFrom<TtsMetrics> for lk_agents_abi::metrics::base::TtsMetrics {
     }
 }
 
-/// `TTSCapabilities` (`tts/tts.py`).
 #[napi(object, js_name = "TtsCapabilities")]
 pub struct TtsCapabilities {
-    /// Whether this instance has a duplex path; read at construction (some plugins compute it).
+    /// Whether this TTS supports streaming (generally using websockets)
     pub streaming: bool,
+    /// Whether this TTS supports aligned transcripts with word timestamps
     pub aligned_transcript: bool,
 }
 

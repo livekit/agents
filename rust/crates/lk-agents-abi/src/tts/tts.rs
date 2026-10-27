@@ -9,68 +9,114 @@ use lk_agents_host_derive::Host;
 use crate::{AudioFrame, ApiConnectOptions};
 use crate::utils::stream::{StreamSink, StreamSource};
 
-/// `TTSCapabilities` (`tts/tts.py`).
-///
-/// The Python class stays hand-written; the payload `FallbackTts`'s `capabilities` getter builds by name
-/// is generated, since a forgotten key would silently take the reference's default.
+// `TTSCapabilities` (`tts/tts.py`). The payload `FallbackTts`'s `capabilities` getter builds by
+// name is generated too, since a forgotten key would silently take the reference's default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
+#[python(dataclass, module = "tts", path = "livekit.agents.tts.tts", name = "TTSCapabilities", with_bases)]
 // Both directions.
 #[binding(emit, extract)]
 pub struct TtsCapabilities {
-    /// Whether this instance has a duplex path; read at construction (some plugins compute it).
+    /// Whether this TTS supports streaming (generally using websockets)
+    // Whether this instance has a duplex path; read at construction (some plugins compute it).
     pub streaming: bool,
+    /// Whether this TTS supports aligned transcripts with word timestamps
+    #[python(default = "False")]
     pub aligned_transcript: bool,
 }
 
-/// `tts.SynthesizedAudio` (`tts/tts.py:39-51`) plus the two fields a Python plugin carries in
-/// `rtc.AudioFrame.userdata` (`USERDATA_TIMED_TRANSCRIPT`, `USERDATA_TTS_STARTED_TIME`), lifted by
-/// the host class's `_core_*` views. Not what `Agent.tts_node` yields (a bare frame).
+/// What the expressive markup pipeline can do with a given voice.
+#[derive(Debug, Clone, Default, PartialEq, Host)]
+#[python(dataclass, module = "tts", path = "livekit.agents.tts.tts", name = "MarkupInfo", with_bases)]
+pub struct MarkupInfo {
+    /// ``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op
+    #[python(default_factory = "dict")]
+    pub nonverbals: std::collections::HashMap<String, Vec<String>>,
+}
+
+// `tts.SynthesizedAudio` (`tts/tts.py:39-51`) plus the two fields a Python plugin carries in
+// `rtc.AudioFrame.userdata` (`USERDATA_TIMED_TRANSCRIPT`, `USERDATA_TTS_STARTED_TIME`). Not what
+// `Agent.tts_node` yields (a bare frame). The reference has no class docstring.
 #[derive(Debug, Clone, PartialEq, Host)]
-// Read by hand (below): the host class's own views of the frame's `userdata`.
+#[python(dataclass, module = "tts", path = "livekit.agents.tts.tts", name = "SynthesizedAudio", with_bases)]
+// Read by hand (below): the two fields are the frame's `userdata`.
 #[binding(emit)]
 pub struct SynthesizedAudio {
-    /// A real `rtc.AudioFrame` both ways: [`AudioFrame`]'s twin is `construct`.
+    /// Synthesized audio frame
+    // A real `rtc.AudioFrame` both ways: [`AudioFrame`]'s twin is `construct`.
+    #[python(ty = "rtc.AudioFrame", import = "livekit:rtc")]
     pub frame: AudioFrame,
-    /// One segment can be made up of several requests.
+    /// Request ID (one segment could be made up of multiple requests)
     pub request_id: String,
-    /// Last frame of the segment.
+    /// Whether this is latest frame of the segment
+    #[python(default = "False")]
     pub is_final: bool,
-    /// Segments are separated by a flush. Streaming only, `""` otherwise.
+    /// Segment ID, each segment is separated by a flush (streaming only)
+    #[python(default = "\"\"")]
     pub segment_id: String,
-    /// Streaming only, `""` otherwise.
+    /// Current segment of the synthesized audio (streaming only)
+    #[python(default = "\"\"")]
     pub delta_text: String,
-    /// `USERDATA_TTS_STARTED_TIME`: when the text was first sent to the provider, in wall-clock
-    /// seconds (a host's `perf_counter()` stamp is converted where it is read).
-    /// `None` when absent (`generation.py:426` branches on it); `0.0` is legitimate.
-    /// Read off `_core_started_time`, the host class's view of the frame's `userdata`.
+    // `USERDATA_TTS_STARTED_TIME`: when the text was first sent to the provider, in wall-clock
+    // seconds (a host's `perf_counter()` stamp is converted where it is read). `None` when absent
+    // (`generation.py:426` branches on it); `0.0` is legitimate.
+    #[python(skip)]
     pub started_time: Option<f64>,
-    /// `USERDATA_TIMED_TRANSCRIPT`: the words this frame covers. Empty is the common case.
-    /// Host `TimedString`s both ways; read off `_core_timed_transcript` (the `userdata` list, words
-    /// only -- a plain `str` there is skipped, as `generation.py:432-434` does).
+    // `USERDATA_TIMED_TRANSCRIPT`: the words this frame covers. Empty is the common case. Host
+    // `TimedString`s both ways; a plain `str` in the host's list is skipped, as
+    // `generation.py:432-434` does.
+    #[python(skip)]
     pub timed_transcript: Vec<TimedString>,
-    /// What `frame.data` holds. Host plugins always deliver PCM, so it does not cross.
+    // What `frame.data` holds. Host plugins always deliver PCM, so it does not cross.
     #[binding(skip, extract_skip)]
+    #[python(skip)]
     pub encoding: AudioEncoding,
 }
 
-/// `started_time` and `timed_transcript` come off `_core_started_time` / `_core_timed_transcript`.
+/// `started_time` and `timed_transcript` come off the frame's `userdata`.
 #[cfg(feature = "python")]
 impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for SynthesizedAudio {
     type Error = pyo3::PyErr;
 
     fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{attr, attr_or};
+        use crate::python::attr;
         use pyo3::types::PyAnyMethods as _;
         const OWNER: &str = "SynthesizedAudioFromPy";
         let obj = &*obj;
+        let py = obj.py();
+        let frame = obj.getattr("frame")?;
+        let types = py.import("livekit.agents.types")?;
+        let userdata = frame.getattr("userdata")?;
+        let get = |key: &str| -> pyo3::PyResult<Option<pyo3::Bound<'py, pyo3::PyAny>>> {
+            let v = userdata.call_method1("get", (types.getattr(key)?,))?;
+            Ok((!v.is_none()).then_some(v))
+        };
+        // a `perf_counter()` stamp, as wall-clock seconds
+        let started_time = match get("USERDATA_TTS_STARTED_TIME")? {
+            Some(v) => {
+                let started: f64 = v.extract()?;
+                let time = py.import("time")?;
+                let wall: f64 = time.call_method0("time")?.extract()?;
+                let perf: f64 = time.call_method0("perf_counter")?.extract()?;
+                Some(wall - (perf - started))
+            }
+            None => None,
+        };
+        let timed_transcript = match get("USERDATA_TIMED_TRANSCRIPT")? {
+            Some(words) => {
+                let word = types.getattr("TimedString")?;
+                let words = words.try_iter()?.flatten().filter(|w| w.is_instance(&word).unwrap_or(false));
+                words.map(|w| w.extract()).collect::<pyo3::PyResult<_>>()?
+            }
+            None => Vec::new(),
+        };
         Ok(SynthesizedAudio {
-            frame: attr(obj, OWNER, "frame")?,
+            frame: frame.extract()?,
             request_id: attr(obj, OWNER, "request_id")?,
             is_final: attr(obj, OWNER, "is_final")?,
             segment_id: attr(obj, OWNER, "segment_id")?,
             delta_text: attr(obj, OWNER, "delta_text")?,
-            started_time: attr_or(obj, OWNER, "_core_started_time", |v| v.extract(), || None)?,
-            timed_transcript: attr_or(obj, OWNER, "_core_timed_transcript", |v| v.extract(), Vec::new)?,
+            started_time,
+            timed_transcript,
             encoding: AudioEncoding::default(),
         })
     }
@@ -113,57 +159,113 @@ pub type TtsSink = Box<dyn StreamSink<String>>;
     output = SynthesizedAudio))]
 pub type TtsSource = Box<dyn StreamSource<SynthesizedAudio>>;
 
-/// The factory methods are `async`: base-class stream constructors call `asyncio.create_task`,
-/// which needs the host loop's thread, so a host provider awaits them there.
+// The factory methods are `async`: base-class stream constructors call `asyncio.create_task`,
+// which needs the host loop's thread, so a host provider awaits them there.
+//
+// A host `tts.TTS` is this trait through its bare `#[host(proxy)]` (`PyTts`), over the base class
+// `lk-agents-codegen` writes from the `#[python]` markers.
+/// A text-to-speech provider.
 ///
-/// A host `tts.TTS` is this trait through its bare `#[host(proxy)]` (`PyTts`).
+/// Plugins implement `synthesize()` for one-shot synthesis, and override `stream()` when the
+/// service synthesizes text as it arrives.
 #[crate::host(proxy(host = "livekit.agents.tts.TTS", clock))]
+#[python(provider(
+    module = "tts",
+    path = "livekit.agents.tts.tts",
+    events = "metrics_collected, error",
+    error(name = "TTSError", kind = "tts_error")
+))]
 #[async_trait]
 pub trait Tts: Send + Sync {
+    /// The name logs and metrics give this instance: its class path.
+    #[python(label)]
     fn label(&self) -> String;
 
-    /// Read per instance, at construction. Not a class property.
+    /// What this instance supports, fixed at construction.
+    // Read per instance, at construction. Not a class property.
+    #[python(init)]
     fn capabilities(&self) -> TtsCapabilities;
 
-    /// `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
+    /// The model and provider labelling this instance's turn metrics.
+    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
+    #[python(identity)]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label(self.label())
     }
 
-    /// `prewarm()`: open the connection pool early; a provider with nothing to warm ignores it.
+    /// Open the connection to the service early; a provider with nothing to warm ignores it.
+    #[python(hook)]
     fn prewarm(&self) {}
 
-    /// The provider's native output rate, which the driver resamples from.
+    /// The rate of the audio the provider produces, which the framework resamples from.
+    #[python(init)]
     fn sample_rate(&self) -> u32;
+
+    /// The channels of the audio the provider produces.
+    #[python(init)]
     fn num_channels(&self) -> u16;
 
-    /// `markup._provider_key()`: the markup dialect this TTS speaks, `""` for none.
+    /// Access TTS markup capabilities (instructions for LLM, text stripping).
+    // `markup._provider_key()`: the markup dialect this TTS speaks, `""` for none.
+    #[python(markup)]
     fn markup_provider(&self) -> String {
         String::new()
     }
 
-    /// Whether the framework lowers this TTS's markup on a duplex path it owns (the gateway's
-    /// stream, a `StreamAdapter`); a natively streaming plugin owns its input and does not.
+    // Whether the framework lowers this TTS's markup on a duplex path it owns (the gateway's
+    // stream, a `StreamAdapter`); a natively streaming plugin owns its input and does not.
+    #[python(value = "False")]
     fn lowers_markup(&self) -> bool {
         false
     }
 
-    /// `_set_expressive`: whether markup is active for the synthesis about to open.
-    fn set_expressive(&self, _on: bool) {}
+    /// Mark whether expressive is active for this turn (set by the framework before each
+    /// synthesis); a TTS tokenizing its own input batches larger chunks when it is.
+    ///
+    /// Args:
+    /// - enabled: Whether markup is active for the synthesis about to open.
+    #[python(hook = "_set_expressive", store = "_expressive", default = "False")]
+    fn set_expressive(&self, _enabled: bool) {}
 
-    /// A view of this provider whose calls carry `conn`; see [`Stt::with_conn_options`](crate::Stt::with_conn_options).
+    // A view of this provider whose calls carry `conn`; see [`Stt::with_conn_options`](crate::Stt::with_conn_options).
+    #[python(conn)]
     fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn Tts>> {
         None
     }
 
-    /// Always present: `synthesize()` is the abstract method.
+    /// Synthesize `text` in one attempt; inside a session the framework retries it.
+    ///
+    /// Args:
+    /// - text: What to say.
+    /// - conn_options: The timeout and retries of the request.
+    // Always present: `synthesize()` is the abstract method.
+    #[python(
+        hook,
+        stream(
+            name = "ChunkedStream",
+            kind = "chunked",
+            doc = "One synthesis of a whole text: ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, pushing the provider's audio into the ``AudioEmitter`` it is given; it runs one attempt, which the framework retries inside a session."
+        )
+    )]
     async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError>;
 
-    /// The duplex path.
+    /// Open a stream synthesizing text as it is pushed. Providers with the `streaming`
+    /// capability override it; any other is wrapped in a `StreamAdapter`.
     ///
-    /// An `Err` is a failed attempt the engine's retry budget handles; nothing downgrades silently.
-    /// A provider without one answers [`no_duplex_path`] and is wrapped in
-    /// [`StreamAdapter`](crate::StreamAdapter) where it enters the engine.
+    /// Args:
+    /// - conn_options: The timeout and retries of the connection.
+    // The duplex path. An `Err` is a failed attempt the engine's retry budget handles; nothing
+    // downgrades silently. A provider without one answers [`no_duplex_path`] and is wrapped in
+    // [`StreamAdapter`](crate::StreamAdapter) where it enters the engine.
+    #[python(
+        hook,
+        unsupported = "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter",
+        stream(
+            name = "SynthesizeStream",
+            kind = "synthesize",
+            doc = "A live synthesis: text in through ``push_text``, ``SynthesizedAudio`` out.\n\nPlugins implement ``_run``, reading ``_input_ch`` and pushing the provider's audio into the ``AudioEmitter`` it is given; it runs one attempt, which the framework retries inside a session."
+        )
+    )]
     async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError>;
 }
 

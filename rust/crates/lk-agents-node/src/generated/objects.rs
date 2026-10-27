@@ -1252,7 +1252,8 @@ pub struct ConsoleIo {
 impl ConsoleIo {
 }
 
-/// `TTS.Markup`, keyed by `_provider_key()`. An unknown key is the no-dialect markup.
+/// The markup dialect a TTS speaks, for the expressive pipeline: what the LLM is taught to write
+/// and how it is normalized and lowered before synthesis.
 #[napi(js_name = "Markup")]
 pub struct Markup {
     pub(crate) inner: lk_agents_abi::tts::markup::Markup,

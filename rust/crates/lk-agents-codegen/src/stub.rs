@@ -312,6 +312,17 @@ fn def(
     Ok(b)
 }
 
+/// A method's parameters as its stub writes them (`(name: type [= default], star before it)`) and
+/// its return annotation: what a generated Python method forwarding to it declares.
+pub(crate) fn signature_parts(
+    decls: &[Decl],
+    x: &Exposed,
+    sig: &Sig,
+) -> Result<(Vec<(String, bool)>, String), String> {
+    let cx = Cx { decls, x };
+    Ok((args(cx, sig)?, py_ty(cx, &sig.ret, false)?))
+}
+
 /// `(name: type [= default], star before it)`: an ambient parameter has none, a keyword record
 /// one per field.
 fn args(cx: Cx, sig: &Sig) -> Result<Vec<(String, bool)>, String> {

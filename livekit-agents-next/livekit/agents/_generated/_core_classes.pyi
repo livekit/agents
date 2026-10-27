@@ -1139,7 +1139,9 @@ class ConsoleIo:
 
 
 class Markup:
-    """`TTS.Markup`, keyed by `_provider_key()`. An unknown key is the no-dialect markup."""
+    """The markup dialect a TTS speaks, for the expressive pipeline: what the LLM is taught to write
+    and how it is normalized and lowered before synthesis.
+    """
 
     def __init__(self, provider_key: str) -> None: ...
     def _provider_key(self) -> str: ...

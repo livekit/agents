@@ -898,7 +898,7 @@ const PROVIDER: &str = r#"
 fn generate_provider(src: &str) -> Result<String, String> {
     let decls = parse::file("test.rs", "lk_agents_abi", src)?;
     let exposed = parse::exposed("test.rs", "lk_agents_abi", src)?;
-    let bases = crate::bases::emit(&decls, &exposed.providers)?;
+    let bases = crate::bases::emit(&decls, &exposed)?;
     Ok(python::emit(&decls, &bases)?.into_iter().map(|o| o.text).collect())
 }
 

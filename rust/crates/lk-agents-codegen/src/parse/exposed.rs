@@ -431,6 +431,7 @@ fn object(label: &str, module: &str, imp: &syn::ItemImpl, m: &[Meta], al: &Alias
             receiver,
             sig,
             reply,
+            doc: doc(&f.attrs),
         });
     }
     if methods.iter().filter(|x| x.kind == MethodKind::New).count() > 1 {

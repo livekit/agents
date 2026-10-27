@@ -241,6 +241,9 @@ pub struct Target {
     pub typed_dict_from: Option<String>,
     /// `#[binding(from_items)]`: the binding reads it as a dict, so a host hands it `asdict(..)`.
     pub from_items: bool,
+    /// `#[python(with_bases)]`: a record of a module holding generated base classes, written only
+    /// where they are (not into the reference package, whose classes are hand-written).
+    pub with_bases: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -467,6 +470,8 @@ pub struct Method {
     pub sig: Sig,
     /// `Reply<T>` (or `Result<Reply<T>, E>`): the host gets an awaitable of `T`; `sig.ret` is `()`.
     pub reply: Option<ReplySig>,
+    /// The method's `///` lines (a generated Python method forwarding to it carries them).
+    pub doc: Vec<String>,
 }
 
 /// `T` of `Reply<T>`, or `U` of `Reply<Result<U, E>>` with `E` mapped via `#[host(error)]`.

@@ -140,7 +140,9 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
                 (Some(attr), Some(default)) => Some((attr, default)),
                 (None, None) => None,
                 _ => {
-                    return Err(format!("{at}: store = \"_attr\" and default = \"..\" go together"));
+                    return Err(format!(
+                        "{at}: store = \"_attr\" and default = \"..\" go together"
+                    ));
                 }
             },
         },

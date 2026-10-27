@@ -22,10 +22,11 @@ pub struct Bases {
 }
 
 /// One entry per module, in first-seen order.
-pub fn emit(decls: &[Decl], providers: &[Provider]) -> Result<Vec<Bases>, String> {
+pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Bases>, String> {
     let mut out: Vec<Bases> = Vec::new();
-    for p in providers {
-        let mut w = Writer { decls, p, imports: Vec::new(), paths: Vec::new(), b: String::new() };
+    for p in &x.providers {
+        let mut w =
+            Writer { decls, x, p, imports: Vec::new(), paths: Vec::new(), b: String::new() };
         w.provider()?;
         let i = match out.iter().position(|b| b.module == p.module) {
             Some(i) => i,
@@ -60,6 +61,7 @@ pub fn emit(decls: &[Decl], providers: &[Provider]) -> Result<Vec<Bases>, String
 
 struct Writer<'a> {
     decls: &'a [Decl],
+    x: &'a Exposed,
     p: &'a Provider,
     imports: Vec<(String, String)>,
     paths: Vec<(String, String)>,
@@ -289,7 +291,6 @@ impl Writer<'_> {
             b.push_str(&format!("class {class}(ABC):\n"));
         }
         docstring(&mut b, &p.doc, 4);
-        b.push('\n');
         // The constructor: the `init` keywords, then what every instance holds.
         let mut params = Vec::new();
         let mut lines = Vec::new();
@@ -316,7 +317,7 @@ impl Writer<'_> {
         }
         let sig =
             if params.is_empty() { String::new() } else { format!(", *, {}", params.join(", ")) };
-        b.push_str(&format!("    def __init__(self{sig}) -> None:\n"));
+        signature(&mut b, "def", "__init__", &format!("self{sig}"), "None");
         for l in &lines {
             b.push_str(&format!("        {l}\n"));
         }
@@ -325,6 +326,19 @@ impl Writer<'_> {
         }
         for m in &p.methods {
             self.face(&mut b, m)?;
+            if m.stream.as_ref().is_some_and(|s| s.kind == "synthesize")
+                && let Some(chunked) = self.stream_of("chunked")
+            {
+                self.need("..types", "DEFAULT_API_CONNECT_OPTIONS");
+                signature(
+                    &mut b,
+                    "def",
+                    "_synthesize_with_stream",
+                    "self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS",
+                    &chunked,
+                );
+                b.push_str("        \"\"\"``synthesize()`` for a provider that only streams: one push, then the end of\n        input.\"\"\"\n        return _ChunkedStreamFromStream(tts=self, input_text=text, conn_options=conn_options)\n");
+            }
         }
         self.idiom(&mut b)?;
         for m in &p.methods {
@@ -705,6 +719,8 @@ impl Writer<'_> {
     ) -> Result<(), String> {
         let text = match s.kind.as_str() {
             "recognize" => self.recognize_stream(s)?,
+            "chunked" => self.synthesis_stream(s, CHUNKED)?,
+            "synthesize" => self.synthesis_stream(s, SYNTHESIZE)?,
             other => return Err(format!("{}: no stream idiom `{other}`", m.rust)),
         };
         b.push_str(&text);
@@ -723,7 +739,26 @@ impl Writer<'_> {
         if let Some(alias) = &s.alias {
             b.push_str(&format!("\n\n{alias} = {}\n", s.name));
         }
+        // A provider with both syntheses has `synthesize()` over its stream for the plugins that
+        // only stream.
+        if s.kind == "synthesize"
+            && let Some(chunked) = self.stream_of("chunked")
+        {
+            b.push_str(
+                &FROM_STREAM.replace("{Chunked}", &chunked).replace("{Provider}", &self.p.class),
+            );
+        }
         Ok(())
+    }
+
+    /// The class a `stream(kind = ..)` method of this provider returns.
+    fn stream_of(&self, kind: &str) -> Option<String> {
+        self.p
+            .methods
+            .iter()
+            .filter_map(|m| m.stream.as_ref())
+            .find(|s| s.kind == kind)
+            .map(|s| s.name.clone())
     }
 
     fn impl_is_task(&self, _m: &ProviderMethod) -> bool {
@@ -740,8 +775,62 @@ impl Writer<'_> {
         Err(format!("{}: a task hook is not written yet", m.rust))
     }
 
-    fn markup(&mut self, _b: &mut String, m: &ProviderMethod) -> Result<(), String> {
-        Err(format!("{}: markup is not written yet", m.rust))
+    /// `markup`: the nested `Markup` class plugins override `_provider_key` on, forwarding the
+    /// rest to the core's `Markup` object of that key, and the `markup` property.
+    fn markup(&mut self, b: &mut String, m: &ProviderMethod) -> Result<(), String> {
+        let o = self
+            .x
+            .objects
+            .iter()
+            .find(|o| o.name == "Markup")
+            .ok_or_else(|| format!("{}: markup forwards to the core's `Markup`", m.rust))?;
+        self.need("..", "_core");
+        let info = self.record("MarkupInfo").ok_or("MarkupInfo is not declared")?;
+        let class = self.p.class.clone();
+        b.push_str("\n    class Markup:\n");
+        docstring(b, &o.doc, 8);
+        b.push_str(&format!(
+            "\n        def __init__(self, tts: {class}) -> None:\n            self._tts = tts\n"
+        ));
+        let key = o
+            .methods
+            .iter()
+            .find(|x| x.name == "_provider_key")
+            .ok_or("Markup has no _provider_key")?;
+        b.push_str("\n        def _provider_key(self) -> str:\n");
+        docstring(b, &key.doc, 12);
+        b.push_str(&format!(
+            "            return \"\"\n\n        def _core(self) -> _core.Markup:\n            return _core.Markup(self._provider_key())\n\n        @property\n        def info(self) -> {info}:\n            \"\"\"The queryable markup matrix for this voice.\"\"\"\n            return {info}(nonverbals=_core.supported_nonverbals(self._provider_key()))\n"
+        ));
+        for f in
+            o.methods.iter().filter(|x| x.kind == MethodKind::Method && x.name != "_provider_key")
+        {
+            let (params, ret) = crate::stub::signature_parts(self.decls, self.x, &f.sig)?;
+            let mut decl = vec!["self".to_owned()];
+            let mut call = Vec::new();
+            let mut kw = false;
+            for (param, star) in &params {
+                if *star {
+                    decl.push("*".to_owned());
+                    kw = true;
+                }
+                decl.push(param.clone());
+                let name = param.split(':').next().unwrap_or(param).trim();
+                call.push(if kw { format!("{name}={name}") } else { name.to_owned() });
+            }
+            if ret.contains("Any") || decl.iter().any(|d| d.contains("Any")) {
+                self.need("typing", "Any");
+            }
+            b.push_str(&format!("\n        def {}({}) -> {ret}:\n", f.name, decl.join(", ")));
+            docstring(b, &f.doc, 12);
+            b.push_str(&format!(
+                "            return self._core().{}({})\n",
+                f.name,
+                call.join(", ")
+            ));
+        }
+        property(b, "markup", "Markup", &m.doc, "self._markup");
+        Ok(())
     }
 
     fn chat_hook(
@@ -758,6 +847,40 @@ impl Writer<'_> {
     }
 
     // ------------------------------------------------------------------- the stream idioms
+
+    /// `stream(kind = "chunked" | "synthesize")`: one attempt run against an `AudioEmitter`, its
+    /// audio checked against the text it was given.
+    fn synthesis_stream(&mut self, s: &StreamClass, idiom: &str) -> Result<String, String> {
+        for (m, n) in [
+            ("", "asyncio"),
+            ("", "time"),
+            ("abc", "abstractmethod"),
+            ("collections.abc", "AsyncIterator"),
+            ("livekit", "rtc"),
+            ("..", "_core"),
+            (".._exceptions", "APIError"),
+            (".._exceptions", "APIStatusError"),
+            ("..log", "logger"),
+            ("..types", "APIConnectOptions"),
+            ("..types", "USERDATA_TIMED_TRANSCRIPT"),
+            ("..types", "USERDATA_TTS_STARTED_TIME"),
+            ("..utils", "aio"),
+            ("..utils", "shortuuid"),
+        ] {
+            self.need(m, n);
+        }
+        let audio = self.record("SynthesizedAudio").ok_or("SynthesizedAudio is not declared")?;
+        let mut b = format!("class {}(ABC):\n", s.name);
+        docstring(&mut b, &s.doc, 4);
+        b.push_str(
+            &idiom
+                .replace("{SYNTHESIS}", SYNTHESIS)
+                .replace("{Stream}", &s.name)
+                .replace("{Provider}", &self.p.class)
+                .replace("{Audio}", &audio),
+        );
+        Ok(b)
+    }
 
     /// `stream(kind = "recognize")`: audio frames in, `SpeechEvent`s out, resampled to the rate
     /// the plugin asks for.
@@ -1007,4 +1130,200 @@ const RECOGNIZE: &str = r#"
         if self._input_ch.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} input ended")
+"#;
+
+/// What both syntheses share: one attempt run against an `AudioEmitter`; retries are the core's.
+const SYNTHESIS: &str = r#"
+    def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        self._tts._emit_error(api_error, recoverable)
+
+    @abstractmethod
+    async def _run(self, output_emitter: _core.AudioEmitter) -> None: ...
+
+    async def _attempt(self) -> None:
+        output_emitter = _core.AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
+        try:
+            await self._run(output_emitter)
+            output_emitter.end_input()
+            # wait for all audio frames to be pushed & propagate errors
+            await output_emitter.join()
+            if problem := self._invalid(output_emitter):
+                raise APIError(problem)
+        except APIError as e:
+            # 499 (Client Closed Request) - close gracefully without raising
+            if isinstance(e, APIStatusError) and e.status_code == 499:
+                return
+            self._emit_error(e, recoverable=False)
+            raise
+        finally:
+            await output_emitter.aclose()
+"#;
+
+/// The one-shot synthesis's idiom.
+const CHUNKED: &str = r#"
+    def __init__(self, *, tts: {Provider}, input_text: str, conn_options: APIConnectOptions) -> None:
+        self._input_text = input_text
+        self._tts = tts
+        self._conn_options = conn_options
+        # the full text is submitted to the provider at creation time
+        self._started_time: float = time.perf_counter()
+        self._event_ch = aio.Chan[{Audio}]()
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._acquire_time: float = 0.0
+        self._connection_reused: bool = False
+        self._synthesize_task = asyncio.create_task(self._attempt(), name="TTS._synthesize_task")
+        self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
+
+    @property
+    def input_text(self) -> str:
+        return self._input_text
+
+    @property
+    def done(self) -> bool:
+        return self._synthesize_task.done()
+
+    @property
+    def exception(self) -> BaseException | None:
+        return self._synthesize_task.exception()
+{SYNTHESIS}
+    def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
+        return _core.validate_synthesis(self._input_text, output_emitter.pushed_duration(), None)  # type: ignore[no-any-return]
+
+    async def collect(self) -> rtc.AudioFrame:
+        """Utility method to collect every frame in a single call"""
+        return rtc.combine_audio_frames([ev.frame async for ev in self])
+
+    async def aclose(self) -> None:
+        """Close is automatically called if the stream is completely collected"""
+        await aio.cancel_and_wait(self._synthesize_task)
+        self._event_ch.close()
+
+    async def __anext__(self) -> {Audio}:
+        try:
+            val = await self._event_ch.__anext__()
+        except StopAsyncIteration:
+            if not self._synthesize_task.cancelled() and (exc := self._synthesize_task.exception()):
+                raise exc  # noqa: B904
+            raise StopAsyncIteration from None
+        val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
+        return val
+
+    def __aiter__(self) -> AsyncIterator[{Audio}]:
+        return self
+"#;
+
+/// The live synthesis's idiom.
+const SYNTHESIZE: &str = r#"
+    class _FlushSentinel:
+        """Marks the end of a segment in ``_input_ch``."""
+
+    def __init__(self, *, tts: {Provider}, conn_options: APIConnectOptions) -> None:
+        super().__init__()
+        self._tts = tts
+        self._conn_options = conn_options
+        self._input_ch = aio.Chan[str | {Stream}._FlushSentinel]()
+        self._event_ch = aio.Chan[{Audio}]()
+        self._task = asyncio.create_task(self._attempt(), name="TTS._main_task")
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._started_time: float = 0
+        self._pushed_text: str = ""
+        # driven by plugins that manage their own segments (Rime)
+        self._input_buffer: list[str | {Stream}._FlushSentinel] = []
+        self._mtc_text = ""
+        self._mtc_pending_texts: list[str] = []
+        self._input_ended = False
+        self._segment_open = False
+        self._num_segments = 0
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._acquire_time: float = 0.0
+        self._connection_reused: bool = False
+{SYNTHESIS}
+    def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
+        return _core.validate_synthesis(  # type: ignore[no-any-return]
+            self._pushed_text,
+            output_emitter.pushed_duration(),
+            (self._num_segments, output_emitter.num_segments),
+        )
+
+    def _mark_started(self) -> None:
+        if self._started_time == 0:
+            self._started_time = time.perf_counter()
+
+    def push_text(self, token: str) -> None:
+        """Push some text to be synthesized"""
+        if not token or self._input_ch.closed:
+            return
+        if not self._segment_open:
+            if self._num_segments >= 1:
+                logger.warning(
+                    "SynthesizeStream: handling multiple segments in a single instance is "
+                    "deprecated. Please create a new SynthesizeStream instance for each segment."
+                )
+                return
+            self._segment_open = True
+            self._num_segments += 1
+        self._pushed_text += token
+        self._input_ch.send_nowait(token)
+
+    def flush(self) -> None:
+        """Mark the end of the current segment"""
+        if self._input_ch.closed:
+            return
+        self._segment_open = False
+        self._input_ch.send_nowait(self._FlushSentinel())
+
+    def end_input(self) -> None:
+        """Mark the end of input, no more text will be pushed"""
+        self.flush()
+        self._input_ch.close()
+
+    async def aclose(self) -> None:
+        """Close ths stream immediately"""
+        await aio.cancel_and_wait(self._task)
+        self._event_ch.close()
+        self._input_ch.close()
+
+    async def __anext__(self) -> {Audio}:
+        try:
+            val = await self._event_ch.__anext__()
+        except StopAsyncIteration:
+            if not self._task.cancelled() and (exc := self._task.exception()):
+                raise exc  # noqa: B904
+            raise StopAsyncIteration from None
+        if self._started_time:
+            val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
+        return val
+
+    def __aiter__(self) -> AsyncIterator[{Audio}]:
+        return self
+"#;
+
+/// `synthesize()` over the provider's stream: one push, then the end of input.
+const FROM_STREAM: &str = r#"
+
+class _ChunkedStreamFromStream({Chunked}):
+    """``synthesize()`` over a provider that only streams."""
+
+    async def _run(self, output_emitter: _core.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id=shortuuid(),
+            sample_rate=self._tts.sample_rate,
+            num_channels=self._tts.num_channels,
+            mime_type="audio/pcm",
+            stream=False,
+        )
+        async with self._tts.stream(conn_options=self._conn_options) as stream:
+            stream.push_text(self._input_text)
+            stream.end_input()
+            async for ev in stream:
+                output_emitter.push(ev.frame.data.tobytes())
+                if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
+                    output_emitter.push_timed_transcript(timed_transcripts)
+        output_emitter.flush()
 "#;

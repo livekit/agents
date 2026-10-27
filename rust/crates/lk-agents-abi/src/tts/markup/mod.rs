@@ -47,7 +47,11 @@ pub struct SentenceTokenizerConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Markup(Option<Provider>);
 
-/// `TTS.Markup`, keyed by `_provider_key()`. An unknown key is the no-dialect markup.
+// `TTS.Markup`, keyed by `_provider_key()`. An unknown key is the no-dialect markup.
+/// The markup dialect a TTS speaks, for the expressive pipeline: what the LLM is taught to write
+/// and how it is normalized and lowered before synthesis.
+///
+/// Plugins opt in by overriding `_provider_key`.
 #[crate::host(object(
     pid = false
 ))]
@@ -62,26 +66,27 @@ impl Markup {
         Markup(Some(provider))
     }
 
-    /// `_provider_key()` --- `""` when there is no dialect.
+    /// The provider's key into the markup tables, or `""` for no markup.
     #[host(method(name = "_provider_key"))]
     pub fn provider_key(&self) -> &'static str {
         self.0.map_or("", Provider::as_str)
     }
 
-    /// Instructions for the LLM describing available markup tags, or `None` if this TTS has no
-    /// markup support. `None` also turns expressive off for the turn (`_resolve_expressive_options`).
+    /// The instructions teaching the LLM this voice's markup, `None` without markup.
+    // `None` also turns expressive off for the turn (`_resolve_expressive_options`).
     #[host(method(kw_only))]
     pub fn llm_instructions(&self, speech_steering: Option<&SpeechSteering>) -> Option<String> {
         instructions::llm_instructions(self.0, speech_steering)
     }
 
-    /// Fix common LLM markup mistakes (e.g. unclosed self-closing tags). A no-op with no dialect.
+    /// Fix common LLM markup mistakes (e.g. unclosed self-closing tags).
+    // A no-op with no dialect.
     #[host(method)]
     pub fn normalize(&self, text: &str) -> String {
         expr::normalize_markup(self.0, text)
     }
 
-    /// Convert framework-standard markup to the provider's native format.
+    /// Lower the framework's markup to the provider's native syntax.
     #[host(method)]
     pub fn convert(&self, text: &str) -> String {
         expr::convert_markup(self.0, text)

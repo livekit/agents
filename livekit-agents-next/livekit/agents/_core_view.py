@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from . import _core, llm, tts, vad
+from . import _core, llm, vad
 from .llm.chat_context import AudioContent, ChatItem, ImageContent
 from .llm.tool_context import (
     FunctionTool,
@@ -56,46 +56,6 @@ class _Provider:
 
     def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
         return type(self)(self._obj, APIConnectOptions(**conn))
-
-
-class _Tts(_Provider):
-    _obj: tts.TTS
-
-    def _core_label(self) -> str:
-        return self._obj.label
-
-    def _core_capabilities(self) -> tts.TTSCapabilities:
-        return self._obj.capabilities
-
-    def _core_id(self) -> dict[str, str]:
-        return _identity(self._obj)
-
-    def _core_prewarm(self) -> None:
-        self._obj.prewarm()
-
-    def _core_sample_rate(self) -> int:
-        return self._obj.sample_rate
-
-    def _core_num_channels(self) -> int:
-        return self._obj.num_channels
-
-    def _core_markup_provider(self) -> str:
-        return self._obj.markup._provider_key()
-
-    def _core_lowers_markup(self) -> bool:
-        return isinstance(self._obj, tts.StreamAdapter)
-
-    def _core_set_expressive(self, on: bool) -> None:
-        self._obj._set_expressive(on)
-
-    async def _core_synthesize(self, text: str) -> tts.ChunkedStream:
-        return self._obj.synthesize(text, conn_options=self._conn)
-
-    async def _core_stream(self) -> _InputStream:
-        if not self._obj.capabilities.streaming:
-            raise RuntimeError(f"{self._obj.label} has no duplex path")
-        stream = self._obj.stream(conn_options=self._conn)
-        return _InputStream(stream, stream.push_text)
 
 
 class _Vad:
@@ -665,7 +625,6 @@ def _views() -> dict[type, Any]:
     from .voice.room_io import _core_rtc
 
     return {
-        tts.TTS: _Tts,
         vad.VAD: _Vad,
         llm.LLM: _Llm,
         io.AudioInput: _AudioInput,

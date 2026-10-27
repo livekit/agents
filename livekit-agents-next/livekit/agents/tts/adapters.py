@@ -20,7 +20,6 @@ from .tts import (
     ChunkedStream,
     SynthesizeStream,
     TTSCapabilities,
-    _drain_native,
 )
 
 if TYPE_CHECKING:
@@ -35,6 +34,18 @@ __all__ = [
     "StreamAdapter",
     "StreamAdapterWrapper",
 ]
+
+
+async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bool) -> None:
+    """Forward a core synthesis (``_core.*TtsStream``) into ``output_emitter``."""
+    started = not stream
+    while (audio := await native.recv()) is not None:
+        if not started:
+            started = True
+            output_emitter.start_segment(segment_id=audio["segment_id"] or utils.shortuuid())
+        if words := audio["timed_transcript"]:
+            output_emitter.push_timed_transcript(words)
+        output_emitter.push_frame(audio["frame"])
 
 
 @dataclass
@@ -221,6 +232,10 @@ class StreamAdapter(TTS):
     def _set_expressive(self, enabled: bool) -> None:
         super()._set_expressive(enabled)
         self._wrapped_tts._set_expressive(enabled)
+
+    def _core_lowers_markup(self) -> bool:
+        # its sentences are lowered here, unlike a natively streaming plugin's input
+        return True
 
     @property
     def model(self) -> str:
