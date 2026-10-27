@@ -326,7 +326,7 @@ pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
         Maybe::NotGiven => None,
         Maybe::Given(TurnDetectionKwarg::Null) => Some(TurnDetection::Auto),
         Maybe::Given(TurnDetectionKwarg::Mode(m)) => Some(m),
-        // A detector *object* is the host's to swap; it says nothing about the owner.
+        // A detector object: refused by `update_turn_options` before this.
         Maybe::Given(TurnDetectionKwarg::Detector { streaming: _ }) => None,
     };
     o

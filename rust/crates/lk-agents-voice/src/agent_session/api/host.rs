@@ -662,12 +662,22 @@ impl SessionApi {
 
     /// `AgentSession.update_options(..)` on a running session: the raw update, read into a patch
     /// the driver merges into its session layer and re-resolves; `expressive` reaches the next
-    /// reply, `keyterms` replace the user's list. An update that says nothing is a no-op.
+    /// reply, `keyterms` replace the user's list. An update that says nothing is a no-op. A turn
+    /// detector object is refused: swapping the detector of a running session is not ported.
     #[host(method)]
     pub fn update_turn_options(
         &self,
         update: crate::agent_activity::options::UpdateKwargs,
-    ) -> Result<(), SessionRefused> {
+    ) -> Result<(), CommandRefused> {
+        if let Maybe::Given(crate::agent_activity::options::TurnDetectionKwarg::Detector { .. }) =
+            update.turn_detection
+        {
+            return Err(CommandRefused::Invalid(
+                "update_options(turn_detection=) takes a mode on a running session; a turn \
+                 detector object is set with VoiceSession(turn_handling=)"
+                    .to_owned(),
+            ));
+        }
         let patch = crate::agent_activity::options::update_layer(&update);
         if let Maybe::Given(expressive) = update.expressive {
             self.send(ActivityCommand::UpdateExpressive(expressive))?;
@@ -679,7 +689,7 @@ impl SessionApi {
             return Ok(());
         }
         self.configure(&patch);
-        self.send(TurnCommand::Configure(patch))
+        Ok(self.send(TurnCommand::Configure(patch))?)
     }
 
     /// The outbound-SIP re-evaluation (`_on_room_io_participant_linked`): the warmup leaf of the
