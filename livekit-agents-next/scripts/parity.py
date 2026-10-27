@@ -5,7 +5,9 @@ Each package is installed into its own venv (the reference with uv, the copy wit
 each scenario runs once per venv in a subprocess that prints a JSON transcript: the public session
 events in order, the LLM requests (what the model was shown), the final ``session.history``, the
 SpeechHandle outcomes, the tool calls, and what reached the room (seconds of agent audio, its text).
-Ids and timestamps are dropped. The orchestrator compares the two transcripts and prints a diff.
+Payloads are compared whole: each message's metrics (the models it names, which timings it
+carries), each metrics record's kind, label, model and attribution. Ids and timestamps are dropped,
+but the history's order by ``created_at`` is kept. The orchestrator compares the two transcripts and prints a diff.
 
 Both stacks run on the reference tests' virtual-time loop (``tests/virtual_time.py``) with the same
 scripted STT/LLM/TTS: the copy over ``_core.FakeRoom``, which runs on the loop's own clock, the
@@ -71,6 +73,63 @@ def _is_transcript_or_state(e: list[Any]) -> bool:
     return e[0] in ("user_input_transcribed", "agent_state_changed", "user_state_changed")
 
 
+def _reports(value: Any) -> list[dict[str, Any]]:
+    """Every message metrics view in a transcript, wherever an item is shown."""
+    if isinstance(value, dict):
+        found = [value["metrics"]] if isinstance(value.get("metrics"), dict) else []
+        return found + [r for v in value.values() for r in _reports(v)]
+    if isinstance(value, list):
+        return [r for v in value for r in _reports(v)]
+    return []
+
+
+def _records(t: dict[str, Any]) -> list[str]:
+    return t.get("metrics", [[]])[0]
+
+
+def _rewrite_records(t: dict[str, Any], kind: str, field: int) -> None:
+    """Blank one field of every metrics record of a kind (kind:label:model:request:speech)."""
+    rows = [r.split(":") for r in _records(t)]
+    for r in rows:
+        if r[0] == kind:
+            r[field] = "*"
+    t["metrics"] = [sorted(":".join(r) for r in rows)]
+
+
+def _eou_detector(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
+    for t in (ref, nxt):
+        _rewrite_records(t, "EOUMetrics", 2)
+
+
+def _fallback_stt(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
+    if not any(e[0] == "stt_availability_changed" for e in ref.get("events", [])):
+        return
+    for t in (ref, nxt):
+        for r in _reports(t):
+            if "stt_metadata" in r:
+                r["stt_metadata"] = "*"
+
+
+def _unmetered(metric: str, kind: str) -> Any:
+    """Drops a message timing from both transcripts when no record of `kind` was metered."""
+
+    def normalise(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
+        if any(r.startswith(kind + ":") for r in _records(ref)):
+            return
+        for t in (ref, nxt):
+            for r in _reports(t):
+                r.pop(metric, None)
+
+    return normalise
+
+
+def _keyterm_pass(ref: dict[str, Any], nxt: dict[str, Any]) -> None:
+    if "record_keyterms" not in json.dumps(ref.get("llm_requests", [])):
+        return
+    for t in (ref, nxt):
+        _rewrite_records(t, "LLMMetrics", 4)
+
+
 # Differences listed rather than fixed (see the report printed with them), as (name, why, a
 # normaliser applied to both transcripts). A scenario they alone separate counts as agreeing.
 KNOWN: list[tuple[str, str, Callable[[dict[str, Any], dict[str, Any]], None]]] = [
@@ -94,6 +153,38 @@ KNOWN: list[tuple[str, str, Callable[[dict[str, Any], dict[str, Any]], None]]] =
         "the same step go through the session's event stream, so the command is seen first; the "
         "reference calls the session and emits from one task",
         _later(lambda e: e[0].startswith("realtime."), _is_transcript_or_state),
+    ),
+    (
+        "eou_names_resolved_detector",
+        "the core's EOUMetrics name the detector it resolved (the default turn detector, or the "
+        "mode it fell back to); the reference's name only a turn_detection the developer passed",
+        _eou_detector,
+    ),
+    (
+        "fallback_stt_identity_at_bind",
+        "the core reads a provider's model and provider once, when it is bound, so after a "
+        "failover a user turn names the FallbackAdapter's first STT; the reference's "
+        "FallbackAdapter.metrics_metadata names the instance that answered",
+        _fallback_stt,
+    ),
+    (
+        "node_str_ttft",
+        "an llm_node returning a str reaches the core as one node-text chunk, which it times like "
+        "an iterator's first chunk (llm_node_ttft); the reference times only an iterator",
+        _unmetered("llm_node_ttft", "LLMMetrics"),
+    ),
+    (
+        "own_audio_tts_node_ttfb",
+        "a tts_node making its own audio is timed by the core from the first text it was given, "
+        "the reference's documented fallback anchor; the reference's anchor task has not resolved "
+        "when that node's first frame arrives, so it reports no tts_node_ttfb",
+        _unmetered("tts_node_ttfb", "TTSMetrics"),
+    ),
+    (
+        "keyterm_pass_unattributed",
+        "the core's keyterm pass runs beside the reply and its LLMMetrics name no speech; the "
+        "reference's inherits the reply task's speech handle context var and names the reply",
+        _keyterm_pass,
     ),
 ]
 
@@ -589,6 +680,42 @@ def default_reply(items: list[dict[str, Any]], tools: list[str]) -> list[Any]:
     return [f"You said: {text}"]
 
 
+def _model(meta: Any) -> list[Any] | None:
+    """A metadata record's model and provider, whichever shape (dict or model) carries them."""
+    if not meta:
+        return None
+    get = meta.get if isinstance(meta, dict) else lambda k: getattr(meta, k, None)
+    return [get("model_name"), get("model_provider")]
+
+
+def report_view(report: Any) -> dict[str, Any]:
+    """A message's metrics as a developer reads them: the models it names, which timings it has."""
+    view: dict[str, Any] = {}
+    for key, value in sorted(dict(report or {}).items()):
+        if key.endswith("_metadata"):
+            view[key] = _model(value)
+        elif key == "provider_request_ids":
+            view[key] = len(value or [])
+        elif value is not None:
+            view[key] = "set"
+    return view
+
+
+def metrics_view(m: Any) -> str:
+    """One metrics record: its kind, label, model, and whether it names a request and a speech."""
+    model = _model(getattr(m, "metadata", None))
+    parts = [
+        type(m).__name__,
+        getattr(m, "label", ""),
+        "/".join(str(x) for x in model) if model else "-",
+        "request" if getattr(m, "request_id", "") else "-",
+        "speech" if getattr(m, "speech_id", None) else "-",
+    ]
+    if getattr(m, "cancelled", False):
+        parts.append("cancelled")
+    return ":".join(parts)
+
+
 def item_view(item: Any) -> dict[str, Any]:
     kind = getattr(item, "type", "?")
     view: dict[str, Any] = {"type": kind}
@@ -597,6 +724,9 @@ def item_view(item: Any) -> dict[str, Any]:
         view["text"] = item.text_content or ""
         if getattr(item, "interrupted", False):
             view["interrupted"] = True
+        metrics = report_view(getattr(item, "metrics", None))
+        if metrics:
+            view["metrics"] = metrics
     elif kind == "function_call":
         view["name"] = item.name
         view["arguments"] = json.loads(item.arguments or "{}")
@@ -688,7 +818,7 @@ class Call:
         )
         # emitted as each provider's stream settles, so their order against the state changes is
         # the scheduler's: counted per kind, not ordered
-        session.on("metrics_collected", lambda ev: self.metrics.append(type(ev.metrics).__name__))
+        session.on("metrics_collected", lambda ev: self.metrics.append(metrics_view(ev.metrics)))
         session.on(
             "session_usage_updated",
             lambda ev: self.metrics.append(f"usage_updated:{len(ev.usage.model_usage)}"),
@@ -825,7 +955,10 @@ class Call:
         out["llm_requests"] = self.llm_requests
         out["tts_requests"] = self.tts_requests
         if self.session is not None:
-            out["history"] = [item_view(i) for i in self.session.history.items]
+            items = self.session.history.items
+            out["history"] = [item_view(i) for i in items]
+            stamps = [i.created_at for i in items]
+            out["history_in_created_order"] = [stamps == sorted(stamps)]
             out["usage"] = [u.model_dump() for u in self.session.usage.model_usage]
         out["speech_handles"] = [
             [label, "done" if h.done() else "pending", "interrupted" if h.interrupted else "-"]

@@ -557,13 +557,13 @@ impl Driver {
     }
 
     /// Commits the input buffer when the server did not segment, and asks for the reply: one
-    /// request, both or neither.
-    pub(crate) fn realtime_user_turn(&mut self, now: Ts, out: &mut Out) {
-        let Some(rt) = self.activity.rt_session.as_ref() else { return };
+    /// request, both or neither. The reply's speech, if one was announced.
+    pub(crate) fn realtime_user_turn(&mut self, now: Ts, out: &mut Out) -> Option<SpeechId> {
+        let rt = self.activity.rt_session.as_ref()?;
         let server_segments =
             rt.capabilities.turn_detection && !self.activity.realtime_turn_detection_disabled;
         let request = Request::UserTurn { commit_audio: !server_segments };
-        self.realtime_request(now, request, None, None, out);
+        self.realtime_request(now, request, None, None, out)
     }
 
     /// The speech announced for it, if the request has one and it was not refused.

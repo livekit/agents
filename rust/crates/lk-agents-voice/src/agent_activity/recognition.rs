@@ -405,9 +405,11 @@ impl Driver {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
             return;
         }
+        // A turn that asks for no reply commits its item without `on_user_turn_completed`, as
+        // the reference returns before the hook.
         match self.activity.hook_bound {
-            Some(bound) => self.issue_turn_hook(now, info, bound, out),
-            None => self.finish_turn(now, info, Vec::new(), out),
+            Some(bound) if !info.skip_reply => self.issue_turn_hook(now, info, bound, out),
+            _ => self.finish_turn(now, info, Vec::new(), out),
         }
     }
 

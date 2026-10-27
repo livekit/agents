@@ -57,6 +57,7 @@ mod retry_backoff_settles;
 mod second_failure_retried;
 mod server_generation_ends;
 mod silent_audio_say;
+mod skip_reply_turn_no_hook;
 mod silent_segment;
 mod sink_reset_reports_cut;
 mod speech_announced_before_user_item;

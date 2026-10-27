@@ -430,10 +430,10 @@ impl Driver {
         // own transcript fills the user item.
         if self.activity.rt_session.is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
-            // The commit of the server's buffer and the ask, as one request.
-            self.realtime_user_turn(now, out);
-            // The realtime reply's speech is created when the server answers; no speech id here.
-            self.emit_eou_metrics(info, None, out);
+            // The commit of the server's buffer and the ask, as one request; its speech is
+            // announced now, so the metrics name it.
+            let speech = self.realtime_user_turn(now, out);
+            self.emit_eou_metrics(info, speech, out);
             return;
         }
         // A preemptive generation for another turn, against a record since changed, or whose

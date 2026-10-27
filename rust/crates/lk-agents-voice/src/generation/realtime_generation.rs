@@ -46,7 +46,6 @@ pub(crate) async fn realtime_generation_task(
     // Consumed: the follow-up step waits for its own grant.
     handle.clear_authorization();
 
-    let started_at = shared.time.wall_secs();
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
     // Locked for the step by the one task that ever reads it; the channel outlives the step.
     let mut rx = events.lock().await;
@@ -71,7 +70,6 @@ pub(crate) async fn realtime_generation_task(
         acc: &mut acc,
         events: &mut rx,
         current: None,
-        first_token_at: None,
         segments: Vec::new(),
         tools: &mut tools,
         response_id: None,
@@ -88,10 +86,8 @@ pub(crate) async fn realtime_generation_task(
     }
     // `Generation::next` fails only on the speech's own request failing: nothing was generated.
     let heard = played.map_err(|failed| failed.error)?;
-    let Generation { segments, received, first_token_at, response_id, message_id, .. } = generation;
+    let Generation { segments, received, response_id, message_id, .. } = generation;
     let interrupted = !heard.complete || handle.interrupted();
-    // The metrics' `llm_started_at` anchor, on the driver's clock. `None` when nothing arrived.
-    let ttft = first_token_at.map(|at| (at - started_at).max(0.0));
     drop(rx);
     // An empty follow-up round: the reply ends on the step already spoken.
     if !received && handle.num_steps() > 0 {
@@ -107,13 +103,9 @@ pub(crate) async fn realtime_generation_task(
         }
     }
     let has_calls = !tools.is_empty();
-    // No token rate: it would measure the server's audio pacing, not generation speed.
-    let stats = TurnStats {
-        llm_ttft: ttft,
-        llm_tps: None,
-        llm_started_at: Some(started_at),
-        ..TurnStats::default()
-    };
+    // No model timings on the message, as the reference's realtime message carries none: the
+    // response's own metrics hold its ttft.
+    let stats = TurnStats::default();
     // The speech's interruption decides it, as the pipeline's step does: a reply whose audio the
     // output cut still has its tools running.
     let tools_running = has_calls && !handle.interrupted_speech();
@@ -177,7 +169,6 @@ struct Generation<'a> {
     events: &'a mut mpsc::UnboundedReceiver<Event>,
     /// The message the text deltas append to: a provider may interleave two.
     current: Option<usize>,
-    first_token_at: Option<f64>,
     segments: Vec<String>,
     /// The calls, dispatched as they arrive.
     tools: &'a mut ToolStep,
@@ -220,11 +211,6 @@ impl Segment for Generation<'_> {
                 && let Some(id) = realtime_state::response_id_of(&ev)
             {
                 self.response_id = Some(id.to_owned());
-            }
-            let token = matches!(&ev, Event::AudioDelta(_))
-                || matches!(&ev, Event::TextDelta(d) if !d.delta.is_empty());
-            if token && self.first_token_at.is_none() {
-                self.first_token_at = Some(self.shared.time.wall_secs());
             }
             match ev {
                 Event::MessageStarted(m) => {

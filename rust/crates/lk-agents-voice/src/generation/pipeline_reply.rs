@@ -251,12 +251,16 @@ async fn pipeline_reply_task_impl(
     };
     // The step's item rides with the step: built from what was heard, committed by the loop. The
     // speech's interruption decides `tools_running`: a step whose audio was cut still has tools.
-    let stats = TurnStats {
-        llm_ttft: llm_gen_data.metrics.ttft(),
-        llm_tps: llm_gen_data.tps,
-        llm_started_at: Some(llm_gen_data.started_at),
-        llm_metadata: ctx.providers.llm.as_ref().map(|llm| llm.id().metrics_metadata()),
-        tts_metadata: ctx.providers.tts.as_ref().map(|tts| tts.id().metrics_metadata()),
+    // A `say` (`_tts_task`) times only its voice: no model, no metadata.
+    let stats = match ctx.source {
+        ReplySource::Llm => TurnStats {
+            llm_ttft: llm_gen_data.metrics.ttft(),
+            llm_tps: llm_gen_data.tps,
+            llm_started_at: Some(llm_gen_data.started_at),
+            llm_metadata: ctx.providers.llm.as_ref().map(|llm| llm.id().metrics_metadata()),
+            tts_metadata: ctx.providers.tts.as_ref().map(|tts| tts.id().metrics_metadata()),
+        },
+        _ => TurnStats::default(),
     };
     let has_tools = !tools.is_empty();
     let tools_running = has_tools && !handle.interrupted_speech();
