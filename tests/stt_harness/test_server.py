@@ -25,7 +25,7 @@ class Example(Protocol):
             await peer.finalize()
             peer.close()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send({"text": result.text, "final": result.final}, final=result.final)
 
 

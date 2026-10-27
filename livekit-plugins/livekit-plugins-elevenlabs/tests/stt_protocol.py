@@ -2,7 +2,7 @@
 
 import base64
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -25,7 +25,7 @@ class Scribe(Protocol):
         if event.get("commit"):
             await self.connection.finalize()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         peer = self.connection
         if not result.final:
             peer.send({"message_type": "partial_transcript", "text": result.text})
@@ -56,24 +56,23 @@ PROVIDERS = (
         Scribe,
         create_stt,
         ("https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime",),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "elevenlabs",
             plugin("elevenlabs.stt"),
             options={"use_realtime": True},
-            completion=(
+            completion_messages=(
                 {
                     "message_type": "committed_transcript_with_timestamps",
                     "text": "words",
                     "words": [{"text": "words", "start": 0, "end": 0.1}],
                 },
             ),
-            stop={"message_type": "input_audio_chunk", "commit": True},
-            completion_closes_socket=False,
+            stop_message={"message_type": "input_audio_chunk", "commit": True},
         ),
         live_constructor="livekit.plugins.elevenlabs.stt:STT",
         required_env=("ELEVEN_API_KEY",),
         live_options={"use_realtime": True},
-        live_env={},
+        live_options_from_env={},
         completion_on_close=False,
     ),
 )

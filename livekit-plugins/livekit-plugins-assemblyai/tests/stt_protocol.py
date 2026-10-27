@@ -2,7 +2,7 @@
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -33,7 +33,7 @@ class Universal(Protocol):
         else:
             assert event["type"] in ("UpdateConfiguration", "KeepAlive")
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "Turn",
@@ -68,10 +68,10 @@ PROVIDERS = (
         Universal,
         create_stt,
         ("https://www.assemblyai.com/docs/streaming/message-sequence",),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "assemblyai",
             plugin("assemblyai.stt"),
-            completion=(
+            completion_messages=(
                 {
                     "type": "Turn",
                     "transcript": "words",
@@ -81,12 +81,12 @@ PROVIDERS = (
                     "words": [],
                 },
             ),
-            stop={"type": "Terminate"},
+            stop_message={"type": "Terminate"},
         ),
         live_constructor="livekit.plugins.assemblyai.stt:STT",
         required_env=("ASSEMBLYAI_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
         completion_on_close=False,
     ),
 )

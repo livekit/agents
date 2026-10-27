@@ -38,16 +38,18 @@ async def _send_utterance(stream, name):
 
 
 @pytest.mark.usefixtures("job_process")
-@pytest.mark.parametrize("case", providers(), ids=lambda case: case.name)
-async def test_live_stream_flush_idle_and_completion(case):
-    if not case.live_constructor:
+@pytest.mark.parametrize(
+    "provider_config", providers(), ids=lambda provider_config: provider_config.name
+)
+async def test_live_stream_flush_idle_and_completion(provider_config):
+    if not provider_config.live_constructor:
         pytest.skip("live driver is not configured for this variant")
     load_dotenv()
-    missing = [name for name in case.required_env if not os.environ.get(name)]
+    missing = [name for name in provider_config.required_env if not os.environ.get(name)]
     if missing:
         pytest.skip("Missing live test configuration: " + ", ".join(missing))
 
-    async with case.create_live() as provider:
+    async with provider_config.create_live_stt() as provider:
         stream = provider.stream(
             conn_options=APIConnectOptions(
                 max_retry=0,

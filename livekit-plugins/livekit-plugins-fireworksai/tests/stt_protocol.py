@@ -6,7 +6,7 @@ needs a server trace before it can serve as an independent completion oracle.
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -24,7 +24,7 @@ class Whisper(Protocol):
             peer.end_input()
             peer.server.final_requested.set()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "segments": [
@@ -61,11 +61,11 @@ PROVIDERS = (
         Whisper,
         create_stt,
         ("https://fireworks.ai/docs/api-reference/audio-streaming-transcriptions",),
-        completion_unknown="Legacy Fireworks checkpoint completion needs a verified server trace",
-        fault_case=FaultCase(
+        completion_unknown_reason="Legacy Fireworks checkpoint completion needs a verified server trace",
+        transport_fixture=TransportFixture(
             "fireworksai",
             plugin("fireworksai.stt"),
-            completion=(
+            completion_messages=(
                 {
                     "segments": [
                         {
@@ -86,11 +86,11 @@ PROVIDERS = (
                     ]
                 },
             ),
-            stop={"checkpoint_id": "final"},
+            stop_message={"checkpoint_id": "final"},
         ),
         live_constructor="livekit.plugins.fireworksai.stt:STT",
         required_env=("FIREWORKS_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
     ),
 )

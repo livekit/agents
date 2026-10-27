@@ -751,7 +751,7 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         closing_ws = asyncio.Event()
-        input_ended = asyncio.Event()
+        drain_started = asyncio.Event()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -781,7 +781,7 @@ class SpeechStream(stt.RecognizeStream):
                     f"Failed to send audio to Reson8 ({type(e).__name__})"
                 ) from None
 
-            input_ended.set()
+            drain_started.set()
             await self._await_final_turn()
 
             closing_ws.set()
@@ -799,7 +799,7 @@ class SpeechStream(stt.RecognizeStream):
                     if closing_ws.is_set():
                         return
 
-                    if input_ended.is_set():
+                    if drain_started.is_set():
                         if not self._speaking:
                             return
 
@@ -862,8 +862,8 @@ class SpeechStream(stt.RecognizeStream):
                         asyncio.create_task(send_task(ws)),
                         asyncio.create_task(recv_task(ws)),
                         reconnect=self._reconnect_event,
-                        sender_completes=True,
-                        draining=input_ended,
+                        sender_waits_for_completion=True,
+                        drain_started=drain_started,
                     )
                     if not reconnect:
                         break

@@ -11,7 +11,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError, APIStatusError, stt
-from livekit.agents.utils.aio.websocket import WebSocketError
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.plugins import meta
 from livekit.plugins.meta import stt as meta_stt
 
@@ -456,7 +456,7 @@ async def test_absolute_pacing_accounts_for_send_time(monkeypatch: pytest.Monkey
     event_sink = _EventSink()
     stream._input_ch = cast(Any, input_items())
     stream._audio_consumed = False
-    stream._end_stream_sent = asyncio.Event()
+    stream._drain_started = asyncio.Event()
     stream._first_frame_at = None
     stream._session_id = "session-1"
     stream._event_ch = cast(Any, event_sink)
@@ -509,7 +509,7 @@ async def test_audio_queued_while_connecting_is_not_paced_late(
     stream = object.__new__(meta.SpeechStream)
     stream._input_ch = cast(Any, input_items())
     stream._audio_consumed = False
-    stream._end_stream_sent = asyncio.Event()
+    stream._drain_started = asyncio.Event()
     # the first frame was pushed 240 ms ago, i.e. the connection took 240 ms
     stream._first_frame_at = 0.0
     clock.now = 0.24
@@ -554,7 +554,7 @@ async def test_idle_time_before_first_frame_does_not_allow_a_burst(
     stream = object.__new__(meta.SpeechStream)
     stream._input_ch = cast(Any, input_items())
     stream._audio_consumed = False
-    stream._end_stream_sent = asyncio.Event()
+    stream._drain_started = asyncio.Event()
     # connected long ago, the first audio only arrives now
     stream._first_frame_at = 10.0
     monkeypatch.setattr(meta_stt.asyncio, "get_running_loop", lambda: clock)
@@ -593,7 +593,7 @@ async def test_first_frame_pushed_after_sender_started_anchors_pacing(
     clock = _Clock()
     stream = object.__new__(meta.SpeechStream)
     stream._audio_consumed = False
-    stream._end_stream_sent = asyncio.Event()
+    stream._drain_started = asyncio.Event()
     stream._first_frame_at = None
 
     async def input_items() -> AsyncIterator[rtc.AudioFrame]:
@@ -994,7 +994,7 @@ async def test_invalid_request_close_during_handshake_is_not_retried() -> None:
     )
     stream.end_input()
 
-    with pytest.raises(WebSocketError) as exc_info:
+    with pytest.raises(WebSocketCloseError) as exc_info:
         async for _ in stream:
             pass
 

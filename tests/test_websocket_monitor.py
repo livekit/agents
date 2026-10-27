@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectionError
 from livekit.agents.utils.aio import WebSocketMonitor
-from livekit.agents.utils.aio.websocket import WebSocketError
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 
 pytestmark = pytest.mark.unit
 
@@ -281,7 +281,7 @@ async def test_transport_close_codes_are_classified_before_provider_dispatch(cod
     ws.receive.return_value = message
     monitor = WebSocketMonitor(cast(aiohttp.ClientWebSocketResponse, ws))
     if fails:
-        with pytest.raises(WebSocketError) as info:
+        with pytest.raises(WebSocketCloseError) as info:
             await monitor.receive()
         assert info.value.close_code == code
         assert not hasattr(info.value, "status_code")

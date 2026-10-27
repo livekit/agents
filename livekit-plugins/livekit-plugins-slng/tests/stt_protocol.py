@@ -6,7 +6,7 @@ ordering. Keep that gap explicit rather than infer a successful close from the c
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -31,7 +31,7 @@ class Bridge(Protocol):
             else:
                 assert event["type"] == "keepalive"
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "final_transcript" if result.final else "partial_transcript",
@@ -56,18 +56,18 @@ PROVIDERS = (
         create_stt,
         ("https://docs.slng.ai/api-reference/speech-to-text/overview",),
         progress_requires_final=True,
-        completion_unknown="Unmute Bridge EOF ordering needs a verified specification or trace",
-        fault_case=FaultCase(
+        completion_unknown_reason="Unmute Bridge EOF ordering needs a verified specification or trace",
+        transport_fixture=TransportFixture(
             "slng",
             plugin("slng.stt"),
             options={"model": "deepgram/nova-3"},
-            greetings=({"type": "ready"},),
-            completion=({"type": "final_transcript", "transcript": "words"},),
-            stop={"type": "close"},
+            initial_messages=({"type": "ready"},),
+            completion_messages=({"type": "final_transcript", "transcript": "words"},),
+            stop_message={"type": "close"},
         ),
         live_constructor="livekit.plugins.slng.stt:STT",
         required_env=("SLNG_API_KEY",),
         live_options={"model": "deepgram/nova-3"},
-        live_env={},
+        live_options_from_env={},
     ),
 )

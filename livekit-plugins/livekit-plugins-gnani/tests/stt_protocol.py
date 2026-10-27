@@ -18,7 +18,7 @@ class Vachana(Protocol):
         assert 0 < len(message.data) <= 1024
         await self.connection.accept_audio(message.data)
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send({"type": "processing"})
         if result.text:
             self.connection.send(
@@ -38,8 +38,8 @@ PROVIDERS = (
         Vachana,
         create_stt,
         ("https://github.com/Gnani-AI-Mintlify/Gnani-Vachana",),
-        monitored=False,
-        attempts_after_audio=1,
-        completion_unknown="Vachana does not document an acknowledged end-of-input protocol",
+        uses_websocket_monitor=False,
+        expected_attempts_after_audio=1,
+        completion_unknown_reason="Vachana does not document an acknowledged end-of-input protocol",
     ),
 )

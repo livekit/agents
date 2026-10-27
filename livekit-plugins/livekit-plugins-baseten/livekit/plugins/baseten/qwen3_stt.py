@@ -282,7 +282,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
         except Exception as e:
             raise APIConnectionError() from e
 
-        input_ended = asyncio.Event()
+        drain_started = asyncio.Event()
         pending_commits = 0
 
         async def _send() -> None:
@@ -317,7 +317,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                         await append(chunker.flush())
                         pending_commits += 1
                         if self._input_ch.closed and self._input_ch.empty():
-                            input_ended.set()
+                            drain_started.set()
                         await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
                         committed = True
                     else:
@@ -328,7 +328,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                     pending_commits += 1
                     await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
             finally:
-                input_ended.set()
+                drain_started.set()
 
         async def _recv() -> None:
             nonlocal pending_commits
@@ -395,7 +395,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                     # finals just close a turn and the stream keeps going.
                     if event.get("is_end_of_audio_flush"):
                         pending_commits -= 1
-                        if pending_commits == 0 and input_ended.is_set():
+                        if pending_commits == 0 and drain_started.is_set():
                             return
 
         try:
@@ -403,7 +403,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
             await self._run_connection_tasks(
                 asyncio.create_task(_send(), name="qwen3-stt-send"),
                 asyncio.create_task(_recv(), name="qwen3-stt-recv"),
-                draining=input_ended,
+                drain_started=drain_started,
             )
         except (APIConnectionError, APIStatusError, APITimeoutError):
             raise

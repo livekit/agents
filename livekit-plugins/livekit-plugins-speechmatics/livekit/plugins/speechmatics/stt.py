@@ -604,7 +604,7 @@ class SpeechStream(stt.RecognizeStream):
         )
 
         transcript_ended = asyncio.Event()
-        input_ended = asyncio.Event()
+        drain_started = asyncio.Event()
 
         # Add message handlers
         def add_message(message: dict[str, Any]) -> None:
@@ -669,7 +669,7 @@ class SpeechStream(stt.RecognizeStream):
 
         async def send() -> None:
             await self._process_audio()
-            input_ended.set()
+            drain_started.set()
             await asyncio.wait_for(finish(), self._conn_options.final_response_timeout)
 
         async def watch_transport() -> None:
@@ -686,8 +686,8 @@ class SpeechStream(stt.RecognizeStream):
                     asyncio.create_task(watch_transport()),
                     *([vad_task] if vad_task is not None else []),
                 ],
-                sender_completes=True,
-                draining=input_ended,
+                sender_waits_for_completion=True,
+                drain_started=drain_started,
             )
         finally:
             if self._vad_stream is not None:

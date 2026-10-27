@@ -42,7 +42,7 @@ from livekit.agents import (
     vad,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils.aio.websocket import WebSocketError
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 
 from ._http import Configuration, HTTPClient, positive_timeout, status_error
 from .log import logger
@@ -316,14 +316,17 @@ class SpeechStream(stt.RecognizeStream):
                 await asyncio.sleep(self._connect_options._interval_for_retry(attempt))
 
     async def _attempt(self) -> None:
-        self._draining = asyncio.Event()
+        self._drain_started = asyncio.Event()
         try:
             monitor = await asyncio.wait_for(self._handshake(), self._conn_options.timeout)
             assert self._ws is not None
             sender = asyncio.create_task(self._send(self._ws))
             receiver = asyncio.create_task(self._receive(monitor))
             await self._run_connection_tasks(
-                sender, receiver, sender_completes=True, draining=self._draining
+                sender,
+                receiver,
+                sender_waits_for_completion=True,
+                drain_started=self._drain_started,
             )
         except aiohttp.WSServerHandshakeError as error:
             raise status_error("STT", error.status) from None
@@ -365,7 +368,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _receive_event(self, monitor: utils.aio.WebSocketMonitor) -> dict[str, object]:
         try:
             message = await monitor.receive()
-        except WebSocketError as error:
+        except WebSocketCloseError as error:
             error.body = None
             raise
         except APIConnectionError as error:
@@ -413,7 +416,7 @@ class SpeechStream(stt.RecognizeStream):
         if not self._segment_samples:
             return
         if self._input_ch.closed and self._input_ch.empty():
-            self._draining.set()
+            self._drain_started.set()
         self._commit_future = asyncio.get_running_loop().create_future()
         self._committed_item_id = None
         try:

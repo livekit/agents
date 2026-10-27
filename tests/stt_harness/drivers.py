@@ -24,7 +24,7 @@ class NoSpeechVADStream(vad.VADStream):
             pass
 
 
-def audio(provider):
+def make_audio_segments(provider):
     # Both turns satisfy provider minimum durations; the last frame stays short.
     return (
         Segment(b"\x00\x10" * (provider.sample_rate * 2 // 5), "first"),
@@ -32,7 +32,7 @@ def audio(provider):
     )
 
 
-def push(stream, provider, segment):
+def push_audio(stream, provider, segment):
     chunk_size = provider.sample_rate // 10 * 2
     for offset in range(0, len(segment.audio), chunk_size):
         chunk = segment.audio[offset : offset + chunk_size]
@@ -40,8 +40,8 @@ def push(stream, provider, segment):
 
 
 @asynccontextmanager
-async def running(provider, monkeypatch, *, server=None, max_retry=0, fallback=False):
-    server = server or STTServer(provider, segments=audio(provider))
+async def open_stream(provider, monkeypatch, *, server=None, max_retry=0, fallback=False):
+    server = server or STTServer(provider, segments=make_audio_segments(provider))
     errors = []
     events = []
     async with server:
@@ -57,7 +57,7 @@ async def running(provider, monkeypatch, *, server=None, max_retry=0, fallback=F
                 max_retry=max_retry,
                 retry_interval=0,
                 timeout=2,
-                final_response_timeout=provider.final_timeout,
+                final_response_timeout=provider.final_response_timeout,
                 liveness_timeout=0.4,
             )
         )

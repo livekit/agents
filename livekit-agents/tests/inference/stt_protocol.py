@@ -6,7 +6,7 @@ session.finalized can precede trailing transcripts. It is not session completion
 
 import base64
 
-from tests.stt_harness.faults import FaultCase
+from tests.stt_harness.faults import TransportFixture
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -32,7 +32,7 @@ class Inference(Protocol):
         else:
             raise AssertionError(f"unknown inference command: {kind}")
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "final_transcript" if result.final else "interim_transcript",
@@ -62,8 +62,8 @@ PROVIDERS = (
         Inference,
         create_stt,
         (__doc__.splitlines()[2],),
-        final_timeout=4,
-        fault_case=FaultCase(
+        final_response_timeout=4,
+        transport_fixture=TransportFixture(
             "inference",
             "livekit.agents.inference.stt",
             options={
@@ -71,12 +71,14 @@ PROVIDERS = (
                 "api_secret": "test-secret-" * 4,
                 "base_url": "http://unused",
             },
-            completion=({"type": "final_transcript", "transcript": "words", "language": "en"},),
-            stop={"type": "session.finalize"},
+            completion_messages=(
+                {"type": "final_transcript", "transcript": "words", "language": "en"},
+            ),
+            stop_message={"type": "session.finalize"},
         ),
         live_constructor="livekit.agents.inference.stt:STT",
         required_env=("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"),
         live_options={"model": "deepgram/nova-3"},
-        live_env={},
+        live_options_from_env={},
     ),
 )

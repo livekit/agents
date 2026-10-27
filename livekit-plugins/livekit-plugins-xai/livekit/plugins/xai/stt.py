@@ -328,7 +328,7 @@ class SpeechStream(stt.RecognizeStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -355,7 +355,7 @@ class SpeechStream(stt.RecognizeStream):
 
             self._audio_duration_collector.flush()
             await ws.send_str(json.dumps({"type": "audio.done"}))
-            closing_ws.set()
+            drain_started.set()
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -392,14 +392,14 @@ class SpeechStream(stt.RecognizeStream):
 
         while True:
             try:
-                closing_ws.clear()
+                drain_started.clear()
                 ws = await self._connect_ws()
                 self._server_ready.clear()
                 reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
-                    draining=closing_ws,
+                    drain_started=drain_started,
                 )
                 if not reconnect:
                     break

@@ -41,7 +41,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
-from livekit.agents.utils.aio.websocket import WebSocketError
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.agents.utils.misc import is_given
 
 from ._utils import PeriodicCollector
@@ -783,7 +783,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         # A single connection attempt: this endpoint bills per connection, so the
         # stream never reconnects on its own (`stream()` also forces max_retry=0).
         ws: aiohttp.ClientWebSocketResponse | None = None
-        self._end_stream_sent = asyncio.Event()
+        self._drain_started = asyncio.Event()
 
         async def receive(socket: aiohttp.ClientWebSocketResponse) -> None:
             await self._process_messages(socket)
@@ -794,7 +794,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             await self._run_connection_tasks(
                 asyncio.create_task(self._process_audio(ws)),
                 asyncio.create_task(receive(ws)),
-                draining=self._end_stream_sent,
+                drain_started=self._drain_started,
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Timed out connecting to Sarvam realtime STT") from e
@@ -968,7 +968,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
         self._emit_local_usage_fallback()
         if not self._session_ended:
-            self._end_stream_sent.set()
+            self._drain_started.set()
             await self._safe_send_str(ws, {"event": "end"})
 
     @utils.log_exceptions(logger=logger)
@@ -1029,7 +1029,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     extra={**self._build_log_context(), "message_type": str(msg.type)},
                 )
 
-    def _error_from_close(self, close_code: object, close_reason: object) -> WebSocketError:
+    def _error_from_close(self, close_code: object, close_reason: object) -> WebSocketCloseError:
         code = int(close_code) if isinstance(close_code, int) else None
         retryable = close_code == 1013
         message = f"Sarvam realtime STT WebSocket closed unexpectedly: {close_reason}"
@@ -1042,7 +1042,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         elif close_code == 4000:
             message = f"Sarvam realtime STT rejected the session: {close_reason}"
 
-        error = WebSocketError(code, close_reason if isinstance(close_reason, str) else None)
+        error = WebSocketCloseError(code, close_reason if isinstance(close_reason, str) else None)
         error.message = message
         error.retryable = retryable
         return error

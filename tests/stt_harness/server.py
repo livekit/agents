@@ -93,7 +93,7 @@ class Connection:
         ):
             await self.finalize()
         else:
-            await self.protocol.transcript(self.result(final=False))
+            await self.protocol.send_transcript(self.result(final=False))
 
     def result(self, *, final: bool) -> Transcript:
         end = len(self.audio)
@@ -122,7 +122,7 @@ class Connection:
     async def finalize(self) -> None:
         self.server.final_requested.set()
         if self.final_offset < len(self.audio):
-            await self.protocol.transcript(self.result(final=True))
+            await self.protocol.send_transcript(self.result(final=True))
 
     def end_input(self, *, require_all: bool = True) -> None:
         assert not self.input_ended, "duplicate end-of-input request"
@@ -255,10 +255,10 @@ class STTServer:
     async def __aenter__(self) -> STTServer:
         ssl_options = {}
         if self.provider.tls:
-            from .tls import contexts
+            from .tls import create_ssl_contexts
 
             self._certificates = tempfile.TemporaryDirectory()
-            server_context, self.ssl_context = contexts(self._certificates.name)
+            server_context, self.ssl_context = create_ssl_contexts(self._certificates.name)
             ssl_options["ssl"] = server_context
         await self.http.start_server(**ssl_options)
         return self

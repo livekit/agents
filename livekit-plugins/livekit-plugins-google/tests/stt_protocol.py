@@ -27,7 +27,7 @@ class Gemini(Protocol):
             assert audio.get("mimeType", audio.get("mime_type")) == "audio/pcm;rate=16000"
             await peer.accept_audio(base64.b64decode(audio["data"], validate=True))
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         content = {
             "inputTranscription" if result.final else "interimInputTranscription": {
                 "text": result.text
@@ -54,14 +54,14 @@ PROVIDERS = (
         Gemini,
         create_stt,
         ("https://ai.google.dev/gemini-api/docs/live-api/live-transcribe",),
-        monitored=False,
+        uses_websocket_monitor=False,
         tls=True,
         completion_on_close=False,
     ),
 )
 
 
-def create_sdk_provider(monkeypatch):
+def create_sdk_fixture(monkeypatch):
     from tests.fake_stt_sdk import Pool, Server
 
     server = Server()
@@ -106,7 +106,7 @@ def create_sdk_provider(monkeypatch):
 PROVIDERS += (
     SDKProvider(
         "google",
-        create_sdk_provider,
+        create_sdk_fixture,
         ("https://docs.cloud.google.com/speech-to-text/docs/v1/speech-to-text-requests",),
     ),
 )

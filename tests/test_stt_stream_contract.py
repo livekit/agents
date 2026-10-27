@@ -13,23 +13,23 @@ import pytest
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError, utils
 
-from .stt_harness.discovery import fault_cases
+from .stt_harness.discovery import transport_fixtures
 from .stt_harness.drivers import collect_events
-from .stt_harness.faults import make_provider
+from .stt_harness.faults import create_transport_fixture
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
-@pytest.fixture(params=fault_cases(), ids=lambda case: case.name)
+@pytest.fixture(params=transport_fixtures(), ids=lambda fixture: fixture.name)
 def provider(request, monkeypatch):
-    return make_provider(request.param, monkeypatch)
+    return create_transport_fixture(request.param, monkeypatch)
 
 
 @asynccontextmanager
-async def running(
+async def open_stream(
     provider, *, max_retry=0, liveness_timeout=0.3, timeout=10, continuous_audio=True
 ):
-    case, instance, transport = provider
+    fixture, instance, transport = provider
     stream = instance.stream(
         conn_options=APIConnectOptions(
             max_retry=max_retry,
@@ -39,7 +39,7 @@ async def running(
             liveness_timeout=liveness_timeout,
         )
     )
-    assert type(stream) is case.stream_type
+    assert type(stream) is fixture.stream_type
     collector = asyncio.create_task(collect_events(stream, []))
 
     async def feed():
@@ -73,13 +73,13 @@ async def running(
 @pytest.mark.parametrize("failure", ["write", "close"])
 @pytest.mark.parametrize("cause", ["timeout", "reset"])
 async def test_failed_stop_is_an_error_even_if_the_peer_closes(provider, failure, cause):
-    case, _, transport = provider
-    if case.stop is None:
+    fixture, _, transport = provider
+    if fixture.stop_message is None:
         pytest.skip("protocol has no stop-write fixture")
     transport.fail_stop = failure
     if cause == "reset":
         transport.error = aiohttp.ClientConnectionResetError("test stop write failed")
-    async with running(provider, timeout=0.5, max_retry=2, continuous_audio=False) as (
+    async with open_stream(provider, timeout=0.5, max_retry=2, continuous_audio=False) as (
         stream,
         collector,
     ):
@@ -88,7 +88,7 @@ async def test_failed_stop_is_an_error_even_if_the_peer_closes(provider, failure
         stream.end_input()
         with pytest.raises(APIError):
             await asyncio.wait_for(collector, 2)
-        if case.stop is not None and failure == "write":
+        if fixture.stop_message is not None and failure == "write":
             assert asyncio.get_running_loop().time() - started < 0.5, (
                 "failed writes must not wait for the final-response deadline"
             )
@@ -97,7 +97,7 @@ async def test_failed_stop_is_an_error_even_if_the_peer_closes(provider, failure
 
 async def test_remote_close_cannot_discard_queued_audio(provider):
     _, _, transport = provider
-    async with running(provider, timeout=0.5, continuous_audio=False) as (stream, collector):
+    async with open_stream(provider, timeout=0.5, continuous_audio=False) as (stream, collector):
         await asyncio.sleep(0.2)
         transport.block_writes = True
         stream.push_frame(rtc.AudioFrame.create(16000, 1, 3200))

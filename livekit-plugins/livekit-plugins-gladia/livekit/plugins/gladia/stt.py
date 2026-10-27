@@ -762,7 +762,7 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
-        self._closing_ws = asyncio.Event()
+        self._drain_started = asyncio.Event()
 
     def update_options(
         self,
@@ -896,7 +896,7 @@ class SpeechStream(stt.SpeechStream):
                 # Connect to the WebSocket
                 async with self._session.ws_connect(session_url, autoping=False) as ws:
                     self._ws = ws
-                    self._closing_ws.clear()
+                    self._drain_started.clear()
                     self._session_time_offset = self._pushed_audio_duration
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
@@ -905,7 +905,7 @@ class SpeechStream(stt.SpeechStream):
                             asyncio.create_task(self._send_audio_task()),
                             asyncio.create_task(self._recv_messages_task()),
                             reconnect=self._reconnect_event,
-                            draining=self._closing_ws,
+                            drain_started=self._drain_started,
                         )
                         if not reconnect:
                             if self._input_ch.closed and self._input_ch.empty():
@@ -1004,7 +1004,7 @@ class SpeechStream(stt.SpeechStream):
             # stop_recording terminates this provider session. _run drains its final
             # messages and opens another connection when input remains.
             self._audio_duration_collector.flush()
-            self._closing_ws.set()
+            self._drain_started.set()
             if self._ws:
                 await self._ws.send_str(json.dumps({"type": "stop_recording"}))
         except (aiohttp.ClientError, ConnectionError) as e:

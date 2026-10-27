@@ -176,7 +176,7 @@ class SpeechStream(stt.RecognizeStream):
         self._speaking = False
 
     async def _run(self) -> None:
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -202,7 +202,7 @@ class SpeechStream(stt.RecognizeStream):
             for frame in audio_bstream.flush():
                 await ws.send_bytes(frame.data.tobytes())
 
-            closing_ws.set()
+            drain_started.set()
             # Only the Deepgram engine has a documented CloseStream command.
             if self._stt._opts.transcription_engine == "deepgram":
                 await ws.send_json({"type": "CloseStream"})
@@ -241,7 +241,7 @@ class SpeechStream(stt.RecognizeStream):
             await self._run_connection_tasks(
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
-                draining=closing_ws,
+                drain_started=drain_started,
                 require_completion=self._stt._opts.transcription_engine == "deepgram",
             )
         finally:

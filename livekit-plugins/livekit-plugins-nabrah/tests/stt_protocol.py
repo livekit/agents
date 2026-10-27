@@ -5,7 +5,7 @@ Public documentation does not establish a terminal response to the client's eof.
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -25,7 +25,7 @@ class Nabrah(Protocol):
             peer.end_input()
             peer.server.final_requested.set()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "transcript",
@@ -49,13 +49,13 @@ PROVIDERS = (
         Nabrah,
         create_stt,
         ("https://www.nabrah.ai/en/docs/api-reference/speech-to-text/stream-speech-to-text",),
-        completion_unknown="Nabrah's public specification does not define EOF completion",
-        attempts_after_audio=1,
-        fault_case=FaultCase(
+        completion_unknown_reason="Nabrah's public specification does not define EOF completion",
+        expected_attempts_after_audio=1,
+        transport_fixture=TransportFixture(
             "nabrah",
             plugin("nabrah.stt"),
-            greetings=({"type": "ready"},),
-            completion=(
+            initial_messages=({"type": "ready"},),
+            completion_messages=(
                 {
                     "type": "transcript",
                     "text": "words <eot>",
@@ -63,11 +63,11 @@ PROVIDERS = (
                     "audio_processed": 0.2,
                 },
             ),
-            stop={"type": "eof"},
+            stop_message={"type": "eof"},
         ),
         live_constructor="livekit.plugins.nabrah.stt:STT",
         required_env=("NABRAH_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
     ),
 )

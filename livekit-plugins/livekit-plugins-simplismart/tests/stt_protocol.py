@@ -2,7 +2,7 @@
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -16,7 +16,7 @@ class Simplismart(Protocol):
         assert message.type == aiohttp.WSMsgType.BINARY
         await self.connection.accept_audio(message.data)
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         if result.text:
             self.connection.send(result.text.encode(), final=result.final)
 
@@ -47,18 +47,18 @@ PROVIDERS = (
         (
             "https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-simplismart",
         ),
-        completion_unknown="Experimental Simplismart streaming has no published EOF protocol",
+        completion_unknown_reason="Experimental Simplismart streaming has no published EOF protocol",
         tls=True,
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "simplismart",
             plugin("simplismart.stt"),
             options={"streaming": True},
-            completion=(b"words",),
-            stop=None,
+            completion_messages=(b"words",),
+            stop_message=None,
         ),
         live_constructor="livekit.plugins.simplismart.stt:STT",
         required_env=("SIMPLISMART_API_KEY",),
         live_options={"streaming": True},
-        live_env={},
+        live_options_from_env={},
     ),
 )

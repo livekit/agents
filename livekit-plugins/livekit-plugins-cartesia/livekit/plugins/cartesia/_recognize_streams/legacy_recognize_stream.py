@@ -169,7 +169,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self._last_speech_end_time: float = 0
 
     async def _run(self) -> None:
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
         # Reset per-connection state so a transport-error retry (a new _run
         # invocation by the base class) starts fresh.
         self._speaking = False
@@ -214,7 +214,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
-                closing_ws.set()
+                drain_started.set()
                 await ws.send_str("close")
             except (aiohttp.ClientError, ConnectionError) as e:
                 raise APIConnectionError(
@@ -260,7 +260,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
                     background=[asyncio.create_task(keepalive_task(ws))],
-                    draining=closing_ws,
+                    drain_started=drain_started,
                 )
                 if not reconnect:
                     break

@@ -2,7 +2,7 @@
 
 import base64
 
-from tests.stt_harness.faults import FaultCase, _microsoft_reply, plugin
+from tests.stt_harness.faults import TransportFixture, _microsoft_on_send, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -25,7 +25,7 @@ class MAI(Protocol):
             assert kind == "input_audio_buffer.commit"
             await peer.finalize()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         peer = self.connection
         item = f"item-{result.index}"
         if result.final:
@@ -62,14 +62,14 @@ PROVIDERS = (
         (
             "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe-2-streaming-realtime",
         ),
-        attempts_after_audio=1,
-        fault_case=FaultCase(
+        expected_attempts_after_audio=1,
+        transport_fixture=TransportFixture(
             "microsoft_ai",
             plugin("microsoft_ai.stt"),
-            reply=_microsoft_reply,
+            on_send=_microsoft_on_send,
             options={"vad": None, "url": "wss://unused", "model": "test"},
-            greetings=({"type": "session.created"}, {"type": "session.updated"}),
-            completion=(
+            initial_messages=({"type": "session.created"}, {"type": "session.updated"}),
+            completion_messages=(
                 {"type": "input_audio_buffer.committed", "item_id": "test"},
                 {
                     "type": "conversation.item.input_audio_transcription.completed",
@@ -77,12 +77,11 @@ PROVIDERS = (
                     "transcript": "words",
                 },
             ),
-            completion_closes_socket=False,
-            stop={"type": "input_audio_buffer.commit"},
+            stop_message={"type": "input_audio_buffer.commit"},
         ),
         live_constructor="livekit.plugins.microsoft_ai.stt:STT",
         required_env=("MICROSOFT_AI_STT_API_KEY", "MICROSOFT_AI_STT_URL", "MICROSOFT_AI_STT_MODEL"),
         live_options={"vad": None},
-        live_env={},
+        live_options_from_env={},
     ),
 )

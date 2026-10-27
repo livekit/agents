@@ -23,7 +23,7 @@ Each plugin owns `tests/stt_protocol.py`. Inference owns
 `livekit-agents/tests/inference/stt_protocol.py`. Discovery reads their `PROVIDERS`
 entries. Add separate entries when models use different protocols. The same
 catalogue supplies wire, SDK, optional fault, and live-test drivers. Live entries
-own `required_env`, `live_options`, and `live_env`; there is no second provider list.
+own `required_env`, `live_options`, and `live_options_from_env`; there is no second provider list.
 A single AST check checks streaming-provider registration and coordinator use.
 
 A protocol implements configuration, audio decoding, transcript encoding, and
@@ -50,7 +50,7 @@ long-lived input, and retry recovery after useful provider traffic. OpenAI also
 has an out-of-order commit-completion scenario. SLNG keeps a separate replay
 budget: its contract requires a final before buffered-audio replay debt clears.
 
-`completion_unknown` records a missing provider guarantee. These providers use a
+`completion_unknown_reason` records a missing provider guarantee. These providers use a
 bounded best-effort drain: normal `end_input()` does not emit an error when the
 grace period expires. Write failures, abnormal closes, and failed liveness probes
 still fail. The tests verify final audio bytes and events without inventing a
@@ -61,7 +61,7 @@ Sarvam, Simplismart, SLNG, and the Telnyx Google and Azure engines.
 correlated final results. Their tests also close a healthy socket without that
 response and require an error. A transport close cannot stand in for that event.
 
-`monitored=False` identifies clients whose SDK owns heartbeat timing. Their real
+`uses_websocket_monitor=False` identifies clients whose SDK owns heartbeat timing. Their real
 ping/pong and close behavior is tested, but the common short liveness deadline is
 not applied to them.
 

@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 from tests.stt_harness.protocol import SDKProvider
 
 
-def create_sdk_provider(monkeypatch):
+def create_sdk_fixture(monkeypatch):
     from tests.fake_stt_sdk import Server
 
     server = Server()
@@ -62,7 +62,7 @@ def create_sdk_provider(monkeypatch):
 PROVIDERS = (
     SDKProvider(
         "aws",
-        create_sdk_provider,
+        create_sdk_fixture,
         ("https://docs.aws.amazon.com/transcribe/latest/dg/streaming-setting-up.html",),
         minimum_python=(3, 12),
     ),

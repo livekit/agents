@@ -294,7 +294,6 @@ async def test_provider_progress_resets_retries_without_transcript(message_type,
     import json
     from types import SimpleNamespace
 
-    from livekit.agents import APIConnectionError
     from livekit.plugins.gnani.stt import SpeechStream
 
     class Socket:
@@ -308,6 +307,5 @@ async def test_provider_progress_resets_retries_without_transcript(message_type,
     stream._event_ch = SimpleNamespace(send_nowait=lambda event: None)
     stream._on_provider_progress = None
     stream._num_retries = 2
-    with pytest.raises(APIConnectionError):
-        await stream._recv_messages(Socket())
+    await stream._recv_messages(Socket())
     assert stream._num_retries == expected_retries

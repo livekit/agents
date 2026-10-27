@@ -8,27 +8,26 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class FaultCase:
+class TransportFixture:
     name: str
     module: str
     stream_class: str = "SpeechStream"
     constructor: str = "STT"
     options: dict[str, Any] = field(default_factory=dict)
-    greetings: tuple[dict[str, Any], ...] = ()
-    completion: tuple[dict[str, Any] | bytes, ...] = ()
+    initial_messages: tuple[dict[str, Any], ...] = ()
+    completion_messages: tuple[dict[str, Any] | bytes, ...] = ()
     constructor_module: str | None = None
-    reply: Callable | None = None
-    stop: dict[str, Any] | str | bytes | None = None
-    completion_closes_socket: bool = True
-    api_key: bool = True
-    http_session: bool = True
+    on_send: Callable | None = None
+    stop_message: dict[str, Any] | str | bytes | None = None
+    accepts_api_key: bool = True
+    accepts_http_session: bool = True
 
-    def create(self, session):
+    def create_stt(self, session):
         module = import_module(self.constructor_module or self.module)
         kwargs = dict(self.options)
-        if self.api_key:
+        if self.accepts_api_key:
             kwargs["api_key"] = "test-key"
-        if self.http_session:
+        if self.accepts_http_session:
             kwargs["http_session"] = session
         return getattr(module, self.constructor)(**kwargs)
 
@@ -41,13 +40,13 @@ def plugin(name):
     return f"livekit.plugins.{name}"
 
 
-def _gladia_reply(socket, data):
+def _gladia_on_send(socket, data):
     if json.loads(data).get("type") == "stop_recording":
-        for event in socket.transport.case.completion:
+        for event in socket.transport.fixture.completion_messages:
             socket.emit(event)
 
 
-def _microsoft_reply(socket, data):
+def _microsoft_on_send(socket, data):
     if json.loads(data).get("type") == "input_audio_buffer.commit":
         item_id = f"item-{len(socket.writes)}"
         socket.emit({"type": "input_audio_buffer.committed", "item_id": item_id})
@@ -60,18 +59,18 @@ def _microsoft_reply(socket, data):
         )
 
 
-def _rtzr_reply(socket, data):
+def _rtzr_on_send(socket, data):
     if data == "EOS":
         socket.server_close()
 
 
-def make_provider(case, monkeypatch):
+def create_transport_fixture(fixture, monkeypatch):
     import aiohttp
 
     from livekit.agents import utils
     from tests.fake_stt_transport import Transport
 
-    transport = Transport(case)
+    transport = Transport(fixture)
 
     async def unexpected_request(*args, **kwargs):
         raise AssertionError("STT contract tests must not use the network")
@@ -81,11 +80,11 @@ def make_provider(case, monkeypatch):
     monkeypatch.setenv("RTZR_CLIENT_SECRET", "test")
     monkeypatch.setattr(aiohttp, "ClientSession", type(transport.session()))
     monkeypatch.setattr(utils.http_context, "http_session", transport.session)
-    instance = case.create(transport.session())
-    return case, instance, transport
+    instance = fixture.create_stt(transport.session())
+    return fixture, instance, transport
 
 
-async def assert_control_write_failure(case, monkeypatch, message, action):
+async def assert_control_write_failure(fixture, monkeypatch, message, action):
     """Check provider-specific stop/flush packets with the shared transport."""
     import asyncio
     import json
@@ -109,7 +108,7 @@ async def assert_control_write_failure(case, monkeypatch, message, action):
         await original_send(self, data)
 
     monkeypatch.setattr(Socket, "send_str", send)
-    _, provider, _ = make_provider(case, monkeypatch)
+    _, provider, _ = create_transport_fixture(fixture, monkeypatch)
     stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
     collector = asyncio.create_task(collect_events(stream, []))
     try:

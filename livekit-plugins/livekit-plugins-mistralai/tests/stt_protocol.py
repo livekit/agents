@@ -34,7 +34,7 @@ class Voxtral(Protocol):
         else:
             assert kind == "input_audio.flush"
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         if result.final:
             self.connection.send(
                 {
@@ -80,7 +80,7 @@ PROVIDERS = (
         Voxtral,
         create_stt,
         ("https://docs.mistral.ai/studio/audio/speech-to-text/transcribe-in-realtime",),
-        monitored=False,
+        uses_websocket_monitor=False,
         completion_on_close=False,
     ),
 )

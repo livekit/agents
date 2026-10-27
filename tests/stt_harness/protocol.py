@@ -13,7 +13,7 @@ from aiohttp import WSMessage, web
 if TYPE_CHECKING:
     from livekit.agents import stt
 
-    from .faults import FaultCase
+    from .faults import TransportFixture
     from .server import Connection, STTServer
 
 
@@ -39,7 +39,7 @@ class Protocol:
     async def receive(self, message: WSMessage) -> None:
         raise NotImplementedError
 
-    async def transcript(self, result: Transcript) -> None:
+    async def send_transcript(self, result: Transcript) -> None:
         raise NotImplementedError
 
 
@@ -50,14 +50,14 @@ class ProviderConfig:
     live_constructor: str = ""
     required_env: tuple[str, ...] = ()
     live_options: dict[str, Any] = field(default_factory=dict)
-    live_env: dict[str, str] = field(default_factory=dict)
-    fault_case: FaultCase | None = None
+    live_options_from_env: dict[str, str] = field(default_factory=dict)
+    transport_fixture: TransportFixture | None = None
 
-    def create_live(self):
+    def create_live_stt(self):
         module, constructor = self.live_constructor.split(":")
         options = {
             **self.live_options,
-            **{arg: os.environ[name] for arg, name in self.live_env.items()},
+            **{arg: os.environ[name] for arg, name in self.live_options_from_env.items()},
         }
         return getattr(import_module(module), constructor)(**options)
 
@@ -70,14 +70,14 @@ class Provider(ProviderConfig):
     sources: tuple[str, ...]
     sample_rate: int = 16000
     # Only a missing protocol guarantee can exclude a completion test.
-    completion_unknown: str = ""
+    completion_unknown_reason: str = ""
     completion_on_close: bool = True
     # SDKs may manage heartbeat themselves rather than use APIConnectOptions.
-    monitored: bool = True
-    final_timeout: float = 0.25
+    uses_websocket_monitor: bool = True
+    final_response_timeout: float = 0.25
     bootstrap: Callable[..., Any] | None = None
     tls: bool = False
-    attempts_after_audio: int = 3
+    expected_attempts_after_audio: int = 3
     # A replay buffer can require a final before its separate replay debt clears.
     progress_requires_final: bool = False
 
@@ -85,6 +85,6 @@ class Provider(ProviderConfig):
 @dataclass(frozen=True)
 class SDKProvider(ProviderConfig):
     name: str
-    create_provider: Callable[..., Any]
+    create_fixture: Callable[..., Any]
     sources: tuple[str, ...]
     minimum_python: tuple[int, int] = (3, 10)

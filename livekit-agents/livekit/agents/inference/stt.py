@@ -1123,7 +1123,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
-        input_ended = asyncio.Event()
+        drain_started = asyncio.Event()
         transcript_timeout = utils.aio.sleep(FINALIZATION_TIMEOUT)
         session_closed = False
         http_session = self._stt._ensure_session()
@@ -1132,7 +1132,7 @@ class SpeechStream(stt.SpeechStream):
         vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
 
         async def wait_for_inactivity() -> None:
-            await input_ended.wait()
+            await drain_started.wait()
             await transcript_timeout
 
         @utils.log_exceptions(logger=logger)
@@ -1169,7 +1169,7 @@ class SpeechStream(stt.SpeechStream):
                     with contextlib.suppress(RuntimeError):
                         vad_stream.end_input()
 
-                input_ended.set()
+                drain_started.set()
                 finalize_msg = {
                     "type": "session.finalize",
                 }
@@ -1233,7 +1233,7 @@ class SpeechStream(stt.SpeechStream):
                     raise APIError(
                         "LiveKit Inference STT returned an error",
                         body={"code": code},
-                        retryable=not input_ended.is_set(),
+                        retryable=not drain_started.is_set(),
                     )
                 if msg_type in (
                     "start_of_speech",
@@ -1269,7 +1269,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(receive_until_complete()),
                     background=background,
-                    draining=input_ended,
+                    drain_started=drain_started,
                 )
             finally:
                 transcript_timeout.cancel()

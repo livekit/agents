@@ -7,7 +7,7 @@ Finalize keeps the session open; CloseStream flushes results and closes it.
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -37,7 +37,7 @@ class Listen(Protocol):
         else:
             assert kind in ("KeepAlive", "Configure"), f"unknown Deepgram command: {kind}"
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "Results",
@@ -68,7 +68,7 @@ class Listen(Protocol):
 
 
 class Flux(Listen):
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         if not getattr(self, "turn_open", False):
             self.turn_open = True
             self.connection.send(
@@ -104,7 +104,7 @@ def create_stt(server, monkeypatch):
     return STT(api_key="test-key", base_url=server.ws_url, sample_rate=16000)
 
 
-def create_flux(server, monkeypatch):
+def create_flux_stt(server, monkeypatch):
     from livekit.plugins.deepgram import STTv2
 
     return STTv2(api_key="test-key", base_url=server.ws_url, sample_rate=16000)
@@ -116,10 +116,10 @@ PROVIDERS = (
         Listen,
         create_stt,
         (__doc__.splitlines()[2],),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "deepgram",
             plugin("deepgram.stt"),
-            completion=(
+            completion_messages=(
                 {
                     "type": "Results",
                     "metadata": {"request_id": "test"},
@@ -140,24 +140,24 @@ PROVIDERS = (
                     },
                 },
             ),
-            stop={"type": "CloseStream"},
+            stop_message={"type": "CloseStream"},
         ),
         live_constructor="livekit.plugins.deepgram.stt:STT",
         required_env=("DEEPGRAM_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
     ),
     Provider(
         "deepgram_v2",
         Flux,
-        create_flux,
+        create_flux_stt,
         (__doc__.splitlines()[3],),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "deepgram_v2",
             plugin("deepgram.stt_v2"),
             "SpeechStreamv2",
             "STTv2",
-            completion=(
+            completion_messages=(
                 {"type": "TurnInfo", "event": "StartOfTurn", "transcript": "", "words": []},
                 {
                     "type": "TurnInfo",
@@ -166,11 +166,11 @@ PROVIDERS = (
                     "words": [{"word": "words", "start": 0, "end": 0.1, "confidence": 1.0}],
                 },
             ),
-            stop={"type": "CloseStream"},
+            stop_message={"type": "CloseStream"},
         ),
         live_constructor="livekit.plugins.deepgram.stt_v2:STTv2",
         required_env=("DEEPGRAM_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
     ),
 )

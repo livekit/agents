@@ -7,7 +7,7 @@ An empty binary message is audio; it is not an end-of-input request.
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -35,7 +35,7 @@ class Soniox(Protocol):
             else:
                 assert event["type"] == "keepalive"
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         tokens = [
             {
                 "text": result.text,
@@ -65,10 +65,10 @@ PROVIDERS = (
         Soniox,
         create_stt,
         (__doc__.splitlines()[2],),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "soniox",
             plugin("soniox.stt"),
-            completion=(
+            completion_messages=(
                 {
                     "tokens": [
                         {
@@ -86,12 +86,12 @@ PROVIDERS = (
                 },
                 {"tokens": [], "finished": True},
             ),
-            stop="",
+            stop_message="",
         ),
         live_constructor="livekit.plugins.soniox.stt:STT",
         required_env=("SONIOX_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
         completion_on_close=False,
     ),
 )

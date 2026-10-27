@@ -226,7 +226,7 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
-        input_closed = asyncio.Event()
+        drain_started = asyncio.Event()
         utterances: dict[str, _Utterance] = {}
 
         def _make_session() -> SttSession:
@@ -253,7 +253,7 @@ class SpeechStream(stt.RecognizeStream):
                     await session.send_audio(frame.data.tobytes())
             for frame in audio_bstream.flush():
                 await session.send_audio(frame.data.tobytes())
-            input_closed.set()
+            drain_started.set()
             # An empty audio frame requests the final transcripts and stream_finished.
             # Closing the SDK session here would cancel its receive loop.
             await session.send_audio(b"")
@@ -350,7 +350,7 @@ class SpeechStream(stt.RecognizeStream):
             await self._run_connection_tasks(
                 asyncio.create_task(_send_task(session)),
                 asyncio.create_task(_recv_task(session)),
-                draining=input_closed,
+                drain_started=drain_started,
             )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None

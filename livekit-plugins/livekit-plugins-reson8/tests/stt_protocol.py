@@ -24,7 +24,7 @@ class Turns(Protocol):
             if self.turn_open:
                 await peer.finalize()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         peer = self.connection
         if not self.turn_open:
             self.turn_open = True
@@ -55,8 +55,8 @@ PROVIDERS = (
         Turns,
         create_stt,
         ("https://docs.reson8.dev/api/speech-to-text/turns/",),
-        monitored=False,
-        final_timeout=0.8,
+        uses_websocket_monitor=False,
+        final_response_timeout=0.8,
         completion_on_close=False,
     ),
 )

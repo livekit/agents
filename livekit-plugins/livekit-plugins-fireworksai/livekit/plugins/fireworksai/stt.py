@@ -322,7 +322,7 @@ class SpeechStream(stt.SpeechStream):
         when something went wrong.
         """
 
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
 
@@ -343,7 +343,7 @@ class SpeechStream(stt.SpeechStream):
                     await self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
-            closing_ws.set()
+            drain_started.set()
             await ws.send_str(self._CLOSE_MSG)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -384,7 +384,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
-                    draining=closing_ws,
+                    drain_started=drain_started,
                     require_completion=False,
                 )
                 if not reconnect:

@@ -6,7 +6,7 @@ from types import SimpleNamespace as NS
 from tests.stt_harness.protocol import SDKProvider
 
 
-def create_sdk_provider(monkeypatch):
+def create_sdk_fixture(monkeypatch):
     from tests.fake_stt_sdk import Server
 
     server = Server()
@@ -67,7 +67,7 @@ def create_sdk_provider(monkeypatch):
 PROVIDERS = (
     SDKProvider(
         "nvidia",
-        create_sdk_provider,
+        create_sdk_fixture,
         (
             "https://docs.nvidia.com/deeplearning/riva/user-guide/docs/reference/protos/riva_asr.proto.html",
         ),

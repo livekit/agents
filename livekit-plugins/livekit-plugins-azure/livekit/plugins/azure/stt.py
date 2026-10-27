@@ -268,7 +268,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        input_ended = asyncio.Event()
+        drain_started = asyncio.Event()
 
         async def process_input() -> None:
             async for input in self._input_ch:
@@ -282,7 +282,7 @@ class SpeechStream(stt.SpeechStream):
 
         async def send() -> None:
             await process_input()
-            input_ended.set()
+            drain_started.set()
             self._stream.close()
 
         async def receive() -> None:
@@ -320,13 +320,13 @@ class SpeechStream(stt.SpeechStream):
                     self._session_started_event.wait(), self._conn_options.timeout
                 )
 
-                input_ended.clear()
+                drain_started.clear()
 
                 reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send()),
                     asyncio.create_task(receive()),
                     reconnect=self._reconnect_event,
-                    draining=input_ended,
+                    drain_started=drain_started,
                 )
                 if reconnect:
                     self._reconnect_event.clear()

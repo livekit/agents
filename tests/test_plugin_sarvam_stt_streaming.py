@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from livekit.agents import APIStatusError
-from livekit.agents.utils.aio.websocket import WebSocketError
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.plugins import sarvam
 from livekit.plugins.sarvam import stt_streaming, tts
 
@@ -36,7 +36,7 @@ def _make_stream(
     stream._request_id = ""
     stream._session_id = ""
     stream._session_ended = False
-    stream._end_stream_sent = asyncio.Event()
+    stream._drain_started = asyncio.Event()
     stream._utterance_idx = None
     stream._utterance_in_progress = False
     stream._active_endpointing = endpointing
@@ -1326,7 +1326,7 @@ async def test_streaming_process_messages_raises_on_realtime_rejection_close() -
         close_code=4000,
     )
 
-    with pytest.raises(WebSocketError) as excinfo:
+    with pytest.raises(WebSocketCloseError) as excinfo:
         await stream._process_messages(ws)
 
     assert excinfo.value.close_code == 4000
@@ -1389,7 +1389,7 @@ async def test_streaming_process_messages_logs_realtime_rejection_close(
     )
 
     with caplog.at_level(logging.ERROR, logger=stt_streaming.logger.name):
-        with pytest.raises(WebSocketError):
+        with pytest.raises(WebSocketCloseError):
             await stream._process_messages(ws)
 
     close_records = [

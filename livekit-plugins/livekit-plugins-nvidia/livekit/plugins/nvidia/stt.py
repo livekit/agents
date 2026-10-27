@@ -165,11 +165,11 @@ class SpeechStream(stt.SpeechStream):
         audio_queue: queue.Queue[bytes | None] = queue.Queue()
         done: asyncio.Future[Exception | None] = self._event_loop.create_future()
         self._audio_queue = audio_queue
-        input_ended = asyncio.Event()
+        drain_started = asyncio.Event()
 
         self._recognition_thread = threading.Thread(
             target=self._recognition_worker,
-            args=(config, audio_queue, done, self._asr_service, input_ended),
+            args=(config, audio_queue, done, self._asr_service, drain_started),
             name="nvidia-asr-recognition",
             daemon=True,
         )
@@ -178,7 +178,7 @@ class SpeechStream(stt.SpeechStream):
         async def send() -> None:
             await self._collect_audio()
             audio_queue.put(None)
-            await input_ended.wait()
+            await drain_started.wait()
 
         async def receive() -> None:
             error = await done
@@ -189,7 +189,7 @@ class SpeechStream(stt.SpeechStream):
             await self._run_connection_tasks(
                 asyncio.create_task(send()),
                 asyncio.create_task(receive()),
-                draining=input_ended,
+                drain_started=drain_started,
             )
         finally:
             audio_queue.put(None)
@@ -230,10 +230,10 @@ class SpeechStream(stt.SpeechStream):
             elif isinstance(data, self._FlushSentinel):
                 continue
 
-    def _recognition_worker(self, config, audio_queue, done, service, input_ended) -> None:
+    def _recognition_worker(self, config, audio_queue, done, service, drain_started) -> None:
         def audio():
             yield from iter(audio_queue.get, None)
-            self._event_loop.call_soon_threadsafe(input_ended.set)
+            self._event_loop.call_soon_threadsafe(drain_started.set)
 
         error = None
         try:

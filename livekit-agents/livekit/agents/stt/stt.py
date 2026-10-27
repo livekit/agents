@@ -475,14 +475,14 @@ class RecognizeStream(ABC):
         *,
         reconnect: asyncio.Event | None = None,
         background: Sequence[asyncio.Future[Any]] = (),
-        sender_completes: bool = False,
-        draining: asyncio.Event | None = None,
+        sender_waits_for_completion: bool = False,
+        drain_started: asyncio.Event | None = None,
         require_completion: bool = True,
     ) -> bool:
         """Run one provider connection; return True when a reconnect is requested.
 
         Sending must finish before success. A receiver that ends during active
-        input is a connection failure. draining signals the interval after
+        input is a connection failure. drain_started signals the interval after
         the last audio write and before the sender returns (for example while
         writing EOS or waiting for an SDK acknowledgement).
 
@@ -490,14 +490,16 @@ class RecognizeStream(ABC):
         Providers without a completion guarantee use a best-effort drain by setting
         require_completion=False. A drain timeout then ends normally; write and
         transport failures still propagate. Transport activity cannot extend it.
-        Set sender_completes when the sender also waits for the final acknowledgement.
+        Set sender_waits_for_completion when the sender waits for the final acknowledgement.
         All supplied tasks are cancelled and awaited on exit.
         """
         reconnect_task = asyncio.create_task(reconnect.wait()) if reconnect is not None else None
-        drain_task = asyncio.create_task(draining.wait()) if draining is not None else None
+        drain_started_task = (
+            asyncio.create_task(drain_started.wait()) if drain_started is not None else None
+        )
         tasks = {sender, receiver, *background}
-        if drain_task is not None:
-            tasks.add(drain_task)
+        if drain_started_task is not None:
+            tasks.add(drain_started_task)
         if reconnect_task is not None:
             tasks.add(reconnect_task)
         pending = set(tasks)
@@ -526,13 +528,15 @@ class RecognizeStream(ABC):
                 if reconnect_task in done:
                     return True
                 if receiver in done and not sender.done():
-                    if draining is None or not draining.is_set():
+                    if drain_started is None or not drain_started.is_set():
                         raise APIConnectionError(
                             "STT connection ended before audio sending finished"
                         )
-                if sender.done() and (receiver.done() or sender_completes):
+                if sender.done() and (receiver.done() or sender_waits_for_completion):
                     return False
-                if deadline is None and (sender in done or receiver in done or drain_task in done):
+                if deadline is None and (
+                    sender in done or receiver in done or drain_started_task in done
+                ):
                     deadline = loop.time() + self._conn_options.final_response_timeout
                 pending.difference_update(done)
         finally:

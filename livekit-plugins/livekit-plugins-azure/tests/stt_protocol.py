@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 from tests.stt_harness.protocol import SDKProvider
 
 
-def create_sdk_provider(monkeypatch):
+def create_sdk_fixture(monkeypatch):
     from tests.fake_stt_sdk import Server
 
     server = Server()
@@ -62,7 +62,7 @@ def create_sdk_provider(monkeypatch):
 PROVIDERS = (
     SDKProvider(
         "azure",
-        create_sdk_provider,
+        create_sdk_fixture,
         (
             "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-use-audio-input-streams",
         ),

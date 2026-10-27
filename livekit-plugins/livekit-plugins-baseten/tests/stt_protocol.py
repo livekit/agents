@@ -4,7 +4,7 @@ import base64
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -31,7 +31,7 @@ class Whisper(Protocol):
             peer.send({"type": "end_audio", "body": {"status": "finished"}}, final=True)
             peer.close()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "transcription",
@@ -57,7 +57,7 @@ class Qwen(Whisper):
             assert event["type"] == "input_audio_buffer.commit"
             await self.connection.finalize()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "transcription",
@@ -70,13 +70,13 @@ class Qwen(Whisper):
         )
 
 
-def whisper(server, monkeypatch):
+def create_whisper_stt(server, monkeypatch):
     from livekit.plugins.baseten import STT
 
     return STT(api_key="test-key", model_endpoint=server.ws_url)
 
 
-def qwen(server, monkeypatch):
+def create_qwen_stt(server, monkeypatch):
     from livekit.plugins.baseten import STT
 
     return STT(api_key="test-key", model_endpoint=server.ws_url, model="qwen3-asr")
@@ -86,36 +86,35 @@ PROVIDERS = (
     Provider(
         "baseten",
         Whisper,
-        whisper,
+        create_whisper_stt,
         (SOURCE,),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "baseten",
             plugin("baseten.stt"),
-            completion=(
+            completion_messages=(
                 {"type": "transcription", "transcript": "words", "is_final": True},
                 {"type": "end_audio", "body": {"status": "finished"}},
             ),
             options={"model_endpoint": "wss://unused"},
-            stop={"type": "end_audio"},
-            completion_closes_socket=False,
+            stop_message={"type": "end_audio"},
         ),
         live_constructor="livekit.plugins.baseten.stt:STT",
         required_env=("BASETEN_API_KEY", "BASETEN_MODEL_ENDPOINT"),
         live_options={"model": "whisper"},
-        live_env={},
+        live_options_from_env={},
     ),
     Provider(
         "baseten_qwen",
         Qwen,
-        qwen,
+        create_qwen_stt,
         (SOURCE,),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "baseten_qwen",
             plugin("baseten.qwen3_stt"),
             "Qwen3SpeechStream",
             options={"model_endpoint": "wss://unused", "model": "qwen3-asr"},
             constructor_module=plugin("baseten.stt"),
-            completion=(
+            completion_messages=(
                 {
                     "type": "transcription",
                     "segments": [{"text": "words"}],
@@ -123,13 +122,12 @@ PROVIDERS = (
                     "is_end_of_audio_flush": True,
                 },
             ),
-            completion_closes_socket=False,
-            stop={"type": "input_audio_buffer.commit"},
+            stop_message={"type": "input_audio_buffer.commit"},
         ),
         live_constructor="livekit.plugins.baseten.stt:STT",
         required_env=("BASETEN_API_KEY", "BASETEN_QWEN_MODEL_ENDPOINT"),
         live_options={"model": "qwen3-asr"},
-        live_env={"model_endpoint": "BASETEN_QWEN_MODEL_ENDPOINT"},
+        live_options_from_env={"model_endpoint": "BASETEN_QWEN_MODEL_ENDPOINT"},
         completion_on_close=False,
     ),
 )

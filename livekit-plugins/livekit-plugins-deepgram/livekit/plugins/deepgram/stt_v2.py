@@ -465,7 +465,7 @@ class SpeechStreamv2(stt.SpeechStream):
             logger.debug("failed to send Configure to deepgram")
 
     async def _run(self) -> None:
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -497,7 +497,7 @@ class SpeechStreamv2(stt.SpeechStream):
                         has_ended = False
 
                 # tell deepgram we are done sending audio/inputs
-                closing_ws.set()
+                drain_started.set()
                 await ws.send_str(SpeechStreamv2._CLOSE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # a mid-write socket drop surfaces here as a raw connection error.
@@ -549,7 +549,7 @@ class SpeechStreamv2(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
-                    draining=closing_ws,
+                    drain_started=drain_started,
                 )
                 if not reconnect:
                     break

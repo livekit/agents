@@ -47,7 +47,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
-from livekit.agents.utils.aio.websocket import WebSocketError
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.agents.utils.misc import is_given
 
 from .log import logger
@@ -931,7 +931,7 @@ class SpeechStream(stt.SpeechStream):
             1,
         )
         self._end_of_stream_msg = self._build_end_of_stream_message()
-        self._end_stream_sent = asyncio.Event()
+        self._drain_started = asyncio.Event()
 
     def _build_end_of_stream_message(self) -> str:
         return json.dumps(
@@ -1241,7 +1241,7 @@ class SpeechStream(stt.SpeechStream):
             await self._send_initial_config(ws)
 
         # Create tasks for audio processing and message handling
-        self._end_stream_sent.clear()
+        self._drain_started.clear()
         self._audio_task = asyncio.create_task(self._process_audio(ws))
         self._message_task = asyncio.create_task(self._process_messages(ws))
 
@@ -1251,7 +1251,7 @@ class SpeechStream(stt.SpeechStream):
                 self._audio_task,
                 self._message_task,
                 reconnect=self._reconnect_event,
-                draining=self._end_stream_sent,
+                drain_started=self._drain_started,
                 require_completion=False,
             )
             if reconnect:
@@ -1356,7 +1356,7 @@ class SpeechStream(stt.SpeechStream):
                     if self._opts.flush_signal:
                         await ws.send_str(json.dumps({"type": "flush"}))
 
-            self._end_stream_sent.set()
+            self._drain_started.set()
             await ws.send_str(self._end_of_stream_msg)
 
         except Exception as e:
@@ -1438,7 +1438,7 @@ class SpeechStream(stt.SpeechStream):
                                 "close_reason": close_reason,
                             },
                         )
-                        raise WebSocketError(close_code, close_reason)
+                        raise WebSocketCloseError(close_code, close_reason)
 
                     self._logger.info(
                         f"WebSocket closed: {msg.type}",

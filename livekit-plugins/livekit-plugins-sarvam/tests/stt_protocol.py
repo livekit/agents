@@ -4,7 +4,7 @@ import base64
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -25,7 +25,7 @@ class Legacy(Protocol):
         else:
             assert event.get("type") in ("config", "flush")
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         offset = 0
         complete = []
         for segment in self.connection.server.segments or ():
@@ -75,7 +75,7 @@ class Realtime(Protocol):
         else:
             assert kind == "speech_start"
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         peer = self.connection
         if not self.turn_open:
             self.turn_open = True
@@ -94,14 +94,14 @@ class Realtime(Protocol):
             self.turn_open = False
 
 
-def legacy(server, monkeypatch):
+def create_legacy_stt(server, monkeypatch):
     from livekit.plugins.sarvam import stt as module
 
     monkeypatch.setattr(module, "_get_urls_for_model", lambda model: (server.url, server.ws_url))
     return module.STT(api_key="test-key", language="en-IN", sample_rate=16000)
 
 
-def realtime(server, monkeypatch):
+def create_realtime_stt(server, monkeypatch):
     from livekit.plugins.sarvam.stt_streaming import STTRealtime
 
     return STTRealtime(api_key="test-key", language="en-IN", base_url=server.ws_url)
@@ -111,38 +111,38 @@ PROVIDERS = (
     Provider(
         "sarvam",
         Legacy,
-        legacy,
+        create_legacy_stt,
         ("https://docs.sarvam.ai/api/stt/stt-ws",),
-        completion_unknown="Legacy Sarvam EOF completion needs a verified wire specification",
-        attempts_after_audio=1,
-        fault_case=FaultCase(
+        completion_unknown_reason="Legacy Sarvam EOF completion needs a verified wire specification",
+        expected_attempts_after_audio=1,
+        transport_fixture=TransportFixture(
             "sarvam",
             plugin("sarvam.stt"),
-            completion=(
+            completion_messages=(
                 {
                     "type": "data",
                     "data": {"transcript": "words", "language_code": "en-IN", "request_id": "test"},
                 },
             ),
-            stop={"type": "end_of_stream"},
+            stop_message={"type": "end_of_stream"},
         ),
         live_constructor="livekit.plugins.sarvam.stt:STT",
         required_env=("SARVAM_API_KEY",),
         live_options={"language": "en-IN"},
-        live_env={},
+        live_options_from_env={},
     ),
     Provider(
         "sarvam_realtime",
         Realtime,
-        realtime,
+        create_realtime_stt,
         ("https://docs.sarvam.ai/api/api-guides-tutorials/speech-to-text/realtime-streaming",),
-        attempts_after_audio=1,
-        fault_case=FaultCase(
+        expected_attempts_after_audio=1,
+        transport_fixture=TransportFixture(
             "sarvam_realtime",
             plugin("sarvam.stt_streaming"),
             "RealtimeSpeechStream",
             "STTRealtime",
-            completion=(
+            completion_messages=(
                 {"event": "vad.speech_start", "utterance_idx": 0},
                 {
                     "event": "transcript.final",
@@ -153,11 +153,11 @@ PROVIDERS = (
                 {"event": "vad.speech_end", "utterance_idx": 0},
                 {"event": "session.end"},
             ),
-            stop={"event": "end"},
+            stop_message={"event": "end"},
         ),
         live_constructor="livekit.plugins.sarvam.stt_streaming:STTRealtime",
         required_env=("SARVAM_API_KEY",),
         live_options={"language": "en-IN"},
-        live_env={},
+        live_options_from_env={},
     ),
 )

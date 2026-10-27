@@ -24,7 +24,7 @@ class Palabra(Protocol):
             peer.send({"message_type": "stream_finished"}, final=True)
             peer.close()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "message_type": "transcription",
@@ -56,7 +56,7 @@ PROVIDERS = (
         Palabra,
         create_stt,
         ("https://docs.palabra.ai/docs/streaming_api/realtime_stt",),
-        monitored=False,
+        uses_websocket_monitor=False,
         completion_on_close=False,
     ),
 )

@@ -2,7 +2,7 @@
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -26,7 +26,7 @@ class Manual(Protocol):
         else:
             raise AssertionError(f"unknown Cartesia command: {message.data!r}")
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "transcript",
@@ -59,7 +59,7 @@ class Auto(Manual):
         else:
             assert event["type"] == "config"
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         if not self.turn_open:
             self.turn_open = True
             self.connection.send({"type": "turn.start", "request_id": "test-session"})
@@ -75,13 +75,13 @@ class Auto(Manual):
             self.turn_open = False
 
 
-def manual(server, monkeypatch):
+def create_manual_stt(server, monkeypatch):
     from livekit.plugins.cartesia import STT
 
     return STT(api_key="test-key", base_url=server.url, model="ink-whisper", language="en")
 
 
-def automatic(server, monkeypatch):
+def create_auto_stt(server, monkeypatch):
     from livekit.plugins.cartesia import STT
 
     return STT(api_key="test-key", base_url=server.url, model="ink-2", language="en")
@@ -91,41 +91,44 @@ PROVIDERS = (
     Provider(
         "cartesia_legacy",
         Manual,
-        manual,
+        create_manual_stt,
         ("https://docs.cartesia.ai/api-reference/stt/websocket",),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "cartesia_legacy",
             plugin("cartesia._recognize_streams.legacy_recognize_stream"),
             "LegacyRecognizeStream",
             options={"model": "ink-whisper", "language": "en"},
             constructor_module=plugin("cartesia.stt"),
-            completion=(
+            completion_messages=(
                 {"type": "transcript", "text": "words", "is_final": True, "duration": 0.1},
             ),
-            stop="close",
+            stop_message="close",
         ),
         live_constructor="livekit.plugins.cartesia.stt:STT",
         required_env=("CARTESIA_API_KEY",),
         live_options={"model": "ink-whisper", "language": "en"},
-        live_env={},
+        live_options_from_env={},
     ),
     Provider(
         "cartesia",
         Auto,
-        automatic,
+        create_auto_stt,
         ("https://docs.cartesia.ai/api-reference/stt/turns/websocket",),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "cartesia",
             plugin("cartesia._recognize_streams.auto_finalize_recognize_stream"),
             "AutoFinalizeRecognizeStream",
             options={"model": "ink-2", "language": "en"},
             constructor_module=plugin("cartesia.stt"),
-            completion=({"type": "turn.start"}, {"type": "turn.end", "transcript": "words"}),
-            stop={"type": "close"},
+            completion_messages=(
+                {"type": "turn.start"},
+                {"type": "turn.end", "transcript": "words"},
+            ),
+            stop_message={"type": "close"},
         ),
         live_constructor="livekit.plugins.cartesia.stt:STT",
         required_env=("CARTESIA_API_KEY",),
         live_options={"model": "ink-2", "language": "en"},
-        live_env={},
+        live_options_from_env={},
     ),
 )

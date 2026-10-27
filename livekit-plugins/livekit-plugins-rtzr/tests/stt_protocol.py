@@ -3,7 +3,7 @@
 import aiohttp
 from aiohttp import web
 
-from tests.stt_harness.faults import FaultCase, _rtzr_reply, plugin
+from tests.stt_harness.faults import TransportFixture, _rtzr_on_send, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -31,7 +31,7 @@ class RTZR(Protocol):
             assert json_message(message) == {"type": "Finalize"}
             await peer.finalize()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "seq": result.index,
@@ -62,12 +62,12 @@ PROVIDERS = (
         create_stt,
         ("https://developers.rtzr.ai/docs/en/stt-streaming/websocket/",),
         bootstrap=bootstrap,
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "rtzr",
             plugin("rtzr.stt"),
-            reply=_rtzr_reply,
-            api_key=False,
-            completion=(
+            on_send=_rtzr_on_send,
+            accepts_api_key=False,
+            completion_messages=(
                 {
                     "alternatives": [{"text": "words"}],
                     "final": True,
@@ -75,11 +75,11 @@ PROVIDERS = (
                     "duration": 100,
                 },
             ),
-            stop="EOS",
+            stop_message="EOS",
         ),
         live_constructor="livekit.plugins.rtzr.stt:STT",
         required_env=("RTZR_CLIENT_ID", "RTZR_CLIENT_SECRET"),
         live_options={"language": "en"},
-        live_env={},
+        live_options_from_env={},
     ),
 )

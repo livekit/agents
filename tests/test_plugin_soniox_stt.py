@@ -259,8 +259,8 @@ def _make_stream(translation: Any = None):
     with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
         stream = SpeechStream(stt=stt_instance, conn_options=DEFAULT_API_CONNECT_OPTIONS)
     # These receive-only scripts represent the final drain after client EOF.
-    stream._end_stream_sent = asyncio.Event()
-    stream._end_stream_sent.set()
+    stream._drain_started = asyncio.Event()
+    stream._drain_started.set()
     return stream
 
 

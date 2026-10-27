@@ -17,18 +17,18 @@ pytestmark = pytest.mark.unit
 @pytest.fixture(
     params=[
         pytest.param(
-            case,
-            id=case.name,
+            provider_config,
+            id=provider_config.name,
             marks=pytest.mark.skipif(
-                sys.version_info < case.minimum_python,
+                sys.version_info < provider_config.minimum_python,
                 reason="provider SDK requires a newer Python",
             ),
         )
-        for case in sdk_providers()
+        for provider_config in sdk_providers()
     ]
 )
 async def connection(request, monkeypatch):
-    provider, server = request.param.create_provider(monkeypatch)
+    provider, server = request.param.create_fixture(monkeypatch)
     stream = provider.stream(
         conn_options=APIConnectOptions(max_retry=0, timeout=0.2, final_response_timeout=0.2)
     )

@@ -239,7 +239,7 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """Set up state and queues for a WebSocket-based transcription stream."""
-        self._end_stream_sent = asyncio.Event()
+        self._drain_started = asyncio.Event()
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
         self._stt: STT = stt
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -342,7 +342,7 @@ class SpeechStream(stt.SpeechStream):
             try:
                 ws = await self._connect_ws()
                 self._ws = ws
-                self._end_stream_sent.clear()
+                self._drain_started.clear()
                 prepare = asyncio.create_task(self._prepare_audio_task())
                 send = asyncio.create_task(self._send_audio_task())
                 reconnect = await self._run_connection_tasks(
@@ -350,7 +350,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(self._recv_messages_task()),
                     reconnect=self._reconnect_event,
                     background=[prepare, send, asyncio.create_task(self._keepalive_task())],
-                    draining=self._end_stream_sent,
+                    drain_started=self._drain_started,
                 )
                 if not reconnect:
                     break
@@ -433,7 +433,7 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.send_bytes(data)
                 else:
                     if data == "":
-                        self._end_stream_sent.set()
+                        self._drain_started.set()
                     await self._ws.send_str(data)
                     if data == "":
                         return

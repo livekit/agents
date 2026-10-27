@@ -34,7 +34,7 @@ class Socket(_Context):
         self.pings = 0
         self.receives = 0
         self.errors = 0
-        for greeting in transport.case.greetings:
+        for greeting in transport.fixture.initial_messages:
             self.emit(greeting)
 
     def emit(self, data):
@@ -67,7 +67,7 @@ class Socket(_Context):
         return message
 
     def is_stop(self, data):
-        expected = self.transport.case.stop
+        expected = self.transport.fixture.stop_message
         if expected is None:
             return False
         if isinstance(expected, dict):
@@ -99,8 +99,8 @@ class Socket(_Context):
             raise aiohttp.ClientConnectionError("test write failed")
         await self._before_write()
         self.record_write(data)
-        if self.transport.auto_reply and self.transport.case.reply is not None:
-            self.transport.case.reply(self, data)
+        if self.transport.auto_reply and self.transport.fixture.on_send is not None:
+            self.transport.fixture.on_send(self, data)
 
     async def send_json(self, data):
         await self.send_str(json.dumps(data))
@@ -145,8 +145,8 @@ class Response(_Context):
 
 
 class Transport:
-    def __init__(self, case):
-        self.case = case
+    def __init__(self, fixture):
+        self.fixture = fixture
         self.failure = None
         self.auto_reply = False
         self.fail_stop = None

@@ -7,7 +7,7 @@ from pathlib import Path
 from .protocol import Provider, SDKProvider
 
 
-def modules():
+def protocol_modules():
     root = Path(__file__).resolve().parents[2]
     paths = sorted((root / "livekit-plugins").glob("*/tests/stt_protocol.py"))
     paths += [root / "livekit-agents/tests/inference/stt_protocol.py"]
@@ -21,22 +21,28 @@ def modules():
 
 
 def providers() -> tuple[Provider | SDKProvider, ...]:
-    cases = tuple(case for _, module in modules() for case in module.PROVIDERS)
-    assert len({case.name for case in cases}) == len(cases), "duplicate STT provider name"
-    return cases
+    entries = tuple(provider for _, module in protocol_modules() for provider in module.PROVIDERS)
+    assert len({provider.name for provider in entries}) == len(entries), (
+        "duplicate STT provider name"
+    )
+    return entries
 
 
 def websocket_providers() -> tuple[Provider, ...]:
-    return tuple(case for case in providers() if isinstance(case, Provider))
+    return tuple(provider for provider in providers() if isinstance(provider, Provider))
 
 
 def sdk_providers() -> tuple[SDKProvider, ...]:
-    return tuple(case for case in providers() if isinstance(case, SDKProvider))
+    return tuple(provider for provider in providers() if isinstance(provider, SDKProvider))
 
 
 def provider_by_name(name: str) -> Provider | SDKProvider:
-    return next(case for case in providers() if case.name == name)
+    return next(provider for provider in providers() if provider.name == name)
 
 
-def fault_cases():
-    return tuple(case.fault_case for case in providers() if case.fault_case is not None)
+def transport_fixtures():
+    return tuple(
+        provider.transport_fixture
+        for provider in providers()
+        if provider.transport_fixture is not None
+    )

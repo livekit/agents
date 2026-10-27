@@ -2,7 +2,7 @@
 
 import base64
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -31,7 +31,7 @@ class Gradium(Protocol):
         else:
             raise AssertionError(f"unknown Gradium message: {event}")
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         offset = 0
         words = []
         for segment in self.connection.server.segments or ():
@@ -58,22 +58,21 @@ PROVIDERS = (
         create_stt,
         ("https://docs.gradium.ai/guides/websocket-lifecycle",),
         sample_rate=24000,
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "gradium",
             plugin("gradium.stt"),
-            completion=(
+            completion_messages=(
                 {"type": "text", "text": "words", "start_s": 0},
                 {"type": "end_text", "stop_s": 0.1},
                 {"type": "end_of_stream"},
             ),
-            greetings=({"type": "ready"},),
-            stop={"type": "end_of_stream"},
-            completion_closes_socket=False,
+            initial_messages=({"type": "ready"},),
+            stop_message={"type": "end_of_stream"},
         ),
         live_constructor="livekit.plugins.gradium.stt:STT",
         required_env=("GRADIUM_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
         completion_on_close=False,
     ),
 )

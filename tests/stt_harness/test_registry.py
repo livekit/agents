@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from .discovery import modules
+from .discovery import protocol_modules
 
 pytestmark = pytest.mark.unit
 
@@ -55,9 +55,11 @@ def test_every_streaming_implementation_has_a_contract_and_uses_the_coordinator(
             ):
                 missing_coordinator.append(f"{path.relative_to(root)}:{node.name}")
     registered = set()
-    for path, module in modules():
+    for path, module in protocol_modules():
         assert module.PROVIDERS, f"empty STT protocol file: {path}"
-        assert all(case.sources for case in module.PROVIDERS), f"missing protocol sources: {path}"
+        assert all(provider.sources for provider in module.PROVIDERS), (
+            f"missing protocol sources: {path}"
+        )
         registered.add(path.parents[1].name if "livekit-plugins" in path.parts else "inference")
     assert registered == streaming
     assert not missing_coordinator, "STT streams bypass the coordinator: " + ", ".join(

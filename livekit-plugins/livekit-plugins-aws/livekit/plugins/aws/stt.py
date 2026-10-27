@@ -324,7 +324,7 @@ class SpeechStream(stt.SpeechStream):
             elif v is not None and is_given(v):
                 filtered_config[k] = v
 
-        input_ended = asyncio.Event()
+        drain_started = asyncio.Event()
 
         try:
             stream = await client.start_stream_transcription(
@@ -352,7 +352,7 @@ class SpeechStream(stt.SpeechStream):
                 finally:
                     self._emit_recognition_usage()
                 # End the write side only after all queued audio was accepted.
-                input_ended.set()
+                drain_started.set()
                 try:
                     await audio_stream.send(
                         AudioStreamAudioEvent(value=AudioEvent(audio_chunk=b""))
@@ -375,7 +375,7 @@ class SpeechStream(stt.SpeechStream):
             await self._run_connection_tasks(
                 asyncio.create_task(input_generator(stream.input_stream)),
                 asyncio.create_task(handle_transcript_events(output_stream)),
-                draining=input_ended,
+                drain_started=drain_started,
             )
         except BadRequestException as e:
             if e.message and e.message.startswith("Your request timed out"):

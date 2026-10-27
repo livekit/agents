@@ -759,7 +759,7 @@ class SpeechStream(stt.SpeechStream):
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
         final_commit_id = ""
         vad_sender: asyncio.Task[None] | None = None
 
@@ -795,7 +795,7 @@ class SpeechStream(stt.SpeechStream):
                     vad_stream.end_input()
                 if vad_sender is not None:
                     await vad_sender
-                closing_ws.set()
+                drain_started.set()
                 await ws.send_json(
                     {"type": "input_audio_buffer.commit", "event_id": final_commit_id}
                 )
@@ -819,7 +819,7 @@ class SpeechStream(stt.SpeechStream):
                         if _is_realtime_only(self._opts.model):
                             await ws.send_json({"type": "input_audio_buffer.commit"})
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws.is_set():
+                if drain_started.is_set():
                     return
                 raise APIConnectionError(
                     "OpenAI Realtime STT connection closed unexpectedly"
@@ -858,7 +858,7 @@ class SpeechStream(stt.SpeechStream):
                     if msg_type == "input_audio_buffer.committed":
                         pending_items.add(data["item_id"])
                     elif msg_type == "input_audio_buffer.cleared":
-                        input_cleared = closing_ws.is_set()
+                        input_cleared = drain_started.is_set()
                     elif msg_type == "input_audio_buffer.speech_started":
                         item_id = data.get("item_id", "")
                         current_item_id = item_id
@@ -951,7 +951,7 @@ class SpeechStream(stt.SpeechStream):
 
                         # restart session if needed
                         if (
-                            not closing_ws.is_set()
+                            not drain_started.is_set()
                             and time.time() - connected_at > _max_session_duration
                         ):
                             logger.info("resetting Realtime STT session due to timeout")
@@ -990,7 +990,7 @@ class SpeechStream(stt.SpeechStream):
                     logger.exception("failed to process OpenAI message")
 
         while True:
-            closing_ws.clear()  # reset the flag
+            drain_started.clear()  # reset the flag
             final_commit_id = utils.shortuuid("stt_commit_")
             # a segment left open across the reconnect gap would fuse into the next utterance
             self._stop_speaking()
@@ -1035,7 +1035,7 @@ class SpeechStream(stt.SpeechStream):
                         asyncio.create_task(recv_task(ws)),
                         reconnect=self._reconnect_event,
                         background=background,
-                        draining=closing_ws,
+                        drain_started=drain_started,
                     )
                     if not reconnect:
                         break

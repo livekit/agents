@@ -12,7 +12,7 @@ from livekit import rtc
 from livekit.agents import APIConnectOptions, stt
 
 from .stt_harness.discovery import provider_by_name
-from .stt_harness.faults import assert_control_write_failure, make_provider
+from .stt_harness.faults import assert_control_write_failure, create_transport_fixture
 
 pytestmark = pytest.mark.plugin("gladia")
 
@@ -48,7 +48,9 @@ async def test_update_options_rejects_translation_without_target_languages():
 @pytest.mark.no_concurrent
 @pytest.mark.parametrize("completion", ["close", "post_final_transcript", "end_session"])
 async def test_gladia_drains_final_transcript_after_input_ends(monkeypatch, completion):
-    _, provider, transport = make_provider(provider_by_name("gladia").fault_case, monkeypatch)
+    _, provider, transport = create_transport_fixture(
+        provider_by_name("gladia").transport_fixture, monkeypatch
+    )
     stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
 
     async def collect():
@@ -101,7 +103,7 @@ async def _wait_for_stop(socket):
 @pytest.mark.no_concurrent
 async def test_stop_recording_write_failure_is_reported(monkeypatch):
     await assert_control_write_failure(
-        provider_by_name("gladia").fault_case, monkeypatch, "stop_recording", "end"
+        provider_by_name("gladia").transport_fixture, monkeypatch, "stop_recording", "end"
     )
 
 
@@ -112,9 +114,9 @@ async def test_stop_recording_write_failure_is_reported(monkeypatch):
 async def test_segment_completion_preserves_queued_audio(monkeypatch, stop, first_samples):
     from livekit.plugins.gladia.stt import AudioEnergyFilter
 
-    case = replace(
-        provider_by_name("gladia").fault_case,
-        completion=(
+    fixture = replace(
+        provider_by_name("gladia").transport_fixture,
+        completion_messages=(
             {
                 "type": "transcript",
                 "data": {
@@ -133,7 +135,7 @@ async def test_segment_completion_preserves_queued_audio(monkeypatch, stop, firs
             "energy_filter": AudioEnergyFilter(min_silence=0) if stop == "silence" else False,
         },
     )
-    _, provider, transport = make_provider(case, monkeypatch)
+    _, provider, transport = create_transport_fixture(fixture, monkeypatch)
     transport.auto_reply = True
     stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
     frames = [

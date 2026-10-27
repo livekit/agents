@@ -428,12 +428,12 @@ class SpeechStream(stt.RecognizeStream):
             connection: RealtimeConnection,
             vad_stream: vad.VADStream | None,
             vad_worker: asyncio.Task[None] | None,
-            input_ended: asyncio.Event,
+            drain_started: asyncio.Event,
         ) -> None:
             await self._send_task(connection, vad_stream)
             if vad_worker is not None:
                 await vad_worker
-            input_ended.set()
+            drain_started.set()
             await connection.end_audio()
 
         try:
@@ -447,16 +447,16 @@ class SpeechStream(stt.RecognizeStream):
                         else None
                     )
 
-                    input_ended = asyncio.Event()
+                    drain_started = asyncio.Event()
                     try:
                         reconnect = await self._run_connection_tasks(
                             asyncio.create_task(
-                                send(connection, vad_stream, vad_worker, input_ended)
+                                send(connection, vad_stream, vad_worker, drain_started)
                             ),
                             asyncio.create_task(self._recv_task(connection)),
                             reconnect=self._reconnect_event,
                             background=[vad_worker] if vad_worker is not None else [],
-                            draining=input_ended,
+                            drain_started=drain_started,
                         )
                         if not reconnect:
                             break

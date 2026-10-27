@@ -34,7 +34,7 @@ class AgentSTT(Protocol):
         else:
             assert kind in ("SetRecognitionConfig", "GetSpeakers")
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "message": "AddSegment" if result.final else "AddPartialSegment",
@@ -62,7 +62,7 @@ PROVIDERS = (
         AgentSTT,
         create_stt,
         ("https://docs.speechmatics.com/api-ref/agent-stt-websocket",),
-        monitored=False,
+        uses_websocket_monitor=False,
         completion_on_close=False,
     ),
 )

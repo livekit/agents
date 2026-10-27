@@ -2,7 +2,7 @@
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -25,7 +25,7 @@ class Muse(Protocol):
             await peer.finalize()
             peer.close()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         peer = self.connection
         turn = f"turn-{result.index}"
         if not getattr(self, "turn_open", False):
@@ -63,21 +63,21 @@ PROVIDERS = (
         ("https://dev.meta.ai/docs/speech-to-text",),
         sample_rate=24000,
         tls=True,
-        attempts_after_audio=1,
-        fault_case=FaultCase(
+        expected_attempts_after_audio=1,
+        transport_fixture=TransportFixture(
             "meta",
             plugin("meta.stt"),
-            greetings=({"sessionId": "test"},),
-            completion=(
+            initial_messages=({"sessionId": "test"},),
+            completion_messages=(
                 {"type": "speechStart", "turnId": "test"},
                 {"type": "speechEnd", "turnId": "test"},
                 {"type": "speechComplete", "turnId": "test", "transcript": "words"},
             ),
-            stop={"type": "endStream"},
+            stop_message={"type": "endStream"},
         ),
         live_constructor="livekit.plugins.meta.stt:STT",
         required_env=("META_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
     ),
 )

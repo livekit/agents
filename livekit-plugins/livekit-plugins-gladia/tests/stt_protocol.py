@@ -5,7 +5,7 @@ import base64
 import aiohttp
 from aiohttp import web
 
-from tests.stt_harness.faults import FaultCase, _gladia_reply, plugin
+from tests.stt_harness.faults import TransportFixture, _gladia_on_send, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -40,7 +40,7 @@ class Gladia(Protocol):
         else:
             raise AssertionError(f"unknown Gladia command: {event}")
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "transcript",
@@ -74,20 +74,19 @@ PROVIDERS = (
             "https://docs.gladia.io/api-reference/v2/live/callback/end-session",
         ),
         bootstrap=bootstrap,
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "gladia",
             plugin("gladia.stt"),
-            reply=_gladia_reply,
-            completion=(
+            on_send=_gladia_on_send,
+            completion_messages=(
                 {"type": "transcript", "data": {"is_final": True, "utterance": {"text": "words"}}},
                 {"type": "end_session"},
             ),
-            stop={"type": "stop_recording"},
-            completion_closes_socket=False,
+            stop_message={"type": "stop_recording"},
         ),
         live_constructor="livekit.plugins.gladia.stt:STT",
         required_env=("GLADIA_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
     ),
 )

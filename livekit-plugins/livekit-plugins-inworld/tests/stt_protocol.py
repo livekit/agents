@@ -2,7 +2,7 @@
 
 import base64
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -27,7 +27,7 @@ class Inworld(Protocol):
             )
             peer.close()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "result": {
@@ -55,19 +55,18 @@ PROVIDERS = (
         Inworld,
         create_stt,
         ("https://docs.inworld.ai/stt/best-practices",),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "inworld",
             plugin("inworld.stt"),
-            completion=(
+            completion_messages=(
                 {"result": {"transcription": {"transcript": "words", "isFinal": True}}},
                 {"result": {"usage": {"transcribedAudioMs": 100}}},
             ),
-            stop={"closeStream": {}},
-            completion_closes_socket=False,
+            stop_message={"closeStream": {}},
         ),
         live_constructor="livekit.plugins.inworld.stt:STT",
         required_env=("INWORLD_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
     ),
 )

@@ -266,11 +266,11 @@ class RecognizeStream(stt.RecognizeStream):
 
         try:
             async with client.aio.live.connect(model=self._opts.model, config=config) as session:
-                input_ended = asyncio.Event()
+                drain_started = asyncio.Event()
 
                 async def send() -> None:
                     await self._send_loop(session)
-                    input_ended.set()
+                    drain_started.set()
                     await session.send_realtime_input(audio_stream_end=True)
 
                 async def receive() -> None:
@@ -278,13 +278,13 @@ class RecognizeStream(stt.RecognizeStream):
                         completed = await self._receive_loop(session)
                         if not completed:
                             raise APIConnectionError("Gemini STT connection closed unexpectedly")
-                        if input_ended.is_set():
+                        if drain_started.is_set():
                             return
 
                 await self._run_connection_tasks(
                     asyncio.create_task(send()),
                     asyncio.create_task(receive()),
-                    draining=input_ended,
+                    drain_started=drain_started,
                 )
 
         # Provider errors can quote the audio payload or transcript, so the text is logged

@@ -41,7 +41,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
-from livekit.agents.utils.aio.websocket import WebSocketError
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 
 DEFAULT_URL = "wss://api.meta.ai/v1/asr/realtime"
 DEFAULT_MODEL = "muse-voice-transcribe-1.0"
@@ -184,7 +184,7 @@ def _close_error(
     *,
     phase: str,
     retryable_on_normal_close: bool = False,
-) -> WebSocketError:
+) -> WebSocketCloseError:
     code = close_code or -1
     if code == 1000:
         retryable = retryable_on_normal_close
@@ -194,7 +194,7 @@ def _close_error(
         retryable = True
     else:
         retryable = True
-    error = WebSocketError(close_code, None)
+    error = WebSocketCloseError(close_code, None)
     error.message = f"Meta Muse realtime ASR closed during {phase}"
     error.retryable = retryable
     return error
@@ -407,7 +407,7 @@ class SpeechStream(stt.RecognizeStream):
         self._completed_turn_ids: set[str] = set()
         self._completed_turn_order: deque[str] = deque()
         self._audio_consumed = False
-        self._end_stream_sent = asyncio.Event()
+        self._drain_started = asyncio.Event()
         self._last_audio_processed_ms = 0.0
         self._pending_usage_seconds = 0.0
         self._first_frame_at: float | None = None
@@ -421,7 +421,7 @@ class SpeechStream(stt.RecognizeStream):
         super().push_frame(frame)
 
     async def _run(self) -> None:
-        self._end_stream_sent.clear()
+        self._drain_started.clear()
         self._last_audio_processed_ms = 0.0
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
@@ -492,7 +492,7 @@ class SpeechStream(stt.RecognizeStream):
         except asyncio.TimeoutError:
             await _close_quietly(ws)
             raise APITimeoutError("Meta Muse realtime ASR handshake timed out") from None
-        except WebSocketError as exc:
+        except WebSocketCloseError as exc:
             await _close_quietly(ws)
             raise _close_error(
                 exc.close_code, phase="handshake", retryable_on_normal_close=True
@@ -539,7 +539,7 @@ class SpeechStream(stt.RecognizeStream):
         await self._run_connection_tasks(
             sender,
             receiver,
-            draining=self._end_stream_sent,
+            drain_started=self._drain_started,
         )
         self._validate_clean_close()
 
@@ -589,8 +589,8 @@ class SpeechStream(stt.RecognizeStream):
 
         if pending:
             await send_packet(bytes(pending))
-        if not self._end_stream_sent.is_set():
-            self._end_stream_sent.set()
+        if not self._drain_started.is_set():
+            self._drain_started.set()
             try:
                 await ws.send_str('{"type":"endStream"}')
             except Exception as exc:
@@ -606,7 +606,7 @@ class SpeechStream(stt.RecognizeStream):
         while True:
             try:
                 raw = await monitor.receive()
-            except WebSocketError as exc:
+            except WebSocketCloseError as exc:
                 raise _close_error(
                     exc.close_code,
                     phase="stream",

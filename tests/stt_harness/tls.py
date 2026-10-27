@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 
-def contexts(directory: str) -> tuple[ssl.SSLContext, ssl.SSLContext]:
+def create_ssl_contexts(directory: str) -> tuple[ssl.SSLContext, ssl.SSLContext]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "STT test server")])
     now = datetime.datetime.now(datetime.timezone.utc)

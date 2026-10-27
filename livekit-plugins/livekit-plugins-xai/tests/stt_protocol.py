@@ -2,7 +2,7 @@
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -26,7 +26,7 @@ class XAI(Protocol):
                 assert event["type"] in ("finalize", "Finalize")
                 await peer.finalize()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "transcript.done" if result.final else "transcript.partial",
@@ -53,16 +53,16 @@ PROVIDERS = (
         XAI,
         create_stt,
         ("https://docs.x.ai/developers/rest-api-reference/inference/speech-to-text",),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "xai",
             plugin("xai.stt"),
-            greetings=({"type": "transcript.created"},),
-            completion=({"type": "transcript.done", "text": "words"},),
+            initial_messages=({"type": "transcript.created"},),
+            completion_messages=({"type": "transcript.done", "text": "words"},),
         ),
         live_constructor="livekit.plugins.xai.stt:STT",
         required_env=("XAI_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
         completion_on_close=False,
     ),
 )

@@ -436,7 +436,7 @@ class SpeechStream(stt.SpeechStream):
         when something went wrong.
         """
 
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             samples_per_buffer = 512
@@ -460,7 +460,7 @@ class SpeechStream(stt.SpeechStream):
 
                         int16_array = np.frombuffer(frame.data, dtype=np.int16)
                         await ws.send_bytes(int16_array.tobytes())
-                closing_ws.set()
+                drain_started.set()
                 await ws.send_str(json.dumps({"type": "end_audio"}))
             except (aiohttp.ClientError, ConnectionError) as e:
                 raise APIConnectionError("Baseten connection closed unexpectedly") from e
@@ -605,7 +605,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
-                    draining=closing_ws,
+                    drain_started=drain_started,
                 )
                 if not reconnect:
                     break

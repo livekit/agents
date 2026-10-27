@@ -240,14 +240,14 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self._request_id = ""
         self._speaking = False
         self._speech_duration: float = 0.0
-        self._closing_ws = asyncio.Event()
+        self._drain_started = asyncio.Event()
         # cumulative transcript for the current turn; used to re-emit on turn.resume
         self._current_transcript = ""
 
     async def _run(self) -> None:
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
-                while not self._closing_ws.is_set():
+                while not self._drain_started.is_set():
                     await ws.ping()
                     await asyncio.sleep(30)
             except Exception:
@@ -278,7 +278,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
-                self._closing_ws.set()
+                self._drain_started.set()
                 await ws.send_str('{"type":"close"}')
             except (aiohttp.ClientError, ConnectionError) as e:
                 raise APIConnectionError(
@@ -323,12 +323,12 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         # invocation by the base class) starts fresh. Without this, stale
         # `_speaking=True` silently drops the next turn.start,
         # `_current_transcript` can leak into turn.eager_end / turn.end
-        # transcript fallbacks, and a stale `_closing_ws=True` makes recv_task
+        # transcript fallbacks, and a stale `_drain_started` event makes recv_task
         # suppress legitimate unexpected-close failures on the new connection.
         self._speaking = False
         self._current_transcript = ""
         self._speech_duration = 0.0
-        self._closing_ws.clear()
+        self._drain_started.clear()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
@@ -339,7 +339,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     background=[asyncio.create_task(keepalive_task(ws))],
-                    draining=self._closing_ws,
+                    drain_started=self._drain_started,
                 )
             finally:
                 self._send_recognition_usage_event()

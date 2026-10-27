@@ -658,23 +658,3 @@ async def test_source_translation_progress_resets_retries_without_final(mock_pal
     finally:
         await stream.aclose()
         await provider.aclose()
-
-
-async def test_socket_close_without_stream_finished_is_an_error(monkeypatch):
-    from livekit.agents import APIConnectionError
-
-    from .fake_stt_sdk import make_provider
-
-    provider, server = make_provider("palabra", monkeypatch)
-    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.5))
-    try:
-        stream.push_frame(_frame())
-        stream.end_input()
-        await asyncio.wait_for(server.stopped.wait(), 1)
-        server.terminal = None
-        server.finish()
-        with pytest.raises(APIConnectionError, match="stream_finished"):
-            await asyncio.wait_for(stream._task, 1)
-    finally:
-        await stream.aclose()
-        await provider.aclose()

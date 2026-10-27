@@ -128,7 +128,10 @@ async def test_cancellation_awaits_all_connection_tasks(stream, draining):
 async def test_sender_can_include_the_protocol_acknowledgement(stream):
     sender, receiver, _ = futures()
     sender.set_result(None)
-    assert await stream._run_connection_tasks(sender, receiver, sender_completes=True) is False
+    assert (
+        await stream._run_connection_tasks(sender, receiver, sender_waits_for_completion=True)
+        is False
+    )
     assert receiver.cancelled()
 
 
@@ -195,12 +198,12 @@ async def test_transport_exceptions_use_the_api_error_contract(stream, error):
 @pytest.mark.parametrize("sender_ack", [False, True])
 async def test_receiver_completion_during_drain_waits_for_the_sender(stream, sender_ack):
     sender, receiver, _ = futures()
-    draining = asyncio.Event()
-    draining.set()
+    drain_started = asyncio.Event()
+    drain_started.set()
     receiver.set_result(None)
     task = asyncio.create_task(
         stream._run_connection_tasks(
-            sender, receiver, draining=draining, sender_completes=sender_ack
+            sender, receiver, drain_started=drain_started, sender_waits_for_completion=sender_ack
         )
     )
     await asyncio.sleep(0.1)
@@ -211,10 +214,12 @@ async def test_receiver_completion_during_drain_waits_for_the_sender(stream, sen
 
 async def test_sender_failure_after_completion_is_not_discarded(stream):
     sender, receiver, _ = futures()
-    draining = asyncio.Event()
-    draining.set()
+    drain_started = asyncio.Event()
+    drain_started.set()
     receiver.set_result(None)
-    task = asyncio.create_task(stream._run_connection_tasks(sender, receiver, draining=draining))
+    task = asyncio.create_task(
+        stream._run_connection_tasks(sender, receiver, drain_started=drain_started)
+    )
     await asyncio.sleep(0.1)
     sender.set_exception(ConnectionResetError("EOS write failed"))
     with pytest.raises(APIConnectionError) as info:
@@ -224,13 +229,15 @@ async def test_sender_failure_after_completion_is_not_discarded(stream):
 
 async def test_drain_signal_bounds_an_sdk_sender_waiting_for_ack(stream):
     sender, receiver, _ = futures()
-    draining = asyncio.Event()
+    drain_started = asyncio.Event()
     task = asyncio.create_task(
-        stream._run_connection_tasks(sender, receiver, draining=draining, sender_completes=True)
+        stream._run_connection_tasks(
+            sender, receiver, drain_started=drain_started, sender_waits_for_completion=True
+        )
     )
     await asyncio.sleep(3)
     assert not task.done()
-    draining.set()
+    drain_started.set()
     with pytest.raises(APITimeoutError):
         await task
 
@@ -244,11 +251,11 @@ async def test_best_effort_drain_ends_without_an_error(stream):
 
 async def test_best_effort_drain_cannot_hide_a_blocked_sender(stream):
     sender, receiver, _ = futures()
-    draining = asyncio.Event()
-    draining.set()
+    drain_started = asyncio.Event()
+    drain_started.set()
     with pytest.raises(APITimeoutError):
         await stream._run_connection_tasks(
-            sender, receiver, draining=draining, require_completion=False
+            sender, receiver, drain_started=drain_started, require_completion=False
         )
 
 

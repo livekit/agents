@@ -7,7 +7,7 @@ import struct
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -35,7 +35,7 @@ class Telnyx(Protocol):
             else:
                 assert kind == "KeepAlive"
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {"transcript": result.text, "is_final": result.final, "confidence": 1},
             final=result.final,
@@ -54,26 +54,26 @@ PROVIDERS = (
         Telnyx,
         create_stt,
         ("https://developers.telnyx.com/docs/voice/stt/websocket-streaming/index",),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "telnyx",
             plugin("telnyx.stt"),
-            completion=({"transcript": "words", "is_final": True},),
+            completion_messages=({"transcript": "words", "is_final": True},),
             options={"transcription_engine": "deepgram"},
-            stop={"type": "CloseStream"},
+            stop_message={"type": "CloseStream"},
         ),
         live_constructor="livekit.plugins.telnyx.stt:STT",
         required_env=("TELNYX_API_KEY",),
         live_options={"transcription_engine": "deepgram"},
-        live_env={},
+        live_options_from_env={},
     ),
 )
 
 
-def google(server, monkeypatch):
+def create_google_stt(server, monkeypatch):
     return create_stt(server, monkeypatch, "google")
 
 
-def azure(server, monkeypatch):
+def create_azure_stt(server, monkeypatch):
     return create_stt(server, monkeypatch, "azure")
 
 
@@ -83,10 +83,10 @@ PROVIDERS += tuple(
         Telnyx,
         factory,
         PROVIDERS[0].sources,
-        completion_unknown="This Telnyx engine has no documented completion request or signal",
+        completion_unknown_reason="This Telnyx engine has no documented completion request or signal",
         live_constructor="livekit.plugins.telnyx.stt:STT",
         required_env=("TELNYX_API_KEY",),
         live_options={"transcription_engine": engine},
     )
-    for engine, factory in (("google", google), ("azure", azure))
+    for engine, factory in (("google", create_google_stt), ("azure", create_azure_stt))
 )

@@ -499,7 +499,7 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # Resets the public API's inactivity timer while no audio flows; the server
@@ -514,7 +514,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # With no audio flowing this write is where a dropped socket shows first.
-                if closing_ws.is_set() or self._session.closed:
+                if drain_started.is_set() or self._session.closed:
                     return
                 raise APIConnectionError("Smallest AI STT connection closed unexpectedly") from e
 
@@ -552,7 +552,7 @@ class SpeechStream(stt.SpeechStream):
                             await ws.send_str(SpeechStream._FINALIZE_MSG)
 
                 # Input closed: the server flushes, answers with is_last and closes.
-                closing_ws.set()
+                drain_started.set()
                 await ws.send_str(SpeechStream._CLOSE_STREAM_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # A dropped socket surfaces on the write side first. Expected closes just
@@ -626,7 +626,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
                     background=[asyncio.create_task(keepalive_task(ws))],
-                    draining=closing_ws,
+                    drain_started=drain_started,
                 )
                 if not reconnect:
                     break

@@ -2,7 +2,7 @@
 
 import aiohttp
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -35,7 +35,7 @@ class Pulse(Protocol):
                 assert event["type"] == "finalize"
                 await peer.finalize()
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "transcription",
@@ -64,16 +64,16 @@ PROVIDERS = (
         (
             "https://docs.smallest.ai/models/documentation/speech-to-text-pulse/realtime-web-socket/response-format",
         ),
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "smallestai",
             plugin("smallestai.stt"),
-            completion=({"transcript": "words", "is_final": True, "is_last": True},),
-            stop={"type": "close_stream"},
+            completion_messages=({"transcript": "words", "is_final": True, "is_last": True},),
+            stop_message={"type": "close_stream"},
         ),
         live_constructor="livekit.plugins.smallestai.stt:STT",
         required_env=("SMALLEST_API_KEY",),
         live_options={},
-        live_env={},
+        live_options_from_env={},
         completion_on_close=False,
     ),
 )

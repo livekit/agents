@@ -6,7 +6,7 @@ The server stays open after commits. Item completions may arrive out of order.
 
 import base64
 
-from tests.stt_harness.faults import FaultCase, plugin
+from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
 from tests.stt_harness.server import json_message
 
@@ -50,7 +50,7 @@ class Realtime(Protocol):
         else:
             raise AssertionError(f"unknown realtime command: {kind}")
 
-    async def transcript(self, result):
+    async def send_transcript(self, result):
         peer = self.connection
         item_id = f"item-{result.index}"
         if result.final:
@@ -106,12 +106,12 @@ PROVIDERS = (
         create_stt,
         (__doc__.splitlines()[2],),
         sample_rate=24000,
-        fault_case=FaultCase(
+        transport_fixture=TransportFixture(
             "openai",
             plugin("openai.stt"),
             options={"use_realtime": True},
-            http_session=False,
-            completion=(
+            accepts_http_session=False,
+            completion_messages=(
                 {"type": "input_audio_buffer.committed", "item_id": "test"},
                 {"type": "input_audio_buffer.cleared"},
                 {
@@ -120,13 +120,12 @@ PROVIDERS = (
                     "transcript": "words",
                 },
             ),
-            stop={"type": "input_audio_buffer.clear"},
-            completion_closes_socket=False,
+            stop_message={"type": "input_audio_buffer.clear"},
         ),
         live_constructor="livekit.plugins.openai.stt:STT",
         required_env=("OPENAI_API_KEY",),
         live_options={"use_realtime": True},
-        live_env={},
+        live_options_from_env={},
         completion_on_close=False,
     ),
     Provider(

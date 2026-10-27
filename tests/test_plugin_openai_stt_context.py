@@ -896,16 +896,18 @@ async def test_final_control_write_failure_is_retryable(message, monkeypatch):
     from .stt_harness.faults import assert_control_write_failure
 
     await assert_control_write_failure(
-        provider_by_name("openai").fault_case, monkeypatch, message, "end"
+        provider_by_name("openai").transport_fixture, monkeypatch, message, "end"
     )
 
 
 async def test_remote_close_before_final_ack_is_an_error(monkeypatch):
     from livekit.agents import APIError
 
-    from .stt_harness.faults import make_provider
+    from .stt_harness.faults import create_transport_fixture
 
-    _, instance, transport = make_provider(provider_by_name("openai").fault_case, monkeypatch)
+    _, instance, transport = create_transport_fixture(
+        provider_by_name("openai").transport_fixture, monkeypatch
+    )
     stream = instance.stream(
         conn_options=dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
     )

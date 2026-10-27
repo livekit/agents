@@ -617,7 +617,7 @@ class SpeechStream(stt.SpeechStream):
             self._pending_keyterm = None
 
     async def _run(self) -> None:
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # if we want to keep the connection alive even if no audio is sent,
@@ -632,7 +632,7 @@ class SpeechStream(stt.SpeechStream):
                 # socket, so it is where a drop surfaces first. if the close is
                 # expected just return; otherwise re-raise as a retryable APIError so
                 # _main_task reconnects, symmetric with send_task and recv_task.
-                if closing_ws.is_set() or self._session.closed:
+                if drain_started.is_set() or self._session.closed:
                     return
                 raise APIConnectionError("deepgram connection closed unexpectedly") from e
             except Exception as e:
@@ -670,7 +670,7 @@ class SpeechStream(stt.SpeechStream):
                         has_ended = False
 
                 # tell deepgram we are done sending audio/inputs
-                closing_ws.set()
+                drain_started.set()
                 await ws.send_str(SpeechStream._CLOSE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # a mid-write socket drop surfaces here as a raw connection error.
@@ -717,7 +717,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
                     background=[asyncio.create_task(keepalive_task(ws))],
-                    draining=closing_ws,
+                    drain_started=drain_started,
                 )
                 if not reconnect:
                     break

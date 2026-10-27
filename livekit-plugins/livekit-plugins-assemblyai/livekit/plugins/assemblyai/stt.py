@@ -670,7 +670,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Run a single websocket connection to AssemblyAI."""
-        closing_ws = asyncio.Event()
+        drain_started = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             anchored = False
@@ -704,7 +704,7 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_bytes(frame.data.tobytes())
                         self._last_frame_sent_at = time.time()
 
-                closing_ws.set()
+                drain_started.set()
                 logger.debug("AssemblyAI sending close message session=%s", self._session_id)
                 await ws.send_str(SpeechStream._CLOSE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -785,7 +785,7 @@ class SpeechStream(stt.SpeechStream):
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
                 background=[asyncio.create_task(send_config_task(ws))],
-                draining=closing_ws,
+                drain_started=drain_started,
             )
         finally:
             if ws is not None:
