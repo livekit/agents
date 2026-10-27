@@ -214,8 +214,6 @@ class TurnDetector:
     """A ``turn_detection`` object as the core's end-of-turn detector: its ``stream()`` hears
     the user's audio and predicts the end of their turn."""
 
-    streaming = True
-
     def __init__(self, detector: Any) -> None:
         if not hasattr(detector, "stream"):
             raise TypeError(
@@ -239,9 +237,7 @@ class TurnDetector:
     def _core_flush(self, reason: str) -> None:
         self._stream.flush(reason)
 
-    async def _core_predict(
-        self, chat_ctx: _core.TurnContext, timeout: float | None
-    ) -> dict[str, Any]:
+    async def _core_predict(self, timeout: float | None) -> dict[str, Any]:
         ev = await self._stream.predict()
         return {
             "end_of_turn_probability": ev.end_of_turn_probability,

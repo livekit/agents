@@ -789,7 +789,6 @@ class VoiceSession:
         options: SessionOptions | None = None,
         agent_turn_handling: Any | None = None,
         turn_detector: Any | None = None,
-        turn_detector_streaming: bool = False,
         interruption_detector: Any | None = None,
         text_output: bool = True,
         room_io_config: Any | None = None,
@@ -1566,15 +1565,6 @@ class ChatRequest:
     def extra(self) -> dict[str, Any] | None: ...
     @property
     def inference_class(self) -> str | None: ...
-
-
-class TurnContext:
-    """The conversation a host turn detector scores, as `_core.TurnContext`: its
-    `ChatContext.to_dict()` form (timestamps kept; images and audio are not rendered), which the
-    host rebuilds with `ChatContext.from_dict`.
-    """
-
-    def to_host_dict(self) -> Any: ...
 
 
 class SttStreamAdapter:

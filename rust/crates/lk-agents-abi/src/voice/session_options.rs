@@ -47,11 +47,10 @@ pub enum TurnDetection {
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral {
     what: "detector kind",
     value: s.to_owned(),
-    expected: "\"streaming\", \"batch\" or None",
+    expected: "\"streaming\" or None",
 }))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum DetectorKind {
-    Batch,
     Streaming,
 }
 
@@ -549,7 +548,7 @@ pub struct SessionLegs {
     pub tts: bool,
     // The LLM is a realtime model (its socket may own turn detection).
     pub realtime: bool,
-    /// `"streaming"`, `"batch"` or `None`.
+    /// `"streaming"` or `None`.
     // An end-of-turn detector was built, and which protocol it speaks.
     #[python(ty = "Literal[\"streaming\", \"batch\"] | None")]
     pub detector: Option<lk_agents_abi::voice::session_options::DetectorKind>,

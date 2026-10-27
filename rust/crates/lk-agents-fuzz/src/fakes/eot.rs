@@ -3,7 +3,7 @@
 //! left unanswered it times out, which is a real provider outcome the driver must handle.
 use std::{sync::Arc, time::Duration};
 
-use lk_agents_abi::{AudioFrame, ChatContext, EotDetector, EotPrediction, errors::ProviderError};
+use lk_agents_abi::{AudioFrame, EotDetector, EotPrediction, errors::ProviderError};
 use tokio::sync::oneshot;
 
 use super::{Control, Registry, Slot, tags_of};
@@ -39,11 +39,7 @@ impl EotDetector for FakeEot {
 
     fn flush(&self, _reason: &'static str) {}
 
-    async fn predict(
-        &self,
-        _chat_ctx: &ChatContext,
-        timeout: Option<Duration>,
-    ) -> Result<EotPrediction, ProviderError> {
+    async fn predict(&self, timeout: Option<Duration>) -> Result<EotPrediction, ProviderError> {
         let (sender, receiver) = oneshot::channel();
         let slot =
             self.registry.register(Kind::Prediction, Detail::None, Control::Prediction(sender));

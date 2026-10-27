@@ -338,19 +338,11 @@ impl DriverBuilder {
             );
         }
 
-        // Detector presence has one source, the leg; with a leg and no protocol named, batch.
+        // Detector presence has one source, the leg.
         {
             use crate::agent_activity::options::DetectorKind;
             let eot = self.eot.is_some();
-            self.config.edit(|_, legs| {
-                legs.detector = match (eot, legs.detector) {
-                    (false, None | Some(DetectorKind::Batch | DetectorKind::Streaming)) => None,
-                    (true, None) => Some(DetectorKind::Batch),
-                    (true, Some(kind @ (DetectorKind::Batch | DetectorKind::Streaming))) => {
-                        Some(kind)
-                    }
-                };
-            });
+            self.config.edit(|_, legs| legs.detector = eot.then_some(DetectorKind::Streaming));
         }
         let eot = self
             .eot

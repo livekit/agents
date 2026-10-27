@@ -815,7 +815,6 @@ use std::collections::HashSet;
 const _: () = ();
 
 /// A conversation, ordered by [`ChatItem::created_at`]. Nothing assumes `items` is sorted.
-#[crate::class(name = "TurnContext")]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChatContext {
     pub items: Vec<ChatItem>,

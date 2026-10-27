@@ -460,8 +460,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
             using_default_vad=self._using_default_vad,
             turn_detector=self._turn_detector,
-            turn_detector_streaming=self._turn_detector is not None
-            and self._turn_detector.streaming,
             hook_bound=_HOOK_BOUND,
             max_unrecoverable_errors=self._conn_options.max_unrecoverable_errors,
             interruption_detector=self._interruption_detector(agent, frame, model),
@@ -521,8 +519,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 can_disable_turn_detection=model.capabilities.can_disable_turn_detection,
                 vad=has_vad,
                 turn_detection=self._turn_detection_mode,
-                streaming_detector=self._turn_detector is not None
-                and self._turn_detector.streaming,
+                streaming_detector=self._turn_detector is not None,
                 interruption_given=bool(agent_mode or self._interruption_mode),
             ),
             has_vad=has_vad,

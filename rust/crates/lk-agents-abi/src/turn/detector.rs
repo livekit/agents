@@ -1,11 +1,11 @@
-//! The end-of-turn detector seam: batch (`_TurnDetector.predict_end_of_turn`) and streaming
-//! (`_StreamingTurnDetector.stream()`) behind one trait. Thresholds come from [`crate::tokenize::language`].
+//! The end-of-turn detector seam: an audio detector (`_StreamingTurnDetector.stream()`) that hears
+//! the user and predicts on request. Thresholds come from [`crate::tokenize::language`].
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::errors::ProviderError;
-use crate::{AudioFrame, ChatContext, EotPrediction, Spawner, SpawnerExt, StreamSink};
+use crate::{AudioFrame, EotPrediction, Spawner, SpawnerExt, StreamSink};
 
 /// Strictly increasing per session; the driver drops an answer whose id is not the outstanding one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -24,7 +24,6 @@ pub enum LegEvent<V> {
 /// loop's `select!` and none has to be cancel-safe.
 #[async_trait::async_trait]
 pub trait DetectorLeg: Send + Sync {
-    /// Not `Copy`: the EOT request carries the chat context.
     type Signal: Send;
     type Verdict: Send;
 
@@ -39,8 +38,7 @@ pub trait DetectorLeg: Send + Sync {
 }
 
 /// A host `turn_detection` object is this trait through its `#[host(proxy)]` (`PyEotDetector`), over
-/// `_core_view.TurnDetector`, which speaks both reference protocols (batch `predict_end_of_turn`,
-/// streaming `stream()`) behind the `_core_*` surface.
+/// `_core_view.TurnDetector`, which speaks the detector's `stream()` behind the `_core_*` surface.
 #[crate::host(proxy)]
 #[async_trait::async_trait]
 pub trait EotDetector: Send + Sync + 'static {
@@ -49,8 +47,7 @@ pub trait EotDetector: Send + Sync + 'static {
         crate::types::identity::ProviderId::of_label("turn_detector")
     }
 
-    /// One frame of the user's audio, for a streaming detector. Fire-and-forget, gated as the STT
-    /// leg is; a batch detector ignores it.
+    /// One frame of the user's audio. Fire-and-forget, gated as the STT leg is.
     fn push_audio(&self, frame: crate::AudioFrame);
 
     /// `cancel_inference(timed_out=..)` (`audio_recognition.py:1592`); the detector reports a
@@ -59,37 +56,19 @@ pub trait EotDetector: Send + Sync + 'static {
 
     /// `flush(reason)`: a segment boundary, not a close.
     fn flush(&self, reason: &'static str);
-    /// Ask for a prediction: `stream.predict()` for a streaming detector, or
-    /// `predict_end_of_turn(chat_ctx)` for a batch one.
+    /// Ask for a prediction (`stream.predict()`).
     ///
     /// The countdown already bounds `timeout` itself, so ignoring it cannot hang a turn. An `Err`
     /// is not a turn failure: the countdown proceeds as if no detector were configured.
-    async fn predict(
-        &self,
-        chat_ctx: &ChatContext,
-        timeout: Option<Duration>,
-    ) -> Result<EotPrediction, ProviderError>;
+    async fn predict(&self, timeout: Option<Duration>) -> Result<EotPrediction, ProviderError>;
 
     /// Close what the detector holds open (a streaming detector's stream) at session close: an
     /// open stream keeps the session alive (`audio_recognition.py:855`). Nothing by default.
     async fn aclose(&self) {}
 }
 
-/// The conversation a host turn detector scores, as `_core.TurnContext`: its
-/// `ChatContext.to_dict()` form (timestamps kept; images and audio are not rendered), which the
-/// host rebuilds with `ChatContext.from_dict`.
-#[crate::host(object(name = "TurnContext"))]
-impl ChatContext {
-    #[host(method)]
-    pub fn to_host_dict(&self) -> serde_json::Value {
-        let opts = crate::llm::to_dict::ToDictOptions { exclude_timestamp: false, ..Default::default() };
-        self.to_dict(&opts, &Default::default()).unwrap_or(serde_json::Value::Null)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct EotRequest {
-    pub chat_ctx: ChatContext,
     pub timeout: Option<Duration>,
 }
 
@@ -135,10 +114,10 @@ impl<D: EotDetector + ?Sized> DetectorLeg for EotLeg<D> {
     fn signal(&self, req: Option<ReqId>, signal: Self::Signal) {
         let detector = Arc::clone(&self.detector);
         let tx = self.tx.clone();
-        let EotRequest { chat_ctx, timeout } = signal;
+        let EotRequest { timeout } = signal;
         // Spawned: the driver is mid-transition and cannot await here. Failures travel too.
         let task = self.spawner.spawn_unboxed(async move {
-            let ev = match detector.predict(&chat_ctx, timeout).await {
+            let ev = match detector.predict(timeout).await {
                 Ok(verdict) => LegEvent::Verdict { req, verdict },
                 Err(err) => LegEvent::Error { req, recoverable: true, err },
             };

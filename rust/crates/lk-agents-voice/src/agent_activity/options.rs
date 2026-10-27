@@ -149,7 +149,7 @@ option_group!(TimerOptions {
 pub const fn defaults(legs: &LegSet) -> AgentSessionOptions {
     let (min_delay, max_delay) = match legs.detector {
         Some(DetectorKind::Streaming) => (Duration::from_millis(300), Duration::from_millis(2500)),
-        Some(DetectorKind::Batch) | None => {
+        None => {
             (Duration::from_millis(500), Duration::from_millis(3000))
         }
     };

@@ -1929,22 +1929,6 @@ impl ChatRequest {
     }
 }
 
-/// The conversation a host turn detector scores, as `_core.TurnContext`: its
-/// `ChatContext.to_dict()` form (timestamps kept; images and audio are not rendered), which the
-/// host rebuilds with `ChatContext.from_dict`.
-#[napi(js_name = "TurnContext")]
-pub struct TurnContext {
-    pub(crate) inner: lk_agents_abi::ChatContext,
-}
-
-#[napi]
-impl TurnContext {
-    #[napi(js_name = "toHostDict")]
-    pub fn to_host_dict(&self) -> serde_json::Value {
-        self.inner.to_host_dict()
-    }
-}
-
 /// `stt.StreamAdapter`'s engine, as the host builds it; the public class stays Python.
 #[napi(js_name = "SttStreamAdapter")]
 pub struct SttStreamAdapter {

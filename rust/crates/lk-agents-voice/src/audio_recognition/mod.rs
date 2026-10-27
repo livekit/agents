@@ -125,7 +125,6 @@ impl AudioRecognition {
             backchannel_boundary: i.backchannel_boundary(),
             detector: match legs.detector {
                 None => Detector::None,
-                Some(DetectorKind::Batch) => Detector::Batch,
                 Some(DetectorKind::Streaming) => {
                     Detector::Streaming { prediction_timeout: cfg.turn.endpointing.max_delay() }
                 }
@@ -265,7 +264,7 @@ impl AudioRecognition {
     pub fn prediction_timeout(&self) -> Option<Duration> {
         match self.cfg.detector {
             Detector::Streaming { prediction_timeout } => Some(prediction_timeout),
-            Detector::None | Detector::Batch => None,
+            Detector::None => None,
         }
     }
 
@@ -512,8 +511,6 @@ pub enum TurnDetectionMode {
 pub enum Detector {
     /// Every turn commits after `min_delay`.
     None,
-    /// `_TurnDetector`: the countdown asks and waits with no timeout.
-    Batch,
     /// `_StreamingTurnDetector`: inference starts on VAD silence, bounded by `prediction_timeout`.
     Streaming { prediction_timeout: Duration },
 }
@@ -638,8 +635,8 @@ pub enum Phase {
     Speaking { since: Ts, prediction: Prediction, declared: bool },
     /// No countdown could start: the owner hasn't declared the end, or no words yet.
     Ended { anchor: Ts, prediction: Prediction, declared: bool },
-    /// Waiting on the detector. `deadline` is `None` for [`Detector::Batch`].
-    Awaiting { run: Run, req: ReqId, deadline: Option<Ts> },
+    /// Waiting on the detector until `deadline`, the prediction timeout.
+    Awaiting { run: Run, req: ReqId, deadline: Ts },
     /// Serving the endpointing delay; `prediction` is reused if a final restarts the countdown.
     Delaying {
         run: Run,
@@ -661,8 +658,7 @@ impl Phase {
             | Phase::Speaking { .. }
             | Phase::Ended { .. }
             | Phase::Committed { .. } => None,
-            Phase::Awaiting { deadline: Some(at), .. } => Some((Timer::EotPredictionTimeout, *at)),
-            Phase::Awaiting { deadline: None, .. } => None,
+            Phase::Awaiting { deadline, .. } => Some((Timer::EotPredictionTimeout, *deadline)),
             Phase::Delaying { fire_at, .. } | Phase::ManualCommitted { fire_at, .. } => {
                 Some((Timer::EndpointingDelay, *fire_at))
             }

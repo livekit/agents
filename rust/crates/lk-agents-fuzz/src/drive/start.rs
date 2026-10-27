@@ -163,7 +163,6 @@ impl Run {
                 Some(&options),
                 None,
                 setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
-                true,
                 adaptive.then(|| {
                     Arc::new(fakes::FakeInterruptionSource(registry.clone()))
                         as Arc<dyn InterruptionSource>

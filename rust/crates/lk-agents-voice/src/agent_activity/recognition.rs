@@ -559,14 +559,13 @@ impl Driver {
     pub(crate) fn request_eot_prediction(&mut self, req: lk_agents_abi::turn::detector::ReqId) {
         // Unreachable: the machine asks only when a detector was configured.
         let Some(leg) = self.activity.audio_recognition.eot() else { return };
-        let chat_ctx = self.session.chat_ctx.agent_chat_ctx();
         let timeout = self.activity.audio_recognition.prediction_timeout();
         // Any outstanding request is superseded; its late answer is dropped.
         self.journal(Step::Input(InputStep::LegRequested {
             leg: crate::trace::DetectorName::Eot,
             req: req.0,
         }));
-        leg.signal(Some(req), lk_agents_abi::EotRequest { chat_ctx, timeout });
+        leg.signal(Some(req), lk_agents_abi::EotRequest { timeout });
     }
 
     /// A prediction arrived for `req`, or will not. Only the request the phase holds applies: a

@@ -43,7 +43,6 @@ impl SessionApi {
             auto_gain_control = true,
             input_sample_rate = 24_000,
             output_sample_rate = 24_000,
-            turn_detector_streaming = false,
             text_output = true,
             host_video_sampler = false,
             using_default_vad = false,
@@ -77,10 +76,8 @@ impl SessionApi {
         options: Option<&crate::agent_activity::options::HostOptions>,
         // The first agent's own `turn_handling`, as written: the agent layer of the stack.
         agent_turn_handling: Option<crate::agent_activity::options::TurnHandlingKwargs>,
-        // `_core_view.TurnDetector` over the user's `turn_detection`, and which protocol it
-        // speaks (`hasattr(detector, "stream")`).
+        // `_core_view.TurnDetector` over the user's audio `turn_detection`.
         turn_detector: Option<Arc<dyn lk_agents_abi::EotDetector>>,
-        turn_detector_streaming: bool,
         // The adaptive-interruption detector: an object means the host's gate said yes.
         interruption_detector: Option<
             Arc<dyn lk_agents_abi::turn::interruption::InterruptionSource>,
@@ -304,13 +301,9 @@ impl SessionApi {
             llm: llm.is_some(),
             tts: tts.is_some(),
             realtime: realtime.is_some(),
-            detector: turn_detector.as_ref().map(|_| {
-                if turn_detector_streaming {
-                    crate::agent_activity::options::DetectorKind::Streaming
-                } else {
-                    crate::agent_activity::options::DetectorKind::Batch
-                }
-            }),
+            detector: turn_detector
+                .as_ref()
+                .map(|_| crate::agent_activity::options::DetectorKind::Streaming),
             adaptive_detector: interruption.is_some(),
             audio_enabled: true,
             audio_output: true,

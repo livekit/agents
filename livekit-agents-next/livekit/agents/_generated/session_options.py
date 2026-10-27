@@ -71,7 +71,7 @@ class SessionLegs(TypedDict):
     tts: bool
     realtime: bool
     detector: Literal["streaming", "batch"] | None
-    """`"streaming"`, `"batch"` or `None`."""
+    """`"streaming"` or `None`."""
     adaptive_detector: bool
     audio_enabled: bool
     audio_output: bool

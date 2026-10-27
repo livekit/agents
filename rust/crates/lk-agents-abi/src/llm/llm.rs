@@ -165,7 +165,8 @@ impl ChatRequest {
     /// are not rendered): the context of a request the core minted itself.
     #[host(getter)]
     pub fn chat_ctx(&self) -> serde_json::Value {
-        self.chat_ctx.to_host_dict()
+        let opts = crate::llm::to_dict::ToDictOptions { exclude_timestamp: false, ..Default::default() };
+        self.chat_ctx.to_dict(&opts, &Default::default()).unwrap_or(serde_json::Value::Null)
     }
 
     /// The names of the tools this turn offers, in order: the host pool is narrowed to these.

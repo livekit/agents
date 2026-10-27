@@ -9,7 +9,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::TurnDetectorModel;
 use lk_agents_abi::turn::eot::MetricsEvent;
 use lk_agents_abi::utils::resample::{Quality, Resampler};
-use lk_agents_abi::{AudioFrame, ChatContext, EotPrediction, ProviderId};
+use lk_agents_abi::{AudioFrame, EotPrediction, ProviderId};
 use tokio::sync::{oneshot, watch};
 
 use crate::eot::{
@@ -343,7 +343,6 @@ impl lk_agents_abi::EotDetector for EotStream {
 
     async fn predict(
         &self,
-        _chat_ctx: &ChatContext,
         _timeout: Option<std::time::Duration>,
     ) -> Result<EotPrediction, ProviderError> {
         self.predict().await.map_err(|_| ApiError::new("turn detector stream closed").into())

@@ -211,7 +211,7 @@ impl AudioRecognition {
         let mut eff = Effects::new();
         match timer {
             Timer::EotPredictionTimeout => {
-                if let Phase::Awaiting { run, req, deadline: Some(_) } = &self.phase {
+                if let Phase::Awaiting { run, req, .. } = &self.phase {
                     let (run, req) = (*run, *req);
                     self.fired = Some(timer);
                     // `._bounce_eou_task`: the one site that cancels with `timed_out=True`.
@@ -634,23 +634,13 @@ impl AudioRecognition {
             return eff;
         }
 
-        // A batch detector with nothing to score is not asked.
-        let usable = (!self.audio_transcript.is_empty()
-            || matches!(self.cfg.detector, Detector::Streaming { .. }))
-            && self.thresholds.supports(self.last_language.as_ref());
-
-        if !usable {
+        if !self.thresholds.supports(self.last_language.as_ref()) {
             eff.append(self.enter_delaying(now, run, run.min_delay, None, None));
             return eff;
         }
 
         match self.cfg.detector {
             Detector::None => eff.append(self.enter_delaying(now, run, run.min_delay, None, None)),
-            Detector::Batch => {
-                let req = self.mint_req();
-                eff.request_eot(req);
-                eff.append(self.set_phase(Phase::Awaiting { run, req, deadline: None }));
-            }
             Detector::Streaming { prediction_timeout } => match prediction {
                 // `._bounce_eou_task`: no request in flight, so commit on `min_delay` with no
                 // prediction.
@@ -659,11 +649,7 @@ impl AudioRecognition {
                 }
                 Prediction::Pending(req) => {
                     let deadline = now.saturating_add(prediction_timeout);
-                    eff.append(self.set_phase(Phase::Awaiting {
-                        run,
-                        req,
-                        deadline: Some(deadline),
-                    }));
+                    eff.append(self.set_phase(Phase::Awaiting { run, req, deadline }));
                 }
                 // `from_cache`: resolves without suspending, so no timer is ever armed.
                 Prediction::Ready(p) => eff.append(self.resolve(now, run, p)),
