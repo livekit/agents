@@ -58,7 +58,7 @@ Without this hook the plugin still works, but end of turn detection relies entir
 
 The plugin supports gateway region routing via the `region_override` option on both `STT` and `TTS`.
 This maps directly to the gateway's `X-Region-Override` header.
-See the available regions at [docs.slng.ai/region-override](https://docs.slng.ai/region-override).
+See the available regions at [docs.slng.ai regions guide](https://docs.slng.ai/concepts/whats-slng/regions).
 
 You can pass either a single region:
 
