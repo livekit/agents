@@ -662,7 +662,7 @@ impl SessionApi {
 
     /// `AgentSession.update_options(..)` on a running session: the raw update, read into a patch
     /// the driver merges into its session layer and re-resolves; `expressive` reaches the next
-    /// reply. An update that says nothing is a no-op (`keyterms` never reaches the driver).
+    /// reply, `keyterms` replace the user's list. An update that says nothing is a no-op.
     #[host(method)]
     pub fn update_turn_options(
         &self,
@@ -671,6 +671,9 @@ impl SessionApi {
         let patch = crate::agent_activity::options::update_layer(&update);
         if let Maybe::Given(expressive) = update.expressive {
             self.send(ActivityCommand::UpdateExpressive(expressive))?;
+        }
+        if let Some(terms) = update.keyterms {
+            self.send(Command::SetStaticKeyterms(terms))?;
         }
         if patch == crate::agent_activity::options::AgentSessionOptions::default() {
             return Ok(());

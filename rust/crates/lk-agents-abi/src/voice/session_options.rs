@@ -461,7 +461,7 @@ pub struct SessionKwargs {
     pub conn_options: HostValue,
 }
 
-/// `AgentSession.update_options(..)`'s option surface (`keyterms` stays host-side).
+/// `AgentSession.update_options(..)`'s option surface.
 #[derive(Clone, Default, PartialEq, Host)]
 #[python(typed_dict, module = "session_options", name = "UpdateKwargs")]
 pub struct UpdateKwargs {
@@ -482,6 +482,10 @@ pub struct UpdateKwargs {
     #[python(ty = "NotGivenOr[bool | ExpressiveOptions]", type_import = ".expressive:ExpressiveOptions")]
     #[binding(default)]
     pub expressive: lk_agents_abi::Maybe<Expressive>,
+    /// The user-defined keyterms, replaced; the detected ones stay.
+    #[python(ty = "NotGivenOr[list[str]]")]
+    #[binding(default)]
+    pub keyterms: Option<Vec<String>>,
 }
 
 // `Maybe<T>` has `Debug` only for `Maybe<Option<T>>`, so these impls are written out.
@@ -520,7 +524,7 @@ debug_record!(SessionKwargs {
 });
 
 debug_record!(UpdateKwargs {
-    endpointing_opts;
+    endpointing_opts, keyterms;
     turn_detection, expressive
 });
 
@@ -863,6 +867,16 @@ mod host {
 
         fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
             let d = obj.cast::<PyDict>()?;
+            // An option this session cannot change is refused, not dropped.
+            const KNOWN: [&str; 4] = ["endpointing_opts", "turn_detection", "expressive", "keyterms"];
+            for key in d.keys() {
+                let key: String = key.extract()?;
+                if !KNOWN.contains(&key.as_str()) {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "update_options() got an unexpected keyword argument {key:?}"
+                    )));
+                }
+            }
             Ok(UpdateKwargs {
                 endpointing_opts: match d.get_item("endpointing_opts")? {
                     Some(v) if !unsaid(&v)? => Some(v.extract()?),
@@ -870,6 +884,10 @@ mod host {
                 },
                 turn_detection: match d.get_item("turn_detection")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
                 expressive: match d.get_item("expressive")? { Some(v) => v.extract()?, None => Maybe::NotGiven },
+                keyterms: match d.get_item("keyterms")? {
+                    Some(v) if !unsaid(&v)? => Some(v.extract()?),
+                    _ => None,
+                },
             })
         }
     }

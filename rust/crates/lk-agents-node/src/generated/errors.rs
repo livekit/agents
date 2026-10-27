@@ -93,6 +93,7 @@ pub fn unknown_close_reason_to_node(e: lk_agents_voice::agent_session::UnknownCl
 pub fn command_refused_to_node(e: lk_agents_voice::agent_session::CommandRefused) -> JsError {
     let kind = match &e {
         lk_agents_voice::agent_session::CommandRefused::Session(..) => "RuntimeError",
+        lk_agents_voice::agent_session::CommandRefused::Rejected(..) => "RuntimeError",
         _ => "ValueError",
     };
     JsError::new(kind, e.to_string())

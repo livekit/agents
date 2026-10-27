@@ -317,7 +317,7 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
 
 /// What `update_options(..)` says.
 pub fn update_layer(kw: &UpdateKwargs) -> AgentSessionOptions {
-    let UpdateKwargs { endpointing_opts, turn_detection, expressive: _ } = kw.clone();
+    let UpdateKwargs { endpointing_opts, turn_detection, expressive: _, keyterms: _ } = kw.clone();
     let mut o = AgentSessionOptions::default();
     if let Some(e) = endpointing_opts {
         o.turn.endpointing = endpointing_options(&e);

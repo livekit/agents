@@ -406,9 +406,12 @@ impl SpeechHandle {
     }
 
     #[napi(js_name = "waitForPlayout", ts_return_type = "Promise<void>")]
-    pub fn wait_for_playout<'env>(&self, env: &'env Env) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+    pub fn wait_for_playout<'env>(&self, env: &'env Env, origin: Option<String>) -> napi::Result<napi::bindgen_prelude::PromiseRaw<'env, ()>> {
+        let (origin,) = crate::host_error::run(env, || {
+            Ok((origin,))
+        })?;
         let inner = std::sync::Arc::clone(&self.inner);
-        env.spawn_future_with_callback(async move { Ok(inner.wait_for_playout_for_host().await.map_err(crate::generated::errors::speech_refused_to_node)) }, |env, out| match out {
+        env.spawn_future_with_callback(async move { Ok(inner.wait_for_playout_for_host(origin).await.map_err(crate::generated::errors::speech_refused_to_node)) }, |env, out| match out {
             Ok(out) => Ok(()),
             Err(e) => Err(e.into_napi(env)),
         })

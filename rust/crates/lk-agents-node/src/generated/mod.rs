@@ -80,6 +80,7 @@
 //! - `lk_agents_voice::agent_session::SessionApi::say_stream`: parameter `text`: not yet: a stream half returned as a stream class
 //! - `lk_agents_voice::agent_session::SessionApi::say_audio`: parameter `audio`: not yet: a stream half returned as a stream class
 //! - `lk_agents_voice::agent_session::SessionApi::host_metrics`: parameter `record`: `HostMetricsRecord` is not a #[derive(Host)] type or a #[host(wire_enum)]
+//! - `lk_agents_voice::agent_session::SessionApi::agent_chat_ctx`: return: not yet: returning an exposed class
 //! - `lk_agents_media::StreamBuffer::len`: not yet: `__len__` is a Python protocol method
 //! - `lk_agents_voice::remote_session::driver::HostRuntime::new`: parameter `clock`: not yet: `Arc<dyn Clock>` (a host object behind a proxy)
 //! - `lk_agents_voice::remote_session::driver::HostRuntime::set_port`: parameter `port`: not yet: `Arc<dyn SessionPort>` (a host object behind a proxy)

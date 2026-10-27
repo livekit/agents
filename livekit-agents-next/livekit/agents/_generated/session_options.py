@@ -51,12 +51,14 @@ class SessionKwargs(TypedDict):
 
 
 class UpdateKwargs(TypedDict):
-    """`AgentSession.update_options(..)`'s option surface (`keyterms` stays host-side)."""
+    """`AgentSession.update_options(..)`'s option surface."""
 
     endpointing_opts: NotGivenOr[EndpointingOptions]
     turn_detection: NotGivenOr[TurnDetectionMode | None]
     """`NotGivenOr[TurnDetectionMode | None]`: `None` reverts to automatic selection (`Auto`)."""
     expressive: NotGivenOr[bool | ExpressiveOptions]
+    keyterms: NotGivenOr[list[str]]
+    """The user-defined keyterms, replaced; the detected ones stay."""
 
 
 class SessionLegs(TypedDict):
