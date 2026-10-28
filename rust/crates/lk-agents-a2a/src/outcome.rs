@@ -72,8 +72,9 @@ pub struct PendingAnswer {
 
 /// A conversation tool's pending `InputRequired`, if `pending` holds one: the last message is
 /// the call's output (replacing the placeholder the run recorded, else inserted as item
-/// `item_id`). Continuing the waiting task (`taskId`) makes it the answer and merges the row the
-/// message came in under into it; otherwise the waiting task completes merged into this one.
+/// `item_id`). Continuing the waiting task (`taskId`) makes it the answer, working again with the
+/// message appended to its history, and merges the row the message came in under into it;
+/// otherwise the waiting task completes merged into this one.
 pub fn answer_pending(
     history: &mut Vec<ItemRow>,
     pending: Option<&TaskRow>,
@@ -127,6 +128,14 @@ pub fn answer_pending(
                 metadata: Some(merged_into(&pending.task_id)),
                 ..TaskPatch::default()
             },
+        });
+        // the continued task keeps its own message and history; the reply is appended
+        let mut history = pending.data.history.clone();
+        history.push(last.to_a2a());
+        out.transitions.push(TaskTransition {
+            task_id: pending.task_id.clone(),
+            status: TaskState::Working,
+            patch: TaskPatch { history: Some(history), ..TaskPatch::default() },
         });
     } else {
         out.transitions.push(TaskTransition {
@@ -245,10 +254,16 @@ pub fn settle(history: &mut Vec<ItemRow>, s: Settle<'_>) -> Result<Settlement, S
             },
         });
     }
-    let base = TaskPatch {
-        message_id: Some(last.message_id.clone()),
-        history: Some(s.batch.iter().map(Message::to_a2a).collect()),
-        ..TaskPatch::default()
+    // a continued task (an answer to its pending question) keeps its own message and the
+    // history `answer_pending` gave it: the message is the receipt row's
+    let received = s.task_ids.last().is_some_and(|t| *t == answer);
+    let base = match received {
+        true => TaskPatch {
+            message_id: Some(last.message_id.clone()),
+            history: Some(s.batch.iter().map(Message::to_a2a).collect()),
+            ..TaskPatch::default()
+        },
+        false => TaskPatch::default(),
     };
     if let Some(err) = &out.error {
         settled.transitions.push(TaskTransition {
@@ -441,6 +456,8 @@ pub fn python_reason(e: &StorageError) -> String {
 mod tests {
     use super::*;
     use crate::HandlerOutput;
+    use lk_agents_storage::db::TaskWrite;
+    use lk_agents_storage::run::merge_write;
     use serde_json::json;
 
     fn msg(id: &str, text: &str) -> Message {
@@ -550,5 +567,70 @@ mod tests {
         );
         assert_eq!(answer.answer_task, "AST_waiting");
         assert_eq!(answer.transitions[0].task_id, "AST_receipt");
+    }
+
+    /// Found by the A2A DST (A2A_SEED=8): a reply continuing a pending question by its `taskId`
+    /// stamped its `messageId` on both the receipt and the continued task, and the thread's
+    /// unique (lane, message_id) task index refused the whole commit.
+    #[test]
+    fn a_continuation_keeps_one_task_per_message_and_the_continued_history() {
+        let mut waiting =
+            unpersisted_failed("AST_waiting", "desk", None, "", 0, "msg_question".into());
+        waiting.status = TaskState::InputRequired;
+        waiting.message_id = Some("question".into());
+        waiting.data.history = vec![msg("question", "book me a table").to_a2a()];
+        waiting.internal = Some(lk_agents_abi::storage::TaskInternal {
+            ask: Some(lk_agents_abi::storage::Ask {
+                question: "For how many?".into(),
+                ..Default::default()
+            }),
+            streams: Vec::new(),
+        });
+        let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("two")]);
+        wire.message_id = "answer".into();
+        wire.task_id = Some("AST_waiting".into());
+        let answer = Message::from_a2a(&wire, 1.0, None).unwrap();
+        let receipt = TaskWrite {
+            task_id: "AST_receipt".into(),
+            status: TaskState::Working,
+            message_id: Some("answer".into()),
+            name: None,
+            data: TaskData { history: vec![answer.to_a2a()], ..TaskData::default() },
+            internal: None,
+        };
+        let mut rows = vec![TaskWrite::from(waiting.clone()), receipt];
+        let mut write = |t: TaskTransition| {
+            let i = rows.iter().position(|r| r.task_id == t.task_id).unwrap();
+            rows[i] = merge_write(&t.task_id, Some(&rows[i]), t.status, t.patch).unwrap();
+        };
+        let mut history = Vec::new();
+        let pending =
+            answer_pending(&mut history, Some(&waiting), &answer, "AST_receipt", 2.0, "i".into());
+        pending.transitions.into_iter().for_each(&mut write);
+        let out = HandlerOutput { output: Some(json!("booked")), ..HandlerOutput::default() };
+        let batch = [answer.clone()];
+        let settled = settle(
+            &mut history,
+            Settle {
+                batch: &batch,
+                task_ids: &["AST_receipt".to_owned()],
+                answer_task: &pending.answer_task,
+                user_message: crate::batch_to_chat_message(&batch, 2.0, "item_u".into()),
+                out: &out,
+                stop: None,
+                answer_canceled: false,
+                now: 2.0,
+                ids: ids(),
+            },
+        )
+        .unwrap();
+        settled.transitions.into_iter().for_each(&mut write);
+        let ids: Vec<_> = rows.iter().map(|r| r.message_id.as_deref()).collect();
+        assert_eq!(ids, [Some("question"), Some("answer")], "one task per messageId");
+        let continued = &rows[0];
+        assert_eq!(continued.status, TaskState::Completed);
+        let said: Vec<&str> =
+            continued.data.history.iter().map(|m| m.message_id.as_str()).collect();
+        assert_eq!(said, ["question", "answer"], "the continued task's history accumulates");
     }
 }
