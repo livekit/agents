@@ -102,7 +102,7 @@ def test_rate_change_after_a_fallback_adapter_already_wraps_the_tts() -> None:
     status's ``needs_resampling`` are fixed at construction by design; this test pins
     the input side, which is the half the plugin controls.
     """
-    from livekit.agents.tts.fallback_adapter import FallbackAdapter
+    from livekit.agents.tts import FallbackAdapter
     from livekit.plugins.smallestai import TTS
 
     primary = TTS(api_key="test-key", sample_rate=24000)

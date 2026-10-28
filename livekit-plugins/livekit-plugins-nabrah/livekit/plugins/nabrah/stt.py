@@ -43,9 +43,10 @@ import json
 import math
 import os
 import time
-from typing import Any, Literal
+from typing import Literal
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit import rtc
 from livekit.agents import (
@@ -100,7 +101,7 @@ def _append_text(existing: str, new: str) -> str:
     return _normalize_whitespace(existing + separator + new)
 
 
-def _word_text(w: dict[str, Any]) -> str:
+def _word_text(w: dict[str, JsonValue]) -> str:
     value = w.get("word", "")
     if not isinstance(value, str):
         raise ValueError("nabrah word text must be a string")
@@ -116,7 +117,7 @@ def _finite_number(value: object, *, field: str) -> float:
     return number
 
 
-def _timed_word(w: dict[str, Any], offset: float) -> TimedString:
+def _timed_word(w: dict[str, JsonValue], offset: float) -> TimedString:
     """One backend word entry as a TimedString. Timestamps arrive in ms."""
     start_time = _finite_number(w.get("start_time", 0), field="word start_time")
     end_time = _finite_number(w.get("end_time", 0), field="word end_time")
@@ -275,13 +276,13 @@ class SpeechStream(stt.SpeechStream):
         self._reported_audio_position: float = 0.0
         self._last_message_position: float = 0.0
 
-    def _config_frame(self) -> dict[str, Any]:
+    def _config_frame(self) -> dict[str, JsonValue]:
         return {
             "api_key": self._stt._api_key,
             "recognition_model": self._stt._recognition_model,
             "end_of_utterance_silence_ms": self._stt._end_of_utterance_silence_ms,
             "disable_number_normalization": self._stt._disable_number_normalization,
-            "priority_words": self._stt._priority_words,
+            "priority_words": list[JsonValue](self._stt._priority_words),
             "priority_words_strength": self._stt._priority_words_strength,
         }
 
@@ -327,13 +328,11 @@ class SpeechStream(stt.SpeechStream):
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         raise APIConnectionError("nabrah STT closed before ready")
                     try:
-                        payload = json.loads(msg.data)
-                    except (json.JSONDecodeError, TypeError):
+                        payload = TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
+                    except (ValueError, TypeError):
                         raise APIConnectionError(
                             "nabrah STT sent an invalid ready response"
                         ) from None
-                    if not isinstance(payload, dict):
-                        raise APIConnectionError("nabrah STT sent an invalid ready response")
                     if payload.get("type") == "error":
                         raise APIStatusError(
                             "nabrah STT rejected the configuration",
@@ -419,7 +418,7 @@ class SpeechStream(stt.SpeechStream):
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:
-                self._process_message(json.loads(msg.data))
+                self._process_message(TypeAdapter(dict[str, JsonValue]).validate_json(msg.data))
             except APIError:
                 raise
             except Exception:
@@ -535,7 +534,7 @@ class SpeechStream(stt.SpeechStream):
             )
         )
 
-    def _process_message(self, data: dict[str, Any]) -> None:
+    def _process_message(self, data: dict[str, JsonValue]) -> None:
         msg_type = data.get("type")
 
         if msg_type == "error":
@@ -550,7 +549,7 @@ class SpeechStream(stt.SpeechStream):
         if msg_type != "transcript":
             return
 
-        text = data.get("text", "")
+        text = TypeAdapter(str).validate_python(data.get("text", ""))
         is_final = data.get("is_final", False)
         if not isinstance(is_final, bool):
             raise ValueError("nabrah is_final must be a boolean")
@@ -584,7 +583,7 @@ class SpeechStream(stt.SpeechStream):
             self._utt_raw_seen = 0
         self._utt_closed = False
 
-        raw_words = data.get("words") or []
+        raw_words = TypeAdapter(list[dict[str, JsonValue]]).validate_python(data.get("words") or [])
         if raw_words:
             self._utt_words = tuple(
                 _timed_word(w, self.start_time_offset)

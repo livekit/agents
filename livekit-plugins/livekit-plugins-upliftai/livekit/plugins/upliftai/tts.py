@@ -10,10 +10,12 @@ import os
 import time
 import uuid
 import weakref
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from importlib import import_module
+from typing import Literal, Protocol, cast
 
-import socketio  # type: ignore[import-untyped]
+from pydantic import BaseModel, JsonValue
 
 from livekit.agents import (
     APIConnectionError,
@@ -214,14 +216,55 @@ class TTS(tts.TTS):
             self._client = None
 
 
+class _SocketClient(Protocol):
+    connected: bool
+
+    def on(
+        self,
+        event: str,
+        handler: Callable[[], Awaitable[None]] | Callable[[object], Awaitable[None]],
+        *,
+        namespace: str,
+    ) -> None: ...
+    async def connect(
+        self,
+        url: str,
+        *,
+        auth: dict[str, str],
+        namespaces: list[str],
+        transports: list[str],
+        wait_timeout: float,
+    ) -> None: ...
+    async def emit(self, event: str, data: dict[str, JsonValue], *, namespace: str) -> None: ...
+    async def disconnect(self) -> None: ...
+
+
+class _SocketFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        reconnection: bool,
+        logger: bool,
+        engineio_logger: bool,
+    ) -> _SocketClient: ...
+
+
+class _ServerMessage(BaseModel):
+    type: str
+    requestId: str | None = None
+    sessionId: str | None = None
+    audio: str | None = None
+    message: str | None = None
+
+
 class WebSocketClient:
     """Manages WebSocket connection to TTS service"""
 
     def __init__(self, opts: _TTSOptions):
         self.opts = opts
-        self.sio: socketio.AsyncClient | None = None
+        self.sio: _SocketClient | None = None
         self.connected = False
-        self.audio_callbacks: dict[str, asyncio.Queue[bytes | None]] = {}
+        self.audio_callbacks: dict[str, asyncio.Queue[bytes | APIError | None]] = {}
         self.active_requests: dict[str, bool] = {}
 
     async def connect(self) -> bool:
@@ -230,10 +273,10 @@ class WebSocketClient:
             return True
 
         try:
-            self.sio = socketio.AsyncClient(
-                reconnection=True,
-                reconnection_attempts=3,
-                reconnection_delay=1,
+            # python-socketio does not ship a complete typed AsyncClient contract.
+            factory = cast(_SocketFactory, import_module("socketio").AsyncClient)
+            self.sio = factory(
+                reconnection=False,
                 logger=False,
                 engineio_logger=False,
             )
@@ -272,7 +315,7 @@ class WebSocketClient:
 
     async def synthesize(
         self, text: str, request_id: str | None = None
-    ) -> asyncio.Queue[bytes | None]:
+    ) -> asyncio.Queue[bytes | APIError | None]:
         """Send synthesis request and return audio queue"""
         if not self.sio or not self.connected:
             if not await self.connect():
@@ -282,12 +325,12 @@ class WebSocketClient:
             request_id = str(uuid.uuid4())
 
         # Create audio queue
-        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        audio_queue: asyncio.Queue[bytes | APIError | None] = asyncio.Queue()
         self.audio_callbacks[request_id] = audio_queue
         self.active_requests[request_id] = True
 
         # Build message
-        message: dict[str, Any] = {
+        message: dict[str, JsonValue] = {
             "type": "synthesize",
             "requestId": request_id,
             "text": text,
@@ -323,47 +366,39 @@ class WebSocketClient:
         """Handle connection"""
         logger.debug("WebSocket connected")
 
-    async def _on_message(self, data: Any) -> None:
-        """Handle messages"""
-        message_type = data.get("type")
-
-        if message_type == "ready":
+    async def _on_message(self, data: object) -> None:
+        message = _ServerMessage.model_validate(data)
+        if message.type == "ready":
             self.connected = True
-            logger.debug(f"Ready with session: {data.get('sessionId')}")
-
-        elif message_type == "audio":
-            request_id = data.get("requestId")
-            audio_b64 = data.get("audio")
-
-            if audio_b64 and request_id in self.audio_callbacks:
-                audio_bytes = base64.b64decode(audio_b64)
-                if self.active_requests.get(request_id, False):
-                    await self.audio_callbacks[request_id].put(audio_bytes)
-
-        elif message_type == "audio_end":
-            request_id = data.get("requestId")
-            if request_id in self.audio_callbacks:
-                await self.audio_callbacks[request_id].put(None)
-                del self.audio_callbacks[request_id]
-                if request_id in self.active_requests:
-                    del self.active_requests[request_id]
-
-        elif message_type == "error":
-            request_id = data.get("requestId", "unknown")
-            error_msg = data.get("message", str(data))
-            logger.error(f"Error for {request_id}: {error_msg}")
-
-            if request_id in self.audio_callbacks:
-                await self.audio_callbacks[request_id].put(None)
-                del self.audio_callbacks[request_id]
-                if request_id in self.active_requests:
-                    del self.active_requests[request_id]
+            logger.debug("Ready with session: %s", message.sessionId)
+            return
+        request_id = message.requestId
+        if request_id is None:
+            return
+        queue = self.audio_callbacks.get(request_id)
+        if message.type == "audio":
+            if message.audio and queue is not None and self.active_requests.get(request_id, False):
+                await queue.put(base64.b64decode(message.audio))
+        elif message.type == "audio_end":
+            if queue is not None:
+                await queue.put(None)
+                self.audio_callbacks.pop(request_id, None)
+                self.active_requests.pop(request_id, None)
+        elif message.type == "error" and queue is not None:
+            await queue.put(
+                APIError(
+                    "Uplift rejected the synthesis request",
+                    body=message.model_dump(exclude_none=True),
+                    retryable=False,
+                )
+            )
+            self.audio_callbacks.pop(request_id, None)
+            self.active_requests.pop(request_id, None)
 
     async def _on_disconnect(self) -> None:
-        """Handle disconnection"""
         self.connected = False
         for queue in self.audio_callbacks.values():
-            await queue.put(None)
+            await queue.put(APIConnectionError("Uplift disconnected before synthesis completed"))
         self.audio_callbacks.clear()
         self.active_requests.clear()
 
@@ -404,19 +439,22 @@ class ChunkedStream(tts.ChunkedStream):
 
                     if audio_data is None:
                         break
+                    if isinstance(audio_data, APIError):
+                        raise audio_data
 
                     output_emitter.push(audio_data)
 
-                except asyncio.TimeoutError:
-                    logger.warning("Audio timeout")
-                    break
+                except asyncio.TimeoutError as exc:
+                    raise APITimeoutError("Uplift did not complete synthesis") from exc
 
             output_emitter.flush()
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
+        except APIError:
+            raise
         except Exception as e:
-            raise APIConnectionError(f"TTS synthesis failed: {str(e)}") from e
+            raise APIConnectionError("Uplift synthesis failed") from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -451,7 +489,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         segments_ch.send_nowait(word_stream)
 
                     word_stream.push_text(input)
-                elif isinstance(input, self.Flush):
+                else:
                     if word_stream is not None:
                         word_stream.end_input()
                     word_stream = None
@@ -475,6 +513,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -495,7 +535,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._tts._client = WebSocketClient(self._tts._opts)
 
             # Collect text
-            text_parts = []
+            text_parts: list[str] = []
             async for data in word_stream:
                 text_parts.append(data.token)
 
@@ -520,14 +560,17 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     if audio_data is None:
                         break
+                    if isinstance(audio_data, APIError):
+                        raise audio_data
 
                     output_emitter.push(audio_data)
 
-                except asyncio.TimeoutError:
-                    break
+                except asyncio.TimeoutError as exc:
+                    raise APITimeoutError("Uplift did not complete synthesis") from exc
 
             output_emitter.end_input()
 
+        except APIError:
+            raise
         except Exception as e:
-            logger.error(f"Segment synthesis error: {e}")
-            raise APIError(f"Segment synthesis failed: {str(e)}") from e
+            raise APIError("Uplift segment synthesis failed") from e

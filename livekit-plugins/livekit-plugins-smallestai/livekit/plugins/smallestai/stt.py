@@ -42,10 +42,10 @@ import weakref
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, Generic, TypeVar
 from urllib.parse import urlencode
 
 import aiohttp
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from livekit import rtc
 from livekit.agents import (
@@ -80,23 +80,21 @@ _STREAMING_MODELS: frozenset[str] = frozenset({"pulse"})
 # Any letter or digit in any script; a transcript with none is punctuation only.
 _WORD_RE = re.compile(r"\w")
 
-T = TypeVar("T")
 
-
-class _PeriodicCollector(Generic[T]):
+class _PeriodicCollector:
     """Flushes every `duration`."""
 
-    def __init__(self, callback: Callable[[T], None], *, duration: float) -> None:
+    def __init__(self, callback: Callable[[float], None], *, duration: float) -> None:
         self._duration = duration
         self._callback = callback
         self._last_flush_time = time.monotonic()
-        self._total: T | None = None
+        self._total: float | None = None
 
-    def push(self, value: T) -> None:
+    def push(self, value: float) -> None:
         if self._total is None:
             self._total = value
         else:
-            self._total += value  # type: ignore[operator]
+            self._total += value
         if time.monotonic() - self._last_flush_time >= self._duration:
             self.flush()
 
@@ -105,6 +103,36 @@ class _PeriodicCollector(Generic[T]):
             self._callback(self._total)
             self._total = None
         self._last_flush_time = time.monotonic()
+
+
+class _Word(BaseModel):
+    word: str = ""
+    start: float = 0.0
+    end: float = 0.0
+    confidence: float | None = None
+    speaker: str | int | None = None
+
+
+class _Utterance(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    start: float = 0.0
+    end: float = 0.0
+
+
+class _Transcript(BaseModel):
+    session_id: str = ""
+    type: str = ""
+    transcript: str = ""
+    transcription: str = ""
+    is_final: bool = False
+    is_last: bool = False
+    from_finalize: bool = False
+    speech_final: bool = False
+    words: list[_Word] | None = None
+    utterances: list[_Utterance] | None = None
+    language: str | None = None
+    redacted_entities: list[str] | None = None
 
 
 @dataclass
@@ -305,7 +333,7 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
-        params: dict[str, Any] = {
+        params: dict[str, JsonValue] = {
             "model": config.model,
             "language": config.language,
             "encoding": config.encoding,
@@ -331,7 +359,7 @@ class STT(stt.STT):
                 conn_options=conn_options,
             ) as resp:
                 resp.raise_for_status()
-                data = await resp.json()
+                data = TypeAdapter(dict[str, JsonValue]).validate_python(await resp.json())
                 return _batch_transcription_to_speech_event(config.language, data)
 
         except asyncio.TimeoutError as e:
@@ -429,13 +457,49 @@ class STT(stt.STT):
         return config
 
 
-def _apply_updates(opts: _STTOptions, **updates: Any) -> _STTOptions:
-    """Copy `opts` with every given (non-NOT_GIVEN) keyword applied; lists are copied."""
-    updated = replace(opts)
-    for key, value in updates.items():
-        if is_given(value):
-            setattr(updated, key, list(value) if isinstance(value, list) else value)
-    return updated
+def _apply_updates(
+    opts: _STTOptions,
+    *,
+    model: NotGivenOr[STTModels | str] = NOT_GIVEN,
+    language: NotGivenOr[str] = NOT_GIVEN,
+    sample_rate: NotGivenOr[int] = NOT_GIVEN,
+    encoding: NotGivenOr[STTEncoding | str] = NOT_GIVEN,
+    format: NotGivenOr[bool] = NOT_GIVEN,
+    itn_normalize: NotGivenOr[bool] = NOT_GIVEN,
+    keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
+    sentence_timestamps: NotGivenOr[bool] = NOT_GIVEN,
+    redact_pii: NotGivenOr[bool] = NOT_GIVEN,
+    redact_pci: NotGivenOr[bool] = NOT_GIVEN,
+    endpointing: NotGivenOr[bool] = NOT_GIVEN,
+    endpointing_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+    eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
+    vad_events: NotGivenOr[bool] = NOT_GIVEN,
+    finalize_on_flush: NotGivenOr[bool] = NOT_GIVEN,
+) -> _STTOptions:
+    return replace(
+        opts,
+        model=model if is_given(model) else opts.model,
+        language=language if is_given(language) else opts.language,
+        sample_rate=sample_rate if is_given(sample_rate) else opts.sample_rate,
+        encoding=encoding if is_given(encoding) else opts.encoding,
+        format=format if is_given(format) else opts.format,
+        itn_normalize=itn_normalize if is_given(itn_normalize) else opts.itn_normalize,
+        keywords=list(keywords) if is_given(keywords) else list(opts.keywords),
+        sentence_timestamps=sentence_timestamps
+        if is_given(sentence_timestamps)
+        else opts.sentence_timestamps,
+        redact_pii=redact_pii if is_given(redact_pii) else opts.redact_pii,
+        redact_pci=redact_pci if is_given(redact_pci) else opts.redact_pci,
+        endpointing=endpointing if is_given(endpointing) else opts.endpointing,
+        endpointing_timeout_ms=endpointing_timeout_ms
+        if is_given(endpointing_timeout_ms)
+        else opts.endpointing_timeout_ms,
+        eou_timeout_ms=eou_timeout_ms if is_given(eou_timeout_ms) else opts.eou_timeout_ms,
+        vad_events=vad_events if is_given(vad_events) else opts.vad_events,
+        finalize_on_flush=finalize_on_flush
+        if is_given(finalize_on_flush)
+        else opts.finalize_on_flush,
+    )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -538,7 +602,7 @@ class SpeechStream(stt.SpeechStream):
                     flushed = False
                     if isinstance(data, rtc.AudioFrame):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self.Flush):
+                    else:
                         frames.extend(audio_bstream.flush())
                         flushed = True
 
@@ -594,7 +658,7 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 try:
-                    data = json.loads(msg.data)
+                    data = TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
                 except json.JSONDecodeError:
                     logger.warning(
                         "failed to parse Smallest AI STT message", extra={"lk.pii.data": msg.data}
@@ -663,10 +727,10 @@ class SpeechStream(stt.SpeechStream):
                 # speech_ended with it: close the turn here so START/END stay paired.
                 self._end_speech()
 
-    def _stream_params(self) -> dict[str, Any]:
+    def _stream_params(self) -> dict[str, JsonValue]:
         """Query parameters for the streaming connection; unset knobs are left to the server."""
         o = self._opts
-        params: dict[str, Any] = {
+        params: dict[str, JsonValue] = {
             "model": o.model,
             "language": o.language,
             "encoding": o.encoding,
@@ -750,12 +814,13 @@ class SpeechStream(stt.SpeechStream):
             self._speaking = False
             self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
-    def _process_stream_event(self, data: dict[str, Any]) -> None:
-        session_id = data.get("session_id", "")
+    def _process_stream_event(self, data: dict[str, JsonValue] | _Transcript) -> None:
+        data = _Transcript.model_validate(data)
+        session_id = data.session_id
         if session_id:
             self._session_id = session_id
 
-        msg_type = data.get("type", "")
+        msg_type = data.type
         # Acoustic VAD messages: the speaker started or stopped, independent of decoding.
         if msg_type == "speech_started":
             self._start_speech()
@@ -765,10 +830,10 @@ class SpeechStream(stt.SpeechStream):
             return
 
         # The gateway duplicates the server's `transcript` into `transcription`.
-        transcript = data.get("transcript") or data.get("transcription") or ""
-        is_final = bool(data.get("is_final", False))
-        is_last = bool(data.get("is_last", False))
-        from_finalize = bool(data.get("from_finalize", False))
+        transcript = data.transcript or data.transcription
+        is_final = data.is_final
+        is_last = data.is_last
+        from_finalize = data.from_finalize
 
         # Punctuation-only text ("." or "।" landing in its own chunk) is not a user turn.
         if _WORD_RE.search(transcript):
@@ -798,19 +863,14 @@ class SpeechStream(stt.SpeechStream):
         # (word rollover, blank-token endpoint); with vad_events the turn end comes
         # from speech_ended, without them every final has to count as one.
         if is_final and (
-            is_last
-            or from_finalize
-            or data.get("speech_final") is True
-            or not self._opts.vad_events
+            is_last or from_finalize or data.speech_final or not self._opts.vad_events
         ):
             self._end_speech()
 
 
-def _aggregate_confidence(raw_words: list[dict[str, Any]]) -> float:
+def _aggregate_confidence(raw_words: list[_Word]) -> float:
     """Geometric mean of the per-word confidences (each already a geometric mean over its pieces)."""
-    probs = [
-        float(w["confidence"]) for w in raw_words if isinstance(w.get("confidence"), (int, float))
-    ]
+    probs = [w.confidence for w in raw_words if w.confidence is not None]
     if not probs:
         return 0.0
     return min(1.0, max(0.0, math.exp(sum(math.log(max(p, 1e-10)) for p in probs) / len(probs))))
@@ -818,20 +878,21 @@ def _aggregate_confidence(raw_words: list[dict[str, Any]]) -> float:
 
 def _transcript_to_speech_data(
     language: str,
-    data: dict[str, Any],
+    data: dict[str, JsonValue] | _Transcript,
     *,
     transcript: str,
     start_time_offset: float,
     diarize: bool,
 ) -> list[stt.SpeechData]:
-    raw_words: list[dict[str, Any]] = data.get("words") or []
+    data = _Transcript.model_validate(data)
+    raw_words = data.words or []
 
     words: list[TimedString] | None = (
         [
             TimedString(
-                text=w.get("word", ""),
-                start_time=w.get("start", 0.0) + start_time_offset,
-                end_time=w.get("end", 0.0) + start_time_offset,
+                text=w.word,
+                start_time=w.start + start_time_offset,
+                end_time=w.end + start_time_offset,
                 start_time_offset=start_time_offset,
             )
             for w in raw_words
@@ -840,33 +901,35 @@ def _transcript_to_speech_data(
         else None
     )
 
-    start_time = raw_words[0].get("start", 0.0) + start_time_offset if raw_words else 0.0
-    end_time = raw_words[-1].get("end", 0.0) + start_time_offset if raw_words else 0.0
+    start_time = raw_words[0].start + start_time_offset if raw_words else 0.0
+    end_time = raw_words[-1].end + start_time_offset if raw_words else 0.0
 
     # Streaming diarization: per-word speaker ids are integers; the utterance takes the majority.
     speaker_id: str | None = None
     if diarize and raw_words:
-        speaker_counts = Counter(w["speaker"] for w in raw_words if "speaker" in w)
+        speaker_counts = Counter(w.speaker for w in raw_words if w.speaker is not None)
         if speaker_counts:
             speaker_id = f"S{speaker_counts.most_common(1)[0][0]}"
 
     # With language="multi" the server reports the detected language on finals.
-    detected_language = data.get("language") or language
+    detected_language = data.language or language
 
-    metadata: dict[str, Any] = {}
-    raw_utterances: list[dict[str, Any]] = data.get("utterances") or []
+    metadata: dict[str, JsonValue] = {}
+    raw_utterances = data.utterances or []
     if raw_utterances:
         metadata["utterances"] = [
             {
-                **u,
-                "start": u.get("start", 0.0) + start_time_offset,
-                "end": u.get("end", 0.0) + start_time_offset,
+                **TypeAdapter(dict[str, JsonValue]).validate_python(
+                    u.model_dump(mode="json", exclude_unset=True)
+                ),
+                "start": u.start + start_time_offset,
+                "end": u.end + start_time_offset,
             }
             for u in raw_utterances
         ]
-    redacted_entities: list[str] = data.get("redacted_entities") or []
+    redacted_entities = data.redacted_entities or []
     if redacted_entities:
-        metadata["redacted_entities"] = redacted_entities
+        metadata["redacted_entities"] = list[JsonValue](redacted_entities)
 
     return [
         stt.SpeechData(
@@ -882,21 +945,19 @@ def _transcript_to_speech_data(
     ]
 
 
-def _batch_transcription_to_speech_event(language: str, data: dict[str, Any]) -> stt.SpeechEvent:
+def _batch_transcription_to_speech_event(
+    language: str, data: dict[str, JsonValue] | _Transcript
+) -> stt.SpeechEvent:
     # Batch HTTP response: {"status", "transcription", "audio_length", "words": [...],
     # "utterances": [...] (when word_timestamps=True), "language", "metadata"}.
-    transcript = data.get("transcription", "")
-    raw_words: list[dict[str, Any]] = data.get("words") or []
-    raw_utterances: list[dict[str, Any]] = data.get("utterances") or []
-    detected_language = data.get("language") or language
+    data = _Transcript.model_validate(data)
+    transcript = data.transcription
+    raw_words = data.words or []
+    raw_utterances = data.utterances or []
+    detected_language = data.language or language
 
     words: list[TimedString] | None = (
-        [
-            TimedString(
-                text=w.get("word", ""), start_time=w.get("start", 0.0), end_time=w.get("end", 0.0)
-            )
-            for w in raw_words
-        ]
+        [TimedString(text=w.word, start_time=w.start, end_time=w.end) for w in raw_words]
         if raw_words
         else None
     )
@@ -908,11 +969,17 @@ def _batch_transcription_to_speech_event(language: str, data: dict[str, Any]) ->
             stt.SpeechData(
                 language=LanguageCode(detected_language),
                 text=transcript,
-                start_time=raw_words[0].get("start", 0.0) if raw_words else 0.0,
-                end_time=raw_words[-1].get("end", 0.0) if raw_words else 0.0,
+                start_time=raw_words[0].start if raw_words else 0.0,
+                end_time=raw_words[-1].end if raw_words else 0.0,
                 confidence=_aggregate_confidence(raw_words),
                 words=words,
-                metadata={"utterances": raw_utterances} if raw_utterances else None,
+                metadata={
+                    "utterances": [
+                        u.model_dump(mode="json", exclude_unset=True) for u in raw_utterances
+                    ]
+                }
+                if raw_utterances
+                else None,
             )
         ],
     )

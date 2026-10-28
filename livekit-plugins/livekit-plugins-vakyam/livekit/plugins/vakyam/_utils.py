@@ -14,9 +14,9 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any
 from urllib.parse import urlparse
+
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import APIStatusError
 
@@ -42,7 +42,7 @@ _RETRYABLE_WS_CODES = {
 }
 
 
-def normalize_voice(voice: str) -> str:
+def normalize_voice(voice: object) -> str:
     """Normalize a preset voice name or custom ``vc_`` voice ID."""
     if not isinstance(voice, str) or not voice.strip():
         raise ValueError("voice must be a non-empty string")
@@ -113,7 +113,7 @@ def validate_tts_options(
     normalize_voice(voice)
 
 
-def validate_text(text: str) -> None:
+def validate_text(text: object) -> None:
     """Validate utterance text for a single synthesis request."""
     if not isinstance(text, str) or not text:
         raise ValueError("text is required")
@@ -154,7 +154,7 @@ def speech_payload(
     sample_rate: int,
     speed: float,
     output_format: str = "pcm",
-) -> dict[str, Any]:
+) -> dict[str, JsonValue]:
     """JSON body for HTTP generate/stream requests."""
     validate_text(text)
     validate_tts_options(
@@ -173,15 +173,15 @@ def speech_payload(
 
 def raise_http_error(status: int, body: str) -> None:
     """Raise ``APIStatusError`` from a Vakyam HTTP error envelope."""
-    parsed: object | None = None
+    parsed: JsonValue = None
     try:
-        parsed = json.loads(body) if body else None
-    except json.JSONDecodeError:
+        parsed = TypeAdapter[JsonValue](JsonValue).validate_json(body) if body else None
+    except ValueError:
         parsed = None
 
     error_code: str | None = None
-    if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
-        error = parsed["error"]
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    if isinstance(error, dict):
         code = error.get("code")
         if isinstance(code, (str, int)):
             error_code = str(code)
@@ -195,9 +195,9 @@ def raise_http_error(status: int, body: str) -> None:
     raise APIStatusError(message, status_code=status, body=safe_body)
 
 
-def raise_ws_error(data: dict[str, Any]) -> None:
+def raise_ws_error(data: dict[str, JsonValue]) -> None:
     """Raise ``APIStatusError`` from a Vakyam WebSocket ``error`` frame."""
-    error = data.get("error") if isinstance(data.get("error"), dict) else {}
+    error = data.get("error")
     code = error.get("code") if isinstance(error, dict) else None
     error_code = str(code) if isinstance(code, (str, int)) else None
     retryable = error_code in _RETRYABLE_WS_CODES

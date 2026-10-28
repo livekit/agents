@@ -21,7 +21,7 @@ def stream() -> SpeechStream:
         coroutine.close()
         return MagicMock()
 
-    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_discard_task):
+    with patch("livekit.agents._generated.stt.asyncio.create_task", side_effect=_discard_task):
         return SpeechStream(
             stt_instance=STT(api_key="test-key"),
             conn_options=DEFAULT_API_CONNECT_OPTIONS,

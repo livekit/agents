@@ -26,7 +26,12 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING
+
+from pydantic import JsonValue, TypeAdapter
+
+if TYPE_CHECKING:
+    from websockets.asyncio.client import ClientConnection
 
 from livekit.agents import (
     APIConnectionError,
@@ -60,7 +65,7 @@ class TTSSessionConfig:
     speed: float = 1.0
     output_format: str = "pcm"
 
-    def to_wire_message(self) -> dict[str, Any]:
+    def to_wire_message(self) -> dict[str, JsonValue]:
         return {
             "type": "config",
             "model_id": self.model,
@@ -100,18 +105,18 @@ def disconnect_message() -> dict[str, str]:
     return {"type": "disconnect"}
 
 
-def speech_result_from_terminal(data: dict[str, Any]) -> WebSocketSpeechResult:
+def speech_result_from_terminal(data: dict[str, JsonValue]) -> WebSocketSpeechResult:
     msg_type = data.get("type")
     if msg_type == "cancellation":
         return WebSocketSpeechResult(
-            characters_used=int(data.get("characters_used", 0)),
-            duration_seconds=float(data.get("duration_seconds", 0.0)),
+            characters_used=TypeAdapter(int).validate_python(data.get("characters_used", 0)),
+            duration_seconds=TypeAdapter(float).validate_python(data.get("duration_seconds", 0.0)),
             cancelled=True,
         )
     if msg_type == "end_of_utterance":
         return WebSocketSpeechResult(
-            characters_used=int(data["characters_used"]),
-            duration_seconds=float(data["duration_seconds"]),
+            characters_used=TypeAdapter(int).validate_python(data["characters_used"]),
+            duration_seconds=TypeAdapter(float).validate_python(data["duration_seconds"]),
             truncated=bool(data.get("truncated", False)),
             truncation_reason=(str(data["reason"]) if data.get("reason") is not None else None),
         )
@@ -153,7 +158,7 @@ class AsyncStreamingTTSSession:
         self._api_key = api_key
         self._config = config
         self._url = websocket_url(resolved_base)
-        self._connection: Any = None
+        self._connection: ClientConnection | None = None
         self._utterance_active = False
         self.last_result: WebSocketSpeechResult | None = None
 
@@ -197,12 +202,16 @@ class AsyncStreamingTTSSession:
                 open_timeout=timeout,
                 close_timeout=timeout,
             )
-            connected = json.loads(await self._connection.recv())
+            connected = TypeAdapter(dict[str, JsonValue]).validate_json(
+                await self._connection.recv()
+            )
             if connected.get("type") != "connected":
                 raise APIConnectionError("Unexpected WebSocket handshake response")
 
             await self._connection.send(json.dumps(self._config.to_wire_message()))
-            configured = json.loads(await self._connection.recv())
+            configured = TypeAdapter(dict[str, JsonValue]).validate_json(
+                await self._connection.recv()
+            )
             if configured.get("type") == "error":
                 raise_ws_error(configured)
             if configured.get("type") != "configured":
@@ -251,7 +260,7 @@ class AsyncStreamingTTSSession:
                         yield message
                     continue
 
-                data = json.loads(message)
+                data = TypeAdapter(dict[str, JsonValue]).validate_json(message)
                 msg_type = data.get("type")
                 if msg_type == "error":
                     raise_ws_error(data)
@@ -299,7 +308,9 @@ class AsyncStreamingTTSSession:
             await asyncio.wait_for(
                 self._connection.send(json.dumps(ping_message())), timeout=timeout
             )
-            response = json.loads(await asyncio.wait_for(self._connection.recv(), timeout=timeout))
+            response = TypeAdapter(dict[str, JsonValue]).validate_json(
+                await asyncio.wait_for(self._connection.recv(), timeout=timeout)
+            )
         except asyncio.TimeoutError as exc:
             raise APITimeoutError("Vakyam TTS WebSocket ping timed out") from exc
         except Exception as exc:
@@ -351,7 +362,7 @@ class AsyncStreamingTTSSession:
                 raise APITimeoutError("Vakyam TTS WebSocket cancellation timed out") from exc
             if isinstance(message, bytes):
                 continue
-            data = json.loads(message)
+            data = TypeAdapter(dict[str, JsonValue]).validate_json(message)
             msg_type = data.get("type")
             if msg_type == "error":
                 raise_ws_error(data)

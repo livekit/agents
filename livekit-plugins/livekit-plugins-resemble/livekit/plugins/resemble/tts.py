@@ -22,6 +22,7 @@ import weakref
 from dataclasses import dataclass, replace
 
 import aiohttp
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 
 from livekit.agents import (
     APIConnectionError,
@@ -41,6 +42,18 @@ from .models import TTSModels
 RESEMBLE_WEBSOCKET_URL = "wss://websocket.cluster.resemble.ai/stream"
 RESEMBLE_REST_API_URL = "https://f.cluster.resemble.ai/synthesize"
 DEFAULT_VOICE_UUID = "55592656"
+
+
+class _SynthesisResponse(BaseModel):
+    success: bool = False
+    issues: list[str] = Field(default_factory=lambda: ["Unknown error"])
+    audio_content: str | None = None
+
+
+class _WebSocketMessage(BaseModel):
+    type: str
+    audio_content: str | None = None
+    request_id: int | str | None = None
 
 
 @dataclass
@@ -207,11 +220,11 @@ class ChunkedStream(tts.ChunkedStream):
                 conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
-                response_json = await resp.json()
+                response_json = TypeAdapter(dict[str, JsonValue]).validate_python(await resp.json())
+                response = _SynthesisResponse.model_validate(response_json)
 
-                if not response_json.get("success", False):
-                    issues = response_json.get("issues", ["Unknown error"])
-                    error_msg = "; ".join(issues)
+                if not response.success:
+                    error_msg = "; ".join(response.issues)
                     raise APIError(
                         message=f"Resemble API returned failure: {error_msg}",
                         body=json.dumps(response_json),
@@ -224,8 +237,9 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/wav",
                 )
 
-                audio_b64 = response_json["audio_content"]
-                audio_bytes = base64.b64decode(audio_b64)
+                if response.audio_content is None:
+                    raise APIConnectionError("Resemble response omitted audio content")
+                audio_bytes = base64.b64decode(response.audio_content)
 
                 output_emitter.push(audio_bytes)
                 output_emitter.flush()
@@ -236,6 +250,8 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -274,7 +290,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         input_stream = self._opts.tokenizer.stream()
                         segments_ch.send_nowait(input_stream)
                     input_stream.push_text(text)
-                elif isinstance(text, self.Flush):
+                else:
                     if input_stream is not None:
                         input_stream.end_input()
                     input_stream = None
@@ -300,6 +316,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
             ) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -351,19 +369,24 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("Unexpected Resemble message type %s", msg.type)
                     continue
 
-                data = json.loads(msg.data)
-                if data.get("type") == "audio":
-                    if data.get("audio_content", None):
-                        b64data = base64.b64decode(data["audio_content"])
+                data = _WebSocketMessage.model_validate_json(msg.data)
+                if data.type == "audio":
+                    if data.audio_content:
+                        b64data = base64.b64decode(data.audio_content)
                         output_emitter.push(b64data)
 
-                elif data.get("type") == "audio_end":
-                    index = data["request_id"]
+                elif data.type == "audio_end":
+                    index = data.request_id
+                    if index is None:
+                        raise APIConnectionError("Resemble completion omitted request identity")
                     if index == last_index and input_ended:
                         output_emitter.end_segment()
                         break
                 else:
-                    logger.error("Unexpected Resemble message", extra={"lk.pii.data": data})
+                    logger.error(
+                        "Unexpected Resemble message",
+                        extra={"lk.pii.data": data.model_dump(mode="json")},
+                    )
 
         async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [

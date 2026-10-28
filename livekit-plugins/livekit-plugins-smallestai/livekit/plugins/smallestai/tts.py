@@ -20,9 +20,9 @@ import contextlib
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any
 
 import aiohttp
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 
 from livekit.agents import (
     APIConnectionError,
@@ -51,6 +51,19 @@ SMALLEST_WS_URL = "wss://api.smallest.ai/waves/v1/tts/live"
 # frames, means done. The connection is never reused after an inferred completion
 # (see _run), so a too-short value costs a truncated tail, not a corrupted response.
 _CONTINUATIONS_IDLE_TIMEOUT = 0.6
+
+
+class _TtsData(BaseModel):
+    audio: str | None = None
+    word: str | None = None
+    start: float | None = None
+    end: float | None = None
+
+
+class _TtsEvent(BaseModel):
+    status: str | None = None
+    data: _TtsData = Field(default_factory=_TtsData)
+    message: JsonValue = "unknown error"
 
 
 @dataclass
@@ -419,15 +432,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             pkt = {**self._base_payload(context_id), "cancel_request": True}
             await asyncio.wait_for(ws.send_str(json.dumps(pkt)), timeout=1.0)
 
-    def _base_payload(self, context_id: str) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+    def _base_payload(self, context_id: str) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
             "model": self._opts.model,
             "voice_id": self._opts.voice_id,
             "sample_rate": self._opts.sample_rate,
             "speed": self._opts.speed,
-            "language": self._opts.language.language
-            if isinstance(self._opts.language, LanguageCode)
-            else self._opts.language,
+            "language": self._opts.language.language,
         }
         if self._opts.word_timestamps:
             payload["word_timestamps"] = True
@@ -482,7 +493,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         if not self._opts.use_continuations:
             while True:
                 msg = await self._recv_one(ws, timeout=self._conn_options.read_timeout)
-                status, event = self._parse_status_event(msg, output_emitter)
+                status, _ = self._parse_status_event(msg, output_emitter)
                 if status == "complete":
                     return True
 
@@ -554,22 +565,22 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     def _parse_status_event(
         self, msg: aiohttp.WSMessage, output_emitter: tts.AudioEmitter
-    ) -> tuple[str | None, dict[str, Any]]:
+    ) -> tuple[str | None, dict[str, JsonValue]]:
         if msg.type != aiohttp.WSMsgType.TEXT:
             return None, {}
 
-        event = json.loads(msg.data)
-        status = event.get("status")
+        event = TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
+        parsed = _TtsEvent.model_validate(event)
+        status = parsed.status
 
         if status == "chunk":
-            audio_b64 = event.get("data", {}).get("audio")
+            audio_b64 = parsed.data.audio
             if audio_b64:
                 output_emitter.push(base64.b64decode(audio_b64))
         elif status == "word_timestamp":
-            data = event.get("data", {})
-            word = data.get("word")
-            start = data.get("start")
-            end = data.get("end")
+            word = parsed.data.word
+            start = parsed.data.start
+            end = parsed.data.end
             if word is not None and start is not None and end is not None:
                 output_emitter.push_timed_transcript(
                     TimedString(text=word, start_time=start, end_time=end)
@@ -579,7 +590,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             # (e.g. "unsupported character in text: ..."), so it's logged separately
             # under a PII-tagged key instead of being embedded in the exception message,
             # which flows into TTS telemetry/traces.
-            provider_message = event.get("message", "unknown error")
+            provider_message = parsed.message
             logger.error(
                 "SmallestAI TTS error", extra={"lk.pii.provider_message": provider_message}
             )
@@ -587,14 +598,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         return status, event
 
 
-def _to_smallest_options(opts: _TTSOptions) -> dict[str, Any]:
+def _to_smallest_options(opts: _TTSOptions) -> dict[str, JsonValue]:
     return {
         "model": opts.model,
         "voice_id": opts.voice_id,
         "sample_rate": opts.sample_rate,
         "speed": opts.speed,
-        "language": opts.language.language
-        if isinstance(opts.language, LanguageCode)
-        else opts.language,
+        "language": opts.language.language,
         "output_format": opts.output_format,
     }

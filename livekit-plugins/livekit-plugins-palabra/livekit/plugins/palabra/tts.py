@@ -437,16 +437,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                         f"palabra tts error: {event.code}",
                         retryable=event.code in _RETRYABLE_ERROR_CODES,
                     )
-                if isinstance(event, TtsChunk):
-                    if event.audio:
-                        got_audio = True
-                        if not segment_started:
-                            # One segment per stream: the agent opens a fresh stream() per reply.
-                            output_emitter.start_segment(segment_id=request_id)
-                            segment_started = True
-                        output_emitter.push(event.audio)
-                    if event.last_chunk:
-                        pending_gens.discard(event.generation_id)
+                if event.audio:
+                    got_audio = True
+                    if not segment_started:
+                        # One segment per stream: the agent opens a fresh stream() per reply.
+                        output_emitter.start_segment(segment_id=request_id)
+                        segment_started = True
+                    output_emitter.push(event.audio)
+                if event.last_chunk:
+                    pending_gens.discard(event.generation_id)
             output_emitter.end_input()
 
         async def _teardown() -> None:
