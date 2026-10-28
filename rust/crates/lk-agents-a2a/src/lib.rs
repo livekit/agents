@@ -15,6 +15,7 @@
 
 pub mod outcome;
 pub mod policy;
+pub mod rpc;
 
 use std::time::Duration;
 
