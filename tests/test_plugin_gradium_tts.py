@@ -610,6 +610,44 @@ async def test_failed_session_then_server_close_reconnects():
     assert not sockets[1].closed
 
 
+async def test_a_reply_caught_by_a_sibling_failure_is_retried():
+    """The server closes the socket after one session failed. The other session on
+    it did nothing wrong: it is retried on a new socket rather than handed the
+    sibling's error, here a non-retryable close code."""
+    sockets = [
+        FakeWebSocket(
+            [[READY], [READY, ERROR, "close"]],
+            close_code=1003,
+            close_reason="Unknown voice 'nope'.",
+        ),
+        FakeWebSocket([[READY, AUDIO, EOS]]),
+    ]
+    session = FakeSession(*sockets)
+    tts = _new_tts(session)
+
+    bystander = asyncio.create_task(_drain(tts, APIConnectOptions(max_retry=1, timeout=5)))
+    await asyncio.sleep(0.05)  # its session is set up and waiting on the first socket
+    with pytest.raises(APIStatusError, match="Unknown voice"):
+        await _drain(tts, CONN_OPTS)
+
+    assert await bystander > 0
+    assert len(session.connects) == 2
+
+
+async def test_a_reply_caught_by_a_sibling_failure_gets_a_connection_error():
+    tts, _, ws = _make_tts_scripts([[READY], [READY, ERROR]], close_code=1003)
+
+    bystander = asyncio.create_task(_drain(tts, CONN_OPTS))
+    await asyncio.sleep(0.05)
+    with pytest.raises(APIStatusError, match="Unknown voice"):
+        await _drain(tts, CONN_OPTS)
+    ws.queue("close")
+
+    with pytest.raises(APIConnectionError, match="after a session on it failed") as exc:
+        await bystander
+    assert exc.value.retryable
+
+
 async def test_connection_loss_reaches_every_open_session():
     tts, _, ws = _make_tts_scripts([[READY], [READY]])
 
