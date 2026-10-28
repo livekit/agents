@@ -683,7 +683,7 @@ impl Decode for CommitDecode {
 /// What a commit whose acknowledgment was lost turned out to be.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Resolution {
-    /// The run's `run_ended` is there: it committed, at `version`, with `task` read back.
+    /// The run's `run_ended` is there: it committed, making `version`, with `task` read back.
     Committed(Committed),
     /// Not committed, and the fence still holds: sending the same commit again is safe.
     NotApplied,
@@ -725,6 +725,9 @@ impl Decode for ResolveDecode {
                 Some(i) => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
                 None => None,
             };
+            // the version this run's commit made, not the lane's now: others may have
+            // committed since
+            let version = self.fence.as_ref().map_or(version, |f| f.version + 1);
             return Ok(Resolution::Committed(Committed { version, task }));
         }
         Ok(match self.fence {
@@ -880,6 +883,9 @@ mod tests {
         let f = fence();
         let committed = Resolution::Committed(Committed { version: 4, task: None });
         assert_eq!(resolve(Some(&f), answer(true, 4, None)), committed);
+        // found by the storage DST: the lane moved on after the lost commit; the run still
+        // reports the version its own commit made
+        assert_eq!(resolve(Some(&f), answer(true, 9, Some("lease_c"))), committed);
         assert_eq!(resolve(Some(&f), answer(false, 3, Some("lease_a"))), Resolution::NotApplied);
         assert_eq!(resolve(Some(&f), answer(false, 3, Some("lease_b"))), Resolution::Rejected);
         assert_eq!(resolve(Some(&f), answer(false, 4, None)), Resolution::Rejected);

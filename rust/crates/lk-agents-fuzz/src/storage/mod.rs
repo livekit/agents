@@ -192,14 +192,15 @@ fn check(db: &SimDb, seen: &Observed, violations: &mut Vec<String>) {
     for task in tasks.values().filter(|t| !t.terminal()) {
         violations.push(format!("{}: ended {:?}, not terminal", task.task_id, task.status));
     }
-    // one commit per version bump: a stale owner that committed would repeat a version
+    // one commit per version bump: a stale owner that committed would repeat a version (a
+    // worker lost after its commit applied leaves a version nobody saw returned)
     let mut versions: Vec<i64> = seen.committed.iter().map(|(_, v)| *v).collect();
     versions.sort_unstable();
     let lane = db.inspect(&plans::lane_info(LANE).statement);
     let lane_version = lane.first().and_then(|r| r[1].as_i64()).unwrap_or(0);
-    if versions != (1..=versions.len() as i64).collect::<Vec<_>>()
-        || lane_version < versions.len() as i64
-    {
+    let mut distinct = versions.clone();
+    distinct.dedup();
+    if distinct.len() != versions.len() || versions.last().is_some_and(|v| *v > lane_version) {
         violations.push(format!("commits returned versions {versions:?}, lane at {lane_version}"));
     }
     let events = db.inspect(&plans::lane_events(LANE, 0).statement);
