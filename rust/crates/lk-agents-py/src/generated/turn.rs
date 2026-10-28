@@ -103,7 +103,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::EotPrediction>()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::records::turn_events::eot_prediction_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }

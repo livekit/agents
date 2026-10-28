@@ -37,11 +37,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for DetectionLlm {
 // `Option` per field, since default and explicit `None` coincide for all six. Each field spells
 // `ty`: `Option` here means absent, not nullable.
 #[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
-    name = "KeytermDetectionOptions"
-)]
+#[python(typed_dict, total = "False", name = "KeytermDetectionOptions")]
 // The read target: `total=False` in the generator's vocabulary.
 #[binding(extract, from_items)]
 pub struct KeytermDetectionConfig {
@@ -103,11 +99,7 @@ pub struct ResolvedKeytermDetection {
 // The `cfg_attr(doctest)` lines fence the Python sample for `cargo test --doc` only; the codegen
 // reads `///` alone, so the generated docstring is unchanged.
 #[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
-    name = "STTContextOptions"
-)]
+#[python(typed_dict, total = "False", name = "STTContextOptions")]
 #[binding(extract, from_items)]
 pub struct SttContextConfig {
     /// Static keyterms applied wherever the STT accepts a term list; never touched by detection.
@@ -123,8 +115,8 @@ pub struct SttContextConfig {
 }
 
 /// One LLM answer: three disjoint lists of terms.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[binding(emit)]
+#[crate::host(record(module = "keyterm_events", emit))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeytermUpdate {
     /// Distinctive terms seen but not yet trusted -- tracked, not applied.
     pub pending: Vec<String>,
@@ -135,8 +127,8 @@ pub struct KeytermUpdate {
 }
 
 /// The effective list changed, and how.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit)]
+#[crate::host(record(module = "keyterm_events", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeytermsChanged {
     /// What the STT should now be biased toward.
     pub keyterms: Vec<String>,

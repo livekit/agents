@@ -20,6 +20,7 @@ from pydantic import TypeAdapter
 
 from . import _core, llm
 from ._generated.llm_fallback import AvailabilityChanged
+from ._generated.turn_events import EotPrediction
 from .llm.chat_context import AudioContent, ChatContent, ChatItem, ImageContent
 from .llm.tool_context import (
     ProviderTool,
@@ -244,15 +245,15 @@ class TurnDetector:
     def _core_flush(self, reason: str) -> None:
         self._stream.flush(reason)
 
-    async def _core_predict(self, timeout: float | None) -> dict[str, Any]:
+    async def _core_predict(self, timeout: float | None) -> EotPrediction:
         ev = await self._stream.predict()
-        return {
-            "end_of_turn_probability": ev.end_of_turn_probability,
-            "last_speaking_time": ev.last_speaking_time,
-            "detection_delay": ev.detection_delay,
-            "inference_duration": ev.inference_duration,
-            "backchannel_probability": ev.backchannel_probability,
-        }
+        return EotPrediction(
+            end_of_turn_probability=ev.end_of_turn_probability,
+            last_speaking_time=ev.last_speaking_time,
+            detection_delay=ev.detection_delay,
+            inference_duration=ev.inference_duration,
+            backchannel_probability=ev.backchannel_probability,
+        )
 
     async def _core_aclose(self) -> None:
         await self._stream.aclose()

@@ -1,5 +1,5 @@
-//! The EOT detector's wire. The decisions stay in `lk_agents_inference::eot::EotSession`; the
-//! `tag_value` strings are the wire `inference/eot/base.py` reads.
+//! End-of-turn actions and transport events. Session decisions live in
+//! `lk_agents_inference::eot::EotSession`; Python values use the declared record classes.
 
 use lk_agents_host_derive::Host;
 
@@ -7,6 +7,7 @@ use crate::{EotInferenceMetrics, EotPrediction};
 
 /// The caller mints it, so cancelling a superseded request is a no-op rather than a teardown of the
 /// live one.
+#[crate::host(handwritten(emit, host = "str"))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EotRequestId(String);
 
@@ -34,10 +35,9 @@ crate::python::into_host_str!(EotRequestId, |v| v.as_str());
 
 // --- the actions ------------------------------------------------------------------------------
 
-/// `{"type": "resolve", "id": .., + the five `TurnDetectionEvent` fields}`.
-// Flat: the host splats the tail into `TurnDetectionEvent(...)`, and emit targets cannot flatten.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "resolve")]
+/// A resolved request and its prediction measurements.
+#[crate::host(record(module = "eot_events", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EotResolve {
     pub id: EotRequestId,
     pub end_of_turn_probability: f64,
@@ -60,32 +60,31 @@ impl EotResolve {
     }
 }
 
-/// `{"type": "start_inference", "id": ..}` -- `transport.run_inference(request_id)` (`base.py:184`).
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "start_inference")]
+/// Start inference for one request.
+#[crate::host(record(module = "eot_events", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EotStartInference {
     pub id: EotRequestId,
 }
 
-/// `{"type": "flush"}` -- the kind is the whole message (`transport.flush()`, `base.py:205`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit, tag = "type", tag_value = "flush")]
+/// Flush the detector's buffered audio.
+#[crate::host(record(module = "eot_events", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EotFlush {}
 
-/// `{"type": "swap_to_local"}` -- mount the local mini model (`base.py:388`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit, tag = "type", tag_value = "swap_to_local")]
+/// Replace the cloud transport with the local mini model.
+#[crate::host(record(module = "eot_events", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EotSwapToLocal {}
 
-/// `{"type": "degrade"}` -- `_degrade` (`base.py:373`): drop buffered audio and stop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Host)]
-#[binding(emit, tag = "type", tag_value = "degrade")]
+/// Drop buffered audio and stop when no detector remains.
+#[crate::host(record(module = "eot_events", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EotDegrade {}
 
-/// `{"type": "warn", "warning": .., "reason": ..}` -- one `EotWarning` as the host reads it.
-// The sentences stay in Python. `reason` is `None`, never absent: `_warn` reads it unconditionally.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(emit, tag = "type", tag_value = "warn")]
+/// A detector warning and its optional cause.
+#[crate::host(record(module = "eot_events", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EotWarn {
     pub warning: String,
     pub reason: Option<String>,
@@ -93,10 +92,9 @@ pub struct EotWarn {
 
 // --- the transport events ---------------------------------------------------------------------
 
-/// `{"type": "prediction", "id": .., + the four numbers a transport reports}`.
-// `probability` here is `end_of_turn_probability` on the resolved action.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(emit, tag = "type", tag_value = "prediction")]
+/// The measurements a transport reports for one request.
+#[crate::host(record(module = "eot_events", emit))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PredictionEvent {
     pub id: String,
     pub probability: f64,
