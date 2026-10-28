@@ -29,6 +29,7 @@ pub enum VadEventType {
 #[derive(Debug, Clone, PartialEq, Host)]
 #[python(dataclass, module = "vad", path = "livekit.agents", name = "VADEvent")]
 // Read by hand (`FromPyObject` below): `frames` is interned only when it holds audio.
+#[crate::host(handwritten(extract))]
 #[binding(emit)]
 pub struct VadEvent {
     /// Type of the VAD event (e.g., start of speech, end of speech, inference done).

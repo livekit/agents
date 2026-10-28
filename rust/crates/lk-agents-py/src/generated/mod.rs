@@ -14,6 +14,7 @@ pub mod llm;
 pub mod storage;
 pub mod telemetry;
 pub mod tts;
+pub mod vad;
 pub mod worker;
 
 /// The implementation of each declared class. The registration shell implements it.

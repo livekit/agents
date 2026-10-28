@@ -11,6 +11,7 @@ mod llm;
 mod storage;
 mod telemetry;
 mod tts;
+mod vad;
 mod worker;
 
 /// `obj` is not an instance of the model(s) `expected` names.

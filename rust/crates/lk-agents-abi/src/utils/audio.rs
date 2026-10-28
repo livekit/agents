@@ -7,6 +7,7 @@ use std::sync::Arc;
 /// Interleaved signed 16-bit little-endian PCM, with a one-dimensional contiguous payload.
 /// `samples_per_channel` is carried, not derived: a plugin frame may disagree with its data length.
 /// The field names are `rtc.AudioFrame(..)`'s keyword arguments.
+#[crate::host(handwritten(extract, emit, host = "rtc.AudioFrame"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioFrame {
     /// `bytes`, not a list of ints (which `rtc.AudioFrame` would read as garbage).

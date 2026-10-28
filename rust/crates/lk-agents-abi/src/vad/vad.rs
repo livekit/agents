@@ -21,33 +21,37 @@ pub struct VadCapabilities {
 pub type VadSink = Box<dyn StreamSink<AudioFrame>>;
 pub type VadSource = Box<dyn StreamSource<VadEvent>>;
 
-// A host `vad.VAD` is this trait through its bare `#[host(proxy)]` (`PyVad`), over the base class
-// `lk-agents-codegen` writes from the `#[python]` markers.
+// A host `vad.VAD` is this trait through its generated proxy (`VadProxy`), calling the `_core_*`
+// methods of the base class `lk-agents-codegen` writes from the `#[python]` markers.
 /// A voice activity detector.
 ///
 /// Plugins implement `stream()`, returning a `VADStream` whose `_main_task` turns the pushed
 /// audio into `VADEvent`s.
-#[crate::host(proxy(host = "livekit.agents.VAD", clock))]
+#[crate::host(proxy(host = "livekit.agents.VAD"))]
 #[python(provider(module = "vad", path = "livekit.agents", events = "metrics_collected"))]
 #[async_trait]
 pub trait Vad: Send + Sync {
     /// The name logs and metrics give this instance: its class path.
     #[python(label)]
+    #[host(read_once, name = "_core_label")]
     fn label(&self) -> String;
 
     /// What this instance supports, fixed at construction.
     #[python(init)]
+    #[host(read_once, name = "_core_capabilities")]
     fn capabilities(&self) -> VadCapabilities;
 
     /// The model and provider labelling this instance's metrics.
     // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
     #[python(identity)]
+    #[host(read_once, name = "_core_id")]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label(self.label())
     }
 
     /// Load the model early; a detector with nothing to warm ignores it.
     #[python(hook)]
+    #[host(notify, name = "_core_prewarm")]
     fn prewarm(&self) {}
 
     /// Open a stream detecting speech in the audio pushed into it.
@@ -60,5 +64,6 @@ pub trait Vad: Send + Sync {
             doc = "A live detection: audio in through ``push_frame``, ``VADEvent`` out.\n\nPlugins implement ``_main_task``, reading ``input`` and handing each event to ``send``."
         )
     )]
+    #[host(await, name = "_core_stream")]
     async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError>;
 }
