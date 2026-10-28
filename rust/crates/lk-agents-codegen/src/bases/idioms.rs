@@ -94,14 +94,7 @@ pub(super) const RECOGNIZE: &str = r#"
             now = time.time()
             self._start_time_offset += now - started
             self._start_time = started = now
-            try:
-                await self._run()
-            except Exception:
-                if _core.api_attempt_connected(
-                    self._conn_options.connect_timeout, time.time() - started
-                ):
-                    self._core_attempts.count = 0
-                raise
+            await self._run()
 
         await self._core_attempts.run(attempt)
 
@@ -404,7 +397,8 @@ class _ChunkedStreamFromStream({Chunked}):
             stream=False,
         )
         async with self._tts.stream(conn_options=self._conn_options) as stream:
-            stream._core_attempts.core = self._core_attempts.core
+            # The batch operation owns retries; reopening this child is one attempt.
+            stream._core_attempts.core = True
             stream.push_text(self._input_text)
             stream.end_input()
             async for ev in stream:

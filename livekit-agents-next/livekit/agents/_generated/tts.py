@@ -14,10 +14,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Never
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import Self
+from typing_extensions import Self, TypeVar
 
 from livekit import rtc
 
@@ -72,7 +72,7 @@ class TTSError(BaseModel):
     recoverable: bool
 
 
-TEvent = TypeVar("TEvent")
+TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
 
 class TTS(

@@ -15,9 +15,9 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import Generic, Literal, Never
 
-from typing_extensions import Self
+from typing_extensions import Self, TypeVar
 
 from livekit import rtc
 
@@ -73,7 +73,7 @@ class VADCapabilities:
     update_interval: float
 
 
-TEvent = TypeVar("TEvent")
+TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
 
 class VAD(

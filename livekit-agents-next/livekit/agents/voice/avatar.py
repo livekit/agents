@@ -13,7 +13,9 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, Never
+
+from typing_extensions import TypeVar
 
 from livekit import rtc
 from livekit.api import TwirpError
@@ -124,7 +126,7 @@ async def _maybe_await(result: None | Coroutine[None, None, None]) -> None:
         await result
 
 
-TEvent = TypeVar("TEvent")
+TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
 
 class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent], Generic[TEvent]):

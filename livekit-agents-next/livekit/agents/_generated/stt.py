@@ -16,10 +16,10 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Never
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import Self
+from typing_extensions import Self, TypeVar
 
 from livekit import rtc
 
@@ -147,7 +147,7 @@ class STTError(BaseModel):
     recoverable: bool
 
 
-TEvent = TypeVar("TEvent")
+TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
 
 class STT(
@@ -408,14 +408,7 @@ class RecognizeStream(ABC):
             now = time.time()
             self._start_time_offset += now - started
             self._start_time = started = now
-            try:
-                await self._run()
-            except Exception:
-                if _core.api_attempt_connected(
-                    self._conn_options.connect_timeout, time.time() - started
-                ):
-                    self._core_attempts.count = 0
-                raise
+            await self._run()
 
         await self._core_attempts.run(attempt)
 

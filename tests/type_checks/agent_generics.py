@@ -70,7 +70,7 @@ async def runs(patient: Patient) -> None:
     await backend.run("hi", context=42)  # type: ignore[arg-type]
 
     result = await fnol.run("hi")
-    if isinstance(result.output, Claim):
+    if result.status == "completed":
         _ = result.output.numbr  # type: ignore[attr-defined]
 
 

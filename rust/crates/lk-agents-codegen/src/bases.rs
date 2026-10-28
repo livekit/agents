@@ -282,11 +282,12 @@ impl Writer<'_> {
         }
         let generic = !p.events.is_empty();
         if generic {
-            self.need("typing", "TypeVar");
+            self.need("typing_extensions", "TypeVar");
+            self.need("typing", "Never");
             self.need("typing", "Generic");
             self.need("typing", "Literal");
             self.need("livekit", "rtc");
-            b.push_str("TEvent = TypeVar(\"TEvent\")\n\n\n");
+            b.push_str("TEvent = TypeVar(\"TEvent\", default=Never, contravariant=True)\n\n\n");
             let events = p.events.iter().map(|e| format!("\"{e}\"")).collect::<Vec<_>>().join(", ");
             b.push_str(&format!(
                 "class {class}(\n    ABC,\n    rtc.EventEmitter[Literal[{events}] | TEvent],\n    Generic[TEvent],\n):\n"
@@ -926,7 +927,8 @@ impl Writer<'_> {
             ("typing", "Any"),
             ("typing", "Generic"),
             ("typing", "Literal"),
-            ("typing", "TypeVar"),
+            ("typing_extensions", "TypeVar"),
+            ("typing", "Never"),
             ("livekit", "rtc"),
             ("..log", "logger"),
             ("..types", "NOT_GIVEN"),
@@ -948,7 +950,7 @@ impl Writer<'_> {
             .and_then(|x| x.ret.clone())
             .ok_or_else(|| format!("{}: a realtime model has init capabilities", m.rust))?;
         let caps = self.core_ty(m, &caps)?;
-        let event = if self.p.events.is_empty() { "TEvent = TypeVar(\"TEvent\")\n\n" } else { "" };
+        let event = if self.p.events.is_empty() { "TEvent = TypeVar(\"TEvent\", default=Never, contravariant=True)\n\n" } else { "" };
         let text = REALTIME
             .replace("{TEVENT}", event)
             .replace("{Stream}", &s.name)

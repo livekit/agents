@@ -15,13 +15,12 @@ from typing import (
     Generic,
     Literal,
     TypeGuard,
-    TypeVar,
     get_type_hints,
     overload,
 )
 
 from pydantic import Field
-from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict
+from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict, TypeVar
 
 from .. import _core
 from . import _provider_format
@@ -369,10 +368,10 @@ WAITING_PREFIX = "waiting for the person's answer to: "
 _InfoT = TypeVar("_InfoT", FunctionToolInfo, RawFunctionToolInfo)
 
 
-_P = ParamSpec("_P")
+_P = ParamSpec("_P", default=...)
 
 
-_R = TypeVar("_R")
+_R = TypeVar("_R", default=object, covariant=True)
 
 
 class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):

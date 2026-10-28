@@ -14,10 +14,10 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, Never
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import Self
+from typing_extensions import Self, TypeVar
 
 from livekit import rtc
 
@@ -108,7 +108,7 @@ class LLMError(BaseModel):
     recoverable: bool
 
 
-TEvent = TypeVar("TEvent")
+TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
 
 class LLM(

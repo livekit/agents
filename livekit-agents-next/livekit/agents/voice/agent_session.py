@@ -18,7 +18,7 @@ from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, Literal
+from typing import TYPE_CHECKING, Any, Generic, Literal, overload
 
 import numpy as np
 from opentelemetry import trace
@@ -159,6 +159,8 @@ class VoiceActivityVideoSampler:
         self.speaking_fps = speaking_fps
         self.silent_fps = silent_fps
 
+
+_CallbackT = TypeVar("_CallbackT", bound=Callable[..., object])
 
 class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def __init__(
@@ -1097,7 +1099,17 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if audio_in is not None and isinstance(audio_in.noise_cancellation, rtc.FrameProcessor):
             audio_in.noise_cancellation._close()
 
-    def on(self, event: EventTypes, callback: Callable[..., Any] | None = None) -> Any:  # type: ignore[override]
+    @overload
+    def on(self, event: EventTypes, callback: _CallbackT) -> _CallbackT: ...
+
+    @overload
+    def on(
+        self, event: EventTypes, callback: None = None
+    ) -> Callable[[_CallbackT], _CallbackT]: ...
+
+    def on(
+        self, event: EventTypes, callback: _CallbackT | None = None
+    ) -> _CallbackT | Callable[[_CallbackT], _CallbackT]:
         if event == "metrics_collected":
             raise ValueError(
                 "VoiceSession has no 'metrics_collected' event in 2.0: use "

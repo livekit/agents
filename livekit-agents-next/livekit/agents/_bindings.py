@@ -117,6 +117,8 @@ class Attempts:
                     raise
                 self.emit_error(e, action == "retry")
                 if action == "exhausted":
+                    if isinstance(e, APITimeoutError):
+                        raise
                     raise APIConnectionError(message or str(e)) from e
                 if action == "raise":
                     raise
