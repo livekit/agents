@@ -48,6 +48,10 @@ A free-form companion agent running Expressive Mode. Tell it good news or bad ne
 
 A front desk agent example demonstrating how to build customer service agents with calendar integration and appointment management capabilities.
 
+### 🏨 Hotel: [Reservations](./hotel_reservations/), [Guest Support](./hotel_guest_support/), [Amenities](./hotel_amenities/)
+
+Three focused hotel agents, each with its own tools and simulation scenarios: room bookings and billing, requests and emergencies from guests, and the restaurant, spa, and concierge services. The all-in-one [Hotel Receptionist](./hotel_receptionist/) combines them in a single agent.
+
 ### 🔧 [Primitives](./primitives/)
 
 Basic building blocks and fundamental examples showing core LiveKit concepts like room connections, participant management, and basic audio/video handling.
