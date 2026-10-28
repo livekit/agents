@@ -40,13 +40,21 @@ compiled=(
     "lk-agents-media: tests not in the gate yet (K-12 closure)"
     "lk-agents-rtc: tests not in the gate yet (K-12 closure)"
     "lk-agents-py: binding tests not in the gate yet (B-19 conformance, K-12 closure)"
-    "lk-agents-codegen: unit tests not in the gate yet; codegen --check runs in ci.yml core"
+    "lk-agents-codegen: architecture tests and codegen --check run in the architecture step"
     "lk-agents-runtime: tests not in the gate yet (runtime verification is K-30)"
 )
 outside=(
     "lk-agents-storage: ci.yml storage-tests (cargo test); its DST runs in lk-agents-fuzz's storage survey"
     "lk-agents-a2a: ci.yml storage-tests (cargo test); A2A DST is K-4"
 )
+
+if [[ ${1:-} == --skip-architecture ]]; then
+    shift
+else
+    step "Rust architecture"
+    bash architecture/check.sh
+fi
+[[ $# == 0 ]] || fail "unexpected argument: $1"
 
 step "coverage"
 crates=$(cargo metadata --no-deps --format-version 1 \

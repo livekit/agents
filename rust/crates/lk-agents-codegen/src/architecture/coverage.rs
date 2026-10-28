@@ -1,14 +1,15 @@
-//! Parse architecture lint exemptions; used by the Python gate, never product code.
+//! Effective lint levels for compiler sites, using the shared source visitor.
+use super::Scan;
 use proc_macro2::Span;
 use quote::ToTokens;
 use std::collections::BTreeMap;
-use syn::{spanned::Spanned, visit::Visit};
+use syn::visit::Visit;
 
-struct LintScope {
-    span: Option<Span>,
-    attrs: Vec<syn::Attribute>,
-    module: bool,
-    exemptions_apply: bool,
+pub(super) struct LintScope {
+    pub(super) span: Option<Span>,
+    pub(super) attrs: Vec<syn::Attribute>,
+    pub(super) module: bool,
+    pub(super) exemptions_apply: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -19,14 +20,14 @@ enum LintLevel {
 }
 
 /// Proves source exemptions separately from the forced-warning compiler capture.
-struct Coverage {
-    scopes: Vec<LintScope>,
-    enclosing: Vec<usize>,
+pub(super) struct Coverage {
+    pub(super) scopes: Vec<LintScope>,
+    pub(super) enclosing: Vec<usize>,
     features: Vec<String>,
 }
 
 impl Coverage {
-    fn new(attrs: &[syn::Attribute], features: &[String]) -> Self {
+    pub(super) fn new(attrs: &[syn::Attribute], features: &[String]) -> Self {
         Self {
             scopes: vec![LintScope {
                 span: None,
@@ -39,7 +40,7 @@ impl Coverage {
         }
     }
 
-    fn enter(&mut self, span: Span, module: bool, exemptions_apply: bool) {
+    pub(super) fn enter(&mut self, span: Span, module: bool, exemptions_apply: bool) {
         self.enclosing.push(self.scopes.len());
         self.scopes.push(LintScope {
             span: Some(span),
@@ -49,7 +50,7 @@ impl Coverage {
         });
     }
 
-    fn exit(&mut self) {
+    pub(super) fn exit(&mut self) {
         self.enclosing.pop();
     }
 
@@ -180,14 +181,14 @@ impl Coverage {
     }
 }
 
-struct SourceIndex {
+pub(super) struct SourceIndex {
     root: std::path::PathBuf,
     parsed: BTreeMap<std::path::PathBuf, std::rc::Rc<syn::File>>,
     ancestors: BTreeMap<std::path::PathBuf, Option<Vec<Vec<syn::Attribute>>>>,
 }
 
 impl SourceIndex {
-    fn new(root: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(super) fn new(root: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let mut index = Self {
             root: root.canonicalize()?,
             parsed: BTreeMap::new(),
@@ -305,7 +306,7 @@ impl SourceIndex {
         }
     }
 
-    fn coverage(
+    pub(super) fn coverage(
         &self,
         path: &str,
         positions: &[String],
@@ -341,7 +342,7 @@ impl SourceIndex {
     }
 }
 
-fn coverage_root(path: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+pub(super) fn coverage_root(path: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     if let Some(root) = std::env::var_os("ARCHITECTURE_CRATE_ROOT") {
         return Ok(root.into());
     }
@@ -605,343 +606,4 @@ mod active;
                 .contains("ambiguous module ancestry")
         );
     }
-}
-
-#[derive(Default)]
-struct Scan {
-    path: String,
-    scopes: Vec<String>,
-    locations: Vec<(Span, String)>,
-    exemptions: Vec<String>,
-    occurrences: BTreeMap<String, usize>,
-    tuple_fields: BTreeMap<String, usize>,
-    errors: Vec<String>,
-    coverage: Option<Coverage>,
-}
-
-impl Scan {
-    fn coverage_scope(
-        &mut self,
-        span: Span,
-        exemptions_apply: bool,
-        visit: impl FnOnce(&mut Self),
-    ) {
-        if let Some(coverage) = &mut self.coverage {
-            coverage.enter(span, false, exemptions_apply);
-        }
-        visit(self);
-        if let Some(coverage) = &mut self.coverage {
-            coverage.exit();
-        }
-    }
-
-    fn enter(&mut self, name: String, span: Span, f: impl FnOnce(&mut Self)) {
-        if let Some(coverage) = &mut self.coverage {
-            coverage.enter(span, name.starts_with("mod "), !name.starts_with("argument "));
-        }
-        self.scopes.push(name);
-        self.locations.push((span, self.scopes.join("/")));
-        f(self);
-        self.scopes.pop();
-        if let Some(coverage) = &mut self.coverage {
-            coverage.exit();
-        }
-    }
-
-    fn macro_tokens(&mut self, tokens: proc_macro2::TokenStream) {
-        use syn::parse::Parser;
-        let tokens: Vec<_> = tokens.into_iter().collect();
-        for (index, token) in tokens.iter().enumerate() {
-            if matches!(token, proc_macro2::TokenTree::Punct(p) if p.as_char() == '#') {
-                if let Some(proc_macro2::TokenTree::Group(group)) = tokens.get(index + 1) {
-                    if group.delimiter() == proc_macro2::Delimiter::Bracket {
-                        if let Ok(attrs) =
-                            syn::Attribute::parse_outer.parse2(quote::quote!(#token #group))
-                        {
-                            for attr in attrs {
-                                self.meta(&attr.meta, "always");
-                            }
-                        }
-                    }
-                }
-            }
-            if let proc_macro2::TokenTree::Group(group) = token {
-                self.macro_tokens(group.stream());
-            }
-        }
-    }
-
-    fn meta(&mut self, meta: &syn::Meta, context: &str) {
-        let syn::Meta::List(list) = meta else { return };
-        let kind = list.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
-        if kind == "cfg_attr" {
-            use syn::parse::Parser;
-            if let Ok(items) =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
-                    .parse2(list.tokens.clone())
-            {
-                let condition = items
-                    .first()
-                    .map(|item| item.to_token_stream().to_string())
-                    .unwrap_or_default();
-                let nested = format!("{context}/cfg({condition})");
-                for item in items.iter().skip(1) {
-                    self.meta(item, &nested);
-                }
-            }
-        } else if matches!(kind.as_str(), "allow" | "expect" | "warn") {
-            use syn::parse::Parser;
-            if let Ok(items) =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
-                    .parse2(list.tokens.clone())
-            {
-                let reason = items.iter().any(|item| {
-                    matches!(item, syn::Meta::NameValue(value)
-                        if value.path.is_ident("reason") && matches!(&value.value,
-                            syn::Expr::Lit(value) if matches!(&value.lit,
-                                syn::Lit::Str(text) if !text.value().trim().is_empty())))
-                });
-                for item in items {
-                    let lint = item.path().to_token_stream().to_string().replace(' ', "");
-                    if matches!(
-                        lint.as_str(),
-                        "warnings"
-                            | "clippy::all"
-                            | "clippy::restriction"
-                            | "clippy::disallowed_methods"
-                            | "clippy::disallowed_types"
-                            | "clippy::disallowed_macros"
-                    ) {
-                        if !reason {
-                            self.errors.push(format!(
-                                "{}:{}: {kind}({lint}) requires a nonempty reason",
-                                self.path,
-                                self.scopes.join("/")
-                            ));
-                        }
-                        let key = format!(
-                            "{}:{}:{lint}:{kind}:{context}",
-                            self.path,
-                            self.scopes.join("/")
-                        );
-                        let occurrence = self.occurrences.entry(key.clone()).or_default();
-                        *occurrence += 1;
-                        self.exemptions.push(format!("{key}:{}", *occurrence));
-                    }
-                }
-            }
-        }
-    }
-}
-
-macro_rules! coverage_visit {
-    ($method:ident, $ty:ty, $exemptions_apply:expr) => {
-        fn $method(&mut self, node: &'ast $ty) {
-            self.coverage_scope(node.span(), $exemptions_apply, |s| syn::visit::$method(s, node));
-        }
-    };
-}
-
-impl<'ast> Visit<'ast> for Scan {
-    fn visit_file(&mut self, node: &'ast syn::File) {
-        if self.coverage.is_none() {
-            for attr in &node.attrs {
-                self.visit_attribute(attr);
-            }
-        }
-        for item in &node.items {
-            self.visit_item(item);
-        }
-    }
-
-    coverage_visit!(visit_expr, syn::Expr, true);
-    coverage_visit!(visit_local, syn::Local, true);
-    coverage_visit!(visit_arm, syn::Arm, true);
-    coverage_visit!(visit_generic_param, syn::GenericParam, false);
-    coverage_visit!(visit_pat, syn::Pat, false);
-    coverage_visit!(visit_field_pat, syn::FieldPat, false);
-    coverage_visit!(visit_field_value, syn::FieldValue, true);
-    coverage_visit!(visit_stmt_macro, syn::StmtMacro, true);
-    coverage_visit!(visit_foreign_item, syn::ForeignItem, true);
-    coverage_visit!(visit_bare_fn_arg, syn::BareFnArg, false);
-    coverage_visit!(visit_bare_variadic, syn::BareVariadic, false);
-    coverage_visit!(visit_variadic, syn::Variadic, false);
-
-    fn visit_item(&mut self, node: &'ast syn::Item) {
-        let name = match node {
-            syn::Item::Fn(i) => format!("fn {}", i.sig.ident),
-            syn::Item::Struct(i) => format!("struct {}", i.ident),
-            syn::Item::Enum(i) => format!("enum {}", i.ident),
-            syn::Item::Mod(i) => format!("mod {}", i.ident),
-            syn::Item::Type(i) => format!("type {}", i.ident),
-            syn::Item::Const(i) => format!("const {}", i.ident),
-            syn::Item::Static(i) => format!("static {}", i.ident),
-            syn::Item::Trait(i) => format!("trait {}", i.ident),
-            syn::Item::Impl(i) => format!(
-                "impl {} {}",
-                i.trait_
-                    .as_ref()
-                    .map(|(_, p, _)| p.to_token_stream().to_string())
-                    .unwrap_or_default(),
-                i.self_ty.to_token_stream()
-            ),
-            syn::Item::Macro(i) => format!(
-                "macro {} {}",
-                i.mac.path.to_token_stream(),
-                i.ident.as_ref().map(ToString::to_string).unwrap_or_default()
-            ),
-            syn::Item::Use(i) => format!("use {}", i.tree.to_token_stream()),
-            _ => "item".into(),
-        };
-        self.enter(name, node.span(), |s| syn::visit::visit_item(s, node));
-    }
-    fn visit_impl_item(&mut self, node: &'ast syn::ImplItem) {
-        let name = match node {
-            syn::ImplItem::Fn(i) => format!("fn {}", i.sig.ident),
-            syn::ImplItem::Const(i) => format!("const {}", i.ident),
-            syn::ImplItem::Type(i) => format!("type {}", i.ident),
-            _ => "item".into(),
-        };
-        self.enter(name, node.span(), |s| syn::visit::visit_impl_item(s, node));
-    }
-    fn visit_trait_item(&mut self, node: &'ast syn::TraitItem) {
-        let name = match node {
-            syn::TraitItem::Fn(i) => format!("fn {}", i.sig.ident),
-            syn::TraitItem::Const(i) => format!("const {}", i.ident),
-            syn::TraitItem::Type(i) => format!("type {}", i.ident),
-            _ => "item".into(),
-        };
-        self.enter(name, node.span(), |s| syn::visit::visit_trait_item(s, node));
-    }
-    fn visit_variant(&mut self, node: &'ast syn::Variant) {
-        self.enter(format!("variant {}", node.ident), node.span(), |s| {
-            syn::visit::visit_variant(s, node)
-        });
-    }
-    fn visit_fn_arg(&mut self, node: &'ast syn::FnArg) {
-        let name = match node {
-            syn::FnArg::Receiver(_) => "self".into(),
-            syn::FnArg::Typed(i) => i.pat.to_token_stream().to_string(),
-        };
-        self.enter(format!("argument {name}"), node.span(), |s| syn::visit::visit_fn_arg(s, node));
-    }
-    fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        self.macro_tokens(node.tokens.clone());
-        syn::visit::visit_macro(self, node);
-    }
-    fn visit_field(&mut self, node: &'ast syn::Field) {
-        let name = if let Some(ident) = &node.ident {
-            format!("field {ident}")
-        } else {
-            let ordinal = self.tuple_fields.entry(self.scopes.join("/")).or_default();
-            let name = format!("field {} {}", *ordinal, node.ty.to_token_stream());
-            *ordinal += 1;
-            name
-        };
-        self.enter(name, node.span(), |s| syn::visit::visit_field(s, node));
-    }
-    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
-        if let Some(coverage) = &mut self.coverage {
-            let current = *coverage.enclosing.last().expect("root scope");
-            coverage.scopes[current].attrs.push(attr.clone());
-        }
-        self.meta(&attr.meta, "always");
-    }
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let mode = args.first().ok_or("expected inventory or locate")?;
-    if matches!(mode.as_str(), "coverage" | "coverage-batch") {
-        use std::io::BufRead;
-        let requests: Vec<(String, Vec<String>)> = if mode == "coverage-batch" {
-            std::io::stdin()
-                .lock()
-                .lines()
-                .map(|line| {
-                    let line = line?;
-                    let mut columns = line.split('\t');
-                    let path = columns.next().ok_or("missing coverage source path")?.to_owned();
-                    Ok((path, columns.map(str::to_owned).collect()))
-                })
-                .collect::<Result<_, Box<dyn std::error::Error>>>()?
-        } else {
-            vec![(
-                args.get(1).ok_or("missing coverage source path")?.clone(),
-                args.iter().skip(2).cloned().collect(),
-            )]
-        };
-        let first = requests.first().ok_or("empty coverage request")?;
-        let root = coverage_root(&first.0)?;
-        let features: Vec<_> = std::env::var("ARCHITECTURE_FEATURES")?
-            .split(',')
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-            .collect();
-        let index = SourceIndex::new(&root)?;
-        for (path, positions) in requests {
-            if positions.is_empty() {
-                return Err("empty coverage positions".into());
-            }
-            for permitted in index.coverage(&path, &positions, &features)? {
-                println!("{}", if permitted { "allowed" } else { "denied" });
-            }
-        }
-        return Ok(());
-    }
-    for path in args.iter().skip(1).take(if matches!(mode.as_str(), "locate" | "locations") {
-        1
-    } else {
-        usize::MAX
-    }) {
-        let source = std::fs::read_to_string(path)?;
-        let parsed = syn::parse_file(&source).map_err(|e| format!("{path}: {e}"))?;
-        let mut scan = Scan { path: path.clone(), ..Scan::default() };
-        scan.visit_file(&parsed);
-        if mode == "locate" || mode == "locations" {
-            let positions: Vec<(usize, usize)> = if mode == "locations" {
-                args.iter()
-                    .skip(2)
-                    .map(|value| {
-                        let (line, column) = value.split_once(':').ok_or("expected line:column")?;
-                        Ok((line.parse()?, column.parse()?))
-                    })
-                    .collect::<Result<_, Box<dyn std::error::Error>>>()?
-            } else {
-                vec![(
-                    args.get(2).ok_or("missing line")?.parse()?,
-                    args.get(3).ok_or("missing column")?.parse()?,
-                )]
-            };
-            for (line, column) in positions {
-                let position = (line, column.saturating_sub(1));
-                let candidate = scan
-                    .locations
-                    .iter()
-                    .filter(|(span, _)| {
-                        (span.start().line, span.start().column) <= position
-                            && position <= (span.end().line, span.end().column)
-                    })
-                    .min_by_key(|(span, _)| {
-                        (
-                            span.end().line - span.start().line,
-                            span.end().column.saturating_sub(span.start().column),
-                        )
-                    });
-                let (span, name) = candidate
-                    .ok_or_else(|| format!("{path}:{line}:{column}: no enclosing item"))?;
-                println!("{}\t{name}", span.start().line);
-            }
-        } else if mode == "inventory" {
-            if !scan.errors.is_empty() {
-                return Err(scan.errors.join("\n").into());
-            }
-            for exemption in scan.exemptions {
-                println!("{exemption}");
-            }
-        } else {
-            return Err("expected inventory or locate".into());
-        }
-    }
-    Ok(())
 }

@@ -75,10 +75,13 @@ jobs:
           key: launch-gate-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: launch-gate-${{ runner.os }}-
 
+      - name: Rust architecture
+        run: bash rust/architecture/check.sh
+
       # Pull requests and pushes: the 1024-seed survey plus 4096 campaign seeds. Nightly and on
       # demand: the full 32768.
       - name: Launch gate
         env:
           VOICE_GATE_SEEDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '32768' || '4096' }}
           VOICE_FULL_WINDOW: ${{ github.event_name == 'schedule' && '1' || '' }}
-        run: rust/crates/lk-agents-fuzz/launch-gate.sh
+        run: rust/crates/lk-agents-fuzz/launch-gate.sh --skip-architecture

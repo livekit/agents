@@ -7,6 +7,7 @@
 //! source lists below.
 
 mod adapter;
+mod architecture;
 mod bases;
 mod class_stub;
 mod decl;
@@ -205,6 +206,16 @@ const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 const REFERENCE_PACKAGE: &str = "livekit-agents";
 
 fn main() -> std::process::ExitCode {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "--architecture") {
+        return match architecture::run(&args[1..]) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("architecture: {error}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
     let check = std::env::args().any(|a| a == "--check");
     let write = std::env::args().any(|a| a == "--write");
     if check == write {

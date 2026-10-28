@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import clippy
+import check as clippy
 from check import ratchet
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -297,7 +297,13 @@ class ClippyContracts(unittest.TestCase):
         self.assertTrue(ratchet(sites, sites - {sorted(macro_sites)[-1]}))
         ordered = sorted(locations)
         scopes = subprocess.run(
-            [str(HELPER), "locations", str(source), *(f"{s[1]}:{s[2]}" for s in ordered)],
+            [
+                str(HELPER),
+                "--architecture",
+                "locations",
+                str(source),
+                *(f"{s[1]}:{s[2]}" for s in ordered),
+            ],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -326,7 +332,7 @@ class ClippyContracts(unittest.TestCase):
             ]
         )
         result = subprocess.run(
-            [str(HELPER), "coverage-batch"],
+            [str(HELPER), "--architecture", "coverage-batch"],
             input=request + "\n",
             cwd=ROOT,
             env={**os.environ, "ARCHITECTURE_FEATURES": "", "ARCHITECTURE_CRATE_ROOT": str(source)},

@@ -907,8 +907,7 @@ a different one, and neither baseline identities nor exemptions may grow or
 broaden. Each check has deliberately failing inputs, including replacement of
 an old violation with a new identity. The shared enforcement step is
 [`rust/architecture/check.sh`](../../rust/architecture/check.sh), invoked by CI
-and the launch gate. These checks enforce the listed boundaries; they do not
-replace review of core state, effects, live resources or executable ownership.
+and the launch gate. Run it from any directory in a full Git checkout.
 
 ## Common runtime primitives
 

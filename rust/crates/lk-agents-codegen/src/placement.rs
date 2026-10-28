@@ -8,7 +8,7 @@ use std::{
 };
 
 use quote::ToTokens as _;
-use syn::{parse::Parser as _, punctuated::Punctuated, spanned::Spanned as _, visit::Visit as _};
+use syn::{parse::Parser as _, punctuated::Punctuated, spanned::Spanned as _};
 
 const BASELINE: &str = "rust/crates/lk-agents-codegen/export-placement-baseline.json";
 // These newly checked families have their own first baseline. Keeping it separate means
@@ -107,9 +107,7 @@ fn violations(path: &str, source: &str) -> Result<Vec<(String, usize)>, String> 
     if source.lines().next().is_some_and(|s| s.starts_with("//! GENERATED FILE -- DO NOT EDIT.")) {
         return Ok(Vec::new());
     }
-    let parsed = syn::parse_file(source).map_err(|e| format!("{path}: {e}"))?;
-    let mut visitor = Exports { path, scope: Vec::new(), found: Vec::new(), error: None };
-    visitor.visit_file(&parsed);
+    let mut visitor = crate::architecture::Scan::source(path, source)?.exports;
     if let Some(error) = visitor.error {
         return Err(format!("{path}: {error}"));
     }
@@ -124,75 +122,22 @@ fn violations(path: &str, source: &str) -> Result<Vec<(String, usize)>, String> 
     Ok(visitor.found)
 }
 
-struct Exports<'a> {
-    path: &'a str,
-    scope: Vec<String>,
-    found: Vec<(String, usize)>,
-    error: Option<syn::Error>,
+#[derive(Default)]
+pub(crate) struct Exports {
+    pub(crate) path: String,
+    pub(crate) scope: Vec<String>,
+    pub(crate) found: Vec<(String, usize)>,
+    pub(crate) error: Option<syn::Error>,
 }
 
-impl Exports<'_> {
-    fn generator(&self) -> bool {
+impl Exports {
+    pub(crate) fn generator(&self) -> bool {
         ["lk-agents-codegen", "lk-agents-bindgen", "lk-agents-host-derive"]
             .iter()
             .any(|name| self.path.starts_with(&format!("rust/crates/{name}/")))
     }
 
-    fn macro_tokens(&mut self, tokens: proc_macro2::TokenStream) {
-        use proc_macro2::{Delimiter, TokenTree};
-        let tokens: Vec<_> = tokens.into_iter().collect();
-        let mut index = 0;
-        while index < tokens.len() {
-            if matches!(&tokens[index], TokenTree::Punct(p) if p.as_char() == '#') {
-                let mut next = index + 1;
-                if matches!(tokens.get(next), Some(TokenTree::Punct(p)) if p.as_char() == '!') {
-                    next += 1;
-                }
-                if let Some(TokenTree::Group(group)) = tokens.get(next)
-                    && group.delimiter() == Delimiter::Bracket
-                {
-                    let contents = group.stream();
-                    if matches!(contents.clone().into_iter().next(), Some(TokenTree::Punct(p)) if p.as_char() == '$')
-                    {
-                        index = next + 1; // Forwarded metadata is checked at its concrete call site.
-                        continue;
-                    }
-                    let meta = syn::parse2::<syn::Meta>(contents.clone()).or_else(|_| {
-                        // Metavariables may prevent parsing arguments; the attribute's path
-                        // still identifies a handwritten export and must not be hidden.
-                        let parser = |input: syn::parse::ParseStream<'_>| {
-                            let path = input.call(syn::Path::parse_mod_style)?;
-                            let _: proc_macro2::TokenStream = input.parse()?;
-                            Ok(syn::Meta::Path(path))
-                        };
-                        parser.parse2(contents.clone())
-                    });
-                    match meta {
-                        Ok(meta) => {
-                            if let Err(error) = self.attribute(&meta) {
-                                self.error = Some(error);
-                            }
-                        }
-                        Err(error) => self.error = Some(error),
-                    }
-                    index = next + 1;
-                    continue;
-                }
-            }
-            if let TokenTree::Group(group) = &tokens[index] {
-                let template = self.generator()
-                    && index >= 2
-                    && matches!(&tokens[index - 1], TokenTree::Punct(p) if p.as_char() == '!')
-                    && matches!(&tokens[index - 2], TokenTree::Ident(i) if ["quote", "quote_spanned", "parse_quote", "parse_quote_spanned"].iter().any(|name| i == name));
-                if !template {
-                    self.macro_tokens(group.stream());
-                }
-            }
-            index += 1;
-        }
-    }
-
-    fn attribute(&mut self, meta: &syn::Meta) -> syn::Result<()> {
+    pub(crate) fn attribute(&mut self, meta: &syn::Meta) -> syn::Result<()> {
         let Some(last) = meta.path().segments.last() else { return Ok(()) };
         let name = last.ident.to_string();
         if name == "cfg_attr" {
@@ -237,111 +182,6 @@ impl Exports<'_> {
             ));
         }
         Ok(())
-    }
-}
-
-impl<'ast> syn::visit::Visit<'ast> for Exports<'_> {
-    fn visit_item(&mut self, item: &'ast syn::Item) {
-        let name = match item {
-            syn::Item::Const(v) => format!("const {}", v.ident),
-            syn::Item::Enum(v) => format!("enum {}", v.ident),
-            syn::Item::Fn(v) => format!("fn {}", v.sig.ident),
-            syn::Item::Impl(v) => format!(
-                "impl {} for {}",
-                v.trait_
-                    .as_ref()
-                    .map(|(_, p, _)| p.to_token_stream().to_string())
-                    .unwrap_or_default(),
-                v.self_ty.to_token_stream()
-            ),
-            syn::Item::Mod(v) => format!("mod {}", v.ident),
-            syn::Item::Macro(v) => format!(
-                "macro {}",
-                v.ident.as_ref().map(ToString::to_string).unwrap_or_else(|| v
-                    .mac
-                    .path
-                    .to_token_stream()
-                    .to_string())
-            ),
-            syn::Item::Static(v) => format!("static {}", v.ident),
-            syn::Item::Struct(v) => format!("struct {}", v.ident),
-            syn::Item::Trait(v) => format!("trait {}", v.ident),
-            syn::Item::TraitAlias(v) => format!("trait {}", v.ident),
-            syn::Item::Type(v) => format!("type {}", v.ident),
-            syn::Item::Union(v) => format!("union {}", v.ident),
-            _ => "item".to_owned(),
-        };
-        self.scope.push(name);
-        syn::visit::visit_item(self, item);
-        self.scope.pop();
-    }
-
-    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
-        let name = match item {
-            syn::ImplItem::Const(v) => v.ident.to_string(),
-            syn::ImplItem::Fn(v) => v.sig.ident.to_string(),
-            syn::ImplItem::Type(v) => v.ident.to_string(),
-            _ => "item".to_owned(),
-        };
-        self.scope.push(name);
-        syn::visit::visit_impl_item(self, item);
-        self.scope.pop();
-    }
-
-    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
-        let name = match item {
-            syn::TraitItem::Const(v) => v.ident.to_string(),
-            syn::TraitItem::Fn(v) => v.sig.ident.to_string(),
-            syn::TraitItem::Type(v) => v.ident.to_string(),
-            _ => "item".to_owned(),
-        };
-        self.scope.push(name);
-        syn::visit::visit_trait_item(self, item);
-        self.scope.pop();
-    }
-
-    fn visit_field(&mut self, field: &'ast syn::Field) {
-        self.scope.push(
-            field.ident.as_ref().map(ToString::to_string).unwrap_or_else(|| "field".to_owned()),
-        );
-        syn::visit::visit_field(self, field);
-        self.scope.pop();
-    }
-
-    fn visit_fn_arg(&mut self, argument: &'ast syn::FnArg) {
-        self.scope.push(match argument {
-            syn::FnArg::Receiver(_) => "arg self".to_owned(),
-            syn::FnArg::Typed(value) => format!("arg {}", value.pat.to_token_stream()),
-        });
-        syn::visit::visit_fn_arg(self, argument);
-        self.scope.pop();
-    }
-
-    fn visit_variant(&mut self, variant: &'ast syn::Variant) {
-        self.scope.push(variant.ident.to_string());
-        syn::visit::visit_variant(self, variant);
-        self.scope.pop();
-    }
-
-    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
-        if let Err(error) = self.attribute(&attr.meta) {
-            self.error = Some(error);
-        }
-    }
-
-    fn visit_macro(&mut self, value: &'ast syn::Macro) {
-        let template = self.generator()
-            && value.path.segments.last().is_some_and(|s| {
-                ["quote", "quote_spanned", "parse_quote", "parse_quote_spanned"]
-                    .iter()
-                    .any(|name| s.ident == name)
-            });
-        if template {
-            return; // These tools emit the generated adapters; their quoted attributes are output.
-        }
-        self.scope.push(format!("tokens {}", value.path.to_token_stream()));
-        self.macro_tokens(value.tokens.clone());
-        self.scope.pop();
     }
 }
 
