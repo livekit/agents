@@ -57,7 +57,7 @@ class KeyframeAPI:
     ) -> dict[str, Any]:
         """Create a plugin session via POST /v1/sessions/plugins/livekit.
 
-        Returns dict with reservation_id and avatar_participant_identity.
+        Returns dict with reservation_id, avatar_participant_identity and model_id.
         """
         payload: dict[str, Any] = {
             "room_name": room_name,

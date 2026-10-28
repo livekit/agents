@@ -89,6 +89,7 @@ from .keyterm_detection import (
     _stt_context_from_keyterms_options,
 )
 from .recorder_io import RecorderIO
+from .recorder_io.recorder_io import _validate_bit_rate
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
@@ -152,6 +153,13 @@ class RecordingOptions(TypedDict, total=False):
     ``gen_ai.system_instructions`` is left out while unchanged. Such spans carry
     ``lk.input.*`` attributes pointing at the span that holds the rest.
     """
+    bit_rate: int | None
+    """Target bit rate of the session-audio Opus encoder, in bits per second. ``None``
+    (the default) keeps the encoder's own default. Only affects ``audio`` recording."""
+    constant_bit_rate: bool
+    """Encode session audio at a constant bit rate instead of a variable one. Defaults to
+    ``False``. Players that estimate an Ogg Opus duration from the file size (e.g. macOS
+    Finder and QuickLook) only get it right on a constant bit rate."""
 
 
 _RECORDING_ALL_ON: RecordingOptions = {
@@ -174,6 +182,7 @@ def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOpti
     if isinstance(record, bool):
         defaults = _RECORDING_ALL_ON if record else _RECORDING_ALL_OFF
         return RecordingOptions(**defaults)
+    _validate_bit_rate(record.get("bit_rate"))
     return RecordingOptions(**{**_RECORDING_ALL_ON, **record})
 
 
@@ -270,7 +279,10 @@ def _append_instructions(template: Instructions | str, extra: str) -> Instructio
     # concatenate the *raw* template text so any {placeholders} survive until render()
     if isinstance(template, Instructions):
         return Instructions(
-            template.common + "\n\n" + extra, audio=template.audio, text=template.text
+            template.common + "\n\n" + extra,
+            audio=template.audio,
+            text=template.text,
+            dynamic=template.dynamic,
         )
     return Instructions(template + "\n\n" + extra)
 
@@ -1085,7 +1097,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
                     if self._opts.recording_options["audio"] or (c.enabled and c.record):
-                        self._recorder_io = RecorderIO(agent_session=self)
+                        self._recorder_io = RecorderIO(
+                            agent_session=self,
+                            bit_rate=self._opts.recording_options.get("bit_rate"),
+                            constant_bit_rate=self._opts.recording_options.get(
+                                "constant_bit_rate", False
+                            ),
+                        )
                         self.input.audio = self._recorder_io.record_input(self.input.audio)
                         self.output.audio = self._recorder_io.record_output(self.output.audio)
 
@@ -1369,10 +1387,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._amd = None
 
         activity = self._activity
+        cancelled = False
         while activity and isinstance(agent_task := activity.agent, AgentTask):
+            parent_interrupted: asyncio.Future[None] | None = None
+            if drain:
+                # cancel() interrupts with force: let the task play out what it has queued
+                # first, such as the goodbye of the tool that called shutdown()
+                await activity.drain()
+                # once a task is cancelled, the parents' speech that awaits the chain would only
+                # answer the cancellation, even when a TaskGroup in between completes with it
+                cancelled = cancelled or not agent_task.done()
+                old_agent = agent_task._old_agent
+                if cancelled and old_agent and old_agent._activity:
+                    parent_interrupted = old_agent._activity.interrupt(force=True)
             # notify AgentTask to complete and wait it to resume the parent agent
             agent_task.cancel()
             await agent_task._wait_for_inactive()
+            if parent_interrupted is not None:
+                # the parent's speech is waiting on this task, it can only end after cancel()
+                await parent_interrupted
 
             if old_agent := agent_task._old_agent:
                 activity = old_agent._activity
@@ -1732,8 +1765,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 to be received after committing the user turn.
                 Default ``2.0`` s. Increase this value if the STT is slow to respond.
             stt_flush_duration (float, optional): The duration of the silence to be appended to the STT
-                to flush the buffer and generate the final transcript.
-                Default ``2.0`` s.
+                to flush the buffer and generate the final transcript when audio input is
+                detached and STT does not support manual flushing. STT with manual flush
+                support receives a flush request instead. Default ``2.0`` s.
             skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
 
         Returns:
@@ -1931,6 +1965,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._activity = self._next_activity
                 self._next_activity = None
 
+                if self._user_state == "listening" and self._agent_state == "listening":
+                    # which tools hold the away window off depends on the current agent
+                    self._set_user_away_timer()
+
                 run_state = self._global_run_state
                 handoff_item = AgentHandoff(
                     old_agent_id=(previous_activity_v.agent.id if previous_activity_v else None),
@@ -2059,8 +2097,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._opts.user_away_timeout is None:
             return
 
-        if _RunningTasks.get(self):
-            # a tool in flight will speak when it lands; the window restarts then (#6883)
+        if any(
+            task.executor._owning_activity in (None, self._activity)
+            for task in _RunningTasks.get(self, {}).values()
+        ):
+            # a tool that can speak when it lands holds the window; a paused agent's can't (#6883)
             return
 
         if (room_io := self._room_io) and (
@@ -2321,8 +2362,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             isinstance(ev.update, ToolCallEnded)
             and self._user_state == "listening"
             and self._agent_state == "listening"
+            and self._user_away_timer is None
         ):
-            # tools hold the window off, so the last one to land restarts it (#6883)
+            # tools hold the window off, so the last one to land restarts it (#6883); a running
+            # timer means the tool that ended belongs to a paused agent and never held it
             self._set_user_away_timer()
 
         self.emit("tool_execution_updated", ev)

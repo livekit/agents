@@ -784,6 +784,24 @@ def _run_bounded(action: str, targets: list[tuple[str, Callable[[], Any]]], time
         logger.warning("telemetry %s exceeded %.1fs; continuing", action, timeout)
 
 
+# (pid, detected resource): service.instance.id is per process, so a fork detects again
+_detected_resource: tuple[int, Resource] | None = None
+
+
+def _resource(attributes: Mapping[str, AttributeValue]) -> Resource:
+    """``Resource.create(attributes)``, with the resource detectors run once per process.
+
+    ``Resource.create`` starts and joins a thread per detector on every call. On the event
+    loop, under GIL contention, each thread handoff waits for the GIL: a call took 85 ms with
+    two busy Python threads (0.1 ms idle). The job process warms this up before its first job.
+    """
+    global _detected_resource
+    pid = os.getpid()
+    if _detected_resource is None or _detected_resource[0] != pid:
+        _detected_resource = (pid, Resource.create())
+    return _detected_resource[1].merge(Resource(dict(attributes)))
+
+
 class _CloudTelemetry:
     """Process-lifetime LiveKit Cloud telemetry infrastructure.
 
@@ -882,7 +900,7 @@ class _CloudTelemetry:
                 self._observability_url = observability_url
             if self._session is None:
                 self._session = _AuthRefreshingSession(_AuthHeaderProvider())
-            resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
+            resource = _resource({SERVICE_NAME: "livekit-agents", **base_metadata})
             self._ensure_trace_pipeline(resource, self._observability_url)
             if self._span_gate is not None:
                 self._span_gate.open_job(job_id)
@@ -940,7 +958,7 @@ class _CloudTelemetry:
             if self._session is None:
                 self._session = _AuthRefreshingSession(_AuthHeaderProvider())
 
-            resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
+            resource = _resource({SERVICE_NAME: "livekit-agents", **base_metadata})
 
             if enable_traces:
                 self._ensure_trace_pipeline(resource, url)
@@ -967,7 +985,7 @@ class _CloudTelemetry:
             process_metadata = {
                 k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
             }
-            meter_resource = Resource.create({SERVICE_NAME: "livekit-agents", **process_metadata})
+            meter_resource = _resource({SERVICE_NAME: "livekit-agents", **process_metadata})
             self._ensure_meter_provider(meter_resource, url)
 
             if not self._atexit_registered:
@@ -1052,7 +1070,7 @@ class _CloudTelemetry:
             # an SDK provider the integrator set up — adopt it
             self._logger_provider = current
         else:
-            owned = LoggerProvider(shutdown_on_exit=False)
+            owned = LoggerProvider(resource=_resource({}), shutdown_on_exit=False)
             self._exit_targets.append(("LoggerProvider", owned.shutdown))
             set_logger_provider(owned)
             self._logger_provider = owned
@@ -1406,6 +1424,13 @@ async def _upload_session_report(
         job_id=report.job_id,
         simulated=bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
         redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
+        duration=int((report.duration or 0) * 1000),
+        # Agent evals read this to pick sessions. Schema: evalschema/session-summary.schema.json
+        # in livekit/cloud-protocol.
+        session_summary=json.dumps(
+            report.to_dict(include_chat_history=False, include_events=False),
+            separators=(",", ":"),
+        ),
     )
     header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
     header_bytes = header_msg.SerializeToString()

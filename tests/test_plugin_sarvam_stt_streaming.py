@@ -30,6 +30,8 @@ def _make_stream(
 ) -> stt_streaming.RealtimeSpeechStream:
     stream = object.__new__(stt_streaming.RealtimeSpeechStream)
     stream._event_ch = _FakeEventChannel()
+    stream._num_retries = 0
+    stream._on_provider_progress = None
     stream._request_id = ""
     stream._session_id = ""
     stream._session_ended = False
@@ -69,6 +71,22 @@ def _make_stream(
         duration=5.0,
     )
     return stream
+
+
+@pytest.mark.parametrize("event", ["vad.speech_start", "vad.speech_end"])
+async def test_provider_turn_events_reset_retries_without_a_transcript(event: str) -> None:
+    stream = _make_stream()
+    stream._num_retries = 2
+    await stream._handle_message({"event": event})
+    assert stream._num_retries == 0
+
+
+@pytest.mark.parametrize("event", ["session.begin", "config.updated", "pong", "unknown"])
+async def test_provider_control_events_do_not_reset_retries(event: str) -> None:
+    stream = _make_stream()
+    stream._num_retries = 2
+    await stream._handle_message({"event": event})
+    assert stream._num_retries == 2
 
 
 async def _flush_pending_config_update(

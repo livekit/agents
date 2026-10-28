@@ -39,7 +39,7 @@ def to_conversations_ctx(
                 text_parts = [
                     str(c)
                     for c in item.content
-                    if not isinstance(c, (llm.ImageContent, llm.AudioContent))
+                    if not isinstance(c, (llm.ImageContent, llm.AudioContent, llm.CacheBreakpoint))
                 ]
                 instructions = "\n".join(text_parts) if text_parts else None
                 continue
@@ -94,7 +94,7 @@ def _build_content(msg: llm.ChatMessage) -> str | list[dict[str, Any]]:
     for content in msg.content:
         if isinstance(content, llm.ImageContent):
             list_content.append(_to_image_content(content))
-        elif isinstance(content, llm.AudioContent):
+        elif isinstance(content, (llm.AudioContent, llm.CacheBreakpoint)):
             pass
         else:
             # str or Instructions

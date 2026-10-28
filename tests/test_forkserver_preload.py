@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from livekit.agents.job import JobContext
-from livekit.agents.worker import AgentServer
+from livekit.agents.plugin import Plugin
+from livekit.agents.worker import AgentServer, WorkerOptions
 
 pytestmark = pytest.mark.unit
 
@@ -68,3 +69,48 @@ def test_forkserver_preload_preserves_child_gc() -> None:
 
     assert outcome["freeze_count"] > 0
     assert outcome["child_cycle_collected"] is True
+
+
+@pytest.mark.skipif(
+    "forkserver" not in mp.get_all_start_methods(),
+    reason="forkserver is not available on this platform",
+)
+@pytest.mark.parametrize(
+    ("preload_modules", "expected"),
+    [
+        (None, ["plugin.a"]),
+        (["app.a", "app.b"], ["plugin.a", "app.a", "app.b"]),
+        (["app.a", "plugin.a", "app.a"], ["plugin.a", "app.a"]),
+    ],
+)
+async def test_preload_modules(preload_modules: list[str] | None, expected: list[str]) -> None:
+    server = AgentServer.from_server_options(
+        WorkerOptions(
+            entrypoint_fnc=AsyncMock(),
+            multiprocessing_context="forkserver",
+            num_idle_processes=0,
+            preload_modules=preload_modules,
+        )
+    )
+    server._simulation = True
+    server._mp_ctx = mp_context = MagicMock()
+
+    pool_started = asyncio.Event()
+    process_pool = MagicMock()
+    process_pool.start = AsyncMock(side_effect=lambda: pool_started.set())
+    process_pool.aclose = AsyncMock()
+
+    with (
+        patch.object(Plugin, "registered_plugins", [MagicMock(package="plugin.a")]),
+        patch("livekit.agents.ipc.proc_pool.ProcPool", return_value=process_pool),
+    ):
+        run_task = asyncio.create_task(server.run(unregistered=True))
+        try:
+            await asyncio.wait_for(pool_started.wait(), timeout=5)
+            assert mp_context.set_forkserver_preload.call_args.args[0] == expected + [
+                "livekit.agents.ipc._preload",
+                "livekit.agents.ipc._preload_freeze",
+            ]
+        finally:
+            await server.aclose()
+            await run_task
