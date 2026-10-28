@@ -385,7 +385,21 @@ async def _synthesize_text(
 
     ``offset`` (seconds) shifts the word timestamps onto the emitter's timeline.
     """
-    request_options: RequestOptions = {"timeout_in_seconds": int(conn_options.timeout)}
+    timeout = conn_options.connect_timeout
+    if (
+        timeout is None
+        or conn_options.pool_timeout != timeout
+        or conn_options.read_timeout != timeout
+        or conn_options.write_timeout != timeout
+        or conn_options.total_timeout is not None
+        or not float(timeout).is_integer()
+    ):
+        raise APIError(
+            "Speechify SDK requires equal finite pool/connect/write/read timeouts in whole "
+            "seconds and cannot enforce total_timeout across framework attempts",
+            retryable=False,
+        )
+    request_options: RequestOptions = {"timeout_in_seconds": int(timeout), "max_retries": 0}
 
     if not _supports_streaming_marks(opts.model):
         response = await client.audio.speech(
