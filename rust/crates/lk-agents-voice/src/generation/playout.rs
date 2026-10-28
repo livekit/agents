@@ -233,10 +233,12 @@ async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool
     }
 }
 
-/// `flush()` then `clear_buffer()`: a cut segment reports `Clear`, never `Flush`+`End`.
-pub(crate) fn clear_sink(shared: &Arc<SessionShared>, speech: SpeechId, out: &dyn AudioOutput) {
+/// `flush()` then `clear_buffer()`: a cut segment reports `Clear`, never `Flush`+`End`. With
+/// nothing pushed since the last flush there is no segment to close, and a second flush would end
+/// a synchronised segment that has none of its audio.
+fn clear_sink(shared: &Arc<SessionShared>, speech: SpeechId, out: &dyn AudioOutput, open: bool) {
     shared.trace(PlayoutStep::SinkCalled { speech: Some(speech), call: SinkCall::Clear });
-    out.cut();
+    if open { out.cut() } else { out.clear_buffer() }
 }
 
 /// Built at the first off-rate frame. A sink that takes any rate gets the frames untouched. A rate
@@ -296,6 +298,38 @@ impl PlaybackObserver for SinkReports {
 
     fn is_closed(&self) -> bool {
         self.0.is_closed()
+    }
+}
+
+/// A complete segment that pushed no audio but forwarded words: its audio leg ends with none, so
+/// a synchroniser shows the words whole and pairs the next segment's audio with the next
+/// segment's words. Nothing plays, so nothing is waited for.
+pub(super) fn end_unvoiced(shared: &Arc<SessionShared>, speech: SpeechId, out: &dyn AudioOutput) {
+    let shown: Arc<dyn PlaybackObserver> =
+        Arc::new(ShownUnvoiced { shared: Arc::clone(shared), speech });
+    out.tracker().observe(Arc::clone(&shown));
+    out.flush();
+    out.tracker().unobserve(&shown);
+}
+
+/// Journals the words a synchroniser shows as an unvoiced segment ends. With no audio there is no
+/// playhead to be ahead of: each word counts as reached where it starts.
+struct ShownUnvoiced {
+    shared: Arc<SessionShared>,
+    speech: SpeechId,
+}
+
+impl PlaybackObserver for ShownUnvoiced {
+    fn on_playback_event(&self, _ev: &PlaybackEvent) {}
+
+    fn on_transcript_shown(&self, word: &lk_agents_abi::TimedString) {
+        self.shared.trace(PlayoutStep::TranscriptShown {
+            speech: self.speech,
+            text: word.text.clone(),
+            start: word.start_time.unwrap_or_default(),
+            end: word.end_time.unwrap_or_default(),
+            played: Duration::from_secs_f64(word.start_time.unwrap_or_default().max(0.0)),
+        });
     }
 }
 
@@ -492,7 +526,7 @@ impl Playing<'_> {
 
     async fn cut<S: Segment>(&mut self, segment: &mut S, text: String) -> Heard {
         // Synchronous: interruption may not wait for a lock.
-        clear_sink(self.shared, self.handle.id(), self.out);
+        clear_sink(self.shared, self.handle.id(), self.out, self.batch > 0);
         self.drain(segment);
         let (heard, reported) = self.heard_at_cut(text).await;
         self.drain(segment);
@@ -525,7 +559,8 @@ impl Playing<'_> {
         // A host output reports from its own loop, later than the hops: wait for it on the clock,
         // which runs unless the session is closing.
         if report.is_none() && !*self.shared.closing.borrow() {
-            report = self.shared.time.timeout(CUT_REPORT_WAIT, self.out.wait_for_playout()).await.ok();
+            report =
+                self.shared.time.timeout(CUT_REPORT_WAIT, self.out.wait_for_playout()).await.ok();
         }
         let Some(ev) = report else {
             let position = self.out.tracker().position();

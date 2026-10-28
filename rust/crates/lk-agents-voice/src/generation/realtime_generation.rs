@@ -5,27 +5,32 @@ use crate::agent_activity::realtime::{RealtimeWake, realtime_state};
 use crate::agent_session::{DriverError, SessionShared, Tx};
 use crate::generation::forward::{TextLeg, first_text_started_speaking};
 use crate::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
-use crate::generation::playout::{Next, Segment, first_frame, perform_audio_forwarding};
+use crate::generation::playout::{
+    Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding,
+};
 use crate::generation::tools::{ToolStep, run_tools};
 use crate::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
-use crate::trace::GenerationStep;
 use crate::io::RealtimeAudioNode;
 use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::{NextStep, StepDecision};
+use crate::trace::GenerationStep;
 use lk_agents_abi::llm::realtime::{Event, Modalities};
-use std::time::Duration;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, TextOutput};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, llm::realtime as rt};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// `_realtime_generation_task`: one step of a realtime reply. Each `MessageDone` is a boundary;
 /// the speech ends when its last frame has played.
 pub(crate) async fn realtime_generation_task(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: &tokio::sync::Mutex<mpsc::UnboundedReceiver<Event>>,
     wake: &Tx,
 ) -> Result<StepOutcome, DriverError> {
@@ -66,15 +71,17 @@ pub(crate) async fn realtime_generation_task(
     let text_out = ctx.providers.output_nodes.text_output(text_out.flatten());
     // `realtime_audio_output_node`: frames go to a node opened for this step over its output,
     // which emits into that output itself. A node that fails to open plays nothing of the step.
-    let node = ctx.providers.output_nodes.realtime_audio.as_ref().zip(audio_out.as_ref()).and_then(|(nodes, out)| {
-        nodes
-            .audio_node(crate::io::CoreAudioSink::new(Arc::clone(out)))
-            .inspect_err(|e| {
-                log::error!(target: "livekit.agents", error = e.to_string().as_str();
+    let node = ctx.providers.output_nodes.realtime_audio.as_ref().zip(audio_out.as_ref()).and_then(
+        |(nodes, out)| {
+            nodes
+                .audio_node(crate::io::CoreAudioSink::new(Arc::clone(out)))
+                .inspect_err(|e| {
+                    log::error!(target: "livekit.agents", error = e.to_string().as_str();
                     "failed to open the realtime_audio_output_node");
-            })
-            .ok()
-    });
+                })
+                .ok()
+        },
+    );
     let node_out =
         node.as_deref().zip(audio_out.as_deref()).map(|(node, out)| NodeOutput { node, out });
     let out: Option<&dyn AudioOutput> = match &node_out {
@@ -115,6 +122,14 @@ pub(crate) async fn realtime_generation_task(
     // `Generation::next` fails only on the speech's own request failing: nothing was generated.
     generation.unvoice().await;
     let heard = played.map_err(|failed| failed.error)?;
+    if heard.frames == 0
+        && heard.complete
+        && text_out.is_some()
+        && !generation.segments.is_empty()
+        && let Some(out) = audio_out.as_deref()
+    {
+        end_unvoiced(shared, handle.id(), out);
+    }
     let interrupted = !heard.complete || handle.interrupted();
     if interrupted {
         // What the server holds of its reply is cut to what the caller heard; a message they heard
@@ -186,8 +201,7 @@ fn deliver_realtime(
         shared.report(GenEvent::ToolStep { speech, step: handle.num_steps() });
     }
     let step = handle.num_steps();
-    let sent =
-        wake.send(RealtimeWake::ToolsDone { speech, step, ask, tool_choice }).is_ok();
+    let sent = wake.send(RealtimeWake::ToolsDone { speech, step, ask, tool_choice }).is_ok();
     if ask && sent { StepOutcome::Next(finished) } else { StepOutcome::Done(finished) }
 }
 
@@ -262,7 +276,13 @@ impl Generation<'_> {
 
     fn message_started(&mut self, id: String) {
         let start = self.audio;
-        self.messages.push(Message { id, start, audio: Duration::ZERO, modalities: None, done: false });
+        self.messages.push(Message {
+            id,
+            start,
+            audio: Duration::ZERO,
+            modalities: None,
+            done: false,
+        });
     }
 
     /// What was already sent to this speech when it was cut: the server holds it too.
@@ -321,7 +341,9 @@ impl Generation<'_> {
             };
             let kind = crate::trace::ProviderKind::Tts;
             let failed = |e, r| tts.failed(e, r);
-            match super::llm::retry(self.shared, self.handle, &mut attempt, kind, &error, &failed).await {
+            match super::llm::retry(self.shared, self.handle, &mut attempt, kind, &error, &failed)
+                .await
+            {
                 super::llm::Retried::Again => {}
                 super::llm::Retried::Interrupted => return Ok(()),
                 super::llm::Retried::GiveUp => return Err(DriverError::from(error)),
@@ -410,8 +432,10 @@ impl Generation<'_> {
             let text = self.segments.get(i).map_or("", String::as_str);
             let (said, rest) = split_chars(words, text.chars().count());
             words = rest;
-            let has_audio = m.modalities.map_or(m.audio > Duration::ZERO || self.plays_audio, |
-                modalities| modalities == Modalities::AudioAndText);
+            let has_audio =
+                m.modalities.map_or(m.audio > Duration::ZERO || self.plays_audio, |modalities| {
+                    modalities == Modalities::AudioAndText
+                });
             if has_audio {
                 let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
                 let heard_ms = ms(heard.played.saturating_sub(m.start).min(m.audio));

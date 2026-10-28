@@ -2,12 +2,14 @@
 //! (`perform_text_forwarding`).
 
 use super::llm::{SegEvent, extend};
-use super::playout::{Next, Segment, first_frame, perform_audio_forwarding, silent, unheard};
+use super::playout::{
+    Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding, silent, unheard,
+};
 use super::tts::{Aligned, Lost, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::DriverError;
-use crate::agent_session::nodes::OutputNodes;
 use crate::agent_session::SessionShared;
+use crate::agent_session::nodes::OutputNodes;
 use crate::generation::TurnAccumulator;
 use crate::generation::{GenEvent, ReplyContext, ReplySource};
 use crate::speech_handle::SpeechHandle;
@@ -46,9 +48,8 @@ pub(super) async fn voice_leg(
     if let Voice::Tts(tts) = &voice {
         tts.set_expressive(ctx.request.expressive.is_some());
     }
-    let synthesis = matches!(voice, Voice::Tts(_))
-        && shared.audio_enabled()
-        && shared.audio_output().is_some();
+    let synthesis =
+        matches!(voice, Voice::Tts(_)) && shared.audio_enabled() && shared.audio_output().is_some();
     if synthesis {
         let early = matches!(ctx.source, ReplySource::Llm) && ctx.preemptive_tts;
         let ready = early
@@ -315,6 +316,17 @@ impl Pump<'_> {
         if let Some(out) = text_out {
             out.flush();
         }
+        // Both legs end every segment, one whose words went down the transcript leg with no
+        // audio (none synthesised, a voice lost before its first frame, or its audio switched
+        // off) included.
+        if text.is_some()
+            && text_out.is_some_and(|leg| leg.forwarded.get())
+            && heard.frames == 0
+            && heard.complete
+            && let Some(out) = shared.audio_output()
+        {
+            end_unvoiced(shared, self.handle.id(), &*out);
+        }
         if synthesis {
             playback.flush_text(shared, self.handle).await;
         }
@@ -351,6 +363,8 @@ pub(super) struct TextLeg<'a> {
     buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     flushed: AtomicBool,
+    /// Words of this segment went down the leg.
+    forwarded: lk_agents_abi::Monotone<bool>,
     shared: &'a Arc<SessionShared>,
     speech: SpeechId,
 }
@@ -363,7 +377,8 @@ impl<'a> TextLeg<'a> {
         shared: &'a Arc<SessionShared>,
         speech: SpeechId,
     ) -> Self {
-        TextLeg { out, buffered, flushed: AtomicBool::new(false), shared, speech }
+        let forwarded = lk_agents_abi::Monotone::new(false);
+        TextLeg { out, buffered, flushed: AtomicBool::new(false), forwarded, shared, speech }
     }
 
     /// Errors are dropped: a text stream that will not open must not silence the agent.
@@ -381,6 +396,9 @@ impl<'a> TextLeg<'a> {
     }
 
     pub(super) async fn forward(&self, event: SynthesisEvent) {
+        if matches!(event, SynthesisEvent::Text(_) | SynthesisEvent::TimedText(_)) {
+            self.forwarded.set(true);
+        }
         if let Some(tx) = self.buffered {
             let _ = tx.send(event);
             return;

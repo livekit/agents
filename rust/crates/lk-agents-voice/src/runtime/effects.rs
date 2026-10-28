@@ -9,7 +9,6 @@ use crate::events::SessionEvent;
 use crate::generation::{GenEvent, ReplySource};
 use crate::room_io::{Opened, StreamOpened};
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::voice::io::AudioOutputExt;
 use lk_agents_abi::{HOST_TEARDOWN_TIMEOUT, SpawnerExt};
 use std::sync::Arc;
 
@@ -340,9 +339,10 @@ impl Runtime {
                 match op {
                     GateOp::Pause => sink.pause(),
                     GateOp::Resume => sink.resume(),
-                    // `cut`, never a bare `clear_buffer`: the flush closes the segment in the
-                    // trackers, or the next speech's wait resolves on this clear's event.
-                    GateOp::ClearBuffer => sink.cut(),
+                    // A bare clear: the speech's own playout, cut by the same interruption, closes
+                    // the segment it pushed (`clear_sink`). A flush here would end a synchronised
+                    // segment none of whose audio reached the sink as if it had been said.
+                    GateOp::ClearBuffer => sink.clear_buffer(),
                 }
             }
             // A synchroniser left behind would otherwise keep pacing into the old leaf. The same

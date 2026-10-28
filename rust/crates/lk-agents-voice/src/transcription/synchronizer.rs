@@ -234,8 +234,8 @@ impl Pacer {
     /// | Finished | warn | warn | warn | warn | warn | warn | → Closed |
     /// | Closed | warn | warn | warn | warn | warn | warn | warn |
     ///
-    /// ¹ re-estimates the speed; with no audio at all the segment is closed, nothing shown (as
-    /// the `Streaming` row's `AudioEnd` with no audio is: see `Pacer::end_audio`).
+    /// ¹ re-estimates the speed. A segment whose inputs ended with no audio shows its text whole
+    /// at once: nothing will play it.
     #[must_use = "an effect not performed is a word the user never sees"]
     pub fn step(mut self, ev: PaceEvent) -> (Pacer, Vec<PaceEffect>) {
         use PaceEvent as E;
@@ -268,7 +268,7 @@ impl Pacer {
             }
             (_, E::Text { .. } | E::TextEnd) => warn(&mut out, PaceWarning::TextAfterEnd),
             (S::Streaming | S::TextEnded, E::Audio { secs }) => self.count_audio(secs),
-            (S::Streaming, E::AudioEnd) => self.end_audio(&mut out),
+            (S::Streaming, E::AudioEnd) => self.end_audio(),
             (S::TextEnded, E::AudioEnd) => self.inputs_ended(&mut out),
             (_, E::Audio { .. } | E::AudioEnd) => warn(&mut out, PaceWarning::AudioAfterEnd),
         }
@@ -340,20 +340,15 @@ impl Pacer {
         self.frames += 1;
     }
 
-    /// With no audio at all the segment is closed and nothing shown (the reference's `flush()`
-    /// rotates); only a cut before the first frame does this.
-    fn end_audio(&mut self, out: &mut Vec<PaceEffect>) {
-        if self.frames == 0 {
-            self.cut(out);
-            return;
-        }
+    fn end_audio(&mut self) {
         self.state = PaceState::AudioEnded;
     }
 
     /// Both inputs ended: the segment's own rate is known.
     fn inputs_ended(&mut self, out: &mut Vec<PaceEffect>) {
         if self.frames == 0 {
-            self.cut(out);
+            // Nothing will play it: shown whole now, as a segment that finished playing.
+            self.finish(Duration::ZERO, false, out);
             return;
         }
         self.state = PaceState::InputsEnded;
@@ -624,18 +619,235 @@ impl Hyphenator for Liang {
     }
 }
 
+/// What the two legs and the sink below tell the synchroniser.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SyncInput {
+    Text {
+        raw: String,
+        start_time: Option<f64>,
+        end_time: Option<f64>,
+    },
+    /// The text leg's flush: the segment's text is complete.
+    TextEnd,
+    /// A frame for the sink below.
+    Audio {
+        secs: f64,
+    },
+    /// The audio leg's flush: the segment's audio is complete, possibly with none.
+    AudioEnd,
+    /// `clear_buffer`: the newest segment, if none of its audio reached the sink, is cut.
+    Clear,
+    Started,
+    Progressed(Duration),
+    Paused,
+    Finished {
+        position: Duration,
+        interrupted: bool,
+    },
+    /// The sink threw its playback count away: the segments it owed are gone where they stood.
+    Reset,
+    Enabled(bool),
+    /// End every segment where it stands; the next input starts a fresh one.
+    Rotate,
+}
+
+/// One segment as the synchroniser sees it.
+struct Segment {
+    /// `None` once closed while its audio is still the sink's (a rotation, synchronisation
+    /// switched off), or opened while synchronisation was off: its playback moves no pacer.
+    pacer: Option<Pacer>,
+    text_ended: bool,
+    /// A frame reached the sink: the sink owes this segment's playback finish.
+    audio: bool,
+    audio_ended: bool,
+    /// The sink reported this segment's playback started.
+    started: bool,
+}
+
+/// `_SegmentSynchronizerImpl`s in order. Each leg is an ordered stream of segments delimited by
+/// its flushes: a segment's text is the next text not yet ended, its audio the next audio, so a
+/// segment the producer ended with no audio is one by construction even when its words arrive
+/// later (through a `transcription_node`). The sink's playback moves the oldest segment it owes.
+pub struct SyncSegments {
+    opts: PacerOptions,
+    enabled: bool,
+    segments: VecDeque<Segment>,
+}
+
+impl SyncSegments {
+    pub fn new(opts: PacerOptions) -> SyncSegments {
+        SyncSegments { opts, enabled: true, segments: VecDeque::new() }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// One input in, the words to show out. A `Heard` is kept only for a `Finished` segment that
+    /// had text: its synchronised transcript.
+    pub fn step(&mut self, input: SyncInput) -> Vec<PaceEffect> {
+        let mut out = Vec::new();
+        match input {
+            SyncInput::Text { raw, start_time, end_time } => {
+                let i = self.next(|s| !s.text_ended);
+                if self.segments[i].pacer.is_none() {
+                    // A segment closed mid-write: its words have no pace to keep.
+                    out.push(PaceEffect::Forward { word: raw, start_time: 0.0, end_time: 0.0 });
+                } else {
+                    self.apply(i, PaceEvent::Text { raw, start_time, end_time }, &mut out);
+                }
+            }
+            SyncInput::TextEnd => {
+                if let Some(i) = self.segments.iter().position(|s| !s.text_ended) {
+                    self.segments[i].text_ended = true;
+                    self.apply(i, PaceEvent::TextEnd, &mut out);
+                    self.settle(i);
+                }
+            }
+            SyncInput::Audio { secs } => {
+                let i = self.next(|s| !s.audio_ended);
+                self.segments[i].audio = true;
+                self.apply(i, PaceEvent::Audio { secs }, &mut out);
+            }
+            SyncInput::AudioEnd => {
+                // Ended before any of its words arrived: a segment with no audio, unless its
+                // words will pass unpaced.
+                if !self.enabled && self.segments.iter().all(|s| s.audio_ended) {
+                    return out;
+                }
+                let i = self.next(|s| !s.audio_ended);
+                self.segments[i].audio_ended = true;
+                self.apply(i, PaceEvent::AudioEnd, &mut out);
+                self.settle(i);
+            }
+            SyncInput::Clear => {
+                if self.segments.back().is_some_and(|s| !s.audio) {
+                    let i = self.segments.len() - 1;
+                    self.apply(i, PaceEvent::Close, &mut out);
+                    self.segments.pop_back();
+                }
+            }
+            SyncInput::Started => {
+                // A sink plays its segments in order: one starting while an older one it had
+                // started is still owed means that one's finish was lost. It ends where it stood.
+                if let Some(i) = self.playing()
+                    && self.segments[i].started
+                    && self.segments.iter().skip(i + 1).any(|s| s.audio)
+                {
+                    self.apply(i, PaceEvent::Close, &mut out);
+                    self.segments.remove(i);
+                }
+                // The reference's pacing loop takes its first word as the playback starts.
+                if let Some(i) = self.playing() {
+                    self.segments[i].started = true;
+                    if let Some(at) = self.segments[i].pacer.as_ref().map(Pacer::position) {
+                        self.apply(i, PaceEvent::Position(at), &mut out);
+                    }
+                }
+            }
+            SyncInput::Progressed(at) => {
+                if let Some(i) = self.playing() {
+                    self.apply(i, PaceEvent::Position(at), &mut out);
+                }
+            }
+            SyncInput::Paused => {
+                if let Some(i) = self.playing() {
+                    self.apply(i, PaceEvent::Paused, &mut out);
+                }
+            }
+            SyncInput::Finished { position, interrupted } => {
+                let Some(i) = self.playing() else { return out };
+                let segment = self.segments.remove(i).expect("playing is an index");
+                if let Some(pacer) = segment.pacer.filter(|p| !p.is_over() && !p.is_blank()) {
+                    // Audio with no words: no transcript, so the speech's own text stands.
+                    let had_text = pacer.saw_text();
+                    let (_, effects) =
+                        pacer.step(PaceEvent::PlaybackFinished { position, interrupted });
+                    let heard = |e: &PaceEffect| matches!(e, PaceEffect::Heard(_));
+                    out.extend(effects.into_iter().filter(|e| had_text || !heard(e)));
+                    return out;
+                }
+            }
+            SyncInput::Reset => {
+                for i in 0..self.segments.len() {
+                    if self.segments[i].audio {
+                        self.apply(i, PaceEvent::Close, &mut out);
+                    }
+                }
+                self.segments.retain(|s| !s.audio);
+            }
+            SyncInput::Enabled(enabled) => {
+                if self.enabled != enabled {
+                    self.enabled = enabled;
+                    self.rotate(&mut out);
+                }
+            }
+            SyncInput::Rotate => self.rotate(&mut out),
+        }
+        out.retain(|e| !matches!(e, PaceEffect::Heard(_)));
+        out
+    }
+
+    /// The oldest segment `open` holds for, else a new one.
+    fn next(&mut self, open: impl Fn(&Segment) -> bool) -> usize {
+        if let Some(i) = self.segments.iter().position(open) {
+            return i;
+        }
+        let pacer = self.enabled.then(|| Pacer::new(self.opts.clone()));
+        let segment =
+            Segment { pacer, text_ended: false, audio: false, audio_ended: false, started: false };
+        self.segments.push_back(segment);
+        self.segments.len() - 1
+    }
+
+    /// A segment with no audio is gone once its pacer and its text are: nothing will report its
+    /// playout.
+    fn settle(&mut self, i: usize) {
+        let segment = &self.segments[i];
+        if !segment.audio && segment.text_ended && segment.pacer.as_ref().is_none_or(Pacer::is_over)
+        {
+            self.segments.remove(i);
+        }
+    }
+
+    /// The oldest segment the sink owes a playout.
+    fn playing(&self) -> Option<usize> {
+        self.segments.iter().position(|s| s.audio)
+    }
+
+    /// Closing ends the text output's segment even with none open, as closing the reference's
+    /// idle `_SegmentSynchronizerImpl` does.
+    fn rotate(&mut self, out: &mut Vec<PaceEffect>) {
+        if self.segments.is_empty() {
+            out.push(PaceEffect::Flush);
+        }
+        for i in 0..self.segments.len() {
+            self.apply(i, PaceEvent::Close, out);
+            let segment = &mut self.segments[i];
+            segment.pacer = None;
+            segment.text_ended = true;
+        }
+        self.segments.retain(|s| s.audio);
+    }
+
+    fn apply(&mut self, i: usize, ev: PaceEvent, out: &mut Vec<PaceEffect>) {
+        let slot = &mut self.segments[i].pacer;
+        // An ended segment takes nothing more; its slot still accounts for its playout.
+        let Some(pacer) = slot.take_if(|p| !p.is_over()) else { return };
+        let (pacer, effects) = pacer.step(ev);
+        *slot = Some(pacer);
+        out.extend(effects);
+    }
+}
+
 enum Out {
     Word(TimedString),
     Flush,
 }
 
-/// The one live segment and the gate around it, under one lock.
+/// The segments and the gate around them, under one lock.
 struct SyncState {
-    pacer: Option<Pacer>,
-    /// The `Heard` of the segment being finished, taken by the `PlaybackFinished` re-emit.
-    heard: Option<Heard>,
-    /// `audio_attached && text_attached`, unless `set_enabled` said otherwise since.
-    enabled: bool,
+    segments: SyncSegments,
     audio_attached: bool,
     text_attached: bool,
     closed: bool,
@@ -646,7 +858,6 @@ struct SyncState {
 
 /// What both chain nodes and the facade share; nothing holds the facade, so no reference cycle.
 struct SyncCore {
-    opts: PacerOptions,
     clock: Arc<dyn Clock>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<SyncState>,
@@ -661,31 +872,13 @@ struct SyncCore {
 
 impl SyncCore {
     fn enabled(&self) -> bool {
-        self.state.lock().unwrap().enabled
+        self.state.lock().unwrap().segments.enabled()
     }
 
-    fn pacer(state: &SyncState) -> &Pacer {
-        state.pacer.as_ref().expect("the pacer is only taken inside `apply`")
-    }
-
-    /// A finished segment takes nothing more: the next input starts the next one.
-    fn fresh_if_over(&self, state: &mut SyncState) {
-        if Self::pacer(state).is_over() {
-            state.pacer = Some(Pacer::new(self.opts.clone()));
-        }
-    }
-
-    fn rotate(&self, state: &mut SyncState) {
-        if !Self::pacer(state).is_over() {
-            self.apply(state, PaceEvent::Close);
-        }
-        state.pacer = Some(Pacer::new(self.opts.clone()));
-    }
-
-    fn apply(&self, state: &mut SyncState, ev: PaceEvent) {
-        let pacer = state.pacer.take().expect("the pacer is only taken here");
-        let (pacer, effects) = pacer.step(ev);
-        state.pacer = Some(pacer);
+    /// Step the segments and perform what they say; the heard transcript of a finished segment.
+    fn step(&self, input: SyncInput) -> Option<Heard> {
+        let effects = self.state.lock().unwrap().segments.step(input);
+        let mut heard = None;
         for effect in effects {
             match effect {
                 PaceEffect::Forward { word, start_time, end_time } => {
@@ -699,10 +892,11 @@ impl SyncCore {
                     self.send(Out::Word(TimedString { start_time: None, ..shown }));
                 }
                 PaceEffect::Flush => self.send(Out::Flush),
-                PaceEffect::Heard(heard) => state.heard = Some(heard),
+                PaceEffect::Heard(h) => heard = Some(h),
                 PaceEffect::Warn(w) => log::warn!(target: "livekit.agents", "{}", w.message()),
             }
         }
+        heard
     }
 
     fn send(&self, out: Out) {
@@ -713,19 +907,13 @@ impl SyncCore {
 
     /// `_on_attachment_changed`. `None` leaves a leg's attachment where it is.
     fn on_attachment_changed(&self, audio: Option<bool>, text: Option<bool>) {
-        let mut state = self.state.lock().unwrap();
-        state.audio_attached = audio.unwrap_or(state.audio_attached);
-        state.text_attached = text.unwrap_or(state.text_attached);
-        let enabled = state.audio_attached && state.text_attached;
-        self.set_enabled_locked(&mut state, enabled);
-    }
-
-    /// A change of `enabled` rotates the segment.
-    fn set_enabled_locked(&self, state: &mut SyncState, enabled: bool) {
-        if state.enabled != enabled {
-            state.enabled = enabled;
-            self.rotate(state);
-        }
+        let enabled = {
+            let mut state = self.state.lock().unwrap();
+            state.audio_attached = audio.unwrap_or(state.audio_attached);
+            state.text_attached = text.unwrap_or(state.text_attached);
+            state.audio_attached && state.text_attached
+        };
+        self.step(SyncInput::Enabled(enabled));
     }
 
     /// The forwarder: the only task and the only place the text sink is awaited.
@@ -762,6 +950,13 @@ impl PlaybackObserver for AudioEvents {
             node.handle_playback(ev);
         }
     }
+
+    fn on_playback_reset(&self) {
+        if let Some(node) = self.0.upgrade() {
+            node.core.step(SyncInput::Reset);
+            node.tracker.on_playback_reset();
+        }
+    }
 }
 
 impl SyncedAudioOutput {
@@ -785,46 +980,20 @@ impl SyncedAudioOutput {
         match ev {
             PlaybackEvent::Started(e) => {
                 self.tracker.playback_started(e.created_at);
-                // The reference's pacing loop takes its first word as the playback starts.
-                let mut state = self.core.state.lock().unwrap();
-                if state.enabled && !SyncCore::pacer(&state).is_over() {
-                    let at = SyncCore::pacer(&state).position();
-                    self.core.apply(&mut state, PaceEvent::Position(at));
-                }
+                self.core.step(SyncInput::Started);
             }
             PlaybackEvent::Progressed(e) => {
                 self.tracker.playback_progressed(e.started_at, e.offset, e.duration);
-                let mut state = self.core.state.lock().unwrap();
-                if state.enabled && !SyncCore::pacer(&state).is_over() {
-                    self.core.apply(&mut state, PaceEvent::Position(e.offset + e.duration));
-                }
+                self.core.step(SyncInput::Progressed(e.offset + e.duration));
             }
             PlaybackEvent::Finished(e) => {
-                let heard = {
-                    let mut state = self.core.state.lock().unwrap();
-                    let pacer = SyncCore::pacer(&state);
-                    if !state.enabled || pacer.is_over() || pacer.is_blank() {
-                        None
-                    } else {
-                        // Audio with no words: finished, but `None` so the speech's own text stands.
-                        let had_text = pacer.saw_text();
-                        self.core.apply(
-                            &mut state,
-                            PaceEvent::PlaybackFinished {
-                                position: e.playback_position,
-                                interrupted: e.interrupted,
-                            },
-                        );
-                        state.heard.take().filter(|_| had_text)
-                    }
-                };
-                match heard {
-                    Some(heard) => self.tracker.playback_finished(PlaybackFinished {
-                        synchronized_transcript: Some(heard.text),
-                        ..e.clone()
-                    }),
-                    None => self.tracker.playback_finished(e.clone()),
-                };
+                let position = e.playback_position;
+                let heard =
+                    self.core.step(SyncInput::Finished { position, interrupted: e.interrupted });
+                let synchronized_transcript =
+                    heard.map(|h| h.text).or(e.synchronized_transcript.clone());
+                self.tracker
+                    .playback_finished(PlaybackFinished { synchronized_transcript, ..e.clone() });
             }
         }
     }
@@ -853,38 +1022,21 @@ impl AudioOutput for SyncedAudioOutput {
     }
 
     async fn capture(&self, frame: &AudioFrame) -> Result<()> {
-        // Passthrough first, unconditionally: the transcript must never hold up speech.
-        self.next.capture_frame(frame).await?;
-        let mut state = self.core.state.lock().unwrap();
-        if !state.enabled {
-            return Ok(());
-        }
-        self.core.fresh_if_over(&mut state);
-        if SyncCore::pacer(&state).audio_ended() {
-            // A missing `playback_finished`: this frame is the next turn's.
-            self.core.rotate(&mut state);
-        }
+        // Counted before it passes: the sink below may report its playback from inside the
+        // capture, and that playback is this segment's.
         let secs = lk_agents_rtc::frame_duration(frame).as_secs_f64();
-        self.core.apply(&mut state, PaceEvent::Audio { secs });
-        Ok(())
+        self.core.step(SyncInput::Audio { secs });
+        self.next.capture_frame(frame).await
     }
 
     fn flush_segment(&self) {
         self.next.flush();
-        if !self.core.enabled() {
-            return;
-        }
-        let mut state = self.core.state.lock().unwrap();
-        let pacer = SyncCore::pacer(&state);
-        // Ending a blank segment would end the next turn's audio early.
-        if pacer.is_over() || pacer.is_blank() || pacer.audio_ended() {
-            return;
-        }
-        self.core.apply(&mut state, PaceEvent::AudioEnd);
+        self.core.step(SyncInput::AudioEnd);
     }
 
     fn clear_buffer(&self) {
         self.next.clear_buffer();
+        self.core.step(SyncInput::Clear);
     }
 
     fn on_attached(&self) {
@@ -899,10 +1051,7 @@ impl AudioOutput for SyncedAudioOutput {
 
     fn pause(&self) {
         self.next.pause();
-        let mut state = self.core.state.lock().unwrap();
-        if state.enabled && !SyncCore::pacer(&state).is_over() {
-            self.core.apply(&mut state, PaceEvent::Paused);
-        }
+        self.core.step(SyncInput::Paused);
     }
 
     fn resume(&self) {
@@ -929,16 +1078,11 @@ impl SyncedTextOutput {
             }
             return Ok(());
         }
-        let mut state = self.core.state.lock().unwrap();
-        state.capturing_text = true;
-        self.core.fresh_if_over(&mut state);
-        if SyncCore::pacer(&state).text_ended() {
-            self.core.rotate(&mut state);
-        }
+        self.core.state.lock().unwrap().capturing_text = true;
         let (start_time, end_time) =
             if aligned { (text.start_time, text.end_time) } else { (None, None) };
         let raw = text.text.clone();
-        self.core.apply(&mut state, PaceEvent::Text { raw, start_time, end_time });
+        self.core.step(SyncInput::Text { raw, start_time, end_time });
         Ok(())
     }
 }
@@ -968,15 +1112,9 @@ impl TextOutput for SyncedTextOutput {
             }
             return;
         }
-        let mut state = self.core.state.lock().unwrap();
-        if !std::mem::take(&mut state.capturing_text) {
-            return;
+        if std::mem::take(&mut self.core.state.lock().unwrap().capturing_text) {
+            self.core.step(SyncInput::TextEnd);
         }
-        let pacer = SyncCore::pacer(&state);
-        if pacer.is_over() || pacer.text_ended() {
-            return;
-        }
-        self.core.apply(&mut state, PaceEvent::TextEnd);
     }
 
     fn on_attached(&self) {
@@ -1065,15 +1203,12 @@ impl TranscriptSynchronizer {
         let (tx, rx) = mpsc::unbounded_channel();
         let core = Arc::new(SyncCore {
             state: Mutex::new(SyncState {
-                pacer: Some(Pacer::new(opts.clone())),
-                heard: None,
-                enabled: true,
+                segments: SyncSegments::new(opts),
                 audio_attached: true,
                 text_attached: true,
                 closed: false,
                 capturing_text: false,
             }),
-            opts,
             clock,
             tx: Mutex::new(Some(tx)),
             forwarder_done: Arc::new(Monotone::new(false)),
@@ -1115,16 +1250,14 @@ impl TranscriptSynchronizer {
 
     #[host(method)]
     pub fn set_enabled(&self, enabled: bool) {
-        let mut state = self.core.state.lock().unwrap();
-        self.core.set_enabled_locked(&mut state, enabled);
+        self.core.step(SyncInput::Enabled(enabled));
     }
 
     /// End the live segment now and start a fresh one.
     #[host(method)]
     pub fn rotate_segment(&self) {
-        let mut state = self.core.state.lock().unwrap();
-        if !state.closed {
-            self.core.rotate(&mut state);
+        if !self.core.state.lock().unwrap().closed {
+            self.core.step(SyncInput::Rotate);
         }
     }
 
@@ -1132,16 +1265,10 @@ impl TranscriptSynchronizer {
     /// `RoomIO.aclose` must close this before the transcription outputs it feeds.
     #[host(method)]
     pub async fn aclose(&self) {
-        {
-            let mut state = self.core.state.lock().unwrap();
-            if state.closed {
-                return;
-            }
-            state.closed = true;
-            if !SyncCore::pacer(&state).is_over() {
-                self.core.apply(&mut state, PaceEvent::Close);
-            }
+        if std::mem::replace(&mut self.core.state.lock().unwrap().closed, true) {
+            return;
         }
+        self.core.step(SyncInput::Rotate);
         // Dropping the sender is what ends the forwarder's `recv`, after the words already queued.
         self.core.tx.lock().unwrap().take();
         let _ = lk_agents_abi::timeout(
@@ -1154,266 +1281,5 @@ impl TranscriptSynchronizer {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn paced(text: &str, audio_secs: f64) -> Pacer {
-        let mut p = Pacer::new(PacerOptions::default());
-        for ev in [
-            PaceEvent::Text { raw: text.into(), start_time: None, end_time: None },
-            PaceEvent::TextEnd,
-            PaceEvent::Audio { secs: audio_secs },
-            PaceEvent::AudioEnd,
-        ] {
-            p = p.step(ev).0;
-        }
-        p
-    }
-
-    fn warned(effects: &[PaceEffect]) -> Vec<PaceWarning> {
-        effects
-            .iter()
-            .filter_map(|e| match e {
-                PaceEffect::Warn(w) => Some(*w),
-                _ => None,
-            })
-            .collect()
-    }
-
-    // Catches: an event out of order (a missing rotation upstream) silently changing a segment
-    // instead of being warned about and ignored, or a segment that finished early never reporting
-    // what was heard.
-    #[test]
-    fn events_out_of_order_are_warned_and_change_nothing() {
-        let text = || PaceEvent::Text { raw: "late".into(), start_time: None, end_time: None };
-        let mut p = Pacer::new(PacerOptions::default());
-        for ev in [text(), PaceEvent::TextEnd] {
-            p = p.step(ev).0;
-        }
-        let (p, effects) = p.step(text());
-        assert_eq!(warned(&effects), [PaceWarning::TextAfterEnd]);
-        let (p, _) = p.step(PaceEvent::Audio { secs: 0.2 });
-        let (p, _) = p.step(PaceEvent::AudioEnd);
-        let (p, effects) = p.step(PaceEvent::AudioEnd);
-        assert_eq!(warned(&effects), [PaceWarning::AudioAfterEnd]);
-
-        // Audio first: the text's end is what ends the inputs.
-        let mut q = Pacer::new(PacerOptions::default());
-        for ev in [text(), PaceEvent::Audio { secs: 0.2 }, PaceEvent::AudioEnd, PaceEvent::TextEnd]
-        {
-            let (next, effects) = q.step(ev);
-            assert!(warned(&effects).is_empty());
-            q = next;
-        }
-        assert!(q.text_ended() && q.audio_ended());
-
-        // Finished before the inputs ended: warned, and still heard once.
-        let early = Pacer::new(PacerOptions::default()).step(text()).0;
-        let finish =
-            PaceEvent::PlaybackFinished { position: Duration::from_millis(50), interrupted: false };
-        let (early, effects) = early.step(finish.clone());
-        assert_eq!(warned(&effects), [PaceWarning::PlaybackFinishedTooEarly]);
-        assert_eq!(effects.iter().filter(|e| matches!(e, PaceEffect::Heard(_))).count(), 1);
-        let (early, effects) = early.step(PaceEvent::Position(Duration::from_millis(60)));
-        assert_eq!(warned(&effects), [PaceWarning::AfterFinished]);
-        let (early, effects) = early.step(PaceEvent::Close);
-        assert!(effects.is_empty() && early.is_over());
-        let (_, effects) = early.step(finish);
-        assert_eq!(warned(&effects), [PaceWarning::AfterClose]);
-        let _ = p;
-    }
-
-    // Catches: an aligned delta (a TTS that reports where each word starts) planned on the
-    // estimated pace instead of its own onset.
-    #[test]
-    fn an_aligned_delta_starts_where_the_voice_says() {
-        let mut p = Pacer::new(PacerOptions::default());
-        for ev in [
-            PaceEvent::Text { raw: "one ".into(), start_time: Some(0.0), end_time: None },
-            PaceEvent::Text { raw: "two".into(), start_time: Some(1.0), end_time: None },
-            PaceEvent::TextEnd,
-            PaceEvent::Audio { secs: 2.0 },
-            PaceEvent::AudioEnd,
-        ] {
-            p = p.step(ev).0;
-        }
-        let (p, effects) = p.step(PaceEvent::Position(Duration::from_millis(900)));
-        assert_eq!(shown(&effects), "one", "the second word starts at its aligned onset, 1 s");
-        let (_, effects) = p.step(PaceEvent::Position(Duration::from_millis(1900)));
-        assert_eq!(shown(&effects), " two");
-    }
-
-    fn shown(effects: &[PaceEffect]) -> String {
-        effects
-            .iter()
-            .filter_map(|e| match e {
-                PaceEffect::Forward { word, .. } => Some(word.as_str()),
-                _ => None,
-            })
-            .collect()
-    }
-
-    // The reference's pacing loop shows a word halfway through its delay and counts it heard only
-    // once the whole delay passed (`_SegmentSynchronizerImpl._main_task`): a cut keeps the words
-    // whose audio ended, not the one playing. Found by `scripts/parity.py say_cut`.
-    #[test]
-    fn a_cut_keeps_the_words_whose_audio_ended() {
-        // Four one-hyphen words over 0.4 s: 0.1 s each, shown at 0.05, 0.15, ...
-        let p = paced("one two three four", 0.4);
-        let (p, effects) = p.step(PaceEvent::Position(Duration::from_millis(160)));
-        assert_eq!(shown(&effects), "one two");
-        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
-            position: Duration::from_millis(160),
-            interrupted: true,
-        });
-        let heard = effects.iter().find_map(|e| match e {
-            PaceEffect::Heard(h) => Some(h.text.clone()),
-            _ => None,
-        });
-        assert_eq!(heard.as_deref(), Some("one"), "\"two\" was shown but still playing");
-    }
-
-    // Catches: a sink that reports no progress (`DataStreamAudioOutput`, an avatar) cut after
-    // seconds of speech leaving nothing heard, so the interrupted reply had no item and the caller
-    // no transcript (found by `scripts/e2e.py avatar` on LiveKit Cloud).
-    #[test]
-    fn a_cut_without_progress_hears_up_to_the_reported_playhead() {
-        let p = paced("one two three four", 0.4);
-        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
-            position: Duration::from_millis(260),
-            interrupted: true,
-        });
-        assert_eq!(shown(&effects), "one two three");
-        let heard = effects.iter().find_map(|e| match e {
-            PaceEffect::Heard(h) => Some(h.text.clone()),
-            _ => None,
-        });
-        assert_eq!(heard.as_deref(), Some("one two"));
-    }
-
-    // The reference's pacing loop sleeps through a pause: the word whose delay began before it is
-    // still shown (not heard), and only the next word waits. Found by `parity.py
-    // realtime_interruption`.
-    #[test]
-    fn a_pause_shows_the_word_in_its_delay() {
-        let p = paced("one two three four", 0.4);
-        // "one" is out; "two" started at 0.1 and shows at 0.15.
-        let (p, effects) = p.step(PaceEvent::Position(Duration::from_millis(120)));
-        assert_eq!(shown(&effects), "one");
-        let (p, effects) = p.step(PaceEvent::Paused);
-        assert_eq!(shown(&effects), " two");
-        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
-            position: Duration::from_millis(120),
-            interrupted: true,
-        });
-        let heard = effects.iter().find_map(|e| match e {
-            PaceEffect::Heard(h) => Some(h.text.clone()),
-            _ => None,
-        });
-        assert_eq!(heard.as_deref(), Some("one"), "\"two\" was shown but still playing");
-    }
-
-    // An aligned word starts at its stamp: a pause before it shows nothing (the pause shows only
-    // a word already playing). Found by `transcript_follows_audio` reading it.
-    #[test]
-    fn a_pause_shows_no_aligned_word_ahead_of_its_stamp() {
-        let mut p = Pacer::new(PacerOptions::default());
-        for (raw, at) in [("one ", 0.0), ("two ", 0.2)] {
-            p = p.step(PaceEvent::Text { raw: raw.into(), start_time: Some(at), end_time: None }).0;
-        }
-        p = p.step(PaceEvent::Audio { secs: 0.4 }).0;
-        let (p, effects) = p.step(PaceEvent::Position(Duration::from_millis(100)));
-        assert_eq!(shown(&effects), "one");
-        let (_, effects) = p.step(PaceEvent::Paused);
-        assert_eq!(shown(&effects), "", "nothing after \"one\" has started by the pause at 0.1 s");
-    }
-
-    // An aligned word's audio is over at the TTS's `end_time`, however long its hyphens pace it: a
-    // cut after it keeps it. Found by `cut_keeps_heard_words` (seed 7680): "Okay." stamped over the
-    // first 10 ms was paced to 0.26 s, so a cut at 0.24 s remembered nothing.
-    #[test]
-    fn an_aligned_word_ends_at_its_stamp() {
-        let mut p = Pacer::new(PacerOptions::default());
-        for (raw, at) in [("Okay. ", 0.0), ("I've ", 0.01)] {
-            let ev = PaceEvent::Text {
-                raw: raw.into(),
-                start_time: Some(at),
-                end_time: Some(at + 0.01),
-            };
-            p = p.step(ev).0;
-        }
-        p = p.step(PaceEvent::Audio { secs: 0.24 }).0;
-        let (p, _) = p.step(PaceEvent::Position(Duration::from_millis(240)));
-        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
-            position: Duration::from_millis(240),
-            interrupted: true,
-        });
-        let heard = effects.iter().find_map(|e| match e {
-            PaceEffect::Heard(h) => Some(h.text.clone()),
-            _ => None,
-        });
-        assert_eq!(heard.as_deref(), Some("Okay. I've"));
-    }
-
-    // An aligned delta's trailing space, paced a hyphen past the word, holds back no stamped word
-    // after it. Found by `cut_keeps_heard_words` (seed 27432): the space after "That's" was due at
-    // 0.26 s, so nothing after it showed while 120 ms played, and the cut remembered it all.
-    #[test]
-    fn a_paced_space_holds_back_no_stamped_word() {
-        let mut p = Pacer::new(PacerOptions::default());
-        for (raw, at, end) in
-            [("That's ", 0.0, None), ("outside ", 0.008, None), ("what", 0.016, Some(0.03))]
-        {
-            let ev = PaceEvent::Text { raw: raw.into(), start_time: Some(at), end_time: end };
-            p = p.step(ev).0;
-        }
-        p = p.step(PaceEvent::TextEnd).0;
-        let (_, effects) = p.step(PaceEvent::Position(Duration::from_millis(120)));
-        assert_eq!(shown(&effects).trim_end(), "That's outside what");
-    }
-
-    // A word's audio is over once the next one's starts: an adapted voice stamps a whole sentence,
-    // its first word paced at the standard rate until the audio ended, the rest at the segment's.
-    // Found by `cut_keeps_heard_words` (seed 7680): the first word outlasted the cut and the
-    // reply remembered nothing of the words after it.
-    #[test]
-    fn a_word_ends_where_the_next_starts() {
-        let mut p = Pacer::new(PacerOptions::default());
-        let ev =
-            PaceEvent::Text { raw: "one two three ".into(), start_time: Some(0.0), end_time: None };
-        p = p.step(ev).0;
-        p = p.step(PaceEvent::Audio { secs: 0.03 }).0;
-        // "one" shows at the start, paced at the standard rate (to 0.26 s).
-        p = p.step(PaceEvent::Position(Duration::ZERO)).0;
-        p = p.step(PaceEvent::TextEnd).0;
-        p = p.step(PaceEvent::AudioEnd).0;
-        let (p, _) = p.step(PaceEvent::Position(Duration::from_millis(25)));
-        let (_, effects) = p.step(PaceEvent::PlaybackFinished {
-            position: Duration::from_millis(25),
-            interrupted: true,
-        });
-        let heard = effects.iter().find_map(|e| match e {
-            PaceEffect::Heard(h) => Some(h.text.clone()),
-            _ => None,
-        });
-        assert_eq!(heard.as_deref(), Some("one two"));
-    }
-
-    // Each word lasts its hyphens at the speed known when it starts, as the reference computes
-    // each delay when it reaches the word: a re-estimate moves the words after it, not before.
-    #[test]
-    fn a_word_keeps_the_speed_it_started_at() {
-        let mut p = Pacer::new(PacerOptions::default());
-        p = p
-            .step(PaceEvent::Text { raw: "one two three".into(), start_time: None, end_time: None })
-            .0;
-        p = p.step(PaceEvent::TextEnd).0;
-        p = p.step(PaceEvent::Audio { secs: 0.3 }).0;
-        // The first word starts with the playback, at the standard rate (1 / 3.83 s).
-        p = p.step(PaceEvent::Position(Duration::ZERO)).0;
-        p = p.step(PaceEvent::AudioEnd).0;
-        let (_, effects) = p.step(PaceEvent::Position(Duration::from_millis(200)));
-        // "one" ends at 0.261 s; "two" (0.1 s at the re-estimated 10 hyphens/s) is shown at 0.311.
-        assert_eq!(shown(&effects), "one");
-    }
-}
+#[path = "synchronizer_tests.rs"]
+mod tests;
