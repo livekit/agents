@@ -3,6 +3,7 @@
 //! decisions are `lk-agents-core`'s; the runtime executes these calls; the host binds signatures,
 //! validates application types and runs the bodies.
 
+pub mod assertions;
 pub mod run;
 
 use async_trait::async_trait;

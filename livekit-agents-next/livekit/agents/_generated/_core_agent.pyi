@@ -10,7 +10,27 @@ from typing import Any
 from livekit.agents.llm import LLM
 from livekit.agents.voice.agent_host import AgentHost
 
-from .agent_run import AgentDefinition, RunRequest, RunUpdate
+from .agent_run import AgentDefinition, EventExpectation, ObservedEvent, RunRequest, RunUpdate
+
+class RunEvents:
+    """The observed events of one invocation and the position `next_event` reads from. Each call
+    returns the index of the event it matched.
+    """
+    def __init__(self, events: list[ObservedEvent]) -> None: ...
+    def at(self, index: int, expected: EventExpectation | None) -> int:
+        """The event at `index` (from the end when negative), meeting `expected` when given."""
+    def next_event(self, expected: EventExpectation | None) -> int:
+        """Advances to the next event of `expected`'s kind, or the next event when `None`."""
+    def skip_next_event_if(self, expected: EventExpectation) -> int | None:
+        """Advances past the next event only if it meets `expected`."""
+    def skip_next(self, count: int) -> None: ...
+    def no_more_events(self) -> None: ...
+    def contains(self, start: int, stop: int, expected: EventExpectation) -> int:
+        """The first event of `start..stop` meeting `expected`."""
+    def failure(self, message: str, index: int | None) -> str:
+        """The message of a failure about the event at `index`, or the current one: `message` and
+        the events with that one marked.
+        """
 
 class AgentRunner:
     """Runs invocations of one agent definition: each `run` streams its updates, then its settled

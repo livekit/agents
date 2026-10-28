@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/agent.rs
+#     rust/crates/lk-agents-abi/src/agent/assertions.rs
 #     rust/crates/lk-agents-abi/src/agent/run.rs
 
 from __future__ import annotations
@@ -180,6 +181,50 @@ class Retries:
 
     tool: int = 1
     output: int = 1
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ObservedEvent:
+    """One event of a tested invocation, as the assertions read it."""
+
+    item: ChatItem
+    new_agent_types: list[str]
+    """For a handoff, the qualified names of the new agent's class and its bases."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class EventExpectationMessage:
+    """`role` is the `ChatRole` literal."""
+
+    role: str | None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class EventExpectationFunctionCall:
+    """`arguments` holds the keys the call must carry with equal values; others may be present."""
+
+    name: str | None
+    arguments: object | None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class EventExpectationFunctionCallOutput:
+    output: str | None
+    is_error: bool | None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class EventExpectationAgentHandoff:
+    new_agent_type: str | None
+
+
+EventExpectation: TypeAlias = (
+    EventExpectationMessage
+    | EventExpectationFunctionCall
+    | EventExpectationFunctionCallOutput
+    | EventExpectationAgentHandoff
+)
+"""What an assertion expects of an event: its kind and the fields it names."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

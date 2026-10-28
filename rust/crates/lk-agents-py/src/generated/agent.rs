@@ -10,6 +10,79 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/agent/assertions.rs.
+type RunEventsImpl = <crate::Selected as super::Implementations>::RunEvents;
+
+/// The observed events of one invocation and the position `next_event` reads from. Each call
+/// returns the index of the event it matched.
+#[pyclass(name = "RunEvents", module = "livekit.agents._core")]
+pub struct RunEvents(RunEventsImpl);
+
+#[pymethods]
+impl RunEvents {
+    #[new]
+    #[pyo3(signature = (events))]
+    fn new(events: ::std::vec::Vec<::lk_agents_abi::agent::assertions::ObservedEvent>) -> PyResult<RunEvents> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::new(events);
+        Ok(RunEvents(out))
+    }
+
+    /// The event at `index` (from the end when negative), meeting `expected` when given.
+    #[pyo3(signature = (index, expected))]
+    fn at(&self, index: i64, expected: ::std::option::Option<::lk_agents_abi::agent::assertions::EventExpectation>) -> PyResult<usize> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::at(&self.0, index, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    /// Advances to the next event of `expected`'s kind, or the next event when `None`.
+    #[pyo3(signature = (expected))]
+    fn next_event(&mut self, expected: ::std::option::Option<::lk_agents_abi::agent::assertions::EventExpectation>) -> PyResult<usize> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::next_event(&mut self.0, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    /// Advances past the next event only if it meets `expected`.
+    #[pyo3(signature = (expected))]
+    fn skip_next_event_if(&mut self, expected: ::lk_agents_abi::agent::assertions::EventExpectation) -> PyResult<::std::option::Option<usize>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next_event_if(&mut self.0, expected);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (count))]
+    fn skip_next(&mut self, count: usize) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next(&mut self.0, count).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    fn no_more_events(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::no_more_events(&self.0).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// The first event of `start..stop` meeting `expected`.
+    #[pyo3(signature = (start, stop, expected))]
+    fn contains(&self, start: usize, stop: usize, expected: ::lk_agents_abi::agent::assertions::EventExpectation) -> PyResult<usize> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::contains(&self.0, start, stop, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    /// The message of a failure about the event at `index`, or the current one: `message` and
+    /// the events with that one marked.
+    #[pyo3(signature = (message, index))]
+    fn failure(&self, message: ::std::string::String, index: ::std::option::Option<usize>) -> PyResult<::std::string::String> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::failure(&self.0, message, index);
+        Ok(out)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
 type AgentRunnerImpl = <crate::Selected as super::Implementations>::AgentRunner;
 

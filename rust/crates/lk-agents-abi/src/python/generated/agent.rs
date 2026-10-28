@@ -251,6 +251,58 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::agent::Retries {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/agent/assertions.rs.
+static OBSERVED_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::agent::assertions::ObservedEvent {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(OBSERVED_EVENT.import(py, "livekit.agents._generated.agent_run", "ObservedEvent")?)? {
+            return Err(super::not_a(obj, "ObservedEvent"));
+        }
+        Ok(Self {
+            item: ::lk_agents_abi::python::attr_with(obj, "ObservedEvent", "item", |v| v.extract::<::lk_agents_abi::ChatItem>().map_err(::std::convert::Into::<PyErr>::into))?,
+            new_agent_types: ::lk_agents_abi::python::attr_with(obj, "ObservedEvent", "new_agent_types", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>())?,
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/agent/assertions.rs.
+static EVENT_EXPECTATION_MESSAGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+static EVENT_EXPECTATION_FUNCTION_CALL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+static EVENT_EXPECTATION_FUNCTION_CALL_OUTPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+static EVENT_EXPECTATION_AGENT_HANDOFF: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::agent::assertions::EventExpectation {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if obj.is_instance(EVENT_EXPECTATION_MESSAGE.import(py, "livekit.agents._generated.agent_run", "EventExpectationMessage")?)? {
+            return Ok(Self::Message { role: ::lk_agents_abi::python::attr_with(obj, "EventExpectationMessage", "role", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })? });
+        }
+        if obj.is_instance(EVENT_EXPECTATION_FUNCTION_CALL.import(py, "livekit.agents._generated.agent_run", "EventExpectationFunctionCall")?)? {
+            return Ok(Self::FunctionCall { name: ::lk_agents_abi::python::attr_with(obj, "EventExpectationFunctionCall", "name", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, arguments: ::lk_agents_abi::python::attr_with(obj, "EventExpectationFunctionCall", "arguments", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "EventExpectationFunctionCall.arguments")).map(Some) })? });
+        }
+        if obj.is_instance(EVENT_EXPECTATION_FUNCTION_CALL_OUTPUT.import(py, "livekit.agents._generated.agent_run", "EventExpectationFunctionCallOutput")?)? {
+            return Ok(Self::FunctionCallOutput { output: ::lk_agents_abi::python::attr_with(obj, "EventExpectationFunctionCallOutput", "output", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, is_error: ::lk_agents_abi::python::attr_with(obj, "EventExpectationFunctionCallOutput", "is_error", |v| if v.is_none() { Ok(None) } else { (v.extract::<bool>()).map(Some) })? });
+        }
+        if obj.is_instance(EVENT_EXPECTATION_AGENT_HANDOFF.import(py, "livekit.agents._generated.agent_run", "EventExpectationAgentHandoff")?)? {
+            return Ok(Self::AgentHandoff { new_agent_type: ::lk_agents_abi::python::attr_with(obj, "EventExpectationAgentHandoff", "new_agent_type", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })? });
+        }
+        Err(super::not_a(obj, "EventExpectationMessage | EventExpectationFunctionCall | EventExpectationFunctionCallOutput | EventExpectationAgentHandoff"))
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
 static RUN_RESULT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
     ::pyo3::sync::PyOnceLock::new();

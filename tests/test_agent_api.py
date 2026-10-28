@@ -253,6 +253,43 @@ async def test_session_mock_tools_replace_a_tool_on_the_call() -> None:
         result.expect.next_event().is_function_call_output(output="mock: Paris")
 
 
+async def test_a_failed_expectation_names_the_mismatch_and_lists_the_events() -> None:
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="weather?",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="lookup", arguments='{"city": "Paris"}', call_id="l1")
+                ],
+            ),
+            FakeLLMResponse(input="sunny", content="It is sunny.", ttft=0, duration=0),
+        ]
+    )
+    agent = Agent(instructions="x")
+
+    @agent.tool
+    async def lookup(ctx: RunContext, city: str) -> str:
+        """Look the weather up.
+
+        Args:
+            city: the city
+        """
+        return "sunny"
+
+    async with VoiceSession(llm=llm) as session:
+        await session.start(agent)
+        result = await session.run(user_input="weather?")
+        with pytest.raises(AssertionError) as failed:
+            result.expect.next_event().is_function_call(name="lookup", arguments={"city": "Rome"})
+        message = str(failed.value)
+        assert message.startswith('For key \'city\', expected "Rome", got "Paris"')
+        assert ">>> [0] FunctionCallEvent(name='lookup'" in message
+        assert "[2] ChatMessageEvent(role='assistant', content='It is sunny.')" in message
+
+
 async def test_input_required_pauses_the_turn_until_the_next_message() -> None:
     """A verbatim ``InputRequired`` speaks the question as written; the next user message is
     the call's output."""

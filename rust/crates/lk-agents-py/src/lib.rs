@@ -59,6 +59,7 @@ impl generated::Implementations for Selected {
     type LoopMonitor = lk_agents_runtime::telemetry::loop_monitor::python::LoopMonitor;
     type LoopMonitorThresholds = lk_agents_runtime::telemetry::loop_monitor::LoopMonitorOptions;
     type AgentRunner = lk_agents_runtime::agent_run::Runner;
+    type RunEvents = lk_agents_runtime::agent_run::RunEvents;
     type InferenceAvatar = lk_agents_runtime::avatar::GatewayAvatar;
     type InferenceLlm = lk_agents_runtime::llm::GatewayLlm;
     type ChoiceParser = lk_agents_inference::llm::parse::ChoiceParser;

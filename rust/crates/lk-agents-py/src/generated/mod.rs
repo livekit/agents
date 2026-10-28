@@ -28,6 +28,7 @@ pub trait Implementations: 'static {
     type RemoteInteraction: ::lk_agents_abi::a2a::remote::RemoteInteraction;
     type RemoteConfiguration: ::lk_agents_abi::a2a::remote::RemoteConfiguration;
     type EndpointCard: ::lk_agents_abi::a2a::card::EndpointCard;
+    type RunEvents: ::lk_agents_abi::agent::assertions::RunEvents;
     type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
@@ -55,6 +56,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::_core_RemoteInteraction>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_agent_card, m)?)?;
+    m.add_class::<agent::RunEvents>()?;
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;
     m.add_class::<inference::InferenceAvatar>()?;

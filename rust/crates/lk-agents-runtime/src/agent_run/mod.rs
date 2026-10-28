@@ -503,3 +503,5 @@ mod runner;
 mod tests;
 
 pub use runner::{Runner, Updates};
+/// `result.expect`'s events: the assertions are the core's own, nothing runs.
+pub use lk_agents_core::assertions::RunEvents;
