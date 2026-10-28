@@ -617,15 +617,25 @@ impl Driver {
     }
 
     /// `_on_false_interruption`: the pause is resolved, resumed or not. A newer current speech
-    /// makes it a real interruption: no event.
+    /// makes it a real interruption: no event. Either way the pause is taken here, so a sink it
+    /// paused and this does not resume is released: the paused speech's own release finds no pause
+    /// left, and the next speech would play into a paused sink until the close.
     fn on_false_interruption(&mut self, now: Ts, out: &mut Out) {
         let Some(paused) = self.activity.paused_speech.take_paused() else { return };
+        // A pause the facts no longer permit was already released by `refresh_pause_facts`.
+        let held = self.activity.paused_speech.pause_timeout().is_some();
         if self.activity.speech_scheduler.current_speech().is_some_and(|c| c != paused.handle) {
+            if held {
+                self.gate_op(out, paused.handle, GateOp::Resume, GateCause::Released);
+            }
             return;
         }
         // The one predicate (the reference drops `audio_enabled` here; this port does not).
         let done = self.activity.speech_scheduler.handle(paused.handle).is_none_or(|h| h.done());
-        let resumed = self.activity.paused_speech.pause_timeout().is_some() && !done;
+        let resumed = held && !done;
+        if held && done {
+            self.gate_op(out, paused.handle, GateOp::Resume, GateCause::Released);
+        }
         // Restored and resumed before the event, as the reference emits it.
         if resumed {
             self.set_agent_state(now, paused.agent_state, out);

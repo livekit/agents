@@ -33,6 +33,7 @@ mod model_failure_reported;
 mod model_metrics_reported;
 mod path_needs_both_switches;
 mod pause_outlives_its_speech;
+mod paused_sink_released_when_done;
 mod preemptive_parked;
 mod preemptive_reply_latency;
 mod filler_refused_on_realtime;
