@@ -42,7 +42,6 @@ if TYPE_CHECKING:
     from .agent_run import _TextRun
     from .agent_session import VoiceSession
     from .run_result import RunUsage
-    from .tool_executor import UpdatePromptArgs
 
 __all__ = [
     "AgentEvent",
@@ -241,35 +240,23 @@ class RunContext(Generic[Context_T]):
     def _origin(self) -> str | None:
         return None if self._function_call is None else f"tool:{self._function_call.call_id}"
 
-    async def update(
-        self,
-        message: str | Any,
-        *,
-        template: str | Callable[[UpdatePromptArgs], str] | None = None,
-    ) -> None:
-        """Push a progress update into the conversation.
+    async def update(self, message: str) -> None:
+        """A progress message while the tool runs: a ``working`` frame on the text door, speech
+        on a call (agents.md "RunContext").
 
-        The first update releases control to the LLM with ``message`` as the tool's
-        synthetic return; later ones are coalesced into a deferred reply by the core.
-
-        Args:
-            message: Progress message; strings are wrapped by ``template``.
-            template: A ``str.format()`` template or a callable receiving ``UpdatePromptArgs``.
+        On a call, the first update releases control to the model with ``message`` as the
+        tool's interim return; later ones are coalesced into a deferred reply by the core.
         """
         from .tool_executor import UPDATE_TEMPLATE, _render
 
-        raw = message if isinstance(message, str) else str(message)
-        rendered = (
-            _render(
-                template or UPDATE_TEMPLATE,
-                {
-                    "function_name": self.function_call.name,
-                    "call_id": self.function_call.call_id,
-                    "message": message,
-                },
-            )
-            if isinstance(message, str)
-            else raw
+        raw = message
+        rendered = _render(
+            UPDATE_TEMPLATE,
+            {
+                "function_name": self.function_call.name,
+                "call_id": self.function_call.call_id,
+                "message": message,
+            },
         )
         fnc_call = self.function_call
         suffix = f"_update_{len(self._updates)}" if self._updates else ""

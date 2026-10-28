@@ -13,14 +13,13 @@ pub struct ToolFlag(u8);
 impl ToolFlag {
     pub const NONE: ToolFlag = ToolFlag(0);
     pub const IGNORE_ON_ENTER: ToolFlag = ToolFlag(1);
-    pub const CANCELLABLE: ToolFlag = ToolFlag(2);
 
     pub const fn bits(self) -> u8 {
         self.0
     }
     /// `None` for a bit this version does not know, so a newer host's flag is not reinterpreted.
     pub const fn from_bits(bits: u8) -> Option<ToolFlag> {
-        if bits & !0b11 == 0 { Some(ToolFlag(bits)) } else { None }
+        if bits & !0b1 == 0 { Some(ToolFlag(bits)) } else { None }
     }
     pub const fn contains(self, other: ToolFlag) -> bool {
         self.0 & other.0 == other.0
@@ -361,7 +360,8 @@ mod tests {
     // Catches: `from_bits` accepting a bit this version does not know.
     #[test]
     fn an_unknown_bit_is_refused() {
-        assert_eq!(ToolFlag::from_bits(3).map(ToolFlag::bits), Some(3));
+        assert_eq!(ToolFlag::from_bits(1).map(ToolFlag::bits), Some(1));
+        assert!(ToolFlag::from_bits(2).is_none(), "CANCELLABLE was dropped (decision 11)");
         assert!(ToolFlag::from_bits(4).is_none());
         assert!(ToolFlag::from_bits(8).is_none());
     }

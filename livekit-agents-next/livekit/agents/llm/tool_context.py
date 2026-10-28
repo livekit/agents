@@ -86,7 +86,7 @@ class Toolset:
             await asyncio.gather(
                 *(
                     t.aclose()
-                    for t, r in zip(toolsets, results)
+                    for t, r in zip(toolsets, results, strict=True)
                     if not isinstance(r, BaseException)
                 ),
                 return_exceptions=True,
@@ -270,7 +270,6 @@ def is_transition(value: Any) -> TypeGuard[Transition]:
 class ToolFlag(Flag):
     NONE = 0
     IGNORE_ON_ENTER = auto()
-    CANCELLABLE = auto()
 
 
 DuplicateMode = Literal["allow", "reject", "replace", "confirm"]
@@ -728,7 +727,7 @@ class AsyncToolset(Toolset):
 
     Example::
 
-        @function_tool(on_duplicate="confirm", flags=ToolFlag.CANCELLABLE)
+        @function_tool(on_duplicate="confirm")
         async def book_flight(ctx, origin: str, destination: str) -> dict:
             await ctx.update(f"Looking up flights {origin} → {destination}...")
             flights = await search(origin, destination)
