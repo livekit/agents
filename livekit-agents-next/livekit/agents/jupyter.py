@@ -10,6 +10,7 @@ import aiohttp
 import nest_asyncio  # type: ignore
 
 from livekit import api
+from livekit.protocol import models
 from livekit.rtc.jupyter import display_room
 
 from . import cli
@@ -37,6 +38,8 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
             )
 
     server.update_options(job_executor_type=JobExecutorType.THREAD)
+    api_key = server._config.api_key
+    api_secret = server._config.api_secret
 
     # create user and agent tokens
     if jupyter_url:
@@ -62,8 +65,6 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
 
     else:
         ws_url = server._config.ws_url
-        api_key = server._config.api_key
-        api_secret = server._config.api_secret
 
         # manually create the user_token and agent_token using the provided api key and secret
         room_name = f"jupyter-room-{uuid.uuid4()}"
@@ -107,8 +108,12 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
     @server.once("worker_started")
     def _simulate_job() -> None:
         async def simulate_job() -> None:
-            async with api.LiveKitAPI(ws_url, api_key, api_secret) as lk_api:
-                room_info = await lk_api.room.create_room(api.CreateRoomRequest(name=room_name))
+            if jupyter_url:
+                # The join service owns the room; its tokens carry no admin credentials.
+                room_info = models.Room(name=room_name)
+            else:
+                async with api.LiveKitAPI(ws_url, api_key, api_secret) as lk_api:
+                    room_info = await lk_api.room.create_room(api.CreateRoomRequest(name=room_name))
 
             await server.simulate_job(
                 room_name,
@@ -124,10 +129,11 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
         server,
         {
             "log_level": "DEBUG",
-            "log_format": "json",
+            "log_style": "json",
             "dev": False,
             "cli_addr": None,
             "simulation": False,
             "options": {k: v for k, v in options.items() if v},
         },
+        unregistered=True,
     )

@@ -963,10 +963,8 @@ class _CloudTelemetry:
                     if self._log_handler not in root.handlers:
                         root.addHandler(self._log_handler)
 
-            # the meter provider outlives the job (the OTel metrics global is
-            # set-once), so its resource carries only process-stable identity;
-            # per-job room_id/job_id ride on each measurement instead
-            # (otel_metrics._job_attrs)
+            # The meter provider outlives the job. Keep its resource process-stable;
+            # per-job identity belongs on traces, never on metric measurements.
             process_metadata = {
                 k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
             }
@@ -1455,13 +1453,13 @@ def _shutdown_telemetry(job_id: str, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOU
     _cloud.release(job_id, timeout)
 
 
-_FALSY = ("0", "false", "no", "off")
+_TRUTHY = ("1", "true", "yes", "on")
 
 
 # the env var name the GenAI conventions standardise for this opt-in
 _capture_content: bool = (
     os.environ.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "").strip().lower()
-    not in _FALSY
+    in _TRUTHY
 )
 
 

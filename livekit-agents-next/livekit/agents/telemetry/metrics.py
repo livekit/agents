@@ -100,26 +100,32 @@ def _histogram(name: str) -> Any:
     return _meter.create_histogram(name, unit="s")
 
 
-def _job_attrs() -> dict[str, Any]:
-    """The per-job attributes stamped on every measurement: the meter provider outlives jobs, so
-    they cannot sit on its resource."""
-    from ..job import get_job_context  # local import: job.py imports this module
+_METRIC_LABEL_VALUES = {
+    "connection_reused": frozenset({"true", "false"}),
+    "severity": frozenset({"warning", "error"}),
+}
 
-    ctx = get_job_context(required=False)
-    if ctx is None:
-        return {}
-    if (state := ctx._telemetry_state) is not None:
-        return dict(state.attributes)
-    # recording was not initialized (disabled, or the crash path); keep identity
-    return {"room_id": ctx.job.room.sid, "job_id": ctx.job.id}
+
+def _metric_attrs(attributes: dict[str, Any]) -> dict[str, str]:
+    """Finite labels only: at most nine combinations, including either label being absent.
+
+    Model, agent and tool names and per-job metadata belong on traces, where unique values
+    do not create a new metric aggregation for every measurement.
+    """
+    return {
+        key: value
+        for key, value in attributes.items()
+        if key in _METRIC_LABEL_VALUES
+        and isinstance(value, str)
+        and value in _METRIC_LABEL_VALUES[key]
+    }
 
 
 def flush_turn_metrics(chat_ctx: ChatContext) -> None:
     """Record the per-turn latency histograms of the history; called at session end."""
-    job = _job_attrs()
     for msg in chat_ctx.messages():
         for name, _, value, attrs in _core.otel_turn_records(dict(msg.metrics)):
-            _histogram(name).record(value, attributes={**job, **attrs})
+            _histogram(name).record(value, attributes=_metric_attrs(attrs))
 
 
 @functools.cache
@@ -130,21 +136,18 @@ def _counter(name: str) -> Any:
 
 def collect_usage(metrics: Any) -> None:
     """Record the usage counters (and connection timing) one metrics event carries."""
-    job = _job_attrs()
     for name, kind, value, attrs in _core.otel_usage_records(metrics):
         if kind == "counter":
-            _counter(name).add(value, attributes={**job, **attrs})
+            _counter(name).add(value, attributes=_metric_attrs(attrs))
         else:
-            _histogram(name).record(value, attributes={**job, **attrs})
+            _histogram(name).record(value, attributes=_metric_attrs(attrs))
 
 
 def record_span_metric(name: str, value: float, attributes: dict[str, Any]) -> None:
     """A duration the core measured with one of its spans (``gen_ai.invoke_agent.duration``,
     ``gen_ai.execute_tool.duration``)."""
-    _histogram(name).record(value, attributes={**_job_attrs(), **attributes})
+    _histogram(name).record(value, attributes=_metric_attrs(attributes))
 
 
 def record_event_loop_blocked(duration: float, *, severity: str) -> None:
-    attrs = _job_attrs()
-    attrs["severity"] = severity
-    _event_loop_blocked.record(duration, attributes=attrs)
+    _event_loop_blocked.record(duration, attributes=_metric_attrs({"severity": severity}))

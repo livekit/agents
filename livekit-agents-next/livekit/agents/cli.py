@@ -60,22 +60,23 @@ def main(argv: list[str] | None = None) -> int:
     args = _core.parse_cli(sys.argv[1:] if argv is None else argv)
     if args["command"] == "download-files":
         return _download_files()
-    _dispatch(_load_server(args["entrypoint"]), args)
-    return 0
+    return _dispatch(_load_server(args["entrypoint"]), args)
 
 
 def run_app(server: AgentServer) -> None:
     """``python myagent.py start [--dev]``: the interface ``lk agent`` drives."""
-    _dispatch(server, _core.parse_cli(sys.argv[1:]))
+    if status := _dispatch(server, _core.parse_cli(sys.argv[1:])):
+        raise SystemExit(status)
 
 
-def _dispatch(server: AgentServer, args: dict[str, Any]) -> None:
+def _dispatch(server: AgentServer, args: dict[str, Any]) -> int:
     if args["command"] == "console":
         _run_console(server, args["connect_addr"], args["record"])
     elif args["command"] == "start":
         _run_worker(server, args)
     else:
-        _download_files()
+        return _download_files()
+    return 0
 
 
 def _load_server(entrypoint: str | None) -> AgentServer:
@@ -100,13 +101,14 @@ def _download_files() -> int:
         logger.warning("no livekit.plugins namespace found — nothing to download")
         return 0
     names = [m.name for m in pkgutil.iter_modules(plugins.__path__, "livekit.plugins.") if m.ispkg]
+    failed = 0
     for name in names:
         try:
             importlib.import_module(name)
         except Exception as e:
             logger.warning("failed to import %s: %s", name, e)
+            failed = 1
     logger.info("discovered %d plugin package(s): %s", len(names), ", ".join(names) or "(none)")
-    failed = 0
     for plugin in Plugin.registered_plugins:
         logger.info("downloading files for %s", plugin.package)
         try:
@@ -211,7 +213,7 @@ def setup_logging(log_level: str, style: str) -> logging.Handler:
 # --- the worker --------------------------------------------------------------------------------
 
 
-def _run_worker(server: AgentServer, args: dict[str, Any]) -> None:
+def _run_worker(server: AgentServer, args: dict[str, Any], *, unregistered: bool = False) -> None:
     """``start``: the worker until a signal, then drained (not in dev) and closed."""
     if args["options"]:
         server.update_options(**args["options"])
@@ -251,7 +253,8 @@ def _run_worker(server: AgentServer, args: dict[str, Any]) -> None:
 
     try:
         main_task = loop.create_task(
-            _serve(server, devmode, args["cli_addr"]), name="worker_main_task_cli"
+            _serve(server, devmode, args["cli_addr"], unregistered=unregistered),
+            name="worker_main_task_cli",
         )
         with contextlib.suppress(_ExitCli):
             # the worker keeps running during drain: an exit ends this wait, not the worker
@@ -268,8 +271,13 @@ def _run_worker(server: AgentServer, args: dict[str, Any]) -> None:
             signal.signal(sig, lambda *_: os._exit(1))
         _close_loop(loop)
 
+    if not main_task.cancelled():
+        main_task.result()
 
-async def _serve(server: AgentServer, devmode: bool, cli_addr: str | None) -> None:
+
+async def _serve(
+    server: AgentServer, devmode: bool, cli_addr: str | None, *, unregistered: bool = False
+) -> None:
     """The worker, beside the dev channel to the ``lk`` CLI at ``cli_addr`` when given."""
     channel = None
     if cli_addr:
@@ -284,9 +292,10 @@ async def _serve(server: AgentServer, devmode: bool, cli_addr: str | None) -> No
         )
         channel = asyncio.ensure_future(dev)
     try:
-        await server.run(devmode=devmode, unregistered=False)
+        await server.run(devmode=devmode, unregistered=unregistered)
     except Exception:
         logger.exception("worker failed")
+        raise
     finally:
         if channel is not None:
             channel.cancel()
