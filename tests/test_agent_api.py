@@ -671,3 +671,21 @@ async def test_a_tool_in_an_a2a_turn_reads_its_task_and_thread(thread_storage: S
 
     task = events[0]["task"]
     assert seen == [(task["id"], task["contextId"], None)]
+
+
+def test_the_dropped_execution_surface_is_refused() -> None:
+    # decision 55: no documented use and no pydantic-ai counterpart
+    import livekit.agents as agents
+    from livekit.agents import llm as agents_llm
+    from livekit.agents.llm import ToolFlag, Working
+    from livekit.agents.voice.run_result import VoiceRunResult
+
+    for module in (agents, agents_llm):
+        assert not hasattr(module, "Transition")
+    assert not hasattr(ToolFlag, "CANCELLABLE")
+    with pytest.raises(TypeError):
+        InputRequired("Which day?", timeout=None)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        Working(tool=None)  # type: ignore[call-arg]
+    for name in ("interrupted", "pending_call", "events", "final_output", "done"):
+        assert not hasattr(VoiceRunResult, name)

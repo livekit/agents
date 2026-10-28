@@ -65,7 +65,6 @@ from .llm.tool_context import (
     ToolContext,
     ToolError,
     ToolResult,
-    Transition,
     Working,
     function_tool,
 )
@@ -244,7 +243,6 @@ __all__ = [
     "Rejected",
     "InputRequired",
     "Working",
-    "Transition",
     "RunContext",
     "Plugin",
     "Scenario",

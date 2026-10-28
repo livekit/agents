@@ -7,7 +7,6 @@ import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
 from enum import Flag, auto
 from typing import (
     TYPE_CHECKING,
@@ -238,13 +237,11 @@ class InputRequired:
 
     The agent facing the person asks it in its own words, or exactly as written with
     ``verbatim=True``. From a conversation tool the next message is written as this call's
-    output. ``tool`` names the tool that takes the answer and ``timeout`` schedules
-    ``on_timeout``.
+    output. ``tool`` names the tool that takes the answer.
     """
 
     question: str
     tool: FunctionTool | RawFunctionTool | None = None
-    timeout: timedelta | None = None
     verbatim: bool = False
 
 
@@ -252,8 +249,6 @@ class InputRequired:
 class Working:
     """The task waits on a system: nothing is delivered, ``message`` is its status."""
 
-    tool: FunctionTool | RawFunctionTool | None = None
-    timeout: timedelta | None = None
     message: str | None = None
 
 
