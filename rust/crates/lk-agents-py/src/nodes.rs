@@ -397,11 +397,9 @@ fn speech_event(py: Python<'_>, ev: &SpeechEvent) -> PyResult<Py<PyAny>> {
 // ----------------------------------------------------------------------------- the default nodes
 
 fn conn_options(options: &Bound<'_, PyAny>) -> PyResult<lk_agents_abi::ApiConnectOptions> {
-    Ok(lk_agents_abi::ApiConnectOptions {
-        max_retry: options.getattr("max_retry")?.extract()?,
-        retry_interval: options.getattr("retry_interval")?.extract()?,
-        timeout: options.getattr("timeout")?.extract()?,
-    })
+    let options: lk_agents_abi::ApiConnectOptions = options.extract()?;
+    options.validate().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(options)
 }
 
 /// `input` (any async iterable), drained in the caller's context: the node calling a default node

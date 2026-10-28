@@ -4,33 +4,52 @@
 use lk_agents_host_derive::Host;
 use thiserror::Error;
 
-/// `types.py:127`, minus the guard `u32` makes unnecessary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum ApiConnectOptionsError {
-    #[error("retry_interval must be greater than or equal to 0")]
-    NegativeRetryInterval,
-    #[error("timeout must be greater than or equal to 0")]
-    NegativeTimeout,
+/// A field outside its declared range, named by its path.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("conn_options.{field} {requirement}")]
+pub struct ApiConnectOptionsError {
+    pub field: &'static str,
+    pub requirement: &'static str,
 }
 
-/// Per-call connection policy: how many retries, how long between them, how long to wait.
+/// Per-operation connection policy: retries, their interval and the limit of each wait.
 ///
-/// The dict for `APIConnectOptions(..)` is generated from these field names: a misspelt keyword
-/// would silently take the reference's defaults.
+/// The five phase limits are seconds, finite and non-negative, `None` disabling one: `pool` waits
+/// for transport capacity, `connect` for a usable connection (DNS and TLS included), `write`
+/// without progress while sending, `read` without progress while a response is expected, `total`
+/// the whole operation (admission, retries and fallback). Each phase defaults to 10 s; `total`
+/// is off.
+///
+/// `timeout` is the single limit of the providers not yet reading the phases (B-9 removes it with
+/// their migration); nothing that reads the phases reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Host)]
-#[binding(emit)]
+#[binding(emit, extract)]
 pub struct ApiConnectOptions {
-    /// Maximum number of retries to connect to the API.
+    /// Attempts after the first.
     pub max_retry: u32,
-    /// Interval between retries to connect to the API in seconds.
+    /// Seconds between retries; the first retry waits 0.1 s.
     pub retry_interval: f64,
-    /// Timeout for connecting to the API in seconds.
+    /// Legacy single limit, in seconds, of providers not yet reading the phase limits.
     pub timeout: f64,
+    pub pool_timeout: Option<f64>,
+    pub connect_timeout: Option<f64>,
+    pub write_timeout: Option<f64>,
+    pub read_timeout: Option<f64>,
+    pub total_timeout: Option<f64>,
 }
 
-/// `types.py:149`.
-pub const DEFAULT_API_CONNECT_OPTIONS: ApiConnectOptions =
-    ApiConnectOptions { max_retry: 3, retry_interval: 2.0, timeout: 10.0 };
+const DEFAULT_PHASE_TIMEOUT: Option<f64> = Some(10.0);
+
+pub const DEFAULT_API_CONNECT_OPTIONS: ApiConnectOptions = ApiConnectOptions {
+    max_retry: 3,
+    retry_interval: 2.0,
+    timeout: 10.0,
+    pool_timeout: DEFAULT_PHASE_TIMEOUT,
+    connect_timeout: DEFAULT_PHASE_TIMEOUT,
+    write_timeout: DEFAULT_PHASE_TIMEOUT,
+    read_timeout: DEFAULT_PHASE_TIMEOUT,
+    total_timeout: None,
+};
 
 impl Default for ApiConnectOptions {
     fn default() -> Self {
@@ -39,19 +58,37 @@ impl Default for ApiConnectOptions {
 }
 
 impl ApiConnectOptions {
-    /// `max_retry < 0` is unrepresentable. NaN is accepted, as in Python.
-    pub fn new(
-        max_retry: u32,
-        retry_interval: f64,
-        timeout: f64,
-    ) -> Result<Self, ApiConnectOptionsError> {
-        if retry_interval < 0.0 {
-            return Err(ApiConnectOptionsError::NegativeRetryInterval);
+    /// The legacy three-field form; the phase limits keep their defaults.
+    pub fn new(max_retry: u32, retry_interval: f64, timeout: f64) -> Result<Self, ApiConnectOptionsError> {
+        let options = ApiConnectOptions { max_retry, retry_interval, timeout, ..DEFAULT_API_CONNECT_OPTIONS };
+        options.validate()?;
+        Ok(options)
+    }
+
+    /// Every duration finite and non-negative, before any work starts. A native duration is
+    /// built only from a validated value.
+    pub fn validate(&self) -> Result<(), ApiConnectOptionsError> {
+        let seconds = |field, value: f64| {
+            if value.is_finite() && value >= 0.0 && value <= MAX_SECONDS {
+                Ok(())
+            } else {
+                Err(ApiConnectOptionsError { field, requirement: "must be a finite number of seconds >= 0" })
+            }
+        };
+        seconds("retry_interval", self.retry_interval)?;
+        seconds("timeout", self.timeout)?;
+        for (field, value) in [
+            ("pool_timeout", self.pool_timeout),
+            ("connect_timeout", self.connect_timeout),
+            ("write_timeout", self.write_timeout),
+            ("read_timeout", self.read_timeout),
+            ("total_timeout", self.total_timeout),
+        ] {
+            if let Some(value) = value {
+                seconds(field, value)?;
+            }
         }
-        if timeout < 0.0 {
-            return Err(ApiConnectOptionsError::NegativeTimeout);
-        }
-        Ok(ApiConnectOptions { max_retry, retry_interval, timeout })
+        Ok(())
     }
 
     /// `types.py:138`. The first retry waits 100 ms, not zero as the docstring says (#1337). Shared
@@ -61,13 +98,43 @@ impl ApiConnectOptions {
     }
 }
 
+/// The largest duration accepted: a century, far below what `Duration::from_secs_f64` overflows on.
+const MAX_SECONDS: f64 = 100.0 * 365.25 * 86_400.0;
+
+/// The record as the host built it, checked at the boundary; the error names the field.
+#[crate::host(export(pid = false))]
+pub fn api_connect_options_check(
+    max_retry: i64,
+    retry_interval: f64,
+    timeout: f64,
+    pool_timeout: Option<f64>,
+    connect_timeout: Option<f64>,
+    write_timeout: Option<f64>,
+    read_timeout: Option<f64>,
+    total_timeout: Option<f64>,
+) -> Result<(), ApiConnectOptionsError> {
+    let max_retry = u32::try_from(max_retry)
+        .map_err(|_| ApiConnectOptionsError { field: "max_retry", requirement: "must be an integer >= 0" })?;
+    ApiConnectOptions {
+        max_retry,
+        retry_interval,
+        timeout,
+        pool_timeout,
+        connect_timeout,
+        write_timeout,
+        read_timeout,
+        total_timeout,
+    }
+    .validate()
+}
+
 pub const FIRST_RETRY_INTERVAL: f64 = 0.1;
 
 /// `APIConnectOptions._interval_for_retry` (`types.py:138`) for the host's retry loops; only
 /// `retry_interval` affects the answer.
 #[crate::host(export(pid = false))]
 pub fn api_retry_interval(retry_interval: f64, num_retries: u32) -> f64 {
-    ApiConnectOptions { max_retry: 0, retry_interval, timeout: 0.0 }.interval_for_retry(num_retries)
+    ApiConnectOptions { max_retry: 0, retry_interval, ..DEFAULT_API_CONNECT_OPTIONS }.interval_for_retry(num_retries)
 }
 
 #[cfg(test)]
@@ -88,17 +155,20 @@ mod tests {
     }
 
 
-    // Catches: dropping the guards, or checking `<= 0` instead of `< 0` (zero is legal and used).
+    // Catches: a negative, NaN or infinite duration accepted (NaN slipped past `< 0` checks and
+    // infinity panicked in `Duration::from_secs_f64`), zero refused, or an error that does not
+    // name its field.
     #[test]
-    fn zero_is_valid_and_negatives_are_not() {
+    fn invalid_durations_fail_with_their_field_and_zero_or_none_is_valid() {
         assert!(ApiConnectOptions::new(0, 0.0, 0.0).is_ok());
-        assert_eq!(
-            ApiConnectOptions::new(3, -1.0, 10.0),
-            Err(ApiConnectOptionsError::NegativeRetryInterval)
-        );
-        assert_eq!(
-            ApiConnectOptions::new(3, 2.0, -1.0),
-            Err(ApiConnectOptionsError::NegativeTimeout)
-        );
+        let ok = ApiConnectOptions { read_timeout: None, total_timeout: Some(0.0), ..DEFAULT_API_CONNECT_OPTIONS };
+        assert_eq!(ok.validate(), Ok(()));
+        for bad in [-1.0, f64::NAN, f64::INFINITY, 1e300] {
+            let err = ApiConnectOptions { read_timeout: Some(bad), ..DEFAULT_API_CONNECT_OPTIONS }.validate();
+            assert_eq!(err.unwrap_err().field, "read_timeout", "{bad}");
+            assert_eq!(ApiConnectOptions::new(3, bad, 10.0).unwrap_err().field, "retry_interval", "{bad}");
+        }
+        let err = api_connect_options_check(-1, 2.0, 10.0, None, None, None, None, None).unwrap_err();
+        assert_eq!(err.to_string(), "conn_options.max_retry must be an integer >= 0");
     }
 }

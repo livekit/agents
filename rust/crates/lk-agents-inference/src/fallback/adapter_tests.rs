@@ -205,7 +205,7 @@ async fn a_wrapped_llm_receives_the_chains_conn_options_not_the_callers() {
     let fb = llm_chain(vec![primary.clone(), backup.clone()]);
 
     let req = ChatRequest {
-        conn_options: ApiConnectOptions { max_retry: 3, retry_interval: 2.0, timeout: 10.0 },
+        conn_options: ApiConnectOptions::default(),
         ..Default::default()
     };
     let mut stream = within("chat", fb.chat(&req)).await.expect("the adapter hands back a stream");

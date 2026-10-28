@@ -83,30 +83,51 @@ NOT_GIVEN = NotGiven()
 
 @dataclass(frozen=True)
 class APIConnectOptions:
+    """Per-request connection policy: retries and the limit of each wait.
+
+    Each ``*_timeout`` is a finite number of seconds >= 0, or ``None`` to disable that
+    limit. Invalid values raise ``ValueError`` naming the field before any work starts.
+    """
+
     max_retry: int = 3
-    """
-    Maximum number of retries to connect to the API.
-    """
+    """Attempts after the first."""
 
     retry_interval: float = 2.0
-    """
-    Interval between retries to connect to the API in seconds.
-    """
+    """Seconds between retries (the first retry waits 0.1 s)."""
 
     timeout: float = 10.0
-    """
-    Timeout for connecting to the API in seconds.
-    """
+    """Single limit, in seconds, of providers that do not read the phase limits yet."""
+
+    pool_timeout: float | None = 10.0
+    """Wait for transport capacity or a pooled connection."""
+
+    connect_timeout: float | None = 10.0
+    """Establish a usable connection, including DNS and TLS."""
+
+    write_timeout: float | None = 10.0
+    """Wait without progress while writing the request."""
+
+    read_timeout: float | None = 10.0
+    """Wait without progress while a response is expected."""
+
+    total_timeout: float | None = None
+    """The whole operation, including retries and fallback."""
 
     def __post_init__(self) -> None:
-        if self.max_retry < 0:
-            raise ValueError("max_retry must be greater than or equal to 0")
+        from . import _core
 
-        if self.retry_interval < 0:
-            raise ValueError("retry_interval must be greater than or equal to 0")
-
-        if self.timeout < 0:
-            raise ValueError("timeout must be greater than or equal to 0")
+        if isinstance(self.max_retry, bool) or not isinstance(self.max_retry, int):
+            raise ValueError("conn_options.max_retry must be an integer >= 0")
+        _core.api_connect_options_check(
+            self.max_retry,
+            self.retry_interval,
+            self.timeout,
+            self.pool_timeout,
+            self.connect_timeout,
+            self.write_timeout,
+            self.read_timeout,
+            self.total_timeout,
+        )
 
     def _interval_for_retry(self, num_retries: int) -> float:
         """

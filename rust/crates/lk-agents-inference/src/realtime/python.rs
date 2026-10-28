@@ -231,7 +231,7 @@ impl PyNativeRealtimeModel {
             base_url,
             azure: is_azure.then_some(Azure { deployment: azure_deployment }),
             auth,
-            conn: ApiConnectOptions { max_retry, retry_interval, timeout },
+            conn: ApiConnectOptions { max_retry, retry_interval, timeout, ..lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS },
         };
         let mut native = NativeRealtime::new(
             dialect,

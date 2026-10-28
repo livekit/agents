@@ -17,7 +17,7 @@ use crate::evals::transcript::{format_chat_ctx, has_handoffs, latest_instruction
 
 /// `judge.py:11`: a judgment is one long completion over a whole transcript.
 pub const JUDGE_CONN_OPTIONS: ApiConnectOptions =
-    ApiConnectOptions { max_retry: 3, retry_interval: 2.0, timeout: 90.0 };
+    ApiConnectOptions { timeout: 90.0, read_timeout: Some(90.0), ..crate::DEFAULT_API_CONNECT_OPTIONS };
 
 /// The inference class every judgment must run under (`_judge_chat_kwargs`, `judge.py:19`).
 // Not applied here: `inference_class` is a per-instance header in Rust, so whoever constructs the

@@ -814,12 +814,9 @@ mod host {
                 return Ok(SessionConnOptions::default());
             };
             let leg = |name: &str| -> PyResult<crate::ApiConnectOptions> {
-                let conn = options.getattr(name)?;
-                Ok(crate::ApiConnectOptions {
-                    max_retry: conn.getattr("max_retry")?.extract()?,
-                    retry_interval: conn.getattr("retry_interval")?.extract()?,
-                    timeout: conn.getattr("timeout")?.extract()?,
-                })
+                let conn: crate::ApiConnectOptions = options.getattr(name)?.extract()?;
+                conn.validate().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+                Ok(conn)
             };
             Ok(SessionConnOptions {
                 stt: leg("stt_conn_options")?,

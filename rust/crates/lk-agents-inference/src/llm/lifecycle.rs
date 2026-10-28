@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::{LlmChunk, Ts};
+use lk_agents_abi::{ApiConnectOptions, LlmChunk, Ts};
 
 use super::parse::{ChoiceAccumulator, TagFilter, WireChunk, usage_chunk};
 
@@ -39,6 +39,22 @@ pub struct RequestPolicy {
     /// Attempts after the first.
     pub max_retry: u32,
     pub retry_interval: Duration,
+}
+
+impl RequestPolicy {
+    /// The phase limits of validated options; `pool_timeout` bounds no wait of this transport and
+    /// the legacy `timeout` is not read.
+    pub fn from_options(options: &ApiConnectOptions) -> Self {
+        let limit = |seconds: Option<f64>| seconds.map(Duration::from_secs_f64);
+        RequestPolicy {
+            connect_timeout: limit(options.connect_timeout),
+            write_timeout: limit(options.write_timeout),
+            read_timeout: limit(options.read_timeout),
+            total_timeout: limit(options.total_timeout),
+            max_retry: options.max_retry,
+            retry_interval: Duration::from_secs_f64(options.retry_interval),
+        }
+    }
 }
 
 /// What the transport reports. Every attempt-scoped event names its attempt; one from an

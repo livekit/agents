@@ -145,7 +145,7 @@ impl InferenceAvatar {
             base_url,
             api_key,
             api_secret,
-            conn: ApiConnectOptions { max_retry, retry_interval, timeout },
+            conn: ApiConnectOptions { max_retry, retry_interval, timeout, ..lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS },
             created: Mutex::new(Created::default()),
             http: std::sync::OnceLock::new(),
         })

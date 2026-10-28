@@ -210,7 +210,7 @@ fn rig(backends: Vec<Arc<Fake>>, policy: ChainPolicy) -> Rig {
 }
 
 fn caller() -> ApiConnectOptions {
-    ApiConnectOptions { max_retry: 3, retry_interval: 2.0, timeout: 10.0 }
+    ApiConnectOptions::default()
 }
 
 /// Runs one request, recording which entries drained; the drain calls `mark_serving` on first

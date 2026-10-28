@@ -1043,7 +1043,7 @@ mod tests {
     async fn a_failed_sentence_is_synthesized_again_within_its_budget() {
         let mut tts = FakeTts::new(3);
         Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
-        let budget = crate::ApiConnectOptions { max_retry: 2, retry_interval: 0.0, timeout: 1.0 };
+        let budget = crate::ApiConnectOptions::new(2, 0.0, 1.0).unwrap();
         let clock = Arc::new(crate::utils::clock::SimClock::new());
         let splitter: SplitterFactory = Arc::new(|_| Box::new(DotSplitter::default()));
         let adapter = StreamAdapter::new(tts.clone(), splitter, clock).with_budget(budget);

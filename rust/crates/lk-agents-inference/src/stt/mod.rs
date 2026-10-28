@@ -968,7 +968,7 @@ mod tests {
     async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
         let ws = Arc::new(FakeWs::failing(TransportError::Connect("refused".into())));
         let mut opts = opts();
-        opts.conn_options = ApiConnectOptions { max_retry: 2, retry_interval: 0.0, timeout: 10.0 };
+        opts.conn_options = ApiConnectOptions::new(2, 0.0, 10.0).unwrap();
         let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
         let stt = NativeStt::new(opts, ws.clone(), spawner);
         let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();

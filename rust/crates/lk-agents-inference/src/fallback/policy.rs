@@ -92,15 +92,12 @@ impl ChainPolicy {
 /// `DEFAULT_FALLBACK_API_CONNECT_OPTIONS` (`llm:17`, `stt:27`, `tts:31`): the adapter is the retry
 /// loop. `retry_interval` drops to the dataclass default (2.0), as in the reference.
 pub fn caller_default() -> ApiConnectOptions {
-    ApiConnectOptions {
-        max_retry: 0,
-        retry_interval: ApiConnectOptions::default().retry_interval,
-        timeout: ApiConnectOptions::default().timeout,
-    }
+    ApiConnectOptions { max_retry: 0, ..ApiConnectOptions::default() }
 }
 
 /// What a child sees on a real attempt: `dataclasses.replace(conn_options, max_retry=…,
-/// timeout=…, retry_interval=…)`, unconditionally (the N x M guard).
+/// timeout=…, retry_interval=…)`, unconditionally (the N x M guard). The attempt timeout bounds
+/// the whole attempt: the legacy single limit and the attempt's total.
 pub fn conn_options_for_attempt(
     caller: &ApiConnectOptions,
     policy: &ChainPolicy,
@@ -108,7 +105,9 @@ pub fn conn_options_for_attempt(
     ApiConnectOptions {
         max_retry: policy.max_retry_per_backend,
         timeout: policy.attempt_timeout.unwrap_or(caller.timeout),
+        total_timeout: policy.attempt_timeout.or(caller.total_timeout),
         retry_interval: policy.retry_interval.unwrap_or(caller.retry_interval),
+        ..*caller
     }
 }
 
@@ -121,7 +120,9 @@ pub fn conn_options_for_recovery(
     ApiConnectOptions {
         max_retry: 0,
         timeout: policy.attempt_timeout.unwrap_or(caller.timeout),
+        total_timeout: policy.attempt_timeout.or(caller.total_timeout),
         retry_interval: policy.retry_interval.unwrap_or(caller.retry_interval),
+        ..*caller
     }
 }
 
