@@ -6,7 +6,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -241,17 +240,10 @@ impl Llm for GatewayLlm {
     }
 
     /// The voice session's generation retries its own LLM calls until it delegates them to the
-    /// request core, so each call here is one attempt; its single `timeout` bounds every wait.
+    /// request core, so each call here is one attempt under the session's phase limits.
     async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        let limit = Some(Duration::from_secs_f64(req.conn_options.timeout.max(0.0)));
-        let policy = RequestPolicy {
-            connect_timeout: limit,
-            write_timeout: limit,
-            read_timeout: limit,
-            total_timeout: None,
-            max_retry: 0,
-            retry_interval: Duration::ZERO,
-        };
+        req.conn_options.validate().map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
+        let policy = RequestPolicy { max_retry: 0, ..RequestPolicy::from_options(&req.conn_options) };
         let args = ChatArgs {
             extra_kwargs: req.extra.clone(),
             parallel_tool_calls: req.parallel_tool_calls,
