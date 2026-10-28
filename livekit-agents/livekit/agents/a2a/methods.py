@@ -61,7 +61,7 @@ from .codec import (
     to_stream_response,
 )
 from .extension import CALLER_LANE, KIND, KIND_DELEGATION, REASON, Extensions, pb, to_json
-from .pump import ResponsePump, WireHost, start
+from .pump import ResponsePump, WireHost, start, tail
 
 if TYPE_CHECKING:
     from .endpoint import A2AEndpoint
@@ -242,12 +242,18 @@ class A2AService(Generic[S]):
         if thread_id is None:
             record, context_id = self._unknown_session(message, call)
         else:
-            pump: ResponsePump[TurnOutcome] | None = None
+            pump: ResponsePump | None = None
             try:
                 pump = await self._start(thread_id, message, call.extensions)
                 async for _ in pump.frames():
                     pass
-                record, context_id = pump.outcome.result.task, pump.outcome.context_id
+                # the response followed the task's stream, which ends once its row does
+                found = await self._find_task(thread_id, str(pump.acked))
+                if found is None:
+                    raise TaskNotFoundError(
+                        message=f"task {pump.acked} is not in session {thread_id}"
+                    )
+                record, context_id = found, thread_id
             except (RunRejected, ThreadNotFound):
                 raise
             except StorageError as e:
@@ -265,7 +271,9 @@ class A2AService(Generic[S]):
             )
         )
 
-    async def stream(self, params: Params, call: CallContext) -> AsyncIterator[StreamEvent]:
+    async def stream(
+        self, params: Params, call: CallContext
+    ) -> AsyncIterator[StreamEvent | pb.StreamResponse]:
         """``message/stream``: the acknowledgment, progress, the artifact, the final status."""
         message = _message_of(params)
         received = time.monotonic()
@@ -276,7 +284,7 @@ class A2AService(Generic[S]):
             yield final_event(record, context_id, exts=call.extensions)
             return
 
-        pump: ResponsePump[TurnOutcome] | None = None
+        pump: ResponsePump | None = None
         try:
             pump = await self._start(thread_id, message, call.extensions)
             logger.debug(
@@ -334,7 +342,7 @@ class A2AService(Generic[S]):
 
     async def _start(
         self, thread_id: str, message: StoredMessage, exts: Extensions
-    ) -> ResponsePump[TurnOutcome]:
+    ) -> ResponsePump:
         """The turn in a task of its own, its frames through the pump (plan 6)."""
         if metadata_from_wire(message.get("metadata")).get(CALLER_LANE) == self.lane:
             # it would wait for the lane its caller holds while the caller waits on it
@@ -357,12 +365,15 @@ class A2AService(Generic[S]):
             opening.add_done_callback(close)
             raise
         own_id: str | None = created.stream_id
+        continued_from: asyncio.Future[str | None] | None = None
         if continued:
             # the task answers on its own stream, which stayed open while it waited
             self._streams.appendleft(stream)
             message, own_id = {**message, "taskId": continued}, None
+            # its response follows the stream from where it ends now
+            continued_from = asyncio.ensure_future(tail(self._storage.streams, continued))
         task_id = continued or created.stream_id
-        pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, task_id)
+        pump: ResponsePump = ResponsePump(self._storage.streams, task_id)
         wire = WireHost(
             lambda on_update, on_token: self._host(
                 thread_id, on_update=on_update, on_token=on_token
@@ -371,6 +382,7 @@ class A2AService(Generic[S]):
             task_id=task_id,
             context_id=thread_id,
             exts=exts,
+            continued_from=continued_from,
         )
 
         async def produce() -> None:
@@ -380,8 +392,7 @@ class A2AService(Generic[S]):
                 await pump.fail(e)
                 return
 
-            wire.finish(outcome)
-            await pump.finish(outcome, close=outcome.result.task.status in TERMINAL_TASK_STATES)
+            await wire.finish(outcome)
 
         start(produce())
         return pump

@@ -228,6 +228,13 @@ class TurnHost(Generic[S]):
         if self._on_token is not None:
             await self._on_token(task_id, delta)
 
+    async def accepted(self, task_id: str, local: bool) -> None:
+        """Rust calls it under ``live`` once the message is in the inbox; a host with no response
+        does nothing."""
+
+    async def on_end(self, record: TaskRecord, output: JsonValue) -> None:
+        """Rust calls it under ``live`` after each commit; a host with no stream does nothing."""
+
     def _load_state(self, stored: JsonValue) -> S:
         if self._state_type is None:
             return cast(S, None)  # a door declared with no state: ``A2ASessionContext[None]``

@@ -127,6 +127,7 @@ the extension still receives the server-set keys and may ignore them.
 | ---------------------------- | -- | ----- |
 | `livekit/channel`            | a message | the channel it came from; absent means `a2a` |
 | `livekit/kind`               | a message, or a data part | `delegation` when another agent asks on its user's behalf; on a data part, `chat_ctx` for a caller's conversation |
+| `livekit/interrupt`          | a message | `false` when, under the `live` inbox, it waits for the reply under way instead of stopping it; a delegation sends `false` |
 | `livekit/interrupted`        | the final status of a `canceled` task | `true` when the server ended the turn for a newer message |
 | `livekit/interruptionReason` | the same | `new-message` |
 | `livekit/mergedInto`         | the final status of a `completed` task | the task whose turn answered this message too |

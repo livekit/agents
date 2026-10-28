@@ -302,11 +302,12 @@ class A2ADelegate(Delegate, Toolset):
         """The request as the card allows: the caller's session and lane, the delegation tag
         and, with no session to name, the conversation, all only when the expert offers the
         extension. An answer goes to the task that asked, alone."""
-        from ..a2a.extension import CALLER_LANE, KIND, KIND_DELEGATION
+        from ..a2a.extension import CALLER_LANE, INTERRUPT, KIND, KIND_DELEGATION
 
         offers = client.offers_extension
         shared = context_id if offers else None
-        metadata: dict[str, JsonValue] = {KIND: KIND_DELEGATION}
+        # the expert's own work is never stopped by a caller
+        metadata: dict[str, JsonValue] = {KIND: KIND_DELEGATION, INTERRUPT: False}
         if shared is not None and caller_lane:
             metadata[CALLER_LANE] = caller_lane
         own = None
