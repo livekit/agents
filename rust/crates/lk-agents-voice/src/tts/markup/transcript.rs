@@ -1,11 +1,3 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! The provider-agnostic transcript side: strip every dialect, surface the leading expression, hold
 //! a tag that straddles a chunk boundary.
 
@@ -18,7 +10,6 @@ use crate::tts::markup::strip::extract_and_strip;
 
 /// Strip the union of every provider's expressive XML markup (provider-agnostic): the sinks no
 /// longer know the provider. Square brackets are prose here and are left alone.
-#[crate::host(export(pid = false))]
 pub fn split_all_markup(text: &str) -> (String, Vec<ExpressiveTag>) {
     // Every markup shape starts with `<`: skip the scan for the common, markup-free chunk.
     if !text.contains('<') {
@@ -32,13 +23,11 @@ pub fn split_all_markup(text: &str) -> (String, Vec<ExpressiveTag>) {
 }
 
 /// [`split_all_markup`] returning only the clean text (tags discarded).
-#[crate::host(export(pid = false))]
 pub fn strip_all_markup(text: &str) -> String {
     split_all_markup(text).0
 }
 
 /// Strip only the `<expr/>` dialect, leaving all other markup untouched.
-#[crate::host(export(pid = false))]
 pub fn strip_expr_markup(text: &str) -> String {
     split_expr(text).0
 }
@@ -46,7 +35,6 @@ pub fn strip_expr_markup(text: &str) -> String {
 /// Only the `<expr/>` dialect stripped, with its markers: the provider-native tags stay in the
 /// words. With markers the text loses its trailing blanks, and a marker heading it takes the blank
 /// after it along.
-#[crate::host(export(pid = false))]
 pub fn split_expr_markup(text: &str) -> (String, Vec<ExpressiveTag>) {
     let (clean, tags) = split_expr(text);
     if tags.is_empty() {
@@ -74,17 +62,18 @@ pub fn expression_attribute(tags: &[ExpressiveTag]) -> Option<(&'static str, Str
     Some((ATTRIBUTE_TRANSCRIPTION_EXPRESSION, json))
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// [`expression_attribute`] as the one-entry `{ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json}` dict the
 /// reference returns.
-#[crate::host(export(pid = false, name = "expression_attribute"))]
-pub fn expression_attribute_map(tags: Vec<ExpressiveTag>) -> Option<std::collections::HashMap<String, String>> {
+pub fn expression_attribute_map(
+    tags: Vec<ExpressiveTag>,
+) -> Option<std::collections::BTreeMap<String, String>> {
     attribute_map(expression_attribute(&tags))
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-fn attribute_map(pair: Option<(&'static str, String)>) -> Option<std::collections::HashMap<String, String>> {
-    pair.map(|(key, json)| std::collections::HashMap::from([(key.to_owned(), json)]))
+fn attribute_map(
+    pair: Option<(&'static str, String)>,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    pair.map(|(key, json)| std::collections::BTreeMap::from([(key.to_owned(), json)]))
 }
 
 /// `ensure_ascii=True`: non-ASCII is escaped as `\uXXXX`, which a JSON writer would not do.
@@ -113,7 +102,6 @@ fn push_json_string(out: &mut String, s: &str) {
 
 /// Stateful, provider-agnostic markup stripper for one transcript segment. A partial trailing tag
 /// is held back until it closes.
-#[crate::class(mutable)]
 #[derive(Debug, Default)]
 pub struct TranscriptMarkupStripper {
     buf: String,
@@ -122,11 +110,7 @@ pub struct TranscriptMarkupStripper {
 }
 
 /// Stateful, provider-agnostic markup stripper for one transcript segment.
-#[crate::host(object(
-    pid = false
-))]
 impl TranscriptMarkupStripper {
-    #[host(new)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -173,7 +157,6 @@ impl TranscriptMarkupStripper {
     }
 
     /// Feed a chunk; return the clean text ready to emit (may be empty).
-    #[host(method)]
     pub fn push(&mut self, text: &str) -> String {
         self.buf.push_str(text);
         if self.has_open_tag() {
@@ -184,7 +167,6 @@ impl TranscriptMarkupStripper {
     }
 
     /// Drain any buffered text at segment end; return the remaining clean text.
-    #[host(method)]
     pub fn flush(&mut self) -> String {
         if self.buf.is_empty() {
             return String::new();
@@ -194,7 +176,6 @@ impl TranscriptMarkupStripper {
     }
 
     /// The markup tags stripped so far, in document order.
-    #[host(getter)]
     pub fn tags(&self) -> &[ExpressiveTag] {
         &self.tags
     }
@@ -204,10 +185,8 @@ impl TranscriptMarkupStripper {
         expression_attribute(&self.tags)
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// [`Self::expression_attribute`] as the host's one-entry dict.
-    #[host(method(name = "expression_attribute"))]
-    pub fn expression_attribute_map(&self) -> Option<std::collections::HashMap<String, String>> {
+    pub fn expression_attribute_map(&self) -> Option<std::collections::BTreeMap<String, String>> {
         attribute_map(self.expression_attribute())
     }
 }
@@ -295,7 +274,6 @@ pub type CuePlan = Vec<(usize, Option<String>)>;
 
 /// [`drop_bracket_cues`] as a plan over token texts, for a host whose `TimedString` cannot cross.
 /// Returns `(emit, keep)`; `None` text means reuse the host's token object.
-#[crate::host(export(name = "drop_bracket_cues", pid = false))]
 pub fn drop_bracket_cues_plan(texts: &[String], end_of_stream: bool) -> (CuePlan, CuePlan) {
     let tokens: Vec<TimedString> = texts
         .iter()

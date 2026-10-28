@@ -5,6 +5,8 @@ mod api;
 mod host_capture;
 mod payload_table;
 mod provider;
+mod stream;
+pub use stream::PullError;
 pub(crate) mod side_table;
 
 pub use api::{

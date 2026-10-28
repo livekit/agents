@@ -1,7 +1,7 @@
 //! `LLMStream._parse_choice` and the usage chunk, as a pure accumulator over SSE chunks. Several
 //! branches are truthiness tests on strings providers routinely send empty.
 
-use lk_agents_abi::tokenize::{FilterState, strip_thinking_tokens};
+use super::thinking::{FilterState, strip_thinking_tokens};
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::{ChoiceDelta, Extra, FunctionToolCall, LlmChunk, Role};
 use serde::Deserialize;
@@ -333,7 +333,11 @@ mod tests {
         .expect("a null tool_calls must not fail the chunk");
         let mut acc = ChoiceAccumulator::new();
         let got = acc
-            .parse_choice(&c.id, c.choices.first().unwrap(), &mut TagFilter::new("<think>", "</think>"))
+            .parse_choice(
+                &c.id,
+                c.choices.first().unwrap(),
+                &mut TagFilter::new("<think>", "</think>"),
+            )
             .expect("the content delta must survive");
         assert_eq!(text_of(&got), Some("Hi"));
         // The same for `choices`.
@@ -537,7 +541,11 @@ mod tests {
             (&["<think>one</think>middle<think>two</think>end"], "middleend"),
             (&["héllo 🎉 wörld"], "héllo 🎉 wörld"),
         ] {
-            assert_eq!(strip_all(&mut TagFilter::new("<think>", "</think>"), chunks), want, "{chunks:?}");
+            assert_eq!(
+                strip_all(&mut TagFilter::new("<think>", "</think>"), chunks),
+                want,
+                "{chunks:?}"
+            );
         }
     }
 

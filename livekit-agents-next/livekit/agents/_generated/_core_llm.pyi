@@ -12,9 +12,11 @@ from livekit.agents._core_view import AvailabilityObserver
 from livekit.agents.llm import LLM
 from livekit.agents.llm.mcp import _Progress, _Streams
 from livekit.agents.llm.utils import SerializedImage
+from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
 
-from .._core import ChatItem
+from .._core import ChatItem, FallbackTtsStream
+from .mcp import MCPToolOptions
 from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
 from .tool_context import DuplicateMode, DuplicateScope
@@ -49,6 +51,45 @@ class FallbackLlm:
 class FallbackLlmChunks:
     async def recv(self) -> dict[str, object] | None: ...
     async def aclose(self) -> None: ...
+
+class FallbackTts:
+    """`tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
+    def __init__(
+        self,
+        ttss: Sequence[TTS[Any]],
+        *,
+        max_retry_per_tts: int = 2,
+        sample_rate: int | None = None,
+        on_availability: AvailabilityObserver | None = None,
+    ) -> None: ...
+    @property
+    def active_index(self) -> int: ...
+    @property
+    def capabilities(self) -> dict[str, object]: ...
+    @property
+    def sample_rate(self) -> int: ...
+    @property
+    def num_channels(self) -> int: ...
+    async def aclose(self) -> None: ...
+    async def synthesize(
+        self,
+        text: str,
+        conn_options: APIConnectOptions | None = None,
+    ) -> FallbackTtsStream: ...
+    async def stream(self, conn_options: APIConnectOptions | None = None) -> FallbackTtsStream: ...
+
+class TtsTokenLog:
+    """The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text
+    a recovering stream replays.
+
+    `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
+    here is lossy or bounded.
+    """
+    def __init__(self) -> None: ...
+    def push(self, text: str) -> None: ...
+    def flush(self) -> None: ...
+    def end(self) -> None: ...
+    def snapshot(self) -> tuple[list[str | None], bool]: ...
 
 class InferenceLlm:
     """The gateway LLM behind `inference.LLM`. Its options are shared by every view
@@ -153,7 +194,7 @@ class McpSession:
     @property
     def cleanup(self) -> McpCleanup: ...
 
-def resolve_mcp_tool_options(config: dict[str, object] | None) -> dict[str, object]: ...
+def resolve_mcp_tool_options(config: MCPToolOptions | None) -> dict[str, object]: ...
 
 def mcp_raw_schema(
     name: str,

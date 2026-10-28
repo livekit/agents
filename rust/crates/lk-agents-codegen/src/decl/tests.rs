@@ -401,7 +401,7 @@ fn declared_proxies_call_the_host_in_their_context() {
         "fn cancel(&self, at: &::lk_agents_abi::llm::chat::Report) {",
         "::lk_agents_runtime::host::notify(&self.notifier, \"Callbacks.abort\", at, &[], false, ::std::boxed::Box::new(move |py| {",
         "Ok((host.bind(py).getattr(\"abort\")?",
-        "let host = super::llm::CallbacksProxy::from_host(&host)?;",
+        "let host = crate::generated::llm::CallbacksProxy::from_host(&host)?;",
         "native::<dyn ::lk_agents_abi::llm::class::Callbacks>(obj)",
     ] {
         assert!(llm.contains(want), "{want}\n{llm}");
@@ -453,14 +453,9 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
         assert!(llm.contains(want), "{want}\n{llm}");
     }
     let bridges = crate::records::rust(&decls).expect("emits");
-    let bridge = &bridges.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
-        bridge.contains(
-            "impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::class::Callbacks {"
-        ) && bridge.contains(
-            "crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::class::Callbacks>(obj)"
-        ),
-        "{bridge}"
+        bridges.iter().all(|out| !out.text.contains("HostProxy for dyn")),
+        "a declaration-only proxy must not generate an ABI Python implementation"
     );
 }
 
@@ -799,7 +794,7 @@ fn an_optional_proxy_is_absence_or_the_host_object_behind_its_proxy() {
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
-        llm.contains("if o.is_none() { Ok(None) } else { (super::llm::CallbacksProxy::from_host(&o)).map(Some) }"),
+        llm.contains("if o.is_none() { Ok(None) } else { (crate::generated::llm::CallbacksProxy::from_host(&o)).map(Some) }"),
         "{llm}"
     );
 }
@@ -842,7 +837,7 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
     // A host object handed over to be owned (a writer the core later closes by value).
     assert!(
         llm.contains("-> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>")
-            && llm.contains("super::llm::CallbacksProxy::owned(&")
+            && llm.contains("crate::generated::llm::CallbacksProxy::owned(&")
             && llm.contains("pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>>"),
         "{llm}"
     );

@@ -1,10 +1,8 @@
 //! Fakes for the [`lk_agents_net::transport`] seam, for tests only (`cfg(test)` or the `testkit` feature).
 //! Deterministic; the only clock is the caller's `VirtualClock`.
 
-use lk_agents_net::transport::{
-    TransportError, WsMessage, WsReceiver, WsSender, WsTransport,
-};
 use async_trait::async_trait;
+use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 
@@ -182,7 +180,7 @@ impl WsReceiver for FakeWsReceiver {
                 // The default: hang up once the script is done.
                 return Ok(WsMessage::Closed);
             }
-                // Yield rather than park, so `feed` can still deliver.
+            // Yield rather than park, so `feed` can still deliver.
             tokio::task::yield_now().await;
         }
     }
@@ -199,3 +197,4 @@ pub async fn arm_then_advance(clock: &lk_agents_abi::VirtualClock, by: std::time
     }
     clock.advance(by);
 }
+pub mod fallback;

@@ -1,20 +1,5 @@
-//! `tokenize/`, the parts on the default path. Python keeps the tokenizer ABCs (plugins subclass and
-//! `isinstance` them). Offsets are characters, and `str.isspace()` is not `char::is_whitespace()`.
+//! Language identifiers and tokenization export contracts.
 
+pub mod bindings;
 pub mod language;
-mod replace;
 pub mod search;
-mod sentence;
-pub mod thinking;
-mod token_buffer;
-mod word;
-pub mod xml;
-
-pub use replace::{replace_words, split_paragraphs, tokenize_paragraphs};
-pub use sentence::{BasicSentenceTokenizer, basic_split_sentences};
-pub use thinking::{FilterState, Stripped, strip_thinking_tokens};
-pub use token_buffer::{Span, TokenBuffer, TokenBufferOptions, Tokenize, Words};
-pub use word::{
-    BasicWordTokenizer, PUNCTUATIONS, Word, WordTokenizerOptions, count_words, is_char_based, is_punctuation, is_py_space, py_strip,
-    split_words, split_words_of,
-};

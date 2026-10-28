@@ -499,7 +499,7 @@ impl AgentRun {
             return self.finish(Err(RunError::NoModel), fx);
         };
         self.history = std::mem::take(&mut self.input.history);
-        let answer = self.input.message.text_content().unwrap_or_default();
+        let answer = self.input.message.raw_text_content().unwrap_or_default();
         // The person's message answers the question a call is waiting on.
         for item in &mut self.history {
             if let ChatItem::FunctionCallOutput(o) = item
@@ -655,8 +655,7 @@ impl AgentRun {
     fn act(&mut self, calls: Vec<FunctionCall>, now: Ts, fx: &mut Vec<Effect>) {
         self.usage.tool_calls += calls.len() as u32;
         let calls = calls.into_iter().map(|c| (CallId(self.mint()), c)).collect();
-        let (calls, candidates) =
-            ToolCalls::begin(calls, &self.agent, &self.approval_answers, fx);
+        let (calls, candidates) = ToolCalls::begin(calls, &self.agent, &self.approval_answers, fx);
         let mut acting = Acting { calls, finals: BTreeMap::new(), accepted: BTreeMap::new() };
         for FinalCandidate { call, value } in candidates {
             match value {

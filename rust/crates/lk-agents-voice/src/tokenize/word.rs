@@ -10,16 +10,7 @@ pub const PUNCTUATIONS: [char; 39] = [
     '…',
 ];
 
-/// Python's `str.isspace()`, which also counts `\x1c`-`\x1f`, unlike `char::is_whitespace()`.
-#[inline]
-pub fn is_py_space(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}')
-}
-
-/// `str.strip()`, over Python's whitespace set.
-pub fn py_strip(s: &str) -> &str {
-    s.trim_matches(is_py_space)
-}
+pub use lk_agents_core::text::{is_py_space, py_strip};
 
 /// `char_based_codes`, verbatim. Deliberately no Hangul or Arabic/Hebrew/Indic (#2366).
 #[inline]
@@ -66,13 +57,6 @@ struct Pos {
 
 /// `split_words` for the host: `(word, start_char, end_char)`, with character offsets
 /// (`replace_words` splices with them).
-#[crate::host(export(
-    pid = false,
-    name = "split_words",
-    kw_only = "ignore_punctuation",
-    defaults(ignore_punctuation = true, split_character = false, retain_format = false)
-))]
-#[python(forward(module = "tokenize_basic"))]
 pub fn split_words_of(
     text: &str,
     ignore_punctuation: bool,
@@ -146,7 +130,8 @@ fn scan<'a>(text: &'a str, opts: WordTokenizerOptions, mut sink: impl FnMut(Word
 pub fn is_punctuation(c: char) -> bool {
     static UNICODE_PUNCTUATION: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"^\p{P}$").expect("constant pattern"));
-    PUNCTUATIONS.contains(&c) || (!c.is_ascii() && UNICODE_PUNCTUATION.is_match(c.encode_utf8(&mut [0; 4])))
+    PUNCTUATIONS.contains(&c)
+        || (!c.is_ascii() && UNICODE_PUNCTUATION.is_match(c.encode_utf8(&mut [0; 4])))
 }
 
 #[cfg(test)]
@@ -314,25 +299,13 @@ mod tests {
 /// Really naive implementation of a word tokenizer: words split on whitespace, punctuation
 /// stripped unless asked to keep it.
 #[derive(Debug, Clone)]
-#[crate::class(name = "BasicWordTokenizer")]
 pub struct BasicWordTokenizer {
     pub opts: WordTokenizerOptions,
 }
 
 /// Really naive implementation of a word tokenizer: words split on whitespace, punctuation
 /// stripped unless asked to keep it.
-#[crate::host(object(name = "BasicWordTokenizer", pid = false))]
-#[python(wrapper(
-    module = "tokenize_basic",
-    path = "livekit.agents.tokenize.basic",
-    name = "WordTokenizer",
-    base = "..tokenize:_CoreWordTokenizer"
-))]
 impl BasicWordTokenizer {
-    #[host(new(
-        kw_only,
-        defaults(ignore_punctuation = true, split_character = false, retain_format = false)
-    ))]
     pub fn new(ignore_punctuation: bool, split_character: bool, retain_format: bool) -> Self {
         BasicWordTokenizer {
             opts: WordTokenizerOptions { ignore_punctuation, split_character, retain_format },
@@ -340,26 +313,25 @@ impl BasicWordTokenizer {
     }
 
     /// The words of `text`; `language` is accepted and unused.
-    #[host(method(kw_only = "language", defaults(language = None)))]
     pub fn tokenize(&self, text: &str, language: Option<&str>) -> Vec<String> {
         let _ = language;
         split_words(text, self.opts).into_iter().map(|w| w.text.into_owned()).collect()
     }
 
     /// `(word, start, end)` per word: what a stream batches.
-    #[host(method(name = "_core_split"))]
     pub fn split(&self, text: &str) -> Vec<(String, usize, usize)> {
-        split_words(text, self.opts).into_iter().map(|w| (w.text.into_owned(), w.start, w.end)).collect()
+        split_words(text, self.opts)
+            .into_iter()
+            .map(|w| (w.text.into_owned(), w.start, w.end))
+            .collect()
     }
 
     /// The shortest token a stream emits: each word once the next proves it whole.
-    #[host(getter(name = "_core_min_token_len"))]
     pub fn min_token_len(&self) -> usize {
         1
     }
 
     /// The text a stream buffers before it splits.
-    #[host(getter(name = "_core_min_ctx_len"))]
     pub fn min_ctx_len(&self) -> usize {
         1
     }

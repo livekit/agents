@@ -46,6 +46,23 @@ pub struct Selected;
 impl generated::Implementations for Selected {
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSessionExecution = Selected;
+    type TtsTokenLog = lk_agents_runtime::cores::TtsTokenLog;
+    type FallbackTts = lk_agents_runtime::speech_text::host::FallbackTts;
+    type InferenceTts = lk_agents_runtime::speech_text::host::NativeTts;
+    type FallbackTtsStream = lk_agents_runtime::speech_text::stream::TtsStream;
+    type InferenceTtsStream = lk_agents_runtime::speech_text::stream::TtsStream;
+    type StreamAdapterFunctions = lk_agents_runtime::speech_text::stream_adapter::AdapterStreams;
+    type TokenizeFunctions = lk_agents_runtime::speech_text::tokenize::SpeechTokenizer;
+    type WordTokenizer = lk_agents_runtime::speech_text::tokenize::BasicWordTokenizer;
+    type SentenceTokenizer = lk_agents_runtime::speech_text::tokenize::BasicSentenceTokenizer;
+    type BufferedTokens = lk_agents_runtime::speech_text::tokenize::BufferedTokenStream;
+    type MarkupFunctions = lk_agents_runtime::speech_text::markup::SpeechMarkup;
+    type MarkupClass = lk_agents_runtime::speech_text::markup::Markup;
+    type TranscriptStripper = lk_agents_runtime::speech_text::markup::TranscriptMarkupStripper;
+    type SearchDocument = lk_agents_runtime::speech_text::search::SearchDocument;
+    type SearchIndex = lk_agents_runtime::speech_text::search::Bm25;
+    type ToolSearch = lk_agents_runtime::speech_text::search::ToolDiscovery;
+
     type ExpFilter = lk_agents_runtime::filters::ExpFilter;
     type MovingAverage = lk_agents_runtime::filters::MovingAverage;
     type LlmAlgorithms = lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms<

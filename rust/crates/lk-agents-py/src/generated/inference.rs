@@ -112,3 +112,102 @@ impl InferenceAvatar {
         })
     }
 }
+
+// Declared in rust/crates/lk-agents-abi/src/inference/tts_client.rs.
+type InferenceTtsImpl = <crate::Selected as super::Implementations>::InferenceTts;
+
+fn _extract_inference_tts_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")
+}
+
+/// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::NativeTts`.
+#[pyclass(frozen, name = "InferenceTts", module = "livekit.agents._core")]
+pub struct InferenceTts(::std::sync::Arc<InferenceTtsImpl>);
+
+#[pymethods]
+impl InferenceTts {
+    #[new]
+    #[pyo3(signature = (model, *, base_url, api_key, api_secret, conn_options, voice = None, language = None, encoding = "pcm_s16le".to_owned(), sample_rate = 24000, extra_kwargs = None, fallback = None))]
+    fn new(model: ::std::string::String, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, conn_options: ::lk_agents_abi::ApiConnectOptions, voice: ::std::option::Option<::std::string::String>, language: ::std::option::Option<::std::string::String>, encoding: ::std::string::String, #[pyo3(from_py_with = _extract_inference_tts_new_sample_rate)] sample_rate: u32, extra_kwargs: Option<Bound<'_, PyAny>>, fallback: Option<Bound<'_, PyAny>>) -> PyResult<InferenceTts> {
+        ::lk_agents_abi::python::check_pid()?;
+        let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), value => Err(::pyo3::exceptions::PyValueError::new_err(format!("expected a dict of extra kwargs, got {value}"))) }).transpose()?;
+        let fallback = fallback.map(|v| v.cast::<::pyo3::types::PyList>().map_err(::pyo3::PyErr::from).and_then(|items| items.iter().map(|item| { if !item.is_instance_of::<::pyo3::types::PyDict>() { return Err(::pyo3::exceptions::PyValueError::new_err("each fallback entry must be a dict")); } item.extract::<::lk_agents_abi::inference::fallback::TtsFallbackModel>() }).collect::<PyResult<Vec<_>>>())).transpose()?;
+        let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::new(model, base_url, api_key, api_secret, conn_options, voice, language, encoding, sample_rate, extra_kwargs, fallback).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(InferenceTts(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (expressive))]
+    fn set_expressive(&self, expressive: bool) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::set_expressive(&self.0, expressive);
+        Ok(())
+    }
+
+    #[getter]
+    fn sample_rate(&self) -> PyResult<u32> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::sample_rate(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn aligned_transcript(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::aligned_transcript(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (clock))]
+    fn bind_clock(&self, clock: Bound<'_, PyAny>) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        let clock = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Clock>(&clock).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("clock", ": expected native livekit.agents._core.SessionClock")))?;
+        <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::bind_clock(&self.0, clock);
+        Ok(())
+    }
+
+    #[pyo3(signature = (*, headers = None))]
+    fn prewarm(&self, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::prewarm(&self.0, headers);
+        Ok(())
+    }
+
+    #[pyo3(signature = (headers, reporter = None))]
+    fn identified(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, reporter: Option<Bound<'_, PyAny>>) -> PyResult<InferenceTts> {
+        ::lk_agents_abi::python::check_pid()?;
+        let reporter = reporter.map(|v| crate::generated::tts::TtsProxy::from_host(&v)).transpose()?;
+        let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::identified(&self.0, headers, reporter);
+        Ok(InferenceTts(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (*, model = None, voice = None, language = None, extra = None))]
+    fn update_options(&self, model: ::std::option::Option<::std::string::String>, voice: ::std::option::Option<::std::string::String>, language: ::std::option::Option<::std::string::String>, extra: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        let extra = extra.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra")? { ::serde_json::Value::Object(map) => Ok(map), value => Err(::pyo3::exceptions::PyValueError::new_err(format!("expected a dict of extra kwargs, got {value}"))) }).transpose()?;
+        <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::update_options(&self.0, model, voice, language, extra);
+        Ok(())
+    }
+
+    #[pyo3(signature = (*, headers = None, conn_options = None))]
+    fn stream<'py>(&self, py: Python<'py>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::stream(&this, headers, conn_options)
+                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::InferenceTtsStream(::std::sync::Arc::new(out)), py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Tts`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Tts>(),
+        read: |obj| {
+            let this = obj.cast::<InferenceTts>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Tts> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}

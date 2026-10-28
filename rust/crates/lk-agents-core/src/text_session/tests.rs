@@ -252,7 +252,7 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     let call = second.session.state.frames[&child_id].parent.clone().unwrap();
     assert_eq!(call.frame_id, root_id);
     assert_eq!(
-        second.request().1.items.last().unwrap().as_message().unwrap().text_content().unwrap(),
+        second.request().1.items.last().unwrap().as_message().unwrap().raw_text_content().unwrap(),
         "{\"nights\":2}"
     );
     second.auto_release = false;
@@ -278,20 +278,12 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
         third.session.state.frames[&root_id].history,
         second.session.state.frames[&root_id].history
     );
-    assert!(
-        third
-            .request()
-            .1
-            .items
-            .iter()
-            .any(|i| i.as_message().is_some_and(|m| m.text_content().as_deref() == Some("Friday")))
-    );
-    assert!(
-        !third.session.state.frames[&root_id]
-            .history
-            .iter()
-            .any(|i| i.as_message().is_some_and(|m| m.text_content().as_deref() == Some("Friday")))
-    );
+    assert!(third.request().1.items.iter().any(|i| {
+        i.as_message().is_some_and(|m| m.raw_text_content().as_deref() == Some("Friday"))
+    }));
+    assert!(!third.session.state.frames[&root_id].history.iter().any(|i| {
+        i.as_message().is_some_and(|m| m.raw_text_content().as_deref() == Some("Friday"))
+    }));
     third.accepted(json!({"reference":"R-1"}));
     let parent_request = third.request().1;
     assert_eq!(parent_request.items.iter().filter(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == call.call_id && o.output == "{\"reference\":\"R-1\"}")).count(), 1);
@@ -299,7 +291,7 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     assert!(third.session.state.ancestors.is_empty());
     assert!(parent_request.items.iter().any(|i| i.id() == question_message.id));
     assert!(!parent_request.items.iter().any(|i| {
-        i.as_message().is_some_and(|m| m.text_content().as_deref() == Some("{\"nights\":2}"))
+        i.as_message().is_some_and(|m| m.raw_text_content().as_deref() == Some("{\"nights\":2}"))
     }));
     let parent_invocation = third.invocation();
     assert_ne!(parent_invocation, pending.invocation_id);
@@ -390,7 +382,7 @@ fn fresh_and_fork_use_validated_task_arguments_once_and_exclude_unresolved_calls
             first.prepare(json!({"nights":nights}));
             let task = first.request().1;
             assert_eq!(
-                task.items.last().unwrap().as_message().unwrap().text_content().unwrap(),
+                task.items.last().unwrap().as_message().unwrap().raw_text_content().unwrap(),
                 format!("{{\"nights\":{nights}}}")
             );
             assert!(
@@ -403,7 +395,7 @@ fn fresh_and_fork_use_validated_task_arguments_once_and_exclude_unresolved_calls
                 task.items
                     .iter()
                     .filter(|i| i.as_message().is_some_and(
-                        |m| m.text_content().as_deref() == Some("Preferences: quiet room")
+                        |m| m.raw_text_content().as_deref() == Some("Preferences: quiet room")
                     ))
                     .count(),
                 usize::from(mode == ChatHistory::Fork)
@@ -416,7 +408,7 @@ fn fresh_and_fork_use_validated_task_arguments_once_and_exclude_unresolved_calls
                     .1
                     .items
                     .iter()
-                    .filter(|i| i.as_message().is_some_and(|m| m.text_content().as_deref()
+                    .filter(|i| i.as_message().is_some_and(|m| m.raw_text_content().as_deref()
                         == Some(&format!("{{\"nights\":{nights}}}"))))
                     .count(),
                 1
@@ -430,17 +422,18 @@ fn fresh_and_fork_use_validated_task_arguments_once_and_exclude_unresolved_calls
                 root.history
                     .iter()
                     .filter(|i| i.as_message().is_some_and(
-                        |m| m.text_content().as_deref() == Some("Preferences: quiet room")
+                        |m| m.raw_text_content().as_deref() == Some("Preferences: quiet room")
                     ))
                     .count(),
                 1
             );
             assert!(root.history.iter().any(|i| {
-                i.as_message().is_some_and(|m| m.text_content().as_deref() == Some("Friday"))
+                i.as_message().is_some_and(|m| m.raw_text_content().as_deref() == Some("Friday"))
             }));
             // The child question was generated, but has no delivery receipt: it stays private.
             assert!(!root.history.iter().any(|i| {
-                i.as_message().is_some_and(|m| m.text_content().as_deref() == Some("Which date?"))
+                i.as_message()
+                    .is_some_and(|m| m.raw_text_content().as_deref() == Some("Which date?"))
             }));
         }
     }
@@ -708,7 +701,16 @@ fn sibling_children_follow_model_order_across_reconstruction_and_resolve_once() 
         }
     )));
     assert_eq!(
-        driver.request().1.items.last().unwrap().as_message().unwrap().text_content().as_deref(),
+        driver
+            .request()
+            .1
+            .items
+            .last()
+            .unwrap()
+            .as_message()
+            .unwrap()
+            .raw_text_content()
+            .as_deref(),
         Some("{\"nights\":2}")
     );
     driver.reply("Which date?", &[]);
@@ -718,7 +720,7 @@ fn sibling_children_follow_model_order_across_reconstruction_and_resolve_once() 
     let mut next = driver.reconstruct("Friday");
     next.accepted(json!({"reference":"first"}));
     assert_eq!(
-        next.request().1.items.last().unwrap().as_message().unwrap().text_content().as_deref(),
+        next.request().1.items.last().unwrap().as_message().unwrap().raw_text_content().as_deref(),
         Some("{\"nights\":7}")
     );
     next.accepted(json!({"reference":"second"}));
@@ -734,14 +736,9 @@ fn sibling_children_follow_model_order_across_reconstruction_and_resolve_once() 
         .collect();
     assert_eq!(outputs, ["{\"reference\":\"first\"}", "{\"reference\":\"second\"}"]);
     assert!(next.session.state.frames[&root].pending_calls.is_empty());
-    assert!(
-        !next
-            .request()
-            .1
-            .items
-            .iter()
-            .any(|i| i.as_message().is_some_and(|m| m.text_content().as_deref() == Some("Friday")))
-    );
+    assert!(!next.request().1.items.iter().any(|i| {
+        i.as_message().is_some_and(|m| m.raw_text_content().as_deref() == Some("Friday"))
+    }));
     let sequences: Vec<_> = next
         .effects
         .iter()

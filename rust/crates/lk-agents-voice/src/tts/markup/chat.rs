@@ -51,3 +51,21 @@ pub fn strip_message_markup(msg: &mut ChatMessage) -> bool {
     }
     true
 }
+
+/// Display text strips speech markup from assistant messages.
+pub trait ChatMessageExt {
+    fn text_content(&self) -> Option<String>;
+}
+
+impl ChatMessageExt for ChatMessage {
+    fn text_content(&self) -> Option<String> {
+        self.raw_text_content().map(|text| {
+            if self.role == Role::Assistant { super::strip_expr_markup(&text) } else { text }
+        })
+    }
+}
+
+pub fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<String> {
+    let text = lk_agents_abi::chat_message_raw_text_content(parts)?;
+    Some(if assistant { super::strip_expr_markup(&text) } else { text })
+}

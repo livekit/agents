@@ -3,9 +3,10 @@
 
 use std::borrow::Cow;
 
-use crate::SentenceSplitter;
 use crate::tokenize::word::{WordTokenizerOptions, split_words};
 use crate::tokenize::xml;
+use lk_agents_abi::SentenceSplitter;
+use lk_agents_abi::tokenize::bindings::TokenizerToken;
 
 /// Character indices. Spans must tile the input start-to-start, or the text in a gap is dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,8 +23,28 @@ impl Span {
     }
 }
 
+/// Text-only callback tokens retain the reference's first-match offsets and following whitespace.
+pub fn spans_from_tokens(text: &str, tokens: Vec<TokenizerToken>) -> Vec<Span> {
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            TokenizerToken::Span((text, start, end)) => Span { text, start, end },
+            TokenizerToken::Text(token) => {
+                let start = text.find(&token).map_or(0, |byte| text[..byte].chars().count());
+                let mut end = start + token.chars().count();
+                end += text.chars().skip(end).take_while(|c| c.is_whitespace()).count();
+                Span { text: token, start, end }
+            }
+        })
+        .collect()
+}
+
+pub(crate) mod sealed {
+    pub trait NativeTokenizer {}
+}
+
 /// Infallible: on failure return [`Span::whole`].
-pub trait Tokenize {
+pub trait Tokenize: sealed::NativeTokenizer {
     fn tokenize(&self, text: &str) -> Vec<Span>;
 }
 
@@ -42,71 +63,131 @@ pub struct TokenBufferOptions {
 
 impl TokenBufferOptions {
     /// `basic.WordTokenizer.stream()`: emit each word once a following one proves it whole.
-    pub const WORDS: TokenBufferOptions =
-        TokenBufferOptions { min_token_len: 1, min_ctx_len: 1, max_token_len: None, xml_aware: false };
+    pub const WORDS: TokenBufferOptions = TokenBufferOptions {
+        min_token_len: 1,
+        min_ctx_len: 1,
+        max_token_len: None,
+        xml_aware: false,
+    };
+}
+
+/// One tokenization requested from the queue owner, or the completed operation's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenBufferStep {
+    Tokenize(String),
+    Done(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Operation {
+    Push,
+    Flush,
 }
 
 #[derive(Debug, Clone)]
-pub struct TokenBuffer<T: Tokenize> {
-    tok: T,
+enum Phase {
+    Idle,
+    Awaiting { operation: Operation, plan: xml::Tokenization, emitted: Vec<String> },
+}
+
+/// Pure buffering state. Its owner supplies the spans of each requested text.
+#[derive(Debug, Clone)]
+pub struct TokenBuffer {
     opts: TokenBufferOptions,
     in_buf: String,
     out_buf: String,
+    phase: Phase,
 }
 
-impl<T: Tokenize> TokenBuffer<T> {
-    pub fn new(tok: T, opts: TokenBufferOptions) -> Self {
-        TokenBuffer { tok, opts, in_buf: String::new(), out_buf: String::new() }
+impl TokenBuffer {
+    pub fn new(opts: TokenBufferOptions) -> Self {
+        Self { opts, in_buf: String::new(), out_buf: String::new(), phase: Phase::Idle }
     }
 
-    fn spans(&self, text: &str) -> Vec<Span> {
-        if self.opts.xml_aware { xml::tokenize_aware(&self.tok, text) } else { self.tok.tokenize(text) }
-    }
-
-    pub fn push(&mut self, text: &str) -> Vec<String> {
-        let mut out = Vec::new();
+    pub fn push(&mut self, text: &str) -> TokenBufferStep {
+        assert!(matches!(self.phase, Phase::Idle), "tokenization is already pending");
         if text.is_empty() {
-            return out;
+            return TokenBufferStep::Done(Vec::new());
         }
         self.in_buf.push_str(text);
         if self.in_buf.chars().count() < self.opts.min_ctx_len {
-            return out;
+            return TokenBufferStep::Done(Vec::new());
         }
+        self.request(Operation::Push, Vec::new())
+    }
 
-        loop {
-            let mut spans = self.spans(&self.in_buf).into_iter();
-            let (Some(first), Some(_second)) = (spans.next(), spans.next()) else {
-                // One span is a fragment: something has to follow a token before it is complete.
-                return out;
-            };
-            // A token that would split a tag waits for the chunk that closes it.
-            if self.opts.xml_aware && xml::has_unclosed_tags(&first.text) {
-                return out;
+    /// Ignores the minimum token length; the cap still applies.
+    pub fn flush(&mut self) -> TokenBufferStep {
+        assert!(matches!(self.phase, Phase::Idle), "tokenization is already pending");
+        if self.in_buf.is_empty() && self.out_buf.is_empty() {
+            return TokenBufferStep::Done(Vec::new());
+        }
+        self.request(Operation::Flush, Vec::new())
+    }
+
+    pub fn accept(&mut self, spans: Vec<Span>) -> TokenBufferStep {
+        let Phase::Awaiting { operation, plan, emitted } =
+            std::mem::replace(&mut self.phase, Phase::Idle)
+        else {
+            panic!("no tokenization is pending");
+        };
+        self.apply(operation, emitted, plan.finish(spans))
+    }
+
+    fn request(&mut self, operation: Operation, emitted: Vec<String>) -> TokenBufferStep {
+        let plan = if self.opts.xml_aware {
+            xml::Tokenization::new(&self.in_buf)
+        } else {
+            xml::Tokenization::Plain(self.in_buf.clone())
+        };
+        match plan.input() {
+            Some(text) => {
+                let text = text.to_owned();
+                self.phase = Phase::Awaiting { operation, plan, emitted };
+                TokenBufferStep::Tokenize(text)
             }
-            self.absorb(&first.text, &mut out);
-            if self.out_buf.chars().count() >= self.opts.min_token_len {
-                out.push(std::mem::take(&mut self.out_buf));
-            }
-            // Character offsets, so `chars()` and not a byte range.
-            let cut = self.in_buf.char_indices().nth(first.end).map_or(self.in_buf.len(), |(b, _)| b);
-            self.in_buf.drain(..cut);
+            None => self.apply(operation, emitted, plan.finish(Vec::new())),
         }
     }
 
-    /// Ignores `min_token_len`.
-    pub fn flush(&mut self) -> Vec<String> {
-        let mut out = Vec::new();
-        if self.in_buf.is_empty() && self.out_buf.is_empty() {
-            return out;
+    fn apply(
+        &mut self,
+        operation: Operation,
+        mut emitted: Vec<String>,
+        spans: Vec<Span>,
+    ) -> TokenBufferStep {
+        match operation {
+            Operation::Push => {
+                let mut spans = spans.into_iter();
+                let (Some(first), Some(_second)) = (spans.next(), spans.next()) else {
+                    return TokenBufferStep::Done(emitted);
+                };
+                if self.opts.xml_aware && xml::has_unclosed_tags(&first.text) {
+                    return TokenBufferStep::Done(emitted);
+                }
+                self.absorb(&first.text, &mut emitted);
+                if self.out_buf.chars().count() >= self.opts.min_token_len {
+                    emitted.push(std::mem::take(&mut self.out_buf));
+                }
+                let cut = self
+                    .in_buf
+                    .char_indices()
+                    .nth(first.end)
+                    .map_or(self.in_buf.len(), |(byte, _)| byte);
+                self.in_buf.drain(..cut);
+                self.request(operation, emitted)
+            }
+            Operation::Flush => {
+                self.in_buf.clear();
+                for span in spans {
+                    self.absorb(&span.text, &mut emitted);
+                }
+                if !self.out_buf.is_empty() {
+                    emitted.push(std::mem::take(&mut self.out_buf));
+                }
+                TokenBufferStep::Done(emitted)
+            }
         }
-        let in_buf = std::mem::take(&mut self.in_buf);
-        for span in self.spans(&in_buf) {
-            self.absorb(&span.text, &mut out);
-        }
-        if !self.out_buf.is_empty() {
-            out.push(std::mem::take(&mut self.out_buf));
-        }
-        out
     }
 
     fn absorb(&mut self, token: &str, out: &mut Vec<String>) {
@@ -123,18 +204,53 @@ impl<T: Tokenize> TokenBuffer<T> {
     }
 }
 
-impl<T: Tokenize + Send> SentenceSplitter for TokenBuffer<T> {
-    fn push(&mut self, text: &str) -> Vec<String> {
-        TokenBuffer::push(self, text)
+/// Convenience owner for built-in native tokenizers. The sealed tokenizer cannot call a host.
+#[derive(Debug, Clone)]
+pub struct NativeTokenBuffer<T: Tokenize> {
+    tokenizer: T,
+    state: TokenBuffer,
+}
+
+impl<T: Tokenize> NativeTokenBuffer<T> {
+    pub fn new(tokenizer: T, opts: TokenBufferOptions) -> Self {
+        Self { tokenizer, state: TokenBuffer::new(opts) }
     }
 
+    pub fn push(&mut self, text: &str) -> Vec<String> {
+        let step = self.state.push(text);
+        self.drive(step)
+    }
+
+    pub fn flush(&mut self) -> Vec<String> {
+        let step = self.state.flush();
+        self.drive(step)
+    }
+
+    fn drive(&mut self, mut step: TokenBufferStep) -> Vec<String> {
+        loop {
+            step = match step {
+                TokenBufferStep::Tokenize(text) => {
+                    self.state.accept(self.tokenizer.tokenize(&text))
+                }
+                TokenBufferStep::Done(out) => return out,
+            };
+        }
+    }
+}
+
+impl<T: Tokenize + Send> SentenceSplitter for NativeTokenBuffer<T> {
+    fn push(&mut self, text: &str) -> Vec<String> {
+        NativeTokenBuffer::push(self, text)
+    }
     fn flush(&mut self) -> Vec<String> {
-        TokenBuffer::flush(self)
+        NativeTokenBuffer::flush(self)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Words(pub WordTokenizerOptions);
+
+impl sealed::NativeTokenizer for Words {}
 
 impl Tokenize for Words {
     fn tokenize(&self, text: &str) -> Vec<Span> {
@@ -152,204 +268,16 @@ impl Tokenize for Words {
     }
 }
 
-// The `SentenceTokenizer`/`WordTokenizer` ABCs stay Python (subclassed and `isinstance`-checked).
-#[cfg(feature = "python")]
-mod python {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    use std::sync::Mutex;
-
-    use pyo3::prelude::*;
-
-    use super::{TokenBuffer, TokenBufferOptions};
-    use crate::tokenize::{Span, Tokenize};
-
-    /// An exception is parked and re-raised by the calling method, unless `xml_aware` (the
-    /// reference swallows it there); either way the text comes back as one span.
-    pub struct HostTokenizer {
-        fnc: Py<PyAny>,
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        failed: Mutex<Option<PyErr>>,
-    }
-
-    impl HostTokenizer {
-        fn call(&self, py: Python<'_>, text: &str) -> PyResult<Vec<Span>> {
-            let tokens = self.fnc.bind(py).call1((text,))?;
-            let mut out = Vec::new();
-            for item in tokens.try_iter()? {
-                let item = item?;
-                if let Ok((tok, start, end)) = item.extract::<(String, usize, usize)>() {
-                    out.push(Span { text: tok, start, end });
-                    continue;
-                }
-                // No offsets: locate with `str.find` (0 when absent) and absorb the following
-                // whitespace, matching the reference's `.lstrip()`.
-                let tok: String = item.extract()?;
-                let start = text.find(&tok).map_or(0, |b| text[..b].chars().count());
-                let mut end = start + tok.chars().count();
-                end += text.chars().skip(end).take_while(|c| c.is_whitespace()).count();
-                out.push(Span { text: tok, start, end });
-            }
-            Ok(out)
-        }
-    }
-
-    impl Tokenize for HostTokenizer {
-        fn tokenize(&self, text: &str) -> Vec<Span> {
-            Python::attach(|py| match self.call(py, text) {
-                Ok(spans) => spans,
-                Err(err) => {
-                    *self.failed.lock().unwrap() = Some(err);
-                    if text.trim().is_empty() { Vec::new() } else { vec![Span::whole(text)] }
-                }
-            })
-        }
-    }
-
-    /// `BufferedTokenStream`'s batching loop over a host tokenizer. The Python class keeps the
-    /// channel, the segment ids and the `closed` rule; this keeps the two buffers and the five rules.
-    #[pyclass(name = "TokenBuffer", module = "livekit.agents._core")]
-    pub struct PyTokenBuffer {
-        inner: TokenBuffer<HostTokenizer>,
-    }
-
-    #[pymethods]
-    impl PyTokenBuffer {
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        #[new]
-        #[pyo3(signature = (tokenize_fnc, *, min_token_len, min_ctx_len, max_token_len=None, xml_aware=false))]
-        pub(super) fn new(
-            tokenize_fnc: Py<PyAny>,
-            min_token_len: usize,
-            min_ctx_len: usize,
-            max_token_len: Option<usize>,
-            xml_aware: bool,
-        ) -> Self {
-            let tok = HostTokenizer { fnc: tokenize_fnc, failed: Mutex::new(None) };
-            let opts = TokenBufferOptions { min_token_len, min_ctx_len, max_token_len, xml_aware };
-            PyTokenBuffer { inner: TokenBuffer::new(tok, opts) }
-        }
-
-        /// `push_text`: the tokens now proven complete, batched.
-        pub(super) fn push(&mut self, text: &str) -> PyResult<Vec<String>> {
-            let out = self.inner.push(text);
-            self.settle(out)
-        }
-
-        /// `flush`: everything held, batched under the cap but with no `min_token_len` gate.
-        pub(super) fn flush(&mut self) -> PyResult<Vec<String>> {
-            let out = self.inner.flush();
-            self.settle(out)
-        }
-    }
-
-    impl PyTokenBuffer {
-        /// Re-raise a parked tokenizer exception, unless the XML wrap swallows it (as the
-        /// reference's does: worse prosody, not a lost reply).
-        fn settle(&self, out: Vec<String>) -> PyResult<Vec<String>> {
-            match self.inner.tok.failed.lock().unwrap().take() {
-                Some(err) if !self.inner.opts.xml_aware => Err(err),
-                _ => Ok(out),
-            }
-        }
-    }
-
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// `SentenceTokenizer.tokenize` with `xml_aware`: [`crate::tokenize::xml::tokenize_aware`] over a
-    /// host tokenizer. A tokenizer error leaves the text as one span, as on the streaming path.
-    #[pyfunction]
-    pub fn xml_tokenize(tokenize_fnc: Py<PyAny>, text: &str) -> Vec<(String, usize, usize)> {
-        let tok = HostTokenizer { fnc: tokenize_fnc, failed: Mutex::new(None) };
-        crate::tokenize::xml::tokenize_aware(&tok, text).into_iter().map(|s| (s.text, s.start, s.end)).collect()
-    }
-
-    crate::register_host!(class PyTokenBuffer);
-    crate::register_host!(fn xml_tokenize);
-}
-
-#[cfg(all(test, feature = "python"))]
-mod python_tests {
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
-
-    use super::python::PyTokenBuffer;
-
-    fn attach<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
-        Python::initialize();
-        Python::attach(f)
-    }
-
-    /// A sentence tokenizer that returns `(text, start, end)` triples, as `_core.split_sentences`
-    /// does: a sentence ends at a `.` followed by whitespace or the end of the text.
-    fn by_sentence(py: Python<'_>) -> Py<PyAny> {
-        let locals = PyDict::new(py);
-        py.run(
-            c"def by_sentence(text):
-    out = []
-    start = 0
-    for i, ch in enumerate(text):
-        if ch == '.' and (i + 1 == len(text) or text[i + 1].isspace()):
-            out.append((text[start:i + 1].strip(), start, i + 1))
-            start = i + 1
-    if text[start:].strip():
-        out.append((text[start:].strip(), start, len(text)))
-    return out
-",
-            None,
-            Some(&locals),
-        )
-        .expect("defines");
-        locals.get_item("by_sentence").expect("lookup").expect("defined").unbind()
-    }
-
-    fn buffer(fnc: Py<PyAny>, min_token_len: usize) -> PyTokenBuffer {
-        PyTokenBuffer::new(fnc, min_token_len, 1, None, false)
-    }
-
-    // Catches: the crossing changing the batching, e.g. a byte/char offset mix-up.
-    #[test]
-    fn a_host_tokenizer_with_offsets_batches_like_the_reference() {
-        attach(|py| {
-            let mut buf = buffer(by_sentence(py), 20);
-            let mut out = buf.push("Sure. ").unwrap();
-            out.extend(buf.push("Let me look. ").unwrap());
-            out.extend(buf.push("And one more here. Tail.").unwrap());
-            assert_eq!(out, vec!["Sure. Let me look. And one more here."]);
-            assert_eq!(buf.flush().unwrap(), vec!["Tail."]);
-            assert_eq!(buf.flush().unwrap(), Vec::<String>::new());
-        });
-    }
-
-    // Catches: a plain-string tokenizer advanced by the wrong amount.
-    #[test]
-    fn a_host_tokenizer_without_offsets_is_located_by_find() {
-        attach(|py| {
-            let split = py.eval(c"lambda text: text.split()", None, None).unwrap().unbind();
-            let mut buf = buffer(split, 1);
-            assert_eq!(buf.push("Hello wor").unwrap(), vec!["Hello"]);
-            assert_eq!(buf.push("ld  ok").unwrap(), vec!["world"]);
-            assert_eq!(buf.flush().unwrap(), vec!["ok"]);
-        });
-    }
-
-    // Catches: the host's exception swallowed outside the XML wrap (which swallows it, pinned in
-    // `tests/test_token_stream_xml.py`).
-    #[test]
-    fn a_raising_tokenizer_raises_from_push() {
-        attach(|py| {
-            let boom = py.eval(c"lambda text: 1 / 0", None, None).unwrap().unbind();
-            let err = buffer(boom, 1).push("abc def. ghi").unwrap_err();
-            assert!(err.is_instance_of::<pyo3::exceptions::PyZeroDivisionError>(py), "{err}");
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::NativeTokenBuffer as TokenBuffer;
     use super::*;
 
     /// A model-free sentence tokenizer: ends at `.`, `!` or `?` before whitespace or end; spans
     /// tile, text trimmed.
     struct Dots;
+
+    impl sealed::NativeTokenizer for Dots {}
 
     impl Tokenize for Dots {
         fn tokenize(&self, text: &str) -> Vec<Span> {
@@ -379,8 +307,12 @@ mod tests {
         TokenBuffer::new(Dots, opts)
     }
 
-    const PER_SENTENCE: TokenBufferOptions =
-        TokenBufferOptions { min_token_len: 1, min_ctx_len: 1, max_token_len: None, xml_aware: false };
+    const PER_SENTENCE: TokenBufferOptions = TokenBufferOptions {
+        min_token_len: 1,
+        min_ctx_len: 1,
+        max_token_len: None,
+        xml_aware: false,
+    };
 
     fn drive<T: Tokenize>(buf: &mut TokenBuffer<T>, chunks: &[String]) -> Vec<String> {
         let mut out: Vec<String> = chunks.iter().flat_map(|c| buf.push(c)).collect();
@@ -390,6 +322,33 @@ mod tests {
 
     fn drive_str<T: Tokenize>(buf: &mut TokenBuffer<T>, chunks: &[&str]) -> Vec<String> {
         drive(buf, &chunks.iter().map(|c| (*c).to_owned()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn supplied_spans_drive_requests_without_retaining_a_tokenizer() {
+        let mut state = super::TokenBuffer::new(TokenBufferOptions {
+            min_ctx_len: 4,
+            ..TokenBufferOptions::WORDS
+        });
+        assert_eq!(state.push("é "), TokenBufferStep::Done(vec![]));
+        assert_eq!(state.push("word "), TokenBufferStep::Tokenize("é word ".into()));
+        assert_eq!(
+            state.accept(vec![
+                Span { text: "é".into(), start: 0, end: 2 },
+                Span { text: "word".into(), start: 2, end: 7 },
+            ]),
+            TokenBufferStep::Tokenize("word ".into())
+        );
+        assert_eq!(
+            state.accept(vec![Span { text: "word".into(), start: 0, end: 5 }]),
+            TokenBufferStep::Done(vec!["é".into()])
+        );
+        assert_eq!(state.flush(), TokenBufferStep::Tokenize("word ".into()));
+        assert_eq!(
+            state.accept(vec![Span { text: "word".into(), start: 0, end: 5 }]),
+            TokenBufferStep::Done(vec!["word".into()])
+        );
+        assert_eq!(state.flush(), TokenBufferStep::Done(vec![]));
     }
 
     // --- The hold-back rules, one at a time.
@@ -507,7 +466,11 @@ mod tests {
     #[test]
     fn words_spans_tile_the_input_and_reassemble_it() {
         let text = "  Hello there,  wörld! 你好 ok ";
-        let opts = WordTokenizerOptions { ignore_punctuation: false, split_character: true, retain_format: true };
+        let opts = WordTokenizerOptions {
+            ignore_punctuation: false,
+            split_character: true,
+            retain_format: true,
+        };
         let spans = Words(opts).tokenize(text);
         assert_eq!(spans[0].start, 0);
         for pair in spans.windows(2) {
@@ -529,8 +492,12 @@ mod tests {
 
     // --- xml-aware streaming (the rest of `TestStreamingTokenizer` runs in the reference suite).
 
-    const XML_STREAM: TokenBufferOptions =
-        TokenBufferOptions { min_token_len: 1, min_ctx_len: 5, max_token_len: None, xml_aware: true };
+    const XML_STREAM: TokenBufferOptions = TokenBufferOptions {
+        min_token_len: 1,
+        min_ctx_len: 5,
+        max_token_len: None,
+        xml_aware: true,
+    };
 
     // A-31. Catches: a `<break time="1s"/>` arriving one character at a time being cut. At the
     // reference's floor of 20 it rides inside its sentence.
@@ -538,8 +505,14 @@ mod tests {
     fn a_break_tag_mid_sentence_never_splits() {
         let text = "Hello <break time=\"1s\"/> there my friend. Second sentence here.";
         let per_char: Vec<String> = text.chars().map(String::from).collect();
-        let got = drive(&mut sentences(TokenBufferOptions { min_token_len: 20, ..XML_STREAM }), &per_char);
-        assert_eq!(got, vec!["Hello <break time=\"1s\"/> there my friend.", "Second sentence here."]);
+        let got = drive(
+            &mut sentences(TokenBufferOptions { min_token_len: 20, ..XML_STREAM }),
+            &per_char,
+        );
+        assert_eq!(
+            got,
+            vec!["Hello <break time=\"1s\"/> there my friend.", "Second sentence here."]
+        );
 
         let got = drive(&mut sentences(XML_STREAM), &per_char);
         assert_eq!(got.iter().filter(|t| t.contains("<break time=\"1s\"/>")).count(), 1, "{got:?}");
@@ -548,5 +521,4 @@ mod tests {
             assert!(!xml::is_xml_only(token), "a tag was emitted alone: {token:?}");
         }
     }
-
 }

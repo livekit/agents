@@ -28,7 +28,7 @@ use lk_agents_abi::{
 
 use prompts::BuiltIn;
 
-use crate::env::{Env, Standalone};
+use crate::env::Env;
 
 /// A judgment is one long completion over a whole transcript.
 const JUDGE_CONN_OPTIONS: ApiConnectOptions =
@@ -37,8 +37,13 @@ const JUDGE_CONN_OPTIONS: ApiConnectOptions =
 /// Judging is batch load after the conversation: it never competes with live traffic.
 const INFERENCE_CLASS: &str = "low";
 
+/// The speech-text projection supplied by the host composing conversation judges.
+pub trait JudgeEnv: Env {
+    fn strip_assistant_markup(text: &str) -> String;
+}
+
 /// The judges of evaluations on one model, and the host that runs the application's.
-pub struct Judges<E: Env = Standalone> {
+pub struct Judges<E: JudgeEnv> {
     llm: Option<Arc<dyn Llm>>,
     /// The host's live judge tools, offered to a model the host implements.
     tools: HostRef,
@@ -52,7 +57,7 @@ enum Judge {
     Host { name: String, evaluator: HostRef },
 }
 
-impl<E: Env> JudgeRunner for Judges<E> {
+impl<E: JudgeEnv> JudgeRunner for Judges<E> {
     fn new(llm: Option<Arc<dyn Llm>>, tools: HostRef, host: Arc<dyn EvaluationHost>) -> Self {
         Judges { llm, tools, host, clock: E::clock(), env: PhantomData }
     }
@@ -110,7 +115,7 @@ impl<E: Env> JudgeRunner for Judges<E> {
     }
 }
 
-impl<E: Env> Judges<E> {
+impl<E: JudgeEnv> Judges<E> {
     async fn judge(
         &self,
         judge: &Judge,
@@ -147,7 +152,7 @@ impl<E: Env> Judges<E> {
                 judge.name
             )
         })?;
-        let prompt = judge.prompt(chat_ctx, reference);
+        let prompt = judge.prompt(chat_ctx, reference, E::strip_assistant_markup);
         let (arguments, _) = self
             .call(
                 llm,

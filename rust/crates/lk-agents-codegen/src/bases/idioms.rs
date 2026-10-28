@@ -250,7 +250,7 @@ pub(super) const CHUNKED: &str = r#"
         return self._synthesize_task.exception()
 {SYNTHESIS}
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
-        return _core.validate_synthesis(self._input_text, output_emitter.pushed_duration(), None)  # type: ignore[no-any-return]
+        return _core.validate_synthesis(self._input_text, output_emitter.pushed_duration(), None)
 
     async def collect(self) -> rtc.AudioFrame:
         """Utility method to collect every frame in a single call"""
@@ -328,7 +328,7 @@ pub(super) const SYNTHESIZE: &str = r#"
             self.input.close()
 
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
-        return _core.validate_synthesis(  # type: ignore[no-any-return]
+        return _core.validate_synthesis(
             self._pushed_text,
             output_emitter.pushed_duration(),
             (self._num_segments, output_emitter.num_segments),

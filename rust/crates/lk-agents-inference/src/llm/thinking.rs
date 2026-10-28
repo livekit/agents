@@ -38,7 +38,6 @@ fn partial_marker_length(content: &str, marker: &str) -> usize {
 /// [`strip_thinking_tokens`] over the filter's fields: `(visible, buffer, end_marker)`.
 /// `content=None` (no field) and `""` (empty field) are distinct, and only `""` can answer `""`:
 /// collapsing them would make a content-filtered chunk look like pure reasoning.
-#[crate::host(export(pid = false))]
 pub fn strip_thinking(
     content: Option<&str>,
     start_tag: &str,
@@ -47,7 +46,8 @@ pub fn strip_thinking(
     end_marker: Option<&str>,
     is_final: bool,
 ) -> (Option<String>, String, Option<String>) {
-    let state = FilterState { buffer: buffer.to_owned(), end_marker: end_marker.map(str::to_owned) };
+    let state =
+        FilterState { buffer: buffer.to_owned(), end_marker: end_marker.map(str::to_owned) };
     let out = strip_thinking_tokens(content, start_tag, end_tag, state, is_final);
     (out.visible, out.state.buffer, out.state.end_marker)
 }
@@ -187,7 +187,6 @@ mod tests {
 }
 
 /// An empty list means no text; a present empty part is an empty delta.
-#[crate::host(export(name = "flatten_delta_text"))]
 pub fn flatten_text_parts(parts: &[String]) -> Option<String> {
     (!parts.is_empty()).then(|| parts.concat())
 }

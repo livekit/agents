@@ -84,6 +84,7 @@ pub fn host_clock() -> Arc<dyn Clock> {
 
 /// This process as the inference clients' [`Env`](lk_agents_inference::env::Env): what a class
 /// the host constructs runs on (decision 88).
+#[derive(Clone)]
 pub struct Process;
 
 impl lk_agents_inference::env::Env for Process {

@@ -1,7 +1,9 @@
 //! Labels a steering disables are omitted along with every example that demonstrates them.
 
 use crate::tts::markup::prompts::*;
-use crate::tts::markup::provider::{FISHAUDIO_EMOTIONS, FISHAUDIO_TONES, Provider, XAI_INLINE, XAI_WRAPPING};
+use crate::tts::markup::provider::{
+    FISHAUDIO_EMOTIONS, FISHAUDIO_TONES, Provider, XAI_INLINE, XAI_WRAPPING,
+};
 use crate::tts::markup::steering::{SpeechSteering, allowed_prosody, allowed_sounds};
 
 /// Drop example lines that demonstrate a *vocabulary* label not in `allowed`.
@@ -50,7 +52,8 @@ fn inworld(sounds: &[&str]) -> String {
     if sounds.contains(&"laugh") {
         parts.push(INWORLD_LAUGHTER.to_string());
     }
-    let examples = sound_examples(&INWORLD_EXAMPLES, sounds, &crate::tts::markup::provider::INWORLD_SOUNDS);
+    let examples =
+        sound_examples(&INWORLD_EXAMPLES, sounds, &crate::tts::markup::provider::INWORLD_SOUNDS);
     if !examples.is_empty() {
         parts.push(examples_block(&examples));
     }

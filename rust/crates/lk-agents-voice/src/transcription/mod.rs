@@ -3,7 +3,7 @@ pub mod pacer;
 pub mod synchronizer;
 
 use crate::transcription::filters::{MarkdownFilter, filter_emoji};
-use lk_agents_abi::tts::markup::{ExpressiveTag, TranscriptMarkupStripper, split_all_markup};
+use crate::tts::markup::{ExpressiveTag, TranscriptMarkupStripper, split_all_markup};
 use std::time::Duration;
 
 /// What was heard of one segment: the words, where the playhead stopped, whether it played out.

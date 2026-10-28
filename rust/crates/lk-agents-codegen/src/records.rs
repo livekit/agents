@@ -10,6 +10,10 @@
 //! the field is not optional, fails naming `Record.field`; a declared default is the model's, so it
 //! applies to an omitted keyword only.
 
+mod emit;
+mod legacy;
+pub(crate) use emit::emit;
+
 use crate::class_stub::{Imports, docstring, py_literal};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,12 +32,9 @@ const HEADER: &str = "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `c
 /// `HostProxy` bridges and the in-place records' trait impls, `mod.rs` and one module per subject.
 pub fn rust(decls: &Declarations) -> Result<Vec<Out>, String> {
     let in_place = || decls.records.iter().filter(|r| r.in_place);
-    let mut families: Vec<&str> = decls
-        .proxies
-        .iter()
-        .map(|p| p.family.as_str())
-        .chain(in_place().map(|r| r.family.as_str()))
-        .collect();
+    let proxies = || decls.proxies.iter().filter(|proxy| legacy::proxy_in_place(&proxy.trait_path));
+    let mut families: Vec<&str> =
+        proxies().map(|p| p.family.as_str()).chain(in_place().map(|r| r.family.as_str())).collect();
     families.sort();
     families.dedup();
     let mut root = format!("{HEADER}\n");
@@ -54,7 +55,7 @@ pub fn rust(decls: &Declarations) -> Result<Vec<Out>, String> {
             text.push_str(&format!("\n// Declared in {}.\n", r.source));
             text.push_str(&record_rust(r, true, decls)?);
         }
-        for p in decls.proxies.iter().filter(|p| p.family == family) {
+        for p in proxies().filter(|p| p.family == family) {
             text.push_str(&format!("\n// Declared in {}.\n", p.source));
             text.push_str(&crate::proxy::legacy_bridge(p));
         }
@@ -181,6 +182,7 @@ pub fn mark_in_place(decls: &mut Declarations) {
 /// Every [`IN_PLACE`] entry is a declared record, and one the list did not hold at `HEAD` was a
 /// `#[derive(Host)]` record there: the list only trades a derive's trait impls for generated ones.
 pub fn check_in_place(root: &std::path::Path, decls: &Declarations) -> Result<(), String> {
+    legacy::check_proxies(root, decls)?;
     let at_head = |path: &str| -> Option<String> {
         let out = std::process::Command::new("git")
             .args(["show", &format!("HEAD:{path}")])
@@ -224,7 +226,7 @@ fn records_in(ty: &Ty, out: &mut Vec<String>) {
     match ty {
         Ty::Record(r) if matches!(r.host, HostForm::Record { .. }) => out.push(r.rust.clone()),
         Ty::Optional(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => records_in(t, out),
-        Ty::Map(k, t) => {
+        Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
             records_in(k, out);
             records_in(t, out);
         }
@@ -237,7 +239,7 @@ fn mark(ty: &mut Ty, held: &BTreeSet<String>) {
     match ty {
         Ty::Record(r) => r.in_place = held.contains(&r.rust),
         Ty::Optional(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => mark(t, held),
-        Ty::Map(k, t) => {
+        Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
             mark(k, held);
             mark(t, held);
         }
@@ -303,9 +305,12 @@ const NOT_A: &str = "\n/// `obj` is not an instance of the model(s) `expected` n
 /// Whether `ty` holds a declared record: it then crosses by the records' conversion functions.
 pub(crate) fn holds_record(ty: &Ty) -> bool {
     match ty {
-        Ty::Record(r) => matches!(r.host, HostForm::Record { .. }) && !r.in_place,
+        Ty::Record(r) => {
+            matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs) && !r.in_place
+        }
         Ty::Optional(t) | Ty::List(t) | Ty::Set(t) => holds_record(t),
         Ty::Map(k, t) => holds_record(k) || holds_record(t),
+        Ty::OrderedMap(..) => true,
         Ty::Tuple(ts) => ts.iter().any(holds_record),
         _ => false,
     }
@@ -611,6 +616,9 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
         Ty::Optional(t) => {
             format!("if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}", read(t, v, path)?)
         }
+        Ty::Tuple(_) | Ty::OrderedMap(..) => {
+            crate::adapter::from_object(v, ty, &format!("{path:?}"), path)?
+        }
         Ty::List(t) => format!(
             "{v}.cast::<::pyo3::types::PyList>()?.iter().map(|item| {{ let item = &item; {} }}).collect::<PyResult<Vec<_>>>()",
             read(t, "item", path)?
@@ -635,56 +643,13 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
                 "{path}: a record holds a shared `Arc<dyn ..>` proxy, not an owned one"
             ));
         }
+        Ty::Proxy { declared: Some(_), .. } | Ty::Proxy { native_only: true, .. } => {
+            crate::adapter::from_object(v, ty, &format!("{path:?}"), path)?
+        }
         Ty::Proxy { rust, .. } => {
             format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host({v}, None)")
         }
         other => return Err(format!("{path}: `{}` is not a record field", other.rust())),
-    })
-}
-
-/// A `Bound<'py, PyAny>` expression of the owned value `x` (fallible steps use `?`, `py` in scope):
-/// what a declared record field, an adapter's result or a proxy's argument crosses as.
-pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
-    Ok(match ty {
-        Ty::Record(Record { host: HostForm::Record { module, name }, in_place: false, .. }) => {
-            format!("{}_to_py(py, {x})?", conversion(module, name))
-        }
-        Ty::Tuple(ts) => {
-            let names: Vec<String> = (0..ts.len()).map(|i| format!("x{i}")).collect();
-            let items =
-                ts.iter().zip(&names).map(|(t, n)| emit(t, n)).collect::<Result<Vec<_>, _>>()?;
-            format!(
-                "{{ let ({},) = {x}; ::pyo3::types::PyTuple::new(py, [{}])?.into_any() }}",
-                names.join(", "),
-                items.join(", ")
-            )
-        }
-        Ty::Json => format!("::lk_agents_abi::python::value_to_py(py, &{x})?"),
-        Ty::JsonObject => format!("::lk_agents_abi::python::extra_to_py(py, &{x})?.into_any()"),
-        Ty::Optional(t) => format!(
-            "match {x} {{ None => py.None().into_bound(py), Some(x) => {} }}",
-            emit(t, "x")?
-        ),
-        Ty::List(t) => format!(
-            "::pyo3::types::PyList::new(py, {x}.into_iter().map(|x| PyResult::Ok({})).collect::<PyResult<Vec<_>>>()?)?.into_any()",
-            emit(t, "x")?
-        ),
-        Ty::Map(k, t) => format!(
-            "{{ let d = ::pyo3::types::PyDict::new(py); for (k, x) in {x} {{ d.set_item({}, {})?; }} d.into_any() }}",
-            emit(k, "k")?,
-            emit(t, "x")?
-        ),
-        Ty::Set(t) => format!(
-            "::pyo3::types::PyFrozenSet::new(py, {x}.into_iter().map(|x| PyResult::Ok({})).collect::<PyResult<Vec<_>>>()?)?.into_any()",
-            emit(t, "x")?
-        ),
-        Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) => {
-            format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}, py)?")
-        }
-        Ty::Duration => {
-            format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}.as_secs_f64(), py)?")
-        }
-        other => return Err(format!("`{}` is not a record field", other.rust())),
     })
 }
 
@@ -737,11 +702,12 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                     format!("{PACKAGE}.{module}")
                 ),
             ),
+            Ty::Tuple(_) => ("tuple", "obj.is_instance_of::<::pyo3::types::PyTuple>()".into()),
             Ty::Str => ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".into()),
             Ty::Bool => ("bool", "obj.is_instance_of::<::pyo3::types::PyBool>()".into()),
             Ty::Int(_) => ("number", "(obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())".into()),
             Ty::Float | Ty::Duration => ("number", "(obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>()))".into()),
-            Ty::Map(..) | Ty::JsonObject => ("dict", "obj.is_instance_of::<::pyo3::types::PyDict>()".into()),
+            Ty::Map(..) | Ty::OrderedMap(..) | Ty::JsonObject => ("dict", "obj.is_instance_of::<::pyo3::types::PyDict>()".into()),
             Ty::List(_) => ("list", "obj.is_instance_of::<::pyo3::types::PyList>()".into()),
             other => {
                 return Err(format!(
@@ -1201,8 +1167,16 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),
         Ty::Optional(t) => format!("{} | None", annotation(t, module, own, out, typing)),
+        Ty::Tuple(items) => format!(
+            "tuple[{}]",
+            items
+                .iter()
+                .map(|item| annotation(item, module, own, out, typing))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Ty::List(t) => format!("list[{}]", annotation(t, module, own, out, typing)),
-        Ty::Map(k, t) => format!(
+        Ty::Map(k, t) | Ty::OrderedMap(k, t) => format!(
             "dict[{}, {}]",
             annotation(k, module, own, out, typing),
             annotation(t, module, own, out, typing)
@@ -1233,6 +1207,7 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
                 name.clone()
             }
             HostForm::Dict => "dict[str, object]".into(),
+            HostForm::WireStrs => "str".into(),
             HostForm::Annotation(text) => text.clone(),
         },
         // Refused by the resolver (`check_record_field`).

@@ -13,6 +13,7 @@ use crate::audio_recognition::{EndOfTurnInfo, InterruptionSignal, TurnDetectionM
 use crate::events::SessionEvent;
 use crate::run_result::Owned;
 use crate::trace::{CoreStep, InputStep, InterruptStep, RealtimeStep, Step, ToolStep, TurnStep};
+use crate::tts::markup::ChatMessageExt;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::voice::events::UserState;

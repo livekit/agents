@@ -2,7 +2,8 @@
 //! re-exported by `_core.pyi`. Written from the same IR as the adapters.
 
 use crate::decl::{
-    Class, Declarations, Form, HostForm, Literal, Method, MethodKind, RecordDecl, Ty,
+    Class, Declarations, Form, HostForm, Literal, Method, MethodKind, Proxy, ProxyCall, RecordDecl,
+    Ty,
 };
 use crate::python::Out;
 use crate::surface::Stub;
@@ -25,7 +26,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
     let mut out = Vec::new();
     for family in families {
         let classes: Vec<&Class> = decls.classes.iter().filter(|c| c.family == family).collect();
-        let mut imports = Imports(Vec::new(), decls.records.clone());
+        let mut imports = Imports::new(decls);
         let mut body = String::new();
         let mut own: Vec<String> = Vec::new();
         let mut names: Vec<String> = Vec::new();
@@ -84,9 +85,17 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
 
 /// `from <module> import <name>` lines, sorted.
 #[derive(Default)]
-pub(crate) struct Imports(Vec<(String, String)>, Vec<RecordDecl>);
+pub(crate) struct Imports(Vec<(String, String)>, Vec<RecordDecl>, Vec<Proxy>);
 
 impl Imports {
+    pub(crate) fn new(declarations: &Declarations) -> Self {
+        Self(Vec::new(), declarations.records.clone(), declarations.proxies.clone())
+    }
+
+    pub(crate) fn entries(&self) -> &[(String, String)] {
+        &self.0
+    }
+
     /// `name` may be a nested model (`Owner.Name`): its owner is imported.
     pub(crate) fn add(&mut self, module: &str, name: &str) {
         let name = name.split('.').next().unwrap_or(name);
@@ -190,22 +199,15 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
     } else {
         vec!["self".to_owned()]
     };
+    let (parameters, ret) = signature_parts(c, m, imports);
     let mut star = false;
-    for p in m.params.iter().filter(|p| p.ty != Ty::CallContext) {
-        if p.kw_only && !star {
+    for (parameter, kw_only) in parameters {
+        if kw_only && !star {
             params.push("*".into());
             star = true;
         }
-        let ty = annotation(c, &p.ty, Dir::In, imports);
-        params.push(match &p.default {
-            Some(d) => format!("{}: {ty} = {}", p.name.trim_start_matches("r#"), py_literal(d)),
-            None if matches!(p.ty, Ty::Maybe(_)) => {
-                format!("{}: {ty} = ...", p.name.trim_start_matches("r#"))
-            }
-            None => format!("{}: {ty}", p.name.trim_start_matches("r#")),
-        });
+        params.push(parameter);
     }
-    let ret = annotation(c, &m.ret.ok, Dir::Out, imports);
     let mut s = String::new();
     let ind = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
         ""
@@ -247,10 +249,52 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
     s
 }
 
+/// One callable's parameters and result, shared by stubs and generated forwarding methods.
+pub(crate) fn signature_parts(
+    c: &Class,
+    m: &Method,
+    imports: &mut Imports,
+) -> (Vec<(String, bool)>, String) {
+    (parameters(c, m, imports), annotation(c, &m.ret.ok, Dir::Out, imports))
+}
+
+/// Parameters shared by native stubs and authoring-class constructors.
+pub(crate) fn parameters(c: &Class, m: &Method, imports: &mut Imports) -> Vec<(String, bool)> {
+    m.params
+        .iter()
+        .filter(|p| p.ty != Ty::CallContext)
+        .map(|p| {
+            let ty = if p.shape_error.as_ref().is_some_and(|policy| policy.items) {
+                strict_list_input(c, &p.ty, imports)
+            } else {
+                annotation(c, &p.ty, Dir::In, imports)
+            };
+            let name = p.name.trim_start_matches("r#");
+            let text = match &p.default {
+                Some(default) => format!("{name}: {ty} = {}", py_literal(default)),
+                None if matches!(p.ty, Ty::Maybe(_)) => format!("{name}: {ty} = ..."),
+                None => format!("{name}: {ty}"),
+            };
+            (text, p.kw_only)
+        })
+        .collect()
+}
+
+/// The existing item-shape policy reads a concrete PyList; child records keep input types.
+fn strict_list_input(c: &Class, ty: &Ty, imports: &mut Imports) -> String {
+    match ty {
+        Ty::Optional(inner) => format!("{} | None", strict_list_input(c, inner, imports)),
+        Ty::List(item) => format!("list[{}]", annotation(c, item, Dir::In, imports)),
+        other => annotation(c, other, Dir::In, imports),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Dir {
     In,
     Out,
+    /// A proxy result decoded by from_object: list values may be any iterable.
+    ProxyResult,
 }
 
 /// What the host passes (`In`) or receives (`Out`): an emitted record is a dict of its fields.
@@ -277,9 +321,13 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             imports.add("collections.abc", "Sequence");
             format!("Sequence[{}]", annotation(c, t, dir, imports))
         }
+        Ty::List(t) if dir == Dir::ProxyResult => {
+            imports.add("collections.abc", "Iterable");
+            format!("Iterable[{}]", annotation(c, t, dir, imports))
+        }
         Ty::List(t) => format!("list[{}]", annotation(c, t, dir, imports)),
-        Ty::Map(k, t) => {
-            let map = if dir == Dir::In {
+        Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
+            let map = if dir == Dir::In && matches!(ty, Ty::Map(..)) {
                 imports.add("collections.abc", "Mapping");
                 "Mapping"
             } else {
@@ -296,7 +344,10 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             if dir == Dir::Out
                 && !matches!(
                     r.host,
-                    HostForm::CoreClass(_) | HostForm::Annotation(_) | HostForm::Record { .. }
+                    HostForm::CoreClass(_)
+                        | HostForm::Annotation(_)
+                        | HostForm::WireStrs
+                        | HostForm::Record { .. }
                 ) =>
         {
             "dict[str, object]".into()
@@ -315,13 +366,38 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
                 name.clone()
             }
             HostForm::Dict => "dict[str, object]".into(),
+            HostForm::WireStrs => "str".into(),
             HostForm::Annotation(text) => {
                 imports.annotation(text, &r.rust);
                 text.clone()
             }
         },
         Ty::This => c.name.clone(),
-        Ty::Proxy { host, generic, .. } => {
+        Ty::Proxy { host, generic, declared, .. } => {
+            if host == "collections.abc.Callable"
+                && let Some((family, name)) = declared
+                && let Some(method) = imports
+                    .2
+                    .iter()
+                    .find(|proxy| &proxy.family == family && &proxy.rust_name == name)
+                    .and_then(|proxy| proxy.methods.iter().find(|method| method.name == "__call__"))
+                    .cloned()
+            {
+                imports.add("collections.abc", "Callable");
+                let params = method
+                    .params
+                    .iter()
+                    .filter(|parameter| parameter.ty != Ty::CallContext)
+                    .map(|parameter| annotation(c, &parameter.ty, Dir::Out, imports))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut result = annotation(c, &method.ret.ok, Dir::ProxyResult, imports);
+                if method.kind == ProxyCall::Await {
+                    imports.add("collections.abc", "Awaitable");
+                    result = format!("Awaitable[{result}]");
+                }
+                return format!("Callable[[{params}], {result}]");
+            }
             let (module, name) = host.rsplit_once('.').expect("a proxy's host class is dotted");
             imports.add(module, name);
             if *generic {

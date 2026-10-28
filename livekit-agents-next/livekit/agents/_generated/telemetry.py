@@ -12,7 +12,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
+
+if TYPE_CHECKING:
+    from .usage import ModelUsage
 
 TelemetryValueKind: TypeAlias = Literal["scalar", "integer", "string", "bytes", "mapping", "sequence", "unsupported"]
 
@@ -87,7 +90,7 @@ class SessionReportSnapshot:
     options: object | None
     chat_history: object | None
     timestamp: float
-    usage: list[dict[str, object]] | None
+    usage: list[ModelUsage] | None
     sdk_version: str
 
 

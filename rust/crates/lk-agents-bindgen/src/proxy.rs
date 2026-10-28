@@ -392,6 +392,11 @@ pub fn native(attr: TokenStream, tr: &syn::ItemTrait) -> syn::Result<TokenStream
             return Err(syn::Error::new_spanned(at, format!("native({}) has no meaning", x.key.trim_start_matches("native."))));
         }
     }
+    // A bare marker is declaration metadata. Its generated Python reader uses HostNative;
+    // unlike legacy through/refused adapters, it emits no executable ABI implementation.
+    if m.0.len() == 1 && m.0[0].key == "native" && m.0[0].value == crate::meta::Value::Word {
+        return Ok(TokenStream::new());
+    }
     let rt = quote!(::lk_agents_abi::python);
     let clock_ty = quote!(::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Clock>>);
     let through: Vec<_> = m.under("native.through.").collect();

@@ -426,7 +426,9 @@ fn rust_literal(d: &Literal, ty: &Ty) -> String {
 fn native(ty: &Ty) -> bool {
     match ty {
         // A declared record crosses by its generated conversion functions, not a pyo3 trait.
-        Ty::Record(r) => r.in_place || !matches!(r.host, HostForm::Record { .. }),
+        Ty::Record(r) => {
+            r.in_place || !matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs)
+        }
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Error(_) => true,
         Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) => native(t),
         Ty::Map(k, t) => native(k) && native(t),
@@ -440,7 +442,9 @@ fn contains_number(ty: &Ty) -> bool {
     match ty {
         Ty::Int(_) | Ty::Float => true,
         Ty::Optional(inner) | Ty::Maybe(inner) | Ty::List(inner) => contains_number(inner),
-        Ty::Map(key, value) => contains_number(key) || contains_number(value),
+        Ty::Map(key, value) | Ty::OrderedMap(key, value) => {
+            contains_number(key) || contains_number(value)
+        }
         Ty::Tuple(items) => items.iter().any(contains_number),
         _ => false,
     }
@@ -449,7 +453,7 @@ fn contains_number(ty: &Ty) -> bool {
 /// The adapter's parameter type, and the conversion (an expression of the parameter) when it is
 /// taken as an object.
 fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
-    if native(&p.ty) {
+    if p.shape_error.is_none() && native(&p.ty) {
         return Ok((p.ty.rust(), None));
     }
     let path = format!("{:?}", p.name);
@@ -465,7 +469,8 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
                     p.name
                 ));
             }
-            let convert = from_object("v", inner, &path, at)?;
+            let convert =
+                crate::shape_error::convert("v", inner, &path, at, p.shape_error.as_ref())?;
             Ok((
                 "Option<Bound<'_, PyAny>>".into(),
                 Some(format!("{}.map(|v| {convert}).transpose()?", p.name)),
@@ -480,7 +485,10 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
             }
             Ok((
                 "Bound<'_, PyAny>".into(),
-                Some(format!("{}?", from_object(&p.name, ty, &path, at)?)),
+                Some(format!(
+                    "{}?",
+                    crate::shape_error::convert(&p.name, ty, &path, at, p.shape_error.as_ref())?
+                )),
             ))
         }
     }
@@ -497,6 +505,9 @@ fn maybe_input(value: &str, inner: &Ty, path: &str, at: &str) -> Result<String, 
 /// `PyResult<T>` of the object `v`.
 pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<String, String> {
     Ok(match ty {
+        Ty::Instance { family, class, .. } => format!(
+            "{v}.cast::<super::{family}::{class}>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from)"
+        ),
         Ty::Int(integer) => {
             format!("::lk_agents_abi::python::number_from_py::<{}>(&{v}, {path})", integer.rust())
         }
@@ -517,16 +528,27 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Record(Record { host: HostForm::Record { module, name }, in_place: false, .. }) => {
             format!("{}_from_py(&{v})", crate::records::conversion(module, name))
         }
-        Ty::Map(k, t) => format!(
-            "{v}.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok(({}?, {}?))).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())",
-            from_object("key", k, path, at)?,
-            from_object("item", t, path, at)?
+        Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
+            let collection = if matches!(ty, Ty::OrderedMap(..)) {
+                "::indexmap::IndexMap"
+            } else {
+                "::std::collections::BTreeMap"
+            };
+            format!(
+                "{v}.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok(({}?, {}?))).collect::<PyResult<{collection}<_, _>>>())",
+                from_object("key", k, path, at)?,
+                from_object("item", t, path, at)?
+            )
+        }
+        Ty::Proxy { rust, host, native_only: true, .. } => format!(
+            "::lk_agents_abi::python::native::<dyn {rust}>(&{v}).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!({path}, {message:?})))",
+            message = format!(": expected native {host}"),
         ),
         Ty::Proxy { declared: Some((family, name)), boxed: true, .. } => {
-            format!("super::{family}::{name}Proxy::owned(&{v})")
+            format!("crate::generated::{family}::{name}Proxy::owned(&{v})")
         }
         Ty::Proxy { declared: Some((family, name)), .. } => {
-            format!("super::{family}::{name}Proxy::from_host(&{v})")
+            format!("crate::generated::{family}::{name}Proxy::from_host(&{v})")
         }
         Ty::Shared { rust, .. } => {
             format!("<{rust} as ::lk_agents_abi::python::ArcClass>::shared(&{v})")

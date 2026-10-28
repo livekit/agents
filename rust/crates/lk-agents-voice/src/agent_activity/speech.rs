@@ -23,6 +23,7 @@ use crate::trace::{
     CoreStep, GenerationStep, HandoffStep, InterruptCause, InterruptStep, PlayoutStep, SpeechStep,
     ToolStep, TurnStep,
 };
+use crate::tts::markup::ChatMessageExt;
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatContext, ChatMessage, Modality, Role, Ts};

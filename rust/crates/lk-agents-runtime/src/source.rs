@@ -5,7 +5,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{Closed, StreamSource, Ts};
 use tokio::sync::{Mutex, Notify};
 
@@ -17,14 +16,7 @@ pub enum Pulled<T> {
     Cancelled,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum PullError {
-    /// `StreamStateError`: another pull is in flight.
-    #[error("another pull of this stream is still in flight")]
-    Overlap,
-    #[error(transparent)]
-    Failed(#[from] ProviderError),
-}
+pub use lk_agents_abi::errors::PullError;
 
 struct Inner<T> {
     source: Mutex<Option<Box<dyn StreamSource<T>>>>,
@@ -132,6 +124,7 @@ mod python {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::errors::ProviderError;
     use std::sync::atomic::AtomicUsize;
 
     /// Yields its items, then waits forever; counts closes.

@@ -2,11 +2,11 @@
 
 use super::machine::{Effect, Event, Synthesis};
 use super::*;
-use lk_agents_net::transport::{WsMessage, connect_error};
 use base64::Engine as _;
 use futures_util::future::{Either, select};
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::TimeoutPhase;
+use lk_agents_net::transport::{WsMessage, connect_error};
 use std::pin::pin;
 
 impl Pump {
@@ -18,7 +18,6 @@ impl Pump {
             let mut core = Synthesis::new(
                 request_id,
                 self.sample_rate,
-                self.expressive,
                 self.opts.conn_options.read_timeout.map(Duration::from_secs_f64),
                 self.opts.conn_options.total_timeout.map(|timeout| {
                     self.accepted_at.saturating_add(Duration::from_secs_f64(timeout))
@@ -140,6 +139,7 @@ impl Pump {
         let text_rx = &mut self.text_rx;
         let audio_tx = &self.audio_tx;
         let stopped = &mut self.stopped;
+        let transcript = &mut self.transcript;
         let mut effects = std::collections::VecDeque::new();
         let mut input_closed = false;
         loop {
@@ -188,7 +188,12 @@ impl Pump {
                             Err(error) => core.handle(Event::Failed(error), clock.now()),
                         });
                     }
-                    Effect::TtsAudio(audio) => {
+                    Effect::TtsAlignment { segment_id, tokens } => {
+                        transcript.push_alignment(segment_id, tokens);
+                    }
+                    Effect::TtsAudio(mut audio) => {
+                        audio.timed_transcript =
+                            transcript.take_audio_transcript(&audio.segment_id, audio.is_final);
                         let blocked_at = clock.now();
                         let total_timer = async {
                             match core.total_deadline() {

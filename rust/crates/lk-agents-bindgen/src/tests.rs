@@ -575,7 +575,7 @@ fn a_declared_error_is_a_core_exception_class_of_its_base() {
 }
 
 // Catches: a native-only trait proxying a host object, a `through` trait trying its adapter before
-// the native, or a declaration that says neither what to refuse nor what to go through.
+// the native, or a bare declaration marker emitting an executable ABI proxy.
 #[test]
 fn a_native_trait_takes_its_native_first_then_refuses_or_goes_through_its_adapter() {
     let tr: syn::ItemTrait = syn::parse2(quote! { pub trait Room: Send { fn rtc(&self); } }).unwrap();
@@ -585,7 +585,7 @@ fn a_native_trait_takes_its_native_first_then_refuses_or_goes_through_its_adapte
     assert!(native < through, "{out}");
     let out = text(crate::native(quote!(native(refused = "only native")), &tr).unwrap());
     assert!(out.contains("PyTypeError :: new_err (\"only native\")"), "{out}");
-    assert!(crate::native(quote!(native), &tr).is_err());
+    assert!(crate::native(quote!(native), &tr).unwrap().is_empty());
 }
 
 #[test]

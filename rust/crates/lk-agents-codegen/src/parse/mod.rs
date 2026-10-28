@@ -14,6 +14,7 @@ use syn::spanned::Spanned as _;
 #[cfg(test)]
 pub use exposed::exposed;
 pub use exposed::{aliases, exposed_with, global_aliases};
+pub(crate) use exposed::{forward_module, wrapper};
 use meta::{
     flag, has_host_derive, head_of, host_attr_strict, meta_str, metas, rust_arg, str_arg, str_args,
     unprefixed,

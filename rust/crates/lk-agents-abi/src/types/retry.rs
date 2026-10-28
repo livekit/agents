@@ -91,7 +91,7 @@ pub fn validate_synthesis(
     duration: f64,
     #[host(required)] segments: Option<(usize, usize)>,
 ) -> Option<String> {
-    if text.trim_matches(crate::tokenize::is_py_space).is_empty() {
+    if text.trim_matches(|c| crate::utils::strings::PYTHON_WHITESPACE.contains(&c)).is_empty() {
         return None;
     }
     if duration <= 0.0 {

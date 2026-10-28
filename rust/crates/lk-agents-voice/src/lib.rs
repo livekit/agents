@@ -5,15 +5,15 @@
 
 extern crate self as lk_agents_voice;
 
-pub mod background_audio;
 pub mod agent;
 pub mod agent_activity;
 pub mod agent_session;
 pub mod amd;
 pub mod audio;
+pub mod audio_recognition;
 pub mod avatar;
 pub mod avatar_runner;
-pub mod audio_recognition;
+pub mod background_audio;
 pub mod data_plane;
 pub mod endpointing;
 pub mod events;
@@ -34,3 +34,5 @@ pub mod transcription;
 pub mod turn;
 pub mod workflows;
 
+pub mod tokenize;
+pub mod tts;

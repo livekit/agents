@@ -1,4 +1,4 @@
-use lk_agents_abi::tokenize::is_py_space;
+use crate::tokenize::is_py_space;
 
 /// `INLINE_SPLIT_TOKENS`: the buffer is cut after the last of these.
 const SPLIT_TOKENS: [char; 11] = [' ', ',', '.', '?', '!', ';', '，', '。', '？', '！', '；'];

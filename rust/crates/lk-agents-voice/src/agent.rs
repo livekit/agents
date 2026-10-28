@@ -208,7 +208,7 @@ impl SessionChatCtx {
                 && c.visibility.model()
                 && let ChatItem::Message(msg) = &mut c.item
             {
-                lk_agents_abi::tts::markup::strip_message_markup(msg);
+                crate::tts::markup::strip_message_markup(msg);
             }
         }
     }

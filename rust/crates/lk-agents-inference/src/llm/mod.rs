@@ -7,6 +7,7 @@ pub mod gateway;
 pub mod lifecycle;
 pub mod models;
 pub mod parse;
+pub mod thinking;
 pub mod request;
 
 /// `_LLMOptions`.

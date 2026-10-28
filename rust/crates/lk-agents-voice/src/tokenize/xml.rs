@@ -58,7 +58,6 @@ pub fn tags(text: &str) -> Vec<Tag> {
 
 /// Is there an incomplete or unclosed tag in `text`? A `<` after the last `>` is tag-shaped when
 /// followed by `/`, a letter, or nothing.
-#[crate::host(export(pid = false, name = "xml_has_unclosed_tags"))]
 pub fn has_unclosed_tags(text: &str) -> bool {
     if !text.contains('<') {
         return false;
@@ -178,31 +177,68 @@ pub fn remap(text: &str, clean_ends: &[usize], tag_spans: &[Tag]) -> Vec<Segment
     merged
 }
 
-/// Tag-free text goes to the tokenizer untouched; tag-only text comes back as one span.
+/// Pure preparation and remapping around a tokenizer's supplied spans.
+#[derive(Debug, Clone)]
+pub enum Tokenization {
+    Ready(Vec<Span>),
+    Plain(String),
+    Markup { original: String, clean: String, tags: Vec<Tag> },
+}
+
+impl Tokenization {
+    pub fn new(text: &str) -> Self {
+        let tag_spans = tags(text);
+        if tag_spans.is_empty() {
+            return Self::Plain(text.to_owned());
+        }
+        let clean = strip_tags(text);
+        if clean.trim().is_empty() {
+            return Self::Ready(if text.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![Span::whole(text)]
+            });
+        }
+        Self::Markup { original: text.to_owned(), clean, tags: tag_spans }
+    }
+
+    /// Only this text is passed to a tokenizer; `None` needs no tokenizer call.
+    pub fn input(&self) -> Option<&str> {
+        match self {
+            Self::Ready(_) => None,
+            Self::Plain(text) => Some(text),
+            Self::Markup { clean, .. } => Some(clean),
+        }
+    }
+
+    pub fn finish(self, spans: Vec<Span>) -> Vec<Span> {
+        match self {
+            Self::Ready(spans) => spans,
+            Self::Plain(_) => spans,
+            Self::Markup { original, tags, .. } => {
+                let clean_ends: Vec<usize> = spans.into_iter().map(|span| span.end).collect();
+                if clean_ends.is_empty() {
+                    return Vec::new();
+                }
+                remap(&original, &clean_ends, &tags)
+                    .into_iter()
+                    .map(|span| Span { text: span.text, start: span.start, end: span.end })
+                    .collect()
+            }
+        }
+    }
+}
+
+/// Native-only convenience; host tokenizers are driven outside the core using the same plan.
 pub fn tokenize_aware<T: Tokenize + ?Sized>(tok: &T, text: &str) -> Vec<Span> {
-    let tag_spans = tags(text);
-    if tag_spans.is_empty() {
-        return tok.tokenize(text);
-    }
-    let clean = strip_tags(text);
-    if clean.trim().is_empty() {
-        return if text.trim().is_empty() { Vec::new() } else { vec![Span::whole(text)] };
-    }
-    let clean_ends: Vec<usize> = tok.tokenize(&clean).into_iter().map(|s| s.end).collect();
-    if clean_ends.is_empty() {
-        return Vec::new();
-    }
-    remap(text, &clean_ends, &tag_spans)
-        .into_iter()
-        .map(|s| Span { text: s.text, start: s.start, end: s.end })
-        .collect()
+    let plan = Tokenization::new(text);
+    let spans = plan.input().map(|input| tok.tokenize(input)).unwrap_or_default();
+    plan.finish(spans)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-
 
     // Catches: counting a self-closing tag as an open.
     #[test]

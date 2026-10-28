@@ -5,7 +5,7 @@ use crate::room_io::{
     find_micro_track_id, is_local_proxy_participant, local_micro_track_id, publishes_on_behalf_of,
 };
 use lk_agents_abi::AbortHandle;
-use lk_agents_abi::tts::markup::{ExpressiveTag, expression_attribute};
+use crate::tts::markup::{ExpressiveTag, expression_attribute};
 use lk_agents_abi::voice::io::Result;
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{

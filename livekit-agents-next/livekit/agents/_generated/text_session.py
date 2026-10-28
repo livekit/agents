@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
     from .._core import ChatItem
     from .agent_run import AgentDefinition, RunError, RunResult, RunUsage, StreamEvent
+    from .chat_items import ChatMessage
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -72,7 +73,7 @@ class SessionFrame:
     completed: bool
     pending_calls: list[PendingChildCall]
     answer_tool: str | None
-    visible_dialogue: list[dict[str, object]]
+    visible_dialogue: list[ChatMessage]
     """Delivery receipts, in conversation order, excluding the initial tool task and fork."""
     starting_history_ids: frozenset[str]
     transferred_message_ids: frozenset[str]

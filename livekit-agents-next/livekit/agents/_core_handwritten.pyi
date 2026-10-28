@@ -463,23 +463,6 @@ def session_records(
 
 # --- tokenize ------------------------------------------------------------------------------------
 
-class TokenBuffer:
-    def __init__(
-        self,
-        tokenize_fnc: Callable[[str], Any],
-        *,
-        min_token_len: int,
-        min_ctx_len: int,
-        max_token_len: int | None = None,
-        xml_aware: bool = False,
-    ) -> None: ...
-    def push(self, text: str) -> list[str]:
-        """The tokens ``text`` proves complete, batched."""
-
-    def flush(self) -> list[str]: ...
-
-def xml_tokenize(tokenize_fnc: Callable[[str], Any], text: str) -> list[tuple[str, int, int]]: ...
-
 # --- inference -----------------------------------------------------------------------------------
 
 def stt_keyterms_extra_for_model(

@@ -6,11 +6,9 @@
 //! `inference/tts.py`'s `SynthesizeStream` does.
 
 pub mod machine;
+mod ports;
 mod pump;
-#[cfg(feature = "python")]
-mod python;
-#[cfg(test)]
-mod tests;
+pub use ports::TtsHost;
 pub mod wire;
 
 use crate::abi::{
@@ -18,16 +16,18 @@ use crate::abi::{
 };
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
-use lk_agents_net::transport::{WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url};
 use async_trait::async_trait;
+use lk_agents_net::transport::{
+    WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url,
+};
 
 use futures_util::future::{Either, select};
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::tts::markup::{Markup, SentenceTokenizerConfig, sentence_tokenizer_of};
+use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
+use lk_agents_abi::tts::text::{TranscriptProcessor, TtsTextProcessorFactory};
 use lk_agents_abi::utils::connection_pool::ConnectionPool;
 use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
 use lk_agents_abi::{Spawner, SpawnerExt};
-use lk_agents_media::blingfire::{SentenceBuffer, SentenceBufferOptions};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::pin::pin;
@@ -83,7 +83,8 @@ impl Default for TtsOptions {
 /// One gateway TTS client as one session holds it: the shared client, and the identity of the
 /// job that session serves (two sessions sharing an instance bill each its own job).
 #[derive(Clone)]
-pub struct NativeTts {
+pub struct NativeTts<P: TtsTextProcessorFactory> {
+    speech: std::marker::PhantomData<P>,
     shared: Arc<TtsShared>,
     identity: Arc<BoundIdentity>,
     conn_options: Option<ApiConnectOptions>,
@@ -91,7 +92,7 @@ pub struct NativeTts {
     reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
 }
 
-impl std::ops::Deref for NativeTts {
+impl<P: TtsTextProcessorFactory> std::ops::Deref for NativeTts<P> {
     type Target = TtsShared;
 
     fn deref(&self) -> &TtsShared {
@@ -172,29 +173,7 @@ fn pool_secs(clock: &dyn Clock) -> f64 {
     clock.now().as_nanos() as f64 / 1e9
 }
 
-/// `inference.TTS`'s constructor keywords, in the host's order.
-#[lk_agents_abi::host(client(class = crate::tts::InferenceTts, build = crate::tts::python::build, positional = model))]
-pub struct TtsClientConfig {
-    pub model: String,
-    #[host(kwarg(default = None))]
-    pub voice: Option<String>,
-    #[host(kwarg(default = None))]
-    pub language: Option<String>,
-    #[host(kwarg(default = "pcm_s16le".to_owned()))]
-    pub encoding: String,
-    #[host(kwarg(default = 24_000))]
-    pub sample_rate: u32,
-    pub base_url: String,
-    pub api_key: String,
-    pub api_secret: String,
-    #[host(kwarg(default = None))]
-    pub extra_kwargs: Option<crate::extra::ExtraKwargs>,
-    #[host(kwarg(default = None))]
-    pub fallback: Option<crate::extra::Fallbacks<FallbackModel>>,
-    pub conn_options: ApiConnectOptions,
-}
-
-impl NativeTts {
+impl<P: TtsTextProcessorFactory> NativeTts<P> {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
     }
@@ -210,6 +189,7 @@ impl NativeTts {
             connections: Arc::default(),
         };
         NativeTts {
+            speech: std::marker::PhantomData,
             shared: Arc::new(shared),
             identity: Arc::default(),
             conn_options: None,
@@ -224,7 +204,7 @@ impl NativeTts {
         &self,
         headers: Headers,
         reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
-    ) -> NativeTts {
+    ) -> Self {
         let mut view = NativeTts::new(
             self.opts.lock().unwrap().clone(),
             self.ws.clone(),
@@ -301,20 +281,9 @@ impl NativeTts {
 }
 
 /// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::NativeTts`.
-#[lk_agents_abi::host(object(
-    name = "InferenceTts",
-    cell = "arc",
-    rust_name = InferenceTts,
-    as_dyn(Tts = as_tts),
-    stub = "def __init__(self, *args: Any, **kwargs: Any) -> None: ...",
-    stub = "def bind_clock(self, clock: SessionClock) -> None: ...",
-    stub = "def prewarm(self, *, headers: list[tuple[str, str]] | None = None) -> None: ...",
-    stub = "def identified(self, headers: list[tuple[str, str]], reporter: Any | None = None) -> InferenceTts: ..."
-))]
-impl NativeTts {
+impl<P: TtsTextProcessorFactory> NativeTts<P> {
     /// `_set_expressive`: whether syntheses opened from here batch sentences for markup and drop
     /// bracket cues from the alignment.
-    #[host(method)]
     pub fn set_expressive(&self, expressive: bool) {
         self.expressive.store(expressive, Ordering::SeqCst);
     }
@@ -323,20 +292,17 @@ impl NativeTts {
         self.opts.lock().unwrap().model.clone()
     }
 
-    #[host(getter)]
     pub fn sample_rate(&self) -> u32 {
         self.opts.lock().unwrap().sample_rate
     }
 
     /// `TTSCapabilities.aligned_transcript`, recomputed from the model and extra kwargs.
-    #[host(getter)]
     pub fn aligned_transcript(&self) -> bool {
         let opts = self.opts.lock().unwrap();
         wire::has_aligned_transcript(&opts.model, &opts.extra_kwargs)
     }
 
     /// `update_options`. Unlike the LLM's, `extra` merges (`.update()`).
-    #[host(method(kw_only))]
     pub fn update_options(
         &self,
         model: Option<&str>,
@@ -366,7 +332,6 @@ impl NativeTts {
     /// Open a duplex synthesis. The gateway has no one-shot endpoint, so `synthesize` is this plus
     /// one push and `end_input`. `headers` is `get_inference_headers()`, read by the host in the
     /// synthesis's job context; each sentence pushed goes out as it arrives.
-    #[host(method(name = "stream", stream = lk_agents_abi::InferenceTtsStream, kw_only))]
     pub async fn stream_for_host(
         &self,
         headers: Option<Vec<(String, String)>>,
@@ -424,24 +389,14 @@ impl NativeTts {
             sample_rate: opts.sample_rate,
             opts,
             provider,
-            expressive,
+            transcript: P::transcript(expressive),
             text_rx,
             audio_tx,
         };
-        let (max_token_len, min_token_len, xml_aware) =
-            sentence_tokenizer_of(&pump.provider, expressive);
-        let sentences = SentenceBuffer::with_options(SentenceBufferOptions {
-            retain_format: false,
-            ..SentenceBufferOptions::from_config(SentenceTokenizerConfig {
-                max_token_len,
-                min_token_len,
-                xml_aware,
-            })
-        });
         let prep = TextPrep {
             pending_bytes: 0,
-            markup: Markup::from_provider_key(wire::markup_provider_key(&pump.opts.model)),
-            sentences: Box::new(sentences),
+            markup: P::markup(wire::markup_provider_key(&pump.opts.model)),
+            sentences: P::sentence_splitter(Some(&pump.provider), expressive),
         };
         self.spawner.spawn_unboxed(pump.run());
 
@@ -460,7 +415,7 @@ impl NativeTts {
 }
 
 #[async_trait]
-impl Tts for NativeTts {
+impl<P: TtsTextProcessorFactory> Tts for NativeTts<P> {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }
@@ -549,15 +504,18 @@ pub struct TtsSinkHandle {
 /// sentences, each converted to its markup.
 struct TextPrep {
     pending_bytes: usize,
-    markup: Markup,
+    markup: Option<Box<dyn SentenceTextProcessor>>,
     sentences: Box<dyn SentenceSplitter>,
 }
 
 impl TtsSinkHandle {
     fn send(&self, sentences: Vec<String>) -> Result<(), ProviderError> {
-        let markup = self.prep.lock().unwrap().markup;
+        let prep = self.prep.lock().unwrap();
         for sentence in sentences {
-            let converted = markup.convert(&markup.normalize(&sentence));
+            let converted = match &prep.markup {
+                Some(markup) => markup.convert(&markup.normalize(&sentence)),
+                None => sentence,
+            };
             let permit = self.text.try_reserve().map_err(|_| stream_closed(WHAT))?;
             if self.text.capacity() == 0 {
                 return Err(ApiError::new("TTS pending text queue is full").into());
@@ -579,7 +537,10 @@ impl StreamSink<String> for TtsSinkHandle {
                 return Err(ApiError::new("TTS pending text exceeds its limit").into());
             }
             prep.pending_bytes += item.len();
-            let normalized = prep.markup.normalize(&item);
+            let normalized = match &prep.markup {
+                Some(markup) => markup.normalize(&item),
+                None => item,
+            };
             let sentences = prep.sentences.push(&normalized);
             prep.pending_bytes =
                 prep.pending_bytes.saturating_sub(sentences.iter().map(String::len).sum());
@@ -696,8 +657,8 @@ impl Drop for TtsSourceHandle {
     }
 }
 
-const TEXT_QUEUE_CAPACITY: usize = 64;
-const AUDIO_QUEUE_CAPACITY: usize = 8;
+pub const TEXT_QUEUE_CAPACITY: usize = 64;
+pub const AUDIO_QUEUE_CAPACITY: usize = 8;
 const MAX_PENDING_TEXT_BYTES: usize = 64 * 1024;
 
 struct Pump {
@@ -716,7 +677,7 @@ struct Pump {
     opts: TtsOptions,
     provider: String,
     sample_rate: u32,
-    expressive: bool,
+    transcript: Box<dyn TranscriptProcessor>,
     text_rx: mpsc::Receiver<TextCmd>,
     audio_tx: mpsc::Sender<Result<SynthesizedAudio, ApiError>>,
 }

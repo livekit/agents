@@ -1142,7 +1142,8 @@ fn tts_leg(
     let tts = tts.with_conn_options(&one_attempt(conn)).unwrap_or(tts);
     lk_agents_abi::StreamAdapter::adapted(
         tts,
-        lk_agents_media::blingfire::SentenceBuffer::factory(),
+        crate::tokenize::blingfire::SentenceBuffer::factory(),
+        crate::tts::markup::text_processor_factory(),
         clock,
         *conn,
     )

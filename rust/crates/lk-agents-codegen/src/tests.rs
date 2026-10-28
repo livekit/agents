@@ -775,7 +775,7 @@ const PROVIDER: &str = r#"
 fn generate_provider(src: &str) -> Result<String, String> {
     let decls = parse::file("test.rs", src)?;
     let exposed = parse::exposed("test.rs", src)?;
-    let bases = crate::bases::emit(&decls, &exposed)?;
+    let bases = crate::bases::emit(&decls, &exposed, &crate::decl::Declarations::default())?;
     Ok(python::emit_with(&decls, &bases, &[])?.into_iter().map(|o| o.text).collect())
 }
 
@@ -831,7 +831,8 @@ pub fn name_of(code: &str) -> Option<&str> { None }
 pub fn normalize(code: &str) -> String { code.to_owned() }
 "#;
     let x = parse::exposed("a.rs", src).expect("parses");
-    let out = crate::forward::emit(&[], &x).expect("generates");
+    let out =
+        crate::forward::emit(&[], &x, &crate::decl::Declarations::default()).expect("generates");
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].path, "code.py");
     let text = &out[0].text;
@@ -866,7 +867,8 @@ impl Tok {
 pub fn split(text: &str) -> Vec<String> { Vec::new() }
 "#;
     let x = parse::exposed("a.rs", src).expect("parses");
-    let out = crate::forward::emit(&[], &x).expect("generates");
+    let out =
+        crate::forward::emit(&[], &x, &crate::decl::Declarations::default()).expect("generates");
     assert_eq!(out.len(), 1);
     let text = &out[0].text;
     for want in [
@@ -998,4 +1000,103 @@ fn a_call_context_is_captured_at_entry_and_never_crosses() {
     let stubs = crate::class_stub::emit(&decls).expect("stubs");
     let stub = stubs.iter().map(|s| s.out.text.as_str()).collect::<String>();
     assert!(stub.contains("async def say(self, text: str) -> None"), "{stub}");
+}
+
+#[test]
+fn provider_markup_forwards_legacy_and_declared_classes_through_the_same_contract() {
+    let records = r#"
+        #[derive(Host)]
+        #[python(dataclass, module = "m", path = "livekit.agents.m", name = "MarkupInfo")]
+        pub struct MarkupInfo { pub nonverbals: String }
+        #[derive(Host)]
+        #[python(typed_dict, module = "expressive", path = "livekit.agents.m", name = "SpeechSteeringOptions")]
+        #[binding(extract, from_items)]
+        pub struct SpeechSteering { pub rate: f64 }
+    "#;
+    let provider =
+        PROVIDER.replace("MARKER", "#[python(markup)] fn provider_key(&self) -> String;");
+    let common = format!("{records}\n{provider}");
+    let legacy = r#"
+        /// Markup helper.
+        #[crate::host(object(name = "Markup"))]
+        impl Markup {
+            #[host(new)] pub fn new(provider: &str) -> Self { todo!() }
+            /// The dialect key.
+            #[host(method(name = "_provider_key"))]
+            pub fn provider_key(&self) -> String { todo!() }
+            /// Instructions for this voice.
+            #[host(method(kw_only))]
+            pub fn llm_instructions(&self, speech_steering: Option<&SpeechSteering>) -> Option<String> { todo!() }
+            #[host(method)] pub fn normalize(&self, text: &str) -> String { todo!() }
+            #[host(method)] pub fn convert(&self, text: &str) -> String { todo!() }
+        }
+    "#;
+    let declared = r#"
+        /// Markup helper.
+        #[crate::host(class(name = "Markup"))]
+        pub trait Markup: Sized {
+            #[host(new)] fn new(provider: String) -> Self;
+            /// The dialect key.
+            #[host(call, name = "_provider_key")] fn provider_key(&self) -> String;
+            /// Instructions for this voice.
+            #[host(call)] fn llm_instructions(&self, #[host(kw, default = None)] speech_steering: Option<SpeechSteering>) -> Option<String>;
+            #[host(call)] fn normalize(&self, text: String) -> String;
+            #[host(call)] fn convert(&self, text: String) -> String;
+        }
+    "#;
+    let records = parse::file("test.rs", &common).unwrap();
+    let legacy_exposed = parse::exposed("test.rs", &format!("{common}\n{legacy}")).unwrap();
+    let legacy_bases =
+        crate::bases::emit(&records, &legacy_exposed, &crate::decl::Declarations::default())
+            .unwrap();
+    let text = format!("{common}\n{declared}");
+    let tree = crate::decl::tree::Crate::from_files(
+        "lk_agents_abi",
+        &[("lib.rs", "pub mod tts;"), ("tts.rs", &text)],
+    )
+    .unwrap();
+    let declarations = crate::decl::resolve::declarations(&tree).unwrap();
+    let exposed = parse::exposed("test.rs", &common).unwrap();
+    let declared_bases = crate::bases::emit(&records, &exposed, &declarations).unwrap();
+    // Legacy dictionary extractors intentionally expose Any; the declaration keeps the
+    // record's TypedDict name. All forwarding, docs, defaults and calls must otherwise match.
+    let old_annotation = "speech_steering: Any | None = None";
+    assert_eq!(legacy_bases[0].body.matches(old_annotation).count(), 1);
+    assert_eq!(
+        legacy_bases[0].body.replacen(
+            old_annotation,
+            "speech_steering: SpeechSteeringOptions | None = None",
+            1
+        ),
+        declared_bases[0].body,
+        "switching declaration form must preserve the full forwarding body except the typed annotation"
+    );
+    let body = &declared_bases[0].body;
+    assert!(body.contains("def llm_instructions(self, *, speech_steering: SpeechSteeringOptions | None = None) -> str | None:"), "{body}");
+    assert!(
+        body.contains("return self._core().llm_instructions(speech_steering=speech_steering)"),
+        "{body}"
+    );
+    assert!(
+        body.contains("def normalize(self, text: str) -> str:")
+            && body.contains("return self._core().normalize(text)"),
+        "{body}"
+    );
+    assert_eq!(body.matches("def convert(").count(), 1, "each declared method forwards once");
+    assert_eq!(
+        declared_bases[0]
+            .imports
+            .iter()
+            .filter(|(module, name)| module == ".expressive" && name == "SpeechSteeringOptions")
+            .count(),
+        1,
+        "the declared record must import its canonical TypedDict exactly once"
+    );
+    assert!(
+        !declared_bases[0]
+            .imports
+            .iter()
+            .any(|(module, name)| module == ".m" && name == "SpeechSteeringOptions"),
+        "records already beside the base must not import their own module"
+    );
 }

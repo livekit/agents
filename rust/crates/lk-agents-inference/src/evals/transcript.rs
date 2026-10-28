@@ -4,12 +4,12 @@ use lk_agents_abi::utils::strings::py_repr;
 use lk_agents_abi::{ChatItem, ChatMessage, CopyOptions, Role};
 
 /// The items in list order, one line each.
-pub fn format_items(items: &[ChatItem]) -> String {
+pub fn format_items(items: &[ChatItem], strip_assistant: fn(&str) -> String) -> String {
     let mut lines = Vec::with_capacity(items.len());
     for item in items {
         lines.push(match item {
             ChatItem::Message(m) => {
-                let text = text_content(m).unwrap_or_default();
+                let text = text_content(m, strip_assistant).unwrap_or_default();
                 let role = m.role.as_str();
                 if m.interrupted {
                     format!("{role}: {text} [interrupted]")
@@ -45,9 +45,12 @@ pub fn format_items(items: &[ChatItem]) -> String {
 }
 
 /// A reference conversation without its instructions: the judge never sees two sets.
-pub fn reference_transcript(reference: &[ChatItem]) -> String {
+pub fn reference_transcript(reference: &[ChatItem], strip_assistant: fn(&str) -> String) -> String {
     let ctx = lk_agents_abi::ChatContext::new(reference.to_vec());
-    format_items(&ctx.copy(&CopyOptions { exclude_instructions: true, ..Default::default() }).items)
+    format_items(
+        &ctx.copy(&CopyOptions { exclude_instructions: true, ..Default::default() }).items,
+        strip_assistant,
+    )
 }
 
 /// The newest non-empty instructions of an agent config update.
@@ -64,12 +67,12 @@ pub fn has_handoffs(items: &[ChatItem]) -> bool {
 }
 
 /// Assistant text without its expressive markup, which would read as verbosity.
-fn text_content(m: &ChatMessage) -> Option<String> {
+fn text_content(m: &ChatMessage, strip_assistant: fn(&str) -> String) -> Option<String> {
     let raw = m.raw_text_content()?;
     if m.role != Role::Assistant {
         return Some(raw);
     }
-    Some(lk_agents_abi::tts::markup::strip_expr_markup(&raw))
+    Some(strip_assistant(&raw))
 }
 
 fn py_list_repr(items: &[String]) -> String {

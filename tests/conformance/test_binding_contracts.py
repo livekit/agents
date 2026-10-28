@@ -188,3 +188,54 @@ assert os.waitstatus_to_exitcode(status) == 0
         capture_output=True,
         text=True,
     )
+
+
+async def test_native_tts_accepts_session_clock_and_rejects_foreign_clock() -> None:
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+
+    room = _core.FakeRoom()
+    client = _core.InferenceTts(
+        "cartesia/sonic-2",
+        base_url="http://unused.invalid",
+        api_key="test",
+        api_secret="test",
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+    )
+    client.bind_clock(room.session_clock)
+    with pytest.raises(TypeError):
+        client.bind_clock(object())
+
+
+@pytest.mark.parametrize(
+    ("operation", "options", "error", "message"),
+    [
+        ("new", {"extra_kwargs": []}, ValueError, "expected a dict of extra kwargs, got []"),
+        ("new", {"extra_kwargs": 7}, ValueError, "expected a dict of extra kwargs, got 7"),
+        ("update", {"extra": []}, ValueError, "expected a dict of extra kwargs, got []"),
+        ("new", {"fallback": [7]}, ValueError, "each fallback entry must be a dict"),
+        ("new", {"fallback": [{"model": 7, "voice": ""}]}, TypeError, None),
+        ("new", {"fallback": 7}, TypeError, None),
+    ],
+)
+async def test_native_tts_preserves_option_shape_errors(
+    operation: str, options: dict[str, Any], error: type[Exception], message: str | None
+) -> None:
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+
+    def client(**kwargs: Any) -> Any:
+        return _core.InferenceTts(
+            "cartesia/sonic-2",
+            base_url="http://unused.invalid",
+            api_key="test",
+            api_secret="test",
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+            **kwargs,
+        )
+
+    with pytest.raises(error) as raised:
+        if operation == "new":
+            client(**options)
+        else:
+            client().update_options(**options)
+    if message is not None:
+        assert str(raised.value) == message

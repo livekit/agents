@@ -27,11 +27,8 @@ pub mod gateway {
             "deepgram/nova-2-conversationalai",
             "deepgram/nova-2-phonecall",
         ];
-        pub const DEEPGRAM_FLUX_MODELS: &[&str] = &[
-            "deepgram/flux-general",
-            "deepgram/flux-general-en",
-            "deepgram/flux-general-multi",
-        ];
+        pub const DEEPGRAM_FLUX_MODELS: &[&str] =
+            &["deepgram/flux-general", "deepgram/flux-general-en", "deepgram/flux-general-multi"];
         pub const CARTESIA_MODELS: &[&str] = &["cartesia/ink-whisper", "cartesia/ink-2"];
         #[host(name = "AssemblyAIModels")]
         pub const ASSEMBLY_AI_MODELS: &[&str] = &[
@@ -136,14 +133,26 @@ pub mod gateway {
             pub prefer_current_speaker: Option<bool>,
             pub enable_partials: Option<bool>, // default True (overridden by gateway)
             pub enable_entities: Option<bool>,
-            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+            #[allow(
+                clippy::disallowed_types,
+                reason = "S0: migrate live execution/state to runtime"
+            )]
             pub punctuation_overrides: Option<HashMap<String, Value>>,
-            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+            #[allow(
+                clippy::disallowed_types,
+                reason = "S0: migrate live execution/state to runtime"
+            )]
             pub additional_vocab: Option<Vec<HashMap<String, Value>>>,
             pub end_of_utterance_silence_trigger: Option<f64>, // seconds of silence before final
-            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+            #[allow(
+                clippy::disallowed_types,
+                reason = "S0: migrate live execution/state to runtime"
+            )]
             pub audio_filtering_config: Option<HashMap<String, Value>>,
-            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+            #[allow(
+                clippy::disallowed_types,
+                reason = "S0: migrate live execution/state to runtime"
+            )]
             pub transcript_filtering_config: Option<HashMap<String, Value>>,
         }
 
@@ -204,13 +213,8 @@ pub mod gateway {
             "cartesia/sonic-latest",
         ];
         pub const DEEPGRAM_MODELS: &[&str] = &["deepgram", "deepgram/aura", "deepgram/aura-2"];
-        pub const RIME_MODELS: &[&str] = &[
-            "rime",
-            "rime/coda",
-            "rime/mistv2",
-            "rime/mistv3",
-            "rime/mist",
-        ];
+        pub const RIME_MODELS: &[&str] =
+            &["rime", "rime/coda", "rime/mistv2", "rime/mistv3", "rime/mist"];
         pub const INWORLD_MODELS: &[&str] = &[
             "inworld",
             "inworld/inworld-tts-2",
@@ -221,12 +225,8 @@ pub mod gateway {
             "inworld/inworld-tts-1",
         ];
         pub const XAI_MODELS: &[&str] = &["xai/tts-1"];
-        pub const FISH_AUDIO_MODELS: &[&str] = &[
-            "fishaudio",
-            "fishaudio/s2.1-pro",
-            "fishaudio/s2.1-pro-free",
-            "fishaudio/s2-pro",
-        ];
+        pub const FISH_AUDIO_MODELS: &[&str] =
+            &["fishaudio", "fishaudio/s2.1-pro", "fishaudio/s2.1-pro-free", "fishaudio/s2-pro"];
         #[host(
             name = "TTSModels",
             union = "CartesiaModels, DeepgramModels, RimeModels, InworldModels, XaiModels, FishAudioModels"
@@ -369,15 +369,15 @@ pub mod gateway {
         #[python(typed_dict, typed_dict_from = "typing_extensions")]
         pub struct ChatCompletionOptions {
             pub frequency_penalty: Option<Option<f64>>,
-            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+            #[allow(
+                clippy::disallowed_types,
+                reason = "S0: migrate live execution/state to runtime"
+            )]
             pub logit_bias: Option<Option<HashMap<String, i64>>>,
             pub logprobs: Option<Option<bool>>,
             pub max_completion_tokens: Option<Option<i64>>,
             pub max_tokens: Option<Option<i64>>,
-            #[python(
-                ty = "Metadata | None",
-                type_import = "openai.types.shared_params:Metadata"
-            )]
+            #[python(ty = "Metadata | None", type_import = "openai.types.shared_params:Metadata")]
             pub metadata: Option<Value>,
             #[python(ty = "list[Literal[\"text\", \"audio\"]] | None")]
             pub modalities: Option<Value>,
@@ -463,3 +463,4 @@ pub trait InferenceCredentials {
     #[host(function)]
     fn inference_resolve_api_secret(#[host(default = None)] explicit: Option<String>) -> String;
 }
+pub mod tts_client;

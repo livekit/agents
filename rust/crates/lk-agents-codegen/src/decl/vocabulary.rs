@@ -4,6 +4,7 @@
 //! | where | key | meaning |
 //! |---|---|---|
 //! | trait | `class(name = "X", native = Trait, module = "module", subclass)` | a host class `_core.X` the runtime or a core implements; `native`: it is taken as itself where the host passes that `#[host(proxy)]` trait; `module` preserves Python identity, `subclass` allows Python subclasses |
+//! | trait | `native` | accepts only the registered native class (`class(native = Trait)` or legacy `object(as_dyn(Trait = method))`); the reader and type error are generated in Python bindings, with no ABI proxy |
 //! | trait | `proxy(host = "module.Class")` | the core calling a host object of that class; declared (its proxy generated) when its methods declare `await`/`notify`/`read_once`/`bind`; `view = "module.Class"`: the proxy calls that class's instance over the host object (a host class without the `_core_*` surface) |
 //! | proxy method | `await` | an `async fn(&self, ..) -> Result<T, E>`, or returning nothing (a close: its failure is logged) (`self: Box<Self>` consumes the proxy, as a writer's close does): the host call awaited in its context; dropping it cancels the host task. `T` may be `Box<dyn StreamSource<I>>`: the host's async iterable, pulled in a copy of the call's context |
 //! | proxy method | `call` | a `fn(&self, ..) -> Result<T, E>`: the host method called in place under the GIL, never awaiting (a read the host answers at once); a failure is the declared error; a host stream it returns is pulled in the call's context (its `context` parameter, else the captured one) |
@@ -30,6 +31,7 @@
 //! | trait method | `pid = true/false` | override its class or function group fork guard |
 //! | parameter | `kw` | keyword-only from this parameter on |
 //! | parameter | `default = <literal>` | omittable: `None`, `true`/`false`, a number or a string |
+//! | parameter | `shape_error(kind = "ValueError", message = "..", items)` | only the outer JSON-object shape, or with `items` each dict-record shape in a strict list; `{value}` formats a nonobject JSON value; nested conversion failures keep their own errors |
 //! | error type | `error(with = path)`, `error(kind = "ValueError")`, `error(original)`, per-variant `kind`/`delegate` | `Result<_, E>` raises through E's `HostException`, the one conversion its declaration expands to |
 //! | record | `host_type = "module.Name"` | the host class it is read from, when not a generated model |
 //! | type | `string` | crosses as its string: `Display` to the host, `FromStr` from it |

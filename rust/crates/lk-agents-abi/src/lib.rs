@@ -69,8 +69,6 @@ pub use llm::llm::InferenceLlmStream;
 #[cfg(feature = "python")]
 pub use stt::stt::FallbackSttStream;
 pub use tts::emitter::{AudioEmitter, EmitterError, SegmentDump};
-#[cfg(feature = "python")]
-pub use tts::tts::{FallbackTtsStream, InferenceTtsStream};
 pub use utils::resample::{Quality, ResampleError, Resampler};
 
 pub use llm::llm::{ChatRequest, Llm, LlmStream, ToolChoice, ToolFlags, ToolSpec};
@@ -79,7 +77,10 @@ pub use llm::realtime::{
     UpdateInstructions, UpdateTools,
 };
 pub use llm::realtime::{Realtime, RealtimeCommand, RealtimeCommandKind, RealtimeSession};
-pub use tts::stream_adapter::{SentenceSplitter, SplitterFactory, StreamAdapter, adapter_stream};
+pub use tts::stream_adapter::{
+    SentenceSplitter, SentenceTextProcessor, SplitterFactory, StreamAdapter, StreamAdapterFunctions,
+    TextProcessorFactory,
+};
 pub use turn::detector::{EotDetector, LegEvent, ReqId};
 pub use types::identity::ProviderId;
 pub use utils::audio::{AudioBuffer, AudioFrame};
@@ -117,7 +118,7 @@ pub use llm::chat_context::{
     ChatContext, CopyOptions, HostFacts, ItemFacts, MergeOptions, copy_excludes_facts, copy_plan,
     copy_plan_of, merge_plan, merge_plan_of, truncate_plan, truncate_plan_of,
 };
-pub use llm::chat_context::{Extra, chat_message_raw_text_content, chat_message_text_content};
+pub use llm::chat_context::{Extra, chat_message_raw_text_content};
 pub use llm::ctx_diff::{Anchored, DiffOps, compute_chat_ctx_diff, compute_chat_ctx_diff_of};
 pub use llm::events::{
     ChoiceDelta, CompletionUsage, FunctionToolCall, LlmChunk, chat_chunk_has_response,

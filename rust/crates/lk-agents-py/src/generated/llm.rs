@@ -35,8 +35,8 @@ impl FallbackLlm {
     #[pyo3(signature = (llms, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
     fn new(llms: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_fallback_llm_new_attempt_timeout)] attempt_timeout: f64, #[pyo3(from_py_with = _extract_fallback_llm_new_max_retry_per_llm)] max_retry_per_llm: u32, #[pyo3(from_py_with = _extract_fallback_llm_new_retry_interval)] retry_interval: f64, sticky: bool, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackLlm> {
         ::lk_agents_abi::python::check_pid()?;
-        let llms = llms.try_iter().and_then(|items| items.map(|item| { let item = item?; super::llm::LlmProxy::from_host(&item) }).collect::<PyResult<Vec<_>>>())?;
-        let on_availability = on_availability.map(|v| super::llm::ChainObserverProxy::from_host(&v)).transpose()?;
+        let llms = llms.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::llm::LlmProxy::from_host(&item) }).collect::<PyResult<Vec<_>>>())?;
+        let on_availability = on_availability.map(|v| crate::generated::llm::ChainObserverProxy::from_host(&v)).transpose()?;
         let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(llms, attempt_timeout, max_retry_per_llm, retry_interval, sticky, on_availability).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(FallbackLlm(::std::sync::Arc::new(out)))
     }
@@ -101,6 +101,152 @@ impl FallbackLlmChunks {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
+type FallbackTtsImpl = <crate::Selected as super::Implementations>::FallbackTts;
+
+fn _extract_fallback_tts_new_max_retry_per_tts(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
+    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "max_retry_per_tts")
+}
+
+fn _extract_fallback_tts_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<u32>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")).map(Some) }
+}
+
+/// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
+#[pyclass(frozen, name = "FallbackTts", module = "livekit.agents._core")]
+pub struct FallbackTts(::std::sync::Arc<FallbackTtsImpl>);
+
+#[pymethods]
+impl FallbackTts {
+    #[new]
+    #[pyo3(signature = (ttss, *, max_retry_per_tts = 2, sample_rate = None, on_availability = None))]
+    fn new(ttss: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_fallback_tts_new_max_retry_per_tts)] max_retry_per_tts: u32, #[pyo3(from_py_with = _extract_fallback_tts_new_sample_rate)] sample_rate: ::std::option::Option<u32>, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackTts> {
+        ::lk_agents_abi::python::check_pid()?;
+        let ttss = ttss.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::tts::TtsProxy::from_host(&item) }).collect::<PyResult<Vec<_>>>())?;
+        let on_availability = on_availability.map(|v| crate::generated::llm::ChainObserverProxy::from_host(&v)).transpose()?;
+        let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(ttss, max_retry_per_tts, sample_rate, on_availability).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(FallbackTts(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn active_index(&self) -> PyResult<usize> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::active_index(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn capabilities(&self) -> PyResult<::lk_agents_abi::TtsCapabilities> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::capabilities(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn sample_rate(&self) -> PyResult<u32> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::sample_rate(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn num_channels(&self) -> PyResult<u16> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::num_channels(&self.0);
+        Ok(out)
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::aclose(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[pyo3(signature = (text, conn_options = None))]
+    fn synthesize<'py>(&self, py: Python<'py>, text: ::std::string::String, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::synthesize(&this, text, conn_options)
+                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::FallbackTtsStream(::std::sync::Arc::new(out)), py))
+        })
+    }
+
+    #[pyo3(signature = (conn_options = None))]
+    fn stream<'py>(&self, py: Python<'py>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::stream(&this, conn_options)
+                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::tts::FallbackTtsStream(::std::sync::Arc::new(out)), py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Tts`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Tts>(),
+        read: |obj| {
+            let this = obj.cast::<FallbackTts>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Tts> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
+type TtsTokenLogImpl = <crate::Selected as super::Implementations>::TtsTokenLog;
+
+/// The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text
+/// a recovering stream replays.
+///
+/// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
+/// here is lossy or bounded.
+#[pyclass(frozen, name = "TtsTokenLog", module = "livekit.agents._core")]
+pub struct TtsTokenLog(::std::sync::Arc<TtsTokenLogImpl>);
+
+#[pymethods]
+impl TtsTokenLog {
+    #[new]
+    fn new() -> PyResult<TtsTokenLog> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::new();
+        Ok(TtsTokenLog(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (text))]
+    fn push(&self, text: ::std::string::String) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::push(&self.0, text);
+        Ok(())
+    }
+
+    fn flush(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::flush(&self.0);
+        Ok(())
+    }
+
+    fn end(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::end(&self.0);
+        Ok(())
+    }
+
+    fn snapshot(&self) -> PyResult<(::std::vec::Vec<::std::option::Option<::std::string::String>>, bool)> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <TtsTokenLogImpl as ::lk_agents_abi::llm::fallback::TtsTokenLog>::snapshot(&self.0);
+        Ok(out)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/inference.rs.
 type InferenceLlmImpl = <crate::Selected as super::Implementations>::InferenceLlm;
 
@@ -127,7 +273,7 @@ impl InferenceLlm {
     #[pyo3(signature = (headers, reporter = None))]
     fn identified(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, reporter: Option<Bound<'_, PyAny>>) -> PyResult<InferenceLlm> {
         ::lk_agents_abi::python::check_pid()?;
-        let reporter = reporter.map(|v| super::llm::LlmProxy::from_host(&v)).transpose()?;
+        let reporter = reporter.map(|v| crate::generated::llm::LlmProxy::from_host(&v)).transpose()?;
         let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::identified(&self.0, headers, reporter);
         Ok(InferenceLlm(::std::sync::Arc::new(out)))
     }
@@ -312,7 +458,7 @@ impl McpSession {
     #[pyo3(signature = (transport, host_context))]
     fn connect_host<'py>(&self, py: Python<'py>, transport: Bound<'_, PyAny>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        let transport = super::llm::McpTransportProxy::from_host(&transport)?;
+        let transport = crate::generated::llm::McpTransportProxy::from_host(&transport)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_host(&this, transport, host_context)
@@ -335,7 +481,7 @@ impl McpSession {
     fn call_tool<'py>(&self, py: Python<'py>, name: ::std::string::String, arguments: Bound<'_, PyAny>, progress: Option<Bound<'_, PyAny>>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let arguments = match ::lk_agents_abi::python::value_from_py(&arguments, "arguments")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("arguments", ": expected a dict"))) }?;
-        let progress = progress.map(|v| super::llm::McpProgressProxy::from_host(&v)).transpose()?;
+        let progress = progress.map(|v| crate::generated::llm::McpProgressProxy::from_host(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::call_tool(&this, name, arguments, progress, host_context)

@@ -1,18 +1,25 @@
 //! `ChatContext._summarize` (`llm/chat_context.py:749`) and `to_xml`, split at the `llm.chat` await.
 //! Summarises `text_content` (markup stripped). `to_xml` escapes nothing, deliberately.
 
+use crate::tts::markup::ChatMessageExt;
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::{ChatItem, Role};
 use serde_json::Value;
 
-
 /// [`to_xml`] over owned pairs; `attrs` is a list of pairs because `_summarize`'s two renderings
 /// order `name` and `call_id` differently.
-#[crate::host(export(pid = false, name = "to_xml"))]
-pub fn to_xml_of(tag_name: &str, content: Option<&str>, attrs: Option<Vec<(String, String)>>) -> String {
+pub fn to_xml_of(
+    tag_name: &str,
+    content: Option<&str>,
+    attrs: Option<Vec<(String, String)>>,
+) -> String {
     let attrs = attrs.unwrap_or_default();
-    to_xml(tag_name, content, &attrs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>())
+    to_xml(
+        tag_name,
+        content,
+        &attrs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>(),
+    )
 }
 
 /// `chat_context.py:1100`. `if content:` is truthiness: an empty string renders self-closing.
@@ -20,13 +27,7 @@ pub fn to_xml(tag_name: &str, content: Option<&str>, attrs: &[(&str, &str)]) -> 
     let attrs_str = if attrs.is_empty() {
         None
     } else {
-        Some(
-            attrs
-                .iter()
-                .map(|(k, v)| format!("{k}=\"{v}\""))
-                .collect::<Vec<_>>()
-                .join(" "),
-        )
+        Some(attrs.iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect::<Vec<_>>().join(" "))
     };
 
     match content.filter(|c| !c.is_empty()) {
@@ -77,7 +78,6 @@ pub struct SummarizePlan {
 }
 
 /// The `assistant` message body the summary is stored as.
-#[crate::host(export(pid = false, name = "chat_history_summary_xml"))]
 pub fn summary_content(summary: &str) -> String {
     to_xml("chat_history_summary", Some(summary), &[])
 }
@@ -125,9 +125,12 @@ fn is_summarizable(item: &ChatItem) -> bool {
 /// `keep_last_turns = 0` summarises everything.
 /// `_summarize`'s decisions up to the `llm.chat` await, for the host:
 /// `(split_idx, preserved, system_prompt, user_content, created_at)`; `None` means do nothing.
-#[crate::host(export(pid = false, name = "chat_ctx_summarize_plan"))]
-pub fn summarize_plan_of(items: Vec<ChatItem>, keep_last_turns: usize) -> Option<(usize, Vec<usize>, &'static str, String, SystemTime)> {
-    summarize_plan(&items, keep_last_turns).map(|p| (p.split_idx, p.preserved, p.system_prompt, p.user_content, p.created_at))
+pub fn summarize_plan_of(
+    items: Vec<ChatItem>,
+    keep_last_turns: usize,
+) -> Option<(usize, Vec<usize>, &'static str, String, SystemTime)> {
+    summarize_plan(&items, keep_last_turns)
+        .map(|p| (p.split_idx, p.preserved, p.system_prompt, p.user_content, p.created_at))
 }
 
 pub fn summarize_plan(items: &[ChatItem], keep_last_turns: usize) -> Option<SummarizePlan> {
@@ -200,8 +203,7 @@ pub fn summarize_plan(items: &[ChatItem], keep_last_turns: usize) -> Option<Summ
         return None;
     }
 
-    let preserved: Vec<usize> =
-        (0..split_idx).filter(|&i| !is_summarizable(&items[i])).collect();
+    let preserved: Vec<usize> = (0..split_idx).filter(|&i| !is_summarizable(&items[i])).collect();
 
     const NUDGE: Duration = Duration::from_micros(1);
     let created_at = match tail.first() {
@@ -222,7 +224,7 @@ pub fn summarize_plan(items: &[ChatItem], keep_last_turns: usize) -> Option<Summ
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{call, msg, t};
+    use crate::tts::markup::testkit::{call, msg, t};
     use lk_agents_abi::FunctionCallOutput;
     use serde_json::json;
 

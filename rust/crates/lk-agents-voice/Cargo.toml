@@ -12,6 +12,8 @@ license.workspace = true
 doctest = false
 
 [dependencies]
+regex = "1.13.1"
+fancy-regex = "0.19.0"
 lk-agents-rtc = { path = "../lk-agents-rtc" }
 serde = { workspace = true }
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }

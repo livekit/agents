@@ -21,7 +21,7 @@ pub fn strip_template_tokens(value: Value) -> Value {
             for pattern in TOKENS.iter() {
                 text = pattern.replace_all(&text, "").into_owned();
             }
-            Value::String(lk_agents_abi::tokenize::py_strip(&text).to_owned())
+            Value::String(crate::text::py_strip(&text).to_owned())
         }
         Value::Array(values) => Value::Array(
             values

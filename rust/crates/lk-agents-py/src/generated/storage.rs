@@ -70,7 +70,7 @@ impl Storage {
     fn _core_a2a_door<'py>(&self, py: Python<'py>, config: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let config = crate::generated::records::a2a_door::door_config_from_py(&config)?;
-        let host = super::a2a::TurnHostProxy::from_host(&host)?;
+        let host = crate::generated::a2a::TurnHostProxy::from_host(&host)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_a2a_door(&this, config, host)

@@ -1382,7 +1382,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
- "fancy-regex",
+ "indexmap",
  "inventory",
  "livekit-protocol",
  "lk-agents-host-derive",
@@ -1545,6 +1545,7 @@ name = "lk-agents-py"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "indexmap",
  "lk-agents-abi",
  "lk-agents-rtc",
  "lk-agents-runtime",
@@ -1578,6 +1579,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "httparse",
+ "indexmap",
  "libc",
  "livekit-protocol",
  "livekit-token",
@@ -1650,6 +1652,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "fancy-regex",
  "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-core",
@@ -1659,6 +1662,7 @@ dependencies = [
  "pbjson-types",
  "prost",
  "pyo3",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

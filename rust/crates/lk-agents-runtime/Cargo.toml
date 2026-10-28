@@ -42,6 +42,7 @@ prost.workspace = true
 tonic-types = { version = "0.14", default-features = false }
 a2a.workspace = true
 serde.workspace = true
+indexmap.workspace = true
 # Threads and databases through public-api-server, the one way to agentstore.
 # The AgentDB data plane: the same WebSocket and TLS set as `lk-agents-worker` and
 # `lk-agents-inference`, one crypto provider (`ring`).

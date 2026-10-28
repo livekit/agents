@@ -83,3 +83,57 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
         #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
     ) -> Result<Self::Chunks, crate::errors::ProviderError>;
 }
+
+/// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
+#[crate::host(class(name = "FallbackTts", native = crate::Tts))]
+pub trait FallbackTts: Send + Sync + Sized + 'static {
+    #[host(class(name = "FallbackTtsStream"))]
+    type Stream;
+    #[host(new)]
+    fn new(
+        ttss: Vec<std::sync::Arc<dyn crate::Tts>>,
+        #[host(kw, default = 2)] max_retry_per_tts: u32,
+        #[host(default = None)] sample_rate: Option<u32>,
+        #[host(default = None)] on_availability: Option<std::sync::Arc<dyn ChainObserver>>,
+    ) -> Result<Self, crate::llm::inference::InvalidPayload>;
+    #[host(getter)]
+    fn active_index(&self) -> usize;
+    #[host(getter)]
+    fn capabilities(&self) -> crate::TtsCapabilities;
+    #[host(getter)]
+    fn sample_rate(&self) -> u32;
+    #[host(getter)]
+    fn num_channels(&self) -> u16;
+    #[host(await)]
+    async fn aclose(&self);
+    #[host(await)]
+    async fn synthesize(
+        &self,
+        text: String,
+        #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
+    ) -> Result<Self::Stream, crate::errors::ProviderError>;
+    #[host(await)]
+    async fn stream(
+        &self,
+        #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
+    ) -> Result<Self::Stream, crate::errors::ProviderError>;
+}
+
+/// The pushed-token log as the host's `SynthesizeStream` keeps it (`_core.TtsTokenLog`): the text
+/// a recovering stream replays.
+///
+/// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
+/// here is lossy or bounded.
+#[crate::host(class(name = "TtsTokenLog"))]
+pub trait TtsTokenLog: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new() -> Self;
+    #[host(call)]
+    fn push(&self, text: String);
+    #[host(call)]
+    fn flush(&self);
+    #[host(call)]
+    fn end(&self);
+    #[host(call)]
+    fn snapshot(&self) -> (Vec<Option<String>>, bool);
+}

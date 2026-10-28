@@ -40,7 +40,6 @@ const HANDWRITTEN: &[&str] = &[
     "StreamReader",
     "Streams",
     "Thread",
-    "TokenBuffer",
     "Turn",
     "chat_ctx_to_dict",
     "init",
@@ -53,7 +52,6 @@ const HANDWRITTEN: &[&str] = &[
     "stt_keyterms_extra_for_model",
     "stt_node",
     "tts_node",
-    "xml_tokenize",
 ];
 
 /// `_core.pyi` (package-relative) and `core_names.json`, from the generated stubs of `_generated/`.

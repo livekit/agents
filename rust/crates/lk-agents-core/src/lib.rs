@@ -26,3 +26,5 @@ pub mod tool_outcome;
 
 pub use agent::AgentError;
 pub use agent_run::{AgentRun, Effect, Event, RunInput};
+
+pub mod text;

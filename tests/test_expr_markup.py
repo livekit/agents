@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from livekit.agents import tts
 from livekit.agents.llm import ChatContext, ChatMessage
+
+from .fake_tts import FakeTTS
 
 pytestmark = pytest.mark.unit
 
@@ -43,3 +46,51 @@ def test_transcript_export_strips_assistant_expressions_without_changing_saved_h
     assert exported[0]["content"] == [MARKED]
     assert exported[1]["content"] == [" " + CLEAN]
     assert context.to_dict()["items"][1]["content"] == [MARKED]
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [
+        (
+            "inworld",
+            [
+                ("laughing", ["laugh"]),
+                ("breathing", ["breathe"]),
+                ("sighing", ["sigh"]),
+                ("reflex_sounds", ["cough", "clear throat", "yawn"]),
+            ],
+        ),
+        (
+            "xai",
+            [
+                ("laughing", ["laugh", "chuckle", "giggle", "laugh-speak"]),
+                ("breathing", ["breath", "inhale", "exhale"]),
+                ("sighing", ["sigh"]),
+                ("crying", ["cry"]),
+                ("vocalizing", ["hum-tune", "sing-song", "singing"]),
+                ("mouth_sounds", ["tsk", "tongue-click", "lip-smack"]),
+            ],
+        ),
+        (
+            "fishaudio",
+            [
+                ("laughing", ["laughing", "chuckling"]),
+                ("breathing", ["gasping"]),
+                ("sighing", ["sighing"]),
+                ("crying", ["sobbing"]),
+                ("vocalizing", ["groaning"]),
+                ("reflex_sounds", ["clear throat", "yawning"]),
+            ],
+        ),
+    ],
+)
+def test_markup_info_preserves_provider_field_and_label_order(
+    provider: str, expected: list[tuple[str, list[str]]]
+) -> None:
+    class DialectTTS(FakeTTS):
+        class Markup(tts.TTS.Markup):
+            def _provider_key(self) -> str:
+                return provider
+
+    voice = DialectTTS()
+    assert list(voice.markup.info.nonverbals.items()) == expected

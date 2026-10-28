@@ -128,8 +128,8 @@ impl AgentRunner {
     fn new(definition: Bound<'_, PyAny>, llm: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<AgentRunner> {
         ::lk_agents_abi::python::check_pid()?;
         let definition = crate::generated::records::agent_run::agent_definition_from_py(&definition)?;
-        let llm = super::llm::LlmProxy::from_host(&llm)?;
-        let host = super::agent::AgentHostProxy::from_host(&host)?;
+        let llm = crate::generated::llm::LlmProxy::from_host(&llm)?;
+        let host = crate::generated::agent::AgentHostProxy::from_host(&host)?;
         let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::new(definition, llm, host).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AgentRunner(::std::sync::Arc::new(out)))
     }

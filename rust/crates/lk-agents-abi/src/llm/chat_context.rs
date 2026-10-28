@@ -426,17 +426,6 @@ impl ChatMessage {
         }
         Some(out)
     }
-
-    /// Display text strips expressive markup only from assistant messages.
-    pub fn text_content(&self) -> Option<String> {
-        self.raw_text_content().map(|text| {
-            if self.role == Role::Assistant {
-                crate::tts::markup::strip_expr_markup(&text)
-            } else {
-                text
-            }
-        })
-    }
 }
 
 fn text_message(parts: Vec<String>, assistant: bool) -> ChatMessage {
@@ -452,12 +441,6 @@ fn text_message(parts: Vec<String>, assistant: bool) -> ChatMessage {
 #[crate::host(export)]
 pub fn chat_message_raw_text_content(parts: Vec<String>) -> Option<String> {
     text_message(parts, false).raw_text_content()
-}
-
-/// `ChatMessage.text_content` over the message's text parts: an assistant's loses its markup.
-#[crate::host(export)]
-pub fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<String> {
-    text_message(parts, assistant).text_content()
 }
 
 impl ChatMessage {

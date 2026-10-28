@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any, Generic, Literal, Never
+from typing import Generic, Literal, Never
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Self, TypeVar
@@ -31,6 +31,7 @@ from ..types import (
 )
 from ..utils import aio, shortuuid
 from .chat_items import MetricsMetadata
+from .expressive import SpeechSteeringOptions
 
 
 @dataclass
@@ -157,7 +158,7 @@ class TTS(
             """The queryable markup matrix for this voice."""
             return MarkupInfo(nonverbals=_core.supported_nonverbals(self._provider_key()))
 
-        def llm_instructions(self, *, speech_steering: Any | None = None) -> str | None:
+        def llm_instructions(self, *, speech_steering: SpeechSteeringOptions | None = None) -> str | None:
             """The instructions teaching the LLM this voice's markup, ``None`` without markup."""
             return self._core().llm_instructions(speech_steering=speech_steering)
 
@@ -343,7 +344,7 @@ class ChunkedStream(ABC):
         return self._emitter is not None and self._emitter.pushed_duration() > 0.0
 
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
-        return _core.validate_synthesis(self._input_text, output_emitter.pushed_duration(), None)  # type: ignore[no-any-return]
+        return _core.validate_synthesis(self._input_text, output_emitter.pushed_duration(), None)
 
     async def collect(self) -> rtc.AudioFrame:
         """Utility method to collect every frame in a single call"""
@@ -460,7 +461,7 @@ class SynthesizeStream(ABC):
             self.input.close()
 
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
-        return _core.validate_synthesis(  # type: ignore[no-any-return]
+        return _core.validate_synthesis(
             self._pushed_text,
             output_emitter.pushed_duration(),
             (self._num_segments, output_emitter.num_segments),

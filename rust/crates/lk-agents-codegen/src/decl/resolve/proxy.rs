@@ -150,6 +150,7 @@ impl Resolver<'_> {
                 params.push(Param {
                     name,
                     ty: Ty::CallContext,
+                    shape_error: None,
                     by_ref,
                     kw_only: false,
                     default: None,
@@ -171,7 +172,14 @@ impl Resolver<'_> {
             };
             // It crosses to the host; a declared proxy as the host object behind it.
             check_argument(&pat, &ty)?;
-            params.push(Param { name, ty, by_ref, kw_only: false, default: None });
+            params.push(Param {
+                name,
+                ty,
+                by_ref,
+                kw_only: false,
+                default: None,
+                shape_error: None,
+            });
         }
         let mut lends = false;
         let output = match &boxed {

@@ -4,6 +4,7 @@ use lk_agents_abi::{ChatItem, Role};
 use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, simulate};
 use lk_agents_fuzz::input::{Count, Input, Millis, Ref, RtEvent};
 use lk_agents_voice::events::SessionEvent;
+use lk_agents_voice::tts::markup::ChatMessageExt;
 
 // Catches: `remote_item_added` committed into history as it came, empty, and the transcript and
 // the reply that fill those items never told to the host: the user's final transcript upserted
@@ -13,8 +14,10 @@ use lk_agents_voice::events::SessionEvent;
 // the agent's context and commits the transcript and the message under the server's ids.
 #[test]
 fn server_items_reach_history_filled() {
-    let setup =
-        Setup { realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }), ..Setup::default() };
+    let setup = Setup {
+        realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }),
+        ..Setup::default()
+    };
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
         Input::Advance { ms: Millis(20) },

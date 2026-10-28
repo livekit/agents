@@ -48,6 +48,7 @@ impl Ts {
 }
 
 /// The core's only source of time: `now` drives scheduling, `wall` stamps chat items.
+#[crate::host(native)]
 pub trait Clock: Send + Sync {
     /// Monotonic. Repeated calls at the same instant return the same value.
     fn now(&self) -> Ts;

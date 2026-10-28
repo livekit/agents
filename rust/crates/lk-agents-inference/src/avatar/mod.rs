@@ -12,8 +12,8 @@ use serde_json::{Map, Value};
 
 use crate::attempts::AttemptFailure;
 use crate::headers::{HEADER_INFERENCE_PROVIDER, Headers};
-use lk_agents_net::transport::HttpRequest;
 pub use lifecycle::ProviderSession;
+use lk_agents_net::transport::HttpRequest;
 
 /// The rate when the gateway's answer names none (older gateways); the gateway is authoritative.
 pub const DEFAULT_SAMPLE_RATE: u32 = 16_000;
@@ -21,8 +21,9 @@ pub const DEFAULT_SAMPLE_RATE: u32 = 16_000;
 /// `"provider"` or `"provider/<id>"`, trimmed; anything else is refused naming the string.
 pub fn parse_model(model: &str) -> Result<(String, Option<String>), AvatarError> {
     let (provider, id) = model.split_once('/').unwrap_or((model, ""));
-    let provider = provider.trim_matches(lk_agents_abi::tokenize::is_py_space);
-    let id = id.trim_matches(lk_agents_abi::tokenize::is_py_space);
+    let provider =
+        provider.trim_matches(|c| lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c));
+    let id = id.trim_matches(|c| lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c));
     if provider.is_empty() {
         return Err(AvatarError::InvalidModel(lk_agents_abi::utils::strings::py_repr(model)));
     }
@@ -56,7 +57,14 @@ impl AvatarOptions {
             return Err(AvatarError::CatalogIdAndImage(provider));
         }
         let identity = identity.unwrap_or_else(|| format!("{provider}-inference-avatar"));
-        Ok(AvatarOptions { name: name.unwrap_or_else(|| identity.clone()), identity, provider, avatar_id, options, base_url })
+        Ok(AvatarOptions {
+            name: name.unwrap_or_else(|| identity.clone()),
+            identity,
+            provider,
+            avatar_id,
+            options,
+            base_url,
+        })
     }
 }
 
@@ -98,7 +106,12 @@ pub fn create_request(
 }
 
 /// The terminate exchange of `session`; `None` when it carries no terminable identity.
-pub fn terminate_request(opts: &AvatarOptions, session: &ProviderSession, headers: Headers, bearer: &str) -> Option<HttpRequest> {
+pub fn terminate_request(
+    opts: &AvatarOptions,
+    session: &ProviderSession,
+    headers: Headers,
+    bearer: &str,
+) -> Option<HttpRequest> {
     let body = serde_json::json!({
         "provider": opts.provider,
         "provider_session_id": session.provider_session_id.as_ref()?,
@@ -107,7 +120,13 @@ pub fn terminate_request(opts: &AvatarOptions, session: &ProviderSession, header
     Some(request(opts, "/avatar/sessions/terminate", &body, headers, bearer))
 }
 
-fn request(opts: &AvatarOptions, path: &str, body: &Value, mut headers: Headers, bearer: &str) -> HttpRequest {
+fn request(
+    opts: &AvatarOptions,
+    path: &str,
+    body: &Value,
+    mut headers: Headers,
+    bearer: &str,
+) -> HttpRequest {
     headers.set("Authorization", format!("Bearer {bearer}"));
     headers.set(HEADER_INFERENCE_PROVIDER, opts.provider.clone());
     headers.set("Content-Type", "application/json");
@@ -120,7 +139,11 @@ fn request(opts: &AvatarOptions, path: &str, body: &Value, mut headers: Headers,
 
 /// The create request: `fields`, the catalog id, and the options -- the known ones as the
 /// gateway's first-class fields, any other under `extra_kwargs` (the gateway's allowlist decides).
-pub fn payload(mut fields: Map<String, Value>, avatar_id: Option<&str>, options: Map<String, Value>) -> Value {
+pub fn payload(
+    mut fields: Map<String, Value>,
+    avatar_id: Option<&str>,
+    options: Map<String, Value>,
+) -> Value {
     if let Some(id) = avatar_id.filter(|id| !id.is_empty()) {
         fields.insert("avatar_id".into(), id.into());
     }
@@ -156,8 +179,8 @@ struct CreateAnswer {
 
 /// The session a create answer describes; a body that is not the declared shape is malformed.
 pub fn decode_created(body: &[u8]) -> Result<ProviderSession, AttemptFailure> {
-    let answer: CreateAnswer =
-        serde_json::from_slice(body).map_err(|err| AttemptFailure::Malformed(format!("avatar create answer: {err}")))?;
+    let answer: CreateAnswer = serde_json::from_slice(body)
+        .map_err(|err| AttemptFailure::Malformed(format!("avatar create answer: {err}")))?;
     Ok(ProviderSession {
         session_id: answer.session_id,
         provider_session_id: answer.provider_session_id,
@@ -175,7 +198,10 @@ mod tests {
     // option sent under `extra_kwargs` (the gateway would drop it).
     #[test]
     fn model_string_and_request_options() {
-        assert_eq!(parse_model(" lemonslice / id/x ").unwrap(), ("lemonslice".into(), Some("id/x".into())));
+        assert_eq!(
+            parse_model(" lemonslice / id/x ").unwrap(),
+            ("lemonslice".into(), Some("id/x".into()))
+        );
         assert_eq!(
             parse_model(" /id").unwrap_err().to_string(),
             "invalid avatar model string: ' /id' (expected 'provider' or 'provider/<id>')"
@@ -187,7 +213,13 @@ mod tests {
             json!({"avatar_id":"id", "idle_timeout_s":0, "prompt":"", "extra_kwargs":{"other":{"x":true}}})
         );
         assert_eq!(payload(Map::new(), Some(""), Map::new()), json!({}));
-        let err = AvatarOptions::new("lemonslice/a", None, None, json!({"image_url": "u"}).as_object().unwrap().clone(), String::new());
+        let err = AvatarOptions::new(
+            "lemonslice/a",
+            None,
+            None,
+            json!({"image_url": "u"}).as_object().unwrap().clone(),
+            String::new(),
+        );
         assert!(matches!(err, Err(AvatarError::CatalogIdAndImage(p)) if p == "lemonslice"));
     }
 
@@ -196,8 +228,14 @@ mod tests {
     #[test]
     fn the_create_answer_is_decoded_to_its_typed_fields() {
         let session = decode_created(br#"{"session_id":"s","provider_session_id":"p","terminate_token":"t","sample_rate":24000,"x":1}"#).unwrap();
-        assert_eq!((session.session_id.as_deref(), session.sample_rate, session.terminable()), (Some("s"), 24_000, true));
+        assert_eq!(
+            (session.session_id.as_deref(), session.sample_rate, session.terminable()),
+            (Some("s"), 24_000, true)
+        );
         assert_eq!(decode_created(b"{}").unwrap().sample_rate, DEFAULT_SAMPLE_RATE);
-        assert!(matches!(decode_created(br#"{"session_id":7}"#), Err(AttemptFailure::Malformed(_))));
+        assert!(matches!(
+            decode_created(br#"{"session_id":7}"#),
+            Err(AttemptFailure::Malformed(_))
+        ));
     }
 }

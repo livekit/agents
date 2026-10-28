@@ -5,7 +5,73 @@ use crate::ir::*;
 use crate::python::{Out, docstring};
 use crate::stub::signature_parts;
 
-pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Out>, String> {
+/// A synchronous native class's methods projected for Python forwarding.
+pub(crate) struct ForwardMethod {
+    pub name: String,
+    pub doc: Vec<String>,
+    pub params: Vec<(String, bool)>,
+    pub ret: String,
+}
+
+pub(crate) struct ForwardClass {
+    pub doc: Vec<String>,
+    pub methods: Vec<ForwardMethod>,
+    pub imports: Vec<(String, String)>,
+}
+
+/// Both declaration forms use their stub's type/default renderer; callers emit one forwarding loop.
+pub(crate) fn class_methods(
+    decls: &[Decl],
+    x: &Exposed,
+    declared: &crate::decl::Declarations,
+    name: &str,
+) -> Result<ForwardClass, String> {
+    if let Some(object) = x.objects.iter().find(|object| object.name == name) {
+        let methods = object
+            .methods
+            .iter()
+            .filter(|method| method.kind == MethodKind::Method)
+            .map(|method| {
+                let (params, ret) = signature_parts(decls, x, &method.sig)?;
+                Ok(ForwardMethod {
+                    name: method.name.clone(),
+                    doc: method.doc.clone(),
+                    params,
+                    ret,
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        return Ok(ForwardClass { doc: object.doc.clone(), methods, imports: Vec::new() });
+    }
+    let class = declared
+        .classes
+        .iter()
+        .find(|class| class.name == name)
+        .ok_or_else(|| format!("forwards to undeclared core class `{name}`"))?;
+    let mut imports = crate::class_stub::Imports::new(declared);
+    let methods = class
+        .methods
+        .iter()
+        .filter(|method| method.kind == crate::decl::MethodKind::Call)
+        .map(|method| {
+            let (params, ret) = crate::class_stub::signature_parts(class, method, &mut imports);
+            ForwardMethod { name: method.name.clone(), doc: method.doc.clone(), params, ret }
+        })
+        .collect();
+    Ok(ForwardClass { doc: class.doc.clone(), methods, imports: imports.entries().to_vec() })
+}
+
+pub fn emit(
+    decls: &[Decl],
+    x: &Exposed,
+    declared: &crate::decl::Declarations,
+) -> Result<Vec<Out>, String> {
+    let mut x = x.clone();
+    for class in &declared.classes {
+        x.wrappers.extend(class.wrapper.iter().cloned());
+        x.forwards.extend(class.forwards.iter().cloned());
+    }
+    let x = &x;
     let mut out: Vec<Out> =
         x.str_classes.iter().map(|c| str_class(decls, x, c)).collect::<Result<_, _>>()?;
     let mut modules: Vec<&str> = Vec::new();
@@ -22,7 +88,7 @@ pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Out>, String> {
                 "{m}: a forwarding module holds a str class or wrappers, not both"
             ));
         }
-        out.push(wrapper_module(decls, x, m)?);
+        out.push(wrapper_module(decls, x, declared, m)?);
     }
     Ok(out)
 }
@@ -57,7 +123,12 @@ fn from_import(b: &mut String, module: &str, names: &[String]) {
 }
 
 /// The wrappers and forwarded exports of one module: the classes, then the re-exported fns.
-fn wrapper_module(decls: &[Decl], x: &Exposed, module: &str) -> Result<Out, String> {
+fn wrapper_module(
+    decls: &[Decl],
+    x: &Exposed,
+    declared: &crate::decl::Declarations,
+    module: &str,
+) -> Result<Out, String> {
     let wrappers: Vec<&Wrapper> = x.wrappers.iter().filter(|w| w.module == module).collect();
     let mut forwards: Vec<String> =
         x.forwards.iter().filter(|f| f.0 == module).map(|f| f.1.clone()).collect();
@@ -86,6 +157,47 @@ fn wrapper_module(decls: &[Decl], x: &Exposed, module: &str) -> Result<Out, Stri
         }
     }
     let mut rel: Vec<(String, Vec<String>)> = Vec::new();
+    let mut constructors = Vec::new();
+    for wrapper in &wrappers {
+        let params = if let Some(class) =
+            declared.classes.iter().find(|class| class.name == wrapper.core)
+        {
+            let new = class
+                .methods
+                .iter()
+                .find(|method| method.kind == crate::decl::MethodKind::New)
+                .ok_or_else(|| {
+                    format!("{}: {}: the class has no #[host(new)]", wrapper.source, wrapper.name)
+                })?;
+            let mut imports = crate::class_stub::Imports::new(declared);
+            let (params, _) = crate::class_stub::signature_parts(class, new, &mut imports);
+            for (module, name) in imports.entries() {
+                match rel.iter_mut().find(|(target, _)| target == module) {
+                    Some((_, names)) => {
+                        if !names.contains(name) {
+                            names.push(name.clone());
+                        }
+                    }
+                    None => rel.push((module.clone(), vec![name.clone()])),
+                }
+            }
+            params
+        } else {
+            let object =
+                x.objects.iter().find(|object| object.name == wrapper.core).ok_or_else(|| {
+                    format!("{}: {}: no native constructor", wrapper.source, wrapper.name)
+                })?;
+            let new = object
+                .methods
+                .iter()
+                .find(|method| method.kind == MethodKind::New)
+                .ok_or_else(|| {
+                    format!("{}: {}: the object has no #[host(new)]", wrapper.source, wrapper.name)
+                })?;
+            signature_parts(decls, x, &new.sig)?.0
+        };
+        constructors.push(params);
+    }
     if !wrappers.is_empty() {
         rel.push(("..".to_owned(), vec!["_core".to_owned()]));
     }
@@ -105,13 +217,7 @@ fn wrapper_module(decls: &[Decl], x: &Exposed, module: &str) -> Result<Out, Stri
         b.push_str(&format!("    \"{n}\",\n"));
     }
     b.push_str("]\n");
-    for w in &wrappers {
-        let o = x.objects.iter().find(|o| o.name == w.core).expect("the wrapper's own object");
-        let new =
-            o.methods.iter().find(|m| m.kind == MethodKind::New).ok_or_else(|| {
-                format!("{}: {}: the object has no #[host(new)]", w.source, w.name)
-            })?;
-        let (params, _) = signature_parts(decls, x, &new.sig)?;
+    for (w, params) in wrappers.iter().zip(&constructors) {
         let base = w.base.split_once(':').map_or(w.base.as_str(), |(_, n)| n);
         b.push_str(&format!("\n\nclass {}({base}):\n", w.name));
         if docstring(&mut b, &w.doc, 4) {
@@ -120,7 +226,7 @@ fn wrapper_module(decls: &[Decl], x: &Exposed, module: &str) -> Result<Out, Stri
         let mut parts: Vec<String> = vec!["self".to_owned()];
         let mut star = false;
         let mut args: Vec<String> = Vec::new();
-        for (p, kw) in &params {
+        for (p, kw) in params {
             if *kw && !star {
                 parts.push("*".to_owned());
                 star = true;

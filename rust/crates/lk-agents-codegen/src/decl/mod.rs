@@ -262,6 +262,10 @@ pub struct Refusal {
 #[derive(Debug, Clone)]
 pub struct Class {
     pub form: Form,
+    /// A Python authoring class whose constructor retains this native implementation.
+    pub wrapper: Option<crate::ir::Wrapper>,
+    /// Functions re-exported by generated authoring modules.
+    pub forwards: Vec<(String, String, String)>,
     /// Whether this class or function group checks for fork inheritance by default.
     pub pid: bool,
     /// Python identity and subclass support declared by the class contract.
@@ -349,6 +353,8 @@ pub struct Param {
     /// The value the host may omit to get. `None` is the explicit null, and only an optional
     /// parameter declares it.
     pub default: Option<Literal>,
+    /// Only the outer declared container shape, never nested value conversion failures.
+    pub shape_error: Option<crate::shape_error::ShapeError>,
 }
 
 /// A declared default, written once as a host literal and converted for both sides.
@@ -398,6 +404,8 @@ pub enum Ty {
     List(Box<Ty>),
     /// `BTreeMap<K, V>`: a dict, its keys converted by their declared kind.
     Map(Box<Ty>, Box<Ty>),
+    /// `indexmap::IndexMap<K, V>`: a typed dict retaining host insertion order.
+    OrderedMap(Box<Ty>, Box<Ty>),
     /// `BTreeSet<T>`: a set (a `frozenset` on a model).
     Set(Box<Ty>),
     Tuple(Vec<Ty>),
@@ -417,6 +425,8 @@ pub enum Ty {
         /// A generated provider base (`#[python(provider(..))]`): generic over its event names, so
         /// any instantiation is accepted.
         generic: bool,
+        /// A bare `#[host(native)]`: only the existing registered native class is accepted.
+        native_only: bool,
         /// A declaration-model proxy: `(family, trait)`, generated as `<family>::<trait>Proxy`.
         /// `None`: the trait's in-place `HostProxy`.
         declared: Option<(String, String)>,
@@ -447,6 +457,7 @@ pub enum Ty {
     Instance {
         assoc: String,
         class: String,
+        family: String,
     },
     /// `Arc<T>` of an `object(cell = "arc")` class: the `_core` object itself, shared both ways.
     Shared {
@@ -474,6 +485,8 @@ pub enum HostForm {
     External { module: String, name: String },
     /// A dict of the record's fields (`#[binding(from_items)]` with no model).
     Dict,
+    /// Pure `#[host(wire_strs)]`: output through its existing `as_str`, no host input converter.
+    WireStrs,
     /// `#[host(handwritten(.., host = ".."))]`: the annotation the declaration gives.
     Annotation(String),
     /// A `#[host(record)]`: instances of the generated model (`_generated/<module>.py`), both ways.
@@ -533,6 +546,7 @@ impl Ty {
             Ty::Maybe(t) => format!("::lk_agents_abi::Maybe<{}>", t.rust()),
             Ty::List(t) => format!("::std::vec::Vec<{}>", t.rust()),
             Ty::Map(k, v) => format!("::std::collections::BTreeMap<{}, {}>", k.rust(), v.rust()),
+            Ty::OrderedMap(k, v) => format!("::indexmap::IndexMap<{}, {}>", k.rust(), v.rust()),
             Ty::Set(t) => format!("::std::collections::BTreeSet<{}>", t.rust()),
             Ty::Tuple(ts) if ts.len() == 1 => format!("({},)", ts[0].rust()),
             Ty::Tuple(ts) => {

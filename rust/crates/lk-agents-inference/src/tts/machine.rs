@@ -1,9 +1,8 @@
 //! Synthesis protocol decisions. The adapter owns sockets, bounded delivery and cleanup.
 
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
-use lk_agents_abi::tts::markup::drop_bracket_cues;
 use lk_agents_abi::{SynthesizedAudio, TimedString, Ts};
 
 use super::wire::Incoming;
@@ -25,6 +24,7 @@ pub enum Effect {
     TtsSynthesisStart,
     TtsTextSend(String),
     TtsFinalFlush,
+    TtsAlignment { segment_id: String, tokens: Vec<TimedString> },
     TtsAudio(SynthesizedAudio),
     TtsFailed(ApiError),
     TtsCompleted,
@@ -35,7 +35,6 @@ pub struct Synthesis {
     request_id: String,
     segment_id: String,
     sample_rate: u32,
-    expressive: bool,
     read_timeout: Option<Duration>,
     response_deadline: Option<Ts>,
     total_deadline: Option<Ts>,
@@ -43,14 +42,13 @@ pub struct Synthesis {
     input_ended: bool,
     final_flush_sent: bool,
     terminal: bool,
-    segments: std::collections::BTreeMap<String, (Vec<TimedString>, Vec<TimedString>)>,
+    segments: BTreeSet<String>,
 }
 
 impl Synthesis {
     pub fn new(
         request_id: String,
         sample_rate: u32,
-        expressive: bool,
         read_timeout: Option<Duration>,
         total_deadline: Option<Ts>,
     ) -> Self {
@@ -58,7 +56,6 @@ impl Synthesis {
             segment_id: request_id.clone(),
             request_id,
             sample_rate,
-            expressive,
             read_timeout,
             response_deadline: None,
             total_deadline,
@@ -137,13 +134,8 @@ impl Synthesis {
                     return self.fail(error);
                 }
                 self.progress(now);
-                let (pending, held) = self.segments.entry(self.segment_id.clone()).or_default();
-                pending.extend(if self.expressive {
-                    drop_bracket_cues(tokens, held, false)
-                } else {
-                    tokens
-                });
-                Vec::new()
+                self.segments.insert(self.segment_id.clone());
+                vec![Effect::TtsAlignment { segment_id: self.segment_id.clone(), tokens }]
             }
             Event::Received(Incoming::Done { session_id }) => {
                 if !self.final_flush_sent {
@@ -155,7 +147,7 @@ impl Synthesis {
                 let mut effects = Vec::new();
                 let segment_id = self.segment_id.clone();
                 let pending_ids: Vec<_> =
-                    self.segments.keys().filter(|id| **id != segment_id).cloned().collect();
+                    self.segments.iter().filter(|id| **id != segment_id).cloned().collect();
                 for id in pending_ids {
                     self.segment_id = id;
                     effects.push(Effect::TtsAudio(self.audio(Vec::new(), true)));
@@ -206,15 +198,11 @@ impl Synthesis {
     }
 
     fn audio(&mut self, data: Vec<u8>, is_final: bool) -> SynthesizedAudio {
-        let (pending, held) = self.segments.entry(self.segment_id.clone()).or_default();
-        if is_final {
-            pending.extend(drop_bracket_cues(Vec::new(), held, true));
-        }
+        self.segments.insert(self.segment_id.clone());
         SynthesizedAudio {
             is_final,
             segment_id: self.segment_id.clone(),
             started_time: self.started_time,
-            timed_transcript: std::mem::take(pending),
             ..SynthesizedAudio::new(
                 crate::vad::machine::mono(data, self.sample_rate),
                 self.request_id.clone(),
@@ -234,7 +222,7 @@ mod tests {
     use super::*;
 
     fn synthesis() -> Synthesis {
-        Synthesis::new("request".into(), 24_000, false, Some(Duration::from_secs(1)), None)
+        Synthesis::new("request".into(), 24_000, Some(Duration::from_secs(1)), None)
     }
 
     #[test]
@@ -311,7 +299,6 @@ mod tests {
         let mut core = Synthesis::new(
             "request".into(),
             24_000,
-            false,
             Some(Duration::from_secs(1)),
             Some(Ts::from_nanos(1_500_000_000)),
         );

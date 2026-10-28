@@ -2442,8 +2442,8 @@ pub mod text_session {
             }
             Ok(::lk_agents_abi::text_session::TextSessionAgent {
                 definition: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "definition", |v| crate::generated::records::agent_run::agent_definition_from_py(v))?,
-                llm: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "llm", |v| <dyn ::lk_agents_abi::Llm as ::lk_agents_abi::python::HostProxy>::from_host(v, None))?,
-                host: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "host", |v| <dyn ::lk_agents_abi::agent::AgentHost as ::lk_agents_abi::python::HostProxy>::from_host(v, None))?,
+                llm: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "llm", |v| crate::generated::llm::LlmProxy::from_host(&v))?,
+                host: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "host", |v| crate::generated::agent::AgentHostProxy::from_host(&v))?,
                 output_type_explicit: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "output_type_explicit", |v| v.extract::<bool>())?,
                 agent_tools: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "agent_tools", |v| v.cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)| { let (key, item) = (&key, &item); Ok((key.extract::<::std::string::String>()?, crate::generated::records::text_session::local_agent_tool_from_py(item)?)) }).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())?,
                 host_context: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "host_context", |v| v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into))?,
@@ -2554,6 +2554,22 @@ pub mod text_session {
                 invocation_id: ::lk_agents_abi::python::attr_with(obj, "TextSessionDelivery", "invocation_id", |v| v.extract::<::std::string::String>())?,
                 messages: ::lk_agents_abi::python::attr_with(obj, "TextSessionDelivery", "messages", |v| v.cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)| { let (key, item) = (&key, &item); Ok((key.extract::<::std::string::String>()?, item.extract::<::std::string::String>()?)) }).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())?,
             })
+    }
+}
+
+pub mod tokenizer {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
+
+    pub fn tokenizer_token_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::tokenize::bindings::TokenizerToken> {
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::tokenize::bindings::TokenizerToken::Text(obj.extract::<::std::string::String>()?));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyTuple>() {
+            return Ok(::lk_agents_abi::tokenize::bindings::TokenizerToken::Span((|| -> ::pyo3::PyResult<_> { let tuple = obj.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "TokenizerToken.Span"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((item_0.extract::<::std::string::String>())?, (::lk_agents_abi::python::number_from_py::<usize>(&item_1, "TokenizerToken.Span"))?, (::lk_agents_abi::python::number_from_py::<usize>(&item_2, "TokenizerToken.Span"))?,)) })()?));
+        }
+        Err(super::not_a(obj, "TokenizerToken"))
     }
 }
 

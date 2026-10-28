@@ -10,8 +10,8 @@ use fancy_regex::{Regex, RegexBuilder};
 
 pub(crate) type Captures<'t> = fancy_regex::Captures<'t, str>;
 
-use crate::tts::markup::provider::ALL_MARKUP_TAGS;
 use crate::tokenize::is_py_space;
+use crate::tts::markup::provider::ALL_MARKUP_TAGS;
 
 /// CPython's `\b` for `str` patterns.
 pub(crate) const WORD_BOUNDARY: &str =
@@ -62,7 +62,6 @@ pub(crate) fn dedup_removal_space(m: &Captures, text: &str, kept: &str) -> Strin
 }
 
 /// `<expression value="X"/>` and `<sound value="X"/>` (wrapping form included) -> `[X]`.
-#[crate::host(export(pid = false))]
 pub fn convert_expression_tags(text: &str) -> String {
     let text = sub(&EXPRESSION_RE, text, |m| format!("[{}]", &m[1]));
     sub(&SOUND_RE, &text, |m| format!("[{}]", &m[1]))
@@ -77,7 +76,6 @@ fn strip_pattern(xml_tags: &[&str]) -> Regex {
 
 /// Strip XML markup tags and collect `(type, value)` pairs in one pass. `value` is a wrapping
 /// tag's inner text, else its first quoted attribute, else `""`. Square brackets are left alone.
-#[crate::host(export(pid = false))]
 pub fn extract_and_strip(text: &str, xml_tags: &[&str]) -> (String, Vec<(String, String)>) {
     // `xml_tags=[]` must be the identity.
     if xml_tags.is_empty() {

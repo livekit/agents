@@ -16,10 +16,14 @@ fn rule(pattern: &str, rep: &'static str) -> (Regex, &'static str) {
 }
 
 static PREFIXES: LazyLock<[(Regex, &str); 2]> = LazyLock::new(|| {
-    [rule(r"(Mr|St|Mrs|Ms|Dr)[.]", "${1}<prd>"), rule(r"[.](com|net|org|io|gov|edu|me)", "<prd>${1}")]
+    [
+        rule(r"(Mr|St|Mrs|Ms|Dr)[.]", "${1}<prd>"),
+        rule(r"[.](com|net|org|io|gov|edu|me)", "<prd>${1}"),
+    ]
 });
 
-static MULTIPLE_DOTS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\.{2,}").expect("constant pattern"));
+static MULTIPLE_DOTS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\.{2,}").expect("constant pattern"));
 
 static RULES: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
     vec![
@@ -36,7 +40,6 @@ static RULES: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
 
 /// Sentences of more than `min_sentence_len` characters (shorter ones join the next), each with
 /// its span in the text.
-#[crate::host(export(pid = false, kw_only = "retain_format", defaults(min_sentence_len = 20, retain_format = false)))]
 pub fn basic_split_sentences(
     text: &str,
     min_sentence_len: usize,
@@ -48,7 +51,9 @@ pub fn basic_split_sentences(
     }
     // A number can hold several dot-separated groups ("192.168.1.1").
     text = protect_digit_dots(&text);
-    text = MULTIPLE_DOTS.replace_all(&text, |c: &regex::Captures| "<prd>".repeat(c[0].len())).into_owned();
+    text = MULTIPLE_DOTS
+        .replace_all(&text, |c: &regex::Captures| "<prd>".repeat(c[0].len()))
+        .into_owned();
     if text.contains("Ph.D") {
         text = text.replace("Ph.D.", "Ph<prd>D<prd>");
     }
@@ -106,7 +111,9 @@ fn mark_stops(text: &str) -> String {
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         out.push(c);
-        if matches!(c, '.' | '!' | '?' | '。' | '！' | '？') && !matches!(chars.peek(), Some('"' | '”')) {
+        if matches!(c, '.' | '!' | '?' | '。' | '！' | '？')
+            && !matches!(chars.peek(), Some('"' | '”'))
+        {
             out.push_str("<stop>");
         }
     }
@@ -149,7 +156,12 @@ mod tests {
                 "He said \"stop.\" Then left. 你好。再见！",
                 1,
                 false,
-                &[("He said \"stop.\"", 0, 15), ("Then left.", 15, 26), ("你好。", 26, 30), ("再见！", 30, 33)],
+                &[
+                    ("He said \"stop.\"", 0, 15),
+                    ("Then left.", 15, 26),
+                    ("你好。", 26, 30),
+                    ("再见！", 30, 33),
+                ],
             ),
             (
                 "First line here.\nSecond one here.",
@@ -179,7 +191,6 @@ mod tests {
 /// Really naive implementation of a sentence tokenizer: rule-based, and only English is really
 /// tested.
 #[derive(Debug, Clone)]
-#[crate::class(name = "BasicSentenceTokenizer")]
 pub struct BasicSentenceTokenizer {
     pub language: String,
     pub min_sentence_len: usize,
@@ -189,23 +200,7 @@ pub struct BasicSentenceTokenizer {
 
 /// Really naive implementation of a sentence tokenizer: rule-based, and only English is really
 /// tested.
-#[crate::host(object(name = "BasicSentenceTokenizer", pid = false))]
-#[python(wrapper(
-    module = "tokenize_basic",
-    path = "livekit.agents.tokenize.basic",
-    name = "SentenceTokenizer",
-    base = "..tokenize:_CoreSentenceTokenizer"
-))]
 impl BasicSentenceTokenizer {
-    #[host(new(
-        kw_only,
-        defaults(
-            language = "english",
-            min_sentence_len = 20,
-            stream_context_len = 10,
-            retain_format = false
-        )
-    ))]
     pub fn new(
         language: &str,
         min_sentence_len: usize,
@@ -221,26 +216,22 @@ impl BasicSentenceTokenizer {
     }
 
     /// The sentences of `text`; `language` is accepted and unused.
-    #[host(method(kw_only = "language", defaults(language = None)))]
     pub fn tokenize(&self, text: &str, language: Option<&str>) -> Vec<String> {
         let _ = language;
         self.split(text).into_iter().map(|(sentence, _, _)| sentence).collect()
     }
 
     /// `(sentence, start, end)` per sentence: what a stream batches.
-    #[host(method(name = "_core_split"))]
     pub fn split(&self, text: &str) -> Vec<(String, usize, usize)> {
         basic_split_sentences(text, self.min_sentence_len, self.retain_format)
     }
 
     /// The shortest token a stream emits.
-    #[host(getter(name = "_core_min_token_len"))]
     pub fn min_token_len(&self) -> usize {
         self.min_sentence_len
     }
 
     /// The text a stream buffers before it splits.
-    #[host(getter(name = "_core_min_ctx_len"))]
     pub fn min_ctx_len(&self) -> usize {
         self.stream_context_len
     }

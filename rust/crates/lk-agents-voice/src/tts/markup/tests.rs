@@ -197,8 +197,7 @@ fn a_cue_split_across_alignment_messages_is_still_judged_whole() {
     let mut held = Vec::new();
     let a = drop_bracket_cues(vec![lk_agents_abi::TimedString::new("hi [lau")], &mut held, false);
     assert_eq!(a.iter().map(|t| t.text.as_str()).collect::<String>(), "hi ");
-    let b =
-        drop_bracket_cues(vec![lk_agents_abi::TimedString::new("gh] there")], &mut held, false);
+    let b = drop_bracket_cues(vec![lk_agents_abi::TimedString::new("gh] there")], &mut held, false);
     assert_eq!(b.iter().map(|t| t.text.as_str()).collect::<String>(), "there");
     assert!(held.is_empty());
 }
@@ -531,4 +530,3 @@ fn a_tag_name_needs_a_word_boundary_before_it_counts() {
     // and the same for the expr dialect: `<expr` must not swallow `<expression`
     assert_eq!(strip_expr_markup(r#"<expression value="x"/>"#), r#"<expression value="x"/>"#);
 }
-

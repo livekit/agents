@@ -19,6 +19,7 @@ mod placement;
 mod proxy;
 mod python;
 mod records;
+mod shape_error;
 mod stub;
 mod surface;
 #[cfg(test)]
@@ -88,9 +89,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/llm/provider_format/tools.rs",
     "rust/crates/lk-agents-abi/src/a2a/client.rs",
     "rust/crates/lk-agents-abi/src/utils/strings.rs",
-    "rust/crates/lk-agents-abi/src/tts/markup/strip.rs",
-    "rust/crates/lk-agents-abi/src/tts/markup/transcript.rs",
-    "rust/crates/lk-agents-abi/src/tts/markup/summarize.rs",
     "rust/crates/lk-agents-abi/src/telemetry/report.rs",
     "rust/crates/lk-agents-abi/src/telemetry/transport.rs",
     "rust/crates/lk-agents-voice/src/workflows/mod.rs",
@@ -118,23 +116,18 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/metrics/usage.rs",
     "rust/crates/lk-agents-abi/src/utils/byte_stream.rs",
     "rust/crates/lk-agents-abi/src/tts/stream_pacer.rs",
-    "rust/crates/lk-agents-abi/src/tokenize/xml.rs",
-    "rust/crates/lk-agents-abi/src/tokenize/replace.rs",
     "rust/crates/lk-agents-media/src/stream_buffer.rs",
     "rust/crates/lk-agents-media/src/decoder.rs",
     "rust/crates/lk-agents-inference/src/eot/options.rs",
     "rust/crates/lk-agents-abi/src/worker/job.rs",
     "rust/crates/lk-agents-voice/src/remote_session.rs",
     "rust/crates/lk-agents-abi/src/errors/api.rs",
-    "rust/crates/lk-agents-abi/src/tts/markup/mod.rs",
     "rust/crates/lk-agents-abi/src/tts/markup/mood.rs",
     "rust/crates/lk-agents-abi/src/llm/chat_context.rs",
     "rust/crates/lk-agents-abi/src/llm/ctx_diff.rs",
     "rust/crates/lk-agents-abi/src/metrics/otel.rs",
     "rust/crates/lk-agents-abi/src/types/connect.rs",
     "rust/crates/lk-agents-voice/src/generation/mod.rs",
-    "rust/crates/lk-agents-abi/src/tokenize/thinking.rs",
-    "rust/crates/lk-agents-abi/src/tokenize/search.rs",
     "rust/crates/lk-agents-abi/src/voice/io.rs",
     "rust/crates/lk-agents-voice/src/io.rs",
     "rust/crates/lk-agents-voice/src/avatar.rs",
@@ -150,7 +143,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/stt/stt.rs",
     "rust/crates/lk-agents-abi/src/llm/llm.rs",
     "rust/crates/lk-agents-abi/src/turn/detector.rs",
-    "rust/crates/lk-agents-abi/src/tts/stream_adapter.rs",
     "rust/crates/lk-agents-abi/src/stt/stream_adapter.rs",
     "rust/crates/lk-agents-abi/src/types/retry.rs",
     "rust/crates/lk-agents-abi/src/telemetry/provider.rs",
@@ -159,7 +151,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-inference/src/fallback/realtime.rs",
     "rust/crates/lk-agents-inference/src/stt/mod.rs",
     "rust/crates/lk-agents-inference/src/vad/mod.rs",
-    "rust/crates/lk-agents-inference/src/tts/mod.rs",
     "rust/crates/lk-agents-abi/src/llm/realtime.rs",
     "rust/crates/lk-agents-inference/src/realtime/dialect.rs",
     "rust/crates/lk-agents-inference/src/stt/options.rs",
@@ -170,8 +161,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/utils/connection_pool.rs",
     "rust/crates/lk-agents-voice/src/room_io/_input.rs",
     "rust/crates/lk-agents-abi/src/media/images.rs",
-    "rust/crates/lk-agents-abi/src/tokenize/word.rs",
-    "rust/crates/lk-agents-abi/src/tokenize/sentence.rs",
     "rust/crates/lk-agents-media/src/blingfire.rs",
     "rust/crates/lk-agents-voice/src/transcription/filters.rs",
     "rust/crates/lk-agents-voice/src/transcription/synchronizer.rs",
@@ -184,11 +173,8 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/metrics/log.rs",
 ];
 
-/// The generated Python package, under every Python project the repo has: `python/livekit-agents`
-/// (agents-rust), or `livekit-agents` and its successor `livekit-agents-next` (livekit/agents, where
-/// `rust/` sits beside the packages).
-const PYTHON_PACKAGES: &[&str] =
-    &["python/livekit-agents", "livekit-agents", "livekit-agents-next"];
+/// The authoritative v2 Python project. Generation must not recreate the retired v1 package.
+const PYTHON_PACKAGES: &[&str] = &["livekit-agents-next"];
 const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 /// Where `_core.pyi` sits, beside the extension.
 const PYTHON_CORE: &str = "livekit/agents";
@@ -306,7 +292,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     }
     let class_stubs = class_stub::emit(&declared)?;
     let models = records::python(&declared)?;
-    let bases = bases::emit(&decls, &exposed)?;
+    let bases = bases::emit(&decls, &exposed, &declared)?;
     let with_bases = python::emit_with(&decls, &bases, &constants)?;
     let reference: Vec<ir::Decl> = decls
         .iter()
@@ -317,7 +303,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let stub = stub::emit(&decls, &exposed)?;
     let (core_pyi, core_names) = surface::emit(class_stubs.iter().chain(&stub))?;
     o.add(PathBuf::from(CORE_NAMES), &core_names.text);
-    let forward = forward::emit(&decls, &exposed)?;
+    let forward = forward::emit(&decls, &exposed, &declared)?;
     for package in python_packages {
         let python_root = Path::new(package).join(PYTHON_GENERATED);
         // The reference's own code still imports modules nothing generates any more.
@@ -538,6 +524,11 @@ mod drift {
     fn generated_surface_drift() {
         let (root, packages) = repo_root().expect("repo root");
         let outputs = generate(&root, &packages).expect("generates");
+        assert!(
+            outputs.files.iter().all(|(path, _)| !path.starts_with("livekit-agents"))
+                && outputs.dirs.iter().all(|path| !path.starts_with("livekit-agents")),
+            "generation must never restore the retired v1 package"
+        );
         let tmp = std::env::temp_dir().join(format!("codegen-drift-{}", uuid::Uuid::new_v4()));
         for dir in &outputs.dirs {
             std::fs::create_dir_all(tmp.join(dir)).expect("dir");

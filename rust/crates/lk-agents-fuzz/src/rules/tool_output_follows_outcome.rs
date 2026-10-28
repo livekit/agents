@@ -9,6 +9,7 @@
 //! `VoiceTask`'s speech runs its tools on the task's runner, whose `Completed` ends the task: its
 //! agent asks for no reply to it.
 use lk_agents_abi::{ChatItem, Role, llm::tool_executor::WAITING_PREFIX};
+use lk_agents_voice::tts::markup::ChatMessageExt;
 use lk_agents_voice::{
     events::SessionEvent,
     trace::{HandoffStep, Step},
@@ -92,7 +93,10 @@ impl Rule for ToolOutputFollowsOutcome {
                 continue;
             }
             let outcome = crate::fakes::tools::outcome_of(*answer, text);
-            let mut shape = lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
+            let mut shape = lk_agents_core::tool_outcome::shape(
+                &outcome,
+                lk_agents_core::tool_outcome::Mode::Voice,
+            );
             if *answer == ToolAnswer::Completed && in_task(speech) {
                 shape.reply_required = false;
             }

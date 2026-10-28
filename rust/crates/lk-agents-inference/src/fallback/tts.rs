@@ -10,11 +10,14 @@ use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
+use lk_agents_abi::tts::text::TtsTextProcessorFactory;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_abi::{
     StreamAdapter, StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
-use lk_agents_media::blingfire::SentenceBuffer;
+
+mod ports;
 use lk_agents_media::{AudioFormat, FrameResampler, Quality};
 use tokio::sync::{mpsc, watch};
 
@@ -47,7 +50,6 @@ pub enum Token {
 ///
 /// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
 /// here is lossy or bounded.
-#[lk_agents_abi::class(name = "TtsTokenLog")]
 pub struct TokenLog {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Mutex<TokenLogState>,
@@ -69,31 +71,25 @@ struct TokenLogState {
     main: Option<TtsSink>,
 }
 
-#[lk_agents_abi::host(object(name = "TtsTokenLog"))]
 impl TokenLog {
-    #[host(new)]
     pub fn for_host() -> Self {
         TokenLog::default()
     }
 
-    #[host(method(name = "push"))]
     pub fn push_text(&self, text: String) {
         self.push(Token::Text(text));
     }
 
-    #[host(method(name = "flush"))]
     pub fn push_flush(&self) {
         self.push(Token::Flush);
     }
 
-    #[host(method(name = "end"))]
     pub fn end_input(&self) {
         self.end();
     }
 
     /// Everything pushed so far (`None` for a flush) and whether the input ended: what the host
     /// replays into a fresh stream's channel.
-    #[host(method(name = "snapshot"))]
     pub fn replay_tokens(&self) -> (Vec<Option<String>>, bool) {
         let (tokens, ended) = self.snapshot();
         let tokens = tokens
@@ -207,6 +203,8 @@ pub enum TtsReq {
 pub struct TtsBackend {
     label: String,
     inner: Arc<dyn Tts>,
+    splitter: SplitterFactory,
+    text_processor: TextProcessorFactory,
     clock: Arc<dyn Clock>,
 }
 
@@ -215,14 +213,26 @@ impl TtsBackend {
         &self.inner
     }
 
-    pub fn new(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Arc<Self> {
-        Arc::new(TtsBackend { label: tts.label(), inner: tts.clone(), clock })
+    pub fn new<P: TtsTextProcessorFactory>(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Arc<Self> {
+        Arc::new(TtsBackend {
+            label: tts.label(),
+            inner: tts.clone(),
+            splitter: Arc::new(|expressive| P::sentence_splitter(None, expressive)),
+            text_processor: Arc::new(P::markup),
+            clock,
+        })
     }
 
     fn provider(&self, conn: &ApiConnectOptions) -> Arc<dyn Tts> {
         let tts = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
         // The chain owns retries; the sentence adapter only segments this attempt's text.
-        StreamAdapter::adapted(tts, SentenceBuffer::factory(), self.clock.clone(), *conn)
+        StreamAdapter::adapted(
+            tts,
+            self.splitter.clone(),
+            self.text_processor.clone(),
+            self.clock.clone(),
+            *conn,
+        )
     }
 }
 
@@ -322,7 +332,9 @@ pub fn merge_capabilities(entries: &[TtsCapabilities]) -> TtsCapabilities {
 }
 
 #[derive(Clone)]
-pub struct FallbackTts {
+pub struct FallbackTts<P: TtsTextProcessorFactory> {
+    // P also selects the declared host resource's stream type and constructor services.
+    speech: std::marker::PhantomData<P>,
     chain: Arc<FallbackChain<TtsBackend>>,
     spawner: Arc<dyn Spawner>,
     capabilities: TtsCapabilities,
@@ -333,7 +345,7 @@ pub struct FallbackTts {
     caller_conn: ApiConnectOptions,
 }
 
-impl FallbackTts {
+impl<P: TtsTextProcessorFactory> FallbackTts<P> {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { caller_conn: conn_options.unwrap_or(self.caller_conn), ..self.clone() }
     }
@@ -349,7 +361,7 @@ impl FallbackTts {
         let capabilities =
             merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
         let entries: Vec<Arc<TtsBackend>> =
-            ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock))).collect();
+            ttss.iter().map(|t| TtsBackend::new::<P>(t, Arc::clone(&clock))).collect();
         let channels: Vec<u16> = entries.iter().map(|b| b.inner.num_channels()).collect();
         let Some(&num_channels) = channels.first() else { return Err(TtsChainError::NoBackends) };
         if channels.iter().any(|c| *c != num_channels) {
@@ -360,6 +372,7 @@ impl FallbackTts {
         let chain = FallbackChain::new(entries, policy, clock, Arc::clone(&spawner), observer)
             .map_err(|NoBackends| TtsChainError::NoBackends)?;
         Ok(FallbackTts {
+            speech: std::marker::PhantomData,
             chain: Arc::new(chain),
             spawner,
             capabilities,
@@ -532,18 +545,16 @@ impl FallbackTts {
 }
 
 /// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
-#[lk_agents_abi::host(object(cell = "arc", as_dyn(Tts = as_tts)))]
-impl FallbackTts {
+impl<P: TtsTextProcessorFactory> FallbackTts<P> {
     /// `ttss` in order. `sample_rate = None` takes the maximum of the entries' rates and upsamples
     /// the rest, as the reference does.
-    #[host(new(kw_only = "max_retry_per_tts", defaults(max_retry_per_tts = 2)))]
     pub fn for_host(
         ttss: Vec<Arc<dyn Tts>>,
         max_retry_per_tts: u32,
         sample_rate: Option<u32>,
         on_availability: Option<Arc<dyn ChainObserver>>,
-        #[host(ambient)] clock: Arc<dyn Clock>,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
+        clock: Arc<dyn Clock>,
+        spawner: Arc<dyn Spawner>,
     ) -> Result<Self, TtsChainError> {
         let policy =
             ChainPolicy { max_retry_per_backend: max_retry_per_tts, ..ChainPolicy::tts_defaults() };
@@ -556,7 +567,6 @@ impl FallbackTts {
         Arc::clone(self) as Arc<dyn Tts>
     }
 
-    #[host(getter)]
     pub fn active_index(&self) -> usize {
         self.chain.active_index()
     }
@@ -567,29 +577,24 @@ impl FallbackTts {
     }
 
     /// `aclose()`: every recovery probe in flight closes its stream, awaited (bounded).
-    #[host(method(name = "aclose"))]
     pub async fn aclose_for_host(&self) {
         self.chain.close().await;
     }
 
     /// The merged capabilities, as `TTSCapabilities` keyword arguments.
-    #[host(getter(name = "capabilities"))]
     pub fn merged_capabilities(&self) -> TtsCapabilities {
         self.capabilities
     }
 
-    #[host(getter(name = "sample_rate"))]
     pub fn output_sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
-    #[host(getter(name = "num_channels"))]
     pub fn output_num_channels(&self) -> u16 {
         self.num_channels
     }
 
     /// The one-shot path: a stream with no push half.
-    #[host(method(name = "synthesize", stream = lk_agents_abi::FallbackTtsStream))]
     pub async fn synthesize_for_host(
         &self,
         text: String,
@@ -599,7 +604,6 @@ impl FallbackTts {
     }
 
     /// `stream()`: the duplex path, text in, audio out.
-    #[host(method(name = "stream", stream = lk_agents_abi::FallbackTtsStream))]
     pub async fn stream_for_host(
         &self,
         conn_options: Option<ApiConnectOptions>,
@@ -609,7 +613,7 @@ impl FallbackTts {
 }
 
 #[async_trait]
-impl Tts for FallbackTts {
+impl<P: TtsTextProcessorFactory> Tts for FallbackTts<P> {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }

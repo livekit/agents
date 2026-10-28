@@ -44,8 +44,12 @@ fn each_reply_pays_only_the_voice() {
                 api_secret: "s".into(),
                 ..Default::default()
             };
-            let voice = NativeTts::new(opts, Arc::new(gateway), Arc::new(TokioSpawner::current()))
-                .with_clock(Arc::new(SimClock::new()));
+            let voice = NativeTts::<lk_agents_voice::tts::processing::SpeechText>::new(
+                opts,
+                Arc::new(gateway),
+                Arc::new(TokioSpawner::current()),
+            )
+            .with_clock(Arc::new(SimClock::new()));
             // The session prewarms its voice as it starts; the greeting comes a moment later.
             voice.prewarm();
             tokio::time::sleep(Duration::from_millis(500)).await;

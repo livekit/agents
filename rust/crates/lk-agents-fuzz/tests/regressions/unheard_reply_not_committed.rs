@@ -3,6 +3,7 @@ use lk_agents_abi::{ChatItem, Role};
 use lk_agents_fuzz::drive::{Run, Setup, simulate};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
 use lk_agents_voice::events::SessionEvent;
+use lk_agents_voice::tts::markup::ChatMessageExt;
 
 // Catches: a segment whose synthesis ended interrupted (never opened, or cut while its open was
 // being retried) taking the lost-voice fallback, which forwards the segment's words as text and

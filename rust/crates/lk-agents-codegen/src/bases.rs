@@ -25,11 +25,22 @@ pub struct Bases {
 }
 
 /// One entry per module, in first-seen order.
-pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Bases>, String> {
+pub fn emit(
+    decls: &[Decl],
+    x: &Exposed,
+    declared: &crate::decl::Declarations,
+) -> Result<Vec<Bases>, String> {
     let mut out: Vec<Bases> = Vec::new();
     for p in &x.providers {
-        let mut w =
-            Writer { decls, x, p, imports: Vec::new(), paths: Vec::new(), b: String::new() };
+        let mut w = Writer {
+            decls,
+            x,
+            declared,
+            p,
+            imports: Vec::new(),
+            paths: Vec::new(),
+            b: String::new(),
+        };
         w.provider()?;
         let i = match out.iter().position(|b| b.module == p.module) {
             Some(i) => i,
@@ -67,6 +78,7 @@ const EVENT_TYPE_VAR: &str = "TEvent = TypeVar(\"TEvent\", default=Never, contra
 struct Writer<'a> {
     decls: &'a [Decl],
     x: &'a Exposed,
+    declared: &'a crate::decl::Declarations,
     p: &'a Provider,
     imports: Vec<(String, String)>,
     paths: Vec<(String, String)>,
@@ -820,12 +832,13 @@ impl Writer<'_> {
     /// `markup`: the nested `Markup` class plugins override `_provider_key` on, forwarding the
     /// rest to the core's `Markup` object of that key, and the `markup` property.
     fn markup(&mut self, b: &mut String, m: &ProviderMethod) -> Result<(), String> {
-        let o = self
-            .x
-            .objects
-            .iter()
-            .find(|o| o.name == "Markup")
-            .ok_or_else(|| format!("{}: markup forwards to the core's `Markup`", m.rust))?;
+        let o = crate::forward::class_methods(self.decls, self.x, self.declared, "Markup")
+            .map_err(|error| format!("{}: {error}", m.rust))?;
+        for (module, name) in &o.imports {
+            if module != &format!(".{}", self.p.module) {
+                self.need(module, name);
+            }
+        }
         self.need("..", "_core");
         let info = self.record("MarkupInfo").ok_or("MarkupInfo is not declared")?;
         let class = self.p.class.clone();
@@ -844,14 +857,12 @@ impl Writer<'_> {
         b.push_str(&format!(
             "            return \"\"\n\n        def _core(self) -> _core.Markup:\n            return _core.Markup(self._provider_key())\n\n        @property\n        def info(self) -> {info}:\n            \"\"\"The queryable markup matrix for this voice.\"\"\"\n            return {info}(nonverbals=_core.supported_nonverbals(self._provider_key()))\n"
         ));
-        for f in
-            o.methods.iter().filter(|x| x.kind == MethodKind::Method && x.name != "_provider_key")
-        {
-            let (params, ret) = crate::stub::signature_parts(self.decls, self.x, &f.sig)?;
+        for f in o.methods.iter().filter(|method| method.name != "_provider_key") {
+            let (params, ret) = (&f.params, &f.ret);
             let mut decl = vec!["self".to_owned()];
             let mut call = Vec::new();
             let mut kw = false;
-            for (param, star) in &params {
+            for (param, star) in params {
                 if *star {
                     decl.push("*".to_owned());
                     kw = true;

@@ -6,8 +6,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
+from livekit.agents._core import SessionClock
+from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
+
+from .._core import InferenceTtsStream
+from .inference_tts import FallbackModel
 
 def inference_resolve_api_key(explicit: str | None = None) -> str:
     """`explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `LIVEKIT_API_KEY`; a set but empty
@@ -65,3 +71,47 @@ class InferenceAvatar:
         that cleanup settled or its deadline passed (then logged); a failed terminate keeps the
         session held, so a second call retries.
         """
+
+class InferenceTts:
+    """`inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::NativeTts`."""
+    def __init__(
+        self,
+        model: str,
+        *,
+        base_url: str,
+        api_key: str,
+        api_secret: str,
+        conn_options: APIConnectOptions,
+        voice: str | None = None,
+        language: str | None = None,
+        encoding: str = "pcm_s16le",
+        sample_rate: int = 24000,
+        extra_kwargs: dict[str, object] | None = None,
+        fallback: list[FallbackModel] | None = None,
+    ) -> None: ...
+    def set_expressive(self, expressive: bool) -> None: ...
+    @property
+    def sample_rate(self) -> int: ...
+    @property
+    def aligned_transcript(self) -> bool: ...
+    def bind_clock(self, clock: SessionClock) -> None: ...
+    def prewarm(self, *, headers: Sequence[tuple[str, str]] | None = None) -> None: ...
+    def identified(
+        self,
+        headers: Sequence[tuple[str, str]],
+        reporter: TTS[Any] | None = None,
+    ) -> InferenceTts: ...
+    def update_options(
+        self,
+        *,
+        model: str | None = None,
+        voice: str | None = None,
+        language: str | None = None,
+        extra: dict[str, object] | None = None,
+    ) -> None: ...
+    async def stream(
+        self,
+        *,
+        headers: Sequence[tuple[str, str]] | None = None,
+        conn_options: APIConnectOptions | None = None,
+    ) -> InferenceTtsStream: ...

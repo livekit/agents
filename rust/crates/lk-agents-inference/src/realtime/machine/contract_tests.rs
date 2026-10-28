@@ -3,8 +3,8 @@
 use super::*;
 
 mod provider_tools;
-mod server_items;
 mod review_fixes;
+mod server_items;
 use crate::realtime::dialect::OPENAI;
 use crate::realtime::protocol::Incoming;
 use lk_agents_abi::llm::realtime::{GenerateReply, PushItem, UpdateChatCtx};
@@ -500,7 +500,7 @@ fn superseding_partial_edits_preserves_content_that_has_not_been_submitted() {
     let superseded = m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target }));
     let superseded = finish_context(&mut m, at(1), superseded);
     assert!(superseded.frames.iter().any(|frame| matches!(frame,
-        Outgoing::ItemCreate { item, .. } if item.id() == "a" && item.as_message().unwrap().text_content().as_deref() == Some("new")
+        Outgoing::ItemCreate { item, .. } if item.id() == "a" && item.as_message().unwrap().raw_text_content().as_deref() == Some("new")
     )), "a prepared but unsent edit was mistaken for the submitted conversation");
 }
 
@@ -531,7 +531,7 @@ fn an_older_create_ack_cannot_discard_the_newer_unconfirmed_replacement() {
     let replay = m.reconnect(at(2));
     let replay = finish_context(&mut m, at(2), replay);
     assert!(replay.frames.iter().any(|frame| matches!(frame,
-        Outgoing::ItemCreate { item, .. } if item.id() == "a" && item.as_message().unwrap().text_content().as_deref() == Some("new")
+        Outgoing::ItemCreate { item, .. } if item.id() == "a" && item.as_message().unwrap().raw_text_content().as_deref() == Some("new")
     )), "the older create receipt settled a newer replacement on the same item");
 }
 

@@ -40,6 +40,7 @@ a2a          = { package = "a2a-lf", version = "=0.4.2" }
 thiserror    = "2"
 smallvec     = "1"
 ordered-float = "5"
+indexmap     = "2"
 # --- below the purity line ---
 tokio        = { version = "1", features = ["rt", "sync", "macros", "time"] }
 # The LiveKit protocol: `livekit_protocol::agent` is the generated `livekit.agent` package --

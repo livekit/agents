@@ -1,8 +1,13 @@
-use super::*;
-use crate::testkit::{FakeWs, text};
+use super::host::NativeTts;
 use base64::Engine as _;
 use lk_agents_abi::TokioSpawner;
+use lk_agents_abi::{ApiConnectOptions, Clock, Tts};
+use lk_agents_inference::headers::Headers;
+use lk_agents_inference::testkit::{FakeWs, text};
+use lk_agents_inference::tts::{AUDIO_QUEUE_CAPACITY, TEXT_QUEUE_CAPACITY, TtsOptions};
 use serde_json::json;
+use std::sync::Arc;
+use std::time::Duration;
 
 fn opts() -> TtsOptions {
     TtsOptions {
@@ -54,7 +59,7 @@ async fn a_handshake_that_never_completes_is_a_retryable_timeout_on_the_session_
     let tts = tts(ws.clone()).with_clock(clock.clone());
     let mut source = tts.synthesize("hi").await.unwrap();
 
-    crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
     let err = source.next().await.expect_err("the handshake never completed");
     assert_eq!(err.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
     assert!(err.retryable());
@@ -70,7 +75,7 @@ async fn a_gateway_that_takes_the_text_and_never_answers_is_a_retryable_timeout(
     let tts = tts(ws.clone()).with_clock(clock.clone());
     let mut source = tts.synthesize("hi").await.unwrap();
 
-    crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
     let err = source.next().await.expect_err("the gateway never answered");
     assert_eq!(err.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
     assert!(err.retryable());

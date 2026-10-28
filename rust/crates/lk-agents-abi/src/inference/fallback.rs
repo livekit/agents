@@ -52,6 +52,7 @@ pub struct SttFallbackModel {
     name = "FallbackModel"
 )]
 #[binding(emit)]
+#[crate::host(handwritten(extract))]
 pub struct TtsFallbackModel {
     /// Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda").
     pub model: String,

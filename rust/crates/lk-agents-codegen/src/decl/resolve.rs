@@ -8,6 +8,7 @@ use super::vocabulary::{self as voc, Entry, Value};
 use super::*;
 
 mod class;
+mod native;
 mod proxy;
 mod record;
 use record::{record_entry, record_target};
@@ -92,7 +93,23 @@ impl Resolver<'_> {
                         "{at}: class(name = \"X\") names the declared class it is an instance of"
                     )
                 })?;
-                Ty::Instance { assoc: t.ident.to_string(), class }
+                let family = self
+                    .krate
+                    .modules
+                    .iter()
+                    .find_map(|module| {
+                        module.items.iter().find_map(|item| {
+                            let syn::Item::Trait(tr) = item else { return None };
+                            let entries = voc::read(&tr.attrs).ok()?;
+                            let entry = voc::find(&entries, "class")?;
+                            let name = voc::text(&at, &entry.nested, "name")
+                                .ok()?
+                                .unwrap_or_else(|| tr.ident.to_string());
+                            (name == class).then(|| module.path.first().cloned()).flatten()
+                        })
+                    })
+                    .ok_or_else(|| format!("{at}: `{class}` is not a declared class"))?;
+                Ty::Instance { assoc: t.ident.to_string(), class, family }
             }
             (Some(source), None, None) => {
                 voc::only(&at, &source.nested, &["item", "class"])?;
@@ -177,7 +194,7 @@ impl Resolver<'_> {
             };
             let pat = format!("{at}({})", ident.ident);
             let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
-            voc::only(&pat, &entries, &["kw", "default", "context"])?;
+            voc::only(&pat, &entries, &["kw", "default", "context", "shape_error"])?;
             kw_only |= voc::find(&entries, "kw").is_some();
             if voc::find(&entries, "context").is_some() {
                 let by_ref = matches!(&*pt.ty, syn::Type::Reference(_));
@@ -189,6 +206,7 @@ impl Resolver<'_> {
                 params.push(Param {
                     name: ident.ident.to_string(),
                     ty: Ty::CallContext,
+                    shape_error: None,
                     by_ref,
                     kw_only: false,
                     default: None,
@@ -211,6 +229,7 @@ impl Resolver<'_> {
                 Some(_) => return Err(format!("{pat}: `default` is a literal")),
             };
             check_default(&pat, &ty, default.as_ref())?;
+            let shape_error = crate::shape_error::read(&pat, &entries, &ty)?;
             if params.iter().rfind(|p: &&Param| p.ty != Ty::CallContext).is_some_and(|p| {
                 (p.default.is_some() || matches!(p.ty, Ty::Maybe(_))) && !p.kw_only
             }) && default.is_none()
@@ -222,7 +241,14 @@ impl Resolver<'_> {
                 ));
             }
             check_input(&pat, &ty)?;
-            params.push(Param { name: ident.ident.to_string(), ty, by_ref, kw_only, default });
+            params.push(Param {
+                name: ident.ident.to_string(),
+                ty,
+                by_ref,
+                kw_only,
+                default,
+                shape_error,
+            });
         }
         if kind == MethodKind::Getter && !params.is_empty() {
             return Err(format!("{at}: a getter takes no parameters"));
@@ -459,6 +485,9 @@ impl Resolver<'_> {
                     (["std", "collections", "BTreeMap"], [k, v]) => {
                         Ty::Map(Box::new(self.classify(k, at)?), Box::new(self.classify(v, at)?))
                     }
+                    (["indexmap", "IndexMap"], [k, v]) => {
+                        Ty::OrderedMap(Box::new(self.classify(k, at)?), Box::new(self.classify(v, at)?))
+                    }
                     (["serde_json", "Value"], []) => Ty::Json,
                     (["serde_json", "Map"], [k, v]) if self.classify(k, at)? == Ty::Str && self.classify(v, at)? == Ty::Json => Ty::JsonObject,
                     (["std", "sync", "Arc"], [Shape::Dyn { found: Found::Item { module, item }, args }]) if args.is_empty() => {
@@ -558,6 +587,25 @@ impl Resolver<'_> {
             return Err(format!("{at}: `Arc<dyn ..>` names a trait"));
         };
         let entries = voc::read(&tr.attrs).map_err(|e| format!("{at}: {e}"))?;
+        if voc::find(&entries, "proxy").is_none()
+            && voc::find(&entries, "native")
+                .is_some_and(|entry| entry.value.is_none() && entry.nested.is_empty())
+        {
+            if boxed {
+                return Err(format!(
+                    "{at}: a native-only trait crosses as `Arc<dyn {}>`",
+                    tr.ident
+                ));
+            }
+            return Ok(Ty::Proxy {
+                rust: k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?,
+                host: self.native_host(module, item, at)?,
+                generic: false,
+                native_only: true,
+                declared: None,
+                boxed: false,
+            });
+        }
         let proxy = voc::find(&entries, "proxy")
             .ok_or_else(|| format!("{at}: `{}` is not a #[host(proxy)] trait", tr.ident))?;
         let host = voc::text(at, &proxy.nested, "host")?
@@ -582,6 +630,7 @@ impl Resolver<'_> {
             rust: k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?,
             host,
             generic,
+            native_only: false,
             declared,
             boxed,
         })
@@ -655,7 +704,6 @@ impl Resolver<'_> {
                 external,
                 module_name.or_else(|| file_module(&k.modules[module].items)),
             ) {
-                _ if from_items => HostForm::Dict,
                 (Some(path), _) => {
                     let (module, name) = path
                         .rsplit_once('.')
@@ -665,6 +713,9 @@ impl Resolver<'_> {
                 (None, Some(module)) => {
                     HostForm::Model { module, name: name.unwrap_or_else(|| ident.clone()) }
                 }
+                // `from_items` chooses dict conversion, not an erased annotation when a
+                // Python model already declares this record's input shape.
+                (None, None) if from_items => HostForm::Dict,
                 (None, None) => {
                     return Err(format!(
                         "{at}: record `{rust}` has no host form (a #[python] model, #[host(host_type = \"..\")] or #[binding(from_items)])"
@@ -722,6 +773,17 @@ impl Resolver<'_> {
                     in_place: false,
                 }));
             }
+        }
+        // Explicit host conversions above retain their input/output contract. `wire_strs`
+        // alone supplies only the pure output protocol; it declares no Python input reader.
+        if voc::find(&entries, "wire_strs").is_some() {
+            return Ok(Ty::Record(Record {
+                rust,
+                host: HostForm::WireStrs,
+                extract: false,
+                emit: true,
+                in_place: false,
+            }));
         }
         Err(format!(
             "{at}: `{rust}` is not a declared host type (#[derive(Host)] record or value class)"
@@ -816,12 +878,12 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
             r.rust
         )),
         Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) => check_input(at, t),
-        Ty::Map(k, v) => {
+        Ty::Map(k, v) | Ty::OrderedMap(k, v) => {
             check_input(at, k)?;
             check_input(at, v)
         }
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_input(at, t)),
-        Ty::This | Ty::Source { .. } | Ty::Handle { .. } | Ty::Instance { .. } | Ty::Unit => {
+        Ty::This | Ty::Source { .. } | Ty::Handle { .. } | Ty::Unit => {
             Err(format!("{at}: `{}` is not an input", ty.rust()))
         }
         Ty::HostSource(item) => check_input(at, item),
@@ -840,7 +902,7 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
             Err(format!("{at}: record `{}` is not declared for output (#[binding(emit)])", r.rust))
         }
         Ty::Optional(t) | Ty::List(t) | Ty::Set(t) => check_output(at, t),
-        Ty::Map(k, v) => {
+        Ty::Map(k, v) | Ty::OrderedMap(k, v) => {
             check_output(at, k)?;
             check_output(at, v)
         }

@@ -1,6 +1,7 @@
 //! Session decisions and host hook outcomes, without a voice executor.
 
 use super::*;
+use crate::tts::markup::ChatMessageExt;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::commands::{HookId, HookOutcome};
 use crate::agent_session::host_events::HookCall;

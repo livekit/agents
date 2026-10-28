@@ -1,34 +1,23 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! `replace_words` and `split_paragraphs`, with the reference's arithmetic. Characters, not bytes.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::tokenize::py_strip;
 use crate::tokenize::word::{WordTokenizerOptions, is_punctuation, split_words};
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `replace_words`, case-insensitively, over one string. Returns the text and `processed_index`.
 // `hold_last_word` holds the final word for the next chunk and returns `None` below two words.
 // An empty replacement deletes the word. Trailing punctuation is stripped one character at a
 // time for the lookup (a key may end in punctuation, e.g. Hebrew "ג׳"), the longest matching key
 // wins, and the stripped punctuation survives. `processed_index` advances on every word.
-#[crate::host(export(pid = false, defaults(hold_last_word = false)))]
 pub fn replace_words(
     text: &str,
-    replacements: HashMap<String, String>,
+    replacements: impl IntoIterator<Item = (String, String)>,
     hold_last_word: bool,
 ) -> Option<(String, usize)> {
     // The reference lowercases the keys once.
-    let lookup: HashMap<String, &str> =
-        replacements.iter().map(|(k, v)| (k.to_lowercase(), v.as_str())).collect();
+    let lookup: BTreeMap<String, String> =
+        replacements.into_iter().map(|(key, value)| (key.to_lowercase(), value)).collect();
 
     // Punctuated token text, so `rstrip` can measure the punctuation to keep.
     let opts = WordTokenizerOptions {
@@ -53,7 +42,9 @@ pub fn replace_words(
     let mut processed_index: usize = 0;
 
     for (word, start, end) in words {
-        let lookup_at = |kept: usize| lookup.get(&word[..kept].iter().collect::<String>().to_lowercase()).copied();
+        let lookup_at = |kept: usize| {
+            lookup.get(&word[..kept].iter().collect::<String>().to_lowercase()).map(String::as_str)
+        };
         let mut kept = word.len();
         let mut replacement = lookup_at(kept);
         while replacement.is_none() && kept > 0 && is_punctuation(word[kept - 1]) {
@@ -80,7 +71,6 @@ pub fn replace_words(
 /// `split_paragraphs`: the text between blank lines, each with its span in the original.
 // Offsets use `text.index(stripped)` (the first occurrence), as the reference does. Empty
 // paragraphs are dropped.
-#[crate::host(export(pid = false))]
 pub fn split_paragraphs(text: &str) -> Vec<(String, usize, usize)> {
     let chars: Vec<char> = text.chars().collect();
 
@@ -138,14 +128,13 @@ fn char_find(haystack: &str, needle: &str) -> Option<usize> {
 mod tests {
     use super::*;
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The non-streaming call, which cannot return `None`.
-    fn replace_words_all(text: &str, replacements: &HashMap<String, String>) -> (String, usize) {
-        replace_words(text, replacements.clone(), false).expect("only the streaming mode holds back")
+    fn replace_words_all(text: &str, replacements: &BTreeMap<String, String>) -> (String, usize) {
+        replace_words(text, replacements.clone(), false)
+            .expect("only the streaming mode holds back")
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
     }
 
@@ -178,9 +167,6 @@ mod tests {
         assert_eq!(idx, 2);
     }
 
-
-
-
     // Catches: "fixing" `text.index(stripped)` (first occurrence).
     #[test]
     fn the_offset_is_the_first_occurrence_as_the_reference_finds_it() {
@@ -191,12 +177,9 @@ mod tests {
         let out = split_paragraphs("x\n\n  a  ");
         assert_eq!(out, vec![("x".to_owned(), 0, 1), ("a".to_owned(), 5, 6)]);
     }
-
 }
 
 /// The paragraphs of `text`.
-#[crate::host(export(pid = false))]
-#[python(forward(module = "tokenize_basic"))]
 pub fn tokenize_paragraphs(text: &str) -> Vec<String> {
     split_paragraphs(text).into_iter().map(|(paragraph, _, _)| paragraph).collect()
 }

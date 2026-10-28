@@ -98,23 +98,8 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                     exported_impl(label, imp, &mut out, &al)?;
                 } else {
                     let o = object(label, imp, &m, &al)?;
-                    let at = format!("{label}: {}", o.name);
-                    if let Some(w) =
-                        python_key(&at, &imp.attrs, "wrapper", &["module", "path", "name", "base"])?
-                    {
-                        let get = |k: &str| meta_str(&w, &format!("python.wrapper.{k}"));
-                        let need = |k: &str| {
-                            get(k).ok_or_else(|| format!("{at}: wrapper needs {k} = \"..\""))
-                        };
-                        out.wrappers.push(Wrapper {
-                            name: need("name")?,
-                            module: need("module")?,
-                            path: get("path"),
-                            source: label.to_owned(),
-                            doc: doc(&imp.attrs),
-                            base: need("base")?,
-                            core: o.name.clone(),
-                        });
+                    if let Some(w) = wrapper(label, &imp.attrs, &o.name)? {
+                        out.wrappers.push(w);
                     }
                     out.objects.push(o);
                 }
@@ -209,6 +194,29 @@ fn item_attrs(item: &syn::Item) -> Vec<syn::Attribute> {
 }
 
 /// The item's `#[python(<head>(..))]` entries, if any; any other key is refused.
+pub(crate) fn wrapper(label: &str, attrs: &[syn::Attribute], core: &str) -> Res<Option<Wrapper>> {
+    let at = format!("{label}: {core}");
+    let Some(w) = python_key(&at, attrs, "wrapper", &["module", "path", "name", "base"])? else {
+        return Ok(None);
+    };
+    let get = |k: &str| meta_str(&w, &format!("python.wrapper.{k}"));
+    let need = |k: &str| get(k).ok_or_else(|| format!("{at}: wrapper needs {k} = \"..\""));
+    Ok(Some(Wrapper {
+        name: need("name")?,
+        module: need("module")?,
+        path: get("path"),
+        source: label.to_owned(),
+        doc: doc(attrs),
+        base: need("base")?,
+        core: core.to_owned(),
+    }))
+}
+
+pub(crate) fn forward_module(label: &str, attrs: &[syn::Attribute]) -> Res<Option<String>> {
+    Ok(python_key(label, attrs, "forward", &["module"])?
+        .and_then(|m| meta_str(&m, "python.forward.module")))
+}
+
 fn python_key(
     at: &str,
     attrs: &[syn::Attribute],

@@ -10,17 +10,23 @@
 //! non-streaming ones get [`StreamAdapter`](crate::StreamAdapter).
 
 use crate::TimedString;
-use async_trait::async_trait;
 use crate::errors::{ApiError, ProviderError};
+use async_trait::async_trait;
 use lk_agents_host_derive::Host;
 
-use crate::{AudioFrame, ApiConnectOptions};
 use crate::utils::stream::{StreamSink, StreamSource};
+use crate::{ApiConnectOptions, AudioFrame};
 
 // `TTSCapabilities` (`tts/tts.py`). The payload `FallbackTts`'s `capabilities` getter builds by
 // name is generated too, since a forgotten key would silently take the reference's default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "TTSCapabilities", with_bases)]
+#[python(
+    dataclass,
+    module = "tts",
+    path = "livekit.agents.tts",
+    name = "TTSCapabilities",
+    with_bases
+)]
 // Both directions.
 #[binding(emit, extract)]
 pub struct TtsCapabilities {
@@ -46,7 +52,13 @@ pub struct MarkupInfo {
 // `rtc.AudioFrame.userdata` (`USERDATA_TIMED_TRANSCRIPT`, `USERDATA_TTS_STARTED_TIME`). Not what
 // `Agent.tts_node` yields (a bare frame). The reference has no class docstring.
 #[derive(Debug, Clone, PartialEq, Host)]
-#[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "SynthesizedAudio", with_bases)]
+#[python(
+    dataclass,
+    module = "tts",
+    path = "livekit.agents.tts",
+    name = "SynthesizedAudio",
+    with_bases
+)]
 // Read by hand (below): the two fields are the frame's `userdata`.
 #[host(handwritten(extract))]
 #[binding(emit)]
@@ -114,7 +126,8 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for SynthesizedAudio {
         let timed_transcript = match get("USERDATA_TIMED_TRANSCRIPT")? {
             Some(words) => {
                 let word = types.getattr("TimedString")?;
-                let words = words.try_iter()?.flatten().filter(|w| w.is_instance(&word).unwrap_or(false));
+                let words =
+                    words.try_iter()?.flatten().filter(|w| w.is_instance(&word).unwrap_or(false));
                 words.map(|w| w.extract()).collect::<pyo3::PyResult<_>>()?
             }
             None => Vec::new(),
@@ -161,13 +174,6 @@ pub type TtsSink = Box<dyn StreamSink<String>>;
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// Both TTS paths yield this. Drained by the gateway's `InferenceTtsStream` and the fallback
 /// chain's `FallbackTtsStream` (no sink for a one-shot `synthesize()`).
-#[crate::host(stream(name = "InferenceTtsStream", doc = "One live synthesis.", sink = dyn lk_agents_abi::StreamSink<String>,
-    input = String, output = SynthesizedAudio,
-    end_input, close_ends_input))]
-#[crate::host(stream(name = "FallbackTtsStream", doc = "One synthesis, served by whichever entry the chain picks.", sink = dyn lk_agents_abi::StreamSink<String>,
-    push = "push_text", arg = "token", input = String, end_input,
-    optional_sink = "this is a synthesize() stream; its text was given at the call",
-    output = SynthesizedAudio))]
 pub type TtsSource = Box<dyn StreamSource<SynthesizedAudio>>;
 
 // The factory methods are `async`: base-class stream constructors call `asyncio.create_task`,

@@ -8,7 +8,7 @@ pub mod instructions;
 pub mod prompts;
 pub mod warm_transfer;
 
-use lk_agents_abi::tokenize::{is_py_space, py_strip};
+use crate::tokenize::{is_py_space, py_strip};
 use lk_agents_abi::utils::dates::{Date, DateError};
 
 /// `validate_card_number`: the Luhn checksum over an all-digit string.
@@ -93,7 +93,11 @@ pub fn normalize_email_address(email: &str) -> Result<String, String> {
             && tld.len() >= 2
             && tld.chars().all(|c| c.is_ascii_alphabetic())
     });
-    if valid { Ok(email.to_owned()) } else { Err(format!("Invalid email address provided: {email}")) }
+    if valid {
+        Ok(email.to_owned())
+    } else {
+        Err(format!("Invalid email address provided: {email}"))
+    }
 }
 
 /// `normalize_phone_number`: whitespace, hyphens, parentheses and dots dropped, and refused unless
@@ -108,11 +112,7 @@ pub fn normalize_phone_number(phone_number: &str) -> Result<String, String> {
     let valid = digits.starts_with(|c: char| ('1'..='9').contains(&c))
         && (7..=15).contains(&digits.len())
         && digits.chars().all(|c| c.is_ascii_digit());
-    if valid {
-        Ok(cleaned)
-    } else {
-        Err(format!("Invalid phone number provided: {phone_number}"))
-    }
+    if valid { Ok(cleaned) } else { Err(format!("Invalid phone number provided: {phone_number}")) }
 }
 
 #[cfg(test)]
@@ -127,7 +127,16 @@ mod tests {
     fn email_addresses_read_as_the_reference_regex() {
         assert_eq!(normalize_email_address("  theo@livekit.io ").unwrap(), "theo@livekit.io");
         assert!(normalize_email_address("a.b+c@mail.example.co.uk").is_ok());
-        for bad in ["@x.io", "theo@livekit", "theo@-x.io", "theo@x-.io", "theo@x.i", "a@b@c.io", ".a@x.io", "t@x..io"] {
+        for bad in [
+            "@x.io",
+            "theo@livekit",
+            "theo@-x.io",
+            "theo@x-.io",
+            "theo@x.i",
+            "a@b@c.io",
+            ".a@x.io",
+            "t@x..io",
+        ] {
             assert!(normalize_email_address(bad).is_err(), "{bad}");
         }
         assert_eq!(
@@ -139,7 +148,10 @@ mod tests {
     #[test]
     fn phone_numbers_lose_their_punctuation() {
         assert_eq!(normalize_phone_number(" +1 (510) 555-0123 ").unwrap(), "+15105550123");
-        assert_eq!(normalize_phone_number("06.12.34.56.78").unwrap_err(), "Invalid phone number provided: 06.12.34.56.78");
+        assert_eq!(
+            normalize_phone_number("06.12.34.56.78").unwrap_err(),
+            "Invalid phone number provided: 06.12.34.56.78"
+        );
         assert!(normalize_phone_number("123456").is_err(), "too short");
         assert!(normalize_phone_number("1234567890123456").is_err(), "too long");
     }

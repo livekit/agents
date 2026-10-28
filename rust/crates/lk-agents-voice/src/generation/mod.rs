@@ -1,6 +1,7 @@
 //! `voice/generation.py`: the pure planning of a step (request, turn metrics, retries), what a
 //! reply takes and reports ([`ReplyContext`], [`GenEvent`]), and the pipeline, one file per leg.
 
+use crate::tts::markup::MarkupExt;
 mod forward;
 mod llm;
 pub mod pipeline_reply;
@@ -37,10 +38,7 @@ pub const INSTRUCTIONS_MESSAGE_ID: &str = lk_agents_core::request::INSTRUCTIONS_
 /// [`INSTRUCTIONS_MESSAGE_ID`] item, ascending, given the items' ids.
 #[lk_agents_abi::host(export(name = "remove_instructions", pid = false))]
 pub fn instructions_positions(item_ids: impl IntoIterator<Item = impl Into<String>>) -> Vec<usize> {
-    lk_agents_abi::tts::markup::positions_of(
-        item_ids.into_iter().map(Into::into),
-        INSTRUCTIONS_MESSAGE_ID,
-    )
+    crate::tts::markup::positions_of(item_ids.into_iter().map(Into::into), INSTRUCTIONS_MESSAGE_ID)
 }
 
 /// Python truthiness for an `f64`: zero is "absent".
@@ -371,8 +369,8 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
             }
         }
         None => {
-            lk_agents_abi::tts::markup::remove_expressive_instructions(&mut ctx);
-            lk_agents_abi::tts::markup::strip_assistant_markup(&mut ctx);
+            crate::tts::markup::remove_expressive_instructions(&mut ctx);
+            crate::tts::markup::strip_assistant_markup(&mut ctx);
         }
     }
 
@@ -391,7 +389,7 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
 /// `update_expressive_instructions`: the keyed system message, replaced in place (its stamp kept)
 /// or appended.
 fn upsert_expressive_instructions(ctx: &mut ChatContext, text: &str, now: SystemTime) {
-    use lk_agents_abi::tts::markup::EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID as ID;
+    use crate::tts::markup::EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID as ID;
     match ctx.items.iter().position(|it| it.id() == ID) {
         Some(idx) => {
             let created_at = ctx.items[idx].created_at();
@@ -423,7 +421,7 @@ impl ExpressiveLayers {
         tts: Option<&lk_agents_abi::resources::TtsRef>,
         modality: lk_agents_abi::Modality,
     ) -> Option<String> {
-        use lk_agents_abi::tts::markup::SpeechSteering;
+        use crate::tts::markup::SpeechSteering;
         use lk_agents_abi::voice::session_options::Instructions;
         let tts = tts?;
         let markup = tts.markup;
@@ -940,8 +938,8 @@ pub enum GenEvent {
 #[cfg(test)]
 mod expressive_tests {
     use super::*;
+    use crate::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
     use lk_agents_abi::resources::{ResourceId, TtsRef};
-    use lk_agents_abi::tts::markup::{EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, Markup, SpeechSteering};
     use lk_agents_abi::voice::session_options::{Expressive, ExpressiveConfig};
     use lk_agents_abi::{ChatContext, TtsCapabilities};
 

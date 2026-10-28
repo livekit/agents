@@ -12,6 +12,14 @@ use lk_agents_abi::{
 use tokio::sync::Barrier;
 
 use super::*;
+use crate::env::Standalone;
+
+// These fixtures contain plain text; runtime tests compose the real expressive-markup projector.
+impl JudgeEnv for Standalone {
+    fn strip_assistant_markup(text: &str) -> String {
+        text.to_owned()
+    }
+}
 
 const T0: SystemTime = SystemTime::UNIX_EPOCH;
 
@@ -63,7 +71,7 @@ fn every_item_kind_reaches_the_transcript_in_order() {
         handoff("h0", None, "greeter"),
     ];
     assert_eq!(
-        transcript::format_items(&items),
+        transcript::format_items(&items, str::to_owned),
         "user: book me a table\n\
          [function call: find_table({\"party\":2})]\n\
          [function output: table 7 at 8pm]\n\
@@ -167,14 +175,19 @@ impl EvaluationHost for Host {
     }
 }
 
-fn judges(arguments: Option<&'static str>, requests: usize, host: Host) -> (Judges, Arc<Verdicts>) {
+fn judges(
+    arguments: Option<&'static str>,
+    requests: usize,
+    host: Host,
+) -> (Judges<Standalone>, Arc<Verdicts>) {
     let llm = Arc::new(Verdicts {
         arguments,
         barrier: Barrier::new(requests),
         prompts: Mutex::default(),
     });
     let registry: Arc<dyn RefRegistry> = Arc::new(Registry);
-    let runner = Judges::new(Some(llm.clone()), HostRef::new(0, &registry), Arc::new(host));
+    let runner =
+        Judges::<Standalone>::new(Some(llm.clone()), HostRef::new(0, &registry), Arc::new(host));
     (runner, llm)
 }
 
