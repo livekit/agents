@@ -125,15 +125,37 @@ impl Imports {
         }
     }
 
-    /// A handwritten scalar union can refer to the generated records beside its declaration.
-    fn annotation(&mut self, text: &str, rust: &str) {
-        // `rtc.AudioFrame`: the host SDK module the annotation names.
-        if text
-            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.')
-            .any(|t| t.starts_with("rtc."))
-        {
-            self.add("livekit", "rtc");
+    /// A handwritten annotation as the stub writes it, with what it names imported: `rtc.X`
+    /// through `livekit.rtc`, a dotted `module.Class` as its class, and the generated records
+    /// beside its declaration a scalar union refers to.
+    fn annotation(&mut self, text: &str, rust: &str) -> String {
+        let mut out = String::new();
+        let mut token = String::new();
+        for c in text.chars().chain(std::iter::once(' ')) {
+            if c.is_alphanumeric() || c == '_' || c == '.' {
+                token.push(c);
+                continue;
+            }
+            match token.rsplit_once('.') {
+                Some(("rtc", _)) => {
+                    self.add("livekit", "rtc");
+                    out.push_str(&token);
+                }
+                Some((module, class)) if class.starts_with(char::is_uppercase) => {
+                    self.add(module, class);
+                    out.push_str(class);
+                }
+                _ => out.push_str(&token),
+            }
+            token.clear();
+            out.push(c);
         }
+        out.pop();
+        self.records(text, rust);
+        out
+    }
+
+    fn records(&mut self, text: &str, rust: &str) {
         let Some((module, _)) = rust.rsplit_once("::") else { return };
         let records: Vec<_> = self
             .1
@@ -413,10 +435,7 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             }
             HostForm::Dict => "dict[str, object]".into(),
             HostForm::WireStrs => "str".into(),
-            HostForm::Annotation(text) => {
-                imports.annotation(text, &r.rust);
-                text.clone()
-            }
+            HostForm::Annotation(text) => imports.annotation(text, &r.rust),
         },
         Ty::This => c.name.clone(),
         Ty::Proxy { host, generic, declared, .. } => {
