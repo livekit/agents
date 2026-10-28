@@ -424,6 +424,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice_settings))
             if is_given(self._opts.voice_settings)
@@ -444,10 +445,7 @@ class ChunkedStream(tts.ChunkedStream):
                 url,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
                 json=json_body,
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=self._conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
 
@@ -488,6 +486,16 @@ class SynthesizeStream(tts.SynthesizeStream):
     """
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        if (
+            conn_options.pool_timeout is not None
+            or conn_options.write_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "elevenlabs streaming requires pool_timeout=None, write_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -520,7 +528,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         connection: _Connection | _DialogueConnection
         try:
             connection = await asyncio.wait_for(
-                self._tts._current_connection(), self._conn_options.timeout
+                self._tts._current_connection(), self._conn_options.connect_timeout
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -1016,7 +1024,9 @@ class _Connection:
         if not (ctx := self._context_data.get(context_id)) or ctx.timeout_timer:
             return
 
-        timeout = ctx.stream._conn_options.timeout
+        timeout = ctx.stream._conn_options.read_timeout
+        if timeout is None:
+            return
 
         def _on_timeout() -> None:
             if not ctx.waiter.done():

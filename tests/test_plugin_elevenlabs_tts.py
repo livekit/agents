@@ -491,7 +491,7 @@ async def test_send_loop_arms_timeout_on_close_context(connection_cls: type, mod
         connection._ws = _RecordingWs()
         ctx = elevenlabs_tts._StreamData(
             emitter=_FakeEmitter(),  # type: ignore[arg-type]
-            stream=SimpleNamespace(_conn_options=SimpleNamespace(timeout=60)),  # type: ignore[arg-type]
+            stream=SimpleNamespace(_conn_options=SimpleNamespace(read_timeout=60)),  # type: ignore[arg-type]
             waiter=asyncio.get_event_loop().create_future(),
         )
         connection._context_data["ctx-1"] = ctx
@@ -945,3 +945,31 @@ async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
 
         connection._input_queue.close()
         await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_disabled_response_timeout_keeps_pending_context() -> None:
+    connection = object.__new__(elevenlabs_tts._Connection)
+    waiter = asyncio.get_running_loop().create_future()
+    context_id = "pending-context"
+    ctx = elevenlabs_tts._StreamData(
+        emitter=_FakeEmitter(),  # type: ignore[arg-type]
+        stream=SimpleNamespace(  # type: ignore[arg-type]
+            _conn_options=SimpleNamespace(timeout=0, read_timeout=None)
+        ),
+        waiter=waiter,
+    )
+    connection._context_data = {context_id: ctx}
+    connection._active_contexts = {context_id}
+    try:
+        connection._start_timeout_timer(context_id)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not waiter.done()
+        assert context_id in connection._context_data
+    finally:
+        if ctx.timeout_timer is not None:
+            ctx.timeout_timer.cancel()
+        if waiter.done() and not waiter.cancelled():
+            waiter.exception()
+        waiter.cancel()
