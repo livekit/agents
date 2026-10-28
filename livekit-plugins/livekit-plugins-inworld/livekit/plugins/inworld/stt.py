@@ -27,6 +27,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -223,6 +224,17 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         language: str = DEFAULT_LANGUAGE,
     ) -> None:
+        if (
+            conn_options.pool_timeout is not None
+            or conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "inworld streaming requires pool_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._opts.sample_rate)
         self._stt: STT = stt
         self._language = language
@@ -276,7 +288,7 @@ class SpeechStream(stt.SpeechStream):
                 ws_url,
                 headers={"Authorization": self._stt._authorization},
             ),
-            timeout=self._conn_options.timeout,
+            timeout=self._conn_options.connect_timeout,
         )
 
         self._request_id = utils.shortuuid()
