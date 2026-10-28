@@ -24,7 +24,10 @@ from .version import __version__
 __all__ = ["SentenceTokenizer", "__version__"]
 
 
-import nltk  # type: ignore
+from collections.abc import Callable
+from typing import cast
+
+import nltk  # type: ignore[import-untyped]  # NLTK does not ship a py.typed marker.
 from livekit.agents import Plugin
 
 from .log import logger
@@ -36,9 +39,13 @@ class NltkPlugin(Plugin):
 
     def download_files(self) -> None:
         try:
-            _ = nltk.data.find("tokenizers/punkt_tab")
+            # NLTK does not annotate its resource API.
+            find = cast(Callable[[str], object], nltk.data.find)  # pyright: ignore[reportUnknownMemberType]
+            find("tokenizers/punkt_tab")
         except LookupError:
-            nltk.download("punkt_tab")
+            # NLTK does not annotate its downloader API.
+            download = cast(Callable[[str], bool], nltk.download)  # pyright: ignore[reportUnknownMemberType]
+            download("punkt_tab")
 
 
 Plugin.register_plugin(NltkPlugin())

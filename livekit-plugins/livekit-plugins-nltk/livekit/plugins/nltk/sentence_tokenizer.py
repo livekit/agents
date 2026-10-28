@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import dataclasses
-import functools
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
-import nltk  # type: ignore
+import nltk  # type: ignore[import-untyped]  # NLTK does not ship a py.typed marker.
 from livekit import agents
 from livekit.agents import LanguageCode
 
@@ -12,6 +13,10 @@ from livekit.agents import LanguageCode
 # https://www.nltk.org/_modules/nltk/tokenize/punkt.html
 # this code is using a whitespace to concatenate small sentences together
 # (languages such as Chinese and Japanese are not yet supported)
+
+
+# NLTK does not annotate sent_tokenize; its public API returns sentences as strings.
+_sent_tokenize = cast(Callable[[str, str], list[str]], nltk.tokenize.sent_tokenize)  # pyright: ignore[reportUnknownMemberType]
 
 
 @dataclass
@@ -45,8 +50,8 @@ class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
         config = self._sanitize_options(language=language)
-        sentences = nltk.tokenize.sent_tokenize(text, config.language)
-        new_sentences = []
+        sentences = _sent_tokenize(text, config.language)
+        new_sentences: list[str] = []
         buff = ""
         for sentence in sentences:
             buff += sentence + " "
@@ -62,7 +67,7 @@ class SentenceTokenizer(agents.tokenize.SentenceTokenizer):
     def stream(self, *, language: str | None = None) -> agents.tokenize.SentenceStream:
         config = self._sanitize_options(language=language)
         return agents.tokenize.BufferedSentenceStream(
-            tokenizer=functools.partial(nltk.tokenize.sent_tokenize, language=config.language),
+            tokenizer=lambda text: _sent_tokenize(text, config.language),
             min_token_len=self._config.min_sentence_len,
             min_ctx_len=self._config.stream_context_len,
         )
