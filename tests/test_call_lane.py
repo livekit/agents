@@ -1,10 +1,12 @@
 """The call's lane (design §5, plan 3.3.7): a call commits only what it said and dropped, a text
-between voice turns reaches the realtime model, an empty transcript is no turn, and a tool's
-``ModelRetry`` reads as in text. Seen in what reaches the model and in the call's history."""
+between voice turns reaches the realtime model, an empty transcript is no turn, a tool's
+``ModelRetry`` reads as in text, and under ``live`` a text during the call is a turn of the call.
+Seen in what reaches the model, in the call's history and on the A2A wire."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
@@ -12,13 +14,17 @@ import pytest
 
 from livekit.agents import Agent, LiveSession, RunContext, llm
 from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.a2a.extension import INTERRUPTED
 from livekit.agents.llm import FunctionToolCall, ModelRetry
 from livekit.agents.storage import AgentDBStorage, live
 from livekit.agents.storage.resolve import Thread
 
+from .a2a_driver import AGENT, Door, Reply, call, no_project_env, state_of  # noqa: F401
 from .agentdb_fixture import new_session
 from .fake_llm import FakeLLM, FakeLLMResponse
-from .fake_realtime import FakeRealtimeModel, fake_capabilities
+from .fake_realtime import FakeRealtimeModel, ScriptedRealtimeModel, fake_capabilities
+from .test_call_progress import Booking, answering, soon, told
+from .test_live_inbox import in_the_background
 from .test_storage import a2a, run_turn
 
 pytestmark = [pytest.mark.unit]
@@ -211,3 +217,101 @@ async def test_a_model_retry_on_a_call_reads_as_in_text() -> None:
         result: Any = await session.run(user_input="cancel my visit")
 
     assert result.output == "Which date?"
+
+
+@pytest.mark.rule("R59", "R60")
+@pytest.mark.parametrize(
+    "holds",
+    [
+        pytest.param(
+            True,
+            id="live",
+            marks=pytest.mark.xfail(strict=True, reason="R59, R60: the call never holds its lane"),
+        ),
+        pytest.param(False, id="per-turn"),
+    ],
+)
+async def test_a_text_during_a_call_is_a_turn_of_the_call_when_the_call_holds_its_lane(
+    door: Callable[..., Door], holds: bool
+) -> None:
+    async def handler(ctx: A2ASessionContext[Any]) -> str:
+        return "the door answered"
+
+    desk = door(handler, inbox="live" if holds else "queue")
+    thread = await desk.thread()
+    model = ScriptedRealtimeModel(
+        Reply("Your visit is on Monday.", when=answering("when is my visit?"))
+    )
+    lane = Thread(desk.storage, thread, agent_name=AGENT)
+    lane._call_holds_lane = holds  # as the server sets it from the lane's text door
+    async with LiveSession(llm=model, thread=lane) as session:
+        await session.start(Agent(instructions="front desk"))
+        sent = await asyncio.wait_for(desk.send("when is my visit?", context_id=thread), 20)
+
+    assert sent.state == "completed"
+    assert sent.answer == ("Your visit is on Monday." if holds else "the door answered")
+    assert sent.metadata.get("livekit/answeredByVoice", False) is holds
+    # under live the realtime model had the text in its context when it replied
+    assert any(answering("when is my visit?")(r) for r in model.requests) == holds
+
+
+def held(desk: Door, thread: str) -> Thread:
+    """The call's thread on ``desk``'s lane, held for the whole call as under ``live``."""
+    lane = Thread(desk.storage, thread, agent_name=AGENT)
+    lane._call_holds_lane = True  # as the server sets it from the lane's text door
+    return lane
+
+
+@pytest.mark.rule("B64")
+@pytest.mark.xfail(strict=True, reason="B64: the text ends with the acknowledgement")
+async def test_a_text_whose_work_runs_on_ends_with_the_calls_reply_to_its_result(
+    door: Callable[..., Door],
+) -> None:
+    booking = Booking()
+    model = ScriptedRealtimeModel(
+        Reply("", [call("book", "b1", day="monday")]),
+        Reply("Booking it now."),
+        Reply("Monday is booked.", when=told("b1_final")),
+    )
+    desk = door(inbox="live")
+    thread = await desk.thread()
+    async with LiveSession(llm=model, thread=held(desk, thread)) as session:
+        await session.start(booking.desk)
+        sending = asyncio.create_task(desk.send("book monday", context_id=thread))
+        try:
+            (waiting,) = await in_the_background(desk, thread)
+        finally:
+            booking.second.set()
+            booking.done.set()
+        sent = await asyncio.wait_for(sending, 20)
+
+    assert waiting["status"]["message"]["parts"][0]["text"] == "Booking it now."
+    assert [state_of(f) for f in sent.frames if state_of(f)] == [
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED",
+    ]
+    assert sent.answer == "Monday is booked."
+
+
+@pytest.mark.rule("B65")
+@pytest.mark.xfail(strict=True, reason="B65: the text ends completed")
+@pytest.mark.parametrize("said", ["", "Let me look at"], ids=["nothing-said", "part-said"])
+async def test_a_text_whose_reply_was_cut_off_ends_as_in_text(
+    door: Callable[..., Door], said: str
+) -> None:
+    """A sound on the line cuts the text's reply off: the task ends as a text cut off ends, with
+    what was said, and the provider's own reply that follows is not its answer."""
+    under_way = asyncio.Event()
+    model = ScriptedRealtimeModel(Reply(said, hold=under_way), Reply("The 11:00 or the 2:30?"))
+    desk = door(inbox="live")
+    thread = await desk.thread()
+    async with LiveSession(llm=model, thread=held(desk, thread)) as session:
+        await session.start(Agent(instructions="front desk"))
+        sending = asyncio.create_task(desk.send("the first one", context_id=thread))
+        await soon(lambda: model.requests, "the text's reply under way")
+        model.active_session.noise()
+        under_way.set()
+        sent = await asyncio.wait_for(sending, 20)
+
+    assert sent.state == "canceled" and sent.metadata[INTERRUPTED] is True
+    assert sent.answer == (said or None)

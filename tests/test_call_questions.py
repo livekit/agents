@@ -1,0 +1,229 @@
+"""Questions on a call (design §4, §7 "Questions"): the person's answer goes to the tool that
+asked, a follow-up of the answered task goes first, and questions belong to the lane whichever
+door asked. Seen in what reaches the models, in what the call says and on the A2A wire."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+
+from livekit.agents import Agent, InputRequired, LiveSession, RunContext
+from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.delegation import A2ADelegate
+from livekit.agents.llm.tool_context import SAY_EXACTLY
+from livekit.agents.storage import AgentDBStorage
+from livekit.agents.storage.resolve import Thread
+
+from .a2a_driver import AGENT, Door, Reply, ScriptedLLM, call, no_project_env  # noqa: F401
+from .fake_io import FakeAudioOutput
+from .fake_realtime import ScriptedRealtimeModel
+from .test_call_lane import held
+from .test_call_progress import answering, instructed, soon, spoken
+from .test_live_inbox import said
+
+pytestmark = [pytest.mark.unit]
+
+
+def asking(*questions: str, answer: str, heard: list[tuple[str, str]]) -> Callable[..., Any]:
+    """An expert's handler whose agent asks ``questions`` in turn, as written, then answers
+    ``answer``; ``heard`` keeps each message it got with its task id."""
+    asked = iter(questions)
+    replies = [Reply(tool_calls=[call("check", f"k{n}")]) for n in range(len(questions))]
+    agent = Agent(instructions="expert", llm=ScriptedLLM(*replies, Reply(answer)))
+
+    @agent.tool
+    async def check(ctx: RunContext) -> InputRequired:
+        """Check what the expert needs."""
+        return InputRequired(next(asked), verbatim=True)
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        heard.append((ctx.task_id, ctx.message.text_content or ""))
+        result = await agent.run(ctx.message, message_history=ctx.message_history)
+        return result.input_required or result.output
+
+    return handler
+
+
+@pytest.mark.xfail(strict=True, reason="R38: a pipeline call forces the tool through a model step")
+@pytest.mark.rule("R38")
+async def test_the_answer_goes_to_the_tool_that_asked_with_no_model_step(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    heard: list[tuple[str, str]] = []
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("ask", "a1", request="change my visit")]),
+        Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items[-1])),
+    )
+    delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
+    async with LiveSession(llm=model) as session:
+        await session.start(Agent(instructions="front desk", tools=[delegate]))
+        await session.run(user_input="change my visit")
+        await session.run(user_input="tuesday")
+
+    (asked, _), (answered, text) = heard
+    assert answered == asked and text == "tuesday"
+    assert not any(said("tuesday")(r) for r in model.requests), "no model step took the answer"
+    assert spoken(session) == ["Which day?", "You are booked for Tuesday."]
+
+
+@pytest.mark.rule("R37")
+async def test_a_follow_up_of_the_answered_task_goes_before_the_queue(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    gate = asyncio.Event()
+    fares_heard: list[tuple[str, str]] = []
+    seats_heard: list[tuple[str, str]] = []
+    fares = asking("Which date?", "Morning or evening?", answer="Fare booked.", heard=fares_heard)
+    seats_agent = asking("Which seat?", answer="Seat booked.", heard=seats_heard)
+
+    async def seats(ctx: A2ASessionContext[Any]) -> Any:
+        if not seats_heard:
+            await ctx.update("Looking at the seat map.")
+            await gate.wait()
+        return await seats_agent(ctx)
+
+    model = ScriptedLLM(
+        Reply(
+            tool_calls=[
+                call("fares", "f1", request="a flight"),
+                call("seats", "s1", request="a seat"),
+            ]
+        )
+    )
+    desk = Agent(
+        instructions="front desk",
+        tools=[
+            expert(fares, "fares", tool="fares", announce=False),
+            expert(seats, "seats", tool="seats", announce=False, streamed=True),
+        ],
+    )
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        await session.run(user_input="book a flight and a seat")
+        await soon(lambda: "Which date?" in spoken(session), "the first question")
+        gate.set()
+        await soon(lambda: seats_heard, "the seats expert")
+        await asyncio.sleep(0.5)  # its question waits behind the one in front
+        await session.run(user_input="tuesday")
+        await session.run(user_input="morning")
+        await soon(lambda: "Which seat?" in spoken(session), "the queued question")
+
+    questions = [s for s in spoken(session) if s.endswith("?")]
+    assert questions == ["Which date?", "Morning or evening?", "Which seat?"]
+
+
+@pytest.mark.xfail(strict=True, reason="R42: a call does not take the lane's questions")
+@pytest.mark.rule("R42")
+async def test_a_question_asked_by_text_is_answered_on_a_call(
+    door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    heard: list[tuple[str, str]] = []
+    delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
+    texting = Agent(
+        instructions="front desk",
+        llm=ScriptedLLM(Reply(tool_calls=[call("ask", "a1", request="change my visit")])),
+        tools=[delegate],
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return await texting.run(ctx.message, message_history=ctx.message_history)
+
+    desk = door(handler)
+    asked = await desk.send("change my visit")
+    thread = asked.task["contextId"]
+    model = ScriptedLLM(Reply("You are booked.", when=lambda c: "Booked." in str(c.items[-1])))
+    calling = Agent(instructions="front desk", tools=[delegate])
+    async with LiveSession(llm=model, thread=Thread(desk.storage, thread, agent_name=AGENT)) as s:
+        await s.start(calling)
+        await s.run(user_input="tuesday")
+
+    (first, _), (answered, text) = heard
+    assert asked.state == "input_required"
+    assert answered == first and text == "tuesday"
+    assert (await desk.get_task(asked.task["id"], thread))["status"]["state"] == (
+        "TASK_STATE_COMPLETED"
+    )
+
+
+@pytest.mark.xfail(strict=True, reason="R42: a call leaves no question on its lane")
+@pytest.mark.rule("R42")
+async def test_a_question_asked_on_a_call_is_answered_by_text(
+    agentdb_storage: AgentDBStorage, door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    heard: list[tuple[str, str]] = []
+    delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
+    texting = Agent(
+        instructions="front desk",
+        llm=ScriptedLLM(Reply("You are booked.", when=lambda c: "Booked." in str(c.items[-1]))),
+        tools=[delegate],
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return await texting.run(ctx.message, message_history=ctx.message_history)
+
+    desk = door(handler)
+    thread = await desk.thread()
+    model = ScriptedLLM(Reply(tool_calls=[call("ask", "a1", request="change my visit")]))
+    calling = Agent(instructions="front desk", tools=[delegate])
+    async with LiveSession(llm=model, thread=Thread(desk.storage, thread, agent_name=AGENT)) as s:
+        await s.start(calling)
+        await s.run(user_input="change my visit")
+
+    answered = await desk.send("tuesday", context_id=thread)
+
+    (first, _), (second, text) = heard
+    assert second == first and text == "tuesday"
+    assert answered.answer == "You are booked."
+
+
+@pytest.mark.xfail(strict=True, reason="B68: a text leaves the call's question open")
+@pytest.mark.rule("B68")
+async def test_a_text_during_a_call_answers_the_question_in_front(
+    door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    heard: list[tuple[str, str]] = []
+    model = ScriptedRealtimeModel(
+        Reply("", [call("ask", "a1", request="book sunday")]),
+        Reply("", [call("ask", "a2", request="yes")], when=answering("yes")),
+    )
+    delegate = expert(asking("Sunday at 14:00?", answer="Booked.", heard=heard), announce=False)
+    desk = door(inbox="live")
+    thread = await desk.thread()
+    async with LiveSession(llm=model, thread=held(desk, thread)) as session:
+        await session.start(Agent(instructions="front desk", tools=[delegate]))
+        model.active_session.hear("book sunday")
+        await soon(lambda: "Sunday at 14:00?" in spoken(session), "the question")
+        await asyncio.wait_for(desk.send("yes", context_id=thread), 20)
+
+    (asked, _), (answered, text) = heard
+    assert answered == asked and text == "yes"
+    states = [t["status"]["state"] for t in await desk.list_tasks(thread)]
+    assert "TASK_STATE_INPUT_REQUIRED" not in states
+
+
+@pytest.mark.rule("R61")
+async def test_a_verbatim_question_on_a_model_with_no_voice_is_asked_through_a_reply(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    heard: list[tuple[str, str]] = []
+    model = ScriptedRealtimeModel(
+        Reply("", [call("ask", "a1", request="change my visit")]),
+        Reply("Which day?", when=lambda c: "Which day?" in instructed(c)),
+        say=False,
+    )
+    delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
+    async with LiveSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(Agent(instructions="front desk", tools=[delegate]))
+        model.active_session.hear("change my visit")
+        await soon(lambda: "Which day?" in spoken(session), "the question")
+
+    asking_reply = model.requests[-1]
+    assert instructed(asking_reply) == SAY_EXACTLY.format(text="Which day?")
+    # the realtime model held the question, once, when it was asked to say it
+    held = [i for i in asking_reply.items if i.type == "function_call_output"]
+    assert [o.output for o in held].count("Which day?") <= 1
+    assert spoken(session).count("Which day?") == 1
