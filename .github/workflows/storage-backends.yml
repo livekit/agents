@@ -1,0 +1,72 @@
+name: Storage backend contracts
+
+on:
+  pull_request:
+  push:
+    branches: [v2.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-contracts:
+    name: ${{ matrix.backend == 'agentdb' && 'AgentDB backend contracts' || 'SQLite backend contracts' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, agentdb]
+    defaults:
+      run:
+        shell: bash
+        working-directory: agents
+    env:
+      RUST_SDKS_REF: ${{ vars.AGENTS_RUST_SDKS_REF }}
+      LIVEKIT_URL: ${{ matrix.backend == 'agentdb' && secrets.LIVEKIT_URL || '' }}
+      LIVEKIT_API_KEY: ${{ matrix.backend == 'agentdb' && secrets.LIVEKIT_API_KEY || '' }}
+      LIVEKIT_API_SECRET: ${{ matrix.backend == 'agentdb' && secrets.LIVEKIT_API_SECRET || '' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          path: agents
+
+      - name: Check backend prerequisites
+        run: |
+          bash rust/backend-contracts.sh "${{ matrix.backend }}" --check
+          if [[ -z "$RUST_SDKS_REF" ]]; then
+            echo "::error::Set AGENTS_RUST_SDKS_REF to the compatible published Rust SDK source ref."
+            exit 2
+          fi
+
+      # Cargo's path dependencies resolve beside the agents checkout. The configured SDK ref
+      # must include its matching protocol submodule and thread schema.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: livekit/rust-sdks
+          ref: ${{ env.RUST_SDKS_REF }}
+          path: rust-sdks
+
+      - name: Initialize the SDK protocol source
+        working-directory: rust-sdks
+        run: git submodule update --init --depth 1 livekit-protocol/protocol
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Install cargo-nextest
+        run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            agents/rust/target
+          key: storage-backends-${{ runner.os }}-${{ env.RUST_SDKS_REF }}-${{ hashFiles('agents/rust/Cargo.lock') }}
+          restore-keys: storage-backends-${{ runner.os }}-${{ env.RUST_SDKS_REF }}-
+
+      - name: Run backend contracts
+        run: bash rust/backend-contracts.sh "${{ matrix.backend }}"

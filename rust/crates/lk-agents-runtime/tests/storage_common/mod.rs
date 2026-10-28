@@ -27,7 +27,7 @@ pub struct Fixture {
     pub storage: Arc<dyn Storage>,
     pub thread_id: String,
     lease: LeaseTiming,
-    dir: Option<PathBuf>,
+    pub dir: Option<PathBuf>,
 }
 
 /// A backend with no thread yet, removed (with its directory) at `close`.

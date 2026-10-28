@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# The applicable shared runtime contracts; AgentDB is explicitly credentialed, never silently skipped.
+set -euo pipefail
+
+if [[ $# -lt 1 || $# -gt 2 || ( $# -eq 2 && $2 != --check ) ]]; then
+    echo "usage: $0 sqlite|agentdb [--check]" >&2
+    exit 2
+fi
+backend=$1
+case "$backend" in
+    sqlite) ;;
+    agentdb)
+        for name in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET; do
+            if [[ -z ${!name:-} ]]; then
+                echo "AgentDB backend contracts require $name" >&2
+                exit 2
+            fi
+        done
+        ;;
+    *) echo "unknown backend: $backend" >&2; exit 2 ;;
+esac
+[[ ${2:-} != --check ]] || exit 0
+
+cd "$(dirname "$0")"
+args=(
+    --locked -p lk-agents-runtime
+    --test storage_lifecycle --test storage_runs --test storage_lease
+    --test storage_context --test storage_process --test a2a_turns
+    --no-tests fail
+)
+if [[ $backend == agentdb ]]; then
+    args+=(--run-ignored only -E 'test(agentdb::)')
+fi
+exec cargo nextest run "${args[@]}"
