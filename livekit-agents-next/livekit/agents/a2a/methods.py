@@ -504,13 +504,16 @@ class A2AService:
         reason = metadata_from_wire(params.get("metadata")).get(REASON)
         if reason is not None:
             metadata[REASON] = reason
-        await Thread(self._storage, thread_id, agent_name=record.lane).cancel(record, metadata)
+        thread = Thread(self._storage, thread_id, agent_name=record.lane)
+        updated = await thread.cancel(record, metadata)
+        if updated is not None and updated.status != "canceled":
+            # the task ended between the read and the cancel; terminal rows never change
+            raise TaskNotCancelableError(message=f"task {task_id} is {updated.status}")
 
         logger.info(
             "a client canceled a task",
             extra={"taskId": task_id, "threadId": thread_id, "reason": reason},
         )
-        updated = await self._find_task(thread_id, task_id)
         return task_to_pb(updated or record, thread_id, exts=call.extensions)
 
     async def resubscribe(

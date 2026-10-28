@@ -125,12 +125,13 @@ class Thread:
         records = await self.tasks(agent) if agent else await self.all_tasks()
         return [record for record in records if record.name]
 
-    async def cancel(self, record: TaskRow, metadata: dict[str, JsonValue]) -> None:
-        """``tasks/cancel``: the row ``canceled`` with ``metadata`` merged in (plan 5.5); a
-        running turn yields at its next checkpoint and writes nothing over it."""
+    async def cancel(self, record: TaskRow, metadata: dict[str, JsonValue]) -> TaskRow | None:
+        """``tasks/cancel``: a row not yet terminal goes ``canceled`` with ``metadata`` merged in;
+        a running turn yields at its next checkpoint and writes nothing over it. The row after:
+        unchanged when it became terminal first."""
         core = await self._open()
         try:
-            await core.cancel_task(self._agent_name, record.task_id, metadata)
+            return await core.cancel_task(self._agent_name, record.task_id, metadata)
         finally:
             core.close()
 
