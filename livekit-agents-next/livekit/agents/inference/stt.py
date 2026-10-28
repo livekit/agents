@@ -137,7 +137,6 @@ class STT(stt.STT):
             fallback=[f["model"] for f in self._fallback],
             extra_kwargs=self._extra,
         )
-        caps["aligned_transcript"] = "word" if caps["aligned_transcript"] else False
         return stt.STTCapabilities(**caps)
 
     def _resolve_vad(self, vad: vad_mod.VAD | None) -> vad_mod.VAD | None:

@@ -83,7 +83,7 @@ impl<P: TtsHost> InferenceTts for NativeTts<P> {
             model.as_deref(),
             voice.as_deref(),
             language.as_deref(),
-            extra.map(crate::extra::ExtraKwargs).as_ref(),
+            extra.as_ref(),
         );
     }
     async fn stream(

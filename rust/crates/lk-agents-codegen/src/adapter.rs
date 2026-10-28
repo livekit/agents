@@ -426,6 +426,7 @@ fn duplex_class(
         kw_only: false,
         default: None,
         shape_error: None,
+        one_or_many: false,
     };
     let (item_ty, convert) = input(&at, &param)?;
     let convert = convert.map(|c| format!("        let item = {c};\n")).unwrap_or_default();
@@ -450,7 +451,8 @@ fn duplex_class(
     ));
     for m in &control.methods {
         s.push('\n');
-        s.push_str(&method(decls, &control, m)?);
+        // The input half is boxed: its calls take the trait object.
+        s.push_str(&method(decls, &control, m)?.replace("(&self.0", "(&*self.0"));
     }
     s.push_str("}\n");
     Ok(s)

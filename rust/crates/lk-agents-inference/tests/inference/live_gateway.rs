@@ -45,7 +45,7 @@ async fn an_stt_session_opens_and_accepts_audio() {
         return;
     };
 
-    let stt = NativeStt::new(
+    let stt: NativeStt = NativeStt::new(
         SttOptions {
             model: Some("deepgram/nova-3".into()),
             language: None,

@@ -66,6 +66,8 @@ pub trait Implementations: 'static {
     type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore, A2ADoor = Self::A2ADoor>;
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
+    type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
+    type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
     type TelemetryPolicy: ::lk_agents_abi::telemetry::policy::TelemetryPolicy;
     type MetricSeries: ::lk_agents_abi::telemetry::policy::MetricSeries;
     type SessionReportProjection: ::lk_agents_abi::telemetry::report::projection::SessionReportProjection;
@@ -154,6 +156,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::stt_resolve_vad_for_model, m)?)?;
     m.add_function(wrap_pyfunction!(inference::stt_normalize_fallback_str, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_normalize_fallback_str, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::stt_capabilities, m)?)?;
     m.add_function(wrap_pyfunction!(inference::stt_fallback_capabilities, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_fallback_capabilities, m)?)?;
     m.add_function(wrap_pyfunction!(inference::merge_realtime_capabilities, m)?)?;
@@ -199,6 +202,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<storage::Storage>()?;
     m.add_class::<storage::_core_ContextActivation>()?;
     m.add_class::<storage::_core_VoiceStore>()?;
+    m.add_class::<stt::FallbackStt>()?;
+    m.add_class::<stt::FallbackRecognizeStream>()?;
+    m.add_class::<stt::InferenceStt>()?;
+    m.add_class::<stt::InferenceSttStream>()?;
     m.add_class::<telemetry::_core_TelemetryPolicy>()?;
     m.add_class::<telemetry::_core_MetricSeries>()?;
     m.add_class::<telemetry::_core_SessionReportProjection>()?;

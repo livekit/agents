@@ -311,7 +311,7 @@ impl<P: TtsTextProcessorFactory> NativeTts<P> {
         model: Option<&str>,
         voice: Option<&str>,
         language: Option<&str>,
-        extra: Option<&crate::extra::ExtraKwargs>,
+        extra: Option<&serde_json::Map<String, serde_json::Value>>,
     ) {
         let mut opts = self.opts.lock().unwrap();
         if let Some(model) = model {

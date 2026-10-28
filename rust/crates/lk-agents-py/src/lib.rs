@@ -143,6 +143,10 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::inference::fallback::FallbackLlm<lk_agents_runtime::process::Process>;
     type InferenceLlm =
         lk_agents_runtime::inference::llm::gateway::GatewayLlm<lk_agents_runtime::process::Process>;
+    type FallbackStt =
+        lk_agents_runtime::inference::fallback::FallbackStt<lk_agents_runtime::process::Process>;
+    type InferenceStt =
+        lk_agents_runtime::inference::stt::NativeStt<lk_agents_runtime::process::Process>;
     type ChoiceParser = lk_agents_runtime::cores::ChoiceParser;
     type CompletionWire = lk_agents_runtime::cores::CompletionWire;
     type Storage = lk_agents_runtime::storage::host::HostStorage;

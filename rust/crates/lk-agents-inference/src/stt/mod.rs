@@ -1,11 +1,3 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! Gateway STT adapter. `lifecycle` owns synchronous completion decisions, `machine` builds
 //! speech observations, and `wire` validates gateway messages. This module executes socket and
 //! media work and owns stream cancellation, bounded queues and pump settlement.
@@ -14,8 +6,6 @@ pub mod lifecycle;
 pub mod machine;
 pub mod options;
 pub mod retrying;
-#[cfg(feature = "python")]
-mod python;
 pub mod wire;
 
 use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
@@ -36,8 +26,11 @@ use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use options::FallbackModel;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
+
+use lk_agents_net::env::{Env, Standalone};
 use tokio::sync::mpsc;
 
 const WHAT: &str = "LiveKit Inference STT";
@@ -83,17 +76,30 @@ impl Default for SttOptions {
 }
 
 /// One gateway STT client as one session holds it: the shared client, and the identity of the
-/// job that session serves (two sessions sharing an instance bill each its own job).
-#[derive(Clone)]
-pub struct NativeStt {
+/// job that session serves (two sessions sharing an instance bill each its own job). `E` is the
+/// hosting process a host-constructed client takes its executor and clock from.
+pub struct NativeStt<E: Env = Standalone> {
     shared: Arc<SttShared>,
     identity: Arc<BoundIdentity>,
     conn_options: Option<ApiConnectOptions>,
     /// The host provider this view serves: its `error` event is each failure the core reports.
     reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
+    env: PhantomData<fn() -> E>,
 }
 
-impl std::ops::Deref for NativeStt {
+impl<E: Env> Clone for NativeStt<E> {
+    fn clone(&self) -> Self {
+        NativeStt {
+            shared: Arc::clone(&self.shared),
+            identity: Arc::clone(&self.identity),
+            conn_options: self.conn_options,
+            reporter: self.reporter.clone(),
+            env: PhantomData,
+        }
+    }
+}
+
+impl<E: Env> std::ops::Deref for NativeStt<E> {
     type Target = SttShared;
 
     fn deref(&self) -> &SttShared {
@@ -123,22 +129,7 @@ pub struct SttShared {
     live: Mutex<Vec<Weak<StreamControl>>>,
 }
 
-/// `inference/stt.py`'s WebSocket, over `lk-agents-inference::stt::NativeStt`.
-///
-/// Options, capability rules and model parsing stay host-side; the socket, frame pump, transcript
-/// machine and reconnect cross. The stream is a sink/source pair driven by different host tasks:
-/// `push` is a synchronous send, `recv` the only awaiting method. The keyword constructor is
-/// `python::InferenceStt::new`.
-#[lk_agents_abi::host(object(
-    name = "InferenceStt",
-    cell = "arc",
-    rust_name = InferenceStt,
-    as_dyn(Stt = as_stt),
-    stub = "def __init__(self, *args: Any, **kwargs: Any) -> None: ...",
-    stub = "def set_vad(self, vad: Any | None = None) -> None: ...",
-    stub = "def identified(self, headers: list[tuple[str, str]], reporter: Any | None = None) -> InferenceStt: ..."
-))]
-impl NativeStt {
+impl<E: Env> NativeStt<E> {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
     }
@@ -163,6 +154,7 @@ impl NativeStt {
             identity: Arc::default(),
             conn_options: None,
             reporter: None,
+            env: PhantomData,
         }
     }
 
@@ -173,12 +165,13 @@ impl NativeStt {
         &self,
         headers: Headers,
         reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
-    ) -> NativeStt {
+    ) -> Self {
         let view = NativeStt {
             shared: Arc::clone(&self.shared),
             identity: Arc::default(),
             conn_options: self.conn_options,
             reporter,
+            env: PhantomData,
         };
         view.identity.bind(headers);
         view
@@ -189,11 +182,6 @@ impl NativeStt {
     pub fn with_identification(self, headers: Headers) -> Self {
         self.identity.bind(headers);
         self
-    }
-
-    /// The client as the provider a session holds directly.
-    pub fn as_stt(self: &Arc<Self>) -> Arc<dyn Stt> {
-        Arc::clone(self) as Arc<dyn Stt>
     }
 
     /// Before the client is shared.
@@ -225,13 +213,12 @@ impl NativeStt {
         self.opts.lock().unwrap().model.clone().unwrap_or_else(|| "unknown".to_owned())
     }
 
-    /// `update_options` on the STT. Live streams are updated through [`SttSinkHandle::update_options`].
-    #[host(method(kw_only))]
+    /// `update_options` on the STT; the live streams get it as a mid-stream `session.update`.
     pub fn update_options(
         &self,
         model: Option<&str>,
         language: Option<&str>,
-        extra: Option<&crate::extra::ExtraKwargs>,
+        extra: Option<&serde_json::Map<String, serde_json::Value>>,
     ) {
         let mut opts = self.opts.lock().unwrap();
         if let Some(model) = model {
@@ -263,7 +250,7 @@ impl NativeStt {
             options::capabilities(opts.model.as_deref(), &opts.fallback, Some(&opts.extra_kwargs));
         // A user `extra` re-merges the session keyterms, so the update does not drop them.
         let extra = extra.map(|extra| {
-            let mut merged = extra.0.clone();
+            let mut merged = extra.clone();
             let terms = self.session_keyterms.lock().unwrap().clone();
             let model = opts.model.as_deref().map(|m| options::parse_model_string(m).0);
             if let Some(keyterms) =
@@ -283,8 +270,7 @@ impl NativeStt {
 
     /// `_update_session_keyterms`: a warning once for a model without keyterm prompting, else the
     /// keyterms reach every open stream (now if the user is silent, at end of speech if not).
-    #[host(method(name = "update_keyterms"))]
-    pub fn update_keyterms_for_host(&self, keyterms: Vec<String>) {
+    pub fn update_keyterms(&self, keyterms: &[String]) {
         if !self.capabilities.lock().unwrap().keyterms {
             if !self.keyterms_unsupported_warned.swap(true, std::sync::atomic::Ordering::SeqCst) {
                 log::warn!(
@@ -295,7 +281,7 @@ impl NativeStt {
             }
             return;
         }
-        if let Some(extra) = self.update_session_keyterms(&keyterms) {
+        if let Some(extra) = self.update_session_keyterms(keyterms) {
             for stream in self.live_streams() {
                 stream.apply_keyterms(extra.clone());
             }
@@ -304,7 +290,6 @@ impl NativeStt {
 
     /// `_push_conversation_item`: an assistant turn's text, its tail, biases recognition as
     /// `agent_context` on a model that carries it.
-    #[host(method)]
     pub fn push_conversation_item(&self, role: &str, text: &str) {
         if role != "assistant" || text.is_empty() || !self.capabilities.lock().unwrap().chat_context
         {
@@ -316,7 +301,7 @@ impl NativeStt {
         };
         let mut extra = serde_json::Map::new();
         extra.insert("agent_context".into(), tail.into());
-        self.update_options(None, None, Some(&crate::extra::ExtraKwargs(extra)));
+        self.update_options(None, None, Some(&extra));
     }
 
     /// The `extra` entry a keyterm change applies, or `None` when unsupported or unchanged.
@@ -354,18 +339,6 @@ impl NativeStt {
             );
         }
         opts
-    }
-
-    /// Open a stream. Synchronous: the pump task opens the socket. `start_time_offset` shifts its
-    /// timestamps onto the caller's input timeline.
-    #[host(method(name = "stream", stream = InferenceSttStream, kw_only))]
-    pub fn stream_for_host(
-        &self,
-        language: Option<&str>,
-        start_time_offset: Option<f64>,
-        conn_options: Option<ApiConnectOptions>,
-    ) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
-        self.configured(conn_options).stream_native(language, start_time_offset.unwrap_or(0.0))
     }
 
     /// The unboxed pair, for callers that need the live stream's `update_options`.
@@ -436,8 +409,84 @@ impl NativeStt {
     }
 }
 
+/// `_core.InferenceStt`: the generated adapter calls this.
+impl<E: Env> lk_agents_abi::stt::inference::InferenceStt for NativeStt<E> {
+    type Audio = SttSinkHandle;
+    type Events = SttSourceHandle;
+
+    fn new(
+        model: Option<String>,
+        language: Option<String>,
+        encoding: String,
+        sample_rate: u32,
+        base_url: String,
+        api_key: String,
+        api_secret: String,
+        extra_kwargs: serde_json::Map<String, serde_json::Value>,
+        fallback: Option<Vec<lk_agents_abi::inference::fallback::SttFallbackModel>>,
+        conn_options: ApiConnectOptions,
+        vad: Option<Arc<dyn crate::abi::Vad>>,
+    ) -> Result<Self, ApiError> {
+        let spawner = E::spawner().map_err(|e| ApiError::new(e).with_retryable(false))?;
+        // Not `parse_model_into`: the host already parsed `provider/model:language`; a second
+        // parse would strip a legitimate `:` from the model name.
+        let opts = SttOptions {
+            model,
+            language,
+            encoding,
+            sample_rate,
+            base_url,
+            api_key,
+            api_secret,
+            extra_kwargs,
+            fallback: fallback.unwrap_or_default(),
+            conn_options,
+        };
+        let stt =
+            NativeStt::new(opts, Arc::new(lk_agents_net::websocket::TungsteniteTransport), spawner)
+                .with_clock(E::clock());
+        stt.set_vad(vad);
+        Ok(stt)
+    }
+
+    fn set_vad(&self, vad: Option<Arc<dyn crate::abi::Vad>>) {
+        NativeStt::set_vad(self, vad);
+    }
+
+    fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Stt>>) -> Self {
+        NativeStt::identified(self, headers.into_iter().collect(), reporter)
+    }
+
+    fn update_options(
+        &self,
+        model: Option<String>,
+        language: Option<String>,
+        extra: Option<serde_json::Map<String, serde_json::Value>>,
+    ) {
+        NativeStt::update_options(self, model.as_deref(), language.as_deref(), extra.as_ref());
+    }
+
+    fn update_keyterms(&self, keyterms: Vec<String>) {
+        NativeStt::update_keyterms(self, &keyterms);
+    }
+
+    fn push_conversation_item(&self, role: &str, text: &str) {
+        NativeStt::push_conversation_item(self, role, text);
+    }
+
+    fn stream(
+        &self,
+        language: Option<String>,
+        start_time_offset: Option<f64>,
+        conn_options: Option<ApiConnectOptions>,
+    ) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
+        self.configured(conn_options)
+            .stream_native(language.as_deref(), start_time_offset.unwrap_or(0.0))
+    }
+}
+
 #[async_trait]
-impl Stt for NativeStt {
+impl<E: Env> Stt for NativeStt<E> {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }
@@ -462,7 +511,7 @@ impl Stt for NativeStt {
     }
 
     fn update_keyterms(&self, keyterms: &[String]) {
-        self.update_keyterms_for_host(keyterms.to_vec());
+        NativeStt::update_keyterms(self, keyterms);
     }
 
     fn push_conversation_item(&self, role: &str, text: &str) {
@@ -524,18 +573,14 @@ pub struct SttSinkHandle {
     control: Arc<StreamControl>,
 }
 
-impl SttSinkHandle {
-    pub fn update_options(
+impl lk_agents_abi::stt::inference::InferenceSttAudio for SttSinkHandle {
+    fn update_options(
         &self,
-        model: Option<&str>,
-        language: Option<&str>,
-        extra: Option<&serde_json::Map<String, serde_json::Value>>,
+        model: Option<String>,
+        language: Option<String>,
+        extra: Option<serde_json::Map<String, serde_json::Value>>,
     ) {
-        self.control.update_options(model, language, extra);
-    }
-
-    pub fn apply_keyterms(&self, extra: serde_json::Map<String, serde_json::Value>) {
-        self.control.apply_keyterms(extra);
+        self.control.update_options(model.as_deref(), language.as_deref(), extra.as_ref());
     }
 }
 
@@ -623,12 +668,6 @@ impl SttSinkHandle {
 }
 
 /// The gateway stream's drain half, handed to the host as `InferenceSttStream` beside its sink.
-#[lk_agents_abi::host(stream(name = "InferenceSttStream", doc = "One live recognition session.", sink = crate::stt::SttSinkHandle,
-    input = AudioFrame, input_py = "rtc.AudioFrame",
-    stub_import = "from livekit import rtc", end_input, close_ends_input,
-    output = SpeechEvent,
-    stub = "def apply_keyterms(self, extra: dict[str, Any]) -> None: ...",
-    stub = "def update_options(\n    self,\n    *,\n    model: str | None = None,\n    language: str | None = None,\n    extra: dict[str, Any] | None = None,\n) -> None: ..."))]
 pub struct SttSourceHandle {
     events: mpsc::Receiver<Result<SpeechEvent, ApiError>>,
     done: bool,

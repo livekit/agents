@@ -27,8 +27,6 @@ from ._core_handwritten import (
     resolve_host_ref as resolve_host_ref,
     run_shutdown_callbacks as run_shutdown_callbacks,
     session_records as session_records,
-    stt_capabilities as stt_capabilities,
-    stt_keyterms_extra_for_model as stt_keyterms_extra_for_model,
     stt_node as stt_node,
     tts_node as tts_node,
 )
@@ -74,7 +72,6 @@ from ._generated._core_classes import (
     CoreTextOutput as CoreTextOutput,
     DataStreamAudioReceiver as DataStreamAudioReceiver,
     FakeRoom as FakeRoom,
-    FallbackStt as FallbackStt,
     FallbackSttStream as FallbackSttStream,
     FrameDecoder as FrameDecoder,
     GetAddressResult as GetAddressResult,
@@ -88,8 +85,6 @@ from ._generated._core_classes import (
     GetPhoneNumberResult as GetPhoneNumberResult,
     GetSecurityCodeResult as GetSecurityCodeResult,
     InferenceLlmStream as InferenceLlmStream,
-    InferenceStt as InferenceStt,
-    InferenceSttStream as InferenceSttStream,
     InferenceVad as InferenceVad,
     InferenceVadStream as InferenceVadStream,
     JobInfo as JobInfo,
@@ -232,6 +227,7 @@ from ._generated._core_inference import (
     merge_realtime_capabilities as merge_realtime_capabilities,
     min_reasoning_effort as min_reasoning_effort,
     stt_aligned_transcript_for_model as stt_aligned_transcript_for_model,
+    stt_capabilities as stt_capabilities,
     stt_diarization_enabled as stt_diarization_enabled,
     stt_fallback_capabilities as stt_fallback_capabilities,
     stt_normalize_fallback_str as stt_normalize_fallback_str,
@@ -291,6 +287,12 @@ from ._generated._core_storage import (
     Storage as Storage,
     _core_ContextActivation as _core_ContextActivation,
     _core_VoiceStore as _core_VoiceStore,
+)
+from ._generated._core_stt import (
+    FallbackRecognizeStream as FallbackRecognizeStream,
+    FallbackStt as FallbackStt,
+    InferenceStt as InferenceStt,
+    InferenceSttStream as InferenceSttStream,
 )
 from ._generated._core_telemetry import (
     LoopMonitor as LoopMonitor,

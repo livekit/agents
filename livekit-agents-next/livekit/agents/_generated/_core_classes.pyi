@@ -1444,61 +1444,6 @@ class TtsMetricState:
     ) -> dict[str, Any] | None: ...
 
 
-class FallbackStt:
-    """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
-
-    def __init__(
-        self,
-        stts: list[Any],
-        *,
-        attempt_timeout: float = 10.0,
-        max_retry_per_stt: int = 1,
-        retry_interval: float = 5.0,
-        on_availability: Any | None = None,
-    ) -> None: ...
-    @property
-    def active_index(self) -> int: ...
-    async def aclose(self) -> None: ...
-    @property
-    def capabilities(self) -> dict[str, Any]: ...
-    async def recognize(
-        self,
-        frames: list[Any],
-        language: str | None = None,
-        conn_options: Any | None = None,
-    ) -> dict[str, Any]: ...
-    async def stream(
-        self,
-        language: str | None = None,
-        start_time_offset: float | None = None,
-        conn_options: Any | None = None,
-    ) -> FallbackSttStream: ...
-
-
-class InferenceStt:
-    """`inference/stt.py`'s WebSocket, over `lk-agents-inference::stt::NativeStt`."""
-
-    def update_options(
-        self,
-        *,
-        model: str | None = None,
-        language: str | None = None,
-        extra: Any | None = None,
-    ) -> None: ...
-    def update_keyterms(self, keyterms: list[str]) -> None: ...
-    def push_conversation_item(self, role: str, text: str) -> None: ...
-    def stream(
-        self,
-        *,
-        language: str | None = None,
-        start_time_offset: float | None = None,
-        conn_options: Any | None = None,
-    ) -> InferenceSttStream: ...
-    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-    def set_vad(self, vad: Any | None = None) -> None: ...
-    def identified(self, headers: list[tuple[str, str]], reporter: Any | None = None) -> InferenceStt: ...
-
-
 class InferenceVad:
     """`inference/vad.py`: Silero VAD, the machine in Rust and the model native when the build links
     one, else the host's.
@@ -1618,7 +1563,7 @@ class TranscriptSynchronizer:
 class FallbackSttStream:
     """One `RecognizeStream`'s worth of the chain: push audio in, pull `SpeechEvent`s out."""
 
-    def push_frame(self, text: rtc.AudioFrame) -> None: ...
+    def push(self, text: rtc.AudioFrame) -> None: ...
     def flush(self) -> None: ...
     def end_input(self) -> None: ...
     async def recv(self) -> Any: ...
@@ -1628,24 +1573,6 @@ class FallbackSttStream:
 class InferenceLlmStream:
     """One in-flight completion."""
 
-    async def recv(self) -> Any: ...
-    async def aclose(self) -> None: ...
-
-
-class InferenceSttStream:
-    """One live recognition session."""
-
-    def push(self, text: rtc.AudioFrame) -> None: ...
-    def flush(self) -> None: ...
-    def end_input(self) -> None: ...
-    def apply_keyterms(self, extra: dict[str, Any]) -> None: ...
-    def update_options(
-        self,
-        *,
-        model: str | None = None,
-        language: str | None = None,
-        extra: dict[str, Any] | None = None,
-    ) -> None: ...
     async def recv(self) -> Any: ...
     async def aclose(self) -> None: ...
 

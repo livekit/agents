@@ -17,6 +17,10 @@ use lk_agents_abi::{
 };
 use lk_agents_abi::{ApiConnectOptions, SpeechEvent, SpeechEventType};
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use std::marker::PhantomData;
+
+use lk_agents_abi::llm::inference::InvalidPayload;
+use lk_agents_net::env::{Env, Standalone};
 use tokio::sync::mpsc;
 
 use crate::fallback::chain::{
@@ -355,15 +359,28 @@ pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
     }
 }
 
-#[derive(Clone)]
-pub struct FallbackStt {
+/// `E` is the hosting process a host-built chain takes its executor and clock from.
+pub struct FallbackStt<E: Env = Standalone> {
     chain: Arc<FallbackChain<SttBackend>>,
     spawner: Arc<dyn Spawner>,
     capabilities: SttCapabilities,
     caller_conn: ApiConnectOptions,
+    env: PhantomData<fn() -> E>,
 }
 
-impl FallbackStt {
+impl<E: Env> Clone for FallbackStt<E> {
+    fn clone(&self) -> Self {
+        FallbackStt {
+            chain: Arc::clone(&self.chain),
+            spawner: Arc::clone(&self.spawner),
+            capabilities: self.capabilities,
+            caller_conn: self.caller_conn,
+            env: PhantomData,
+        }
+    }
+}
+
+impl<E: Env> FallbackStt<E> {
     fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
         Self { caller_conn: conn_options.unwrap_or(self.caller_conn), ..self.clone() }
     }
@@ -394,6 +411,7 @@ impl FallbackStt {
             spawner,
             capabilities,
             caller_conn: crate::fallback::policy::caller_default(),
+            env: PhantomData,
         })
     }
 
@@ -404,26 +422,25 @@ impl FallbackStt {
     pub fn active(&self) -> Arc<dyn Stt> {
         Arc::clone(&self.chain.active().inner)
     }
+
+    /// Cancel every recovery probe in flight, idempotently.
+    pub fn aclose(&self) {
+        self.chain.aclose();
+    }
 }
 
-/// `stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
-#[lk_agents_abi::host(object(cell = "arc", as_dyn(Stt = as_stt)))]
-impl FallbackStt {
-    /// `stts` in order, each already streaming (the host wraps a recognize-only entry in its
-    /// `StreamAdapter`, which composes a host VAD); the keywords are `FallbackAdapter.__init__`'s.
-    #[host(new(
-        kw_only = "attempt_timeout",
-        defaults(attempt_timeout = 10.0, max_retry_per_stt = 1, retry_interval = 5.0)
-    ))]
-    pub fn for_host(
+/// `stt.FallbackAdapter`'s engine as the host builds it: the generated adapter calls this.
+impl<E: Env> lk_agents_abi::stt::fallback::FallbackStt for FallbackStt<E> {
+    type Audio = SttSink;
+    type Events = SttSource;
+
+    fn new(
         stts: Vec<Arc<dyn Stt>>,
         attempt_timeout: f64,
         max_retry_per_stt: u32,
         retry_interval: f64,
         on_availability: Option<Arc<dyn ChainObserver>>,
-        #[host(ambient)] clock: Arc<dyn Clock>,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Result<Self, SttChainError> {
+    ) -> Result<Self, InvalidPayload> {
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_stt,
             attempt_timeout: Some(attempt_timeout),
@@ -431,40 +448,23 @@ impl FallbackStt {
             ..ChainPolicy::stt_defaults()
         };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        FallbackStt::new(stts, policy, clock, spawner, observer)
+        FallbackStt::new(stts, policy, E::clock(), E::spawner().map_err(InvalidPayload)?, observer)
+            .map_err(|error| InvalidPayload(error.to_string()))
     }
 
-    /// The chain as the provider the session holds (a native `_core.FallbackStt` is not proxied).
-    pub fn as_stt(self: &Arc<Self>) -> Arc<dyn Stt> {
-        Arc::clone(self) as Arc<dyn Stt>
-    }
-
-    #[host(getter)]
-    pub fn active_index(&self) -> usize {
+    fn active_index(&self) -> usize {
         self.chain.active_index()
     }
 
-    /// Cancel every recovery probe in flight, idempotently.
-    pub fn aclose(&self) {
-        self.chain.aclose();
-    }
-
-    /// `aclose()`: every recovery probe in flight closes its stream, awaited (bounded).
-    #[host(method(name = "aclose"))]
-    pub async fn aclose_for_host(&self) {
-        self.chain.close().await;
-    }
-
-    /// The merged capabilities, not the primary's: a caller must not wait for interim results a
-    /// secondary never sends.
-    #[host(getter(name = "capabilities"))]
-    pub fn merged_capabilities(&self) -> SttCapabilities {
+    fn capabilities(&self) -> SttCapabilities {
         self.capabilities
     }
 
-    /// `_recognize_impl`: the batch path, over whichever entry answers.
-    #[host(method(name = "recognize"))]
-    pub async fn recognize_for_host(
+    async fn aclose(&self) {
+        self.chain.close().await;
+    }
+
+    async fn recognize(
         &self,
         frames: Vec<AudioFrame>,
         language: Option<LanguageCode>,
@@ -473,9 +473,7 @@ impl FallbackStt {
         Stt::recognize(&self.configured(conn_options), &frames, language.as_ref()).await
     }
 
-    /// The duplex path: audio in (tee'd to the serving stream and every recovery probe), events out.
-    #[host(method(name = "stream", stream = lk_agents_abi::FallbackSttStream))]
-    pub async fn stream_for_host(
+    async fn stream(
         &self,
         language: Option<LanguageCode>,
         start_time_offset: Option<f64>,
@@ -488,7 +486,7 @@ impl FallbackStt {
 }
 
 #[async_trait]
-impl Stt for FallbackStt {
+impl<E: Env> Stt for FallbackStt<E> {
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
         Some(Arc::new(self.configured(Some(*conn))))
     }

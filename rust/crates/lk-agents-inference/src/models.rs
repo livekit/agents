@@ -10,6 +10,20 @@ use serde_json::{Map, Value};
 pub struct Models;
 
 impl InferenceModels for Models {
+    fn stt_capabilities(
+        model: Option<String>,
+        fallback: Option<Vec<String>>,
+        extra_kwargs: Option<Map<String, Value>>,
+    ) -> SttCapabilities {
+        // Only each fallback entry's model is read.
+        let fallback: Vec<crate::stt::options::FallbackModel> = fallback
+            .unwrap_or_default()
+            .into_iter()
+            .map(|model| crate::stt::options::FallbackModel { model, extra_kwargs: None })
+            .collect();
+        crate::stt::options::capabilities(model.as_deref(), &fallback, extra_kwargs.as_ref())
+    }
+
     fn stt_fallback_capabilities(entries: Vec<SttCapabilities>) -> SttCapabilities {
         crate::fallback::merge_stt_capabilities(&entries)
     }

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+from livekit import rtc
+
 class AudioEmitter:
     def __init__(self, *, label: str, dst_ch: object) -> None: ...
     def initialize(

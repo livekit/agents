@@ -241,7 +241,7 @@ fn ambiguous_or_unsupported_declarations_fail_generation() {
 // accepted anywhere but beside its source.
 #[test]
 fn a_sink_and_its_source_are_one_duplex_stream_class() {
-    let control = "use super::chat::Chunk;\nuse crate::utils::stream::StreamSink;\npub trait Audio: StreamSink<Chunk> { #[host(call)] fn retune(&self, #[host(kw, default = None)] model: Option<String>); }";
+    let control = "use super::chat::Chunk;\nuse crate::utils::stream::StreamSink;\n#[crate::host(sink)]\npub trait Audio: StreamSink<Chunk> { #[host(call)] fn retune(&self, #[host(kw, default = None)] model: Option<String>); }";
     let declare = |body: &str| {
         format!(
             "{}\npub mod audio {{ {control} }}",
@@ -267,7 +267,7 @@ fn a_sink_and_its_source_are_one_duplex_stream_class() {
         "pub struct Live(::std::boxed::Box<LiveImpl>, ::lk_agents_runtime::source::NativeSource<::lk_agents_abi::llm::chat::Report>);",
         "::lk_agents_abi::StreamSink::push(&*self.0, item).map_err(|e: ::lk_agents_abi::errors::ProviderError|",
         "fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {\n        ::lk_agents_abi::python::check_pid()?;\n        ::lk_agents_abi::StreamSink::end_input(&*self.0);",
-        "<LiveImpl as ::lk_agents_abi::llm::class::audio::Audio>::retune(&self.0, model)",
+        "<LiveImpl as ::lk_agents_abi::llm::class::audio::Audio>::retune(&*self.0, model)",
         "{ let (sink, source) = out; Live(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) }",
     ] {
         assert!(llm.contains(expected), "{expected}\n{llm}");

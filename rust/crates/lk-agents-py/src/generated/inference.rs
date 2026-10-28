@@ -231,6 +231,17 @@ pub fn tts_normalize_fallback_str(model: ::std::string::String) -> PyResult<::lk
     Ok(out)
 }
 
+/// `inference.STT`'s capabilities. Word alignment holds only when the model and every
+/// `fallback` model align: any turn may be served by a fallback, and a false claim disables
+/// the fast VAD interruption path.
+#[pyfunction]
+#[pyo3(signature = (model = None, *, fallback = None, extra_kwargs = None))]
+pub fn stt_capabilities(model: ::std::option::Option<::std::string::String>, fallback: ::std::option::Option<::std::vec::Vec<::std::string::String>>, extra_kwargs: Option<Bound<'_, PyAny>>) -> PyResult<::lk_agents_abi::SttCapabilities> {
+    let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_capabilities(model, fallback, extra_kwargs);
+    Ok(out)
+}
+
 /// `stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
 #[pyfunction]
 #[pyo3(signature = (entries))]

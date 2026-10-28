@@ -585,6 +585,16 @@ pub trait InferenceModels {
     #[host(function)]
     fn tts_normalize_fallback_str(model: String) -> fallback::TtsFallbackModel;
 
+    /// `inference.STT`'s capabilities. Word alignment holds only when the model and every
+    /// `fallback` model align: any turn may be served by a fallback, and a false claim disables
+    /// the fast VAD interruption path.
+    #[host(function)]
+    fn stt_capabilities(
+        #[host(default = None)] model: Option<String>,
+        #[host(kw, default = None)] fallback: Option<Vec<String>>,
+        #[host(default = None)] extra_kwargs: Option<serde_json::Map<String, Value>>,
+    ) -> crate::SttCapabilities;
+
     /// `stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built.
     #[host(function)]
     fn stt_fallback_capabilities(

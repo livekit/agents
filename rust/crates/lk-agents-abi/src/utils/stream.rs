@@ -64,6 +64,55 @@ pub trait StreamSource<T>: Send {
     fn report_retries(&mut self, _report: RetryReport) {}
 }
 
+/// A boxed sink is the sink it holds.
+impl<T, S: StreamSink<T> + ?Sized> StreamSink<T> for Box<S> {
+    fn push(&self, item: T) -> Result<(), ProviderError> {
+        S::push(self, item)
+    }
+
+    fn flush(&self) -> Result<(), ProviderError> {
+        S::flush(self)
+    }
+
+    fn end_input(&self) {
+        S::end_input(self)
+    }
+}
+
+/// A boxed source is the source it holds, every capability included.
+impl<T, S: StreamSource<T> + ?Sized> StreamSource<T> for Box<S> {
+    fn next(&mut self) -> crate::BoxFuture<'_, Result<Option<T>, ProviderError>> {
+        S::next(self)
+    }
+
+    fn cancel_safe(&self) -> bool {
+        S::cancel_safe(self)
+    }
+
+    fn close(self: Box<Self>, deadline: Ts) -> crate::BoxFuture<'static, Closed> {
+        S::close(*self, deadline)
+    }
+
+    fn started_time(&self) -> Option<f64> {
+        S::started_time(self)
+    }
+
+    fn take_call_metrics(
+        &mut self,
+        in_flight: bool,
+    ) -> Option<Vec<crate::metrics::base::AgentMetrics>> {
+        S::take_call_metrics(self, in_flight)
+    }
+
+    fn call_ledger(&self) -> Option<CallLedger> {
+        S::call_ledger(self)
+    }
+
+    fn report_retries(&mut self, report: RetryReport) {
+        S::report_retries(self, report)
+    }
+}
+
 /// Told of each failed attempt a stream retries.
 pub type RetryReport =
     std::sync::Arc<dyn Fn(crate::errors::ProviderError, u32, std::time::Duration) + Send + Sync>;

@@ -178,6 +178,10 @@ impl Resolver<'_> {
                 "{at}: a sink is bound by `StreamSink<T>` or an ABI trait over it"
             ));
         };
+        let declared = voc::read(&tr.attrs).map_err(|e| format!("{at}: {e}"))?;
+        if voc::find(&declared, "sink").is_none() {
+            return Err(format!("{at}: `{}` is declared #[host(sink)]", tr.ident));
+        }
         let over_sink = tr.supertraits.iter().any(|b| {
             matches!(b, syn::TypeParamBound::Trait(s)
                 if self.krate.resolve(module, &s.path).ok() == stream_sink)

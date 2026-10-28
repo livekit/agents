@@ -41,7 +41,7 @@ async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
     opts.conn_options =
         ApiConnectOptions { max_retry: 2, retry_interval: 0.0, ..Default::default() };
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let stt = NativeStt::new(opts, ws.clone(), spawner);
+    let stt: NativeStt = NativeStt::new(opts, ws.clone(), spawner);
     let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
     let err = lk_agents_abi::timeout(
         &lk_agents_abi::RealClock::new(),
@@ -66,7 +66,7 @@ async fn option_and_keyterm_changes_reach_an_open_stream() {
     }
     let mut extra = serde_json::Map::new();
     extra.insert("endpointing".into(), json!(300));
-    stt.update_options(None, Some("fr"), Some(&crate::extra::ExtraKwargs(extra)));
+    stt.update_options(None, Some("fr"), Some(&extra));
     stt.update_keyterms(&["LiveKit".into()]);
     for _ in 0..32 {
         tokio::task::yield_now().await;
@@ -86,7 +86,7 @@ async fn an_assistant_turn_reaches_an_open_stream_as_agent_context() {
     let mut opts = opts();
     opts.model = Some("assemblyai/universal-3-6-pro".into());
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let stt = NativeStt::new(opts, ws.clone(), spawner);
+    let stt: NativeStt = NativeStt::new(opts, ws.clone(), spawner);
     let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
     for _ in 0..32 {
         tokio::task::yield_now().await;
@@ -474,7 +474,7 @@ fn the_label_and_capabilities_come_from_the_configured_model() {
 
     let mut opts = opts();
     opts.model = None;
-    let unnamed = NativeStt::new(
+    let unnamed: NativeStt = NativeStt::new(
         opts,
         Arc::new(FakeWs::new(vec![])),
         Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
@@ -499,7 +499,7 @@ async fn a_session_update_is_not_starved_by_the_audio_stream() {
     for _ in 0..50 {
         sink.push(frame(800)).unwrap();
     }
-    sink.update_options(Some("deepgram/nova-2"), None, None);
+    sink.control.update_options(Some("deepgram/nova-2"), None, None);
     for _ in 0..200 {
         tokio::task::yield_now().await;
     }
@@ -521,7 +521,7 @@ async fn a_keyterm_change_mid_utterance_waits_for_the_end_of_speech() {
     // Let the start_of_speech land, then change the keyterms.
     assert_eq!(source.next().await.unwrap().unwrap().kind, SpeechEventType::StartOfSpeech);
     let extra = stt.update_session_keyterms(&["livekit".to_string()]).unwrap();
-    sink.apply_keyterms(extra);
+    sink.control.apply_keyterms(extra);
     for _ in 0..20 {
         tokio::task::yield_now().await;
     }
@@ -614,7 +614,7 @@ async fn stt_pump_close_saturation_joins_or_retains_incomplete_cleanup() {
         let (closing, mut observed) = tokio::sync::watch::channel(false);
         let (release, released) = tokio::sync::watch::channel(releases);
         let ws = Arc::new(ObservedWs { inner: FakeWs::new(vec![]).keep_open(), closing, released });
-        let provider = NativeStt::new(
+        let provider: NativeStt = NativeStt::new(
             opts(),
             ws.clone(),
             Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
@@ -686,7 +686,7 @@ async fn input_after_a_terminal_timeout_preserves_its_phase() {
     let mut options = opts();
     options.conn_options =
         ApiConnectOptions { max_retry: 0, total_timeout: Some(0.0), ..Default::default() };
-    let client = NativeStt::new(options, ws, Arc::new(TokioSpawner::current()));
+    let client: NativeStt = NativeStt::new(options, ws, Arc::new(TokioSpawner::current()));
     let (sink, mut source) = client.stream(None, None).await.unwrap().unwrap();
     let error = source.next().await.expect_err("the operation expired before launch");
     assert_eq!(error.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));

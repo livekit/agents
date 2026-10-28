@@ -465,19 +465,6 @@ def session_records(
 
 # --- inference -----------------------------------------------------------------------------------
 
-def stt_keyterms_extra_for_model(
-    model: str | None = None,
-    *,
-    extra_kwargs: dict[str, Any] | None = None,
-    session_keyterms: list[str] | None = None,
-) -> dict[str, Any] | None: ...
-def stt_capabilities(
-    model: str | None = None,
-    *,
-    fallback: list[str] | None = None,
-    extra_kwargs: dict[str, Any] | None = None,
-) -> Any: ...
-
 class EotThresholdOptions:
     """Shared between a detector and its stream: a stream's cloud-to-local fallback shows here."""
 

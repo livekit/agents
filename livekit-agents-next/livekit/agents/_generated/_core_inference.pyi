@@ -116,6 +116,17 @@ def stt_normalize_fallback_str(model: str) -> dict[str, object]:
 def tts_normalize_fallback_str(model: str) -> dict[str, object]:
     """`_normalize_fallback`'s string arm for a TTS chain."""
 
+def stt_capabilities(
+    model: str | None = None,
+    *,
+    fallback: Sequence[str] | None = None,
+    extra_kwargs: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """`inference.STT`'s capabilities. Word alignment holds only when the model and every
+    `fallback` model align: any turn may be served by a fallback, and a false claim disables
+    the fast VAD interruption path.
+    """
+
 def stt_fallback_capabilities(entries: Sequence[STTCapabilities]) -> dict[str, object]:
     """`stt.FallbackAdapter`'s capabilities, merged from its members' before any chain is built."""
 

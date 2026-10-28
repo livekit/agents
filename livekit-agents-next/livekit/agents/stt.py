@@ -220,7 +220,7 @@ class StreamAdapterWrapper(RecognizeStream):
             native,
             self.input,
             lambda item: (
-                native.flush() if isinstance(item, self.Flush) else native.push_frame(item)
+                native.flush() if isinstance(item, self.Flush) else native.push(item)
             ),
             lambda ev: self.send(_speech_event_from_core(ev)),
         )

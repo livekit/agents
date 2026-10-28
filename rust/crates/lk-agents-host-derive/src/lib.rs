@@ -188,6 +188,7 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// | `object` | inherent `impl` | `#[pymethods]` on the type's class, or a cell class over it |
 /// | `proxy` | trait | `impl Trait for Py<Trait><B: HostBridge>`: the core calling a host object; nothing when its methods declare `await`/`notify` (the proxy is generated, `lk-agents-codegen`'s `decl`) |
 /// | `class` / `functions` | trait | nothing: a declaration-model class or module functions (`lk-agents-codegen`'s `decl`), adapters generated |
+/// | `sink` | trait | nothing: a duplex stream class's input half, its `call`s methods of that class (`lk-agents-codegen`'s `decl`) |
 /// | `handwritten` | a type | nothing: declares that it crosses by its own pyo3 conversions |
 /// | `record` | a struct or enum | nothing: a schema-defined record; `lk-agents-codegen` writes its model and its conversions (`src/python/generated/`) |
 /// | `stream` | the source type of a stream pair | the Rust->host stream class (`recv`/`aclose`/`push`..) |
@@ -225,7 +226,7 @@ pub fn host(attr: TokenStream, item: TokenStream) -> TokenStream {
 use lk_agents_bindgen::to_snake;
 
 /// What each item takes, for a head on the wrong item.
-const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy`/`native`/`class`/`functions` on a trait, `handwritten`/`record` on a type, \
+const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy`/`native`/`class`/`functions`/`sink` on a trait, `handwritten`/`record` on a type, \
     `stream` on a type, `client`/`kwargs` on a struct, `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
     `file` on `const _`, `constant` on a `pub const` (written into its file's Python module), or `group` on an inline mod";
 
@@ -244,7 +245,7 @@ fn expand_host(
         (&parsed, head.as_deref()),
         (I::Fn(_) | I::Const(_) | I::Impl(_), Some("export"))
             | (I::Impl(_), Some("object"))
-            | (I::Trait(_), Some("proxy" | "native" | "class" | "functions"))
+            | (I::Trait(_), Some("proxy" | "native" | "class" | "functions" | "sink"))
             | (I::Enum(_) | I::Struct(_), Some("handwritten" | "record"))
             | (I::Type(_) | I::Struct(_), Some("stream"))
             | (I::Struct(_), Some("client" | "kwargs"))

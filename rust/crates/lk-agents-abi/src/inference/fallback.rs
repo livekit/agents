@@ -21,6 +21,7 @@ use lk_agents_host_derive::Host;
     name = "FallbackModel"
 )]
 #[binding(emit)]
+#[crate::host(handwritten(extract))]
 pub struct SttFallbackModel {
     /// Model name (e.g. "deepgram/nova-3", "assemblyai/universal-streaming", "cartesia/ink-whisper").
     #[python(ty = "Required[str]", import = "typing_extensions:Required")]

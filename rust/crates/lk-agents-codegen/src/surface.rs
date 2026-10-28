@@ -38,8 +38,6 @@ const HANDWRITTEN: &[&str] = &[
     "resolve_host_ref",
     "run_shutdown_callbacks",
     "session_records",
-    "stt_capabilities",
-    "stt_keyterms_extra_for_model",
     "stt_node",
     "tts_node",
 ];

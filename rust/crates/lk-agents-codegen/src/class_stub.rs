@@ -127,6 +127,13 @@ impl Imports {
 
     /// A handwritten scalar union can refer to the generated records beside its declaration.
     fn annotation(&mut self, text: &str, rust: &str) {
+        // `rtc.AudioFrame`: the host SDK module the annotation names.
+        if text
+            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.')
+            .any(|t| t.starts_with("rtc."))
+        {
+            self.add("livekit", "rtc");
+        }
         let Some((module, _)) = rust.rsplit_once("::") else { return };
         let records: Vec<_> = self
             .1
