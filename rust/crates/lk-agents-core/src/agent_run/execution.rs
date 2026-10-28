@@ -17,16 +17,16 @@ fn stored(message: &ChatMessage) -> Option<Execution> {
 
 /// The pending conversational identity recorded by the latest user turn.
 pub fn pending(history: &[ChatItem]) -> Option<String> {
-    history
-        .iter()
-        .rev()
-        .find_map(|item| match item {
-            ChatItem::Message(message) if message.role == Role::User => Some(message),
-            _ => None,
-        })
-        .and_then(stored)
-        .filter(|state| state.pending)
-        .map(|state| state.id)
+    pending_turn(history).map(|(_, id)| id)
+}
+
+/// The latest user turn's position and identity, when its execution is waiting on the person.
+pub fn pending_turn(history: &[ChatItem]) -> Option<(usize, String)> {
+    let (at, message) = history.iter().enumerate().rev().find_map(|(at, item)| match item {
+        ChatItem::Message(message) if message.role == Role::User => Some((at, message)),
+        _ => None,
+    })?;
+    stored(message).filter(|state| state.pending).map(|state| (at, state.id))
 }
 
 /// The transport owns A2A identity. A direct human reply continues the last pending execution;

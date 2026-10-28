@@ -179,3 +179,29 @@ fn approval_survives_output_validation_feedback_in_the_answering_invocation() {
     second.prepared(call, validated);
     assert_eq!(second.executes().len(), 1, "validation feedback does not answer a read-back");
 }
+
+// Catches: an A2A continuation never granting the repeat, because the door wrote the person's
+// answer over the waiting output before the run started and the run counted only the answers it
+// wrote itself; or because stored history read the JSON identity back as the arguments object.
+#[test]
+fn a_read_back_the_transport_answered_grants_the_repeat() {
+    let validated = json!({"date": "Monday", "notify": true});
+    let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
+    let mut history = first.result().all_messages.clone();
+    for item in &mut history {
+        match item {
+            ChatItem::FunctionCallOutput(o) => o.output = "yes".into(),
+            ChatItem::FunctionCall(c) => {
+                let stored = c.extra[approval::APPROVAL_IDENTITY_KEY].as_str().unwrap();
+                let read_back = serde_json::from_str(stored).unwrap();
+                c.extra.insert(approval::APPROVAL_IDENTITY_KEY.into(), read_back);
+            }
+            _ => {}
+        }
+    }
+    let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
+    second.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
+    let (call, _) = second.prepares()[0].clone();
+    second.prepared(call, validated);
+    assert_eq!(second.executes().len(), 1, "the approved repeat runs");
+}

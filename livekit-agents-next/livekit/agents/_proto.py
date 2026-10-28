@@ -6,6 +6,7 @@ every path that puts a ChatItem on the wire can share one implementation.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
@@ -90,14 +91,12 @@ def encode_chat_item(item: ChatItem) -> _pb.ChatContext.ChatItem:
                 role=ROLES[item.role],
                 content=content,
                 metrics=encode_metrics(item.metrics),
-                extra={k: str(v) for k, v in item.extra.items()},
+                extra=_encode_extra(item.extra),
             )
         )
     elif item.type == "function_call":
         return _pb.ChatContext.ChatItem(
-            function_call=encode_by_name(
-                _pb.FunctionCall, item, extra={k: str(v) for k, v in item.extra.items()}
-            )
+            function_call=encode_by_name(_pb.FunctionCall, item, extra=_encode_extra(item.extra))
         )
     elif item.type == "function_call_output":
         return _pb.ChatContext.ChatItem(
@@ -136,7 +135,7 @@ def decode_chat_item(pb: _pb.ChatContext.ChatItem) -> ChatItem:
             transcript_confidence=(
                 m.transcript_confidence if m.HasField("transcript_confidence") else None
             ),
-            extra=dict(m.extra),
+            extra=_decode_extra(m.extra),
             metrics=cast(Any, _decode_fields(m.metrics)),
             **_created_at(m),
         )
@@ -147,7 +146,7 @@ def decode_chat_item(pb: _pb.ChatContext.ChatItem) -> ChatItem:
             call_id=f.call_id,
             arguments=f.arguments,
             name=f.name,
-            extra=dict(f.extra),
+            extra=_decode_extra(f.extra),
             **_created_at(f),
         )
     if kind == "function_call_output":
@@ -178,6 +177,25 @@ def decode_chat_item(pb: _pb.ChatContext.ChatItem) -> ChatItem:
             **_created_at(c),
         )
     raise ValueError("a chat item without an item")
+
+
+def _encode_extra(extra: Mapping[str, Any]) -> dict[str, str]:
+    """The proto's ``extra`` holds strings: any other value as compact JSON, as the core writes it."""
+    return {
+        k: v if isinstance(v, str) else json.dumps(v, separators=(",", ":"))
+        for k, v in extra.items()
+    }
+
+
+def _decode_extra(extra: Mapping[str, str]) -> dict[str, Any]:
+    """``extra`` as the core reads it: JSON values decoded, any other string kept."""
+    decoded: dict[str, Any] = {}
+    for k, v in extra.items():
+        try:
+            decoded[k] = json.loads(v)
+        except ValueError:
+            decoded[k] = v
+    return decoded
 
 
 def _created_at(msg: Any) -> dict[str, float]:

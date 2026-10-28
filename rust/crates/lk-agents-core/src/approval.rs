@@ -84,20 +84,29 @@ pub fn granted<'a>(
     identity: &str,
 ) -> bool {
     // The identity of the latest answered, unconsumed read-back.
-    let mut open: Option<&str> = None;
+    let mut open: Option<String> = None;
     for item in items {
         let ChatItem::FunctionCall(call) = item else { continue };
         if call.name != tool {
             continue;
         }
-        let decided = call.extra.get(APPROVAL_IDENTITY_KEY).and_then(Value::as_str);
+        let decided = call.extra.get(APPROVAL_IDENTITY_KEY).map(decided_identity);
         match mark(call) {
             Some(Approval::Granted) if decided.is_some() && decided == open => open = None,
             Some(Approval::Asked) => open = decided.filter(|_| answered.contains(&call.call_id)),
             _ => {}
         }
     }
-    open == Some(identity)
+    open.as_deref() == Some(identity)
+}
+
+/// The identity a call was decided on. Stored history keeps `extra` as strings and reads JSON
+/// back as values, so a JSON identity may return as the arguments object it spells.
+fn decided_identity(value: &Value) -> String {
+    match value {
+        Value::String(identity) => identity.clone(),
+        arguments => canonical_json(arguments),
+    }
 }
 
 /// The call's approval mark, if it has one.
