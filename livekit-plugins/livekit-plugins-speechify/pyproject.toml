@@ -24,8 +24,8 @@ classifiers = [
 dependencies = [
     "livekit-agents-next[codecs]>=1.8.6",
     "speechify-api>=4.0.0",
-    # The client we own and pass into speechify-api. The SDK still depends on httpx v1.
-    "httpx2>=2.12,<3",
+    # The client we own and pass into speechify-api. The SDK requires an httpx v1 client.
+    "httpx>=0.28.1,<1",
 ]
 
 [project.urls]

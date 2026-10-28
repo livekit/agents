@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import base64
 
-import httpx2 as httpx
+import httpx
 import pytest
+from speechify.client import AsyncSpeechify
 from speechify.types.error_detail import ErrorDetail
 from speechify.types.nested_chunk import NestedChunk
 from speechify.types.speech_stream_event import (
@@ -21,7 +22,7 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.types import NOT_GIVEN, USERDATA_TIMED_TRANSCRIPT
-from livekit.plugins.speechify import tts as sfy_tts
+from livekit.plugins.speechify import TTS, tts as sfy_tts
 
 pytestmark = pytest.mark.unit
 
@@ -360,3 +361,40 @@ def test_warn_voice_model_compat(caplog: pytest.LogCaptureFixture) -> None:
         sfy_tts._warn_voice_model_compat("henry", "simba-english")
         sfy_tts._warn_voice_model_compat("henry", "simba-3.2")
         assert not caplog.records
+
+
+@pytest.mark.asyncio
+async def test_list_voices_consumes_sdk_pagination() -> None:
+    requests: list[str | None] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        cursor = request.url.params.get("cursor")
+        requests.append(cursor)
+        return httpx.Response(
+            200,
+            json={
+                "voices": [
+                    {
+                        "id": "first" if cursor is None else "second",
+                        "display_name": "Voice",
+                        "gender": "notSpecified",
+                        "locale": "en-US",
+                        "models": [],
+                        "type": "shared",
+                    }
+                ],
+                "has_more": cursor is None,
+                "next_cursor": "page-2" if cursor is None else None,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client = AsyncSpeechify(token="test", httpx_client=http_client)
+        provider = TTS(client=client)
+        try:
+            voices = await provider.list_voices()
+            assert [voice.id for voice in voices] == ["first", "second"]
+            assert [voice.gender for voice in voices] == ["neutral", "neutral"]
+            assert requests == [None, "page-2"]
+        finally:
+            await provider.aclose()

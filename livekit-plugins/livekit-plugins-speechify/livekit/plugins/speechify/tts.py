@@ -19,9 +19,9 @@ import base64
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Literal, NotRequired, TypedDict, cast
 
-import httpx2 as httpx
+import httpx
 
 from livekit.agents import (
     APIConnectionError,
@@ -44,7 +44,10 @@ from speechify.client import AsyncSpeechify
 from speechify.core.api_error import ApiError
 from speechify.core.request_options import RequestOptions
 from speechify.environment import SpeechifyEnvironment
+from speechify.types.get_speech_options_request import GetSpeechOptionsRequest
+from speechify.types.get_stream_options_request import GetStreamOptionsRequest
 from speechify.types.get_voice import GetVoice
+from speechify.types.nested_chunk import NestedChunk
 from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechChunk,
     SpeechStreamEvent_SpeechError,
@@ -58,7 +61,7 @@ DEFAULT_VOICE_ID = "dominic_32"
 DEFAULT_MODEL: TTSModels = "simba-3.2"
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
-AUDIO_FORMAT = "pcm"
+AUDIO_FORMAT: Literal["pcm"] = "pcm"
 MIME_TYPE = "audio/pcm"
 CALLER_HEADER = "Speechify-Caller"
 CALLER_VERSION_HEADER = "Speechify-Caller-Version"
@@ -113,7 +116,7 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         client: AsyncSpeechify | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> None:
         """Create a new instance of Speechify TTS.
 
@@ -171,14 +174,7 @@ class TTS(tts.TTS):
                     "Speechify API key is required, either as the api_key argument "
                     "or via the SPEECHIFY_API_KEY environment variable"
                 )
-            # Fixed httpx2.AsyncClient default header so every request the SDK
-            # issues is attributed to this integration, regardless of call site.
-            # Timeout/limits mirror the openai plugin's owned-client defaults —
-            # the client's own 5s default is too short for longer synthesis requests.
-            # speechify-api types this argument as httpx.AsyncClient and only
-            # retries httpx.ConnectError. request/stream still work against
-            # httpx2; _raise_from maps the httpx2 errors onto APIError so the
-            # TTS retry loop runs.
+            # Reuse the SDK's HTTP client type so its transport errors retain their taxonomy.
             self._httpx_client = httpx.AsyncClient(
                 headers={CALLER_HEADER: "livekit", CALLER_VERSION_HEADER: __version__},
                 timeout=httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=5.0),
@@ -189,7 +185,7 @@ class TTS(tts.TTS):
             self._client = AsyncSpeechify(
                 token=resolved_key,
                 base_url=self._base_url,
-                httpx_client=self._httpx_client,  # type: ignore[arg-type]
+                httpx_client=self._httpx_client,
             )
 
         self._tokenizer = tokenizer if is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
@@ -241,8 +237,8 @@ class TTS(tts.TTS):
 
     async def list_voices(self) -> list[Voice]:
         """List the voices available for the configured Speechify account."""
-        sdk_voices: list[GetVoice] = await self._client.voices.list()
-        return [_voice_from_sdk(v) for v in sdk_voices]
+        sdk_voices = await self._client.voices.list()
+        return [_voice_from_sdk(v) async for v in sdk_voices]
 
     def update_options(
         self,
@@ -281,14 +277,36 @@ class TTS(tts.TTS):
         return SynthesizeStream(tts=self, conn_options=conn_options)
 
 
-def _request_kwargs(text: str, opts: _TTSOptions) -> dict[str, object]:
+class _Request(TypedDict):
+    input: str
+    voice_id: str
+    model: NotRequired[TTSModels]
+    language: NotRequired[str]
+
+
+class _SpeechRequest(_Request):
+    audio_format: Literal["pcm"]
+    options: NotRequired[GetSpeechOptionsRequest]
+
+
+class _StreamRequest(_Request):
+    output_format: Literal["pcm_24000"]
+    options: NotRequired[GetStreamOptionsRequest]
+
+
+def _normalization_options(opts: _TTSOptions) -> dict[str, bool]:
     options: dict[str, bool] = {}
     if is_given(opts.loudness_normalization):
         options["loudness_normalization"] = opts.loudness_normalization
     if is_given(opts.text_normalization):
         options["text_normalization"] = opts.text_normalization
+    return options
 
-    kwargs: dict[str, object] = {
+
+def _request_kwargs(text: str, opts: _TTSOptions) -> _SpeechRequest:
+    options = _normalization_options(opts)
+
+    kwargs: _SpeechRequest = {
         "audio_format": AUDIO_FORMAT,
         "input": text,
         "voice_id": opts.voice_id,
@@ -298,28 +316,24 @@ def _request_kwargs(text: str, opts: _TTSOptions) -> dict[str, object]:
     if is_given(opts.language):
         kwargs["language"] = opts.language
     if options:
-        kwargs["options"] = options
+        kwargs["options"] = GetSpeechOptionsRequest(**options)
     return kwargs
 
 
-def _stream_request_kwargs(text: str, opts: _TTSOptions) -> dict[str, object]:
-    options: dict[str, bool] = {}
-    if is_given(opts.loudness_normalization):
-        options["loudness_normalization"] = opts.loudness_normalization
-    if is_given(opts.text_normalization):
-        options["text_normalization"] = opts.text_normalization
+def _stream_request_kwargs(text: str, opts: _TTSOptions) -> _StreamRequest:
+    options = _normalization_options(opts)
 
-    kwargs: dict[str, object] = {
+    kwargs: _StreamRequest = {
         "input": text,
         "voice_id": opts.voice_id,
-        "output_format": f"pcm_{SAMPLE_RATE}",
+        "output_format": "pcm_24000",
     }
     if is_given(opts.model):
         kwargs["model"] = opts.model
     if is_given(opts.language):
         kwargs["language"] = opts.language
     if options:
-        kwargs["options"] = options
+        kwargs["options"] = GetStreamOptionsRequest(**options)
     return kwargs
 
 
@@ -347,14 +361,14 @@ def _warn_voice_model_compat(voice_id: str, model: NotGivenOr[TTSModels]) -> Non
     )
 
 
-def _marks_to_timed(chunks: Iterable[object], offset: float) -> list[TimedString]:
+def _marks_to_timed(chunks: Iterable[NestedChunk], offset: float) -> list[TimedString]:
     out: list[TimedString] = []
     for chunk in chunks:
-        value = getattr(chunk, "value", None)
-        start = getattr(chunk, "start_time", None)
+        value = chunk.value
+        start = chunk.start_time
         if value is None or start is None:
             continue
-        end = getattr(chunk, "end_time", None)
+        end = chunk.end_time
         out.append(
             TimedString(
                 text=value,
@@ -363,13 +377,6 @@ def _marks_to_timed(chunks: Iterable[object], offset: float) -> list[TimedString
             )
         )
     return out
-
-
-def _timed_transcript(speech_marks: object, offset: float) -> list[TimedString]:
-    chunks = getattr(speech_marks, "chunks", None)
-    if not chunks:
-        return []
-    return _marks_to_timed(chunks, offset)
 
 
 async def _synthesize_text(
@@ -405,7 +412,7 @@ async def _synthesize_text(
             **_request_kwargs(text, opts), request_options=request_options
         )
         audio = base64.b64decode(response.audio_data)
-        timed = _timed_transcript(response.speech_marks, offset)
+        timed = _marks_to_timed(response.speech_marks.chunks, offset)
         if timed:
             output_emitter.push_timed_transcript(timed)
         output_emitter.push(audio)
@@ -457,7 +464,7 @@ def _raise_from(e: Exception) -> None:
     raise e
 
 
-def _check_deprecated_args(kwargs: dict[str, Any]) -> None:
+def _check_deprecated_args(kwargs: dict[str, object]) -> None:
     """Warn about kwargs from earlier plugin versions that no longer apply."""
     removed = {
         "encoding": "output is fixed to 24 kHz PCM",
