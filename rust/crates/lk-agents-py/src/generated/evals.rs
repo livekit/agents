@@ -110,12 +110,12 @@ impl EvaluationHostProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::evals::EvaluationHost>(|obj| EvaluationHostProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
-    async fn evaluate(&self, evaluator: &::lk_agents_abi::HostRef) -> ::std::result::Result<::lk_agents_abi::evals::Judgment, ::lk_agents_abi::errors::HostError> {
+    fn evaluate<'a>(&'a self, evaluator: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::lk_agents_abi::evals::Judgment, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let evaluator_arg = ::std::clone::Clone::clone(evaluator);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(evaluator_arg, py)?];
@@ -131,6 +131,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
             let o = out.bind(py);
             let out = (crate::generated::records::evals::judgment_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 }

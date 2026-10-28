@@ -158,10 +158,12 @@ impl Llm for Verdicts {
 /// The application's evaluator: a fixed judgment, or a failure.
 struct Host(Result<Judgment, &'static str>);
 
-#[async_trait]
 impl EvaluationHost for Host {
-    async fn evaluate(&self, _evaluator: &HostRef) -> Result<Judgment, HostError> {
-        self.0.clone().map_err(HostError::new)
+    fn evaluate<'a>(
+        &'a self,
+        _evaluator: &'a HostRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Judgment, HostError>> {
+        Box::pin(async move { self.0.clone().map_err(HostError::new) })
     }
 }
 

@@ -4,8 +4,6 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-
 use crate::errors::HostError;
 use crate::utils::host_ref::HostRef;
 use crate::{ChatItem, CompletionUsage, Llm};
@@ -78,10 +76,12 @@ pub struct InvalidJudgment(pub String);
 /// The host side of one evaluation: runs an application evaluator on the conversation under
 /// evaluation, with the evaluation's model.
 #[crate::host(proxy(host = "livekit.agents.evals._Evaluation"))]
-#[async_trait]
 pub trait EvaluationHost: Send + Sync {
     #[host(await)]
-    async fn evaluate(&self, evaluator: &HostRef) -> Result<Judgment, HostError>;
+    fn evaluate<'a>(
+        &'a self,
+        evaluator: &'a HostRef,
+    ) -> crate::BoxFuture<'a, Result<Judgment, HostError>>;
 }
 
 /// Runs judges on one model. A model the host implements is offered `tools`, the host's live

@@ -6,7 +6,6 @@
 pub mod assertions;
 pub mod run;
 
-use async_trait::async_trait;
 use serde_json::{Map, Value};
 
 use crate::errors::HostError;
@@ -137,56 +136,55 @@ pub enum ValidatedOutput {
 /// its [`Invocation`] and runs in a copy of the host context it captured; the caller's context is
 /// never entered or changed.
 #[crate::host(proxy(host = "livekit.agents.voice.agent_host.AgentHost"))]
-#[async_trait]
 pub trait AgentHost: Send + Sync {
     /// The surrounding managed turn's verdict; true yields before a model call or delivery.
     #[host(await)]
-    async fn checkpoint(
-        &self,
-        #[host(context)] _invocation: &Invocation,
-    ) -> Result<bool, HostError> {
-        Ok(false)
+    fn checkpoint<'a>(
+        &'a self,
+        #[host(context)] _invocation: &'a Invocation,
+    ) -> crate::BoxFuture<'a, Result<bool, HostError>> {
+        Box::pin(async move { Ok(false) })
     }
 
     /// The `@agent.instructions` functions, rendered and joined.
     #[host(await)]
-    async fn render_instructions(
-        &self,
-        #[host(context)] invocation: &Invocation,
-    ) -> Result<String, HostError>;
+    fn render_instructions<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a Invocation,
+    ) -> crate::BoxFuture<'a, Result<String, HostError>>;
 
     /// Binds the call's arguments to the tool's signature and validates them, in the call's
     /// invocation scope.
     #[host(await)]
-    async fn prepare_tool(
-        &self,
-        #[host(context)] invocation: &Invocation,
+    fn prepare_tool<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a Invocation,
         arguments: Map<String, Value>,
-    ) -> Result<Result<PreparedArguments, ToolArgumentError>, HostError>;
+    ) -> crate::BoxFuture<'a, Result<Result<PreparedArguments, ToolArgumentError>, HostError>>;
 
     /// The tool's read-back function on the prepared arguments.
     #[host(await)]
-    async fn read_back(
-        &self,
-        #[host(context)] invocation: &Invocation,
-        prepared: &HostRef,
-    ) -> Result<ReadBackAnswer, HostError>;
+    fn read_back<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a Invocation,
+        prepared: &'a HostRef,
+    ) -> crate::BoxFuture<'a, Result<ReadBackAnswer, HostError>>;
 
     /// Runs the body with the prepared arguments and classifies what it returned or raised.
     #[host(await)]
-    async fn run_tool(
-        &self,
-        #[host(context)] invocation: &Invocation,
-        prepared: &HostRef,
-    ) -> Result<(ToolReport, Map<String, Value>), HostError>;
+    fn run_tool<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a Invocation,
+        prepared: &'a HostRef,
+    ) -> crate::BoxFuture<'a, Result<(ToolReport, Map<String, Value>), HostError>>;
 
     /// The output type, validators and output function on a candidate.
     #[host(await)]
-    async fn validate_output(
-        &self,
-        #[host(context)] invocation: &Invocation,
+    fn validate_output<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a Invocation,
         candidate: OutputCandidate,
-    ) -> Result<ValidatedOutput, HostError>;
+    ) -> crate::BoxFuture<'a, Result<ValidatedOutput, HostError>>;
 
     /// Cancels the callback in flight for `invocation` (its tool call, when it has one). Its
     /// awaited call still settles, with the cancellation as its outcome.
@@ -265,8 +263,10 @@ impl Default for Retries {
 /// reply (`Agent._render_dynamic_instructions`). `speech` is the reply's, as the host's
 /// `SpeechHandle` sees it.
 #[crate::host(proxy(host = "livekit.agents.voice.agent_session._DynamicInstructions"))]
-#[async_trait::async_trait]
 pub trait HostInstructions: Send + Sync {
     #[host(await, name = "_core_render")]
-    async fn render(&self, speech: &crate::CoreObject) -> Result<String, crate::errors::HostError>;
+    fn render<'a>(
+        &'a self,
+        speech: &'a crate::CoreObject,
+    ) -> crate::BoxFuture<'a, Result<String, crate::errors::HostError>>;
 }

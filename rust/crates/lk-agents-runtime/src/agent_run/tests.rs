@@ -163,84 +163,105 @@ impl FakeHost {
     }
 }
 
-#[async_trait]
 impl AgentHost for FakeHost {
-    async fn checkpoint(&self, _invocation: &Invocation) -> Result<bool, HostError> {
-        Ok(self.body == Body::YieldAfterTool
-            && self.seen.lock().unwrap().iter().any(|(callback, _)| *callback == "run"))
+    fn checkpoint<'a>(
+        &'a self,
+        _invocation: &'a Invocation,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<bool, HostError>> {
+        Box::pin(async move {
+            Ok(self.body == Body::YieldAfterTool
+                && self.seen.lock().unwrap().iter().any(|(callback, _)| *callback == "run"))
+        })
     }
 
-    async fn render_instructions(&self, invocation: &Invocation) -> Result<String, HostError> {
-        self.saw("instructions", invocation);
-        Ok(String::new())
+    fn render_instructions<'a>(
+        &'a self,
+        invocation: &'a Invocation,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<String, HostError>> {
+        Box::pin(async move {
+            self.saw("instructions", invocation);
+            Ok(String::new())
+        })
     }
 
-    async fn prepare_tool(
-        &self,
-        invocation: &Invocation,
+    fn prepare_tool<'a>(
+        &'a self,
+        invocation: &'a Invocation,
         arguments: Map<String, Value>,
-    ) -> Result<Result<PreparedArguments, ToolArgumentError>, HostError> {
-        self.saw("prepare", invocation);
-        Ok(Ok(PreparedArguments {
-            prepared: self.host_ref(),
-            identity: ArgumentIdentity::Json(Value::Object(arguments)),
-        }))
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Result<PreparedArguments, ToolArgumentError>, HostError>>
+    {
+        Box::pin(async move {
+            self.saw("prepare", invocation);
+            Ok(Ok(PreparedArguments {
+                prepared: self.host_ref(),
+                identity: ArgumentIdentity::Json(Value::Object(arguments)),
+            }))
+        })
     }
 
-    async fn read_back(
-        &self,
-        invocation: &Invocation,
-        _prepared: &HostRef,
-    ) -> Result<ReadBackAnswer, HostError> {
-        self.saw("read_back", invocation);
-        Ok(ReadBackAnswer::Question("Sure?".into()))
+    fn read_back<'a>(
+        &'a self,
+        invocation: &'a Invocation,
+        _prepared: &'a HostRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<ReadBackAnswer, HostError>> {
+        Box::pin(async move {
+            self.saw("read_back", invocation);
+            Ok(ReadBackAnswer::Question("Sure?".into()))
+        })
     }
 
-    async fn run_tool(
-        &self,
-        invocation: &Invocation,
-        _prepared: &HostRef,
-    ) -> Result<(ToolReport, serde_json::Map<String, Value>), HostError> {
-        self.saw("run", invocation);
-        match self.body {
-            Body::Returns | Body::YieldAfterTool => {}
-            Body::UntilCancelled => {
-                self.cancel.notified().await;
-                return Ok((ToolOutcome::Cancelled.into(), Default::default()));
+    fn run_tool<'a>(
+        &'a self,
+        invocation: &'a Invocation,
+        _prepared: &'a HostRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(ToolReport, serde_json::Map<String, Value>), HostError>>
+    {
+        Box::pin(async move {
+            self.saw("run", invocation);
+            match self.body {
+                Body::Returns | Body::YieldAfterTool => {}
+                Body::UntilCancelled => {
+                    self.cancel.notified().await;
+                    return Ok((ToolOutcome::Cancelled.into(), Default::default()));
+                }
+                Body::Stuck => std::future::pending::<()>().await,
+                Body::Reports => {
+                    let progress = self.progress.lock().unwrap().clone().expect("the run started");
+                    assert_eq!(progress.report(invocation.operation, "halfway".into()), Ok(()));
+                }
             }
-            Body::Stuck => std::future::pending::<()>().await,
-            Body::Reports => {
-                let progress = self.progress.lock().unwrap().clone().expect("the run started");
-                assert_eq!(progress.report(invocation.operation, "halfway".into()), Ok(()));
-            }
-        }
-        Ok((
-            ToolOutcome::Value {
-                text: "9:00 is free".into(),
-                reply_required: true,
-                verbatim: false,
-                more: None,
-            }
-            .into(),
-            [("application_receipt".into(), json!("confirmed-appointment"))].into_iter().collect(),
-        ))
+            Ok((
+                ToolOutcome::Value {
+                    text: "9:00 is free".into(),
+                    reply_required: true,
+                    verbatim: false,
+                    more: None,
+                }
+                .into(),
+                [("application_receipt".into(), json!("confirmed-appointment"))]
+                    .into_iter()
+                    .collect(),
+            ))
+        })
     }
 
-    async fn validate_output(
-        &self,
-        invocation: &Invocation,
+    fn validate_output<'a>(
+        &'a self,
+        invocation: &'a Invocation,
         candidate: OutputCandidate,
-    ) -> Result<ValidatedOutput, HostError> {
-        self.saw("validate", invocation);
-        let OutputCandidate::Value(_) = candidate else {
-            return Ok(ValidatedOutput::Retry("not text".into()));
-        };
-        Ok(ValidatedOutput::Accepted {
-            text: None,
-            value: Some(self.host_ref()),
-            serialized: Some(lk_agents_abi::agent::SerializedOutput {
-                value: serde_json::json!({"accepted": true}),
-            }),
+    ) -> lk_agents_abi::BoxFuture<'a, Result<ValidatedOutput, HostError>> {
+        Box::pin(async move {
+            self.saw("validate", invocation);
+            let OutputCandidate::Value(_) = candidate else {
+                return Ok(ValidatedOutput::Retry("not text".into()));
+            };
+            Ok(ValidatedOutput::Accepted {
+                text: None,
+                value: Some(self.host_ref()),
+                serialized: Some(lk_agents_abi::agent::SerializedOutput {
+                    value: serde_json::json!({"accepted": true}),
+                }),
+            })
         })
     }
 
