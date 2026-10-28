@@ -10,7 +10,7 @@ from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolPara
 from openai.types.shared.reasoning_effort import ReasoningEffort
 
 from .. import _bindings, _core, llm
-from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+from .._exceptions import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from .._generated.inference_llm import (
     ChatCompletionOptions,
     DeepSeekModels,
@@ -269,6 +269,19 @@ class LLMStream(llm.LLMStream):
         self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
+        options = self._conn_options
+        if options.total_timeout is not None:
+            raise APIError(
+                "OpenAI-compatible SDK cannot enforce total_timeout across framework attempts",
+                retryable=False,
+            )
+        timeout = httpx.Timeout(
+            connect=options.connect_timeout,
+            read=options.read_timeout,
+            write=options.write_timeout,
+            pool=options.pool_timeout,
+        )
+        client = self._client.with_options(max_retries=0)
         retryable = True
         parser = _core.LlmChoiceParser(self._model)
         try:
@@ -282,13 +295,13 @@ class LLMStream(llm.LLMStream):
             if self._provider:
                 headers[HEADER_INFERENCE_PROVIDER] = self._provider
 
-            stream = await self._client.chat.completions.create(
+            stream = await client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], messages),
                 tools=cast(list[ChatCompletionToolParam], schemas) or openai.omit,
                 model=self._model,
                 stream_options={"include_usage": True},
                 stream=True,
-                timeout=httpx.Timeout(self._conn_options.timeout),
+                timeout=timeout,
                 **extra,
             )
             async with stream:
@@ -302,8 +315,8 @@ class LLMStream(llm.LLMStream):
                         usage := _core.llm_usage_chunk(chunk.model_dump())
                     ):
                         self.send(llm.ChatChunk.model_validate(usage))
-        except openai.APITimeoutError:
-            raise APITimeoutError(retryable=retryable) from None
+        except openai.APITimeoutError as e:
+            raise APITimeoutError(retryable=retryable) from e
         except httpx.TimeoutException as e:
             raise APITimeoutError(retryable=retryable) from e
         except openai.APIStatusError as e:
@@ -322,7 +335,7 @@ class LLMStream(llm.LLMStream):
                 request_id=e.request_id,
                 body=e.body,
                 retryable=retryable,
-            ) from None
+            ) from e
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 

@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import anthropic
 import httpx2 as httpx
+import openai
 import pytest
 
 from livekit.agents import APIConnectOptions, APIError, APIStatusError, llm
-from livekit.plugins.anthropic import LLM
+from livekit.plugins.anthropic import LLM as AnthropicLLM
 from livekit.plugins.google.utils import genai_http_options
 from livekit.plugins.mistralai._http import request_timeout_ms
+from livekit.plugins.openai import LLM as OpenAILLM
 
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
 @pytest.mark.asyncio
-async def test_injected_anthropic_client_sends_one_attempt_and_keeps_its_policy() -> None:
+async def test_injected_sdk_client_sends_one_attempt_and_keeps_its_policy(provider: str) -> None:
     requests: list[httpx.Request] = []
 
     async def respond(request: httpx.Request) -> httpx.Response:
@@ -21,8 +24,14 @@ async def test_injected_anthropic_client_sends_one_attempt_and_keeps_its_policy(
         return httpx.Response(503, json={"error": {"type": "overloaded_error", "message": "busy"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
-        client = anthropic.AsyncClient(api_key="test", max_retries=4, http_client=transport)
-        model = LLM(client=client)
+        client: anthropic.AsyncClient | openai.AsyncClient
+        model: llm.LLM
+        if provider == "anthropic":
+            client = anthropic.AsyncClient(api_key="test", max_retries=4, http_client=transport)
+            model = AnthropicLLM(client=client)
+        else:
+            client = openai.AsyncClient(api_key="test", max_retries=4, http_client=transport)
+            model = OpenAILLM(client=client)
         try:
             stream = model.chat(
                 chat_ctx=llm.ChatContext.empty(),
@@ -73,7 +82,7 @@ async def test_fal_failure_does_not_trigger_hidden_sdk_attempts(
     import httpx as fal_httpx
 
     from livekit import rtc
-    from livekit.plugins.fal import WizperSTT, stt as fal_stt
+    from livekit.plugins.fal import WizperSTT
 
     requests: list[fal_httpx.Request] = []
 
@@ -84,7 +93,7 @@ async def test_fal_failure_does_not_trigger_hidden_sdk_attempts(
     transport = fal_httpx.MockTransport(respond)
     factory = fal_httpx.AsyncClient
     monkeypatch.setattr(
-        fal_stt.httpx, "AsyncClient", lambda **kwargs: factory(transport=transport, **kwargs)
+        fal_httpx, "AsyncClient", lambda **kwargs: factory(transport=transport, **kwargs)
     )
     model = WizperSTT(api_key="test")
     try:
