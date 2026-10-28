@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Generic, TypeVar
 
 from .. import _core
+from .._exceptions import APITimeoutError
 from ..log import logger
 from . import aio
 
@@ -26,9 +27,9 @@ class ConnectionPool(Generic[T]):
         *,
         max_session_duration: float | None = None,
         mark_refreshed_on_get: bool = False,
-        connect_cb: Callable[[float], Awaitable[T]] | None = None,
+        connect_cb: Callable[[float | None], Awaitable[T]] | None = None,
         close_cb: Callable[[T], Awaitable[None]] | None = None,
-        connect_timeout: float = 10.0,
+        connect_timeout: float | None = 10.0,
     ) -> None:
         """Initialize the connection wrapper.
 
@@ -55,7 +56,7 @@ class ConnectionPool(Generic[T]):
     def last_connection_reused(self) -> bool:
         return self._state.last_connection_reused
 
-    async def _connect(self, timeout: float, *, started_at: float | None = None) -> T:
+    async def _connect(self, timeout: float | None, *, started_at: float | None = None) -> T:
         if self._connect_cb is None:
             raise NotImplementedError("Must provide connect_cb or implement connect()")
         while True:
@@ -81,13 +82,15 @@ class ConnectionPool(Generic[T]):
             del self._conns[cid]
 
     @asynccontextmanager
-    async def connection(self, *, timeout: float) -> AsyncGenerator[T, None]:
+    async def connection(
+        self, *, timeout: float | None, pool_timeout: float | None = None
+    ) -> AsyncGenerator[T, None]:
         """Get a connection from the pool and automatically return it when done.
 
         Yields:
             An active connection object
         """
-        conn = await self.get(timeout=timeout)
+        conn = await self.get(timeout=timeout, pool_timeout=pool_timeout)
         try:
             yield conn
         except BaseException:
@@ -96,17 +99,32 @@ class ConnectionPool(Generic[T]):
         else:
             self.put(conn)
 
-    async def get(self, *, timeout: float) -> T:
+    async def get(self, *, timeout: float | None, pool_timeout: float | None = None) -> T:
         """Get an available connection or create a new one if needed.
 
         Returns:
             An active connection object
         """
-        async with self._connect_lock:
+        try:
+            async with asyncio.timeout(pool_timeout):
+                await self._connect_lock.acquire()
+        except TimeoutError as exc:
+            raise APITimeoutError(
+                "Timed out waiting for connection capacity", phase="pool"
+            ) from exc
+        try:
             await self._drain_to_close()
             if (cid := self._state.get(time.time())) is not None:
                 return self._conns[cid]
-            return await self._connect(timeout, started_at=time.perf_counter())
+            try:
+                async with asyncio.timeout(timeout):
+                    return await self._connect(timeout, started_at=time.perf_counter())
+            except TimeoutError as exc:
+                raise APITimeoutError(
+                    "Timed out establishing a connection", phase="connect"
+                ) from exc
+        finally:
+            self._connect_lock.release()
 
     def put(self, conn: T) -> None:
         """Mark a connection as available for reuse.

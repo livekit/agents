@@ -10,10 +10,42 @@ from collections.abc import AsyncIterator, Callable
 import aiohttp
 import certifi
 
+from .._exceptions import APIError
 from ..log import logger
+from ..types import APIConnectOptions
 
 _ClientFactory = Callable[[], aiohttp.ClientSession]
 _ContextVar = contextvars.ContextVar[_ClientFactory | None]("agent_http_session")
+
+
+def client_timeout(options: APIConnectOptions) -> aiohttp.ClientTimeout:
+    """Translate request limits that aiohttp can enforce without changing their scope."""
+    # aiohttp's `connect` includes pool acquisition; `sock_connect` excludes DNS.
+    # Neither represents our independent pool/connect phases, and there is no write timer.
+    for field, value in (
+        ("pool_timeout", options.pool_timeout),
+        ("connect_timeout", options.connect_timeout),
+        ("write_timeout", options.write_timeout),
+    ):
+        if value is not None:
+            raise APIError(f"aiohttp cannot enforce conn_options.{field}", retryable=False)
+    if options.total_timeout is not None and options.max_retry:
+        raise APIError(
+            "aiohttp cannot preserve conn_options.total_timeout across retries", retryable=False
+        )
+    # aiohttp interprets zero as disabled and rounds long deadlines by default.
+    for field, value in (
+        ("read_timeout", options.read_timeout),
+        ("total_timeout", options.total_timeout),
+    ):
+        if value == 0:
+            raise APIError(f"aiohttp cannot enforce a zero conn_options.{field}", retryable=False)
+    return aiohttp.ClientTimeout(
+        sock_connect=options.connect_timeout,
+        sock_read=options.read_timeout,
+        total=options.total_timeout,
+        ceil_threshold=float("inf"),
+    )
 
 
 def _has_system_trust_store() -> bool:

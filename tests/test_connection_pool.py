@@ -6,9 +6,38 @@ from aiohttp import RequestInfo, WSServerHandshakeError
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
+from livekit.agents import APITimeoutError
 from livekit.agents.utils import ConnectionPool
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
+
+@pytest.mark.asyncio
+async def test_pool_wait_expires_without_interrupting_the_connecting_caller():
+    connecting = asyncio.Event()
+    release = asyncio.Event()
+
+    async def connect(timeout: float | None):
+        connecting.set()
+        await release.wait()
+        return DummyConnection(1)
+
+    pool = ConnectionPool(connect_cb=connect)
+    first = asyncio.create_task(pool.get(timeout=None))
+    try:
+        await connecting.wait()
+        with pytest.raises(APITimeoutError) as error:
+            await pool.get(timeout=None, pool_timeout=0)
+        assert error.value.phase == "pool"
+        assert not first.done()
+        release.set()
+        connection = await first
+        pool.put(connection)
+        assert await pool.get(timeout=None, pool_timeout=0) is connection
+    finally:
+        release.set()
+        await first
+        await pool.aclose()
 
 
 class DummyConnection:
