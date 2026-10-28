@@ -6,9 +6,9 @@ call. SDK enums cross as the core's names, read through ``_core.rtc_wire_names()
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 from livekit import rtc
 
@@ -227,6 +227,7 @@ class RoomOptions:
 
 
 _CONNECTION, _DISCONNECT, _KINDS, _SOURCES, _FEATURES = _core.rtc_wire_names()
+_Chunk = TypeVar("_Chunk", bytes, str)
 
 
 def _name(names: list[str], value: int, unknown: str) -> str:
@@ -249,7 +250,7 @@ class Room:
         self._room = room
         self._bus = _core.RoomEventBus()
         self._local = LocalParticipant(self)
-        self._tasks: set[asyncio.Task[Any]] = set()
+        self._tasks: set[asyncio.Task[None]] = set()
         # SDK processing objects belonging to each live stream, also used for its buffered head.
         self._processors: dict[
             str,
@@ -311,10 +312,11 @@ class Room:
     def _publication(self, publication: rtc.TrackPublication) -> TrackPublication:
         return TrackPublication(self, publication)
 
-    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return task
 
     def _core_rtc(self) -> Room:
         return self
@@ -338,34 +340,61 @@ class Room:
     def _core_event_bus(self) -> _core.RoomEventBus:
         return self._bus
 
-    def _core_register_byte_stream_handler(self, topic: str, streams: Any) -> None:
-        async def _pump(reader: rtc.ByteStreamReader, sender: str) -> None:
-            if (chunks := streams.open(reader.info, sender)) is None:
-                return
-            async for chunk in reader:
-                if not chunks.push(chunk):
-                    break
-            chunks.close()
+    def _forward_stream(
+        self,
+        reader: AsyncIterator[_Chunk],
+        push: Callable[[_Chunk], bool],
+        close_sink: Callable[[], None],
+        close_reader: Callable[[], None],
+    ) -> None:
+        closed = False
 
-        self._room.register_byte_stream_handler(
-            topic, lambda reader, sender: self._spawn(_pump(reader, sender))
-        )
+        def close() -> None:
+            nonlocal closed
+            if closed:
+                return
+            closed = True
+            try:
+                close_sink()
+            finally:
+                close_reader()
+
+        async def pump() -> None:
+            try:
+                async for chunk in reader:
+                    if not push(chunk):
+                        break
+            finally:
+                close()
+
+        task = self._spawn(pump())
+        # Cancellation before the first poll never enters pump's finally block.
+        task.add_done_callback(lambda _: close())
+
+    def _core_register_byte_stream_handler(
+        self, topic: str, streams: _core.ByteStreamSender
+    ) -> None:
+        def opened(reader: rtc.ByteStreamReader, sender: str) -> None:
+            if (chunks := streams.open(reader.info, sender)) is None:
+                reader.close()
+                return
+            self._forward_stream(reader, chunks.push, chunks.close, reader.close)
+
+        self._room.register_byte_stream_handler(topic, opened)
 
     def _core_unregister_byte_stream_handler(self, topic: str) -> None:
         self._room.unregister_byte_stream_handler(topic)
 
-    def _core_register_text_stream_handler(self, topic: str, streams: Any) -> None:
-        async def _pump(reader: rtc.TextStreamReader, sender: str) -> None:
+    def _core_register_text_stream_handler(
+        self, topic: str, streams: _core.TextStreamSender
+    ) -> None:
+        def opened(reader: rtc.TextStreamReader, sender: str) -> None:
             if (chunks := streams.open(reader.info, sender)) is None:
+                reader.close()
                 return
-            async for chunk in reader:
-                if not chunks.push(chunk):
-                    break
-            chunks.close()
+            self._forward_stream(reader, chunks.push, chunks.close, reader.close)
 
-        self._room.register_text_stream_handler(
-            topic, lambda reader, sender: self._spawn(_pump(reader, sender))
-        )
+        self._room.register_text_stream_handler(topic, opened)
 
     def _core_unregister_text_stream_handler(self, topic: str) -> None:
         self._room.unregister_text_stream_handler(topic)
@@ -587,6 +616,7 @@ class TrackPublication:
         )
         stream = rtc.AudioStream.from_track(
             track=track,
+            capacity=opts.queue_capacity,
             sample_rate=opts.sample_rate or 48000,
             num_channels=opts.num_channels or 1,
             frame_size_ms=opts.frame_size_ms,
@@ -614,7 +644,9 @@ class TrackPublication:
 
     def _core_open_video_stream(self, frames: Any) -> None:
         async def _pump() -> None:
-            stream = rtc.VideoStream.from_track(track=self._publication.track)
+            stream = rtc.VideoStream.from_track(
+                track=self._publication.track, capacity=_core.video_queue_frames()
+            )
             try:
                 async for ev in stream:
                     frame = ev.frame

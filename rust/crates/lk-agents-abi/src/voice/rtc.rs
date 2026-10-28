@@ -201,8 +201,7 @@ impl std::error::Error for UnknownDisconnectReason {}
 
 /// `rtc.ParticipantKind`; must match the SDK's set, or an accepted participant is invisible. The
 /// host adapter folds an unknown kind to `standard`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[crate::host(wire_enum)]
 pub enum ParticipantKind {
     /// An unmapped kind must not make an accepted participant invisible.
@@ -219,8 +218,7 @@ pub enum ParticipantKind {
 wire_i32!(ParticipantKind, "ParticipantKind");
 
 /// `rtc.TrackSource`. The host adapter folds an unknown source to `unknown`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[crate::host(wire_enum)]
 pub enum TrackSource {
     #[default]
@@ -253,7 +251,8 @@ wire_i32!(AudioTrackFeature, "AudioTrackFeature");
 /// Each `ALL` array's names, indexed by wire value, for the host adapter's reads of SDK ints:
 /// `(connection states, disconnect reasons, participant kinds, track sources, audio features)`.
 #[crate::host(export(pid = false))]
-pub fn rtc_wire_names() -> (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>) {
+pub fn rtc_wire_names()
+-> (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>) {
     (
         ConnectionState::ALL.iter().map(|v| v.as_str()).collect(),
         DisconnectReason::ALL.iter().map(|v| v.as_str()).collect(),
@@ -350,6 +349,11 @@ impl AudioStreamOptions {
     #[host(getter)]
     pub fn frame_size_ms(&self) -> Option<u32> {
         self.frame_size_ms
+    }
+    /// Bound the SDK queue before frames reach the core's equally bounded input queue.
+    #[host(getter)]
+    pub fn queue_capacity(&self) -> usize {
+        crate::utils::bounded_lossy::AUDIO_QUEUE_FRAMES
     }
     /// The host's own object.
     #[host(getter)]
@@ -567,7 +571,11 @@ pub struct StreamInfo {
 
 /// `AudioOutputCapabilities`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(deny_unknown_fields)
+)]
 #[crate::class]
 pub struct AudioOutputCapabilities {
     pub pause: bool,
@@ -601,7 +609,6 @@ mod tests {
         assert_eq!(frame_duration(&normal) * 50, Duration::from_secs(1), "50 frames make a second");
         assert_eq!(frame_duration(&AudioFrame::new(vec![0u8; 64], 0, 1, 32)), Duration::ZERO);
     }
-
 
     // Catches: `silence_frame` allocating the wrong number of bytes, or non-zero ones.
     #[test]
@@ -644,10 +651,8 @@ mod tests {
     // Catches: the `close_on_disconnect` set drifting from `DEFAULT_CLOSE_ON_DISCONNECT_REASONS`.
     #[test]
     fn only_three_reasons_close_the_session() {
-        let closing: Vec<_> = DisconnectReason::ALL
-            .into_iter()
-            .filter(|r| r.closes_session_by_default())
-            .collect();
+        let closing: Vec<_> =
+            DisconnectReason::ALL.into_iter().filter(|r| r.closes_session_by_default()).collect();
         assert_eq!(
             closing,
             vec![
