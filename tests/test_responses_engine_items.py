@@ -413,6 +413,51 @@ async def test_second_message_without_hosted_call_still_dropped(
     assert records[0].__dict__["dropped_item_ids"] == ["m2"]
 
 
+async def test_two_hosted_calls_admit_only_one_answer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    reply = await _reply_over_ws(
+        _stream(
+            _message("m1", "Searching."),
+            _web_search_call("ws_1"),
+            _web_search_call("ws_2"),
+            _message("m2", "Result A."),
+            _message("m3", "Result B."),
+        )
+    )
+
+    assert reply.text == "Searching. Result A."
+    records = [
+        r for r in caplog.records if r.getMessage() == "dropped extra Responses output items"
+    ]
+    assert len(records) == 1
+    assert records[0].__dict__["dropped_item_ids"] == ["m3"]
+
+
+async def test_hosted_call_after_a_drop_admits_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    reply = await _reply_over_ws(
+        _stream(
+            _message("m1", "Result A."),
+            _message("m2", "Result B."),
+            _web_search_call("ws_1"),
+            _message("m3", "Result C."),
+        )
+    )
+
+    assert reply.text == "Result A."
+    records = [
+        r for r in caplog.records if r.getMessage() == "dropped extra Responses output items"
+    ]
+    assert len(records) == 1
+    assert records[0].__dict__["dropped_item_ids"] == ["m2", "m3"]
+
+
 async def test_dropped_message_phase_is_not_emitted() -> None:
     reply = await _reply_over_ws(
         _stream(
