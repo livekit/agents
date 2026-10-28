@@ -7,6 +7,14 @@ from __future__ import annotations
 
 from livekit.agents.types import APIConnectOptions
 
+def inference_resolve_api_key(explicit: str | None = None) -> str:
+    """`explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `LIVEKIT_API_KEY`; a set but empty
+    `LIVEKIT_INFERENCE_API_KEY` shadows `LIVEKIT_API_KEY` (`os.getenv(A, os.getenv(B, ""))`).
+    """
+
+def inference_resolve_api_secret(explicit: str | None = None) -> str:
+    """The same ladder for the secret."""
+
 class InferenceAvatar:
     """One avatar provisioned through LiveKit Inference: at most one provider session per instance,
     created under one operation identity, held until `aclose()` terminates it.

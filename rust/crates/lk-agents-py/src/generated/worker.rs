@@ -10,6 +10,27 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
+type ServerEnvironmentImpl = <crate::Selected as super::Implementations>::ServerEnvironment;
+
+/// Logical CPUs, fractional under a cgroup quota. Reads, starts nothing.
+#[pyfunction]
+pub fn cpu_count() -> PyResult<f64> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <ServerEnvironmentImpl as ::lk_agents_abi::worker::worker::ServerEnvironment>::cpu_count();
+    Ok(out)
+}
+
+/// `https://<project>/agents/<agent>/<deployment>` (`AgentServer._endpoint_url_base`), when
+/// the URL and the agent are known; a worker registered without a deployment is `default`.
+#[pyfunction]
+#[pyo3(signature = (ws_url, agent_name, deployment))]
+pub fn endpoint_url_base(ws_url: ::std::string::String, agent_name: ::std::string::String, deployment: ::std::string::String) -> PyResult<::std::option::Option<::std::string::String>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <ServerEnvironmentImpl as ::lk_agents_abi::worker::worker::ServerEnvironment>::endpoint_url_base(ws_url, agent_name, deployment);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/worker/cli.rs.
 type WorkerCliImpl = <crate::Selected as super::Implementations>::WorkerCli;
 

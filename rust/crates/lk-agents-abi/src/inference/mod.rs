@@ -448,3 +448,18 @@ pub mod gateway {
         pub const VAD_MODELS: &[&str] = &["silero"];
     }
 }
+
+/// The inference gateway's credential ladders (`inference/_utils.py`). Each returns `""` when
+/// nothing resolves: the caller raises with its own message, and tests the explicit value
+/// (truthiness vs `is_given`) itself.
+#[crate::host(functions)]
+pub trait InferenceCredentials {
+    /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `LIVEKIT_API_KEY`; a set but empty
+    /// `LIVEKIT_INFERENCE_API_KEY` shadows `LIVEKIT_API_KEY` (`os.getenv(A, os.getenv(B, ""))`).
+    #[host(function)]
+    fn inference_resolve_api_key(#[host(default = None)] explicit: Option<String>) -> String;
+
+    /// The same ladder for the secret.
+    #[host(function)]
+    fn inference_resolve_api_secret(#[host(default = None)] explicit: Option<String>) -> String;
+}

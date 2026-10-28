@@ -40,8 +40,6 @@ class Role(Enum):
     Job = ...
 
 def init(role: Role) -> None: ...
-def cpu_count() -> float:
-    """Logical CPUs, fractional under a cgroup quota; the worker sizes its defaults by it."""
 
 # --- the worker ----------------------------------------------------------------------------------
 
@@ -76,7 +74,6 @@ class EndpointServer:
         self, code: int = 1001, reason: str = "worker draining"
     ) -> Awaitable[None]: ...
 
-def endpoint_url_base(ws_url: str, agent_name: str, deployment: str) -> str | None: ...
 
 class ServerConfig:
     """``AgentServer``'s options, resolved against the environment; writable until it starts."""
@@ -500,8 +497,6 @@ def xml_tokenize(tokenize_fnc: Callable[[str], Any], text: str) -> list[tuple[st
 
 # --- inference -----------------------------------------------------------------------------------
 
-def inference_resolve_api_key(explicit: str | None = None) -> str: ...
-def inference_resolve_api_secret(explicit: str | None = None) -> str: ...
 def stt_keyterms_extra_for_model(
     model: str | None = None,
     *,

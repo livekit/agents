@@ -689,14 +689,6 @@ fn transport_for(routes: bool) -> TransportConfig {
 
 use crate::worker::server::{self, ServerSettings};
 
-/// `AgentServer._endpoint_url_base`.
-#[pyfunction]
-fn endpoint_url_base(ws_url: &str, agent_name: &str, deployment: &str) -> Option<String> {
-    server::endpoint_url_base(ws_url, agent_name, deployment)
-}
-
-lk_agents_abi::register_host!(fn endpoint_url_base);
-
 /// `AgentServer`'s options (`_core.ServerConfig`): what it was given, with the environment read
 /// where an option was left empty. Writable until the server starts.
 #[pyclass(name = "ServerConfig", module = "livekit.agents._core")]

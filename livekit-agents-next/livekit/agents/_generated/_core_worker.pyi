@@ -7,6 +7,14 @@ from __future__ import annotations
 
 from .worker_cli import CliArgs
 
+def cpu_count() -> float:
+    """Logical CPUs, fractional under a cgroup quota. Reads, starts nothing."""
+
+def endpoint_url_base(ws_url: str, agent_name: str, deployment: str) -> str | None:
+    """`https://<project>/agents/<agent>/<deployment>` (`AgentServer._endpoint_url_base`), when
+    the URL and the agent are known; a worker registered without a deployment is `default`.
+    """
+
 def parse_cli(argv: list[str]) -> CliArgs: ...
 
 def entrypoint_module(path: str | None) -> tuple[str, str]: ...

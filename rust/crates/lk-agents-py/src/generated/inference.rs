@@ -10,6 +10,28 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/inference/mod.rs.
+type InferenceCredentialsImpl = <crate::Selected as super::Implementations>::InferenceCredentials;
+
+/// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `LIVEKIT_API_KEY`; a set but empty
+/// `LIVEKIT_INFERENCE_API_KEY` shadows `LIVEKIT_API_KEY` (`os.getenv(A, os.getenv(B, ""))`).
+#[pyfunction]
+#[pyo3(signature = (explicit = None))]
+pub fn inference_resolve_api_key(explicit: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_resolve_api_key(explicit);
+    Ok(out)
+}
+
+/// The same ladder for the secret.
+#[pyfunction]
+#[pyo3(signature = (explicit = None))]
+pub fn inference_resolve_api_secret(explicit: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_resolve_api_secret(explicit);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/inference/avatar_session.rs.
 type InferenceAvatarImpl = <crate::Selected as super::Implementations>::InferenceAvatar;
 

@@ -38,6 +38,7 @@ pub trait Implementations: 'static {
     type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
     type JudgeRunner: ::lk_agents_abi::evals::JudgeRunner;
     type Evaluations: ::lk_agents_abi::evals::Evaluations;
+    type InferenceCredentials: ::lk_agents_abi::inference::InferenceCredentials;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
@@ -58,6 +59,7 @@ pub trait Implementations: 'static {
     type PreparedTranscript: ::lk_agents_abi::telemetry::upload::PreparedTranscript;
     type TelemetryWorker: ::lk_agents_abi::telemetry::work::TelemetryWorker;
     type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner;
+    type ServerEnvironment: ::lk_agents_abi::worker::worker::ServerEnvironment;
     type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
     type CliSignals: ::lk_agents_abi::worker::cli::CliSignals;
 }
@@ -80,6 +82,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<evals::_core_JudgeRunner>()?;
     m.add_function(wrap_pyfunction!(evals::_core_evaluation_score, m)?)?;
     m.add_function(wrap_pyfunction!(evals::_core_judge_tool_schemas, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::inference_resolve_api_key, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::inference_resolve_api_secret, m)?)?;
     m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<llm::InferenceLlm>()?;
     m.add_class::<llm::InferenceLlmChunks>()?;
@@ -107,6 +111,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::_core_TelemetryWorker>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
+    m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
+    m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;
     m.add_function(wrap_pyfunction!(worker::parse_cli, m)?)?;
     m.add_function(wrap_pyfunction!(worker::entrypoint_module, m)?)?;
     m.add_class::<worker::ExitSignals>()?;

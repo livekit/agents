@@ -507,3 +507,17 @@ pub struct ServerOptions {
     #[python(ty = "NotGivenOr[float]", default = "NOT_GIVEN")]
     pub initialize_process_timeout: crate::Maybe<f64>,
 }
+
+/// What the agent server reads from where it runs: the CPU count its defaults are sized by, and
+/// the base URL its text endpoints are reached at.
+#[crate::host(functions)]
+pub trait ServerEnvironment {
+    /// Logical CPUs, fractional under a cgroup quota. Reads, starts nothing.
+    #[host(function)]
+    fn cpu_count() -> f64;
+
+    /// `https://<project>/agents/<agent>/<deployment>` (`AgentServer._endpoint_url_base`), when
+    /// the URL and the agent are known; a worker registered without a deployment is `default`.
+    #[host(function)]
+    fn endpoint_url_base(ws_url: String, agent_name: String, deployment: String) -> Option<String>;
+}

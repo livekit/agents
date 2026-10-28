@@ -32,10 +32,6 @@ from ._core_handwritten import (
     TokenBuffer as TokenBuffer,
     Turn as Turn,
     chat_ctx_to_dict as chat_ctx_to_dict,
-    cpu_count as cpu_count,
-    endpoint_url_base as endpoint_url_base,
-    inference_resolve_api_key as inference_resolve_api_key,
-    inference_resolve_api_secret as inference_resolve_api_secret,
     init as init,
     interruption_metrics as interruption_metrics,
     ipc_pair as ipc_pair,
@@ -323,6 +319,8 @@ from ._generated._core_evals import (
 )
 from ._generated._core_inference import (
     InferenceAvatar as InferenceAvatar,
+    inference_resolve_api_key as inference_resolve_api_key,
+    inference_resolve_api_secret as inference_resolve_api_secret,
 )
 from ._generated._core_llm import (
     InferenceLlm as InferenceLlm,
@@ -364,6 +362,8 @@ from ._generated._core_text_session import (
 )
 from ._generated._core_worker import (
     ExitSignals as ExitSignals,
+    cpu_count as cpu_count,
+    endpoint_url_base as endpoint_url_base,
     entrypoint_module as entrypoint_module,
     parse_cli as parse_cli,
 )

@@ -50,16 +50,8 @@ pub fn init(role: Role) -> PyResult<()> {
     lk_agents_abi::python::declare()
 }
 
-/// The CPU count the worker sizes its defaults by: the cgroup quota when the process runs
-/// under one, else the machine's (`lk_agents_runtime::worker::CpuMonitor`). Reads, starts nothing.
-#[pyfunction]
-pub fn cpu_count() -> f32 {
-    lk_agents_runtime::worker::CpuMonitor::new().cpu_count()
-}
-
 lk_agents_abi::register_host!(class Role);
 lk_agents_abi::register_host!(fn init);
-lk_agents_abi::register_host!(fn cpu_count);
 
 #[cfg(test)]
 mod tests {

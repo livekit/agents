@@ -341,6 +341,19 @@ pub fn prepare_prometheus_dir(configured: Option<&str>) -> Option<String> {
     Some(dir)
 }
 
+/// The agent server's environment reads, as the host calls them.
+pub struct Environment;
+
+impl lk_agents_abi::worker::worker::ServerEnvironment for Environment {
+    fn cpu_count() -> f64 {
+        f64::from(crate::worker::CpuMonitor::new().cpu_count())
+    }
+
+    fn endpoint_url_base(ws_url: String, agent_name: String, deployment: String) -> Option<String> {
+        endpoint_url_base(&ws_url, &agent_name, &deployment)
+    }
+}
+
 /// `https://<project>/agents/<agent>/<deployment>`, where the text doors are reached (plan 7.2),
 /// when the URL and the agent are known; a worker registered without a deployment is `default`.
 pub fn endpoint_url_base(ws_url: &str, agent_name: &str, deployment: &str) -> Option<String> {

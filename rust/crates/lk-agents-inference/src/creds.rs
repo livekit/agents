@@ -60,31 +60,15 @@ mod tests {
     }
 }
 
-/// The two ladders as the host calls them (`inference/_utils.py`).
-#[cfg(feature = "python")]
-mod python {
-    use lk_agents_abi::python::check_pid;
-    use pyo3::prelude::*;
+/// The two ladders as the host calls them.
+pub struct Credentials;
 
-    /// The api-key ladder: `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `LIVEKIT_API_KEY`.
-    ///
-    /// Matches `os.getenv(A, os.getenv(B, ""))`: a *set but empty* `LIVEKIT_INFERENCE_API_KEY`
-    /// shadows `LIVEKIT_API_KEY`. Returns `""` when nothing resolves; the caller raises with its own
-    /// message, and tests the explicit value (truthiness vs `is_given`) itself.
-    #[pyfunction]
-    #[pyo3(signature = (explicit = None))]
-    pub fn inference_resolve_api_key(explicit: Option<&str>) -> PyResult<String> {
-        check_pid()?;
-        Ok(super::resolve_api_key(explicit).unwrap_or_default())
+impl lk_agents_abi::inference::InferenceCredentials for Credentials {
+    fn inference_resolve_api_key(explicit: Option<String>) -> String {
+        resolve_api_key(explicit.as_deref()).unwrap_or_default()
     }
 
-    /// [`inference_resolve_api_key`] for the secret.
-    #[pyfunction]
-    #[pyo3(signature = (explicit = None))]
-    pub fn inference_resolve_api_secret(explicit: Option<&str>) -> PyResult<String> {
-        check_pid()?;
-        Ok(super::resolve_api_secret(explicit).unwrap_or_default())
+    fn inference_resolve_api_secret(explicit: Option<String>) -> String {
+        resolve_api_secret(explicit.as_deref()).unwrap_or_default()
     }
-
-    crate::python::register_fn!(inference_resolve_api_key, inference_resolve_api_secret);
 }
