@@ -9,6 +9,7 @@ import pytest
 from livekit.agents import APIConnectionError, APIConnectOptions
 from livekit.agents.llm import LLM, ChatChunk, ChatContext, ChoiceDelta, LLMStream
 from livekit.agents.llm.tool_context import Tool
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 pytestmark = pytest.mark.unit
 
@@ -23,10 +24,12 @@ class _DroppingLLM(LLM):
         *,
         chat_ctx: ChatContext,
         tools: list[Tool] | None = None,
-        conn_options: APIConnectOptions = APIConnectOptions(),
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         **kwargs: Any,
     ) -> LLMStream:
-        return _DroppingStream(self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options)
+        return _DroppingStream(
+            self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options
+        )
 
 
 class _DroppingStream(LLMStream):
