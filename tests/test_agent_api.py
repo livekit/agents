@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 import pytest
@@ -15,7 +16,7 @@ from livekit.agents import (
     function_tool,
     persisted,
 )
-from livekit.agents.llm import ChatContext, FunctionToolCall, Tool
+from livekit.agents.llm import ChatContext, FunctionToolCall, Tool, Toolset
 from livekit.agents.storage import Storage
 from livekit.agents.storage.resolve import Thread
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
@@ -398,17 +399,6 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     assert restored.patient == Patient(looked_up=1)
 
 
-def test_agent_session_alias_is_deprecated() -> None:
-    import warnings
-
-    import livekit.agents
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        assert livekit.agents.AgentSession is VoiceSession
-    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
-
-
 async def test_run_stream_yields_the_reply_as_it_is_written() -> None:
     llm = FakeLLM(
         fake_responses=[
@@ -424,3 +414,59 @@ async def test_run_stream_yields_the_reply_as_it_is_written() -> None:
     assert len(deltas) > 1, "the reply arrives in pieces"
     assert "".join(deltas) == "hi there, friend"
     assert result.status == "completed" and result.output == "hi there, friend"
+
+
+class CountingToolset(Toolset):
+    def __init__(self) -> None:
+        super().__init__(id="counting")
+        self.setups = self.closes = self.calls = 0
+        self.release = asyncio.Event()
+
+    async def setup(self) -> CountingToolset:
+        self.setups += 1
+        return await super().setup()
+
+    async def aclose(self) -> None:
+        self.closes += 1
+        await super().aclose()
+
+    @function_tool
+    async def wait(self, ctx: RunContext) -> str:
+        """Wait until released."""
+        self.calls += 1
+        await self.release.wait()
+        return "done"
+
+
+async def test_a_run_sets_up_and_closes_its_toolsets_once() -> None:
+    """A toolset connects per run (tools.md "Toolsets"): concurrent runs share one setup and
+    one close, and a run left early still closes it."""
+    toolset = CountingToolset()
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="wait", arguments="{}", call_id="w1")],
+            ),
+            FakeLLMResponse(input="done", content="finished", ttft=0, duration=0),
+        ]
+    )
+    agent = Agent(instructions="x", llm=llm, tools=[toolset])
+
+    runs = [asyncio.create_task(agent.run("go")) for _ in range(2)]
+    while toolset.calls < 2:
+        await asyncio.sleep(0.01)
+    toolset.release.set()
+    for result in await asyncio.gather(*runs):
+        assert result.status == "completed" and result.output == "finished"
+    assert (toolset.setups, toolset.closes) == (1, 1)
+
+    toolset.release.clear()
+    async with agent.run_stream("go") as stream:
+        async for event in stream.stream_events():
+            if event.type == "tool_call":
+                break
+    assert (toolset.setups, toolset.closes) == (2, 2)

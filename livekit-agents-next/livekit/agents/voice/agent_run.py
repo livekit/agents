@@ -125,8 +125,12 @@ class _TextRun(Generic[Context_T]):
         self.llm_conn_options = conn_options
         self.tools = ToolContext(agent.tools)
         # the runner of this invocation, once started: where its tools report progress
-        self.runner: _core.AgentRunner | None = None
+        self.runner: _core.AgentRunner | _core.TextSessionRunner | None = None
         self._history = history
+        self.execution_id: str | None = None
+        self.frame_id: Any = None
+        self.context_scope: str | None = None
+        self._toolsets: list[Toolset] = []
 
     @property
     def llm(self) -> llm.LLM:
@@ -145,6 +149,23 @@ class _TextRun(Generic[Context_T]):
         if self.hooks is None or self.hooks.store is None:
             raise RuntimeError("this run has no managed context store")
         return self.hooks.store
+
+    async def acquire_toolsets(self) -> None:
+        """Sets up the agent's toolsets for this run (tools.md "Toolsets"); a failure releases
+        the ones already acquired."""
+        for toolset in self.agent.tools:
+            if isinstance(toolset, Toolset):
+                try:
+                    await toolset._acquire()
+                except BaseException:
+                    await self.release_toolsets()
+                    raise
+                self._toolsets.append(toolset)
+
+    async def release_toolsets(self) -> None:
+        """Releases this run's toolsets once it settled, completed, failed or cancelled."""
+        toolsets, self._toolsets = self._toolsets, []
+        await asyncio.gather(*(t._release() for t in toolsets))
 
 
 async def start_run(
@@ -177,26 +198,27 @@ async def start_run(
         hooks.interrupted = True
         return run, None
 
-    for toolset in agent.tools:
-        if isinstance(toolset, Toolset):
-            await toolset.setup()  # once per toolset object; a no-op after
-    run.tools = ToolContext(agent.tools)
-
-    captured = contextvars.copy_context()
-    captured.run(_BindingContextVar.set, run)
-    runner = _core.AgentRunner(agent._definition(run.tools), run.llm, agent._host)
-    run.runner = runner
-    updates = runner.run(
-        RunRequest(
-            invocation_id=run.id,
-            message=to_core_item(message),
-            history=to_core_items(history),
-            answer_tool=hooks.answer_tool if hooks is not None else None,
-            delegated=hooks.delegated if hooks is not None else False,
-            conn_options=conn_options,
-            host_context=(asyncio.get_running_loop(), captured),
+    await run.acquire_toolsets()
+    try:
+        run.tools = ToolContext(agent.tools)
+        captured = contextvars.copy_context()
+        captured.run(_BindingContextVar.set, run)
+        runner = _core.AgentRunner(agent._definition(run.tools), run.llm, agent._host)
+        run.runner = runner
+        updates = runner.run(
+            RunRequest(
+                invocation_id=run.id,
+                message=to_core_item(message),
+                history=to_core_items(history),
+                answer_tool=hooks.answer_tool if hooks is not None else None,
+                delegated=hooks.delegated if hooks is not None else False,
+                conn_options=conn_options,
+                host_context=(asyncio.get_running_loop(), captured),
+            )
         )
-    )
+    except BaseException:
+        await run.release_toolsets()
+        raise
     return run, updates
 
 

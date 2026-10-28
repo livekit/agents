@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
 from pydantic import JsonValue
 
-from .._generated import agent_run as records
+from .._generated import agent_run as records, text_session as session_records
 from ..log import logger
 
 if TYPE_CHECKING:
@@ -108,6 +108,7 @@ class RunStream(Generic[ResultT]):
         self._settled: ResultT | None = None
         self._error: BaseException | None = None
         self._closing: asyncio.Task[None] | None = None
+        self._presented: dict[str, str] = {}
 
     async def __aenter__(self) -> RunStream[ResultT]:
         if self._entered:
@@ -176,6 +177,9 @@ class RunStream(Generic[ResultT]):
                 message_id, text = event.message_id, ""
             text += event.delta
             yield event.delta if delta else text
+            self._presented[event.message_id] = (
+                self._presented.get(event.message_id, "") + event.delta
+            )
 
     async def _events(self) -> AsyncIterator[StreamEvent]:
         try:
@@ -204,13 +208,45 @@ class RunStream(Generic[ResultT]):
                 case records.RunUpdateStream(event=event):
                     self._sequence += 1
                     return _event(event, self._sequence, self._agent_name, started.id)
-                case records.RunUpdateFinished(settled=settled):
+                case session_records.TextSessionUpdateStream():
+                    return _event(
+                        update.event,
+                        update.sequence,
+                        update.agent_name,
+                        update.invocation_id,
+                        update.frame_id.value,
+                    )
+                case session_records.TextSessionUpdateInvocationSettled(
+                    invocation_id=invocation_id
+                ):
+                    assert started.release is not None
+                    started.release(
+                        session_records.TextSessionDelivery(
+                            invocation_id=invocation_id, messages=self._presented
+                        )
+                    )
+                    self._presented = {}
+                case session_records.TextSessionUpdateParked(usage=usage):
+                    if started.on_usage is not None:
+                        started.on_usage(usage)
+                case (
+                    records.RunUpdateFinished(settled=settled)
+                    | session_records.TextSessionUpdateFinished(settled=settled)
+                ):
+                    await started.cleanup()
                     self._settled = started.settle(settled)
                     return None
-                case records.RunUpdateFailed(error=error):
+                case (
+                    records.RunUpdateFailed(error=error)
+                    | session_records.TextSessionUpdateFailed(error=error)
+                ):
+                    await started.cleanup()
                     self._error = started.fail(error)
                     return None
-                case records.RunUpdateIncompleteCleanup(pending=pending):
+                case (
+                    records.RunUpdateIncompleteCleanup(pending=pending)
+                    | session_records.TextSessionUpdateIncompleteCleanup(pending=pending)
+                ):
                     logger.error(
                         "the run's cleanup missed its deadline", extra={"pending": pending}
                     )
@@ -221,6 +257,8 @@ class RunStream(Generic[ResultT]):
         if self._closing is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await asyncio.shield(self._closing)
+        if self._started is not None:
+            await self._started.cleanup()
         if self._settled is None and self._error is None:
             self._error = asyncio.CancelledError()
 
@@ -235,24 +273,37 @@ class RunStream(Generic[ResultT]):
         return self._settled
 
 
+async def _nothing() -> None:
+    pass
+
+
 @dataclass
 class _Started(Generic[ResultT]):
     """A started invocation: its id, its updates (``None`` when it yielded before starting),
-    and how its final updates become the result or the exception."""
+    how its final updates become the result or the exception, and ``cleanup``, the release of
+    what it holds for its lifetime (its toolsets), awaited once it settled; idempotent."""
 
     id: str
-    updates: _core.AgentRunUpdates | None
-    settle: Callable[[records.RunSettled | None], ResultT]
-    fail: Callable[[records.RunError], BaseException]
+    updates: _core.AgentRunUpdates | _core.TextSessionUpdates | None
+    settle: Callable[[Any], ResultT]
+    fail: Callable[[Any], BaseException]
+    cleanup: Callable[[], Awaitable[None]] = _nothing
+    release: Callable[[session_records.TextSessionDelivery], None] | None = None
+    on_usage: Callable[[records.RunUsage], None] | None = None
 
 
 def _event(
-    event: records.StreamEvent, sequence: int, agent_name: str, invocation_id: str
+    event: records.StreamEvent,
+    sequence: int,
+    agent_name: str,
+    invocation_id: str,
+    frame_id: str | None = None,
 ) -> StreamEvent:
     common: dict[str, Any] = {
         "sequence": sequence,
         "agent_name": agent_name,
         "invocation_id": invocation_id,
+        "frame_id": frame_id,
     }
     match event:
         case records.StreamEventTextDelta():

@@ -62,6 +62,9 @@ class Toolset:
         self._id = id
         self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []
         self._tools.extend(find_function_tools(self))
+        # the runs and calls using this shared toolset: the first sets it up, the last closes it
+        self._users = 0
+        self._lifecycle = asyncio.Lock()
 
     @property
     def id(self) -> str:
@@ -72,26 +75,52 @@ class Toolset:
         return self._tools
 
     async def setup(self) -> Self:
-        """Initialize the toolset and any nested toolsets.
+        """Connect the toolset and its nested toolsets, when a run or a call starts using it.
 
-        Called by the session when an agent using it starts.
+        A failed setup closes the nested toolsets that did set up before raising.
         """
         toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
-        if toolsets:
-            await asyncio.gather(*(toolset.setup() for toolset in toolsets))
+        results = await asyncio.gather(*(t.setup() for t in toolsets), return_exceptions=True)
+        failed = [r for r in results if isinstance(r, BaseException)]
+        if failed:
+            await asyncio.gather(
+                *(
+                    t.aclose()
+                    for t, r in zip(toolsets, results)
+                    if not isinstance(r, BaseException)
+                ),
+                return_exceptions=True,
+            )
+            raise failed[0]
         return self
 
     async def aclose(self) -> None:
-        """Close the toolset and release any held resources.
+        """Release what ``setup()`` acquired, when the last run or call using it ends.
 
-        Agent-scoped toolsets (passed to ``Agent(tools=...)``) are closed when the
-        agent exits (on agent transition or session close). Session-scoped
-        toolsets (passed to ``VoiceSession(tools=...)``) are closed only when the
-        ``VoiceSession`` shuts down.
+        A toolset on ``Agent(tools=...)`` is closed when the agent's run or activation ends;
+        one on ``VoiceSession(tools=...)`` when the session closes.
         """
         toolsets = [tool for tool in self._tools if isinstance(tool, Toolset)]
         if toolsets:
             await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
+
+    async def _acquire(self) -> None:
+        """One more run or call uses this toolset; the first sets it up."""
+        async with self._lifecycle:
+            if self._users == 0:
+                await self.setup()
+            self._users += 1
+
+    async def _release(self) -> None:
+        """A run or call stopped using this toolset; the last closes it, even when cancelled."""
+
+        async def release() -> None:
+            async with self._lifecycle:
+                self._users -= 1
+                if self._users == 0:
+                    await self.aclose()
+
+        await asyncio.shield(release())
 
 
 # Used by ToolChoice
