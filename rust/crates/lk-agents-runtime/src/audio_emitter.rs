@@ -19,7 +19,7 @@ use lk_agents_media::workers::MediaWorkers;
 use lk_agents_media::{DecodePlan, Decoder};
 use tokio::sync::{Notify, watch};
 
-use crate::codecs::{self, DecoderInput, decoder_limits, whole_pushes};
+use crate::codecs::{self, DecoderInput, decoder_limits};
 
 /// What the emitter runs on, lent by the process (decision 88).
 pub struct EmitterEnv {
@@ -229,7 +229,7 @@ impl Inner {
             Some(decoder) => decoder,
             None => {
                 let (rate, channels) = self.format();
-                let limits = whole_pushes(decoder_limits(rate, channels).format);
+                let limits = decoder_limits(rate, channels).format.whole_pushes();
                 decoder.insert(Decoder::wav(Some(rate), limits).map_err(decode_error)?)
             }
         };
@@ -331,7 +331,7 @@ impl Inner {
                         Some(open) => open,
                         None => segment.insert(self.open_segment(queue)?),
                     };
-                    open.input.push(data).map_err(decode_error)?;
+                    open.input.push(&data).map_err(decode_error)?;
                 }
                 op @ (Op::EndSegment | Op::EndInput) => {
                     if let Some(mut open) = segment.take() {

@@ -49,6 +49,12 @@ impl DecodeLimits {
         Ok(())
     }
 
+    /// For a WAV calculator fed whole pushes: the input that carried a push bounds its size,
+    /// and a provider's concatenated files restart only at a push boundary.
+    pub fn whole_pushes(self) -> Self {
+        Self { max_samples_per_frame: i32::MAX as usize, ..self }
+    }
+
     pub fn is_valid(&self) -> bool {
         self.min_sample_rate > 0
             && self.max_sample_rate >= self.min_sample_rate

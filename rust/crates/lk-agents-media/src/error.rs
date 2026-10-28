@@ -37,6 +37,10 @@ pub enum CodecError {
     #[error("cannot resample {from} Hz to {to} Hz: {detail}")]
     Resample { from: u32, to: u32, detail: String },
 
+    /// The input could not be read.
+    #[error("{0}")]
+    Read(String),
+
     /// Carries `av_strerror`'s text where there is one.
     #[error("ffmpeg: {op} failed: {detail}")]
     Ffmpeg { op: &'static str, detail: String },

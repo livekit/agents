@@ -6,12 +6,13 @@ use std::collections::VecDeque;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Condvar, Mutex};
 
-/// The reference compacts after 5 MB; `VecDeque::drain` reclaims as it goes, so this is unused.
-pub const REFERENCE_COMPACT_THRESHOLD: usize = 5 * 1024 * 1024;
-
+/// Writes are kept whole, so a reader can take them as the writer made them.
 #[derive(Default)]
 struct Inner {
-    data: VecDeque<u8>,
+    chunks: VecDeque<Vec<u8>>,
+    /// Bytes of the front chunk already read.
+    offset: usize,
+    len: usize,
     eof: bool,
     closed: bool,
 }
@@ -42,10 +43,11 @@ impl StreamBuffer {
     /// already been promised.
     pub fn write(&self, data: &[u8]) {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if g.closed || g.eof {
+        if g.closed || g.eof || data.is_empty() {
             return;
         }
-        g.data.extend(data);
+        g.len += data.len();
+        g.chunks.push_back(data.to_vec());
         self.ready.notify_all();
     }
 
@@ -54,23 +56,34 @@ impl StreamBuffer {
         if buf.is_empty() {
             return 0;
         }
+        self.when_readable(|g| {
+            let Some(front) = g.chunks.front() else { return 0 };
+            let start = g.offset;
+            let n = buf.len().min(front.len() - start);
+            buf[..n].copy_from_slice(&front[start..start + n]);
+            g.consume(n);
+            n
+        })
+    }
+
+    /// Blocking read of the rest of the oldest write, as written; `None` at EOF or after `close`.
+    pub fn read_chunk(&self) -> Option<Vec<u8>> {
+        self.when_readable(|g| {
+            let mut chunk = g.chunks.pop_front()?;
+            let read = std::mem::take(&mut g.offset);
+            g.len -= chunk.len() - read;
+            chunk.drain(..read);
+            Some(chunk)
+        })
+    }
+
+    /// Runs `read` once there is data, or none will come (no chunks then).
+    fn when_readable<T>(&self, read: impl FnOnce(&mut Inner) -> T) -> T {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        loop {
-            if g.closed {
-                return 0;
-            }
-            if !g.data.is_empty() {
-                let n = buf.len().min(g.data.len());
-                for (slot, b) in buf.iter_mut().zip(g.data.drain(..n)) {
-                    *slot = b;
-                }
-                return n;
-            }
-            if g.eof {
-                return 0;
-            }
+        while !g.closed && !g.eof && g.chunks.is_empty() {
             g = self.ready.wait(g).unwrap_or_else(|e| e.into_inner());
         }
+        read(&mut g)
     }
 
     /// No more bytes are coming. The reader drains what is buffered, then sees EOF.
@@ -84,13 +97,15 @@ impl StreamBuffer {
     pub fn close(&self) {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         g.closed = true;
-        g.data.clear();
+        g.chunks.clear();
+        g.offset = 0;
+        g.len = 0;
         self.ready.notify_all();
     }
 
     /// Bytes written but not yet read.
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).data.len()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).len
     }
 
     /// `read(size=-1)`: blocks (the binding releases the GIL) until data is available, EOF is
@@ -107,6 +122,17 @@ impl StreamBuffer {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+impl Inner {
+    fn consume(&mut self, n: usize) {
+        self.offset += n;
+        self.len -= n;
+        if self.chunks.front().is_some_and(|front| front.len() == self.offset) {
+            self.chunks.pop_front();
+            self.offset = 0;
+        }
     }
 }
 

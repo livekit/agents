@@ -20,6 +20,7 @@ pub mod recorder;
 pub mod resample;
 #[cfg(feature = "resample")]
 pub mod soxr;
+pub mod source;
 pub mod stream_buffer;
 pub mod wav;
 pub mod workers;
