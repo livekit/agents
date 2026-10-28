@@ -52,7 +52,7 @@ async def test_direct_runs_have_independent_in_memory_threads() -> None:
         await thread.update(attributes={"title": "A conversation"})
         assert (await thread.info()).attributes == {"title": "A conversation"}
         assert (await thread.chat_history()).items == []
-        assert await thread.tasks() == []
+        assert await thread.lane(agent.name).tasks() == []
         assert await thread.journal() == []
         preferences = Preferences()
         await ctx.store.load_context(preferences)
@@ -73,7 +73,7 @@ async def test_direct_runs_have_independent_in_memory_threads() -> None:
                 await thread.info()
     finally:
         for thread in threads:
-            await thread.storage.aclose()
+            await thread._storage.aclose()
 
 
 async def test_cancelled_direct_run_closes_its_in_memory_thread() -> None:
@@ -112,7 +112,7 @@ async def test_cancelled_direct_run_closes_its_in_memory_thread() -> None:
             await threads[0].info()
     finally:
         for thread in threads:
-            await thread.storage.aclose()
+            await thread._storage.aclose()
 
 
 async def test_toolset_setup_failure_releases_each_owned_resource_once(

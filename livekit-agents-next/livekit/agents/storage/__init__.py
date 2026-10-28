@@ -2,7 +2,7 @@
 writes."""
 
 from .backends import AgentDBStorage, SQLiteStorage, Storage
-from .context_store import load_context, persisted, save_context
+from .context_store import ContextStore, load_context, persisted, save_context
 from .errors import (
     NotSerializable,
     RunRejected,
@@ -14,6 +14,7 @@ from .errors import (
 )
 
 __all__ = [
+    "ContextStore",
     "persisted",
     "load_context",
     "save_context",

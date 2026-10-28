@@ -41,9 +41,8 @@ from .protocol import (
 )
 from .resolve import Thread
 
-Handler = Callable[["A2ASessionContext"], "Awaitable[object] | AsyncIterable[str]"]
-"""The developer's handler: the context in, the answer out, either returned whole or yielded as
-it is written (an async generator), in which case the answer is the last run's result."""
+Handler = Callable[["A2ASessionContext"], Awaitable[object]]
+"""The developer's handler: the context in, the answer out (docs/server.md)."""
 
 UpdateHook = Callable[[str, str], Awaitable[None]]
 """``(task_id, text)``: a progress message to the door's live response."""
@@ -118,14 +117,6 @@ class A2ASessionContext:
 
         return "".join(parts)
 
-    async def task(self, task_id: str) -> TaskRecord | None:
-        """One task row of the lane, as it is now."""
-        for record in await self.thread.tasks():
-            if record.task_id == task_id:
-                return record
-
-        return None
-
 
 class TurnHost:
     """What ``_core.Turn`` drives for one door: the handler, its progress and tokens to the
@@ -170,7 +161,7 @@ class TurnHost:
         """The developer's handler on one turn, the run hooks installed around it."""
         thread = self._thread
         if thread.id != ctx.thread_id:
-            thread = Thread(thread.storage, ctx.thread_id, agent_name=ctx.lane)
+            thread = Thread(thread._storage, ctx.thread_id, agent_name=ctx.lane)
         context = A2ASessionContext(
             ctx,
             checkpoint,
@@ -193,17 +184,7 @@ class TurnHost:
 
         token = set_run_hooks(hooks)
         try:
-            handled = self._handler(context)
-            if isinstance(handled, AsyncIterable):
-                # yielded as it is written: each piece reaches the client, the answer is the
-                # last run's, or the text itself when no run was made
-                parts: list[str] = []
-                async for delta in handled:
-                    parts.append(delta)
-                    await context.token(delta)
-                output: object = results[-1] if results else "".join(parts)
-            else:
-                output = await handled
+            output = await self._handler(context)
         except StorageError:
             raise
         except Exception as e:

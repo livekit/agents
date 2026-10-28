@@ -7,10 +7,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydantic import JsonValue
-
 from .. import _core
-from .._generated.storage_class import EventRow, TaskPage, TaskRecord, ThreadInfo
+from .._generated.storage_class import EventRow, TaskRecord, TaskState, ThreadInfo
 from ..llm import ChatContext
 from ..log import logger
 from .backends import Storage
@@ -42,8 +40,8 @@ async def resolve_thread(
 
 
 class Thread:
-    """``ctx.thread``: the durable thread, with the verbs that reach outside the turn. Reads
-    open the thread's database for the call."""
+    """``ctx.thread``: the durable thread (docs/threads.md). Reads open the thread's database for
+    the call."""
 
     def __init__(self, storage: Storage, thread_id: str, *, agent_name: str) -> None:
         self._storage = storage
@@ -54,105 +52,73 @@ class Thread:
     def id(self) -> str:
         return self._id
 
-    @property
-    def agent_name(self) -> str:
-        return self._agent_name
-
-    @property
-    def storage(self) -> Storage:
-        return self._storage
-
     async def info(self) -> ThreadInfo:
+        """The platform's record: scope, attributes, created, last active, expiry."""
         return await self._storage.get_thread(self._id, fresh=True)
-
-    async def chat_history(self, agent: str | None = None) -> ChatContext:
-        """The whole history of this agent's lane, or another agent's."""
-        core = await self._open()
-        try:
-            return history_of(await core.history(agent or self._agent_name))
-        finally:
-            core.close()
-
-    async def tasks(self, agent: str | None = None) -> list[TaskRecord]:
-        """The lane's task rows, newest first."""
-        core = await self._open()
-        try:
-            return await core.tasks(agent or self._agent_name, limit=500)
-        finally:
-            core.close()
-
-    async def task(self, task_id: str) -> TaskRecord | None:
-        """One task, whichever agent's it is."""
-        core = await self._open()
-        try:
-            return await core.task(task_id)
-        finally:
-            core.close()
-
-    async def list_tasks(
-        self,
-        status: str | None = None,
-        updated_after: int = 0,
-        page_size: int = 50,
-        page_token: str | None = None,
-    ) -> TaskPage:
-        """One page of every agent's tasks, last updated first (A2A ``tasks/list``)."""
-        core = await self._open()
-        try:
-            return await core.list_tasks(status, updated_after, page_size, page_token)
-        finally:
-            core.close()
-
-    async def all_tasks(self) -> list[TaskRecord]:
-        """Every lane's task rows, oldest first."""
-        core = await self._open()
-        try:
-            records: list[TaskRecord] = []
-            for lane in await core.lanes():
-                records.extend(await core.tasks(lane.lane, limit=500))
-        finally:
-            core.close()
-
-        records.sort(key=lambda r: (r.updated_at, r.seq))
-        return records
-
-    async def background_tasks(self, agent: str | None = None) -> list[TaskRecord]:
-        """The session's submitted tasks, rows with a name rather than turns: every lane's, or
-        one agent's."""
-        records = await self.tasks(agent) if agent else await self.all_tasks()
-        return [record for record in records if record.name]
-
-    async def cancel(self, record: TaskRecord, metadata: dict[str, JsonValue]) -> TaskRecord | None:
-        """``tasks/cancel``: a row not yet terminal goes ``canceled`` with ``metadata`` merged in;
-        a running turn yields at its next checkpoint and writes nothing over it. The row after:
-        unchanged when it became terminal first."""
-        core = await self._open()
-        try:
-            return await core.cancel_task(self._agent_name, record.task_id, metadata)
-        finally:
-            core.close()
-
-    async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
-        """One page of the session's journal (docs/internals/storage.md#journal), every lane, in order; pass the
-        last ``id`` to read the next."""
-        core = await self._open()
-        try:
-            return await core.events(after_id, limit)
-        finally:
-            core.close()
 
     async def update(
         self, *, attributes: Mapping[str, str] | None = None, idle_ttl_seconds: int | None = None
     ) -> ThreadInfo:
-        """What a sidebar shows: the attributes, and the idle TTL."""
+        """Change the attributes a listing returns, or the idle period."""
         return await self._storage.threads.update_thread(
             self._id,
             attributes=dict(attributes) if attributes is not None else None,
             idle_ttl_seconds=idle_ttl_seconds,
         )
 
+    def lane(self, agent: str) -> Lane:
+        """An agent's lane of this thread: its history and its tasks."""
+        return Lane(self, agent)
+
+    async def chat_history(self, agent: str | None = None) -> ChatContext:
+        """This agent's history, or another agent's."""
+        return await self.lane(agent or self._agent_name).history()
+
+    async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
+        """One page of the journal (docs/internals/storage.md#journal), every lane, in order;
+        pass the last ``id`` to read the next."""
+        core = await self._open()
+        try:
+            return await core.events(after_id, limit)
+        finally:
+            core.close()
+
     async def _open(self) -> _core.Thread:
         return await self._storage.open(self._id)
+
+
+class Lane:
+    """One agent's lane of a thread (docs/threads.md): ``thread.lane(agent)``."""
+
+    def __init__(self, thread: Thread, agent: str) -> None:
+        self._thread = thread
+        self._agent = agent
+
+    async def history(self) -> ChatContext:
+        """The lane's whole history, in order."""
+        core = await self._thread._open()
+        try:
+            return history_of(await core.history(self._agent))
+        finally:
+            core.close()
+
+    async def tasks(self, *, status: TaskState | None = None, limit: int = 50) -> list[TaskRecord]:
+        """The lane's A2A task records, most recent first; only those in ``status`` when given."""
+        core = await self._thread._open()
+        try:
+            if status is None:
+                return await core.tasks(self._agent, limit=limit)
+            records: list[TaskRecord] = []
+            page_token = None
+            while len(records) < limit:
+                page = await core.list_tasks(status, 0, limit, page_token)
+                records += [r for r in page.tasks if r.lane == self._agent]
+                if not page.next_page_token:
+                    break
+                page_token = page.next_page_token
+            return records[:limit]
+        finally:
+            core.close()
 
 
 @dataclass(frozen=True)
@@ -184,6 +150,7 @@ class CallThreadEntrypoint:
 
 __all__ = [
     "CallThreadEntrypoint",
+    "Lane",
     "ResolvedThread",
     "Thread",
     "resolve_thread",

@@ -444,14 +444,14 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             from ..storage.errors import StorageError
 
             try:
-                self._voice_store = await self._thread.storage.threads._core_voice_store(
+                self._voice_store = await self._thread._storage.threads._core_voice_store(
                     self._thread.id,
-                    self._thread.agent_name,
+                    self._thread._agent_name,
                     initial_history=to_core_items(chat_ctx.items) if chat_ctx is not None else None,
                 )
                 self._store = ContextStore(
                     activation=self._voice_store.activation,
-                    scope_id=f"root:{self._thread.agent_name}",
+                    scope_id=f"root:{self._thread._agent_name}",
                 )
                 saved = self._voice_store.initial_history
                 if saved is not None:

@@ -174,7 +174,7 @@ class _TextRun(Generic[Context_T]):
             info = await self._owned_storage.threads.create_thread()
             self.thread = Thread(self._owned_storage, info.thread_id, agent_name=self.agent.name)
         if (self.hooks is None or self.hooks.store is None) and self._store is None:
-            activation = await self.thread.storage._core._core_context_store(
+            activation = await self.thread._storage._core._core_context_store(
                 self.thread.id, self.agent.name
             )
             self._store = ContextStore(activation=activation)

@@ -52,19 +52,14 @@ class A2ASessionOptions(TypedDict, total=False):
 
 
 def a2a_session(
-    *,
-    endpoint: str,
-    description: str,
-    lane: str | None = None,
-    **options: Unpack[A2ASessionOptions],
+    *, endpoint: str, description: str, **options: Unpack[A2ASessionOptions]
 ) -> Callable[[Handler], A2AEndpoint]:
     """The text door as a decorator with no handler: the door is an object a module defines and
     ``AgentServer.add()`` serves (``server.a2a_session(...)`` does both). ``endpoint`` is the
     last path segment of its URL and ``description`` what another agent reads to decide whether
-    to call; ``lane`` names the lane it writes when that is not the worker's own
-    (docs/internals/storage.md#lanes)."""
+    to call. It writes the worker's lane; an ``AgentHandler(lane=)`` door writes its own."""
     return lambda handler: A2AEndpoint(
-        handler, endpoint=endpoint, description=description, lane=lane, **options
+        handler, endpoint=endpoint, description=description, **options
     )
 
 

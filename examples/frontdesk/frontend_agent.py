@@ -1,7 +1,6 @@
 import os
-from collections.abc import AsyncIterator
 
-from livekit.agents import Agent, AgentHandler, JobContext, VoiceSession
+from livekit.agents import Agent, AgentHandler, JobContext, RunResult, VoiceSession
 from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 from livekit.plugins import openai
 
@@ -48,7 +47,6 @@ async def phone(ctx: JobContext) -> None:
 
 
 @front_desk.a2a_session(endpoint="frontend", description="Pearl Dental front desk.")
-async def text(ctx: A2ASessionContext) -> AsyncIterator[str]:
-    async with chat.run_stream(ctx.message, message_history=ctx.message_history) as stream:
-        async for delta in stream.stream_text(delta=True):
-            yield delta
+async def text(ctx: A2ASessionContext) -> RunResult[str]:
+    # the reply reaches the client as it is written
+    return await chat.run(ctx.message, message_history=ctx.message_history)

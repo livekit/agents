@@ -92,7 +92,7 @@ class AgentHandler:
 
         back_office = AgentHandler(lane="backend")
 
-        @back_office.a2a_session(endpoint="backend", description="The back office.", public=False)
+        @back_office.a2a_session(endpoint="backend", description="The back office.")
         async def text(ctx: A2ASessionContext) -> str: ...
 
     ``lane`` names the lane the doors write (docs/internals/storage.md#lanes); the worker's own when left out.
@@ -139,12 +139,12 @@ class AgentHandler:
             @server.a2a_session(endpoint="scheduling", description="Book or move an appointment.")
             async def scheduling(ctx: A2ASessionContext) -> str: ...
         """
-        from .a2a.endpoint import a2a_session
-
-        door = a2a_session(endpoint=endpoint, description=description, lane=self.lane, **options)
+        from .a2a.endpoint import A2AEndpoint
 
         def decorator(handler: Handler) -> A2AEndpoint:
-            ep = door(handler)
+            ep = A2AEndpoint(
+                handler, endpoint=endpoint, description=description, lane=self.lane, **options
+            )
             self.add(ep)
             return ep
 

@@ -106,7 +106,7 @@ async def history_items(storage: Storage, thread_id: str, lane: str) -> list[Cha
 
 
 async def tasks_of(storage: Storage, thread_id: str, lane: str) -> list[TaskRecord]:
-    return await Thread(storage, thread_id, agent_name=lane).tasks()
+    return await Thread(storage, thread_id, agent_name=lane).lane(lane).tasks(limit=500)
 
 
 async def task_of(storage: Storage, thread_id: str, lane: str, task_id: str) -> TaskRecord | None:
@@ -758,7 +758,7 @@ async def test_the_rtc_door_resolves_the_call_thread(thread_storage: Storage) ->
         await door(SimpleNamespace(worker_id="w", job=job, _thread=None))  # type: ignore[arg-type]
 
     named, fresh = seen
-    assert named is not None and named.id == sid and named.agent_name == "desk"
+    assert named is not None and named.id == sid and named._agent_name == "desk"
     assert fresh is not None and fresh.id != sid
     assert (await fresh.info()).thread_id == fresh.id
     # a job process rebuilds the storage from its configuration
