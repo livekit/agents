@@ -181,8 +181,12 @@ async fn frames_after_a_sink_reset_open_their_own_segment() {
     c.leaf.reset();
     out.capture_frame(&frame).await.unwrap();
     out.flush();
-    let wait = tokio::time::timeout(Duration::ZERO, out.wait_for_playout()).await;
-    assert!(wait.is_err(), "the wait returned before the segment after the reset played");
+    let mut wait = std::pin::pin!(out.wait_for_playout());
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(
+        wait.as_mut().poll(&mut cx).is_pending(),
+        "the wait returned before the segment after the reset played"
+    );
     c.finished(100);
     assert!(!out.wait_for_playout().await.interrupted);
 }

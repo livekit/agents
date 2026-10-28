@@ -19,7 +19,6 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
-use tokio::time::Instant;
 
 use super::{ConsoleSink, FrameDecoder, SessionTransport, frame, proto};
 use proto::agent_session_message::{Message, console_io};
@@ -57,20 +56,21 @@ enum Socket {
 trait Stream: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> Stream for T {}
 
-/// The segment being played: when its first frame went out and how much audio it holds.
+/// The segment being played: when its first frame went out (Unix seconds) and how much audio it
+/// holds.
 #[derive(Default)]
 struct Playback {
-    started: Option<Instant>,
+    started: Option<f64>,
     pushed: Duration,
 }
 
 impl Playback {
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
-    /// Close the segment; `Some(position)` when it held audio.
-    fn take(&mut self, interrupted: bool) -> Option<Duration> {
+    /// Close the segment at `now` (Unix seconds); `Some(position)` when it held audio.
+    fn take(&mut self, interrupted: bool, now: f64) -> Option<Duration> {
         let started = self.started.take()?;
         let pushed = std::mem::take(&mut self.pushed);
-        Some(if interrupted { started.elapsed().min(pushed) } else { pushed })
+        let played = Duration::try_from_secs_f64(now - started).unwrap_or_default();
+        Some(if interrupted { played.min(pushed) } else { pushed })
     }
 }
 
@@ -145,7 +145,7 @@ impl ConsoleIo {
     }
 
     fn finish(&self, interrupted: bool) {
-        let position = self.playback.lock().unwrap().take(interrupted);
+        let position = self.playback.lock().unwrap().take(interrupted, lk_agents_abi::unix_now());
         if let Some(position) = position {
             self.tracker.playback_finished(PlaybackFinished {
                 playback_position: position,
@@ -274,17 +274,17 @@ impl AudioOutput for ConsoleIo {
         Some(WIRE_SAMPLE_RATE)
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn capture(&self, f: &AudioFrame) -> Result<(), IoError> {
+        let now = lk_agents_abi::unix_now();
         let first = {
             let mut playback = self.playback.lock().unwrap();
             playback.pushed += Duration::from_secs_f64(f.duration());
             let first = playback.started.is_none();
-            playback.started.get_or_insert_with(Instant::now);
+            playback.started.get_or_insert(now);
             first
         };
         if first {
-            self.tracker.report_started(lk_agents_abi::unix_now());
+            self.tracker.report_started(now);
         }
         self.send(Message::AudioOutput(console_io::AudioFrame {
             data: f.data.to_vec(),

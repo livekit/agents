@@ -19,8 +19,6 @@ use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{AudioFrame, Tts};
 use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
 
 /// A TTS that fails for good moves this to [`Voice::Silent`].
@@ -365,8 +363,9 @@ pub(super) struct TextLeg<'a> {
     out: Option<&'a dyn TextOutput>,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    flushed: AtomicBool,
+    /// Every user of the leg runs in one task (it borrows the reply's state), so checking and
+    /// setting this between awaits flushes once.
+    flushed: lk_agents_abi::Monotone<bool>,
     /// Words of this segment went down the leg.
     forwarded: lk_agents_abi::Monotone<bool>,
     shared: &'a Arc<SessionShared>,
@@ -374,15 +373,15 @@ pub(super) struct TextLeg<'a> {
 }
 
 impl<'a> TextLeg<'a> {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub(super) fn new(
         out: Option<&'a dyn TextOutput>,
         buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
         shared: &'a Arc<SessionShared>,
         speech: SpeechId,
     ) -> Self {
-        let forwarded = lk_agents_abi::Monotone::new(false);
-        TextLeg { out, buffered, flushed: AtomicBool::new(false), forwarded, shared, speech }
+        let (flushed, forwarded) =
+            (lk_agents_abi::Monotone::new(false), lk_agents_abi::Monotone::new(false));
+        TextLeg { out, buffered, flushed, forwarded, shared, speech }
     }
 
     /// Errors are dropped: a text stream that will not open must not silence the agent.
@@ -425,7 +424,8 @@ impl<'a> TextLeg<'a> {
     }
 
     pub(super) fn flush(&self) {
-        if !self.flushed.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        if !self.flushed.get() {
+            self.flushed.set(true);
             if let Some(tx) = self.buffered {
                 let _ = tx.send(SynthesisEvent::FlushText);
             } else if let Some(out) = self.out {
