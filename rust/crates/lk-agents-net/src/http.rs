@@ -8,12 +8,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::{Context, Poll};
 
-use futures_util::StreamExt;
-use lk_agents_abi::{Clock, Ts};
 use crate::attempts::AttemptFailure;
 use crate::transport::HttpRequest;
+use futures_util::StreamExt;
+use lk_agents_abi::{Clock, Ts};
 use tokio::sync::{Notify, mpsc};
-
 
 /// A transport observation and the instant it was made.
 #[derive(Debug)]
@@ -96,6 +95,7 @@ impl GatewayHttp {
     pub fn new() -> Result<Self, String> {
         crate::transport::install_tls_provider();
         let client = reqwest::Client::builder()
+            .retry(reqwest::retry::never())
             .pool_max_idle_per_host(50)
             .pool_idle_timeout(std::time::Duration::from_secs(120))
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -147,6 +147,19 @@ impl GatewayHttp {
         reporter: &Reporter<E>,
         sent: impl Fn(Sent) -> E,
     ) -> Result<reqwest::Response, AttemptFailure> {
+        let response = self.send_raw(method, request, reporter, sent).await?;
+        if response.status().is_success() { Ok(response) } else { Err(rejected(response).await) }
+    }
+
+    /// Protocols such as MCP interpret non-success responses themselves, including authentication
+    /// challenges, session expiry and JSON-RPC errors returned with an HTTP error status.
+    pub async fn send_raw<E>(
+        &self,
+        method: reqwest::Method,
+        request: HttpRequest,
+        reporter: &Reporter<E>,
+        sent: impl Fn(Sent) -> E,
+    ) -> Result<reqwest::Response, AttemptFailure> {
         // Hyper otherwise suppresses an unknown-length GET body without polling it. Explicit
         // empty chunked framing preserves its real connection/write observations without a payload.
         let empty_get = method == reqwest::Method::GET && request.body.is_empty();
@@ -170,11 +183,7 @@ impl GatewayHttp {
             }
         };
         progress.report(&mut reported, reporter, &sent).await;
-        match response {
-            Err(err) => Err(AttemptFailure::Connection(error_chain(&err))),
-            Ok(response) if !response.status().is_success() => Err(rejected(response).await),
-            Ok(response) => Ok(response),
-        }
+        response.map_err(|err| AttemptFailure::Connection(error_chain(&err)))
     }
 }
 
@@ -201,9 +210,8 @@ async fn rejected(response: reqwest::Response) -> AttemptFailure {
         |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
     let request_id = header("x-request-id");
     if status == 429 {
-        let quota = extract_quota_usage(|name| {
-            response.headers().get(name).and_then(|v| v.to_str().ok())
-        });
+        let quota =
+            extract_quota_usage(|name| response.headers().get(name).and_then(|v| v.to_str().ok()));
         let quota: Vec<String> = quota.iter().map(|(k, v)| format!("{k}={v}")).collect();
         log::warn!(
             target: "livekit.agents",

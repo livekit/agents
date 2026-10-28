@@ -12,8 +12,10 @@ pub struct SseEvent {
     pub event: String,
     /// Every `data:` line of the event, joined with `\n`.
     pub data: String,
-    /// The last event ID as of this event (it persists across events).
-    pub id: String,
+    /// The last event ID, if the server supplied one on this stream (including an empty reset).
+    pub id: Option<String>,
+    /// A server-supplied reconnect delay, in milliseconds.
+    pub retry: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -46,8 +48,11 @@ pub struct SseDecoder {
     line: String,
     event: String,
     data: String,
-    last_id: String,
+    last_id: Option<String>,
     failed: Option<SseError>,
+    controls: bool,
+    id_changed: bool,
+    retry: Option<u64>,
 }
 
 impl Default for SseDecoder {
@@ -72,9 +77,18 @@ impl SseDecoder {
             line: String::new(),
             event: String::new(),
             data: String::new(),
-            last_id: String::new(),
+            last_id: None,
             failed: None,
+            controls: false,
+            id_changed: false,
+            retry: None,
         }
+    }
+
+    /// Include ID/retry-only frames for protocols that use SSE reconnect instructions.
+    pub fn with_control_events(mut self) -> Self {
+        self.controls = true;
+        self
     }
 
     /// Decodes `bytes`, appending each event completed by them to `out`. After an error the
@@ -124,7 +138,11 @@ impl SseDecoder {
         if !self.partial.is_empty() {
             return Err(SseError::InvalidUtf8 { offset: self.offset });
         }
-        if !self.line.is_empty() || !self.data.is_empty() || !self.event.is_empty() {
+        if !self.line.is_empty()
+            || !self.data.is_empty()
+            || !self.event.is_empty()
+            || (self.controls && (self.id_changed || self.retry.is_some()))
+        {
             return Err(SseError::Truncated);
         }
         Ok(())
@@ -194,15 +212,24 @@ impl SseDecoder {
                 self.data.push_str(value);
                 self.data.push('\n');
             }
-            "id" if !value.contains('\0') => value.clone_into(&mut self.last_id),
-            // `retry` sets a reconnection delay; no consumer reconnects through it.
+            "id" if !value.contains('\0') => {
+                self.last_id = Some(value.to_owned());
+                self.id_changed = true;
+            }
+            "retry" if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) => {
+                if let Ok(value) = value.parse() {
+                    self.retry = Some(value);
+                }
+            }
             _ => {}
         }
     }
 
     fn dispatch(&mut self, out: &mut Vec<SseEvent>) {
         let event = std::mem::take(&mut self.event);
-        if self.data.is_empty() {
+        let control = std::mem::take(&mut self.id_changed);
+        let retry = self.retry.take();
+        if self.data.is_empty() && !(self.controls && (control || retry.is_some())) {
             return;
         }
         let mut data = std::mem::take(&mut self.data);
@@ -211,7 +238,104 @@ impl SseDecoder {
             event: if event.is_empty() { DEFAULT_EVENT.to_owned() } else { event },
             data,
             id: self.last_id.clone(),
+            retry,
         });
+    }
+}
+
+/// A demand-driven SSE response. Dropping it releases its HTTP exchange synchronously.
+pub struct EventStream {
+    exchange: crate::http::exchange::Exchange,
+    decoder: SseDecoder,
+    pending: std::collections::VecDeque<Result<SseEvent, lk_agents_abi::errors::ApiError>>,
+    limit: usize,
+    ended: bool,
+}
+
+impl EventStream {
+    pub fn new(exchange: crate::http::exchange::Exchange, limit: usize) -> Self {
+        Self {
+            exchange,
+            decoder: SseDecoder::with_max_event_bytes(limit).with_control_events(),
+            pending: Default::default(),
+            limit,
+            ended: false,
+        }
+    }
+
+    pub fn expect_response(&mut self, expected: bool) {
+        self.exchange.expect_response(expected);
+    }
+
+    pub async fn next(&mut self) -> Result<Option<SseEvent>, lk_agents_abi::errors::ApiError> {
+        use crate::http::exchange::HttpEvent;
+        use lk_agents_abi::errors::ApiError;
+
+        loop {
+            if self.ended {
+                return Ok(None);
+            }
+            if let Err(error) = self.exchange.wait_for_consumer(std::future::ready(())).await {
+                self.ended = true;
+                return Err(error);
+            }
+            if let Some(event) = self.pending.pop_front() {
+                match event {
+                    Ok(event) => {
+                        self.exchange.delivered();
+                        return Ok(Some(event));
+                    }
+                    Err(error) => {
+                        self.exchange.cancel();
+                        self.ended = true;
+                        return Err(error);
+                    }
+                }
+            }
+            match self.exchange.next().await {
+                Ok(HttpEvent::Started) => {
+                    self.decoder =
+                        SseDecoder::with_max_event_bytes(self.limit).with_control_events();
+                }
+                Ok(HttpEvent::Headers(_)) => {}
+                Ok(HttpEvent::Bytes(bytes)) => {
+                    let mut events = Vec::new();
+                    let result = self.decoder.feed(&bytes, &mut events);
+                    self.pending.extend(events.into_iter().map(Ok));
+                    if let Err(error) = result {
+                        self.pending
+                            .push_back(Err(ApiError::new(error.to_string()).with_retryable(false)));
+                    }
+                }
+                Ok(HttpEvent::End) => {
+                    self.ended = true;
+                    return self
+                        .decoder
+                        .finish()
+                        .map(|()| None)
+                        .map_err(|error| ApiError::new(error.to_string()).with_retryable(false));
+                }
+                Err(error) => {
+                    self.ended = true;
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    pub fn into_stream(
+        self,
+    ) -> futures_util::stream::BoxStream<'static, Result<SseEvent, lk_agents_abi::errors::ApiError>>
+    {
+        use futures_util::StreamExt;
+        futures_util::stream::unfold(self, |mut stream| async move {
+            match stream.next().await {
+                Ok(Some(event)) => Some((Ok(event), stream)),
+                Ok(None) => None,
+                Err(error) => Some((Err(error), stream)),
+            }
+        })
+        .boxed()
     }
 }
 
@@ -259,10 +383,16 @@ mod tests {
             SseEvent {
                 event: "message".into(),
                 data: "caf\u{e9} \u{20ac}\u{1f600}".into(),
-                id: "".into(),
+                id: None,
+                retry: None,
             },
-            SseEvent { event: "delta".into(), data: " two spaces\n".into(), id: "".into() },
-            SseEvent { event: "message".into(), data: "first\nsecond".into(), id: "7".into() },
+            SseEvent { event: "delta".into(), data: " two spaces\n".into(), id: None, retry: None },
+            SseEvent {
+                event: "message".into(),
+                data: "first\nsecond".into(),
+                id: Some("7".into()),
+                retry: None,
+            },
         ];
         assert_eq!(decode(&[body]), (expected.clone(), Ok(())));
         for at in 0..=body.len() {
@@ -271,6 +401,30 @@ mod tests {
         }
         let bytes: Vec<&[u8]> = body.chunks(1).collect();
         assert_eq!(decode(&bytes), (expected, Ok(())), "one byte per chunk");
+    }
+
+    #[test]
+    fn reconnect_frames_preserve_server_delays_and_explicit_cursor_resets() {
+        let body = b"data: first\n\nretry: 25\nid: resume-1\n\ndata: second\n\nid:\n\n";
+        for at in 0..=body.len() {
+            let mut decoder = SseDecoder::new().with_control_events();
+            let mut events = Vec::new();
+            decoder.feed(&body[..at], &mut events).unwrap();
+            decoder.feed(&body[at..], &mut events).unwrap();
+            decoder.finish().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|event| (event.data.as_str(), event.id.as_deref(), event.retry))
+                    .collect::<Vec<_>>(),
+                [
+                    ("first", None, None),
+                    ("", Some("resume-1"), Some(25)),
+                    ("second", Some("resume-1"), None),
+                    ("", Some(""), None),
+                ]
+            );
+        }
     }
 
     // Catches: decoding each chunk lossily, so a character split across two chunks became two

@@ -45,13 +45,10 @@ impl TransportReceipt {
         self.update(TransportSettlement::reader_opened);
         Reader(self.clone())
     }
-    pub fn track_reader(
+    pub fn track_reader<T: Send + 'static>(
         self: &Arc<Self>,
-        stream: futures_util::stream::BoxStream<
-            'static,
-            Result<sse_stream::Sse, sse_stream::Error>,
-        >,
-    ) -> futures_util::stream::BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>> {
+        stream: futures_util::stream::BoxStream<'static, T>,
+    ) -> futures_util::stream::BoxStream<'static, T> {
         let reader = self.reader();
         stream
             .map(move |event| {
@@ -318,28 +315,34 @@ pub(super) async fn connect_http(
     read_timeout: Duration,
     receipt: Arc<TransportReceipt>,
 ) -> Result<HttpConnection, McpError> {
-    lk_agents_net::transport::install_tls_provider();
+    use lk_agents_net::env::Env;
     let headers = headers
         .into_iter()
-        .map(|(key, value)| {
+        .map(|(name, value)| {
             Ok((
-                reqwest::header::HeaderName::try_from(key).map_err(conn)?,
+                reqwest::header::HeaderName::try_from(name).map_err(conn)?,
                 reqwest::header::HeaderValue::try_from(value).map_err(conn)?,
             ))
         })
         .collect::<Result<reqwest::header::HeaderMap, McpError>>()?;
-    let client = reqwest::Client::builder()
-        .retry(reqwest::retry::never())
-        .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::limited(20))
-        .connect_timeout(timeout)
-        .read_timeout(read_timeout)
-        .build()
-        .map_err(conn)?;
+    let client = CleanupClient {
+        http: crate::process::Process::http()
+            .map_err(|error| conn(std::io::Error::other(error)))?,
+        headers,
+        options: lk_agents_abi::ApiConnectOptions {
+            max_retry: 0,
+            connect_timeout: Some(timeout.as_secs_f64()),
+            write_timeout: Some(timeout.as_secs_f64()),
+            read_timeout: Some(read_timeout.as_secs_f64()),
+            ..Default::default()
+        },
+        clock: crate::process::host_clock(),
+        receipt: receipt.clone(),
+    };
     match lk_agents_core::mcp::http_transport(&url, Some(transport))? {
         lk_agents_core::mcp::HttpTransport::StreamableHttp => {
             Ok(HttpConnection::Streamable(StreamableHttpClientTransport::with_client(
-                CleanupClient { client, receipt: receipt.clone() },
+                client,
                 StreamableHttpClientTransportConfig::with_uri(url),
             )))
         }
@@ -353,28 +356,20 @@ pub(super) async fn connect_http(
 }
 
 async fn connect_sse(
-    client: reqwest::Client,
+    client: CleanupClient,
     url: &str,
     receipt: Arc<TransportReceipt>,
 ) -> Result<(Posts, Messages), McpError> {
     let base = url::Url::parse(url).map_err(conn)?;
-    let response = client
-        .get(base.clone())
-        .header(reqwest::header::ACCEPT, "text/event-stream")
-        .header(reqwest::header::CACHE_CONTROL, "no-store")
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(conn)?;
-    let mut events = Box::pin(sse_stream::SseStream::from_bytes_stream(response.bytes_stream()));
+    let mut events = client.legacy_get(url).await.map_err(conn)?;
     let endpoint = loop {
         match events.next().await {
-            Some(Ok(event)) if event.event.as_deref() == Some("endpoint") => {
-                break base.join(event.data.as_deref().unwrap_or_default()).map_err(conn)?;
+            Ok(Some(event)) if event.event == "endpoint" => {
+                break base.join(&event.data).map_err(conn)?;
             }
-            Some(Ok(_)) => continue,
-            Some(Err(error)) => return Err(conn(error)),
-            None => {
+            Ok(Some(_)) => continue,
+            Err(error) => return Err(conn(error)),
+            Ok(None) => {
                 return Err(conn(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
                     "SSE closed before endpoint",
@@ -385,11 +380,13 @@ async fn connect_sse(
     if endpoint.origin() != base.origin() {
         return Err(conn(std::io::Error::other("SSE endpoint origin differs from connection")));
     }
+    events.expect_response(false);
+    let events = receipt.track_reader(events.into_stream());
     let messages = events
         .scan((), move |_, event| {
             std::future::ready(match event {
-                Ok(event) if event.event.as_deref().unwrap_or("message") == "message" => {
-                    match event.data.filter(|data| !data.is_empty()) {
+                Ok(event) if event.event == "message" => {
+                    match (!event.data.is_empty()).then_some(event.data) {
                         Some(data) => match serde_json::from_str(&data) {
                             Ok(message) => Some(Some(message)),
                             Err(error) => {
@@ -411,13 +408,7 @@ async fn connect_sse(
     let posts = futures_util::sink::unfold(
         (client, endpoint),
         |(client, endpoint), message: ClientJsonRpcMessage| async move {
-            client
-                .post(endpoint.clone())
-                .json(&message)
-                .send()
-                .await
-                .and_then(reqwest::Response::error_for_status)
-                .map_err(conn)?;
+            client.legacy_post(endpoint.as_str(), message).await.map_err(conn)?;
             Ok::<_, McpError>((client, endpoint))
         },
     );

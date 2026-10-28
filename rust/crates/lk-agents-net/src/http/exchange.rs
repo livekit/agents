@@ -5,12 +5,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
+use crate::transport::HttpRequest;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::{ApiConnectOptions, Clock, Ts};
-use crate::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
-use crate::transport::HttpRequest;
 use tokio::sync::mpsc;
 
 use super::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
@@ -26,11 +26,20 @@ pub enum HttpEvent {
     End,
 }
 
+/// Whether HTTP status itself fails an attempt, or the protocol consumes that response.
+#[derive(Clone, Copy)]
+pub enum ResponsePolicy {
+    Successful,
+    Protocol,
+}
+
 pub struct Exchange {
     core: Attempts,
     http: Arc<GatewayHttp>,
     request: HttpRequest,
     method: reqwest::Method,
+    response_policy: ResponsePolicy,
+    status: Option<reqwest::StatusCode>,
     reporter: Reporter<(u32, Sent)>,
     observations: mpsc::Receiver<Stamped<(u32, Sent)>>,
     sending: Option<Sending>,
@@ -38,6 +47,7 @@ pub struct Exchange {
     error: Option<ApiError>,
     started: bool,
     ended: bool,
+    response_expected: bool,
     now: Ts,
 }
 
@@ -49,6 +59,24 @@ impl Exchange {
         options: &ApiConnectOptions,
         clock: Arc<dyn Clock>,
     ) -> Self {
+        Self::with_response_policy(
+            http,
+            method,
+            request,
+            options,
+            clock,
+            ResponsePolicy::Successful,
+        )
+    }
+
+    pub fn with_response_policy(
+        http: Arc<GatewayHttp>,
+        method: reqwest::Method,
+        request: HttpRequest,
+        options: &ApiConnectOptions,
+        clock: Arc<dyn Clock>,
+        response_policy: ResponsePolicy,
+    ) -> Self {
         let now = clock.now();
         let (tx, observations) = mpsc::channel(2);
         let mut steps = Vec::new();
@@ -58,6 +86,8 @@ impl Exchange {
             http,
             request,
             method,
+            response_policy,
+            status: None,
             reporter: Reporter { tx, clock },
             observations,
             sending: None,
@@ -65,25 +95,46 @@ impl Exchange {
             error: None,
             started: false,
             ended: false,
+            response_expected: true,
             now,
         };
         exchange.apply(steps);
         exchange
     }
 
+    /// Release the directly owned exchange before reporting a protocol framing failure.
+    pub fn cancel(&mut self) {
+        self.now = self.reporter.clock.now().max(self.now);
+        let mut steps = Vec::new();
+        self.core.cancel(self.now, &mut steps);
+        self.apply(steps);
+        self.started = false;
+        self.ended = true;
+    }
+
+    pub fn status(&self) -> Option<reqwest::StatusCode> {
+        self.status
+    }
+
     pub fn delivered(&mut self) {
         self.core.delivered();
     }
 
+    /// Passive listening does not count as remote response inactivity. Phase policy and the
+    /// operation's total deadline remain unchanged.
+    pub fn expect_response(&mut self, expected: bool) {
+        self.response_expected = expected;
+    }
+
     pub async fn next(&mut self) -> Result<HttpEvent, ApiError> {
-        let expecting = self.reporter.clock.now();
+        let expecting = self.response_expected.then(|| self.reporter.clock.now());
         loop {
             // Observations already queued precede a wall-clock wake. This matters when a
             // consumer briefly stops pulling: transport progress keeps its original time.
             while let Ok(observed) = self.observations.try_recv() {
                 self.observed(observed, expecting);
             }
-            self.wake(self.reporter.clock.now(), Some(expecting));
+            self.wake(self.reporter.clock.now(), expecting);
             if let Some(error) = self.error.take() {
                 return Err(error);
             }
@@ -94,7 +145,7 @@ impl Exchange {
             if self.ended {
                 return Ok(HttpEvent::End);
             }
-            let wake = self.core.wake_at(Some(expecting));
+            let wake = self.core.wake_at(expecting);
             let clock = self.reporter.clock.clone();
             let sending = &mut self.sending;
             let body = &mut self.body;
@@ -110,11 +161,12 @@ impl Exchange {
                         self.observed(observed, expecting);
                     }
                     let now = self.reporter.clock.now();
-                    self.wake(now, Some(expecting));
+                    self.wake(now, expecting);
                     if self.core.current().is_none() { continue; }
                     match result {
                         Ok(response) => {
                             self.core.progress(self.core.current().expect("active attempt"), now);
+                            self.status = Some(response.status());
                             let headers = response.headers().clone();
                             self.body = Some(Box::pin(response.bytes_stream()));
                             return Ok(HttpEvent::Headers(headers));
@@ -124,7 +176,7 @@ impl Exchange {
                 },
                 chunk = async { body.as_mut().expect("body guarded").next().await }, if is_reading => {
                     let now = self.reporter.clock.now();
-                    self.wake(now, Some(expecting));
+                    self.wake(now, expecting);
                     let Some(attempt) = self.core.current() else { continue; };
                     match chunk {
                         Some(Ok(bytes)) => {
@@ -169,8 +221,8 @@ impl Exchange {
         }
     }
 
-    fn observed(&mut self, observed: Stamped<(u32, Sent)>, expecting: Ts) {
-        self.wake(observed.at, Some(expecting));
+    fn observed(&mut self, observed: Stamped<(u32, Sent)>, expecting: Option<Ts>) {
+        self.wake(observed.at, expecting);
         let (attempt, sent) = observed.event;
         match sent {
             Sent::Connected => self.core.connected(attempt, self.now),
@@ -202,8 +254,19 @@ impl Exchange {
                     let request = self.request.clone();
                     let reporter = self.reporter.clone();
                     let method = self.method.clone();
+                    let policy = self.response_policy;
+                    self.status = None;
                     self.sending = Some(Box::pin(async move {
-                        http.send_method(method, request, &reporter, |sent| (attempt, sent)).await
+                        match policy {
+                            ResponsePolicy::Successful => {
+                                http.send_method(method, request, &reporter, |sent| (attempt, sent))
+                                    .await
+                            }
+                            ResponsePolicy::Protocol => {
+                                http.send_raw(method, request, &reporter, |sent| (attempt, sent))
+                                    .await
+                            }
+                        }
                     }));
                     self.started = true;
                 }
