@@ -133,6 +133,10 @@ Pre-connect audio is normalized to the session's format before entering the
 same processing chain as live input. A processor that needs the source format
 must declare that capability.
 
+If an input processor such as noise cancellation fails, the session reports a
+typed processing error, logs it and continues with unprocessed frames for that
+span. The input stream does not end and the agent keeps hearing the user.
+
 Playback completion waits are bounded by the delivered audio duration and a
 transport allowance. A missing completion report cannot hold the speech or
 session open indefinitely, and a timeout does not count unreported audio as heard.

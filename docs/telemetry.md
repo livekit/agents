@@ -6,6 +6,10 @@ with `livekit.agents.telemetry.set_tracer_provider(provider)`. The application's
 global provider, sampler, resource and exporters remain application-owned.
 Framework cleanup does not shut down an application-owned provider.
 
+The framework records its spans, metrics and logs through the same SDK, so the
+application's processors and exporters receive them alongside its own
+instrumentation.
+
 For child instrumentation with an explicit provider, use
 `trace.get_tracer(name, tracer_provider=provider)`. Tools and callbacks inherit
 their invocation's tracing context, including across failure and cancellation.

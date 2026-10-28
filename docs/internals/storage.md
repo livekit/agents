@@ -52,9 +52,11 @@ The engine has three layers:
 | Shared `Thread`, `Lane`, `Run` and `Lease` | Typed reads, submission/deduplication, lane acquisition, inbox policy, fencing and managed commit decisions |
 | Internal `SqliteConnection` | Execute the shared engine's reads and atomic statement batches against Cloud or local SQLite |
 
-The pure storage core decides plans and outcomes. The storage backends, async I/O
-code outside that core, execute I/O, schedule renewals, and own pools and resources;
-the DST replaces them with an in-memory fake. The backends share the schema
+The pure storage core decides plans and outcomes. The AgentDB and SQLite
+backends live in the same crate behind its `backend` feature: async I/O that
+executes the plans, schedules renewals and owns pools and resources, reaching
+the network through `lk-agents-net`. `lk-agents-core` depends on the decisions
+without that feature. The DST replaces the backends with an in-memory fake. The backends share the schema
 and turn state machine. Host-visible records and bindings are generated from
 Rust declarations through the ABI machinery.
 
