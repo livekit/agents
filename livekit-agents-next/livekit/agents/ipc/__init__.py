@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable, Generator, Sequence
 from enum import Enum
 from multiprocessing.context import BaseContext
 from types import FrameType
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from .. import _core, utils
 from .._generated.worker_ipc import ProcessCompletion
@@ -445,11 +445,11 @@ class ProcPool(
 
     @property
     def processes(self) -> list[JobExecutor]:
-        return self._pool.processes  # type: ignore[no-any-return]
+        return cast(list[JobExecutor], self._pool.processes)
 
     @property
     def _jobs_waiting_for_process(self) -> int:
-        return self._pool.jobs_waiting  # type: ignore[no-any-return]
+        return self._pool.jobs_waiting
 
     def get_by_job_id(self, job_id: str) -> JobExecutor | None:
         return next(
@@ -475,7 +475,7 @@ class ProcPool(
 
     @property
     def target_idle_processes(self) -> int:
-        return self._pool.target_idle_processes  # type: ignore[no-any-return]
+        return self._pool.target_idle_processes
 
     def _core_create(self) -> JobExecutor:
         return JobExecutor(**self._executor_args)

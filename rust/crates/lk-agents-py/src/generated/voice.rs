@@ -27,7 +27,7 @@ fn _extract_data_stream_audio_output_new_clear_buffer_timeout(obj: &Bound<'_, Py
 
 /// The agent's native audio sink, sending one byte stream per avatar speech segment.
 #[pyclass(frozen, name = "DataStreamAudioOutput", module = "livekit.agents._core")]
-pub struct DataStreamAudioOutput(::std::sync::Arc<DataStreamAudioOutputImpl>);
+pub struct DataStreamAudioOutput(pub(crate) ::std::sync::Arc<DataStreamAudioOutputImpl>);
 
 #[pymethods]
 impl DataStreamAudioOutput {
@@ -82,7 +82,7 @@ type ConsoleIoImpl = <crate::Selected as super::Implementations>::ConsoleIo;
 
 /// `lk agent console`'s socket, opened when the session starts.
 #[pyclass(frozen, name = "ConsoleIo", module = "livekit.agents._core")]
-pub struct ConsoleIo(::std::sync::Arc<ConsoleIoImpl>);
+pub struct ConsoleIo(pub(crate) ::std::sync::Arc<ConsoleIoImpl>);
 
 #[pymethods]
 impl ConsoleIo {

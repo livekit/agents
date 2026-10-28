@@ -1,0 +1,264 @@
+use super::*;
+
+use crate::{JobDecision, JobRequest, RunningJobInfo};
+
+#[derive(Clone)]
+struct Host {
+    started: Arc<tokio::sync::Notify>,
+    joining: Arc<tokio::sync::Notify>,
+    closing: Arc<tokio::sync::Notify>,
+    release_close: Arc<tokio::sync::Semaphore>,
+    fail_start: bool,
+    fail_close: bool,
+}
+
+impl Host {
+    fn new() -> Self {
+        Self {
+            started: Arc::default(),
+            joining: Arc::default(),
+            closing: Arc::default(),
+            release_close: Arc::new(tokio::sync::Semaphore::new(0)),
+            fail_start: false,
+            fail_close: false,
+        }
+    }
+}
+
+#[async_trait]
+impl WorkerHost for Host {
+    async fn on_job_request(&self, _: JobRequest) -> JobDecision {
+        JobDecision::Unanswered
+    }
+    async fn launch_job(&self, _: RunningJobInfo) -> crate::HostResult<crate::JobId> {
+        Ok("job".into())
+    }
+    async fn terminate_job(&self, _: crate::JobId) -> crate::HostResult {
+        Ok(())
+    }
+    async fn user_load(&self) -> Option<f32> {
+        Some(0.0)
+    }
+}
+
+#[async_trait]
+impl ServerHost for Host {
+    fn configured(&self, _: bool, _: bool, _: bool) -> Self {
+        self.clone()
+    }
+    async fn start(&self, _: ServerSettings, _: bool, _: bool) -> Result<(), String> {
+        if self.fail_start { Err("pool warmup timed out".into()) } else { Ok(()) }
+    }
+    async fn started(&self) -> Result<(), String> {
+        self.started.notify_one();
+        Ok(())
+    }
+    async fn registered(&self, _: WorkerRegistered) -> Result<(), String> {
+        Ok(())
+    }
+    async fn idle_processes(&self, _: u32) -> Result<(), String> {
+        Ok(())
+    }
+    async fn worker_load(&self, _: f32) -> Result<(), String> {
+        Ok(())
+    }
+    async fn close_websockets(&self) -> Result<(), String> {
+        Ok(())
+    }
+    async fn join_jobs(&self) -> Result<(), String> {
+        self.joining.notify_one();
+        std::future::pending().await
+    }
+    async fn close(&self) -> Result<(), String> {
+        self.closing.notify_one();
+        let _permit = self.release_close.acquire().await.unwrap();
+        if self.fail_close { Err("host close failed".into()) } else { Ok(()) }
+    }
+    async fn active_jobs(&self) -> usize {
+        0
+    }
+    async fn metrics(&self) -> Option<(String, String)> {
+        None
+    }
+}
+
+fn options() -> ServerStart {
+    ServerStart {
+        settings: ServerSettings {
+            simulation: true,
+            num_idle_processes: Some(crate::EnvOption::Fixed(0)),
+            ..Default::default()
+        },
+        devmode: true,
+        unregistered: true,
+        has_rtc: false,
+        has_text_doors: true,
+        has_load_fnc: false,
+        has_on_request: false,
+        publisher: false,
+        endpoints: vec![],
+        transport: crate::TransportConfig::WebSocket { heartbeat: crate::HEARTBEAT_INTERVAL },
+        worker_url: None,
+    }
+}
+
+#[tokio::test]
+async fn server_drain_close_callers_join_without_holding_a_lifecycle_lock() {
+    let host = Host::new();
+    let runtime = ServerRuntime::new(host.clone(), Some(crate::test_support::native_workers()));
+    let run = runtime.run(options());
+    tokio::pin!(run);
+    assert!(futures_util::poll!(&mut run).is_pending());
+    tokio::time::timeout(Duration::from_secs(1), host.started.notified()).await.unwrap();
+    let first_drain = runtime.drain(None);
+    let second_drain = runtime.drain(None);
+    tokio::pin!(first_drain, second_drain);
+    assert!(futures_util::poll!(&mut first_drain).is_pending());
+    assert!(futures_util::poll!(&mut second_drain).is_pending());
+    tokio::time::timeout(Duration::from_secs(1), host.joining.notified()).await.unwrap();
+    let first_close = runtime.close();
+    let second_close = runtime.close();
+    tokio::pin!(first_close, second_close);
+    assert!(futures_util::poll!(&mut first_close).is_pending());
+    assert!(futures_util::poll!(&mut second_close).is_pending());
+    tokio::time::timeout(Duration::from_secs(1), host.closing.notified()).await.unwrap();
+    host.release_close.add_permits(1);
+    assert_eq!(first_close.await, Ok(()));
+    assert_eq!(second_close.await, Ok(()));
+    assert_eq!(run.await, Ok(()));
+    assert_eq!(first_drain.await, Err("server closed during drain".into()));
+    assert_eq!(second_drain.await, Err("server closed during drain".into()));
+    assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
+}
+
+#[tokio::test]
+async fn failed_registration_is_reported_by_run_and_close_joins_cleanup() {
+    let host = Host::new();
+    host.release_close.add_permits(1);
+    let runtime = ServerRuntime::new(host, Some(crate::test_support::native_workers()));
+    let mut start = options();
+    start.unregistered = false;
+    start.settings.ws_url = "ws://127.0.0.1:1".into();
+    start.settings.api_key = "devkey".into();
+    start.settings.api_secret = "devsecret".into();
+    start.settings.max_retry = 0;
+    let failure = tokio::time::timeout(Duration::from_secs(10), runtime.run(start))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(failure.contains("connection failed after 0 retries"), "{failure}");
+    assert_eq!(runtime.close().await, Ok(()));
+    assert_eq!(runtime.close().await, Ok(()));
+    assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
+}
+
+#[tokio::test]
+async fn server_startup_lifecycle_reports_warmup_failure_and_joins_cleanup() {
+    let mut host = Host::new();
+    host.fail_start = true;
+    host.release_close.add_permits(1);
+    let runtime = ServerRuntime::new(host.clone(), Some(crate::test_support::native_workers()));
+    assert_eq!(runtime.run(options()).await, Err("pool warmup timed out".into()));
+    assert_eq!(runtime.close().await, Ok(()));
+    assert_eq!(runtime.close().await, Ok(()));
+    assert!(host.started.notified().now_or_never().is_none());
+    assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
+}
+
+#[tokio::test]
+async fn server_shutdown_resources_reports_host_close_failure_to_every_caller() {
+    let mut host = Host::new();
+    host.fail_close = true;
+    host.release_close.add_permits(1);
+    let runtime = ServerRuntime::new(host.clone(), Some(crate::test_support::native_workers()));
+    let run = runtime.run(options());
+    tokio::pin!(run);
+    assert!(futures_util::poll!(&mut run).is_pending());
+    tokio::time::timeout(Duration::from_secs(1), host.started.notified()).await.unwrap();
+    assert_eq!(runtime.close().await, Err("Host: host close failed".into()));
+    assert_eq!(run.await, Err("Host: host close failed".into()));
+    assert_eq!(runtime.close().await, Err("Host: host close failed".into()));
+}
+
+#[tokio::test]
+async fn server_cleanup_deadline_returns_while_the_actor_retains_the_host() {
+    let host = Host::new();
+    let runtime = ServerRuntime::new(host.clone(), Some(crate::test_support::native_workers()));
+    let mut start = options();
+    start.settings.shutdown_process_timeout = 0.02;
+    let run = runtime.run(start);
+    tokio::pin!(run);
+    assert!(futures_util::poll!(&mut run).is_pending());
+    tokio::time::timeout(Duration::from_secs(1), host.started.notified()).await.unwrap();
+    assert_eq!(runtime.close().await, Ok(()));
+    let snapshot = runtime.snapshot();
+    assert_eq!(snapshot.phase, ServerPhase::Closing);
+    assert_eq!(snapshot.incomplete_cleanup, vec![ServerResource::Host]);
+    assert_eq!(run.await, Ok(()));
+    host.release_close.add_permits(1);
+    let mut snapshots = runtime.snapshot.subscribe();
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        snapshots.wait_for(|snapshot| snapshot.phase == ServerPhase::Closed),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+}
+#[tokio::test(start_paused = true)]
+async fn server_startup_waits_for_sampling_capacity() {
+    let workers = crate::test_support::native_workers();
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        held.push(workers.try_admit().unwrap());
+    }
+    let host = Host::new();
+    host.release_close.add_permits(1);
+    let runtime = ServerRuntime::new(host.clone(), Some(workers.clone()));
+    let run = runtime.run(options());
+    tokio::pin!(run);
+    assert!(futures_util::poll!(&mut run).is_pending());
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(futures_util::poll!(&mut run).is_pending(), "sampling must not reject startup");
+    drop(held);
+    host.started.notified().await;
+    runtime.close().await.unwrap();
+    run.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn close_interrupts_a_server_waiting_for_sampling_capacity() {
+    let workers = crate::test_support::native_workers();
+    let held: Vec<_> = (0..4).map(|_| workers.try_admit().unwrap()).collect();
+    let host = Host::new();
+    host.release_close.add_permits(1);
+    let runtime = ServerRuntime::new(host.clone(), Some(workers));
+    let run = runtime.run(options());
+    tokio::pin!(run);
+    assert!(futures_util::poll!(&mut run).is_pending());
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    runtime.close().await.unwrap();
+    run.await.unwrap();
+    assert!(host.started.notified().now_or_never().is_none());
+    assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
+    drop(held);
+}
+
+#[tokio::test(start_paused = true)]
+async fn server_setup_capacity_timeout_keeps_close_successful() {
+    let workers = crate::test_support::native_workers();
+    let held: Vec<_> = (0..4).map(|_| workers.try_admit().unwrap()).collect();
+    let host = Host::new();
+    host.release_close.add_permits(1);
+    let runtime = ServerRuntime::new(host.clone(), Some(workers));
+    let mut start = options();
+    start.settings.initialize_process_timeout = 0.01;
+    assert_eq!(runtime.run(start).await, Err("server setup capacity wait timed out".into()));
+    runtime.close().await.unwrap();
+    assert!(host.started.notified().now_or_never().is_none());
+    assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
+    drop(held);
+}

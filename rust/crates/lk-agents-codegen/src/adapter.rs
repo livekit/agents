@@ -138,14 +138,8 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
         Form::MutableClass => ("", format!("{name}Impl")),
         _ => ("frozen, ", format!("::std::sync::Arc<{name}Impl>")),
     };
-    // Associated class factories can construct a wrapper from another generated family.
-    let visibility = if decls.classes.iter().any(|owner| {
-        owner.family != c.family && owner.instances.iter().any(|(_, target)| target == name)
-    }) {
-        "pub(crate) "
-    } else {
-        ""
-    };
+    // Native host adapters recover the same implementation behind generated wrappers.
+    let visibility = "pub(crate) ";
     let host_module = &c.host_module;
     let subclass = if c.subclass { "subclass, " } else { "" };
     s.push_str(&format!(
@@ -210,15 +204,22 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
     match m.kind {
         MethodKind::New => s.push_str(&format!("{ind}#[new]\n")),
         MethodKind::Getter => s.push_str(&format!("{ind}#[getter]\n")),
+        MethodKind::Setter => s.push_str(&format!("{ind}#[setter({})]\n", m.name)),
         MethodKind::Function | MethodKind::AsyncFunction => s.push_str("#[pyfunction]\n"),
         MethodKind::Call | MethodKind::Await | MethodKind::Next => {}
     }
     if m.name != m.rust_name
-        && !matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction | MethodKind::Next)
+        && !matches!(
+            m.kind,
+            MethodKind::Function
+                | MethodKind::AsyncFunction
+                | MethodKind::Next
+                | MethodKind::Setter
+        )
     {
         s.push_str(&format!("{ind}#[pyo3(name = \"{}\")]\n", m.name));
     }
-    if m.params.iter().any(|p| p.ty != Ty::CallContext) {
+    if m.kind != MethodKind::Setter && m.params.iter().any(|p| p.ty != Ty::CallContext) {
         s.push_str(&format!("{ind}#[pyo3(signature = ({}))]\n", signature(&m.params)));
     }
     let mut args = Vec::new();

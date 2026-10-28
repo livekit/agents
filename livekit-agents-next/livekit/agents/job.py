@@ -26,7 +26,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field, replace
 from enum import Enum, unique
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import aiohttp
 
@@ -409,7 +409,7 @@ class JobContext:
 
     @property
     def _primary_agent_session(self) -> VoiceSession | None:
-        return self._run.primary_session  # type: ignore[no-any-return]
+        return cast("VoiceSession | None", self._run.primary_session)
 
     @property
     def _redaction_enabled(self) -> bool:
@@ -736,7 +736,10 @@ class JobContext:
             except Exception:
                 logger.exception("unknown error while deleting room")
 
-        return self._run.api_call(_delete_room, "delete_room", api.DeleteRoomResponse())  # type: ignore[no-any-return]
+        return cast(
+            asyncio.Future[api.DeleteRoomResponse],
+            self._run.api_call(_delete_room, "delete_room", api.DeleteRoomResponse()),
+        )
 
     def add_sip_participant(
         self,
@@ -772,7 +775,10 @@ class JobContext:
                 )
             )
 
-        return self._run.api_call(_add, "add_sip_participant", api.SIPParticipantInfo())  # type: ignore[no-any-return]
+        return cast(
+            asyncio.Future[api.SIPParticipantInfo],
+            self._run.api_call(_add, "add_sip_participant", api.SIPParticipantInfo()),
+        )
 
     def transfer_sip_participant(
         self,
@@ -813,8 +819,9 @@ class JobContext:
                 )
             )
 
-        return self._run.api_call(  # type: ignore[no-any-return]
-            _transfer, "transfer_sip_participant", api.SIPParticipantInfo()
+        return cast(
+            asyncio.Future[api.SIPParticipantInfo],
+            self._run.api_call(_transfer, "transfer_sip_participant", api.SIPParticipantInfo()),
         )
 
     def shutdown(self, reason: str = "user requested") -> None:

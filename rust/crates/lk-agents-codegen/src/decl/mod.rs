@@ -335,6 +335,8 @@ pub struct Method {
     pub pid: Option<bool>,
     pub params: Vec<Param>,
     pub ret: Ret,
+    /// A host-owned future returned as HostRef, with its declared completion type.
+    pub future: Option<Ty>,
     pub doc: Vec<String>,
 }
 
@@ -353,6 +355,8 @@ pub enum MethodKind {
     Await,
     /// A read-only property on `&self`.
     Getter,
+    /// A writable property on `&self`, taking its new value.
+    Setter,
     /// `async fn(&self) -> Result<Option<T>, E>`: the class is an async iterator of `T`
     /// (`__aiter__`/`__anext__`); `None` ends it.
     Next,

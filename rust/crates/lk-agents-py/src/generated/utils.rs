@@ -58,7 +58,7 @@ fn _extract_exp_filter_update_base_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64
 }
 
 #[pyclass(subclass, name = "ExpFilter", module = "livekit.agents.utils.exp_filter")]
-pub struct ExpFilter(ExpFilterImpl);
+pub struct ExpFilter(pub(crate) ExpFilterImpl);
 
 #[pymethods]
 impl ExpFilter {
@@ -106,7 +106,7 @@ fn _extract_moving_average_add_sample_sample(obj: &Bound<'_, PyAny>) -> PyResult
 }
 
 #[pyclass(subclass, name = "MovingAverage", module = "livekit.agents.utils.moving_average")]
-pub struct MovingAverage(MovingAverageImpl);
+pub struct MovingAverage(pub(crate) MovingAverageImpl);
 
 #[pymethods]
 impl MovingAverage {

@@ -25,6 +25,8 @@ use tokio::sync::oneshot;
 /// Python callbacks for the generated TTS emitter, entered through HostInvoker.
 pub(crate) mod emitter;
 #[cfg(test)]
+mod cancellation_tests;
+#[cfg(test)]
 mod parentage_tests;
 pub mod loop_monitor;
 pub mod source;
@@ -66,8 +68,14 @@ impl Started {
 /// The host task of a call in flight, cancelled when the call is dropped before it settles.
 struct InFlight {
     event_loop: Py<PyAny>,
-    task: Arc<Mutex<Option<Py<PyAny>>>>,
+    state: Arc<Mutex<InFlightState>>,
     settled: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct InFlightState {
+    task: Option<Py<PyAny>>,
+    cancelled: bool,
 }
 
 impl InFlight {
@@ -75,19 +83,20 @@ impl InFlight {
         if self.settled.load(Ordering::SeqCst) {
             return;
         }
-        Python::attach(|py| {
-            let task = self
-                .task
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .as_ref()
-                .map(|t| t.clone_ref(py));
-            if let Some(task) = task
-                && let Ok(cancel) = task.bind(py).getattr("cancel")
-            {
-                let _ = self.event_loop.bind(py).call_method1("call_soon_threadsafe", (cancel,));
-            }
-        });
+        // Startup holds the GIL before locking state; release state before acquiring the GIL.
+        let task = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.cancelled = true;
+            state.task.take()
+        };
+        if let Some(task) = task {
+            Python::attach(|py| {
+                if let Ok(cancel) = task.bind(py).getattr("cancel") {
+                    let _ =
+                        self.event_loop.bind(py).call_method1("call_soon_threadsafe", (cancel,));
+                }
+            });
+        }
     }
 }
 
@@ -122,7 +131,7 @@ where
     F: for<'py> FnOnce(Python<'py>) -> PyResult<Bound<'py, PyAny>> + Send + 'static,
 {
     let (sender, receiver) = oneshot::channel::<PyResult<Py<PyAny>>>();
-    let task = Arc::new(Mutex::new(None));
+    let state = Arc::new(Mutex::new(InFlightState::default()));
     let settled = Arc::new(AtomicBool::new(false));
     let deliver = {
         let sender = Arc::new(Mutex::new(Some(sender)));
@@ -134,7 +143,7 @@ where
             }
         }
     };
-    let task_slot = task.clone();
+    let task_slot = state.clone();
     let call = Mutex::new(Some(call));
     let task_ctx = ctx.clone().unbind();
     let loop_ref = event_loop.clone().unbind();
@@ -144,6 +153,10 @@ where
         let Some(call) = call.lock().unwrap_or_else(|p| p.into_inner()).take() else {
             return Ok(());
         };
+        if task_slot.lock().unwrap_or_else(|p| p.into_inner()).cancelled {
+            deliver(Err(pyo3::exceptions::asyncio::CancelledError::new_err(())));
+            return Ok(());
+        }
         let value = match call(py) {
             Ok(value) => value,
             Err(e) => {
@@ -164,7 +177,6 @@ where
         let kwargs = pyo3::types::PyDict::new(py);
         kwargs.set_item("context", task_ctx.bind(py))?;
         let future = loop_ref.bind(py).call_method("create_task", (coroutine,), Some(&kwargs))?;
-        *task_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(future.clone().unbind());
         let deliver = Mutex::new(Some(deliver.clone()));
         let done = PyCFunction::new_closure(py, None, None, move |args, _| -> PyResult<()> {
             let finished = args.get_item(0)?;
@@ -175,12 +187,22 @@ where
             Ok(())
         })?;
         future.call_method1("add_done_callback", (done,))?;
+        let cancel_now = {
+            let mut state = task_slot.lock().unwrap_or_else(|p| p.into_inner());
+            if !state.cancelled {
+                state.task = Some(future.clone().unbind());
+            }
+            state.cancelled
+        };
+        if cancel_now {
+            future.call_method0("cancel")?;
+        }
         Ok(())
     })?;
     event_loop.call_method1("call_soon_threadsafe", (ctx.getattr("run")?, start))?;
     Ok(Started {
         receiver,
-        in_flight: InFlight { event_loop: event_loop.clone().unbind(), task, settled },
+        in_flight: InFlight { event_loop: event_loop.clone().unbind(), state, settled },
     })
 }
 

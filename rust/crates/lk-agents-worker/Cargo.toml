@@ -9,7 +9,30 @@ license.workspace = true
 livekit-protocol.workspace = true
 prost.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
+lk-agents-net = { path = "../lk-agents-net" }
+serde_json = { workspace = true, features = ["preserve_order"] }
+# The job process protocol (`ipc/wire.rs`): typed messages, postcard-encoded.
 serde.workspace = true
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+tokio = { workspace = true, features = ["net", "rt", "sync", "time", "io-util", "macros"] }
 thiserror.workspace = true
+async-trait.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+sysinfo.workspace = true
 log.workspace = true
+url = "2"
+# The endpoint exchange's HTTP/1.1 request head (`endpoint.rs`).
+httparse = "1"
+livekit-token.workspace = true
+# The log lines' timestamps (`cli.rs`).
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+[target.'cfg(unix)'.dependencies]
+# SIGUSR1 before the kill of a supervised process (`ipc`).
+libc = "0.2"
+
+[dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util"] }

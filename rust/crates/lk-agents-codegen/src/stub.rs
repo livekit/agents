@@ -77,7 +77,11 @@ pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Stub>, String> {
         b.push_str(&format!("from typing import {}\n", typing.join(", ")));
         wrote = true;
     }
-    for l in imports(exposed) {
+    let extra_imports = imports(exposed);
+    if wrote && !extra_imports.is_empty() {
+        b.push('\n');
+    }
+    for l in extra_imports {
         b.push_str(&format!("{l}\n"));
         wrote = true;
     }

@@ -1,35 +1,42 @@
 //! Worker CPU smoothing, capacity, status, and idle-process calculations.
 
-use lk_agents_abi::utils::filters::MovingAverage;
+use std::collections::VecDeque;
 
 /// Sampled independently by each worker.
 #[derive(Debug)]
-pub struct DefaultLoadCalc<Filter: MovingAverage> {
-    avg: Filter,
+pub struct DefaultLoadCalc {
+    samples: VecDeque<f64>,
 }
 
-impl<Filter: MovingAverage> Default for DefaultLoadCalc<Filter> {
+impl Default for DefaultLoadCalc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Filter: MovingAverage> DefaultLoadCalc<Filter> {
+impl DefaultLoadCalc {
     /// Five samples at the load-update interval cover 2.5 seconds.
     pub const WINDOW: usize = 5;
 
     pub fn new() -> Self {
-        DefaultLoadCalc { avg: Filter::new(Self::WINDOW) }
+        DefaultLoadCalc { samples: VecDeque::with_capacity(Self::WINDOW) }
     }
 
     /// Normalised to `0.0..=1.0`.
     pub fn add_sample(&mut self, cpu_fraction: f32) {
-        self.avg.add_sample(cpu_fraction as f64);
+        if self.samples.len() == Self::WINDOW {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(f64::from(cpu_fraction));
     }
 
     /// Zero before the first sample, so a fresh worker is available on cold start.
     pub fn get(&self) -> f32 {
-        self.avg.get_avg() as f32
+        if self.samples.is_empty() {
+            0.0
+        } else {
+            (self.samples.iter().sum::<f64>() / self.samples.len() as f64) as f32
+        }
     }
 }
 

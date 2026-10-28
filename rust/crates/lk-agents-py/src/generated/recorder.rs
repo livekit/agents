@@ -35,7 +35,7 @@ fn _extract_session_recorder_finish_now(obj: &Bound<'_, PyAny>) -> PyResult<::st
 
 /// One admitted runtime worker owns opening, encoding, writes and finalization.
 #[pyclass(frozen, name = "SessionRecorder", module = "livekit.agents._core")]
-pub struct SessionRecorder(::std::sync::Arc<SessionRecorderImpl>);
+pub struct SessionRecorder(pub(crate) ::std::sync::Arc<SessionRecorderImpl>);
 
 #[pymethods]
 impl SessionRecorder {

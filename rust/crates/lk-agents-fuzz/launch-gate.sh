@@ -84,10 +84,9 @@ python3 crates/lk-agents-fuzz/corpus/derive.py --check
 step "build"
 cargo check -q --workspace --all-targets
 
-step "worker core and real transport tests"
-cargo test -q -p lk-agents-worker
-cargo test -q -p lk-agents-runtime --lib worker::
-cargo test -q -p lk-agents-runtime --test ipc_frames
+step "worker lifecycle and real transport tests"
+cargo test -q -p lk-agents-worker -p lk-agents-net
+cargo test -q -p lk-agents-worker --test ipc_frames --test worker_cli
 
 py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
 agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents-next}

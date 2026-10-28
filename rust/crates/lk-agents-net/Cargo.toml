@@ -39,6 +39,7 @@ prost.workspace = true
 pbjson-types.workspace = true
 tonic-types = { version = "0.14", default-features = false }
 rand = "0.9"
+web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }

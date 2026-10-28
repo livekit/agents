@@ -27,7 +27,7 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from types import FrameType
@@ -270,11 +270,15 @@ class _JobProc:
 
     # --- the steps the core runs -------------------------------------------------------
 
-    def _in_job(self, coro: Coroutine[Any, Any, _T], name: str) -> asyncio.Task[_T]:
+    def _in_job(self, awaitable: Awaitable[_T], name: str) -> asyncio.Task[_T]:
         ctx = contextvars.copy_context()
         ctx.run(_JobContextVar.set, self._job_ctx)
         ctx.run(http_context._ContextVar.set, self._http_session)
-        return ctx.run(asyncio.create_task, coro, name=name)
+
+        async def run() -> _T:
+            return await awaitable
+
+        return ctx.run(asyncio.create_task, run(), name=name)
 
     async def _core_start_entrypoint(self) -> asyncio.Task[None]:
         return self._in_job(self._traceable_entrypoint(), "job_user_entrypoint")

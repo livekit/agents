@@ -94,10 +94,18 @@ pub trait Implementations: 'static {
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type ConsoleIo: ::lk_agents_abi::voice::console::ConsoleIo;
     type VoiceSessionExecution: ::lk_agents_abi::voice::console::VoiceSessionExecution;
+    type EndpointStream: ::lk_agents_abi::worker::endpoint_host::EndpointStream;
+    type EndpointServer: ::lk_agents_abi::worker::endpoint_host::EndpointServer;
     type JobTrace: ::lk_agents_abi::worker::job::JobTrace;
     type ServerEnvironment: ::lk_agents_abi::worker::worker::ServerEnvironment;
     type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
     type CliSignals: ::lk_agents_abi::worker::cli::CliSignals;
+    type WorkerProcSupervisor: ::lk_agents_abi::worker::ipc_host::WorkerProcSupervisor;
+    type WorkerIpcClient: ::lk_agents_abi::worker::ipc_host::WorkerIpcClient;
+    type WorkerProcPool: ::lk_agents_abi::worker::ipc_host::WorkerProcPool;
+    type WorkerJobRun: ::lk_agents_abi::worker::ipc_host::WorkerJobRun;
+    type ServerConfig: ::lk_agents_abi::worker::server_host::ServerConfig;
+    type ServerRuntime: ::lk_agents_abi::worker::server_host::ServerRuntime;
 }
 
 /// Adds every declared class to `_core`.
@@ -242,12 +250,23 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_class::<voice::ConsoleIo>()?;
     m.add_function(wrap_pyfunction!(voice::_core_voice_session_start, m)?)?;
+    m.add_class::<worker::EndpointStream>()?;
+    m.add_class::<worker::EndpointServer>()?;
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;
     m.add_function(wrap_pyfunction!(worker::parse_cli, m)?)?;
     m.add_function(wrap_pyfunction!(worker::entrypoint_module, m)?)?;
+    m.add_function(wrap_pyfunction!(worker::format_log_record, m)?)?;
+    m.add_function(wrap_pyfunction!(worker::dev_channel, m)?)?;
+    m.add_function(wrap_pyfunction!(worker::ipc_pair, m)?)?;
     m.add_class::<worker::ExitSignals>()?;
+    m.add_class::<worker::ProcSupervisor>()?;
+    m.add_class::<worker::IpcClient>()?;
+    m.add_class::<worker::ProcPool>()?;
+    m.add_class::<worker::JobRun>()?;
+    m.add_class::<worker::ServerConfig>()?;
+    m.add_class::<worker::ServerRuntime>()?;
     m.add_function(wrap_pyfunction!(text_session::_core_persist_text_session_state, m)?)?;
     m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
     Ok(())

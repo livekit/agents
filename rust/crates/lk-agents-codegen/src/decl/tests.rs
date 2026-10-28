@@ -6,7 +6,7 @@ use super::*;
 mod callables;
 mod models;
 
-const LIB: &str = "pub mod errors; pub mod llm; pub mod utils; pub use llm::chat::Item;";
+const LIB: &str = "pub mod errors; pub mod llm; pub mod utils; pub use llm::chat::Item; pub use utils::host_ref::HostRef;";
 
 const ERRORS: &str = r#"
 #[crate::host(error(with = crate::errors::raise))]
@@ -61,7 +61,11 @@ pub(crate) fn read(llm: &str) -> Result<Declarations, String> {
             ("llm.rs", "pub mod chat; pub mod class;"),
             ("llm/chat.rs", CHAT),
             ("llm/class.rs", llm),
-            ("utils.rs", "pub mod stream; pub mod maybe;"),
+            ("utils.rs", "pub mod stream; pub mod maybe; pub mod host_ref;"),
+            (
+                "utils/host_ref.rs",
+                "#[crate::host(handwritten(extract, emit, host = \"object\"))] pub struct HostRef;",
+            ),
             ("utils/maybe.rs", "pub enum Maybe<T> { NotGiven, Given(T) }"),
             ("utils/stream.rs", "pub trait StreamSource<T> {}"),
         ],
@@ -308,7 +312,7 @@ fn mutable_classes_and_functions_are_their_own_forms() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
         llm.contains("#[pyclass(name = \"Parser\"")
-            && llm.contains("pub struct Parser(ParserImpl);"),
+            && llm.contains("pub struct Parser(pub(crate) ParserImpl);"),
         "{llm}"
     );
     assert!(

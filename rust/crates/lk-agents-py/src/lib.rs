@@ -34,6 +34,10 @@ pub mod runtime;
 pub mod storage;
 /// `Thread`, `Turn` and `Boundary`: the run and the turn of `lk-agents-storage` over a Python host.
 pub mod turn;
+/// Worker bootstrap and Python host adapters.
+pub mod worker_host;
+
+pub use lk_agents_runtime::{inference, process, worker};
 
 /// The classes the generated adapters hand an implementation's own objects out as.
 pub mod handles {
@@ -96,7 +100,15 @@ impl generated::Implementations for Selected {
     type EndpointCard = lk_agents_runtime::a2a_card::CardBuilder;
     type McpSession = lk_agents_runtime::mcp::McpSession;
     type McpTools = lk_agents_runtime::mcp::McpTools;
-    type WorkerCli = lk_agents_runtime::worker::cli::WorkerCli;
+    type WorkerProcSupervisor = crate::worker_host::ipc::PyProcSupervisor;
+    type WorkerIpcClient = crate::worker_host::ipc::PyIpcClient;
+    type WorkerProcPool = crate::worker_host::ipc::PyProcPool;
+    type WorkerJobRun = crate::worker_host::ipc::PyJobRun;
+    type WorkerCli = crate::worker_host::cli::WorkerCli;
+    type EndpointStream = crate::worker_host::endpoint::PyEndpointStream;
+    type EndpointServer = crate::worker_host::endpoint::PyEndpointServer;
+    type ServerConfig = crate::worker_host::PyServerConfig;
+    type ServerRuntime = crate::worker_host::PyServer;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type InferenceCredentials = lk_agents_runtime::cores::InferenceCredentials;

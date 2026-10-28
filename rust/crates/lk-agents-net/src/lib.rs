@@ -12,6 +12,7 @@
 //! - [`token`]: framework credentials signed with LiveKit's token crate.
 //! - [`transport`]: the WebSocket seam, transport errors and waits bounded on a clock.
 //! - [`websocket`]: the real WebSocket transport over `tokio-tungstenite`.
+//! - [`webtransport`]: raw QUIC sessions with TLS and HTTP connect headers.
 
 pub mod a2a_auth;
 pub mod a2a_client;
@@ -25,3 +26,4 @@ pub mod task;
 pub mod token;
 pub mod transport;
 pub mod websocket;
+pub mod webtransport;

@@ -208,6 +208,7 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
         }
         params.push(parameter);
     }
+
     let mut s = String::new();
     let ind = if matches!(m.kind, MethodKind::Function | MethodKind::AsyncFunction) {
         ""
@@ -222,6 +223,10 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
         MethodKind::New => ("def", "__init__", "None".to_owned()),
         MethodKind::Getter => {
             s.push_str("    @property\n");
+            ("def", m.name.as_str(), ret)
+        }
+        MethodKind::Setter => {
+            s.push_str(&format!("    @{}.setter\n", m.name));
             ("def", m.name.as_str(), ret)
         }
         MethodKind::Next => {
@@ -255,7 +260,14 @@ pub(crate) fn signature_parts(
     m: &Method,
     imports: &mut Imports,
 ) -> (Vec<(String, bool)>, String) {
-    (parameters(c, m, imports), annotation(c, &m.ret.ok, Dir::Out, imports))
+    let result = match &m.future {
+        Some(ty) => {
+            imports.add("asyncio", "Future");
+            format!("Future[{}]", annotation(c, ty, Dir::Out, imports))
+        }
+        None => annotation(c, &m.ret.ok, Dir::Out, imports),
+    };
+    (parameters(c, m, imports), result)
 }
 
 /// Parameters shared by native stubs and authoring-class constructors.
@@ -313,6 +325,9 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::Maybe(t) => {
             imports.add("..types", "NotGivenOr");
             format!("NotGivenOr[{}]", annotation(c, t, dir, imports))
+        }
+        Ty::List(t) if dir == Dir::Out && matches!(**t, Ty::Int(crate::decl::Int::U8)) => {
+            "bytes".into()
         }
         Ty::List(t) if dir == Dir::In && matches!(**t, Ty::Int(crate::decl::Int::U8)) => {
             "bytes | bytearray | memoryview | list[int]".into()

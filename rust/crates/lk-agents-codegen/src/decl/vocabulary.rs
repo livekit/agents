@@ -26,6 +26,8 @@
 //! | trait method | `await` | an `async fn` on `&self`, awaited by the host |
 //! | class method | `call, detach` | releases the GIL while the synchronous native operation executes; arguments are converted before release and results afterward |
 //! | trait method | `getter` | a read-only property on `&self` |
+//! | trait method | `call, future = T` | a synchronous method returning `HostRef` containing a host-owned future; its completion type `T` gives the generated `Future[T]` annotation |
+//! | trait method | `setter` | a writable property on `&self` with one value parameter and unit result |
 //! | trait method | `next` | `async fn next(&self) -> Result<Option<T>, E>`: the class is an async iterator of `T` (`__aiter__`/`__anext__`); `None` ends it |
 //! | trait method | `name = "x"` | the host name, when the Rust one cannot be it |
 //! | class/function trait | `class(.., pid = false)`, `functions(pid = false)` | retain the pure export opt-out from the fork guard; defaults to true |

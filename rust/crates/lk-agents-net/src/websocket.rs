@@ -5,6 +5,41 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 
+pub use tokio_tungstenite::tungstenite::{self, Message};
+
+/// A socket for protocols that need binary frames and explicit ping/pong handling.
+pub type RawWebSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Connect with an optional protocol message limit; `None` preserves the transport default.
+/// The caller owns its connection deadline and the returned socket's lifecycle.
+pub async fn connect_with_limit(
+    url: &str,
+    headers: Vec<(String, String)>,
+    max_message_size: Option<usize>,
+) -> Result<RawWebSocket, TransportError> {
+    use tungstenite::client::IntoClientRequest;
+
+    let mut request =
+        url.into_client_request().map_err(|error| TransportError::Connect(error.to_string()))?;
+    for (name, value) in headers {
+        let name = tungstenite::http::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|error| TransportError::Connect(error.to_string()))?;
+        let value = tungstenite::http::HeaderValue::from_str(&value)
+            .map_err(|error| TransportError::Connect(error.to_string()))?;
+        request.headers_mut().insert(name, value);
+    }
+    let config = max_message_size.map(|limit| {
+        tungstenite::protocol::WebSocketConfig::default()
+            .max_message_size(Some(limit))
+            .max_frame_size(Some(limit))
+    });
+    let (socket, _response) = tokio_tungstenite::connect_async_with_config(request, config, false)
+        .await
+        .map_err(classify_tungstenite)?;
+    Ok(socket)
+}
+
 fn response_reason(status: i64) -> String {
     lk_agents_abi::errors::http_reason(status).unwrap_or("HTTP error").to_owned()
 }
@@ -19,21 +54,7 @@ impl WsTransport for TungsteniteTransport {
         url: &str,
         headers: Vec<(String, String)>,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-
-        let mut request =
-            url.into_client_request().map_err(|e| TransportError::Connect(e.to_string()))?;
-        for (name, value) in headers {
-            let name =
-                tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(name.as_bytes())
-                    .map_err(|e| TransportError::Connect(e.to_string()))?;
-            let value = tokio_tungstenite::tungstenite::http::HeaderValue::from_str(&value)
-                .map_err(|e| TransportError::Connect(e.to_string()))?;
-            request.headers_mut().insert(name, value);
-        }
-
-        let (stream, _response) =
-            tokio_tungstenite::connect_async(request).await.map_err(classify_tungstenite)?;
+        let stream = connect_with_limit(url, headers, None).await?;
         let (sink, source) = stream.split();
         Ok((
             Arc::new(TungsteniteSender {
@@ -71,14 +92,9 @@ pub fn classify_tungstenite(err: tokio_tungstenite::tungstenite::Error) -> Trans
     }
 }
 
-type WsStream =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
 struct TungsteniteSender {
     /// A `tokio` mutex: held across the `send` await, and `&self` is required.
-    sink: tokio::sync::Mutex<
-        futures_util::stream::SplitSink<WsStream, tokio_tungstenite::tungstenite::Message>,
-    >,
+    sink: tokio::sync::Mutex<futures_util::stream::SplitSink<RawWebSocket, Message>>,
     closed: std::sync::atomic::AtomicBool,
 }
 
@@ -119,7 +135,7 @@ impl WsSender for TungsteniteSender {
 }
 
 struct TungsteniteReceiver {
-    source: futures_util::stream::SplitStream<WsStream>,
+    source: futures_util::stream::SplitStream<RawWebSocket>,
     close_code: Option<u16>,
 }
 
@@ -139,5 +155,34 @@ impl WsReceiver for TungsteniteReceiver {
             Some(Ok(_)) => WsMessage::Other,
             Some(Err(err)) => return Err(classify_tungstenite(err)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn connection_message_limit_refuses_an_oversized_prefix_without_waiting_for_payload() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (release, hold) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            // A binary message advertising 129 bytes, with all payload withheld.
+            socket.get_mut().write_all(&[0x82, 126, 0, 129]).await.unwrap();
+            let _ = hold.await;
+        });
+        let mut socket = connect_with_limit(&url, vec![], Some(128)).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), socket.next()).await;
+        let _ = release.send(());
+        server.await.unwrap();
+        assert!(matches!(
+            result.expect("the size limit must be checked before waiting for payload"),
+            Some(Err(tungstenite::Error::Capacity(_)))
+        ));
     }
 }

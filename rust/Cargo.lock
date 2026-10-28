@@ -1548,6 +1548,7 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tonic-types",
  "url",
+ "web-transport-quinn",
 ]
 
 [[package]]
@@ -1587,7 +1588,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
- "chrono",
  "futures-util",
  "httparse",
  "indexmap",
@@ -1604,7 +1604,6 @@ dependencies = [
  "lk-agents-worker",
  "log",
  "pbjson-types",
- "postcard",
  "prost",
  "pyo3",
  "rcgen",
@@ -1614,13 +1613,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sse-stream",
- "sysinfo",
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tokio-util",
  "url",
- "web-transport-quinn",
 ]
 
 [[package]]
@@ -1682,13 +1679,28 @@ dependencies = [
 name = "lk-agents-worker"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "chrono",
+ "futures-util",
+ "httparse",
+ "libc",
  "livekit-protocol",
+ "livekit-token",
  "lk-agents-abi",
+ "lk-agents-net",
  "log",
  "postcard",
  "prost",
+ "rcgen",
+ "rustls",
  "serde",
+ "serde_json",
+ "sysinfo",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "url",
+ "web-transport-quinn",
 ]
 
 [[package]]

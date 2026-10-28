@@ -174,7 +174,10 @@ fn input_maps_accept_covariant_mapping_values_while_results_remain_dicts() {
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let text = stubs.iter().map(|stub| stub.out.text.as_str()).collect::<String>();
     assert!(text.contains("from collections.abc import Mapping"), "{text}");
-    assert!(text.contains("values: Mapping[str, bytes | bytearray | memoryview | list[int]]"), "{text}");
+    assert!(
+        text.contains("values: Mapping[str, bytes | bytearray | memoryview | list[int]]"),
+        "{text}"
+    );
     assert!(text.contains("-> dict[str, bytes]"), "{text}");
     assert!(text.contains("values: Sequence[object]"), "{text}");
     assert!(text.contains("-> list[object]"), "{text}");
@@ -644,4 +647,197 @@ fn list_item_shape_policy_keeps_concrete_list_and_typed_record_annotations() {
         code.contains("cast::<::pyo3::types::PyList>()"),
         "the strict annotation must reflect the existing reader: {code}"
     );
+}
+
+#[test]
+fn writable_property_keeps_its_name_validates_the_value_and_propagates_failures() {
+    let declarations = read(
+        r#"
+        #[crate::host(class(name = "Pool", pid = false))]
+        pub trait Pool: Sized {
+            #[host(getter)] fn target(&self) -> usize;
+            #[host(setter, name = "target", pid = true)]
+            fn set_target(&self, count: usize) -> Result<(), crate::errors::Bad>;
+        }
+    "#,
+    )
+    .unwrap();
+    let adapters = crate::adapter::emit(&declarations).unwrap();
+    let adapter = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
+    syn::parse_file(adapter).expect("a fallible writable property emits valid Rust");
+    assert!(adapter.contains("#[setter(target)]"), "{adapter}");
+    assert!(adapter.contains("number_from_py::<usize>(&obj, \"count\")"), "{adapter}");
+    assert!(
+        adapter.contains("#[pyo3(from_py_with = _extract_pool_set_target_count)]"),
+        "{adapter}"
+    );
+    let call = "::set_target(&self.0, count)";
+    let guard = "::lk_agents_abi::python::check_pid()?";
+    assert_eq!(adapter.matches(guard).count(), 1, "only this setter overrides the PID policy");
+    assert!(adapter.find(guard).unwrap() < adapter.find(call).unwrap(), "{adapter}");
+    assert!(adapter.contains(&format!("{call}.map_err(")), "{adapter}");
+    assert!(adapter.contains("HostException>::to_py_err(&e)"), "{adapter}");
+    assert!(!adapter.contains("#[pyo3(name = \"target\")]"), "the setter annotation owns its name");
+    let stubs = crate::class_stub::emit(&declarations).unwrap();
+    let stub = stubs.iter().map(|out| out.out.text.as_str()).collect::<String>();
+    assert!(stub.contains("@property\n    def target(self) -> int"), "{stub}");
+    assert!(stub.contains("@target.setter\n    def target(self, count: int) -> None"), "{stub}");
+}
+
+#[test]
+fn property_setters_refuse_signatures_python_cannot_assign() {
+    for declaration in [
+        "#[host(setter)] fn set_value(&self);",
+        "#[host(setter)] fn set_value(&self, first: usize, second: usize);",
+        "#[host(setter)] fn set_value(&self, value: usize) -> usize;",
+    ] {
+        let error = refuse(declaration);
+        assert!(error.contains("a setter takes one value and returns unit"), "{error}");
+    }
+    for declaration in [
+        "#[host(setter)] async fn set_value(&self, value: usize);",
+        "#[host(setter)] fn set_value(value: usize);",
+    ] {
+        let error = refuse(declaration);
+        assert!(error.contains("the signature does not fit `setter`"), "{error}");
+    }
+}
+
+#[test]
+fn generated_methods_accept_legacy_native_classes_only_with_clone_extraction() {
+    let source = r#"
+        #[derive(Host)]
+        #[class(from_py_object)]
+        #[binding(class, new)]
+        pub struct StartJobFields { pub job: Vec<u8> }
+
+        #[crate::host(class(name = "Supervisor"))]
+        pub trait Supervisor: Sized {
+            #[host(call)]
+            fn start_job(&self, fields: StartJobFields) -> StartJobFields;
+        }
+    "#;
+    let declarations = read(source).expect("a native class uses its existing class conversion");
+    let method = &declarations.classes[0].methods[0];
+    assert!(matches!(&method.params[0].ty,
+        Ty::Record(record) if record.extract && record.emit
+            && record.host == HostForm::CoreClass("StartJobFields".into())));
+    assert_eq!(method.params[0].ty, method.ret.ok);
+    let adapters = crate::adapter::emit(&declarations).unwrap();
+    let adapter = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
+    syn::parse_file(adapter).expect("the generated method uses the native Rust argument type");
+    assert!(adapter.contains("fields: ::lk_agents_abi::llm::class::StartJobFields"), "{adapter}");
+    assert!(adapter.contains("::start_job(&self.0, fields)"), "{adapter}");
+    assert!(
+        !adapter.contains("start_job_fields_from_py"),
+        "native classes keep their own conversion"
+    );
+
+    let without_extraction = source.replace("#[class(from_py_object)]", "#[class]");
+    let error =
+        read(&without_extraction).expect_err("output-only native classes cannot be arguments");
+    assert!(
+        error.contains("StartJobFields") && error.contains("not declared for input"),
+        "{error}"
+    );
+
+    let output_only = without_extraction
+        .replace("fn start_job(&self, fields: StartJobFields)", "fn start_job(&self)");
+    let declarations =
+        read(&output_only).expect("a native class can still be returned by a method");
+    assert!(matches!(&declarations.classes[0].methods[0].ret.ok,
+        Ty::Record(record) if !record.extract && record.emit
+            && record.host == HostForm::CoreClass("StartJobFields".into())));
+}
+
+#[test]
+fn host_owned_future_preserves_typed_completion_without_another_runtime_future() {
+    let declarations = read(
+        r#"
+        #[crate::host(class(name = "Reader"))]
+        pub trait Reader: Sized {
+            #[host(call, future = Vec<u8>)]
+            fn read(&self) -> Result<crate::HostRef, crate::errors::HostError>;
+            #[host(call, future = ())]
+            fn close(&self) -> crate::HostRef;
+            #[host(getter)] fn data(&self) -> Vec<u8>;
+        }
+    "#,
+    )
+    .unwrap();
+    let stubs = crate::class_stub::emit(&declarations).unwrap();
+    let stub = stubs.iter().map(|out| out.out.text.as_str()).collect::<String>();
+    assert!(stub.contains("from asyncio import Future"), "{stub}");
+    assert!(stub.contains("def read(self) -> Future[bytes]"), "{stub}");
+    assert!(stub.contains("def close(self) -> Future[None]"), "{stub}");
+    let class = &declarations.classes[0];
+    let mut imports = crate::class_stub::Imports::new(&declarations);
+    assert_eq!(
+        crate::class_stub::signature_parts(class, &class.methods[0], &mut imports).1,
+        "Future[bytes]",
+        "forwarded methods must keep the native future's completion type"
+    );
+    assert!(
+        stub.contains("def data(self) -> bytes"),
+        "PyO3 converts native byte vectors to bytes: {stub}"
+    );
+    let adapters = crate::adapter::emit(&declarations).unwrap();
+    let adapter = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
+    assert!(
+        !adapter.contains("future_into_py"),
+        "the adapter returns the original host future: {adapter}"
+    );
+}
+
+#[test]
+fn host_owned_future_refuses_incompatible_methods_and_completion_types() {
+    for body in [
+        "#[host(call, future = ())] fn read(&self) -> bool;",
+        "#[host(getter, future = ())] fn read(&self) -> crate::HostRef;",
+        "#[host(await, future = ())] async fn read(&self) -> crate::HostRef;",
+    ] {
+        let error = refuse(body);
+        assert!(error.contains("future requires a synchronous call returning HostRef"), "{error}");
+    }
+    let error = refuse("#[host(call, future = \"bytes\")] fn read(&self) -> crate::HostRef;");
+    assert!(error.contains("future is its Rust completion type"), "{error}");
+    let error = read(
+        r#"
+        #[crate::host(handwritten(extract, host = "InputOnly"))]
+        pub struct InputOnly;
+        #[crate::host(class(name = "Reader"))]
+        pub trait Reader: Sized {
+            #[host(call, future = InputOnly)] fn read(&self) -> crate::HostRef;
+        }
+    "#,
+    )
+    .unwrap_err();
+    assert!(error.contains("not declared for output"), "{error}");
+}
+
+#[test]
+fn property_assignment_captures_context_without_an_extra_python_argument() {
+    let declarations = read(
+        r#"
+        #[crate::host(class(name = "Pool"))]
+        pub trait Pool: Sized {
+            #[host(getter)] fn target(&self) -> usize;
+            #[host(setter, name = "target")]
+            fn set_target(&self, count: usize, #[host(context)] cx: crate::invoke::CallContext);
+        }
+    "#,
+    )
+    .unwrap();
+    let adapters = crate::adapter::emit(&declarations).unwrap();
+    let adapter = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
+    syn::parse_file(adapter).expect("a contextual property setter emits valid Rust");
+    assert!(adapter.contains("#[setter(target)]"), "{adapter}");
+    assert!(adapter.contains("let cx = crate::host::entered();"), "{adapter}");
+    assert!(adapter.contains("::set_target(&self.0, count, cx)"), "{adapter}");
+    assert!(!adapter.contains("#[pyo3(signature"), "property assignment has no call signature");
+    assert!(!adapter.contains("cx: "), "the binding captures context: {adapter}");
+    let stubs = crate::class_stub::emit(&declarations).unwrap();
+    let stub = stubs.iter().map(|out| out.out.text.as_str()).collect::<String>();
+    assert!(stub.contains("@target.setter\n    def target(self, count: int) -> None"), "{stub}");
+    assert!(!stub.contains("cx"), "context is hidden from Python: {stub}");
 }

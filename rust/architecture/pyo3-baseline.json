@@ -73,10 +73,5 @@
   "pyo3-file:rust/crates/lk-agents-runtime/src/images.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/telemetry/upload.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/telemetry/work.rs",
-  "pyo3-file:rust/crates/lk-agents-runtime/src/worker/cli.rs",
-  "pyo3-file:rust/crates/lk-agents-runtime/src/worker/mod.rs",
-  "pyo3-file:rust/crates/lk-agents-runtime/tests/eot.rs",
-  "pyo3-file:rust/crates/lk-agents-worker/src/ipc/python.rs",
-  "pyo3-file:rust/crates/lk-agents-worker/src/ipc/python/host.rs",
-  "pyo3-file:rust/crates/lk-agents-worker/src/python.rs"
+  "pyo3-file:rust/crates/lk-agents-runtime/tests/eot.rs"
 ]

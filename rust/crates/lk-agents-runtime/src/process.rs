@@ -22,6 +22,7 @@ struct Started {
     pid: u32,
     runtime: tokio::runtime::Runtime,
     workers: MediaWorkers,
+    worker_io: lk_agents_worker::io::WorkerIo,
 }
 
 static RUNTIME: Mutex<Option<Started>> = Mutex::new(None);
@@ -34,6 +35,11 @@ pub fn handle() -> Result<tokio::runtime::Handle, ProcessError> {
 /// The runtime the caller is on, else the process runtime: where a native worker's async side runs.
 pub fn caller_handle() -> Result<tokio::runtime::Handle, ProcessError> {
     tokio::runtime::Handle::try_current().or_else(|_| handle())
+}
+
+/// Process-owned admission reserved for worker setup and health sampling.
+pub fn worker_io() -> Result<lk_agents_worker::io::WorkerIo, ProcessError> {
+    with_started(|started| started.worker_io.clone())
 }
 
 /// The process-owned native admission pool. Clones share the same class and total capacity.
@@ -57,7 +63,9 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         .map_err(|e| ProcessError::Start(e.to_string()))?;
     let workers = MediaWorkers::new(MediaWorkerLimits::default())
         .map_err(|error| ProcessError::Start(error.to_string()))?;
-    let started = slot.insert(Started { pid, runtime, workers });
+    let worker_io = lk_agents_worker::io::WorkerIo::new(runtime.handle().clone(), 4)
+        .map_err(|error| ProcessError::Start(error.to_string()))?;
+    let started = slot.insert(Started { pid, runtime, workers, worker_io });
     Ok(read(started))
 }
 

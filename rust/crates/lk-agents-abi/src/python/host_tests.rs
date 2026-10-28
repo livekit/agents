@@ -765,8 +765,8 @@ mod session_bridge {
         extract_generated::<crate::llm::tool_executor::ToolReport>(v.bind(py))
     }
 
-    // Catches: a variant read as another, a defaulted flag read as given, the transition dropped,
-    // or a dict accepted in place of the model.
+    // Catches: a variant read as another, a defaulted flag read as given, a transition dropped,
+    // or an untyped outcome accepted in place of its declared model.
     #[test]
     fn a_tool_outcome_carries_its_payload() {
         use crate::llm::tool_executor::ToolOutcome;
@@ -794,6 +794,8 @@ mod session_bridge {
             assert!(a.transition.is_some());
             let working = "out = tool_report.ToolReport(outcome=tool_report.ToolOutcomeWorking())";
             assert_eq!(answer(py, working).unwrap().outcome, ToolOutcome::Working(None));
+            let unknown = "out = tool_report.ToolReport(outcome=object())";
+            assert!(answer(py, unknown).is_err(), "an outcome outside the declared variants");
             assert!(answer(py, "out = {'outcome': {'kind': 'working'}}").is_err(), "a dict");
             assert!(answer(py, "out = 'sunny'").is_err(), "not a report at all");
         });

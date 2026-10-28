@@ -46,11 +46,11 @@ pub mod recording;
 pub mod storage;
 pub mod telemetry;
 
-pub mod worker_cli;
+pub use lk_agents_worker::cli_signals as worker_cli;
 
 pub mod text_session;
 
-pub mod worker;
+pub use lk_agents_worker as worker;
 
 pub mod vad;
 

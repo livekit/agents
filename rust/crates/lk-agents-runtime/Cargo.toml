@@ -48,10 +48,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 url = "2"
 # `SQLiteStorage`: one file per thread, executed on its own connection thread.
 
-postcard = { version = "1", default-features = false, features = ["alloc"] }
-sysinfo.workspace = true
-web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -60,7 +56,6 @@ libc = "0.2"
 bytes = "1"
 lk-agents-voice = { path = "../lk-agents-voice", default-features = false, features = ["dst"] }
 lk-agents-storage = { path = "../lk-agents-storage", features = ["testing"] }
-rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 lk-agents-inference = { path = "../lk-agents-inference", features = ["testkit"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
 

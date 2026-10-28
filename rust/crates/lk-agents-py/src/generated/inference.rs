@@ -262,7 +262,7 @@ type InferenceAvatarImpl = <crate::Selected as super::Implementations>::Inferenc
 /// One avatar provisioned through LiveKit Inference: at most one provider session per instance,
 /// created under one operation identity, held until `aclose()` terminates it.
 #[pyclass(frozen, name = "InferenceAvatar", module = "livekit.agents._core")]
-pub struct InferenceAvatar(::std::sync::Arc<InferenceAvatarImpl>);
+pub struct InferenceAvatar(pub(crate) ::std::sync::Arc<InferenceAvatarImpl>);
 
 #[pymethods]
 impl InferenceAvatar {

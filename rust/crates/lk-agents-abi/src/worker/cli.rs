@@ -40,12 +40,40 @@ pub enum CliError {
 
 /// The typed command parser and filesystem entrypoint discovery implemented by the launcher.
 #[crate::host(functions)]
+#[async_trait::async_trait]
 pub trait WorkerCli {
     #[host(function)]
     fn parse_cli(argv: Vec<String>) -> Result<CliArgs, CliError>;
 
     #[host(function)]
     fn entrypoint_module(path: Option<String>) -> Result<(String, String), CliError>;
+
+    /// Format one host logging record using its boundary adapter.
+    #[host(function, pid = false)]
+    fn format_log_record(
+        style: String,
+        record: crate::HostRef,
+        message: String,
+        asctime: String,
+        exception: Option<String>,
+        stack: Option<String>,
+        ensure_ascii: bool,
+    ) -> Result<String, crate::errors::HostError>;
+
+    /// The development launcher connection.
+    #[host(function)]
+    async fn dev_channel(
+        cli_addr: String,
+        agent_name: String,
+        url: String,
+        api_key: String,
+        api_secret: String,
+        server: std::sync::Arc<dyn DevServer>,
+    );
+
+    /// Create the control endpoints for process bootstrap.
+    #[host(function)]
+    fn ipc_pair() -> Result<(i64, i64), crate::errors::HostError>;
 }
 
 /// The process launcher's signal and final event-loop cleanup owner.

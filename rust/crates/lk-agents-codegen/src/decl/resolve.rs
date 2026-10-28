@@ -141,13 +141,17 @@ impl Resolver<'_> {
         voc::only(
             &at,
             &entries,
-            &["new", "call", "await", "getter", "function", "next", "name", "pid", "detach"],
+            &[
+                "new", "call", "await", "getter", "setter", "function", "next", "name", "pid",
+                "detach", "future",
+            ],
         )?;
         let kinds: Vec<MethodKind> = [
             ("new", MethodKind::New),
             ("call", MethodKind::Call),
             ("await", MethodKind::Await),
             ("getter", MethodKind::Getter),
+            ("setter", MethodKind::Setter),
             ("function", MethodKind::Function),
             ("next", MethodKind::Next),
         ]
@@ -157,7 +161,7 @@ impl Resolver<'_> {
         .collect();
         let [mut kind] = kinds[..] else {
             return Err(format!(
-                "{at}: declare exactly one of new, call, await, getter, function, next"
+                "{at}: declare exactly one of new, call, await, getter, setter, function, next"
             ));
         };
         if kind == MethodKind::Function && f.sig.asyncness.is_some() {
@@ -181,7 +185,9 @@ impl Resolver<'_> {
             MethodKind::Await | MethodKind::Next => {
                 receiver.is_some_and(shared) && f.sig.asyncness.is_some()
             }
-            MethodKind::Getter => receiver.is_some_and(shared) && f.sig.asyncness.is_none(),
+            MethodKind::Getter | MethodKind::Setter => {
+                receiver.is_some_and(shared) && f.sig.asyncness.is_none()
+            }
             MethodKind::Call => {
                 receiver.is_some_and(|r| r.reference.is_some()) && f.sig.asyncness.is_none()
             }
@@ -263,6 +269,12 @@ impl Resolver<'_> {
             return Err(format!("{at}: a getter takes no parameters"));
         }
         let ret = self.ret(&f.sig.output, &at)?;
+        if kind == MethodKind::Setter
+            && (params.iter().filter(|parameter| parameter.ty != Ty::CallContext).count() != 1
+                || ret.ok != Ty::Unit)
+        {
+            return Err(format!("{at}: a setter takes one value and returns unit"));
+        }
         if kind == MethodKind::Next
             && (!f.sig.inputs.iter().all(|i| matches!(i, syn::FnArg::Receiver(_)))
                 || ret.err.is_none()
@@ -276,6 +288,24 @@ impl Resolver<'_> {
             return Err(format!("{at}: a constructor returns `Self` or `Result<Self, E>`"));
         }
         check_output(&at, &ret.ok)?;
+        let future = match voc::find(&entries, "future") {
+            None => None,
+            Some(entry) => {
+                if kind != MethodKind::Call
+                    || ret.ok != self.ty(&syn::parse_quote!(crate::HostRef), &at)?
+                {
+                    return Err(format!(
+                        "{at}: future requires a synchronous call returning HostRef"
+                    ));
+                }
+                let Some(Value::Rust(ty)) = &entry.value else {
+                    return Err(format!("{at}: future is its Rust completion type"));
+                };
+                let ty = self.ty(ty, &at)?;
+                check_output(&at, &ty)?;
+                Some(ty)
+            }
+        };
         Ok(Method {
             rust_name: f.sig.ident.to_string(),
             mutable: receiver.is_some_and(|r| r.mutability.is_some()),
@@ -285,6 +315,7 @@ impl Resolver<'_> {
             pid: voc::boolean(&at, &entries, "pid")?,
             params,
             ret,
+            future,
             doc: doc(&f.attrs),
         })
     }
@@ -679,6 +710,15 @@ impl Resolver<'_> {
                 host: HostForm::Annotation(host),
                 extract: has("extract"),
                 emit: has("emit"),
+                in_place: false,
+            }));
+        }
+        if derives_host(attrs) && class_struct(it) {
+            return Ok(Ty::Record(Record {
+                rust,
+                host: HostForm::CoreClass(ident.clone()),
+                extract: class_from_py_object(it),
+                emit: true,
                 in_place: false,
             }));
         }
