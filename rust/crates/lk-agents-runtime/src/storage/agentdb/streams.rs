@@ -19,6 +19,7 @@ use lk_agents_storage::streams::{CONTENT_TYPE, DEFAULT_TTL, START, StreamInfo};
 
 use super::conn::TokenMinter;
 use super::http_ok;
+use crate::sse::{SseDecoder, SseEvent};
 
 /// The streams API's answer to a create.
 #[derive(serde::Deserialize)]
@@ -199,7 +200,17 @@ struct Sse {
     body: std::pin::Pin<
         Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>,
     >,
-    buf: Vec<u8>,
+    decoder: SseDecoder,
+    events: VecDeque<SseEvent>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Control {
+    stream_next_offset: Option<String>,
+    error: Option<String>,
+    #[serde(default)]
+    stream_closed: bool,
 }
 
 impl StreamReader {
@@ -271,27 +282,31 @@ impl StreamReader {
                 .await
                 .map_err(transport)?;
             let resp = http_ok(resp).await?;
-            self.sse = Some(Sse { body: Box::pin(resp.bytes_stream()), buf: Vec::new() });
+            self.sse = Some(Sse {
+                body: Box::pin(resp.bytes_stream()),
+                decoder: SseDecoder::new(),
+                events: VecDeque::new(),
+            });
         }
         let sse = self.sse.as_mut().expect("opened above");
         loop {
-            if let Some((event, data)) = take_event(&mut sse.buf) {
-                match event.as_str() {
+            if let Some(event) = sse.events.pop_front() {
+                match event.event.as_str() {
                     "data" => {
-                        self.buffered.extend(split_records(data.as_bytes())?);
+                        self.buffered.extend(split_records(event.data.as_bytes())?);
                         return Ok(());
                     }
                     "control" => {
-                        let c: serde_json::Value = serde_json::from_str(&data)
+                        let c: Control = serde_json::from_str(&event.data)
                             .map_err(|e| StorageError::Decode(e.to_string()))?;
-                        if let Some(next) = c["streamNextOffset"].as_str() {
-                            self.from = next.to_owned();
+                        if let Some(next) = c.stream_next_offset {
+                            self.from = next;
                         }
-                        if let Some(err) = c["error"].as_str() {
+                        if let Some(err) = c.error {
                             self.sse = None;
                             return Err(StorageError::Http { status: 0, message: err.to_owned() });
                         }
-                        if c["streamClosed"].as_bool() == Some(true) {
+                        if c.stream_closed {
                             self.closed = true;
                             self.sse = None;
                             return Ok(());
@@ -302,12 +317,19 @@ impl StreamReader {
                 continue;
             }
             match sse.body.next().await {
-                Some(Ok(chunk)) => sse.buf.extend_from_slice(&chunk),
+                Some(Ok(chunk)) => {
+                    let mut events = Vec::new();
+                    sse.decoder
+                        .feed(&chunk, &mut events)
+                        .map_err(|e| StorageError::Decode(e.to_string()))?;
+                    sse.events.extend(events);
+                }
                 Some(Err(e)) => {
                     self.sse = None;
                     return Err(transport(e));
                 }
                 None => {
+                    sse.decoder.finish().map_err(|e| StorageError::Decode(e.to_string()))?;
                     self.sse = None; // rotation: reconnect from the offset
                     return Ok(());
                 }
@@ -326,23 +348,6 @@ fn split_records(body: &[u8]) -> Result<Vec<Vec<u8>>, StorageError> {
     Ok(records.into_iter().map(|r| r.get().as_bytes().to_vec()).collect())
 }
 
-/// One complete SSE event off the front of `buf`: `(event, data)`, data lines joined with `\n`.
-fn take_event(buf: &mut Vec<u8>) -> Option<(String, String)> {
-    let end = buf.windows(2).position(|w| w == b"\n\n")?;
-    let block = String::from_utf8_lossy(&buf[..end]).into_owned();
-    buf.drain(..end + 2);
-    let mut event = String::from("message");
-    let mut data = Vec::new();
-    for line in block.lines() {
-        if let Some(v) = line.strip_prefix("event:") {
-            event = v.trim().to_owned();
-        } else if let Some(v) = line.strip_prefix("data:") {
-            data.push(v.strip_prefix(' ').unwrap_or(v).to_owned());
-        }
-    }
-    Some((event, data.join("\n")))
-}
-
 fn header(resp: &reqwest::Response, name: &str) -> Option<String> {
     resp.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned)
 }
@@ -352,22 +357,27 @@ fn transport(e: reqwest::Error) -> StorageError {
 }
 
 #[cfg(test)]
-mod tests {
+mod framing_tests {
     use super::*;
 
-    #[test]
-    fn sse_events_are_taken_one_at_a_time() {
-        let mut buf = b"event: data\ndata: [{\"a\":1},{\"b\":2}]\n\nevent: control\ndata: {\"streamNextOffset\":\"x\",\"upToDate\":true}\n\nev".to_vec();
-        let (e, d) = take_event(&mut buf).unwrap();
-        assert_eq!(e, "data");
-        assert_eq!(
-            split_records(d.as_bytes()).unwrap(),
-            vec![b"{\"a\":1}".to_vec(), b"{\"b\":2}".to_vec()]
+    #[tokio::test]
+    async fn a_live_stream_accepts_utf8_and_crlf_split_across_chunks() {
+        super::super::install_tls_provider();
+        let streams = Streams::new(
+            reqwest::Client::new(),
+            "http://unused/streams",
+            TokenMinter::new("key", "secret").unwrap(),
         );
-        let (e, d) = take_event(&mut buf).unwrap();
-        assert_eq!(e, "control");
-        assert!(d.contains("streamNextOffset"));
-        assert!(take_event(&mut buf).is_none());
-        assert_eq!(buf, b"ev");
+        let mut reader = streams.read("AST_test", None, true);
+        let body = "event: data\r\ndata: [\"café\"]\r\n\r\n".as_bytes();
+        let chunks: Vec<Result<bytes::Bytes, reqwest::Error>> =
+            body.iter().map(|b| Ok(bytes::Bytes::copy_from_slice(&[*b]))).collect();
+        reader.sse = Some(Sse {
+            body: Box::pin(futures_util::stream::iter(chunks)),
+            decoder: SseDecoder::new(),
+            events: VecDeque::new(),
+        });
+        reader.pump_live().await.unwrap();
+        assert_eq!(reader.buffered.pop_front().unwrap(), "\"café\"".as_bytes());
     }
 }

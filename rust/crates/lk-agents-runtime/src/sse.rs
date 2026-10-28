@@ -22,13 +22,19 @@ pub enum SseError {
     InvalidUtf8 { offset: u64 },
     #[error("the event stream ended inside an event")]
     Truncated,
+    #[error("an event exceeds the {limit} byte assembly limit")]
+    TooLarge { limit: usize },
 }
 
 const DEFAULT_EVENT: &str = "message";
+/// Match the runtime's largest accepted protocol frame, including unfinished fields.
+pub const DEFAULT_MAX_EVENT_BYTES: usize = 16 << 20;
 
 /// Incremental decoder state for one body.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SseDecoder {
+    limit: usize,
+    event_bytes: usize,
     /// A UTF-8 sequence the last chunk ended inside.
     partial: Vec<u8>,
     /// Body offset of the next byte not yet decoded (the first of `partial`).
@@ -44,9 +50,31 @@ pub struct SseDecoder {
     failed: Option<SseError>,
 }
 
+impl Default for SseDecoder {
+    fn default() -> Self {
+        Self::with_max_event_bytes(DEFAULT_MAX_EVENT_BYTES)
+    }
+}
+
 impl SseDecoder {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_max_event_bytes(limit: usize) -> Self {
+        Self {
+            limit,
+            event_bytes: 0,
+            partial: Vec::new(),
+            offset: 0,
+            after_cr: false,
+            started: false,
+            line: String::new(),
+            event: String::new(),
+            data: String::new(),
+            last_id: String::new(),
+            failed: None,
+        }
     }
 
     /// Decodes `bytes`, appending each event completed by them to `out`. After an error the
@@ -67,18 +95,18 @@ impl SseDecoder {
             let text = std::str::from_utf8(&partial)
                 .map_err(|_| self.fail(SseError::InvalidUtf8 { offset: self.offset }))?;
             self.offset += partial.len() as u64;
-            self.push_text(text, out);
+            self.push_text(text, out)?;
         }
         match std::str::from_utf8(bytes) {
             Ok(text) => {
                 self.offset += bytes.len() as u64;
-                self.push_text(text, out);
+                self.push_text(text, out)?;
             }
             Err(err) => {
                 let (valid, rest) = bytes.split_at(err.valid_up_to());
                 let text = std::str::from_utf8(valid).unwrap_or_default();
                 self.offset += valid.len() as u64;
-                self.push_text(text, out);
+                self.push_text(text, out)?;
                 if err.error_len().is_some() {
                     return Err(self.fail(SseError::InvalidUtf8 { offset: self.offset }));
                 }
@@ -107,9 +135,9 @@ impl SseDecoder {
         err
     }
 
-    fn push_text(&mut self, mut text: &str, out: &mut Vec<SseEvent>) {
+    fn push_text(&mut self, mut text: &str, out: &mut Vec<SseEvent>) -> Result<(), SseError> {
         if text.is_empty() {
-            return;
+            return Ok(());
         }
         if !self.started {
             self.started = true;
@@ -120,7 +148,7 @@ impl SseDecoder {
             text = text.strip_prefix('\n').unwrap_or(text);
         }
         while let Some(at) = text.find(['\r', '\n']) {
-            self.line.push_str(&text[..at]);
+            self.append_line(&text[..at])?;
             let cr = text.as_bytes()[at] == b'\r';
             text = &text[at + 1..];
             if cr {
@@ -130,9 +158,23 @@ impl SseDecoder {
                 }
             }
             let line = std::mem::take(&mut self.line);
+            if line.is_empty() {
+                self.event_bytes = 0;
+            } else {
+                self.event_bytes += line.len();
+            }
             self.process_line(&line, out);
         }
+        self.append_line(text)?;
+        Ok(())
+    }
+
+    fn append_line(&mut self, text: &str) -> Result<(), SseError> {
+        if text.len() > self.limit.saturating_sub(self.event_bytes + self.line.len()) {
+            return Err(self.fail(SseError::TooLarge { limit: self.limit }));
+        }
         self.line.push_str(text);
+        Ok(())
     }
 
     fn process_line(&mut self, line: &str, out: &mut Vec<SseEvent>) {
@@ -287,5 +329,19 @@ mod tests {
             Err(SseError::InvalidUtf8 { offset: 16 })
         );
         assert_eq!(decode(&[b"data: \xe2\x82"]).1, Err(SseError::InvalidUtf8 { offset: 6 }));
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn an_unterminated_event_cannot_grow_past_the_body_budget() {
+        let mut decoder = SseDecoder::new();
+        let mut out = Vec::new();
+        let event = vec![b'x'; (16 << 20) + 1];
+        assert!(decoder.feed(&event, &mut out).is_err());
+        assert!(out.is_empty());
     }
 }

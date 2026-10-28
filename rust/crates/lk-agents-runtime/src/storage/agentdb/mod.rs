@@ -245,7 +245,7 @@ impl Storage for AgentDbStorage {
     }
 
     async fn close(&self) {
-        self.pool.clear();
+        self.pool.clear().await;
     }
 }
 
@@ -349,9 +349,10 @@ impl DbPool {
         idle.push((database_id, Idle { conn, schema, since: Instant::now() }));
     }
 
-    fn clear(&self) {
-        for (_, entry) in self.idle.lock().expect("pool").drain(..) {
-            entry.conn.close();
+    async fn clear(&self) {
+        let idle = std::mem::take(&mut *self.idle.lock().expect("pool"));
+        for (_, entry) in idle {
+            entry.conn.aclose().await;
         }
     }
 }
