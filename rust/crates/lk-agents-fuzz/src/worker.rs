@@ -31,7 +31,7 @@ use lk_agents_worker::ipc::pool::{
 };
 
 use crate::inference::Timeline;
-use crate::sched::{Sampling, Sched, Step as Picked};
+use crate::sched::{Sampling, Sched, Step as Picked, Tick};
 
 /// The scheduler's own random stream off the seed: the bytes `sched`.
 const SCHED_STREAM: u64 = 0x7363_6865_64;
@@ -302,17 +302,15 @@ pub fn run(seed: u64, sampling: Sampling) -> Outcome {
         let input = if due {
             In::Wake
         } else {
-            match sched.next(&[]) {
-                Some(Picked::Item { item, .. }) => item,
-                Some(Picked::Process(_)) => unreachable!("no processes"),
-                None => {
-                    let wake = pool.wake_at().map(|d| d.as_nanos().div_ceil(1_000_000) as u64);
-                    match timeline.next_due().into_iter().chain(wake).min() {
-                        Some(at) => now = at.max(now + 1),
-                        None => break,
-                    }
+            let wake = pool.wake_at().map(|d| d.as_nanos().div_ceil(1_000_000) as u64);
+            match sched.tick(now, &[], timeline.next_due().into_iter().chain(wake)) {
+                Tick::Step(Picked::Item { item, .. }) => item,
+                Tick::Step(Picked::Process(_)) => unreachable!("no processes"),
+                Tick::Advance(at) => {
+                    now = at;
                     continue;
                 }
+                Tick::Quiet => break,
             }
         };
         if let In::Admit(request, job) = &input {

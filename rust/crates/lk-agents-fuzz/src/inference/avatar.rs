@@ -38,7 +38,7 @@ use lk_agents_inference::avatar::lifecycle::{
 };
 
 use super::{Timeline, dur, ms, ts};
-use crate::sched::{Sampling, Sched, Step as Picked};
+use crate::sched::{Sampling, Sched, Step as Picked, Tick};
 
 const AVATAR: ResourceId = ResourceId(1);
 
@@ -366,16 +366,15 @@ pub fn run(seed: u64, sampling: Sampling) -> Outcome {
         let event = if machine.wake_at().is_some_and(|at| at <= ts(now)) {
             Ev::Wake
         } else {
-            match sched.next(&[]) {
-                Some(Picked::Item { item, .. }) => item,
-                Some(Picked::Process(_)) => unreachable!("no processes"),
-                None => {
-                    match timeline.next_due().into_iter().chain(machine.wake_at().map(ms)).min() {
-                        Some(at) => now = at.max(now + 1),
-                        None => break,
-                    }
+            let due = timeline.next_due().into_iter().chain(machine.wake_at().map(ms));
+            match sched.tick(now, &[], due) {
+                Tick::Step(Picked::Item { item, .. }) => item,
+                Tick::Step(Picked::Process(_)) => unreachable!("no processes"),
+                Tick::Advance(at) => {
+                    now = at;
                     continue;
                 }
+                Tick::Quiet => break,
             }
         };
         if matches!(event, Ev::Cancel) {

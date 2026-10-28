@@ -30,7 +30,7 @@ use lk_agents_inference::vad::machine::{
 };
 
 use super::Timeline;
-use crate::sched::{Sampling, Sched, Step as Picked};
+use crate::sched::{Sampling, Sched, Step as Picked, Tick};
 
 /// The scheduler's own random stream off the seed: the bytes `sched`.
 const SCHED_STREAM: u64 = u64::from_be_bytes(*b"\0\0\0sched");
@@ -176,16 +176,14 @@ pub fn run(seed: u64, sampling: Sampling) -> Outcome {
     let mut now = 0;
     loop {
         timeline.release(now, &mut sched);
-        let input = match sched.next(&[]) {
-            Some(Picked::Item { item, .. }) => item,
-            Some(Picked::Process(_)) => unreachable!("no processes"),
-            None => match timeline.next_due() {
-                Some(at) => {
-                    now = at.max(now + 1);
-                    continue;
-                }
-                None => break,
-            },
+        let input = match sched.tick(now, &[], timeline.next_due()) {
+            Tick::Step(Picked::Item { item, .. }) => item,
+            Tick::Step(Picked::Process(_)) => unreachable!("no processes"),
+            Tick::Advance(at) => {
+                now = at;
+                continue;
+            }
+            Tick::Quiet => break,
         };
         let returned = deliver(&mut machine, &input);
         if let Some(window) = returned.predict {

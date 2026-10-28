@@ -46,7 +46,7 @@ use lk_agents_core::text_session::{
 use serde_json::{Value, json};
 
 use crate::inference::Timeline;
-use crate::sched::{Sampling, Sched, Step as Picked};
+use crate::sched::{Sampling, Sched, Step as Picked, Tick};
 
 /// The scheduler's own random stream off the seed: the bytes `sched`.
 const SCHED_STREAM: u64 = u64::from_be_bytes(*b"\0\0\0sched");
@@ -482,17 +482,15 @@ pub fn run(seed: u64, sampling: Sampling) -> Outcome {
             let event = if session.wake_at().is_some_and(|at| at <= ts(now)) {
                 Event::Wake
             } else {
-                match sched.next(&[]) {
-                    Some(Picked::Item { item, .. }) => item,
-                    Some(Picked::Process(_)) => unreachable!("no processes"),
-                    None => {
-                        let wake = session.wake_at().map(|t| t.as_nanos().div_ceil(1_000_000));
-                        match timeline.next_due().into_iter().chain(wake).min() {
-                            Some(at) => now = at.max(now + 1),
-                            None => break,
-                        }
+                let wake = session.wake_at().map(|t| t.as_nanos().div_ceil(1_000_000));
+                match sched.tick(now, &[], timeline.next_due().into_iter().chain(wake)) {
+                    Tick::Step(Picked::Item { item, .. }) => item,
+                    Tick::Step(Picked::Process(_)) => unreachable!("no processes"),
+                    Tick::Advance(at) => {
+                        now = at;
                         continue;
                     }
+                    Tick::Quiet => break,
                 }
             };
             record.cancelled |= matches!(event, Event::Cancel) && !finished(&record.effects);

@@ -46,7 +46,7 @@ use lk_agents_storage::run::{CHANNEL_KEY, REASON_WORKER_LOST, TaskRow, TaskState
 use lk_agents_storage::schema::{EventRow, ItemRow};
 use serde_json::{Map, Value};
 
-use crate::sched::{Sampling, Sched, Step};
+use crate::sched::{Sampling, Sched, Step, Tick};
 use crate::storage::db::{Clock, SimDb};
 use door::Request;
 use list::Lister;
@@ -226,20 +226,20 @@ pub fn run(seed: u64, messages: usize, sampling: Sampling) -> Record {
         if !lister.done() && lister.wake() <= now {
             due.push(LISTER);
         }
-        if due.is_empty() {
-            let next = requests.iter().filter(|r| !r.done()).map(Request::wake);
-            let next = next
-                .chain((clients.cancels > 0).then_some(clients.cancel_at))
-                .chain((!lister.done()).then(|| lister.wake()))
-                .min();
-            match next {
-                Some(at) => clock.set(at.max(now + 1)),
-                None => break,
+        let next = requests.iter().filter(|r| !r.done()).map(Request::wake);
+        let next = next
+            .chain((clients.cancels > 0).then_some(clients.cancel_at))
+            .chain((!lister.done()).then(|| lister.wake()));
+        let p = match sched.tick(now as u64, &due, next.map(|at| at as u64)) {
+            Tick::Step(Step::Process(p)) => p,
+            Tick::Step(Step::Item { .. }) => unreachable!("only processes"),
+            Tick::Advance(at) => {
+                clock.set(at as i64);
+                continue;
             }
-            continue;
-        }
+            Tick::Quiet => break,
+        };
         steps += 1;
-        let Some(Step::Process(p)) = sched.next(&due) else { unreachable!("a due process") };
         match p {
             CANCELER => {
                 cancel(&mut db, &mut rng, &mut seen);

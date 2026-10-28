@@ -33,7 +33,7 @@ use lk_agents_inference::llm::parse::WireChunk;
 
 use super::{Timeline, dur, ms, ts};
 use crate::corpus;
-use crate::sched::{Sampling, Sched, Step as Picked};
+use crate::sched::{Sampling, Sched, Step as Picked, Tick};
 
 const ID: LlmRequestId = LlmRequestId(1);
 const LLM: ResourceId = ResourceId(1);
@@ -274,18 +274,15 @@ pub fn run(seed: u64, sampling: Sampling) -> Outcome {
         let event = if request.wake_at().is_some_and(|at| at <= ts(now)) {
             LlmRequestEvent::Wake
         } else {
-            match sched.next(&[]) {
-                Some(Picked::Item { item, .. }) => item,
-                Some(Picked::Process(_)) => unreachable!("no processes"),
-                None => {
-                    let next =
-                        timeline.next_due().into_iter().chain(request.wake_at().map(ms)).min();
-                    match next {
-                        Some(at) => now = at.max(now + 1),
-                        None => break,
-                    }
+            let due = timeline.next_due().into_iter().chain(request.wake_at().map(ms));
+            match sched.tick(now, &[], due) {
+                Tick::Step(Picked::Item { item, .. }) => item,
+                Tick::Step(Picked::Process(_)) => unreachable!("no processes"),
+                Tick::Advance(at) => {
+                    now = at;
                     continue;
                 }
+                Tick::Quiet => break,
             }
         };
         if consumer.done

@@ -45,7 +45,7 @@ use lk_agents_worker::{
 };
 
 use crate::inference::Timeline;
-use crate::sched::{Sampling, Sched, Step as Picked};
+use crate::sched::{Sampling, Sched, Step as Picked, Tick};
 
 /// The scheduler's own random stream off the seed: the bytes `sched`.
 const SCHED_STREAM: u64 = u64::from_be_bytes(*b"\0\0\0sched");
@@ -373,19 +373,15 @@ pub fn run(seed: u64, sampling: Sampling) -> Outcome {
         let input = if worker.next_deadline().is_some_and(|at| at <= ts(now)) {
             In::Wake
         } else {
-            match sched.next(&[]) {
-                Some(Picked::Item { item, .. }) => item,
-                Some(Picked::Process(_)) => unreachable!("no processes"),
-                None => {
-                    let next = timeline.next_due().into_iter();
-                    let next = next
-                        .chain(worker.next_deadline().map(|t| t.as_nanos().div_ceil(1_000_000)));
-                    match next.min() {
-                        Some(at) => now = at.max(now + 1),
-                        None => break,
-                    }
+            let wake = worker.next_deadline().map(|t| t.as_nanos().div_ceil(1_000_000));
+            match sched.tick(now, &[], timeline.next_due().into_iter().chain(wake)) {
+                Tick::Step(Picked::Item { item, .. }) => item,
+                Tick::Step(Picked::Process(_)) => unreachable!("no processes"),
+                Tick::Advance(at) => {
+                    now = at;
                     continue;
                 }
+                Tick::Quiet => break,
             }
         };
         if !world.delivers(&input) {

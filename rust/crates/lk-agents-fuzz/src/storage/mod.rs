@@ -30,7 +30,7 @@ use lk_agents_storage::run::{TaskRow, TaskState};
 use lk_agents_storage::schema::ItemRow;
 use serde_json::Map;
 
-use crate::sched::{Sampling, Sched, Step};
+use crate::sched::{Sampling, Sched, Step, Tick};
 use db::{Clock, SimDb};
 use worker::{Worker, task_id};
 
@@ -108,17 +108,18 @@ pub fn run(seed: u64, workers: usize, messages: usize, sampling: Sampling) -> Ou
         if cancels > 0 && cancel_at <= now {
             due.push(canceling);
         }
-        if due.is_empty() {
-            let next = pool.iter().filter(|w| !w.done()).map(Worker::wake);
-            let next = next.chain((cancels > 0).then_some(cancel_at)).min();
-            match next {
-                Some(at) => clock.set(at.max(now + 1)),
-                None => break,
+        let next = pool.iter().filter(|w| !w.done()).map(Worker::wake);
+        let next = next.chain((cancels > 0).then_some(cancel_at));
+        let p = match sched.tick(now as u64, &due, next.map(|at| at as u64)) {
+            Tick::Step(Step::Process(p)) => p,
+            Tick::Step(Step::Item { .. }) => unreachable!("only processes"),
+            Tick::Advance(at) => {
+                clock.set(at as i64);
+                continue;
             }
-            continue;
-        }
+            Tick::Quiet => break,
+        };
         steps += 1;
-        let Some(Step::Process(p)) = sched.next(&due) else { unreachable!("a due process") };
         if p == canceling {
             let task = task_id(rng.usize(0..messages));
             let cancel = plans::cancel(LANE, &task, &Map::new());
