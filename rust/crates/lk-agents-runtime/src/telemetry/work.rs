@@ -13,7 +13,6 @@ use lk_agents_abi::telemetry::work::{
 const WORKERS: usize = 4;
 const JOBS: usize = 64;
 const BYTES: usize = 8 * 1024 * 1024;
-const UPLOADS: usize = 2;
 const MONITORS: usize = 32;
 
 static PROCESS_WORK: OnceLock<Arc<Work>> = OnceLock::new();
@@ -23,7 +22,6 @@ type Callback = Box<dyn FnOnce() -> bool + Send>;
 struct Pending {
     bytes: usize,
     admitted_at: Instant,
-    upload: bool,
     monitor: bool,
     timeout_reported: bool,
 }
@@ -33,7 +31,6 @@ struct State {
     sdk_available: bool,
     pending: BTreeMap<String, Pending>,
     bytes: usize,
-    uploads: usize,
     monitors: usize,
     reserved: BTreeMap<String, (usize, Instant)>,
     observations: VecDeque<TelemetryWorkObservation>,
@@ -60,14 +57,15 @@ struct Work {
 pub struct WorkPermit {
     work: Arc<Work>,
     key: String,
+    shared_class: Option<crate::media_workers::MediaWorkerPermit>,
 }
 
 impl Drop for WorkPermit {
     fn drop(&mut self) {
+        drop(self.shared_class.take());
         let mut state = self.work.state.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(pending) = state.pending.remove(&self.key) {
             state.bytes -= pending.bytes;
-            state.uploads -= usize::from(pending.upload);
             state.monitors -= usize::from(pending.monitor);
             state.completed += 1;
             observe(&mut state, &self.key, TelemetryWorkOutcome::Settled, &self.work);
@@ -88,7 +86,6 @@ impl Work {
                 sdk_available: workers == 0,
                 pending: BTreeMap::new(),
                 bytes: 0,
-                uploads: 0,
                 monitors: 0,
                 reserved: BTreeMap::new(),
                 observations: VecDeque::new(),
@@ -126,13 +123,7 @@ impl Work {
         work
     }
 
-    fn admit(
-        self: &Arc<Self>,
-        key: String,
-        bytes: usize,
-        upload: bool,
-        monitor: bool,
-    ) -> Option<WorkPermit> {
+    fn admit(self: &Arc<Self>, key: String, bytes: usize, monitor: bool) -> Option<WorkPermit> {
         if self.pid != std::process::id() {
             return None;
         }
@@ -142,7 +133,6 @@ impl Work {
             || state.pending.contains_key(&key)
             || state.pending.len() >= JOBS
             || retained.is_none_or(|bytes| bytes > BYTES.saturating_sub(state.bytes))
-            || (upload && state.uploads >= UPLOADS)
             || (monitor && state.monitors >= MONITORS)
         {
             state.dropped += 1;
@@ -150,19 +140,12 @@ impl Work {
         }
         let bytes = retained.expect("validated above");
         state.bytes += bytes;
-        state.uploads += usize::from(upload);
         state.monitors += usize::from(monitor);
         state.pending.insert(
             key.clone(),
-            Pending {
-                bytes,
-                admitted_at: Instant::now(),
-                upload,
-                monitor,
-                timeout_reported: false,
-            },
+            Pending { bytes, admitted_at: Instant::now(), monitor, timeout_reported: false },
         );
-        Some(WorkPermit { work: self.clone(), key })
+        Some(WorkPermit { work: self.clone(), key, shared_class: None })
     }
 
     fn submit(self: &Arc<Self>, key: String, bytes: usize, callback: Callback) -> bool {
@@ -176,7 +159,9 @@ impl Work {
                 return false;
             }
         }
-        let Some(permit) = self.admit(key, bytes, false, false) else { return false };
+        let Some(permit) = self.admit(key, bytes, false) else {
+            return false;
+        };
         self.state.lock().unwrap_or_else(|p| p.into_inner()).queue.push_back((callback, permit));
         self.changed.notify_one();
         true
@@ -217,7 +202,9 @@ impl Work {
         if self.pid != std::process::id() {
             return false;
         }
-        let Some(timeout) = duration(timeout) else { return false };
+        let Some(timeout) = duration(timeout) else {
+            return false;
+        };
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let (state, _) = self
             .changed
@@ -235,7 +222,9 @@ impl Work {
         if self.pid != std::process::id() {
             return false;
         }
-        let Some(timeout) = duration(timeout) else { return false };
+        let Some(timeout) = duration(timeout) else {
+            return false;
+        };
         let wait = async {
             loop {
                 let notified = self.settled.notified();
@@ -280,18 +269,28 @@ fn process_work() -> &'static Arc<Work> {
     PROCESS_WORK.get_or_init(|| Work::start(WORKERS))
 }
 
-/// Session report uploads share process admission, with an independent two-request ceiling.
+/// Recording preparation and transport share the process native upload class. SDK byte accounting
+/// remains attached to the same work permit until actual settlement.
 pub fn try_admit_upload(retained_bytes: usize) -> Option<WorkPermit> {
     let work = process_work();
     if work.pid != std::process::id() {
         return None;
     }
+    let shared_class = crate::process::workers()
+        .ok()
+        .and_then(|workers| workers.try_admit(crate::media_workers::MediaWorkerClass::Upload).ok());
+    let Some(shared_class) = shared_class else {
+        work.state.lock().unwrap_or_else(|p| p.into_inner()).dropped += 1;
+        return None;
+    };
     let key = {
         let mut state = work.state.lock().unwrap_or_else(|p| p.into_inner());
         state.next_upload = state.next_upload.wrapping_add(1);
         format!("upload/{}", state.next_upload)
     };
-    work.admit(key, retained_bytes, true, false)
+    let mut permit = work.admit(key, retained_bytes, false)?;
+    permit.shared_class = Some(shared_class);
+    Some(permit)
 }
 
 /// Watchdogs use the same admission owner and retain capacity until their thread settles.
@@ -305,7 +304,7 @@ pub fn try_admit_monitor() -> Option<WorkPermit> {
         state.next_upload = state.next_upload.wrapping_add(1);
         format!("monitor/{}", state.next_upload)
     };
-    work.admit(key, 0, false, true)
+    work.admit(key, 0, true)
 }
 
 pub fn record_incomplete_cleanup() {

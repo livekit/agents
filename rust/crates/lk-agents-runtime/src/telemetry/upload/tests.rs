@@ -345,3 +345,46 @@ fn report_input_facts_refuse_oversize_before_item_conversion_and_poison_partial_
     assert!(builder.check_input(TRANSCRIPT_ITEMS + 1, 0).is_err());
     assert!(builder.finish().is_err());
 }
+
+#[tokio::test]
+async fn a_stalled_upload_reserves_the_shared_worker_class_until_transport_settles() {
+    use crate::media_workers::{MediaWorkerClass, MediaWorkerError, MediaWorkerLimits};
+    use tokio_util::task::AbortOnDropHandle;
+
+    let _serial = UPLOAD_TESTS.lock().await;
+    let workers = crate::process::workers().unwrap();
+    let _other_uploads: Vec<_> = (1..MediaWorkerLimits::default().uploads)
+        .map(|_| workers.try_admit(MediaWorkerClass::Upload).unwrap())
+        .collect();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (started, received) = tokio::sync::oneshot::channel();
+    let peer = AbortOnDropHandle::new(tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut byte = [0; 1];
+        socket.read_exact(&mut byte).await.unwrap();
+        let _ = started.send(());
+        std::future::pending::<()>().await;
+        drop(socket);
+    }));
+    let uploader = SessionReportUploader::new("key".into(), "secret".into()).unwrap();
+    let mut upload = AbortOnDropHandle::new(tokio::spawn(async move {
+        uploader.send(recording(format!("http://{address}"))).await
+    }));
+    tokio::select! {
+        ready = received => ready.unwrap(),
+        result = &mut upload => panic!("upload settled before reaching the peer: {result:?}"),
+    }
+    let shared_capacity_was_held = matches!(
+        workers.try_admit(MediaWorkerClass::Upload),
+        Err(MediaWorkerError::Exhausted(MediaWorkerClass::Upload))
+    );
+    upload.abort();
+    assert!(upload.await.unwrap_err().is_cancelled());
+    peer.abort();
+    let _ = peer.await;
+    assert!(shared_capacity_was_held, "recording upload bypassed the process worker-class limit");
+    let _next_upload = workers
+        .try_admit(MediaWorkerClass::Upload)
+        .expect("transport settlement releases the shared upload class");
+}
