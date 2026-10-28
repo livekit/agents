@@ -17,11 +17,11 @@ use std::time::Duration;
 use futures_util::{SinkExt as _, StreamExt as _};
 use livekit_api::access_token::{AccessToken, AgentGrants};
 pub use livekit_protocol::agent_db::wire;
+use lk_agents_net::transport::TransportError;
+use lk_agents_net::websocket::{Message, RawWebSocket, connect_with_limit};
 use prost::Message as _;
+use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
-use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use wire as pb;
 
@@ -151,9 +151,7 @@ pub fn encode_batch(rows: &[Row], width: usize) -> wire::ColumnBatch {
     wire::ColumnBatch { columns, rows: rows.len() as u32, statement: 0 }
 }
 
-type WsStream =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-type WsRead = futures_util::stream::SplitStream<WsStream>;
+type WsRead = futures_util::stream::SplitStream<RawWebSocket>;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum WsdbError {
@@ -266,6 +264,8 @@ struct Inner {
     next_id: AtomicU32,
     state: Mutex<State>,
     phase: watch::Sender<Phase>,
+    /// The runtime the connection's supervisor, heartbeat and writer run on.
+    runtime: Handle,
     tasks: TaskTracker,
     cancel: CancellationToken,
 }
@@ -314,8 +314,12 @@ struct Socket {
 }
 
 impl Conn {
-    /// Dials, says `Hello`, and starts the supervisor.
-    pub async fn dial(opts: Options, minter: TokenMinter) -> Result<Conn, WsdbError> {
+    /// Dials, says `Hello`, and starts the supervisor on `runtime`.
+    pub async fn dial(
+        opts: Options,
+        minter: TokenMinter,
+        runtime: Handle,
+    ) -> Result<Conn, WsdbError> {
         super::install_tls_provider();
         let (phase, _) = watch::channel(Phase::Connecting);
         let inner = Arc::new(Inner {
@@ -330,6 +334,7 @@ impl Conn {
                 tip: 0,
             }),
             phase,
+            runtime,
             tasks: TaskTracker::new(),
             cancel: CancellationToken::new(),
         });
@@ -339,21 +344,27 @@ impl Conn {
         let ping_interval = socket.ping_interval;
         let owner = conn.unguarded();
         let cancel = conn.0.cancel.clone();
-        conn.0.tasks.spawn(async move {
-            tokio::select! {
-                _ = cancel.cancelled() => {},
-                _ = owner.supervise(socket) => {},
-            }
-        });
+        conn.0.tasks.spawn_on(
+            async move {
+                tokio::select! {
+                    _ = cancel.cancelled() => {},
+                    _ = owner.supervise(socket) => {},
+                }
+            },
+            &conn.0.runtime,
+        );
         if !ping_interval.is_zero() {
             let owner = conn.unguarded();
             let cancel = conn.0.cancel.clone();
-            conn.0.tasks.spawn(async move {
-                tokio::select! {
-                    _ = cancel.cancelled() => {},
-                    _ = owner.ping_loop(ping_interval) => {},
-                }
-            });
+            conn.0.tasks.spawn_on(
+                async move {
+                    tokio::select! {
+                        _ = cancel.cancelled() => {},
+                        _ = owner.ping_loop(ping_interval) => {},
+                    }
+                },
+                &conn.0.runtime,
+            );
         }
         Ok(conn)
     }
@@ -380,28 +391,17 @@ impl Conn {
         let mut url = url::Url::parse(&self.0.opts.url)
             .map_err(|e| WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)))?;
         url.query_pairs_mut().append_pair("access_token", &token);
-        let request = url
-            .as_str()
-            .into_client_request()
-            .map_err(|e| WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)))?;
-        let config = WebSocketConfig::default()
-            .max_frame_size(Some(MAX_FRAME))
-            .max_message_size(Some(MAX_FRAME));
-        // no Nagle: a request that follows a credit frame must not wait for the delayed ack
-        let dial = tokio_tungstenite::connect_async_with_config(request, Some(config), true);
-        let (ws, _) = tokio::time::timeout_at(deadline, dial)
+        let dial = connect_with_limit(url.as_str(), Vec::new(), Some(MAX_FRAME));
+        let ws = tokio::time::timeout_at(deadline, dial)
             .await
             .map_err(|_| WsdbError::Timeout)?
             .map_err(|e| match e {
                 // the upgrade's own refusal is final, as the same refusal at `Hello` is
-                tungstenite::Error::Http(r) if matches!(r.status().as_u16(), 401 | 403) => {
-                    WsdbError::Server {
-                        code: "unauthenticated".into(),
-                        message: r.status().to_string(),
-                    }
+                TransportError::Status { status: 401 | 403, message, .. } => {
+                    WsdbError::Server { code: "unauthenticated".into(), message }
                 }
-                tungstenite::Error::Http(r) if r.status().as_u16() == 404 => {
-                    WsdbError::Server { code: "not_found".into(), message: r.status().to_string() }
+                TransportError::Status { status: 404, message, .. } => {
+                    WsdbError::Server { code: "not_found".into(), message }
                 }
                 e => WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)),
             })?;
@@ -456,24 +456,27 @@ impl Conn {
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (gone, writer_gone) = tokio::sync::oneshot::channel();
         let cancel = self.0.cancel.clone();
-        self.0.tasks.spawn(async move {
-            let write = async {
-                while let Some(bytes) = rx.recv().await {
-                    let sent =
-                        tokio::time::timeout(ping_timeout, sink.send(Message::binary(bytes)));
-                    if !matches!(sent.await, Ok(Ok(()))) {
-                        return;
+        self.0.tasks.spawn_on(
+            async move {
+                let write = async {
+                    while let Some(bytes) = rx.recv().await {
+                        let sent =
+                            tokio::time::timeout(ping_timeout, sink.send(Message::binary(bytes)));
+                        if !matches!(sent.await, Ok(Ok(()))) {
+                            return;
+                        }
                     }
+                    let _ = tokio::time::timeout(ping_timeout, sink.close()).await;
+                };
+                tokio::select! {
+                    _ = cancel.cancelled() => {},
+                    _ = write => {},
                 }
-                let _ = tokio::time::timeout(ping_timeout, sink.close()).await;
-            };
-            tokio::select! {
-                _ = cancel.cancelled() => {},
-                _ = write => {},
-            }
-            drop(sink);
-            drop(gone);
-        });
+                drop(sink);
+                drop(gone);
+            },
+            &self.0.runtime,
+        );
         {
             let mut st = self.0.state.lock().expect("state");
             st.tip = st.tip.max(ok.tip); // a reconnect can only observe a later tip

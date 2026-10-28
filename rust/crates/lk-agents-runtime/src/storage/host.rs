@@ -21,8 +21,8 @@ use tokio::sync::OnceCell;
 use super::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, service_error};
 use super::engine::LeaseTiming;
 use super::sqlite::SqliteStorage;
-use lk_agents_storage::QueuedStreams;
 use super::{Storage, Thread};
+use lk_agents_storage::QueuedStreams;
 
 /// What the lazily opened backend is built from.
 enum Config {
@@ -246,7 +246,15 @@ impl HostStorageClass for HostStorage {
             (None, Some(url), Some(key), Some(secret)) => {
                 let mut opts = AgentDbOptions::new(&url);
                 opts.lease = lease;
-                Config::Cloud(AgentDbStorage::new(opts, TokenMinter::new(key, secret)?)?)
+                {
+                    let runtime = crate::process::handle()
+                        .map_err(|e| StorageError::Unavailable(format!("storage runtime: {e}")))?;
+                    Config::Cloud(AgentDbStorage::new(
+                        opts,
+                        TokenMinter::new(key, secret)?,
+                        runtime,
+                    )?)
+                }
             }
             _ => {
                 return Err(StorageError::Invalid(

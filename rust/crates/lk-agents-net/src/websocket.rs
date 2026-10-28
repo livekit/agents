@@ -34,7 +34,8 @@ pub async fn connect_with_limit(
             .max_message_size(Some(limit))
             .max_frame_size(Some(limit))
     });
-    let (socket, _response) = tokio_tungstenite::connect_async_with_config(request, config, false)
+    // no Nagle: a small request after a small frame must not wait for the peer's delayed ack
+    let (socket, _response) = tokio_tungstenite::connect_async_with_config(request, config, true)
         .await
         .map_err(classify_tungstenite)?;
     Ok(socket)

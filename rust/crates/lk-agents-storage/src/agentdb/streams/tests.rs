@@ -105,8 +105,12 @@ impl Peer {
                 let _ = socket.write_all(response.as_bytes()).await;
             }
         });
-        let streams =
-            Streams::new(reqwest::Client::new(), base, TokenMinter::new("key", "secret").unwrap());
+        let streams = Streams::new(
+            reqwest::Client::new(),
+            base,
+            TokenMinter::new("key", "secret").unwrap(),
+            tokio::runtime::Handle::current(),
+        );
         Self { streams, task }
     }
 }
@@ -187,10 +191,12 @@ async fn invalid_and_expired_positions_fail_explicitly() {
 #[test]
 fn replay_and_response_budgets_are_finite() {
     super::super::install_tls_provider();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     let streams = Streams::new(
         reqwest::Client::new(),
         "http://unused",
         TokenMinter::new("key", "secret").unwrap(),
+        runtime.handle().clone(),
     );
     let mut reader = streams.read("AST_test", None, false);
     assert!(reader.records(&vec![b' '; MAX_BYTES + 1]).is_err());

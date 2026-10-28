@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::StorageError;
+use crate::sql::{BatchResult, Row, Statement};
 use async_trait::async_trait;
 use livekit_api::services::databases::DatabaseClient;
 use livekit_api::services::threads::ThreadClient;
@@ -16,8 +18,6 @@ use livekit_api::services::{LiveKitApi, ServerError, ServiceError, public_api_ur
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
-use crate::StorageError;
-use crate::sql::{BatchResult, Row, Statement};
 
 use crate::engine::{LeaseTiming, SchemaCell, Thread, ThreadDb};
 use crate::{SqliteConnection, Storage};
@@ -69,7 +69,6 @@ pub fn service_error(e: ServiceError) -> StorageError {
         other => StorageError::Invalid(other.to_string()),
     }
 }
-
 
 /// A non-2xx with the body read: 503 is retryable (`Unavailable`), 404 is `NotFound`.
 pub(crate) async fn http_ok(resp: reqwest::Response) -> Result<reqwest::Response, StorageError> {
@@ -133,10 +132,16 @@ pub struct AgentDbStorage {
     streams: Streams,
     api: Arc<LiveKitApi>,
     pool: Arc<DbPool>,
+    /// The runtime the process lends: its connections and stream queues run there.
+    runtime: tokio::runtime::Handle,
 }
 
 impl AgentDbStorage {
-    pub fn new(opts: AgentDbOptions, minter: TokenMinter) -> Result<Self, StorageError> {
+    pub fn new(
+        opts: AgentDbOptions,
+        minter: TokenMinter,
+        runtime: tokio::runtime::Handle,
+    ) -> Result<Self, StorageError> {
         let url = &opts.url;
         let data_plane = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
             (Some(host), _) => format!("wss://{host}/v0/agentstore/db"),
@@ -148,10 +153,11 @@ impl AgentDbStorage {
             .use_rustls_tls()
             .build()
             .map_err(|e| StorageError::Invalid(format!("http client: {e}")))?;
-        let streams = Streams::new(http, format!("{url}/v0/agentstore/streams"), minter.clone());
+        let base = format!("{url}/v0/agentstore/streams");
+        let streams = Streams::new(http, base, minter.clone(), runtime.clone());
         let api =
             Arc::new(LiveKitApi::with_api_key(&opts.url, minter.api_key(), minter.api_secret()));
-        Ok(Self { data_plane, opts, minter, streams, api, pool: Arc::default() })
+        Ok(Self { data_plane, opts, minter, streams, api, pool: Arc::default(), runtime })
     }
 
     pub fn options(&self) -> &AgentDbOptions {
@@ -190,7 +196,8 @@ impl AgentDbStorage {
             None => {
                 let mut opts = conn::Options::new(self.data_plane.clone(), database_id);
                 opts.reconnect = self.opts.reconnect.clone();
-                (Conn::dial(opts, self.minter.clone()).await?, SchemaCell::default())
+                let conn = Conn::dial(opts, self.minter.clone(), self.runtime.clone()).await?;
+                (conn, SchemaCell::default())
             }
         };
         let pooled = Pooled {
@@ -355,10 +362,13 @@ impl DbPool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_data_plane_sits_under_the_project_public_api() {
+    #[tokio::test]
+    async fn the_data_plane_sits_under_the_project_public_api() {
         let minter = || TokenMinter::new("devkey", "secret").unwrap();
-        let storage = |url: &str| AgentDbStorage::new(AgentDbOptions::new(url), minter());
+        let storage = |url: &str| {
+            let runtime = tokio::runtime::Handle::current();
+            AgentDbStorage::new(AgentDbOptions::new(url), minter(), runtime)
+        };
         let staging = storage("wss://my-app.staging.livekit.cloud").unwrap();
         assert_eq!(staging.opts.url, "https://beta-api.staging.livekit.cloud");
         assert_eq!(staging.data_plane, "wss://beta-api.staging.livekit.cloud/v0/agentstore/db");

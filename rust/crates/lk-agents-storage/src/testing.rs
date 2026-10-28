@@ -63,7 +63,13 @@ impl Backend {
                 opts.lease = lease;
                 let minter =
                     TokenMinter::new(env("LIVEKIT_API_KEY"), env("LIVEKIT_API_SECRET")).unwrap();
-                Store { storage: Arc::new(AgentDbStorage::new(opts, minter).unwrap()), dir: None }
+                Store {
+                    storage: Arc::new(
+                        AgentDbStorage::new(opts, minter, tokio::runtime::Handle::current())
+                            .unwrap(),
+                    ),
+                    dir: None,
+                }
             }
         }
     }
@@ -162,18 +168,12 @@ impl Faulty {
 
 #[async_trait::async_trait]
 impl SqliteConnection for Faulty {
-    async fn query(
-        &self,
-        statement: Statement,
-    ) -> Result<Vec<Row>, StorageError> {
+    async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         self.reachable()?;
         self.inner.query(statement).await
     }
 
-    async fn batch(
-        &self,
-        statements: Vec<Statement>,
-    ) -> Result<BatchResult, StorageError> {
+    async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.reachable()?;
         let is_commit = statements.iter().any(|s| s.sql.contains("version = version + 1"));
         let fault = if is_commit { self.commit.lock().unwrap().take() } else { None };
@@ -189,7 +189,9 @@ impl SqliteConnection for Faulty {
                 self.inner.batch(statements).await?;
                 Err(StorageError::Uncertain("lost after".into()))
             }
-            Some(CommitFault::Refuse) => Err(StorageError::Invalid("sqlite: disk I/O error".into())),
+            Some(CommitFault::Refuse) => {
+                Err(StorageError::Invalid("sqlite: disk I/O error".into()))
+            }
         }
     }
 

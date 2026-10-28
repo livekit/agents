@@ -43,15 +43,23 @@ pub struct Streams {
     http: reqwest::Client,
     base: String,
     minter: TokenMinter,
+    /// The runtime each stream's append queue runs on.
+    runtime: tokio::runtime::Handle,
     queues: Arc<Mutex<HashMap<String, Arc<Queue>>>>,
 }
 
 impl Streams {
-    pub fn new(http: reqwest::Client, base: impl Into<String>, minter: TokenMinter) -> Self {
+    pub fn new(
+        http: reqwest::Client,
+        base: impl Into<String>,
+        minter: TokenMinter,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             http,
             base: base.into().trim_end_matches('/').to_owned(),
             minter,
+            runtime,
             queues: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -111,7 +119,7 @@ impl Streams {
         let this = self.clone();
         let id = stream_id.to_owned();
         let q = queue.clone();
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             while let Some(record) = rx.recv().await {
                 if let Err(e) = this.append_now(&id, &record).await {
                     log::warn!(target: "livekit.agents", streamId = id.as_str(); "stream append failed: {e}");
@@ -504,6 +512,7 @@ mod framing_tests {
             reqwest::Client::new(),
             "http://unused/streams",
             TokenMinter::new("key", "secret").unwrap(),
+            tokio::runtime::Handle::current(),
         );
         let mut reader = streams.read("AST_test", None, true);
         let body = "event: data\r\ndata: [\"café\"]\r\n\r\n".as_bytes();

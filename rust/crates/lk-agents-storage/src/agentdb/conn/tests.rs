@@ -160,7 +160,7 @@ pub(crate) async fn dial(url: &str, db: &str) -> Result<Conn, WsdbError> {
     let mut opts = Options::new(url, db);
     opts.reconnect.min_backoff = Duration::from_millis(10);
     opts.reconnect.budget = Duration::from_secs(5);
-    Conn::dial(opts, minter()).await
+    Conn::dial(opts, minter(), tokio::runtime::Handle::current()).await
 }
 
 #[tokio::test]

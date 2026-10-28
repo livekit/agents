@@ -34,8 +34,8 @@ log.workspace = true
 async-trait.workspace = true
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-# AgentDB's data plane (WebSocket) and its streams API (HTTP); one crypto provider (`ring`).
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+# AgentDB's streams API (HTTP; the data plane's WebSocket is lk-agents-net's); one crypto
+# provider (`ring`).
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
@@ -60,3 +60,5 @@ testing = []
 lk-agents-storage = { path = ".", features = ["testing"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
 httparse = "1"
+# The fake AgentDB server's side of the data plane.
+tokio-tungstenite = { version = "0.30", default-features = false }
