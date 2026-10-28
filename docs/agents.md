@@ -105,7 +105,7 @@ result.status                            # "completed" or "input_required"
 # result.question                        # str when input_required
 result.new_messages()                    # this invocation’s input and recorded messages
 result.all_messages()                    # supplied history plus this invocation, without instructions
-result.usage                             # requests, input_tokens, output_tokens, tool_calls
+result.usage                             # requests, input/output/total_tokens, tool_calls
 ```
 
 `RunResult[Output]` separates framework status from the application's output.
@@ -222,6 +222,19 @@ function can resolve the final value from application data or an authoritative
 service; its parameters define the final-output arguments and its return type
 defines the result. Raising `ModelRetry` asks the model to correct the attempted
 output. See [authoritative completion](#authoritative-completion-and-approval).
+
+`@agent.output_validator` registers a check that runs on the validated output
+before the run accepts it. It receives the `RunContext` and the output and
+returns the value to accept, or raises `ModelRetry` to send the model back with
+the reason:
+
+```python
+@fnol.output_validator
+async def cites_real_jobs(ctx: RunContext, output: Claim) -> Claim:
+    if not await ctx.context.jobs.exists(output.job_id):
+        raise ModelRetry(f"There is no job {output.job_id}; use one the customer named.")
+    return output
+```
 
 For multi-turn conversations with typed final results, see
 [text-session.md](text-session.md).
