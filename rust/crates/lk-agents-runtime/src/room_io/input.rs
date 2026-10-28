@@ -1,288 +1,270 @@
-//! Runtime ownership of participant input subscriptions and their bounded delivery queues.
+//! Executes a participant input's track selection: opens the tracks voice selects, pumps their
+//! frames into the bounded queue the session reads, and retires the streams voice retires.
 
 use lk_agents_abi::voice::io::{AudioInput, IoError, Result, VideoInput};
+use lk_agents_abi::voice::room_io::AudioInputConfig;
 use lk_agents_abi::voice::rtc::{
     AudioInputStream, AudioStreamOptions, AudioTrackFeature, ParticipantIdentity,
-    RemoteParticipant, RoomEvent, RtcRoom, TrackPublication, TrackSid, TrackSource, VideoFrameRef,
-    silence_frame,
+    RemoteParticipant, RoomEvent, RtcRoom, TrackPublication, TrackSid, VideoFrameRef,
 };
 use lk_agents_abi::{
-    AudioFrame, BoundedLossy, Clock, Closed, LossyTx, Pushed, Spawner, StreamSource, TaskSet, Ts,
+    AudioFrame, BoundedLossy, Clock, Closed, HOST_TEARDOWN_TIMEOUT, LossyTx, Pushed, Spawner,
+    SpawnerExt, StreamSource, Ts,
 };
-use lk_agents_voice::room_io::input_state::{InputIdentity, TrackSelection};
+use lk_agents_voice::room_io::input_state::{
+    AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, Publication, TrackReaders, VIDEO_SOURCES,
+    end_of_track,
+};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
 use super::pre_connect_audio::PreConnectAudioHandler;
-use lk_agents_abi::voice::room_io::AudioInputConfig;
 
-const AUDIO_SOURCES: &[TrackSource] = &[TrackSource::Microphone];
-const VIDEO_SOURCES: &[TrackSource] = &[TrackSource::Camera, TrackSource::Screenshare];
-const MAX_READERS: usize = 4;
-
-struct InputFrame<T> {
+struct Delivery<T> {
     identity: InputIdentity,
     item: Result<T>,
 }
 
-struct ReaderState<T> {
-    selection: TrackSelection,
-    stop: Option<Arc<Notify>>,
-    tx: Option<LossyTx<InputFrame<T>>>,
-    cleanup: Closed,
-    starting: usize,
+struct State<T> {
+    readers: TrackReaders,
+    queue: Option<LossyTx<Delivery<T>>>,
 }
 
-struct Lease {
-    generation: u64,
-    stop: Arc<Notify>,
+/// The selection, the queue it admits frames into, and one wake for every reader.
+struct Readers<T> {
+    state: Mutex<State<T>>,
+    queue: tokio::sync::Mutex<BoundedLossy<Delivery<T>>>,
+    changed: Notify,
 }
 
-struct TrackReader<T> {
-    state: Mutex<ReaderState<T>>,
-    rx: tokio::sync::Mutex<BoundedLossy<InputFrame<T>>>,
-    tasks: Arc<TaskSet>,
-    started: Notify,
-}
-
-impl<T> TrackReader<T> {
-    fn new(capacity: usize) -> Self {
-        let (tx, rx) = BoundedLossy::channel(capacity);
+impl<T> Readers<T> {
+    fn new(sources: &'static [lk_agents_abi::voice::rtc::TrackSource], capacity: usize) -> Self {
+        let (queue, rx) = BoundedLossy::channel(capacity);
         Self {
-            state: Mutex::new(ReaderState {
-                selection: TrackSelection::default(),
-                stop: None,
-                tx: Some(tx),
-                cleanup: Closed::Clean,
-                starting: 0,
-            }),
-            rx: tokio::sync::Mutex::new(rx),
-            tasks: Arc::default(),
-            started: Notify::new(),
+            state: Mutex::new(State { readers: TrackReaders::new(sources), queue: Some(queue) }),
+            queue: tokio::sync::Mutex::new(rx),
+            changed: Notify::new(),
         }
+    }
+
+    /// Applies a decision and wakes the readers it may have retired.
+    fn decide<R>(&self, decision: impl FnOnce(&mut TrackReaders) -> R) -> R {
+        let outcome = decision(&mut self.state.lock().unwrap().readers);
+        self.changed.notify_waiters();
+        outcome
     }
 
     fn reading(&self) -> Option<TrackSid> {
-        self.state.lock().unwrap().selection.reading().cloned()
+        self.state.lock().unwrap().readers.reading().cloned()
     }
 
-    fn link(&self, identity: Option<ParticipantIdentity>) -> bool {
-        let mut state = self.state.lock().unwrap();
-        if !state.selection.link(identity) {
-            return false;
-        }
-        if let Some(stop) = state.stop.take() {
-            stop.notify_one();
-        }
-        true
-    }
-
-    fn claim(
-        &self,
-        participant: &ParticipantIdentity,
-        source: TrackSource,
-        sid: &TrackSid,
-        sources: &[TrackSource],
-    ) -> Option<Lease> {
-        let mut state = self.state.lock().unwrap();
-        if self.tasks.names().len() + state.starting >= MAX_READERS {
-            return None;
-        }
-        let generation = state.selection.claim(participant, source, sid, sources)?;
-        if let Some(stop) = state.stop.take() {
-            stop.notify_one();
-        }
-        let stop = Arc::new(Notify::new());
-        state.stop = Some(stop.clone());
-        state.starting += 1;
-        Some(Lease { generation, stop })
-    }
-
-    fn release(&self, participant: &ParticipantIdentity, sid: &TrackSid) -> bool {
-        let mut state = self.state.lock().unwrap();
-        if !state.selection.release(participant, sid) {
-            return false;
-        }
-        if let Some(stop) = state.stop.take() {
-            stop.notify_one();
-        }
-        true
-    }
-
-    fn opening_failed(&self, lease: &Lease) {
-        self.ended(lease);
-        self.state.lock().unwrap().starting -= 1;
-        self.started.notify_waiters();
-    }
-
-    fn spawn(
-        &self,
-        spawner: &dyn Spawner,
-        name: &str,
-        work: impl Future<Output = ()> + Send + 'static,
-    ) {
-        self.tasks.spawn(spawner, name, work);
-    }
-
-    fn started(&self) {
-        self.state.lock().unwrap().starting -= 1;
-        self.started.notify_waiters();
-    }
-
-    fn ended(&self, lease: &Lease) {
-        let mut state = self.state.lock().unwrap();
-        if state.selection.ended(lease.generation) {
-            state.stop.take();
-        }
-    }
-
-    fn finish(&self, lease: &Lease, cleanup: Closed) {
-        let mut state = self.state.lock().unwrap();
-        state.cleanup = state.cleanup.and(cleanup);
-        if state.selection.ended(lease.generation) {
-            state.stop.take();
-        }
-    }
-
-    fn deliver(&self, lease: &Lease, item: Result<T>) -> bool {
+    /// `false` stops the reader.
+    fn deliver(&self, generation: u64, item: Result<T>) -> bool {
         let state = self.state.lock().unwrap();
-        if !state.selection.producing(lease.generation) {
-            return false;
+        match state.readers.admit(generation) {
+            Admit::Stop => false,
+            Admit::Drop => true,
+            Admit::Deliver(identity) => state
+                .queue
+                .as_ref()
+                .is_some_and(|queue| queue.push(Delivery { identity, item }) != Pushed::Closed),
         }
-        let Some(identity) = state.selection.admit(lease.generation) else {
-            return true;
-        };
-        state.tx.as_ref().is_some_and(|tx| tx.push(InputFrame { identity, item }) != Pushed::Closed)
+    }
+
+    /// Resolves once voice retires the reader of `generation`.
+    async fn retired(&self, generation: u64) {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if !self.state.lock().unwrap().readers.producing(generation) {
+                return;
+            }
+            changed.await;
+        }
     }
 
     async fn recv(&self) -> Result<Option<T>> {
-        let mut rx = self.rx.lock().await;
-        while let Some(frame) = rx.recv().await {
-            if self.state.lock().unwrap().selection.accepts(frame.identity) {
+        let mut queue = self.queue.lock().await;
+        while let Some(frame) = queue.recv().await {
+            if self.state.lock().unwrap().readers.accepts(frame.identity) {
                 return frame.item.map(Some);
             }
         }
         Ok(None)
     }
 
-    fn set_attached(&self, attached: bool) {
-        self.state.lock().unwrap().selection.set_attached(attached);
-    }
-
-    fn replay_pre_connect(
-        &self,
-        participant: ParticipantIdentity,
-        participant_sid: String,
-        sid: TrackSid,
-    ) -> bool {
-        self.state.lock().unwrap().selection.replay_pre_connect(
-            participant,
-            participant_sid,
-            sid,
-            lk_agents_voice::room_io::pre_connect_state::MAX_TRACKS,
-        )
-    }
-
+    /// Readers keep retiring their streams after the waiter reaches the deadline.
     async fn close(&self, clock: &dyn Clock, deadline: Ts) -> Closed {
         {
             let mut state = self.state.lock().unwrap();
-            state.selection.close();
-            if let Some(stop) = state.stop.take() {
-                stop.notify_one();
-            }
-            state.tx.take();
+            state.readers.close();
+            state.queue.take();
         }
-        loop {
-            let started = self.started.notified();
-            tokio::pin!(started);
-            started.as_mut().enable();
-            if self.state.lock().unwrap().starting == 0 {
-                break;
+        self.changed.notify_waiters();
+        let settled = async {
+            loop {
+                let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if let Some(outcome) = self.state.lock().unwrap().readers.settled() {
+                    return outcome;
+                }
+                changed.await;
             }
-            if lk_agents_abi::timeout(
-                clock,
-                deadline.saturating_duration_since(clock.now()),
-                &mut started,
-            )
-            .await
-            .is_err()
-            {
-                return Closed::TimedOut;
-            }
-        }
-        if self.tasks.wait_empty(clock, Some(deadline)).await {
-            self.state.lock().unwrap().cleanup
-        } else {
-            Closed::TimedOut
-        }
+        };
+        let remaining = deadline.saturating_duration_since(clock.now());
+        lk_agents_abi::timeout(clock, remaining, settled).await.unwrap_or(Closed::TimedOut)
     }
 }
 
-fn read_first(
-    participant: &Arc<dyn RemoteParticipant>,
-    skip: Option<&TrackSid>,
-    mut try_read: impl FnMut(&Arc<dyn TrackPublication>) -> Result<bool>,
-) -> Result<()> {
-    for publication in participant.track_publications()? {
-        if Some(publication.sid()) != skip
-            && publication.is_subscribed()?
-            && try_read(&publication)?
-        {
-            break;
-        }
-    }
-    Ok(())
+/// The participant's publications as voice reads them, with the SDK handles to open.
+fn publications(
+    participant: &dyn RemoteParticipant,
+) -> Result<(Vec<Publication>, Vec<Arc<dyn TrackPublication>>)> {
+    let handles = participant.track_publications()?;
+    let listed = handles
+        .iter()
+        .map(|publication| {
+            Ok(Publication {
+                sid: publication.sid().clone(),
+                source: publication.source(),
+                subscribed: publication.is_subscribed()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok((listed, handles))
 }
 
-fn link_and_read<T>(
-    reader: &TrackReader<T>,
-    room: &dyn RtcRoom,
-    identity: Option<ParticipantIdentity>,
-    mut try_read: impl FnMut(&Arc<dyn RemoteParticipant>, &Arc<dyn TrackPublication>) -> Result<bool>,
-) -> Result<()> {
-    if !reader.link(identity.clone()) && reader.reading().is_some() {
-        return Ok(());
-    }
-    if let Some(identity) = identity
-        && let Some(participant) = room.participant(&identity)?
-    {
-        read_first(&participant, None, |track| try_read(&participant, track))?;
-    }
-    Ok(())
+/// One kind of input's SDK reader: opens the selected track and pumps it.
+trait Reader: Sized + Send + Sync + 'static {
+    type Frame: Send + 'static;
+
+    fn readers(&self) -> &Readers<Self::Frame>;
+    fn room(&self) -> &dyn RtcRoom;
+    /// Opens the stream and spawns its reader, which reports `retired` when its stream is closed.
+    fn open(
+        self: &Arc<Self>,
+        participant: &dyn RemoteParticipant,
+        publication: &Arc<dyn TrackPublication>,
+        open: &Open,
+    ) -> Result<()>;
 }
 
-fn route<T>(
-    reader: &TrackReader<T>,
-    event: &RoomEvent,
-    mut try_read: impl FnMut(&Arc<dyn RemoteParticipant>, &Arc<dyn TrackPublication>) -> Result<bool>,
+fn perform<R: Reader>(
+    reader: &Arc<R>,
+    participant: &dyn RemoteParticipant,
+    handles: &[Arc<dyn TrackPublication>],
+    open: Option<Open>,
 ) -> Result<()> {
-    match event {
+    let Some(open) = open else { return Ok(()) };
+    let publication = handles.iter().find(|publication| *publication.sid() == open.sid);
+    let opened = match publication {
+        Some(publication) => reader.open(participant, publication, &open),
+        None => Ok(()),
+    };
+    if publication.is_none() || opened.is_err() {
+        reader.readers().decide(|readers| readers.retired(open.generation, Closed::Clean));
+    }
+    opened
+}
+
+fn link<R: Reader>(reader: &Arc<R>, identity: Option<ParticipantIdentity>) -> Result<()> {
+    let participant = match &identity {
+        Some(identity) => reader.room().participant(identity)?,
+        None => None,
+    };
+    let (listed, handles) = match &participant {
+        Some(participant) => publications(participant.as_ref())?,
+        None => Default::default(),
+    };
+    let owner = participant.as_ref().map(|p| Owner { identity: p.identity(), sid: p.sid() });
+    let open = reader.readers().decide(|readers| readers.link(identity.clone(), owner, &listed));
+    match participant {
+        Some(participant) => perform(reader, participant.as_ref(), &handles, open),
+        None => Ok(()),
+    }
+}
+
+fn route<R: Reader>(reader: &Arc<R>, event: &RoomEvent) -> Result<()> {
+    let (participant, publication, unsubscribed) = match event {
         RoomEvent::TrackSubscribed { participant, publication } => {
-            try_read(participant, publication)?;
+            let owner = Owner { identity: participant.identity(), sid: participant.sid() };
+            let listed = Publication {
+                sid: publication.sid().clone(),
+                source: publication.source(),
+                subscribed: true,
+            };
+            let open = reader.readers().decide(|readers| readers.subscribed(owner, &listed));
+            return perform(reader, participant.as_ref(), std::slice::from_ref(publication), open);
         }
         RoomEvent::TrackUnpublished { participant, publication } => {
-            if reader.release(participant.identity(), publication.sid()) {
-                read_first(participant, None, |track| try_read(participant, track))?;
-            }
+            (participant, publication, false)
         }
         RoomEvent::TrackUnsubscribed { participant, publication } => {
-            if reader.release(participant.identity(), publication.sid()) {
-                read_first(participant, Some(publication.sid()), |track| {
-                    try_read(participant, track)
-                })?;
+            (participant, publication, true)
+        }
+        _ => return Ok(()),
+    };
+    if reader.readers().reading().as_ref() != Some(publication.sid()) {
+        return Ok(());
+    }
+    let (listed, handles) = publications(participant.as_ref())?;
+    let owner = Owner { identity: participant.identity(), sid: participant.sid() };
+    let open = reader
+        .readers()
+        .decide(|readers| readers.removed(owner, publication.sid(), unsubscribed, &listed));
+    perform(reader, participant.as_ref(), &handles, open)
+}
+
+/// Reads a stream until voice retires its reader or it ends, then retires the stream.
+async fn pump<T: Send + 'static>(
+    readers: &Readers<T>,
+    clock: &dyn Clock,
+    generation: u64,
+    mut stream: Box<dyn StreamSource<T>>,
+    replay: impl Future<Output = bool>,
+    end: impl FnOnce() -> Option<T>,
+) {
+    let reading = async {
+        if !replay.await {
+            return;
+        }
+        loop {
+            match stream.next().await {
+                Ok(Some(frame)) => {
+                    if !readers.deliver(generation, Ok(frame)) {
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    if let Some(frame) = end() {
+                        readers.deliver(generation, Ok(frame));
+                    }
+                    return;
+                }
+                Err(error) => {
+                    readers.deliver(generation, Err(IoError::from(error)));
+                    return;
+                }
             }
         }
-        _ => {}
+    };
+    tokio::select! {
+        biased;
+        () = readers.retired(generation) => {},
+        () = reading => {},
     }
-    Ok(())
+    let cleanup = stream.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+    readers.decide(|readers| readers.retired(generation, cleanup));
 }
 
 pub struct ParticipantVideoInput {
     room: Arc<dyn RtcRoom>,
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
-    reader: TrackReader<VideoFrameRef>,
+    readers: Readers<VideoFrameRef>,
 }
 
 impl ParticipantVideoInput {
@@ -295,82 +277,52 @@ impl ParticipantVideoInput {
             room,
             spawner,
             clock,
-            reader: TrackReader::new(lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES),
+            readers: Readers::new(VIDEO_SOURCES, lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES),
         })
     }
 
     pub fn reading(&self) -> Option<TrackSid> {
-        self.reader.reading()
+        self.readers.reading()
     }
 
     pub fn set_participant(self: &Arc<Self>, identity: Option<ParticipantIdentity>) -> Result<()> {
-        link_and_read(&self.reader, self.room.as_ref(), identity, |p, t| self.try_read(p, t))
+        link(self, identity)
     }
 
     pub fn handle_event(self: &Arc<Self>, event: &RoomEvent) -> Result<()> {
-        route(&self.reader, event, |p, t| self.try_read(p, t))
-    }
-
-    fn try_read(
-        self: &Arc<Self>,
-        participant: &Arc<dyn RemoteParticipant>,
-        publication: &Arc<dyn TrackPublication>,
-    ) -> Result<bool> {
-        let Some(lease) = self.reader.claim(
-            participant.identity(),
-            publication.source(),
-            publication.sid(),
-            VIDEO_SOURCES,
-        ) else {
-            return Ok(false);
-        };
-        let stream = match publication.open_video_stream() {
-            Ok(stream) => stream,
-            Err(error) => {
-                self.reader.opening_failed(&lease);
-                return Err(error.into());
-            }
-        };
-        let owner = self.clone();
-        self.reader.spawn(self.spawner.as_ref(), "room video input", async move {
-            owner.pump(lease, stream).await;
-        });
-        Ok(true)
-    }
-
-    async fn pump(self: Arc<Self>, lease: Lease, mut stream: Box<dyn StreamSource<VideoFrameRef>>) {
-        self.reader.started();
-        loop {
-            let frame = tokio::select! {
-                biased;
-                () = lease.stop.notified() => break,
-                frame = stream.next() => frame,
-            };
-            match frame {
-                Ok(Some(frame)) => {
-                    if !self.reader.deliver(&lease, Ok(frame)) {
-                        break;
-                    }
-                }
-                Ok(None) => break,
-                Err(error) => {
-                    self.reader.deliver(&lease, Err(IoError::from(error)));
-                    break;
-                }
-            }
-        }
-        let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        let cleanup = stream.close(deadline).await;
-        self.reader.finish(&lease, cleanup);
+        route(self, event)
     }
 
     pub async fn aclose(&self) -> Closed {
-        self.reader
-            .close(
-                self.clock.as_ref(),
-                self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT),
-            )
-            .await
+        let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+        self.readers.close(self.clock.as_ref(), deadline).await
+    }
+}
+
+impl Reader for ParticipantVideoInput {
+    type Frame = VideoFrameRef;
+
+    fn readers(&self) -> &Readers<VideoFrameRef> {
+        &self.readers
+    }
+
+    fn room(&self) -> &dyn RtcRoom {
+        self.room.as_ref()
+    }
+
+    fn open(
+        self: &Arc<Self>,
+        _: &dyn RemoteParticipant,
+        publication: &Arc<dyn TrackPublication>,
+        open: &Open,
+    ) -> Result<()> {
+        let stream = publication.open_video_stream()?;
+        let (owner, generation) = (self.clone(), open.generation);
+        self.spawner.spawn_unboxed(async move {
+            let readers = &owner.readers;
+            pump(readers, owner.clock.as_ref(), generation, stream, async { true }, || None).await;
+        });
+        Ok(())
     }
 }
 
@@ -379,13 +331,13 @@ impl VideoInput for ParticipantVideoInput {
         "RoomIO"
     }
     fn next_frame<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<Option<VideoFrameRef>>> {
-        Box::pin(async move { self.reader.recv().await })
+        Box::pin(async move { self.readers.recv().await })
     }
     fn on_attached(&self) {
-        self.reader.set_attached(true);
+        self.readers.decide(|readers| readers.set_attached(true));
     }
     fn on_detached(&self) {
-        self.reader.set_attached(false);
+        self.readers.decide(|readers| readers.set_attached(false));
     }
 }
 
@@ -395,7 +347,7 @@ pub struct ParticipantAudioInput {
     clock: Arc<dyn Clock>,
     config: AudioInputConfig,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
-    reader: TrackReader<AudioFrame>,
+    readers: Readers<AudioFrame>,
 }
 
 impl ParticipantAudioInput {
@@ -412,152 +364,104 @@ impl ParticipantAudioInput {
             clock,
             config,
             pre_connect,
-            reader: TrackReader::new(lk_agents_abi::AUDIO_QUEUE_FRAMES),
+            readers: Readers::new(AUDIO_SOURCES, lk_agents_abi::AUDIO_QUEUE_FRAMES),
         })
     }
 
     pub fn reading(&self) -> Option<TrackSid> {
-        self.reader.reading()
+        self.readers.reading()
     }
 
     pub fn set_participant(self: &Arc<Self>, identity: Option<ParticipantIdentity>) -> Result<()> {
-        link_and_read(&self.reader, self.room.as_ref(), identity, |p, t| self.try_read(p, t))
+        link(self, identity)
     }
 
     pub fn handle_event(self: &Arc<Self>, event: &RoomEvent) -> Result<()> {
-        route(&self.reader, event, |p, t| self.try_read(p, t))
+        route(self, event)
     }
 
-    fn try_read(
-        self: &Arc<Self>,
-        participant: &Arc<dyn RemoteParticipant>,
-        publication: &Arc<dyn TrackPublication>,
-    ) -> Result<bool> {
-        let Some(lease) = self.reader.claim(
-            participant.identity(),
-            publication.source(),
-            publication.sid(),
-            AUDIO_SOURCES,
-        ) else {
-            return Ok(false);
+    /// The publisher's pre-connect head, through the track's processing, ahead of the live
+    /// frames. `false` stops the reader.
+    async fn replay(
+        &self,
+        generation: u64,
+        sid: &TrackSid,
+        input_stream: Option<Arc<dyn AudioInputStream>>,
+    ) -> bool {
+        let (Some(input_stream), Some(handler)) = (input_stream, &self.pre_connect) else {
+            return true;
         };
-        let input_stream = match publication.open_audio_stream(AudioStreamOptions {
+        let frames = match handler.wait_for_data(sid).await {
+            Ok(frames) => frames,
+            // An absent or expired head doesn't invalidate the live subscription.
+            Err(IoError::PreConnectTimeout(_)) => return true,
+            Err(error) => {
+                self.readers.deliver(generation, Err(error));
+                return false;
+            }
+        };
+        for frame in frames {
+            match input_stream.process_audio(vec![frame]).await {
+                Ok(frames) => {
+                    for frame in frames {
+                        if !self.readers.deliver(generation, Ok(frame)) {
+                            return false;
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.readers.deliver(generation, Err(error.into()));
+                    return false;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+        true
+    }
+
+    pub async fn aclose(&self) -> Closed {
+        let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+        self.readers.close(self.clock.as_ref(), deadline).await
+    }
+}
+
+impl Reader for ParticipantAudioInput {
+    type Frame = AudioFrame;
+
+    fn readers(&self) -> &Readers<AudioFrame> {
+        &self.readers
+    }
+
+    fn room(&self) -> &dyn RtcRoom {
+        self.room.as_ref()
+    }
+
+    fn open(
+        self: &Arc<Self>,
+        participant: &dyn RemoteParticipant,
+        publication: &Arc<dyn TrackPublication>,
+        open: &Open,
+    ) -> Result<()> {
+        let input_stream = publication.open_audio_stream(AudioStreamOptions {
             sample_rate: Some(self.config.sample_rate),
             num_channels: Some(self.config.num_channels),
             frame_size_ms: Some(self.config.frame_size_ms),
             noise_cancellation: self.config.noise_cancellation.clone(),
             auto_gain_control: self.config.auto_gain_control,
             participant_identity: participant.identity().clone(),
-        }) {
-            Ok(stream) => stream,
-            Err(error) => {
-                self.reader.opening_failed(&lease);
-                return Err(error.into());
-            }
-        };
-        let stream = match input_stream.frames() {
-            Ok(stream) => stream,
-            Err(error) => {
-                self.reader.opening_failed(&lease);
-                return Err(error.into());
-            }
-        };
-        let wants_pre_connect =
-            publication.audio_features().contains(&AudioTrackFeature::PreconnectBuffer)
-                && self.reader.replay_pre_connect(
-                    participant.identity().clone(),
-                    participant.sid().to_owned(),
-                    publication.sid().clone(),
-                );
-        let owner = self.clone();
-        let sid = publication.sid().clone();
-        self.reader.spawn(self.spawner.as_ref(), "room audio input", async move {
-            owner.pump(lease, sid, stream, wants_pre_connect.then_some(input_stream)).await;
+        })?;
+        let stream = input_stream.frames()?;
+        let owner = Owner { identity: participant.identity(), sid: participant.sid() };
+        let replay = publication.audio_features().contains(&AudioTrackFeature::PreconnectBuffer)
+            && self.readers.decide(|readers| readers.replay_pre_connect(owner, &open.sid));
+        let (input, generation, sid) = (self.clone(), open.generation, open.sid.clone());
+        self.spawner.spawn_unboxed(async move {
+            let (sample_rate, num_channels) = (input.config.sample_rate, input.config.num_channels);
+            let replay = input.replay(generation, &sid, replay.then_some(input_stream));
+            let end = || Some(end_of_track(sample_rate, num_channels));
+            pump(&input.readers, input.clock.as_ref(), generation, stream, replay, end).await;
         });
-        Ok(true)
-    }
-
-    async fn pump(
-        self: Arc<Self>,
-        lease: Lease,
-        sid: TrackSid,
-        mut stream: Box<dyn StreamSource<AudioFrame>>,
-        pre_connect: Option<Arc<dyn AudioInputStream>>,
-    ) {
-        self.reader.started();
-        let reading = async {
-            if let Some(input_stream) = pre_connect
-                && let Some(handler) = &self.pre_connect
-            {
-                match handler.wait_for_data(&sid).await {
-                    Ok(frames) => {
-                        for frame in frames {
-                            match input_stream.process_audio(vec![frame]).await {
-                                Ok(frames) => {
-                                    for frame in frames {
-                                        if !self.reader.deliver(&lease, Ok(frame)) {
-                                            return;
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    self.reader.deliver(&lease, Err(error.into()));
-                                    return;
-                                }
-                            }
-                            tokio::task::yield_now().await;
-                        }
-                    }
-                    // An absent or expired head doesn't invalidate the live subscription.
-                    Err(IoError::PreConnectTimeout(_)) => {}
-                    Err(error) => {
-                        self.reader.deliver(&lease, Err(error));
-                        return;
-                    }
-                }
-            }
-            loop {
-                match stream.next().await {
-                    Ok(Some(frame)) => {
-                        if !self.reader.deliver(&lease, Ok(frame)) {
-                            return;
-                        }
-                    }
-                    Ok(None) => {
-                        self.reader.deliver(
-                            &lease,
-                            Ok(silence_frame(
-                                self.config.sample_rate / 2,
-                                self.config.sample_rate,
-                                self.config.num_channels,
-                            )),
-                        );
-                        return;
-                    }
-                    Err(error) => {
-                        self.reader.deliver(&lease, Err(IoError::from(error)));
-                        return;
-                    }
-                }
-            }
-        };
-        tokio::select! {
-            biased;
-            () = lease.stop.notified() => {},
-            () = reading => {},
-        }
-        let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        let cleanup = stream.close(deadline).await;
-        self.reader.finish(&lease, cleanup);
-    }
-
-    pub async fn aclose(&self) -> Closed {
-        self.reader
-            .close(
-                self.clock.as_ref(),
-                self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT),
-            )
-            .await
+        Ok(())
     }
 }
 
@@ -566,13 +470,13 @@ impl AudioInput for ParticipantAudioInput {
         "RoomIO"
     }
     fn next_frame<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<Option<AudioFrame>>> {
-        Box::pin(async move { self.reader.recv().await })
+        Box::pin(async move { self.readers.recv().await })
     }
     fn on_attached(&self) {
-        self.reader.set_attached(true);
+        self.readers.decide(|readers| readers.set_attached(true));
     }
     fn on_detached(&self) {
-        self.reader.set_attached(false);
+        self.readers.decide(|readers| readers.set_attached(false));
     }
 }
 
@@ -595,84 +499,5 @@ impl lk_agents_abi::voice::room_owner::RoomVideoInputPort for ParticipantVideoIn
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn replacing_a_track_rejects_its_buffered_input() {
-        let reader = TrackReader::new(8);
-        reader.link(Some("user".into()));
-        let old = reader
-            .claim(&"user".into(), TrackSource::Microphone, &"old".into(), AUDIO_SOURCES)
-            .unwrap();
-        assert!(reader.deliver(&old, Ok("old audio")));
-        let new = reader
-            .claim(&"user".into(), TrackSource::Microphone, &"new".into(), AUDIO_SOURCES)
-            .unwrap();
-        assert!(reader.deliver(&new, Ok("new audio")));
-        assert_eq!(reader.recv().await.unwrap(), Some("new audio"));
-        assert!(!reader.deliver(&old, Ok("late old audio")));
-        reader.ended(&old);
-        assert_eq!(reader.reading(), Some("new".into()));
-    }
-
-    #[tokio::test]
-    async fn reattaching_the_same_input_rejects_its_previous_buffer() {
-        let reader = TrackReader::new(8);
-        reader.link(Some("user".into()));
-        let track = reader
-            .claim(&"user".into(), TrackSource::Microphone, &"mic".into(), AUDIO_SOURCES)
-            .unwrap();
-        assert!(reader.deliver(&track, Ok("previous attachment")));
-        reader.set_attached(false);
-        assert!(reader.deliver(&track, Ok("detached audio")));
-        reader.set_attached(true);
-        assert!(reader.deliver(&track, Ok("current attachment")));
-        assert_eq!(reader.recv().await.unwrap(), Some("current attachment"));
-    }
-
-    #[tokio::test]
-    async fn a_track_ending_preserves_its_accepted_audio() {
-        let reader = TrackReader::new(8);
-        reader.link(Some("user".into()));
-        let track = reader
-            .claim(&"user".into(), TrackSource::Microphone, &"mic".into(), AUDIO_SOURCES)
-            .unwrap();
-        assert!(reader.deliver(&track, Ok("last audio")));
-        reader.ended(&track);
-        assert_eq!(reader.recv().await.unwrap(), Some("last audio"));
-    }
-}
-
-#[cfg(test)]
-mod creation_tests {
-    use super::*;
-    use std::future::Future;
-    use std::task::Poll;
-    use std::time::Duration;
-
-    #[tokio::test]
-    async fn close_does_not_report_clean_while_an_admitted_reader_is_still_opening() {
-        let reader = TrackReader::<u8>::new(8);
-        reader.link(Some("user".into()));
-        let _lease = reader
-            .claim(&"user".into(), TrackSource::Microphone, &"mic".into(), AUDIO_SOURCES)
-            .unwrap();
-        let clock = lk_agents_abi::VirtualClock::new();
-        let mut close = Box::pin(reader.close(&clock, Ts::from_nanos(1_000_000_000)));
-        std::future::poll_fn(|cx| {
-            assert!(
-                close.as_mut().poll(cx).is_pending(),
-                "a room source may still arrive and require retirement"
-            );
-            Poll::Ready(())
-        })
-        .await;
-        clock.advance(Duration::from_secs(1));
-        assert_eq!(close.await, Closed::TimedOut);
-    }
-}
-
-#[cfg(test)]
 #[path = "input_tests.rs"]
-mod live_tests;
+mod tests;

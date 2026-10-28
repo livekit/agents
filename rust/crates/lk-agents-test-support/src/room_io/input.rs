@@ -1,14 +1,20 @@
-//! Simulated subscriptions execute the same track and attachment admission as production.
+//! The simulation's executor of voice's track selection over supplied-clock peers.
 
 use super::pre_connect_audio::PreConnectAudioHandler;
 use lk_agents_abi::voice::io::{AudioInput, IoError, Result, VideoInput};
 use lk_agents_abi::voice::room_io::AudioInputConfig;
 use lk_agents_abi::voice::rtc::{
     AudioStreamOptions, AudioTrackFeature, ParticipantIdentity, RemoteParticipant, RoomEvent,
-    RtcRoom, TrackPublication, TrackSid, TrackSource, VideoFrameRef, silence_frame,
+    RtcRoom, TrackPublication, TrackSid, VideoFrameRef,
 };
-use lk_agents_abi::{AudioFrame, BoundedLossy, Clock, Closed, LossyTx, Spawner, TaskSet};
-use lk_agents_voice::room_io::input_state::{InputIdentity, TrackSelection};
+use lk_agents_abi::{
+    AudioFrame, BoundedLossy, Clock, Closed, HOST_TEARDOWN_TIMEOUT, LossyTx, Pushed, Spawner,
+    SpawnerExt, StreamSource,
+};
+use lk_agents_voice::room_io::input_state::{
+    AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, Publication, TrackReaders, VIDEO_SOURCES,
+    end_of_track,
+};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
@@ -16,80 +22,196 @@ struct Delivery<T> {
     identity: InputIdentity,
     item: Result<T>,
 }
+
 struct Input<T> {
-    selection: Mutex<TrackSelection>,
-    sender: LossyTx<Delivery<T>>,
-    receiver: tokio::sync::Mutex<BoundedLossy<Delivery<T>>>,
+    readers: Mutex<(TrackReaders, Option<LossyTx<Delivery<T>>>)>,
+    queue: tokio::sync::Mutex<BoundedLossy<Delivery<T>>>,
     changed: Notify,
-    tasks: Arc<TaskSet>,
-    cleanup: Mutex<Option<Closed>>,
-    outcome: Mutex<Closed>,
 }
+
 impl<T> Input<T> {
-    fn new(capacity: usize) -> Self {
-        let (sender, receiver) = BoundedLossy::channel(capacity);
+    fn new(sources: &'static [lk_agents_abi::voice::rtc::TrackSource], capacity: usize) -> Self {
+        let (tx, rx) = BoundedLossy::channel(capacity);
         Self {
-            selection: Mutex::default(),
-            sender,
-            receiver: tokio::sync::Mutex::new(receiver),
+            readers: Mutex::new((TrackReaders::new(sources), Some(tx))),
+            queue: tokio::sync::Mutex::new(rx),
             changed: Notify::new(),
-            tasks: Arc::default(),
-            cleanup: Mutex::new(None),
-            outcome: Mutex::new(Closed::Clean),
         }
     }
-    fn deliver(&self, generation: u64, item: Result<T>) {
-        if let Some(identity) = self.selection.lock().unwrap().admit(generation) {
-            self.sender.push(Delivery { identity, item });
+
+    fn decide<R>(&self, decision: impl FnOnce(&mut TrackReaders) -> R) -> R {
+        let outcome = decision(&mut self.readers.lock().unwrap().0);
+        self.changed.notify_waiters();
+        outcome
+    }
+
+    fn deliver(&self, generation: u64, item: Result<T>) -> bool {
+        let readers = self.readers.lock().unwrap();
+        match readers.0.admit(generation) {
+            Admit::Stop => false,
+            Admit::Drop => true,
+            Admit::Deliver(identity) => readers
+                .1
+                .as_ref()
+                .is_some_and(|tx| tx.push(Delivery { identity, item }) != Pushed::Closed),
         }
     }
-    async fn next(&self) -> Result<Option<T>> {
+
+    /// Resolves once voice retires the reader of `generation`.
+    async fn retired(&self, generation: u64) {
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if self.selection.lock().unwrap().is_closed() {
-                return Ok(None);
+            if !self.readers.lock().unwrap().0.producing(generation) {
+                return;
             }
-            let mut receiver = self.receiver.lock().await;
-            let delivery = tokio::select! { item = receiver.recv() => item, () = &mut changed => {
-                if self.selection.lock().unwrap().is_closed() {return Ok(None)}
-                continue;
-            }};
-            let Some(delivery) = delivery else { return Ok(None) };
-            if self.selection.lock().unwrap().accepts(delivery.identity) {
+            changed.await;
+        }
+    }
+
+    async fn next(&self) -> Result<Option<T>> {
+        let mut queue = self.queue.lock().await;
+        while let Some(delivery) = queue.recv().await {
+            if self.readers.lock().unwrap().0.accepts(delivery.identity) {
                 return delivery.item.map(Some);
             }
         }
-    }
-    async fn close(&self, clock: &dyn Clock) -> Closed {
-        if let Some(outcome) = *self.cleanup.lock().unwrap() {
-            return outcome;
-        }
-        self.selection.lock().unwrap().close();
-        self.changed.notify_waiters();
-        {
-            let mut receiver = self.receiver.lock().await;
-            receiver.close();
-            while receiver.recv().await.is_some() {}
-        }
-        let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        let outcome = if self.tasks.wait_empty(clock, Some(deadline)).await {
-            Closed::Clean
-        } else {
-            Closed::TimedOut
-        };
-        *self.cleanup.lock().unwrap().get_or_insert(outcome.and(*self.outcome.lock().unwrap()))
-    }
-    fn record_cleanup(&self, outcome: Closed) {
-        let mut recorded = self.outcome.lock().unwrap();
-        *recorded = recorded.and(outcome);
+        Ok(None)
     }
 
-    fn attached(&self, attached: bool) {
-        self.selection.lock().unwrap().set_attached(attached);
+    async fn close(&self, clock: &dyn Clock) -> Closed {
+        {
+            let mut readers = self.readers.lock().unwrap();
+            readers.0.close();
+            readers.1.take();
+        }
         self.changed.notify_waiters();
+        let settled = async {
+            loop {
+                let changed = self.changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if let Some(outcome) = self.readers.lock().unwrap().0.settled() {
+                    return outcome;
+                }
+                changed.await;
+            }
+        };
+        lk_agents_abi::timeout(clock, HOST_TEARDOWN_TIMEOUT, settled)
+            .await
+            .unwrap_or(Closed::TimedOut)
     }
+
+    async fn pump(
+        &self,
+        clock: &dyn Clock,
+        generation: u64,
+        mut stream: Box<dyn StreamSource<T>>,
+        mut end: Option<T>,
+    ) {
+        loop {
+            let frame = tokio::select! {
+                biased;
+                () = self.retired(generation) => break,
+                frame = stream.next() => frame,
+            };
+            let delivered = match frame {
+                Ok(Some(frame)) => self.deliver(generation, Ok(frame)),
+                Ok(None) => {
+                    if let Some(frame) = end.take() {
+                        self.deliver(generation, Ok(frame));
+                    }
+                    false
+                }
+                Err(error) => {
+                    self.deliver(generation, Err(error.into()));
+                    false
+                }
+            };
+            if !delivered {
+                break;
+            }
+        }
+        let cleanup = stream.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+        self.decide(|readers| readers.retired(generation, cleanup));
+    }
+}
+
+fn listed(
+    participant: &dyn RemoteParticipant,
+) -> Result<(Vec<Publication>, Vec<Arc<dyn TrackPublication>>)> {
+    let handles = participant.track_publications()?;
+    let listed = handles
+        .iter()
+        .map(|track| {
+            Ok(Publication {
+                sid: track.sid().clone(),
+                source: track.source(),
+                subscribed: track.is_subscribed()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok((listed, handles))
+}
+
+/// Which track voice opens, after a link or a room event.
+fn select<T>(
+    input: &Input<T>,
+    room: &dyn RtcRoom,
+    change: Change<'_>,
+) -> Result<Option<(Arc<dyn RemoteParticipant>, Arc<dyn TrackPublication>, Open)>> {
+    let (participant, handles, open) = match change {
+        Change::Link(who) => {
+            let participant = match &who {
+                Some(who) => room.participant(who)?,
+                None => None,
+            };
+            let (listed, handles) = match &participant {
+                Some(p) => listed(p.as_ref())?,
+                None => Default::default(),
+            };
+            let owner =
+                participant.as_ref().map(|p| Owner { identity: p.identity(), sid: p.sid() });
+            let open = input.decide(|readers| readers.link(who.clone(), owner, &listed));
+            (participant, handles, open)
+        }
+        Change::Event(RoomEvent::TrackSubscribed { participant, publication }) => {
+            let owner = Owner { identity: participant.identity(), sid: participant.sid() };
+            let track = Publication {
+                sid: publication.sid().clone(),
+                source: publication.source(),
+                subscribed: true,
+            };
+            let open = input.decide(|readers| readers.subscribed(owner, &track));
+            (Some(participant.clone()), vec![publication.clone()], open)
+        }
+        Change::Event(
+            RoomEvent::TrackUnpublished { participant, publication }
+            | RoomEvent::TrackUnsubscribed { participant, publication },
+        ) => {
+            let unsubscribed = matches!(change, Change::Event(RoomEvent::TrackUnsubscribed { .. }));
+            let (listed, handles) = listed(participant.as_ref())?;
+            let owner = Owner { identity: participant.identity(), sid: participant.sid() };
+            let open = input
+                .decide(|readers| readers.removed(owner, publication.sid(), unsubscribed, &listed));
+            (Some(participant.clone()), handles, open)
+        }
+        Change::Event(_) => return Ok(None),
+    };
+    let (Some(participant), Some(open)) = (participant, open) else { return Ok(None) };
+    match handles.into_iter().find(|track| *track.sid() == open.sid) {
+        Some(track) => Ok(Some((participant, track, open))),
+        None => {
+            input.decide(|readers| readers.retired(open.generation, Closed::Clean));
+            Ok(None)
+        }
+    }
+}
+
+enum Change<'a> {
+    Link(Option<ParticipantIdentity>),
+    Event(&'a RoomEvent),
 }
 
 pub struct ParticipantAudioInput {
@@ -100,6 +222,7 @@ pub struct ParticipantAudioInput {
     config: AudioInputConfig,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
 }
+
 impl ParticipantAudioInput {
     pub fn new(
         room: Arc<dyn RtcRoom>,
@@ -109,7 +232,7 @@ impl ParticipantAudioInput {
         pre_connect: Option<Arc<PreConnectAudioHandler>>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            input: Input::new(lk_agents_abi::AUDIO_QUEUE_FRAMES),
+            input: Input::new(AUDIO_SOURCES, lk_agents_abi::AUDIO_QUEUE_FRAMES),
             room,
             clock,
             spawner,
@@ -117,186 +240,90 @@ impl ParticipantAudioInput {
             pre_connect,
         })
     }
+
     pub fn set_participant(self: &Arc<Self>, who: Option<ParticipantIdentity>) -> Result<()> {
-        self.input.selection.lock().unwrap().link(who.clone());
-        self.input.changed.notify_waiters();
-        if let Some(who) = who
-            && let Some(participant) = self.room.participant(&who)?
-        {
-            for track in participant.track_publications()? {
-                if self.subscribe(&participant, &track)? {
-                    break;
-                }
-            }
-        }
-        Ok(())
+        self.open(Change::Link(who))
     }
+
     pub fn handle_event(self: &Arc<Self>, event: &RoomEvent) -> Result<()> {
-        match event {
-            RoomEvent::TrackSubscribed { participant, publication } => {
-                self.subscribe(participant, publication)?;
-            }
-            RoomEvent::TrackUnsubscribed { participant, publication }
-            | RoomEvent::TrackUnpublished { participant, publication } => {
-                if self
-                    .input
-                    .selection
-                    .lock()
-                    .unwrap()
-                    .release(participant.identity(), publication.sid())
-                {
-                    self.input.changed.notify_waiters();
-                    for track in participant.track_publications()? {
-                        if track.sid() != publication.sid()
-                            && self.subscribe(participant, &track)?
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        Ok(())
+        self.open(Change::Event(event))
     }
-    fn subscribe(
-        self: &Arc<Self>,
-        participant: &Arc<dyn RemoteParticipant>,
-        track: &Arc<dyn TrackPublication>,
-    ) -> Result<bool> {
-        let generation = self.input.selection.lock().unwrap().claim(
-            participant.identity(),
-            track.source(),
-            track.sid(),
-            &[TrackSource::Microphone],
-        );
-        let Some(generation) = generation else { return Ok(false) };
-        self.input.changed.notify_waiters();
-        let source = match track.open_audio_stream(AudioStreamOptions {
-            participant_identity: participant.identity().clone(),
-            sample_rate: Some(self.config.sample_rate),
-            num_channels: Some(self.config.num_channels),
-            frame_size_ms: Some(self.config.frame_size_ms),
-            noise_cancellation: self.config.noise_cancellation.clone(),
-            auto_gain_control: self.config.auto_gain_control,
-        }) {
-            Ok(source) => source,
+
+    fn open(self: &Arc<Self>, change: Change<'_>) -> Result<()> {
+        let Some((participant, track, open)) = select(&self.input, self.room.as_ref(), change)?
+        else {
+            return Ok(());
+        };
+        let opened = track
+            .open_audio_stream(AudioStreamOptions {
+                participant_identity: participant.identity().clone(),
+                sample_rate: Some(self.config.sample_rate),
+                num_channels: Some(self.config.num_channels),
+                frame_size_ms: Some(self.config.frame_size_ms),
+                noise_cancellation: self.config.noise_cancellation.clone(),
+                auto_gain_control: self.config.auto_gain_control,
+            })
+            .and_then(|source| Ok((source.frames()?, source)));
+        let (frames, source) = match opened {
+            Ok(opened) => opened,
             Err(error) => {
-                self.input.selection.lock().unwrap().ended(generation);
+                self.input.decide(|readers| readers.retired(open.generation, Closed::Clean));
                 return Err(error.into());
             }
         };
-        let mut frames = match source.frames() {
-            Ok(frames) => frames,
-            Err(error) => {
-                self.input.selection.lock().unwrap().ended(generation);
-                return Err(error.into());
-            }
-        };
-        let owner = self.clone();
-        let sid = track.sid().clone();
+        let owner = Owner { identity: participant.identity(), sid: participant.sid() };
         let replay = track.audio_features().contains(&AudioTrackFeature::PreconnectBuffer)
-            && self.input.selection.lock().unwrap().replay_pre_connect(
-                participant.identity().clone(),
-                participant.sid().into(),
-                sid.clone(),
-                lk_agents_voice::room_io::pre_connect_state::MAX_TRACKS,
-            );
-        self.input.tasks.spawn(self.spawner.as_ref(), "simulated room audio input", async move {
-            let mut replay_failed = false;
-            let replay_identity = owner.input.selection.lock().unwrap().admit(generation);
-            if replay && let Some(head) = &owner.pre_connect {
-                let changed = owner.input.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                let buffered = if owner.input.selection.lock().unwrap().producing(generation) {
-                    tokio::select! {
-                        data = head.wait_for_data(&sid) => Some(data),
-                        () = &mut changed => None,
-                    }
-                } else {
-                    None
+            && self.input.decide(|readers| readers.replay_pre_connect(owner, &open.sid));
+        let input = self.clone();
+        self.spawner.spawn_unboxed(async move {
+            let generation = open.generation;
+            let mut live = true;
+            if replay && let Some(head) = &input.pre_connect {
+                let buffered = tokio::select! {
+                    biased;
+                    () = input.input.retired(generation) => None,
+                    data = head.wait_for_data(&open.sid) => Some(data),
                 };
-                match buffered {
-                    Some(Ok(buffer)) => {
-                        for frame in buffer {
-                            if !replay_identity.is_some_and(|identity| {
-                                owner.input.selection.lock().unwrap().accepts(identity)
-                            }) {
+                live = match buffered {
+                    None => false,
+                    Some(Err(IoError::PreConnectTimeout(_))) => true,
+                    Some(Err(error)) => {
+                        input.input.deliver(generation, Err(error));
+                        false
+                    }
+                    Some(Ok(frames)) => {
+                        let mut replayed = true;
+                        for frame in frames {
+                            replayed = match source.process_audio(vec![frame]).await {
+                                Ok(processed) => processed
+                                    .into_iter()
+                                    .all(|frame| input.input.deliver(generation, Ok(frame))),
+                                Err(error) => {
+                                    input.input.deliver(generation, Err(error.into()));
+                                    false
+                                }
+                            };
+                            if !replayed {
                                 break;
                             }
-                            match source.process_audio(vec![frame]).await {
-                                Ok(processed) => {
-                                    for frame in processed {
-                                        if let Some(identity) = replay_identity
-                                            && owner
-                                                .input
-                                                .selection
-                                                .lock()
-                                                .unwrap()
-                                                .accepts(identity)
-                                        {
-                                            owner
-                                                .input
-                                                .sender
-                                                .push(Delivery { identity, item: Ok(frame) });
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    owner.input.deliver(generation, Err(error.into()));
-                                    replay_failed = true;
-                                    break;
-                                }
-                            }
                         }
+                        replayed
                     }
-                    Some(Err(IoError::PreConnectTimeout(_))) => {}
-                    Some(Err(error)) => {
-                        owner.input.deliver(generation, Err(error));
-                        replay_failed = true;
-                    }
-                    None => {
-                        replay_failed = !owner.input.selection.lock().unwrap().producing(generation)
-                    }
-                }
+                };
             }
-            loop {
-                let changed = owner.input.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                if replay_failed || !owner.input.selection.lock().unwrap().producing(generation) {
-                    break;
-                }
-                let frame = tokio::select! {frame=frames.next()=>frame,()=&mut changed=>continue};
-                match frame {
-                    Ok(Some(frame)) => owner.input.deliver(generation, Ok(frame)),
-                    Ok(None) => {
-                        owner.input.deliver(
-                            generation,
-                            Ok(silence_frame(
-                                owner.config.sample_rate / 2,
-                                owner.config.sample_rate,
-                                owner.config.num_channels,
-                            )),
-                        );
-                        break;
-                    }
-                    Err(error) => {
-                        owner.input.deliver(generation, Err(error.into()));
-                        break;
-                    }
-                }
+            if !live {
+                let cleanup =
+                    frames.close(input.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+                input.input.decide(|readers| readers.retired(generation, cleanup));
+                return;
             }
-            owner.input.selection.lock().unwrap().ended(generation);
-            let cleanup = frames
-                .close(owner.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT))
-                .await;
-            owner.input.record_cleanup(cleanup);
+            let end = end_of_track(input.config.sample_rate, input.config.num_channels);
+            input.input.pump(input.clock.as_ref(), generation, frames, Some(end)).await;
         });
-        Ok(true)
+        Ok(())
     }
 }
+
 impl AudioInput for ParticipantAudioInput {
     fn label(&self) -> &str {
         "RoomIO"
@@ -305,18 +332,19 @@ impl AudioInput for ParticipantAudioInput {
         Box::pin(self.input.next())
     }
     fn on_attached(&self) {
-        self.input.attached(true)
+        self.input.decide(|readers| readers.set_attached(true));
     }
     fn on_detached(&self) {
-        self.input.attached(false)
+        self.input.decide(|readers| readers.set_attached(false));
     }
 }
+
 impl lk_agents_abi::voice::room_owner::RoomAudioInputPort for ParticipantAudioInput {
     fn reading(&self) -> Option<TrackSid> {
-        self.input.selection.lock().unwrap().reading().cloned()
+        self.input.readers.lock().unwrap().0.reading().cloned()
     }
     fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, Closed> {
-        Box::pin(async { self.input.close(self.clock.as_ref()).await })
+        Box::pin(self.input.close(self.clock.as_ref()))
     }
 }
 
@@ -326,6 +354,7 @@ pub struct ParticipantVideoInput {
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
 }
+
 impl ParticipantVideoInput {
     pub fn new(
         room: Arc<dyn RtcRoom>,
@@ -333,92 +362,40 @@ impl ParticipantVideoInput {
         spawner: Arc<dyn Spawner>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            input: Input::new(lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES),
+            input: Input::new(VIDEO_SOURCES, lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES),
             room,
             clock,
             spawner,
         })
     }
+
     pub fn set_participant(self: &Arc<Self>, who: Option<ParticipantIdentity>) -> Result<()> {
-        self.input.selection.lock().unwrap().link(who.clone());
-        self.input.changed.notify_waiters();
-        if let Some(who) = who
-            && let Some(p) = self.room.participant(&who)?
-        {
-            for t in p.track_publications()? {
-                if self.subscribe(&p, &t)? {
-                    break;
-                }
-            }
-        }
-        Ok(())
+        self.open(Change::Link(who))
     }
+
     pub fn handle_event(self: &Arc<Self>, event: &RoomEvent) -> Result<()> {
-        match event {
-            RoomEvent::TrackSubscribed { participant, publication } => {
-                self.subscribe(participant, publication)?;
-            }
-            RoomEvent::TrackUnsubscribed { participant, publication }
-            | RoomEvent::TrackUnpublished { participant, publication } => {
-                self.input
-                    .selection
-                    .lock()
-                    .unwrap()
-                    .release(participant.identity(), publication.sid());
-                self.input.changed.notify_waiters();
-            }
-            _ => {}
-        }
-        Ok(())
+        self.open(Change::Event(event))
     }
-    fn subscribe(
-        self: &Arc<Self>,
-        p: &Arc<dyn RemoteParticipant>,
-        t: &Arc<dyn TrackPublication>,
-    ) -> Result<bool> {
-        let generation = self.input.selection.lock().unwrap().claim(
-            p.identity(),
-            t.source(),
-            t.sid(),
-            &[TrackSource::Camera, TrackSource::Screenshare],
-        );
-        let Some(generation) = generation else { return Ok(false) };
-        self.input.changed.notify_waiters();
-        let mut source = match t.open_video_stream() {
-            Ok(source) => source,
+
+    fn open(self: &Arc<Self>, change: Change<'_>) -> Result<()> {
+        let Some((_, track, open)) = select(&self.input, self.room.as_ref(), change)? else {
+            return Ok(());
+        };
+        let frames = match track.open_video_stream() {
+            Ok(frames) => frames,
             Err(error) => {
-                self.input.selection.lock().unwrap().ended(generation);
+                self.input.decide(|readers| readers.retired(open.generation, Closed::Clean));
                 return Err(error.into());
             }
         };
-        let owner = self.clone();
-        self.input.tasks.spawn(self.spawner.as_ref(), "simulated room video input", async move {
-            loop {
-                let changed = owner.input.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                if !owner.input.selection.lock().unwrap().producing(generation) {
-                    break;
-                }
-                let frame = tokio::select! {frame=source.next()=>frame,()=&mut changed=>continue};
-                match frame {
-                    Ok(Some(frame)) => owner.input.deliver(generation, Ok(frame)),
-                    Ok(None) => break,
-                    Err(error) => {
-                        owner.input.deliver(generation, Err(error.into()));
-                        break;
-                    }
-                }
-            }
-            owner.input.selection.lock().unwrap().ended(generation);
-            let cleanup = source
-                .close(owner.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT))
-                .await;
-            owner.input.record_cleanup(cleanup);
+        let input = self.clone();
+        self.spawner.spawn_unboxed(async move {
+            input.input.pump(input.clock.as_ref(), open.generation, frames, None).await;
         });
-        Ok(true)
+        Ok(())
     }
 }
+
 impl VideoInput for ParticipantVideoInput {
     fn label(&self) -> &str {
         "RoomIO"
@@ -427,17 +404,18 @@ impl VideoInput for ParticipantVideoInput {
         Box::pin(self.input.next())
     }
     fn on_attached(&self) {
-        self.input.attached(true)
+        self.input.decide(|readers| readers.set_attached(true));
     }
     fn on_detached(&self) {
-        self.input.attached(false)
+        self.input.decide(|readers| readers.set_attached(false));
     }
 }
+
 impl lk_agents_abi::voice::room_owner::RoomVideoInputPort for ParticipantVideoInput {
     fn reading(&self) -> Option<TrackSid> {
-        self.input.selection.lock().unwrap().reading().cloned()
+        self.input.readers.lock().unwrap().0.reading().cloned()
     }
     fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, Closed> {
-        Box::pin(async { self.input.close(self.clock.as_ref()).await })
+        Box::pin(self.input.close(self.clock.as_ref()))
     }
 }
