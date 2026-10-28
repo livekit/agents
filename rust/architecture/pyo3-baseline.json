@@ -1,5 +1,4 @@
 [
-  "pyo3-dependency:lk-agents-a2a:pyo3",
   "pyo3-dependency:lk-agents-abi:pyo3",
   "pyo3-dependency:lk-agents-abi:pyo3-async-runtimes",
   "pyo3-dependency:lk-agents-inference:pyo3",

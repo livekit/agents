@@ -34,12 +34,11 @@ Policy: TypeAlias = Literal["batch", "interrupt", "queue", "concurrent", "reject
 
 PolicySpec: TypeAlias = Policy | dict[str, Policy] | None
 """`inbox` as a door declares it: nothing (the default map), one policy for every
-channel, or a map that overrides the default map channel by channel. On the wire `null`, a
-policy string, or an object of them by channel.
+channel, or a map that overrides the default map channel by channel.
 """
 
 
 DebounceSpec: TypeAlias = float | dict[str, float] | None
 """The debounce as a door declares it: nothing (the defaults), one wait for every channel, or a
-map per channel. On the wire `null`, seconds, or an object of seconds by channel.
+map per channel.
 """

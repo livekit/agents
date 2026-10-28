@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lk_agents_a2a::{Policy, PolicySpec, TurnOptions};
+use lk_agents_core::a2a::{Policy, PolicySpec, TurnOptions};
 use lk_agents_abi::a2a::client::MessagePart;
 use lk_agents_abi::a2a::turn::{HandlerOutput, TurnContext, TurnEvent, TurnHost, Verdict};
 use lk_agents_abi::errors::ProviderError;

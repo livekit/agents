@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use lk_agents_a2a::{Message, result_for};
+use lk_agents_core::a2a::{Message, result_for};
 use lk_agents_storage::db::{
     self, AcquireOutcome, Acquired, EventWrite, Fenced, Receive, ReceiveInput,
 };

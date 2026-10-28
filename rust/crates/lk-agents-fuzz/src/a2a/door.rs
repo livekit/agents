@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use fastrand::Rng;
 use livekit_protocol::agent::chat_context::ChatItem;
-use lk_agents_a2a::{
+use lk_agents_core::a2a::{
     HandlerOutput, Message, PendingCall, Policy, Settle, Stop, TurnIds, TurnResult, answer_pending,
     batch_to_chat_message, channel_of, checkpoint_stop, failed_message, python_reason,
     resolve_debounce, resolve_policy, result_for, settle, unpersisted_failed,

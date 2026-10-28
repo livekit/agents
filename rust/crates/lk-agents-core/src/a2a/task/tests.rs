@@ -1,7 +1,8 @@
 #![cfg(test)]
 
 use super::*;
-use crate::{DebounceSpec, PolicySpec};
+use crate::a2a::{DebounceSpec, PolicySpec};
+use lk_agents_abi::a2a_protocol as a2a;
 
 fn machine(policy: Policy) -> TaskMachine {
     let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("answer")]);

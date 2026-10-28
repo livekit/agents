@@ -85,12 +85,12 @@ impl Publisher {
         let mut state = self.state.lock().await;
         if let Some(sender) = state.sender.as_ref() {
             if sender.capacity() <= 1 {
-                let error = lk_agents_a2a::rpc::rpc_error(
+                let error = lk_agents_core::a2a::rpc::rpc_error(
                     a2a::error_code::INTERNAL_ERROR,
                     "slow subscriber detached; resume using the last event cursor",
                 );
                 let _ = sender.try_send(Ok(wire::frame(
-                    lk_agents_a2a::rpc::failure(self.request_id.clone(), error),
+                    lk_agents_core::a2a::rpc::failure(self.request_id.clone(), error),
                     None,
                 )));
                 state.sender = None;
@@ -151,7 +151,7 @@ impl Publisher {
 
     pub async fn finish(
         &self,
-        result: &lk_agents_a2a::TurnResult,
+        result: &lk_agents_core::a2a::TurnResult,
         context: &str,
     ) -> Result<(), StorageError> {
         let row = &result.task;

@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use a2a::{AgentCard, JsonRpcId, Message};
-use lk_agents_a2a::client::{Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate};
-use lk_agents_a2a::rpc::TaskRef;
+use lk_agents_core::a2a::client::{Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate};
+use lk_agents_core::a2a::rpc::TaskRef;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
 use lk_agents_net::transport::HttpRequest;
@@ -189,7 +189,7 @@ impl AgentClient {
         mut message: Message,
         thread_id: Option<&str>,
         task_id: Option<&str>,
-        history: Option<&lk_agents_a2a::caller_history::CallerHistory>,
+        history: Option<&lk_agents_core::a2a::caller_history::CallerHistory>,
     ) -> Result<Reply, ClientError> {
         self.inner.core.lock().map_err(poisoned)?.validate_message(&message, thread_id, task_id)?;
         self.connect().await?;

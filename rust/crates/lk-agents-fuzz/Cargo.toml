@@ -39,5 +39,3 @@ lk-agents-storage = { path = "../lk-agents-storage" }
 rusqlite = { version = "0.32.1", features = ["bundled", "functions"] }
 livekit-protocol.workspace = true
 a2a.workspace = true
-# The A2A simulation: the text door's policy and turn decisions over the storage simulation.
-lk-agents-a2a = { path = "../lk-agents-a2a" }

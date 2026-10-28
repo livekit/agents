@@ -37,7 +37,7 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use fastrand::Rng;
-use lk_agents_a2a::{
+use lk_agents_core::a2a::{
     DELEGATION_CHANNEL, DebounceSpec, Policy, PolicySpec, channel_of, resolve_policy,
 };
 use lk_agents_storage::sql::Table;
@@ -75,7 +75,7 @@ pub struct Setup {
 pub struct Response {
     pub request: usize,
     pub message_id: String,
-    pub answer: Result<lk_agents_a2a::TurnResult, StorageError>,
+    pub answer: Result<lk_agents_core::a2a::TurnResult, StorageError>,
     /// Answered after the bounded wait on an unresolved commit (decision 39).
     pub uncertain: bool,
 }
@@ -435,7 +435,7 @@ fn sweep(db: &mut SimDb, clock: &Clock) {
         let pickup = plans::pickup(LANE, &row.task_id);
         let _ = db.batch(&pickup.statements, None);
         let failed =
-            lk_agents_a2a::failed_message(&row.task_id, REASON_WORKER_LOST, "swept".into());
+            lk_agents_core::a2a::failed_message(&row.task_id, REASON_WORKER_LOST, "swept".into());
         let _ = db.batch(&[plans::fail_orphan(LANE, &row.task_id, &failed)], None);
     }
 }

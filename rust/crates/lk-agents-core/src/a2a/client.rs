@@ -2,6 +2,7 @@
 //! response to its own [`ReplyState`]; neither a connection nor an outstanding task lives on a
 //! reusable remote-tool definition.
 
+use lk_agents_abi::a2a_protocol as a2a;
 mod messages;
 pub use messages::{message_from_wire, message_to_wire, metadata_to_wire, part_from_wire};
 mod tool;
@@ -16,7 +17,7 @@ use lk_agents_abi::storage::TaskState;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::rpc::{TaskRef, task_state};
+use crate::a2a::rpc::{TaskRef, task_state};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ClientError {

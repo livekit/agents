@@ -6,16 +6,18 @@ mod tests;
 
 use std::time::Duration;
 
-use lk_agents_abi::storage::StreamInfo;
-use lk_agents_abi::storage::StorageError;
-use lk_agents_abi::storage::thread::TaskWrite;
-use lk_agents_abi::storage::thread::LanePoll;
-use lk_agents_abi::storage::TaskState;
-use lk_agents_abi::storage::thread::{REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, TaskRow};
-use lk_agents_abi::storage::TaskInternal;
-use lk_agents_abi::storage::thread::{InboxRow, TaskData};
+use lk_agents_abi::a2a_protocol as a2a;
 
-use crate::{Message, Policy, TurnOptions, TurnResult, resolve_debounce, resolve_policy};
+use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::StreamInfo;
+use lk_agents_abi::storage::TaskInternal;
+use lk_agents_abi::storage::TaskState;
+use lk_agents_abi::storage::thread::LanePoll;
+use lk_agents_abi::storage::thread::TaskWrite;
+use lk_agents_abi::storage::thread::{InboxRow, TaskData};
+use lk_agents_abi::storage::thread::{REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, TaskRow};
+
+use crate::a2a::{Message, Policy, TurnOptions, TurnResult, resolve_debounce, resolve_policy};
 
 /// One completion belongs to exactly one issued storage/handler operation.
 #[derive(Debug)]
@@ -448,8 +450,11 @@ impl TaskMachine {
                     let row = self.observed.take().ok_or_else(|| {
                         StorageError::Protocol("A2A task disappeared after acceptance".into())
                     })?;
-                    self.result =
-                        Some(crate::result_for(row, &self.thread_id, self.last_run_id.as_deref()));
+                    self.result = Some(crate::a2a::result_for(
+                        row,
+                        &self.thread_id,
+                        self.last_run_id.as_deref(),
+                    ));
                 }
                 self.phase = Phase::Finished;
                 return Ok(None);

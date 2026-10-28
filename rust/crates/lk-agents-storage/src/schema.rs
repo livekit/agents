@@ -1,15 +1,14 @@
-use livekit_protocol::agent::ChatRole;
-use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
+use livekit_protocol::agent::chat_context::ChatItem;
 /// The thread database's tables, as livekit-protocol defines them (version 1). Every `#[table]`
 /// record below is checked against them when the crate compiles.
 pub use livekit_protocol::agent::{THREAD_SCHEMA_V1 as THREAD_SCHEMA, THREAD_SCHEMA_VERSION};
 use lk_agents_host_derive::{Host, Table};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::run::{RunOutcome, TaskState};
 use crate::sql::SqlValue;
-use crate::sql::{FromCell, Table, json_cell, statement};
+use crate::sql::{FromCell, json_cell, statement};
 
 pub use lk_agents_abi::storage::thread::{InboxRow, ItemRow, TaskData, TaskRow};
 pub use lk_agents_abi::storage::{Ask, TaskInternal};
@@ -754,6 +753,9 @@ WHERE lane = :lane AND id > (SELECT drained_id FROM lanes WHERE lane = :lane) OR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql::Table;
+    use livekit_protocol::agent::ChatRole;
+    use livekit_protocol::agent::chat_context::chat_item;
     use crate::StorageError;
     use crate::sql::Bind;
     use crate::sql::Row;

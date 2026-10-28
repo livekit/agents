@@ -125,7 +125,6 @@ class DependencyContracts(unittest.TestCase):
                             "lk-agents-storage",
                         ],
                         "lk-agents-core": ["lk-agents-abi", "livekit-protocol"],
-                        "lk-agents-a2a": ["lk-agents-abi"],
                         "lk-agents-fuzz": ["lk-agents-voice", "lk-agents-abi"],
                     }
                 )

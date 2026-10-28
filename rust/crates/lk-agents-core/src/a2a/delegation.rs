@@ -2,17 +2,18 @@
 //! settlement belong to the conversation coordinator, which explicitly retains `InteractionState`.
 //! Credentials are verified in runtime before this owner receives `VerifiedAuthority`.
 
+use lk_agents_abi::a2a_protocol as a2a;
 pub mod retained;
 
 use a2a::{Message, Part, Role};
-use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::a2a::metadata::KIND_KEY;
+use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::storage::TaskState;
 use serde::{Deserialize, Serialize};
 
-use crate::caller_history::CallerHistory;
-use crate::client::TaskUpdate;
-use crate::rpc::TaskRef;
+use crate::a2a::caller_history::CallerHistory;
+use crate::a2a::client::TaskUpdate;
+use crate::a2a::rpc::TaskRef;
 
 /// A local verifier's authority for this exact destination and caller thread. Never restored
 /// from conversation state or inferred from peer-controlled card/metadata fields.
@@ -53,7 +54,7 @@ pub enum DelegationError {
     #[error("the retained interaction does not match its tool, call or destination")]
     InvalidState,
     #[error(transparent)]
-    History(#[from] crate::caller_history::HistoryError),
+    History(#[from] crate::a2a::caller_history::HistoryError),
 }
 
 /// The original parent call and remote destination, retained independently of presentation.

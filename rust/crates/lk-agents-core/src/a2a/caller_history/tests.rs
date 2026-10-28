@@ -1,4 +1,5 @@
 use super::*;
+use lk_agents_abi::a2a_protocol as a2a;
 use serde_json::json;
 
 fn wire() -> Value {

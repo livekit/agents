@@ -12,7 +12,6 @@ members = ["crates/*"]
 #                                                 # PYO3_PYTHON / PYTHONHOME to the dev venv)
 #   (cd ../livekit-agents-next && maturin develop)
 default-members = [
-    "crates/lk-agents-a2a",
     "crates/lk-agents-abi",
     "crates/lk-agents-bindgen",
     "crates/lk-agents-codegen",

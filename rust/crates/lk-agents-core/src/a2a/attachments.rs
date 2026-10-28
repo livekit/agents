@@ -2,6 +2,7 @@
 //! resolving or authorizing that reference belongs to the application. Inline uploads have no
 //! durable reference and cannot enter the thread's task or inbox records.
 
+use lk_agents_abi::a2a_protocol as a2a;
 use serde_json::Value;
 
 use lk_agents_abi::storage::StorageError;

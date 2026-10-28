@@ -1,9 +1,4 @@
-#![allow(
-    clippy::disallowed_macros,
-    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
-)]
-
-//! `lk-agents-a2a`: the A2A text door's synchronous core. The records the host and the wire
+//! `lk_agents_core::a2a`: the A2A text door's decisions. The records the host and the wire
 //! read ([`Message`], [`TurnContext`], [`HandlerOutput`], [`TurnResult`]), the door's options and
 //! their per-channel resolution ([`policy`]), and the decisions of a turn ([`outcome`]): which task
 //! a message answers, what each task row becomes, the checkpoint verdict. The runtime
@@ -13,8 +8,9 @@
 //! [`Verdict`], then the [`HandlerOutput`]. A turn yields at a checkpoint once a newer message
 //! waits under `interrupt` or a client canceled its task.
 
-pub mod auth;
+use lk_agents_abi::a2a_protocol as a2a;
 pub mod attachments;
+pub mod auth;
 pub mod caller_history;
 pub mod client;
 pub mod delegation;
@@ -28,15 +24,15 @@ use lk_agents_abi::errors::ProviderError;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use livekit_protocol::agent::ChatMessage;
-use livekit_protocol::agent::ChatRole;
-use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
-use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
-use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::a2a::metadata::KIND_KEY;
+use lk_agents_abi::livekit_protocol::agent::ChatMessage;
+use lk_agents_abi::livekit_protocol::agent::ChatRole;
+use lk_agents_abi::livekit_protocol::agent::chat_context::{ChatItem, chat_item};
+use lk_agents_abi::livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
 use lk_agents_abi::storage::RunUsage;
-use lk_agents_abi::storage::thread::{ItemRow, TaskRow};
+use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::thread::timestamp;
+use lk_agents_abi::storage::thread::{ItemRow, TaskRow};
 
 pub use outcome::*;
 pub use policy::*;
@@ -289,9 +285,9 @@ pub struct TurnResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
     use lk_agents_abi::a2a::metadata::{MERGED_INTO_KEY, REASON_KEY};
-use lk_agents_abi::storage::TaskState;
+    use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
+    use lk_agents_abi::storage::TaskState;
     use serde_json::json;
     use std::time::Duration;
 
@@ -304,32 +300,6 @@ use lk_agents_abi::storage::TaskState;
             serde_json::to_string(&interrupted_metadata()).unwrap(),
             r#"{"https://livekit.io/a2a/ext/agents/v1/interrupted":true,"https://livekit.io/a2a/ext/agents/v1/interruptionReason":"new-message"}"#
         );
-    }
-
-    // Catches: the options' wire shape drifting from what the host's `TurnOptions` model writes
-    // (a policy as a string or a map, seconds as numbers, `null` for a default), or an unknown
-    // policy accepted or reported without its name.
-    #[test]
-    fn options_cross_as_the_models_json() {
-        let o: TurnOptions = serde_json::from_str("{}").unwrap();
-        assert_eq!(o, TurnOptions::default());
-        let json = r#"{"policy": {"sms": "batch"}, "debounce": 2.5, "wait_timeout": 1}"#;
-        let o: TurnOptions = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            o.policy,
-            PolicySpec::ByChannel([("sms".to_owned(), Policy::Batch)].into_iter().collect())
-        );
-        assert_eq!(o.debounce, DebounceSpec::All(Duration::from_millis(2500)));
-        assert_eq!(o.wait_timeout(), Duration::from_secs(1));
-        let back: TurnOptions = serde_json::from_value(serde_json::to_value(&o).unwrap()).unwrap();
-        assert_eq!(back, o);
-        assert_eq!(
-            serde_json::to_value(TurnOptions::default()).unwrap(),
-            serde_json::json!({"policy": null, "debounce": null, "wait_timeout": null})
-        );
-        let e = serde_json::from_str::<TurnOptions>(r#"{"policy": "later"}"#).unwrap_err();
-        assert!(e.to_string().contains("later"), "{e}");
-        assert!(serde_json::from_str::<TurnOptions>(r#"{"debounce": -1}"#).is_err());
     }
 
     #[test]

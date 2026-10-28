@@ -3,18 +3,23 @@
 //! checkpoint yields ([`checkpoint_stop`]), and what each task row and the history become
 //! ([`settle`]). Ids and times are supplied by the caller.
 
+use lk_agents_abi::a2a_protocol as a2a;
 use serde_json::{Map, Value};
 
-use livekit_protocol::agent::chat_context::chat_item;
-use livekit_protocol::agent::{ChatRole, FunctionCallOutput};
-use lk_agents_abi::a2a::metadata::{INTERRUPTED_KEY, INTERRUPTION_REASON_KEY, MERGED_INTO_KEY, REASON_KEY};
-use lk_agents_abi::storage::TaskState;
-use lk_agents_abi::storage::thread::{ItemRow, RunOutcome, TaskPatch, TaskRow, WaitOptions, agent_message, wait_patch};
-use lk_agents_abi::storage::thread::TaskData;
+use lk_agents_abi::a2a::metadata::{
+    INTERRUPTED_KEY, INTERRUPTION_REASON_KEY, MERGED_INTO_KEY, REASON_KEY,
+};
+use lk_agents_abi::livekit_protocol::agent::chat_context::chat_item;
+use lk_agents_abi::livekit_protocol::agent::{ChatRole, FunctionCallOutput};
 use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::TaskState;
+use lk_agents_abi::storage::thread::TaskData;
 use lk_agents_abi::storage::thread::timestamp;
+use lk_agents_abi::storage::thread::{
+    ItemRow, RunOutcome, TaskPatch, TaskRow, WaitOptions, agent_message, wait_patch,
+};
 
-use crate::{
+use crate::a2a::{
     HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, channel_of, chat_message,
 };
 
@@ -455,7 +460,7 @@ pub fn python_reason(e: &StorageError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::HandlerOutput;
+    use crate::a2a::HandlerOutput;
     use lk_agents_abi::storage::thread::TaskWrite;
     use lk_agents_abi::storage::thread::merge_write;
     use serde_json::json;
@@ -486,7 +491,7 @@ mod tests {
                 batch: &batch,
                 task_ids: &task_ids,
                 answer_task: "AST_2",
-                user_message: crate::batch_to_chat_message(&batch, 2.0, "item_u".into()),
+                user_message: crate::a2a::batch_to_chat_message(&batch, 2.0, "item_u".into()),
                 out: &out,
                 stop,
                 answer_canceled,
@@ -615,7 +620,7 @@ mod tests {
                 batch: &batch,
                 task_ids: &["AST_receipt".to_owned()],
                 answer_task: &pending.answer_task,
-                user_message: crate::batch_to_chat_message(&batch, 2.0, "item_u".into()),
+                user_message: crate::a2a::batch_to_chat_message(&batch, 2.0, "item_u".into()),
                 out: &out,
                 stop: None,
                 answer_canceled: false,

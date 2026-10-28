@@ -15,7 +15,7 @@ import tomllib
 
 CORES = {
     f"lk-agents-{name}"
-    for name in ("core", "voice", "a2a", "media", "rtc")
+    for name in ("core", "voice", "media", "rtc")
 }
 PURE = CORES | {"lk-agents-abi"}
 # Media's worker pool is its one threaded module (decisions 84, 85): outside the Clippy policy.
@@ -96,7 +96,6 @@ def dependency_violations(metadata: dict) -> set[str]:
             "lk-agents-inference": {"lk-agents-abi", "lk-agents-media", "lk-agents-net"} | {"lk-agents-core"},
             "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
             "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
-            "lk-agents-a2a": {"lk-agents-abi"},
             # The realtime and duplex fakes still run inference's realtime machine (decision 70);
             # the storage simulation still runs storage's statements on SQLite.
             "lk-agents-fuzz": PURE - {"lk-agents-rtc"}

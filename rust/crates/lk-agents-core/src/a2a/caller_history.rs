@@ -1,13 +1,14 @@
 //! The delegation conversation part: a deliberately narrower schema than a stored chat context.
 //! Both outgoing selection and incoming validation use this schema; decoding never stores history.
 
+use lk_agents_abi::a2a_protocol as a2a;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use lk_agents_abi::a2a::metadata::KIND_KEY;
 use lk_agents_abi::llm::chat_context::{
     ChatContent, ChatItem, ChatMessage, FunctionCall, FunctionCallOutput, Role,
 };
-use lk_agents_abi::a2a::metadata::KIND_KEY;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 

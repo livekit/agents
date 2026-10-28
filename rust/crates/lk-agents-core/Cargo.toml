@@ -7,7 +7,8 @@ license.workspace = true
 
 # The shared agent execution core (docs/internals/rust-core.md "Agent execution"): `AgentRun`, the
 # tool/approval/output decisions and the outcome table that direct runs, TextSession and
-# VoiceSession compose. Synchronous and pure: no runtime, executor, Tokio, futures or pyo3.
+# VoiceSession compose, and the A2A task decisions (`a2a`). Synchronous and pure: no runtime,
+# executor, Tokio, futures or pyo3.
 
 [lib]
 doctest = false
@@ -22,3 +23,4 @@ serde.workspace = true
 regex = "1.13.1"
 log.workspace = true
 base64.workspace = true
+thiserror.workspace = true

@@ -86,7 +86,7 @@ pub const STORAGE: Boundary = Boundary {
 /// The A2A campaign (`tests/a2a_survey.rs`, `a2a` module).
 pub const A2A: Boundary = Boundary {
     cores: &[
-        "A2A core (lk_agents_a2a: resolve_policy, resolve_debounce, answer_pending, \
+        "A2A core (lk_agents_core::a2a: resolve_policy, resolve_debounce, answer_pending, \
          checkpoint_stop, settle, result_for) under every inbox policy (interrupt, queue, \
          batch, concurrent, reject), stepped by simulated door requests one decision at a time",
         "storage core (lk_agents_storage::db plans and decodings: acquire with submit and pickup, \

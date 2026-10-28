@@ -4,13 +4,13 @@
 use lk_agents_abi::a2a::turn as host;
 use lk_agents_abi::storage::StorageError;
 
-use crate::{HandlerOutput, HostEvent, Message, PendingCall, TurnContext, TurnResult};
+use crate::a2a::{HandlerOutput, HostEvent, Message, PendingCall, TurnContext, TurnResult};
 
 impl From<Message> for host::Message {
     fn from(message: Message) -> Self {
-        let mut out = crate::client::message_from_wire(message.raw.clone());
+        let mut out = crate::a2a::client::message_from_wire(message.raw.clone());
         out.message_id = Some(message.message_id);
-        out.parts = message.parts.into_iter().map(crate::client::part_from_wire).collect();
+        out.parts = message.parts.into_iter().map(crate::a2a::client::part_from_wire).collect();
         out.channel = Some(message.channel);
         out.received_at = Some(message.received_at);
         out.task_id = message.task_id;

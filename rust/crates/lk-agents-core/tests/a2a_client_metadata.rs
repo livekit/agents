@@ -1,6 +1,6 @@
 //! The generated client keeps application metadata distinct from framework wire keys.
 
-use lk_agents_a2a::client::{message_from_wire, message_to_wire};
+use lk_agents_core::a2a::client::{message_from_wire, message_to_wire};
 use lk_agents_abi::a2a::client::{MessageInput, MessageMetadata};
 use lk_agents_abi::a2a::metadata::EXTENSION_URI;
 use serde_json::json;
@@ -32,7 +32,7 @@ fn short_livekit_metadata_survives_send_without_framework_semantics() {
         ..Default::default()
     });
     let wire = message_to_wire(MessageInput::Message(input), "generated-id".into()).unwrap();
-    let received = lk_agents_a2a::Message::from_a2a(&wire, 0.0, None).unwrap();
+    let received = lk_agents_core::a2a::Message::from_a2a(&wire, 0.0, None).unwrap();
     assert_eq!(received.channel, "chat");
     let mut decoded = message_from_wire(wire);
     let metadata = decoded.metadata.take().unwrap();

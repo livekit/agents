@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use lk_agents_a2a::{Policy, channel_of, resolve_policy};
+use lk_agents_core::a2a::{Policy, channel_of, resolve_policy};
 use lk_agents_storage::StorageError;
 use lk_agents_storage::run::{INTERRUPTED_KEY, MERGED_INTO_KEY, TaskRow, TaskState};
 

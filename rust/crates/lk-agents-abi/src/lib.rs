@@ -11,6 +11,10 @@
 // `Host` stays in this crate; `Vocabulary`, `host` and `class` are the only items re-exported from
 // `lk-agents-host-derive`.
 pub use inventory;
+/// The A2A protocol records (`a2a-lf`) the declared A2A and task records are built from.
+pub use ::a2a as a2a_protocol;
+/// The `livekit.agent` records (chat items, threads) the declared records are built from.
+pub use livekit_protocol;
 pub use lk_agents_host_derive::Vocabulary;
 pub use lk_agents_host_derive::class;
 pub use lk_agents_host_derive::host;

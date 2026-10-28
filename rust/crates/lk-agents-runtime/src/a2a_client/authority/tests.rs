@@ -2,7 +2,7 @@ use super::*;
 use std::time::Duration;
 
 use livekit_token::{AccessToken, AgentThreadGrants};
-use lk_agents_a2a::delegation::{InteractionId, RemoteInteraction};
+use lk_agents_core::a2a::delegation::{InteractionId, RemoteInteraction};
 
 const ENDPOINT: &str = "https://project.livekit.cloud/agents/expert/production/help";
 const KEY: &str = "delegation-test-project";

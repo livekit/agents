@@ -47,7 +47,6 @@ compiled=(
 )
 outside=(
     "lk-agents-storage: ci.yml storage-tests (cargo test); its DST runs in lk-agents-fuzz's storage survey"
-    "lk-agents-a2a: ci.yml storage-tests (cargo test); its DST runs in lk-agents-fuzz's A2A survey"
 )
 
 if [[ ${1:-} == --skip-architecture ]]; then

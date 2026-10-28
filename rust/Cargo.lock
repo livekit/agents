@@ -1374,21 +1374,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lk-agents-a2a"
-version = "0.1.0"
-dependencies = [
- "a2a-lf",
- "livekit-protocol",
- "lk-agents-abi",
- "lk-agents-host-derive",
- "log",
- "pyo3",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "lk-agents-abi"
 version = "0.1.0"
 dependencies = [
@@ -1458,6 +1443,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -1470,7 +1456,6 @@ dependencies = [
  "bytes",
  "fastrand",
  "livekit-protocol",
- "lk-agents-a2a",
  "lk-agents-abi",
  "lk-agents-core",
  "lk-agents-inference",
@@ -1595,7 +1580,6 @@ dependencies = [
  "libc",
  "livekit-protocol",
  "livekit-token",
- "lk-agents-a2a",
  "lk-agents-abi",
  "lk-agents-core",
  "lk-agents-inference",

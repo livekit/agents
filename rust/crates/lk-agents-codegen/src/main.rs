@@ -80,7 +80,6 @@ const SOURCES: &[&str] = &[
     "rust/crates/lk-agents-storage/src/db.rs",
     "rust/crates/lk-agents-storage/src/streams.rs",
     "rust/crates/lk-agents-storage/src/run.rs",
-    "rust/crates/lk-agents-a2a/src/lib.rs",
     "rust/crates/lk-agents-py/src/storage.rs",
 ];
 

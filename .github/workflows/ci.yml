@@ -124,9 +124,9 @@ jobs:
           restore-keys: storage-tests-
 
       # the staging tests skip without a project in the environment
-      - name: Test the agent-store client and the A2A turn engine
+      - name: Test thread storage on both backends
         working-directory: rust
-        run: cargo test --locked -p lk-agents-storage -p lk-agents-a2a
+        run: cargo test --locked -p lk-agents-storage
 
   # The Rust core and the package over it: the generated files match their declarations (every
   # `_generated/` header says CI regenerates them), the core's provider and voice tests pass, and

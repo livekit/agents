@@ -1,4 +1,5 @@
 use super::*;
+use lk_agents_abi::a2a_protocol as a2a;
 use serde_json::json;
 
 fn card() -> Vec<u8> {
@@ -73,23 +74,26 @@ fn card_and_every_rpc_include_version_and_cancel_always_addresses_its_context() 
         assert_eq!(request.method, HttpMethod::Post);
         assert_eq!(request.url, "https://example.test/agent/v1");
     }
-    let canceled = crate::rpc::decode(&requests[1].body).unwrap();
+    let canceled = crate::a2a::rpc::decode(&requests[1].body).unwrap();
     assert!(!requests[0].task_response);
     assert!(requests[1].task_response);
     assert!(!requests[2].task_response);
     assert_eq!(
         canceled.call,
-        crate::rpc::Call::Cancel { task: task.clone(), reason: Some("caller-canceled".into()) }
+        crate::a2a::rpc::Call::Cancel {
+            task: task.clone(),
+            reason: Some("caller-canceled".into())
+        }
     );
-    let subscribed = crate::rpc::decode(&requests[2].body).unwrap();
+    let subscribed = crate::a2a::rpc::decode(&requests[2].body).unwrap();
     assert_eq!(
         subscribed.call,
-        crate::rpc::Call::Subscribe { task, offset: Some("opaque-cursor".into()) }
+        crate::a2a::rpc::Call::Subscribe { task, offset: Some("opaque-cursor".into()) }
     );
     let retry = requests[0].clone();
     assert_eq!(retry.body, requests[0].body);
-    let sent = crate::rpc::decode(&retry.body).unwrap();
-    let crate::rpc::Call::Send { message, .. } = sent.call else { panic!() };
+    let sent = crate::a2a::rpc::decode(&retry.body).unwrap();
+    let crate::a2a::rpc::Call::Send { message, .. } = sent.call else { panic!() };
     assert_eq!(message.message_id, "stable-message-id");
     assert_eq!(message.context_id, None);
 }
@@ -104,8 +108,8 @@ fn last_thread_routing_does_not_imply_a_task_and_explicit_continuation_wins() {
         .unwrap();
     client.acknowledge(&ack).unwrap();
     let request = client.send(message("followup"), None, None, 2.into()).unwrap();
-    let crate::rpc::Call::Send { message: sent, .. } =
-        crate::rpc::decode(&request.body).unwrap().call
+    let crate::a2a::rpc::Call::Send { message: sent, .. } =
+        crate::a2a::rpc::decode(&request.body).unwrap().call
     else {
         panic!()
     };
@@ -114,8 +118,8 @@ fn last_thread_routing_does_not_imply_a_task_and_explicit_continuation_wins() {
     let continued = client
         .send(message("answer"), Some("other-context"), Some("pending-task"), 3.into())
         .unwrap();
-    let crate::rpc::Call::Send { message: sent, .. } =
-        crate::rpc::decode(&continued.body).unwrap().call
+    let crate::a2a::rpc::Call::Send { message: sent, .. } =
+        crate::a2a::rpc::decode(&continued.body).unwrap().call
     else {
         panic!()
     };
@@ -133,8 +137,8 @@ fn last_thread_routing_does_not_imply_a_task_and_explicit_continuation_wins() {
         Some(TaskRef { id: "embedded-pending".into(), context_id: "original-context".into() })
     );
     let independent = connected().send(message("other-person"), None, None, 1.into()).unwrap();
-    let crate::rpc::Call::Send { message: sent, .. } =
-        crate::rpc::decode(&independent.body).unwrap().call
+    let crate::a2a::rpc::Call::Send { message: sent, .. } =
+        crate::a2a::rpc::decode(&independent.body).unwrap().call
     else {
         panic!()
     };

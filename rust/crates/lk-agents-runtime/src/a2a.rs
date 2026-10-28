@@ -1,6 +1,6 @@
 //! The A2A text door's turns: [`Turn::run`] takes one incoming message through its channel's
 //! policy against storage and drives the host's handler, applying the A2A core's decisions
-//! (`lk_agents_a2a::outcome`) to the run. The turn writes the message's task row: `submitted`,
+//! (`lk_agents_core::a2a::outcome`) to the run. The turn writes the message's task row: `submitted`,
 //! `working`, then its end state.
 
 pub mod door;
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tokio_util::task::TaskTracker;
 
-use lk_agents_a2a::{
+use lk_agents_core::a2a::{
     HandlerOutput, Message, Policy, Settle, Stop, TurnContext, TurnEvent, TurnHost, TurnIds,
     TurnOptions, TurnResult, Verdict, answer_pending, batch_to_chat_message, caller_history_of,
     channel_of, channel_of_record, checkpoint_stop, failed_message, host_error, python_reason,

@@ -9,8 +9,8 @@ use lk_agents_worker::endpoint_budget::EndpointBudget;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use a2a::{JsonRpcId, error_code};
-use lk_agents_a2a::auth::{allows, allows_first_message};
-use lk_agents_a2a::rpc::{self, Call, Request, TaskRef};
+use lk_agents_core::a2a::auth::{allows, allows_first_message};
+use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_abi::a2a::auth::{AuthError, AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnHost;
@@ -43,7 +43,7 @@ struct Inner {
     lane: String,
     holder: String,
     host: Arc<dyn TurnHost>,
-    options: lk_agents_a2a::TurnOptions,
+    options: lk_agents_core::a2a::TurnOptions,
     owner: TaskTracker,
 }
 
@@ -431,7 +431,7 @@ impl Inner {
                 }
                 Err(StorageError::ThreadNotFound(_)) => {
                     Self::authorize(&principal, AuthOperation::Write, context, None)?;
-                    let row = lk_agents_a2a::unpersisted_failed(
+                    let row = lk_agents_core::a2a::unpersisted_failed(
                         &shortuuid("AST_"),
                         &self.lane,
                         None,

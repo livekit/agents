@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use fastrand::Rng;
-use lk_agents_a2a::{TurnResult, result_for};
+use lk_agents_core::a2a::{TurnResult, result_for};
 use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{self, Fenced, Plan, Resolution};
 use lk_agents_storage::lease::{LanePoll, lease_secs};

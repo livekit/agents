@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use livekit_token::{AccessToken, AgentEndpointGrants, AgentThreadGrants, TokenVerifier};
-use lk_agents_a2a::auth::{allows, has_subject, selected_token};
+use lk_agents_core::a2a::auth::{allows, has_subject, selected_token};
 use lk_agents_abi::a2a::auth::{
     AuthError, AuthGrant, AuthOperation, AuthPermissions, AuthPrincipal,
     Credentials as CredentialsApi, PrincipalKind,

@@ -1,6 +1,7 @@
 //! The door's arrival options: the five inbox policies and the debounce, as declared (one
 //! value, or per channel over the default map) and as resolved for a message's channel.
 
+use lk_agents_abi::a2a_protocol as a2a;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -8,7 +9,7 @@ use serde_json::Value;
 
 use lk_agents_abi::a2a::metadata::{CHANNEL_KEY, KIND_KEY};
 
-use crate::Policy;
+use crate::a2a::Policy;
 
 pub use lk_agents_abi::a2a::options::{DebounceSpec, PolicySpec};
 

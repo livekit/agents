@@ -4,6 +4,7 @@
 use a2a::AgentCard;
 use lk_agents_abi::a2a::client::AgentCard as ToolCard;
 use lk_agents_abi::a2a::metadata::EXTENSION_URI;
+use lk_agents_abi::a2a_protocol as a2a;
 use serde::Deserialize;
 use serde_json::{Value, json};
 

@@ -10,7 +10,9 @@
 //! - [`tool_calls`]: one step's tool calls, from arguments to recorded outcomes.
 //! - [`approval`]: the approval gate's identity, marks and read-back.
 //! - [`text_session`]: request-scoped backend frames and child continuation.
+//! - [`a2a`]: the A2A text door's task decisions, records and delegation client decisions.
 
+pub mod a2a;
 pub mod agent;
 pub mod agent_run;
 pub mod approval;

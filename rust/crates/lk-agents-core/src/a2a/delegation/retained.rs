@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use super::{
     DelegationError, InteractionId, InteractionPhase, InteractionState, RemoteInteraction,
 };
-use crate::rpc::TaskRef;
+use crate::a2a::rpc::TaskRef;
 
 pub const STATE_KEY: &str = "lk.delegation.state";
 
@@ -79,7 +79,7 @@ pub fn call_extra(
 /// semantics are checked again before a retained interaction consumes it.
 pub fn update_from_host(
     update: lk_agents_abi::a2a::client::TaskUpdate,
-) -> Result<crate::client::TaskUpdate, DelegationError> {
+) -> Result<crate::a2a::client::TaskUpdate, DelegationError> {
     use lk_agents_abi::storage::TaskState;
     let state = TaskState::parse(&update.state).ok_or(DelegationError::InvalidState)?;
     let follow_task = match update.metadata.get("livekit/mergedInto") {
@@ -91,7 +91,7 @@ pub fn update_from_host(
         }
         Some(_) => return Err(DelegationError::InvalidState),
     };
-    Ok(crate::client::TaskUpdate {
+    Ok(crate::a2a::client::TaskUpdate {
         state,
         text: update.text,
         task_id: update.task_id,
@@ -105,7 +105,7 @@ pub fn update_from_host(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::TaskUpdate;
+    use crate::a2a::client::TaskUpdate;
     use lk_agents_abi::storage::TaskState;
     use std::time::UNIX_EPOCH;
 

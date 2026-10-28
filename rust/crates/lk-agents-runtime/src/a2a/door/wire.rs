@@ -117,7 +117,7 @@ pub fn final_status(row: &TaskRow, context: &str) -> StreamResponse {
 
 pub fn success<T: Serialize>(id: JsonRpcId, value: T, cursor: Option<&str>) -> DoorFrame {
     let result = serde_json::to_value(value).expect("A2A wire record");
-    frame(lk_agents_a2a::rpc::success(id, result), cursor)
+    frame(lk_agents_core::a2a::rpc::success(id, result), cursor)
 }
 
 pub fn frame(response: JsonRpcResponse, cursor: Option<&str>) -> DoorFrame {

@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use a2a::{JsonRpcRequest, JsonRpcResponse, Message, Part, PartContent, Role};
-use lk_agents_a2a::client::{ClientError, TaskUpdate};
-use lk_agents_a2a::rpc::TaskRef;
+use lk_agents_core::a2a::client::{ClientError, TaskUpdate};
+use lk_agents_core::a2a::rpc::TaskRef;
 use lk_agents_abi::errors::{ApiErrorKind, ProviderError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, RealClock};
 use lk_agents_runtime::a2a_client::{AgentClient, CleanupObservation, Reply};
@@ -367,7 +367,7 @@ async fn agent_client_peer_matrix_preserves_task_continuation_artifacts_and_vers
     outgoing
         .parts
         .extend([Part::data(json!({"account": 42})), Part::url("https://example.test/input.pdf")]);
-    let history = lk_agents_a2a::caller_history::CallerHistory::decode(json!({"items": [{
+    let history = lk_agents_core::a2a::caller_history::CallerHistory::decode(json!({"items": [{
         "id": "caller-message", "type": "message", "created_at": 1.0,
         "role": "user", "content": ["Public caller context"]
     }]}))
@@ -434,7 +434,7 @@ async fn agent_client_peer_matrix_preserves_task_continuation_artifacts_and_vers
     assert_eq!(first.message.message_id, "stable-first-message");
     assert_eq!(first.message.parts.len(), 4);
     assert_eq!(
-        lk_agents_a2a::caller_history::CallerHistory::from_message(&first.message).unwrap(),
+        lk_agents_core::a2a::caller_history::CallerHistory::from_message(&first.message).unwrap(),
         Some(history)
     );
     let resumed: a2a::SendMessageRequest =

@@ -1,5 +1,4 @@
 [
-  "allow:rust/crates/lk-agents-a2a/src/lib.rs::clippy::disallowed_macros:allow:always:1",
   "allow:rust/crates/lk-agents-abi/src/errors/payload_table.rs:impl  PayloadTable < T >/fn new:clippy::disallowed_types:allow:always:1",
   "allow:rust/crates/lk-agents-abi/src/errors/payload_table.rs:mod tests/fn a_dropped_key_queues_its_entry_and_the_next_drain_removes_it:clippy::disallowed_methods:allow:always:1",
   "allow:rust/crates/lk-agents-abi/src/errors/payload_table.rs:struct Store/field entries:clippy::disallowed_types:allow:always:1",

@@ -144,6 +144,43 @@ async def test_one_message_through_the_rust_turn(thread_storage: Storage) -> Non
     session.close()
 
 
+async def test_debounce_delays_the_turn(thread_storage: Storage) -> None:
+    session = await thread_storage.open(await thread_of(thread_storage))
+    turn = _core.Turn(session, LANE, Host(), TurnOptions(policy="queue", debounce=0.4))
+    started = time.monotonic()
+    result = await turn.run(a2a("hello", "m1"))
+    assert result.task.status == "completed"
+    assert time.monotonic() - started >= 0.4
+    session.close()
+
+
+async def test_a_waiter_past_wait_timeout_fails_lease_timeout(
+    thread_storages: tuple[Storage, Storage],
+) -> None:
+    storage_a, storage_b = thread_storages
+    thread_id = await thread_of(storage_a)
+    session_a = await storage_a.open(thread_id)
+    gate = asyncio.Event()
+    host_a = Host(gate)
+    turn_a = _core.Turn(session_a, LANE, host_a, TurnOptions(policy="queue", debounce=0))
+    first = asyncio.ensure_future(turn_a.run(a2a("first", "m1")))
+    await asyncio.wait_for(host_a.entered.wait(), 10)
+
+    session_b = await storage_b.open(thread_id)
+    options = TurnOptions(policy="queue", debounce=0, wait_timeout=0.5)
+    turn_b = _core.Turn(session_b, LANE, Host(), options)
+    second = await asyncio.wait_for(turn_b.run(a2a("second", "m2")), 30)
+    assert second.task.status == "failed"
+    status_message = second.task.data.status_message
+    assert status_message is not None
+    assert "lease-timeout" in status_message["metadata"].values()
+
+    gate.set()
+    assert (await asyncio.wait_for(first, 30)).task.status == "completed"
+    session_a.close()
+    session_b.close()
+
+
 async def test_a_second_message_under_interrupt_yields_the_first(
     thread_storages: tuple[Storage, Storage],
 ) -> None:
@@ -230,7 +267,8 @@ async def test_turn_options_apply_scalar_and_channel_policies(thread_storage: St
                 Host(),
                 {"policy": "interrupt"},  # type: ignore[arg-type]
             )
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(TypeError, match="TurnOptions.debounce") as negative:
             _core.Turn(session, LANE, Host(), TurnOptions(debounce=-1))
+        assert isinstance(negative.value.__cause__, ValueError)
     finally:
         session.close()

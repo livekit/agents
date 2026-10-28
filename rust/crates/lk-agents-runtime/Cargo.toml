@@ -35,7 +35,6 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 pyo3 = { workspace = true, optional = true }
 # Thread storage (all database interaction) and the A2A door's decisions.
 lk-agents-storage = { path = "../lk-agents-storage" }
-lk-agents-a2a = { path = "../lk-agents-a2a" }
 livekit-protocol.workspace = true
 pbjson-types.workspace = true
 prost.workspace = true
@@ -81,7 +80,6 @@ python = [
     "lk-agents-abi/python",
     "lk-agents-inference/python",
     "lk-agents-inference/native-audio",
-    "lk-agents-a2a/python",
     "lk-agents-voice/python",
     "lk-agents-voice/native-audio",
     "lk-agents-media/python",

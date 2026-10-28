@@ -4,7 +4,6 @@
 //! reads a clock or mints an id: lease tokens, timestamps and run ids are supplied.
 
 use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
-use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{StorageError, TaskWrite};

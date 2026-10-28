@@ -1,8 +1,8 @@
 //! Generated host classes forward here; protocol records are converted once at the boundary.
 
-use lk_agents_a2a::caller_history::{CallerHistory, HistorySharing};
-use lk_agents_a2a::client::ClientError;
-use lk_agents_a2a::rpc::TaskRef;
+use lk_agents_core::a2a::caller_history::{CallerHistory, HistorySharing};
+use lk_agents_core::a2a::client::ClientError;
+use lk_agents_core::a2a::rpc::TaskRef;
 use lk_agents_abi::a2a::client::{
     self as port, AgentClientError, Artifact, MessageInput, MessageMetadata, TaskUpdate,
 };
@@ -41,7 +41,7 @@ impl port::AgentClient for AgentClient {
 
     async fn connect(&self) -> Result<port::AgentCard, AgentClientError> {
         let card = AgentClient::connect(self).await.map_err(client_error)?;
-        lk_agents_a2a::client::tool_definition(&card).map_err(client_error)
+        lk_agents_core::a2a::client::tool_definition(&card).map_err(client_error)
     }
 
     fn offers_extension(&self) -> bool {
@@ -74,7 +74,7 @@ impl port::AgentClient for AgentClient {
             message
                 .metadata
                 .get_or_insert_default()
-                .extend(lk_agents_a2a::client::metadata_to_wire(metadata)?);
+                .extend(lk_agents_core::a2a::client::metadata_to_wire(metadata)?);
         }
         let history = chat_ctx
             .map(|items| CallerHistory::from_chat_items(&items, None, &HistorySharing::default()))
@@ -151,12 +151,12 @@ impl port::Reply for Reply {
 }
 
 pub fn message_to_wire(input: MessageInput) -> Result<a2a::Message, AgentClientError> {
-    lk_agents_a2a::client::message_to_wire(input, crate::storage::shortuuid("msg_"))
+    lk_agents_core::a2a::client::message_to_wire(input, crate::storage::shortuuid("msg_"))
 }
 
-pub use lk_agents_a2a::client::message_from_wire;
+pub use lk_agents_core::a2a::client::message_from_wire;
 
-pub fn update_from_wire(update: lk_agents_a2a::client::TaskUpdate) -> TaskUpdate {
+pub fn update_from_wire(update: lk_agents_core::a2a::client::TaskUpdate) -> TaskUpdate {
     TaskUpdate {
         state: match update.state {
             lk_agents_storage::run::TaskState::Submitted => "submitted",
@@ -182,7 +182,7 @@ pub fn update_from_wire(update: lk_agents_a2a::client::TaskUpdate) -> TaskUpdate
                 parts: artifact
                     .parts
                     .into_iter()
-                    .map(lk_agents_a2a::client::part_from_wire)
+                    .map(lk_agents_core::a2a::client::part_from_wire)
                     .collect(),
                 metadata: artifact
                     .metadata

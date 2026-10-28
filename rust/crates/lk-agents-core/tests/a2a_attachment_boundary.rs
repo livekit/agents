@@ -1,4 +1,5 @@
-use lk_agents_a2a::{Message, rpc};
+use lk_agents_abi::a2a_protocol as a2a;
+use lk_agents_core::a2a::{Message, rpc};
 use serde_json::{Value, json};
 
 fn request(part: Value) -> Vec<u8> {
