@@ -8,15 +8,12 @@
 //! cargo test -p lk-agents-inference --test inference live_gateway -- --ignored --nocapture
 //! ```
 //!
+//! The LLM's live checks run over the runtime's transport (`lk-agents-runtime/tests/llm_live.rs`).
+//!
 //! What they are for is narrow and worth stating: the 111 unit tests pin the *logic*, and nothing
 //! in them can catch a wrong assumption about the wire — an auth scheme, a URL shape, a header
 //! name the gateway lower-cases. Each test below is one such assumption.
 
-use lk_agents_inference::abi::Llm;
-use lk_agents_inference::llm::{LlmOptions, NativeLlm};
-use lk_agents_inference::native::ReqwestTransport;
-use lk_agents_inference::testkit::NoImages;
-use lk_agents_abi::{ChatContext, Role};
 use std::sync::Arc;
 
 fn credentials() -> Option<(String, String, String)> {
@@ -27,92 +24,6 @@ fn credentials() -> Option<(String, String, String)> {
     let secret = lk_agents_inference::creds::resolve_api_secret(None).ok()?;
     let url = lk_agents_inference::default_inference_url_from_env();
     Some((key, secret, url))
-}
-
-fn options(model: &str) -> Option<LlmOptions> {
-    let (api_key, api_secret, base_url) = credentials()?;
-    Some(LlmOptions {
-        model: model.to_owned(),
-        provider: None,
-        base_url,
-        api_key,
-        api_secret,
-        inference_class: None,
-        extra_kwargs: [("max_completion_tokens".to_owned(), serde_json::json!(16))]
-            .into_iter()
-            .collect(),
-    })
-}
-
-fn chat_ctx(text: &str) -> ChatContext {
-    ChatContext::new(vec![
-        lk_agents_abi::ChatMessage::text("m1", Role::User, text, std::time::SystemTime::now())
-            .into(),
-    ])
-}
-
-
-/// Catches: every wire assumption the unit tests cannot — the JWT's claim set being one the
-/// gateway rejects, `Authorization: Bearer` being the wrong scheme, `/chat/completions` being the
-/// wrong path, `stream_options.include_usage` being refused, and the SSE framing losing a token.
-/// A green unit suite proves none of these.
-#[tokio::test]
-#[ignore = "needs LIVEKIT_INFERENCE_API_KEY/_SECRET and the network"]
-async fn a_streamed_completion_round_trips() {
-    let Some(opts) = options("openai/gpt-4o-mini") else {
-        eprintln!("skipped: no inference credentials in the environment");
-        return;
-    };
-    let llm = NativeLlm::new(opts, Arc::new(ReqwestTransport::new().unwrap()), Arc::new(NoImages));
-
-    let mut stream = llm
-        .chat(&lk_agents_abi::ChatRequest {
-            chat_ctx: chat_ctx("Say the single word: pong."),
-            ..Default::default()
-        })
-        .await
-        .expect("chat() accepted the request");
-    let mut text = String::new();
-    let mut usage = None;
-    while let Some(chunk) = stream.next().await.expect("the gateway answered") {
-        if let Some(delta) = &chunk.delta
-            && let Some(content) = &delta.content
-        {
-            text.push_str(content);
-        }
-        if chunk.usage.is_some() {
-            usage = chunk.usage;
-        }
-    }
-
-    assert!(!text.trim().is_empty(), "the stream produced no text at all");
-    let usage = usage.expect("stream_options.include_usage must produce a usage chunk");
-    assert!(usage.prompt_tokens > 0, "prompt tokens were not reported: {usage:?}");
-    assert!(usage.total_tokens > 0);
-    eprintln!("live: {text:?} usage={usage:?}");
-}
-
-/// Catches: a 4xx being mapped to the wrong taxonomy class, and the gateway's own error body
-/// being replaced by a bare status phrase. The coordinator's `404 page not found` (a doubled
-/// `/v1`) is indistinguishable from a wrong host unless the body survives.
-#[tokio::test]
-#[ignore = "needs LIVEKIT_INFERENCE_API_KEY/_SECRET and the network"]
-async fn an_unknown_model_is_a_non_retryable_status_error() {
-    let Some(opts) = options("openai/definitely-not-a-model") else {
-        eprintln!("skipped: no inference credentials in the environment");
-        return;
-    };
-    let llm = NativeLlm::new(opts, Arc::new(ReqwestTransport::new().unwrap()), Arc::new(NoImages));
-    let mut stream = llm
-        .chat(&lk_agents_abi::ChatRequest { chat_ctx: chat_ctx("hi"), ..Default::default() })
-        .await
-        .expect("chat() accepted the request");
-    let err = stream.next().await.expect_err("an unknown model must fail");
-    eprintln!("live 4xx: status={:?} message={:?}", err.status_code(), err.message());
-    let status = err.status_code().expect("a status code, not a bare connection error");
-    assert!((400..500).contains(&status), "expected a 4xx, got {status}");
-    assert!(!err.retryable(), "a 4xx other than 408/409/429 must not be retried");
-    assert!(!err.message().is_empty());
 }
 
 /// Catches: everything the WebSocket half assumes and the unit tests fake — the `?model=` query

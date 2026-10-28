@@ -2,8 +2,7 @@
 //! Deterministic; the only clock is the caller's `VirtualClock`.
 
 use crate::transport::{
-    HttpRequest, HttpStream, HttpTransport, LineStream, TransportError, WsMessage, WsReceiver,
-    WsSender, WsTransport,
+    TransportError, WsMessage, WsReceiver, WsSender, WsTransport,
 };
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
@@ -20,93 +19,6 @@ impl lk_agents_abi::llm::provider_format::ImageResolver for NoImages {
         _image: &lk_agents_abi::ImageContent,
     ) -> Result<lk_agents_abi::llm::provider_format::SerializedImage, String> {
         Err("no image resolver is attached to this inference client".to_owned())
-    }
-}
-
-/// A scripted [`HttpTransport`]: one canned SSE stream, replayed in order.
-pub struct FakeHttp {
-    events: Mutex<std::collections::VecDeque<Result<String, TransportError>>>,
-    seen: Mutex<Vec<HttpRequest>>,
-    /// `post_stream` never resolves; the client's connect bound ends it.
-    hang_connect: bool,
-    /// After the script, `next_event` never resolves; the client's per-event bound ends it.
-    hang_at_end: bool,
-}
-
-impl FakeHttp {
-    pub fn new(events: Vec<Result<String, TransportError>>) -> Self {
-        FakeHttp {
-            events: Mutex::new(events.into()),
-            seen: Mutex::new(Vec::new()),
-            hang_connect: false,
-            hang_at_end: false,
-        }
-    }
-
-    pub fn hanging() -> Self {
-        FakeHttp { hang_connect: true, ..FakeHttp::new(Vec::new()) }
-    }
-
-    pub fn then_hang(mut self) -> Self {
-        self.hang_at_end = true;
-        self
-    }
-
-    pub fn requests(&self) -> usize {
-        self.seen.lock().unwrap().len()
-    }
-
-    pub fn last_request(&self) -> Option<HttpRequest> {
-        self.seen.lock().unwrap().last().cloned()
-    }
-}
-
-#[async_trait]
-impl HttpTransport for FakeHttp {
-    async fn post_stream(&self, req: HttpRequest) -> Result<HttpStream, TransportError> {
-        self.seen.lock().unwrap().push(req);
-        if self.hang_connect {
-            std::future::pending::<()>().await;
-        }
-        let mut events = self.events.lock().unwrap();
-        // An error in first position is a connect failure; anywhere else a mid-stream failure.
-        if let Some(Err(_)) = events.front() {
-            let Some(Err(err)) = events.pop_front() else { unreachable!() };
-            return Err(err);
-        }
-        let events = std::mem::take(&mut *events);
-        Ok(HttpStream {
-            status: 200,
-            headers: vec![],
-            body: Box::new(ScriptedLines { events, hang_at_end: self.hang_at_end }),
-        })
-    }
-
-    /// Recorded with the posts; the script is left for them.
-    async fn get(&self, req: HttpRequest) -> Result<(), TransportError> {
-        self.seen.lock().unwrap().push(req);
-        Ok(())
-    }
-}
-
-struct ScriptedLines {
-    events: std::collections::VecDeque<Result<String, TransportError>>,
-    hang_at_end: bool,
-}
-
-#[async_trait]
-impl LineStream for ScriptedLines {
-    async fn next_event(&mut self) -> Result<Option<String>, TransportError> {
-        match self.events.pop_front() {
-            Some(Ok(payload)) => Ok(Some(payload)),
-            Some(Err(err)) => Err(err),
-            None => {
-                if self.hang_at_end {
-                    std::future::pending::<()>().await;
-                }
-                Ok(None)
-            }
-        }
     }
 }
 

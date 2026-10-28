@@ -111,34 +111,12 @@ pub(crate) fn stream_closed(what: &str) -> ProviderError {
     ProviderError::Local(ApiError::connection(Some(format!("{what} stream is closed"))))
 }
 
-/// No timeout field: a whole-request timeout would kill long answers; the client bounds each wait.
+/// One HTTP exchange as the runtime sends it.
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
-}
-
-/// A non-2xx arrives as [`TransportError::Status`] with the body read.
-pub struct HttpStream {
-    pub status: i64,
-    pub headers: Vec<(String, String)>,
-    pub body: Box<dyn LineStream>,
-}
-
-#[async_trait]
-pub trait LineStream: Send {
-    /// `None` at clean end of stream, including the consumed `[DONE]`.
-    async fn next_event(&mut self) -> Result<Option<String>, TransportError>;
-}
-
-#[async_trait]
-pub trait HttpTransport: Send + Sync {
-    async fn post_stream(&self, req: HttpRequest) -> Result<HttpStream, TransportError>;
-
-    /// A GET whose body is read and dropped, whatever its status: it leaves a connection in the
-    /// pool (`prewarm()`). `body` is ignored.
-    async fn get(&self, req: HttpRequest) -> Result<(), TransportError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
