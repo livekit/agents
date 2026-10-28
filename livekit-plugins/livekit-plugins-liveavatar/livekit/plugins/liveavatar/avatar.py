@@ -58,6 +58,7 @@ class AvatarSession(BaseAvatarSession):
     ) -> None:
         super().__init__()
         self._avatar_id = avatar_id if is_given(avatar_id) else os.getenv("LIVEAVATAR_AVATAR_ID")
+        self._conn_options = conn_options
         self._session_id: str | None = None
         self._session_token: str | None = None
         resolved_api_key = api_key if is_given(api_key) else os.getenv("LIVEAVATAR_API_KEY", "")
@@ -221,7 +222,9 @@ class AvatarSession(BaseAvatarSession):
             self._msg_ch.send_nowait(msg)
 
     async def _main_task(self) -> None:
-        ws_conn = await self._api._ensure_http_session().ws_connect(url=self._ws_url)
+        ws_conn = await utils.http_context.ws_connect(
+            self._api._ensure_http_session(), self._ws_url, conn_options=self._conn_options
+        )
         closing = False
         ping_interval = utils.aio.interval(KEEP_ALIVE_INTERVAL)
 
