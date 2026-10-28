@@ -11,6 +11,7 @@
 //! - [`approval`]: the approval gate's identity, marks and read-back.
 //! - [`text_session`]: request-scoped backend frames and child continuation.
 //! - [`a2a`]: the A2A text door's task decisions, records and delegation client decisions.
+//! - [`telemetry`]: telemetry redaction, metric admission and event-loop stall policy.
 
 pub mod a2a;
 pub mod agent;
@@ -20,6 +21,7 @@ pub mod assertions;
 pub mod llm;
 pub mod mcp;
 pub mod request;
+pub mod telemetry;
 pub mod text_session;
 pub mod tool_calls;
 pub mod tool_outcome;

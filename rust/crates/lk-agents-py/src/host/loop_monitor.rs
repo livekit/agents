@@ -7,14 +7,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use lk_agents_runtime::telemetry::loop_monitor::{
-    LoopMonitorClock, LoopMonitorOptions, LoopMonitorPolicy, LoopWatchdog,
-};
 use lk_agents_abi::python::{capture_host, resolve_key};
 use lk_agents_abi::telemetry::loop_monitor::{
     BlockedReport, LoopBlock, LoopMonitorEmission, LoopMonitorLog, LoopMonitorSpan,
 };
 use lk_agents_abi::{HostRef, errors::HostError};
+use lk_agents_runtime::cores::{LoopMonitorOptions, LoopMonitorPolicy};
+use lk_agents_runtime::telemetry::watchdog::{LoopMonitorClock, LoopWatchdog};
 use pyo3::prelude::*;
 use pyo3::types::{PyCFunction, PyDict};
 use serde_json::{Map, Value};

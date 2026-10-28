@@ -167,7 +167,7 @@
     "_core_evaluation_score",
     "_core_format_trace_parent",
     "_core_judge_tool_schemas",
-    "_core_loop_monitor_thresholds_from_env",
+    "_core_loop_monitor_thresholds",
     "_core_mcp_timeout_check",
     "_core_persist_text_session_state",
     "_core_playback_begin",

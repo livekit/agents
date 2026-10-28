@@ -2,7 +2,6 @@
 //! this destination boundary refuses unbounded labels before an SDK creates a new series.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Mutex;
 
 const MAX_SERIES: usize = 1024;
 const MAX_LABELS: usize = 8;
@@ -11,15 +10,15 @@ const MAX_LABEL_BYTES: usize = 256;
 type Series = (String, BTreeMap<String, String>);
 
 pub struct MetricSeries {
-    series: Mutex<BTreeSet<Series>>,
+    series: BTreeSet<Series>,
 }
 
 impl lk_agents_abi::telemetry::policy::MetricSeries for MetricSeries {
     fn new() -> Self {
-        Self { series: Mutex::new(BTreeSet::new()) }
+        Self { series: BTreeSet::new() }
     }
 
-    fn admit(&self, name: String, attributes: Vec<(String, String)>) -> bool {
+    fn admit(&mut self, name: String, attributes: Vec<(String, String)>) -> bool {
         let attributes: BTreeMap<_, _> = attributes.into_iter().collect();
         let instrument = lk_agents_abi::metrics::otel::INSTRUMENTS.iter().any(|(n, _)| *n == name)
             || matches!(
@@ -45,15 +44,14 @@ impl lk_agents_abi::telemetry::policy::MetricSeries for MetricSeries {
         {
             return false;
         }
-        let mut series = self.series.lock().unwrap_or_else(|p| p.into_inner());
         let key = (name, attributes);
-        if series.contains(&key) {
+        if self.series.contains(&key) {
             return true;
         }
-        if series.len() == MAX_SERIES {
+        if self.series.len() == MAX_SERIES {
             return false;
         }
-        series.insert(key);
+        self.series.insert(key);
         true
     }
 }
@@ -65,7 +63,7 @@ mod tests {
 
     #[test]
     fn configured_names_survive_but_identity_and_unbounded_series_are_refused() {
-        let metrics = MetricSeries::new();
+        let mut metrics = MetricSeries::new();
         let tool = || "gen_ai.execute_tool.duration".to_owned();
         let attributes = vec![
             ("gen_ai.operation.name".into(), "execute_tool".into()),

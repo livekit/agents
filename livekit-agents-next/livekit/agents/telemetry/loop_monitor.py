@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import os
 import threading
 import weakref
 from collections.abc import Callable
@@ -84,7 +85,10 @@ class LoopMonitorThresholds:
         """Thresholds from ``LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS`` and ``_ERROR_MS``, or ``None``
         when monitoring is disabled (a warn threshold of 0). Invalid values fall back to the
         defaults with a warning rather than disabling silently."""
-        thresholds = _core._core_loop_monitor_thresholds_from_env()
+        thresholds = _core._core_loop_monitor_thresholds(
+            os.environ.get("LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS"),
+            os.environ.get("LIVEKIT_AGENTS_LOOP_BLOCK_ERROR_MS"),
+        )
         return cls(*thresholds) if thresholds is not None else None
 
 

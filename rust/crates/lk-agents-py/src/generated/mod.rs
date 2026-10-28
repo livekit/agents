@@ -219,7 +219,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::_core_MetricSeries>()?;
     m.add_class::<telemetry::_core_SessionReportProjection>()?;
     m.add_class::<telemetry::LoopMonitor>()?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds_from_env, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds, m)?)?;
     m.add_class::<telemetry::_core_EventRetention>()?;
     m.add_class::<telemetry::_core_SessionReportUpload>()?;
     m.add_class::<telemetry::_core_PreparedTranscript>()?;

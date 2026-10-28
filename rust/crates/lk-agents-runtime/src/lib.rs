@@ -10,6 +10,9 @@
 /// What the extension names of the subject cores (decision 67: it reaches them through the
 /// runtime): the declared classes a core implements outright.
 pub mod cores {
+    pub use lk_agents_core::telemetry::loop_monitor::{LoopMonitorOptions, LoopMonitorPolicy};
+    pub use lk_agents_core::telemetry::metrics::MetricSeries;
+    pub use lk_agents_core::telemetry::policy::DestinationPolicy;
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
     pub use lk_agents_inference::creds::Credentials as InferenceCredentials;
     pub use lk_agents_inference::fallback::TokenLog as TtsTokenLog;

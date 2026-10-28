@@ -1,6 +1,4 @@
-//! Observation dispatch, destination policy, metric series admission and loop-monitor execution.
+//! The event-loop watchdog thread and the session report's event retention.
 
-pub mod loop_monitor;
-pub mod metrics;
 pub mod observation;
-pub mod policy;
+pub mod watchdog;

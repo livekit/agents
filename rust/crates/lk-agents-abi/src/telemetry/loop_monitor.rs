@@ -114,9 +114,13 @@ pub trait LoopMonitor: Send + Sync + Sized + 'static {
     fn stop(&self) -> Result<(), crate::errors::HostError>;
 }
 
-/// Thresholds sampled from the host process environment when monitoring is configured.
+/// Thresholds from the host process environment's `LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS` and
+/// `LIVEKIT_AGENTS_LOOP_BLOCK_ERROR_MS`, as the host read them.
 #[crate::host(functions)]
 pub trait LoopMonitorThresholds {
     #[host(function)]
-    fn _core_loop_monitor_thresholds_from_env() -> Option<(f64, f64)>;
+    fn _core_loop_monitor_thresholds(
+        warn_ms: Option<String>,
+        error_ms: Option<String>,
+    ) -> Option<(f64, f64)>;
 }

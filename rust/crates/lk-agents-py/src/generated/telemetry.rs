@@ -223,8 +223,8 @@ type _core_MetricSeriesImpl = <crate::Selected as super::Implementations>::Metri
 
 /// The framework's metric series. Subject folds decide measurements; this refuses unbounded labels
 /// and series before the host SDK creates a new one.
-#[pyclass(frozen, name = "_core_MetricSeries", module = "livekit.agents._core")]
-pub struct _core_MetricSeries(pub(crate) ::std::sync::Arc<_core_MetricSeriesImpl>);
+#[pyclass(name = "_core_MetricSeries", module = "livekit.agents._core")]
+pub struct _core_MetricSeries(pub(crate) _core_MetricSeriesImpl);
 
 #[pymethods]
 impl _core_MetricSeries {
@@ -232,13 +232,13 @@ impl _core_MetricSeries {
     fn new() -> PyResult<_core_MetricSeries> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_MetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::new();
-        Ok(_core_MetricSeries(::std::sync::Arc::new(out)))
+        Ok(_core_MetricSeries(out))
     }
 
     #[pyo3(signature = (name, attributes))]
-    fn admit(&self, name: ::std::string::String, attributes: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<bool> {
+    fn admit(&mut self, name: ::std::string::String, attributes: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<bool> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_MetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::admit(&self.0, name, attributes);
+        let out = <_core_MetricSeriesImpl as ::lk_agents_abi::telemetry::policy::MetricSeries>::admit(&mut self.0, name, attributes);
         Ok(out)
     }
 }
@@ -402,9 +402,10 @@ impl LoopMonitor {
 type LoopMonitorThresholdsImpl = <crate::Selected as super::Implementations>::LoopMonitorThresholds;
 
 #[pyfunction]
-pub fn _core_loop_monitor_thresholds_from_env() -> PyResult<::std::option::Option<(f64, f64)>> {
+#[pyo3(signature = (warn_ms, error_ms))]
+pub fn _core_loop_monitor_thresholds(warn_ms: ::std::option::Option<::std::string::String>, error_ms: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<(f64, f64)>> {
     ::lk_agents_abi::python::check_pid()?;
-    let out = <LoopMonitorThresholdsImpl as ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds>::_core_loop_monitor_thresholds_from_env();
+    let out = <LoopMonitorThresholdsImpl as ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds>::_core_loop_monitor_thresholds(warn_ms, error_ms);
     Ok(out)
 }
 

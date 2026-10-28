@@ -286,7 +286,7 @@ from ._generated._core_stt import (
 from ._generated._core_telemetry import (
     LoopMonitor as LoopMonitor,
     _core_EventRetention as _core_EventRetention,
-    _core_loop_monitor_thresholds_from_env as _core_loop_monitor_thresholds_from_env,
+    _core_loop_monitor_thresholds as _core_loop_monitor_thresholds,
     _core_MetricSeries as _core_MetricSeries,
     _core_PreparedTranscript as _core_PreparedTranscript,
     _core_SessionReportProjection as _core_SessionReportProjection,
