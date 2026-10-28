@@ -1373,6 +1373,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lk-agents-core"
+version = "0.1.0"
+dependencies = [
+ "lk-agents-abi",
+ "serde_json",
+]
+
+[[package]]
 name = "lk-agents-fuzz"
 version = "0.1.0"
 dependencies = [
@@ -1381,6 +1389,7 @@ dependencies = [
  "bytes",
  "fastrand",
  "lk-agents-abi",
+ "lk-agents-core",
  "lk-agents-inference",
  "lk-agents-media",
  "lk-agents-rtc",
@@ -1527,6 +1536,7 @@ dependencies = [
  "base64 0.22.1",
  "livekit-protocol",
  "lk-agents-abi",
+ "lk-agents-core",
  "lk-agents-media",
  "lk-agents-rtc",
  "log",

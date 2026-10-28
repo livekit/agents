@@ -92,11 +92,11 @@ impl Rule for ToolOutputFollowsOutcome {
                 continue;
             }
             let outcome = crate::fakes::tools::outcome_of(*answer, text);
-            let mut shape = outcome.shape();
+            let mut shape = lk_agents_core::tool_outcome::shape(&outcome);
             if *answer == ToolAnswer::Completed && in_task(speech) {
                 shape.reply_required = false;
             }
-            let want = outcome.delivered().unwrap_or(shape.text);
+            let want = lk_agents_core::tool_outcome::delivered(&outcome).unwrap_or(shape.text);
             let subject = Subject::Resource(Kind::Tool, tool.nth);
             check.expect_with(subject.clone(), output.output == want, || {
                 format!(

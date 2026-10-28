@@ -1,0 +1,19 @@
+[package]
+name = "lk-agents-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The shared agent execution core (docs/internals/rust-core.md "Agent execution"): `AgentRun`, the
+# tool/approval/output decisions and the outcome table that direct runs, TextSession and
+# VoiceSession compose. Synchronous and pure: no runtime, executor, Tokio, futures or pyo3.
+
+[lib]
+doctest = false
+
+[dependencies]
+lk-agents-abi = { path = "../lk-agents-abi" }
+# `preserve_order`: a tool schema's property order decides which parameter takes an answer
+# (`InputRequired(tool=)`), and history JSON round-trips the host's key order.
+serde_json = { workspace = true, features = ["preserve_order"] }

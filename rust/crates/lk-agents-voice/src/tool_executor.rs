@@ -363,9 +363,8 @@ pub fn approval_granted(items: &[ChatItem], call: &FunctionCall) -> bool {
 /// Whether `call` runs on an answered read-back ([`approval_granted`]), decided as the model makes
 /// it, off the session's approval record: one answer grants one repeat, also to a call made before
 /// the granted one is committed.
-pub(crate) fn grant(shared: &crate::agent_session::SessionShared, call: &FunctionCall) -> bool {
-    let mut record = shared.approvals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !approval_granted(&record, call) {
+pub(crate) fn grant(record: &mut Vec<ChatItem>, call: &FunctionCall) -> bool {
+    if !approval_granted(record, call) {
         return false;
     }
     let mut marked = call.clone();
@@ -389,7 +388,7 @@ pub(crate) fn mark_granted(record: &[ChatItem], item: &mut ChatItem) {
     }
 }
 
-/// The session's approval record (`SessionShared::approvals`): every agent's calls marked
+/// The session's approval record (`VoiceSession::approvals`): every agent's calls marked
 /// `lk.approval`, in order, with their outputs as last committed. What [`grant`] reads, in place of
 /// the whole history.
 pub(crate) fn note_approval(record: &mut Vec<ChatItem>, item: &ChatItem) {
@@ -499,8 +498,8 @@ pub use lk_agents_abi::llm::tool_executor::{Approval, ToolOutcome, ToolReport};
 /// reply_required)`: the table a call reads too.
 #[lk_agents_abi::host(export(pid = false))]
 pub fn tool_call_output(outcome: ToolOutcome) -> (String, bool, bool) {
-    let lk_agents_abi::llm::tool_executor::ToolShape { text, is_error, reply_required } =
-        outcome.shape();
+    let lk_agents_core::tool_outcome::ToolShape { text, is_error, reply_required } =
+        lk_agents_core::tool_outcome::shape(&outcome);
     (text, is_error, reply_required)
 }
 
@@ -560,9 +559,10 @@ impl ToolEnd {
         match outcome {
             ToolOutcome::Update { .. } => ToolEnd::Detached,
             ToolOutcome::Cancelled => ToolEnd::Cancelled,
-            ToolOutcome::ToolError(_) | ToolOutcome::Internal | ToolOutcome::Invalid => {
-                ToolEnd::Error
-            }
+            ToolOutcome::ToolError(_)
+            | ToolOutcome::ModelRetry(_)
+            | ToolOutcome::Internal
+            | ToolOutcome::Invalid => ToolEnd::Error,
             ToolOutcome::Value { .. }
             | ToolOutcome::Nothing
             | ToolOutcome::StopResponse
@@ -626,7 +626,9 @@ pub trait HostToolRunner: Send + Sync {
 impl dyn HostToolRunner {
     /// Resolves when the tool returns, raises, is cancelled, or releases the step with its first
     /// `ctx.update()`. Every call gets exactly one answer: a runner that raises or reports an
-    /// unreadable outcome is answered as the reference's internal error, and logged.
+    /// unreadable outcome is answered as the reference's internal error, and logged. Only a
+    /// `VoiceTask`'s speech (`task`) ends a task: an ordinary tool's `Completed` is its call's
+    /// output, asking for a reply, whatever value the host handed with it.
     pub async fn answer(
         &self,
         call: &FunctionCall,
@@ -634,11 +636,15 @@ impl dyn HostToolRunner {
         granted: bool,
         task: bool,
     ) -> ToolReport {
-        self.run(call, speech, granted, task).await.unwrap_or_else(|e| {
+        let mut report = self.run(call, speech, granted, task).await.unwrap_or_else(|e| {
             log::error!(target: "livekit.agents", function = call.name.as_str(), call_id = call.call_id.as_str();
                 "the tool executor failed outside the tool's own error handling: {e}");
             ToolOutcome::Internal.into()
-        })
+        });
+        if !task && matches!(report.outcome, ToolOutcome::Completed { .. }) {
+            report.transition = None;
+        }
+        report
     }
 }
 
@@ -649,14 +655,14 @@ impl std::fmt::Debug for dyn HostToolRunner {
 }
 
 /// The one formatter: every committed `FunctionCallOutput` comes through here, from the one
-/// decision table (`ToolOutcome::shape`), a verbatim result rewritten as delivered.
+/// decision table (`lk_agents_core::tool_outcome`), a verbatim result rewritten as delivered.
 pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolExecution {
     let ToolReport { outcome, approval, transition } = report;
-    let shape = outcome.shape();
+    let shape = lk_agents_core::tool_outcome::shape(&outcome);
     let mut output = FunctionCallOutput::new(
         format!("{}_out", call.id),
         call.call_id.clone(),
-        outcome.delivered().unwrap_or(shape.text),
+        lk_agents_core::tool_outcome::delivered(&outcome).unwrap_or(shape.text),
         shape.is_error,
         now,
     );
@@ -691,7 +697,7 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
             tool,
             transition,
         })),
-        other => other.verbatim().map(|text| Delivery::Say(text.to_owned())),
+        other => lk_agents_core::tool_outcome::verbatim(&other).map(|text| Delivery::Say(text.to_owned())),
     };
     ToolExecution { call, output, end, raw_update: None, delivery }
 }
