@@ -104,7 +104,7 @@ impl ClearBufferListenerProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(ClearBufferListenerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?) })
+        Ok(ClearBufferListenerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -115,11 +115,10 @@ impl ClearBufferListenerProxy {
 impl ::lk_agents_abi::voice::avatar::ClearBufferListener for ClearBufferListenerProxy {
     fn clear_buffer(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "ClearBufferListener._core_clear_buffer", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_clear_buffer")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "ClearBufferListener._core_clear_buffer", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_clear_buffer")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 }
 
@@ -159,13 +158,12 @@ impl AvatarAudioReceiverProxy {
 impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiverProxy {
     fn open_audio(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarAudioReceiver._core_open_audio", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_open_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -182,13 +180,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
 
     fn next_audio(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(u64, bool, ::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarAudioReceiver._core_next_audio", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_next_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -205,13 +202,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
 
     fn notify_playback_started(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarAudioReceiver._core_notify_playback_started", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_notify_playback_started")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -230,13 +226,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
         let host = ::std::sync::Arc::clone(&self.host);
         let playback_position_arg = playback_position;
         let interrupted_arg = interrupted;
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarAudioReceiver._core_notify_playback_finished", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(playback_position_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted_arg, py)?];
                 Ok((host.bind(py).getattr("_core_notify_playback_finished")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -253,13 +248,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
 
     fn aclose(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarAudioReceiver._core_aclose", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_aclose")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -312,13 +306,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
     fn push_audio(&self, frame: ::std::option::Option<::lk_agents_abi::utils::video::MediaFrame>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarVideoGenerator._core_push_audio", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
                 Ok((host.bind(py).getattr("_core_push_audio")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -335,13 +328,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
 
     fn clear_buffer(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarVideoGenerator._core_clear_buffer", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_clear_buffer")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -358,13 +350,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
 
     fn open_frames(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarVideoGenerator._core_open_frames", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_open_frames")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -381,13 +372,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
 
     fn next_frame(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>, ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarVideoGenerator._core_next_frame", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_next_frame")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -439,13 +429,12 @@ impl AvatarMediaProxy {
 impl ::lk_agents_abi::voice::avatar::AvatarMedia for AvatarMediaProxy {
     fn publish(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarMedia._core_publish", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_publish")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -463,13 +452,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarMedia for AvatarMediaProxy {
     fn push(&self, frame: ::lk_agents_abi::utils::video::MediaFrame) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarMedia._core_push", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
                 Ok((host.bind(py).getattr("_core_push")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -486,13 +474,12 @@ impl ::lk_agents_abi::voice::avatar::AvatarMedia for AvatarMediaProxy {
 
     fn aclose(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AvatarMedia._core_aclose", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_aclose")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -535,7 +522,7 @@ impl FrameStreamProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(FrameStreamProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?) })
+        Ok(FrameStreamProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -546,13 +533,12 @@ impl FrameStreamProxy {
 impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy {
     fn next(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::AudioFrame>, ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "FrameStream._core_next", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_next")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -569,22 +555,20 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
 
     fn cancel_pending(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "FrameStream._core_cancel_pending", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_cancel_pending")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "FrameStream._core_cancel_pending", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_cancel_pending")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn close(&self) -> ::lk_agents_abi::BoxFuture<'_, ()> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        if let Err(e) = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "FrameStream._core_close", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await {
+            }));
+        ::std::boxed::Box::pin(async move {
+        if let Err(e) = started.await {
             ::lk_agents_abi::python::log::warn!("FrameStream._core_close failed: {e}");
         }
         })
@@ -620,7 +604,7 @@ impl PlaybackListenerProxy {
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
         let view = obj.py().import("livekit.agents._core_view")?.getattr("_AudioOutput")?.call1((obj,))?;
         let obj = &view;
-        Ok(PlaybackListenerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?) })
+        Ok(PlaybackListenerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -632,11 +616,10 @@ impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
     fn on_playback_started(&self, created_at: f64) {
         let host = ::std::sync::Arc::clone(&self.host);
         let created_at_arg = created_at;
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "PlaybackListener._core_on_playback_started", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(created_at_arg, py)?];
-            Ok((host.bind(py).getattr("_core_on_playback_started")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "PlaybackListener._core_on_playback_started", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(created_at_arg, py)?];
+                Ok((host.bind(py).getattr("_core_on_playback_started")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn on_playback_progressed(&self, started_at: f64, offset: f64, duration: f64) {
@@ -644,11 +627,10 @@ impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
         let started_at_arg = started_at;
         let offset_arg = offset;
         let duration_arg = duration;
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "PlaybackListener._core_on_playback_progressed", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(started_at_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(offset_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(duration_arg, py)?];
-            Ok((host.bind(py).getattr("_core_on_playback_progressed")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "PlaybackListener._core_on_playback_progressed", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(started_at_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(offset_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(duration_arg, py)?];
+                Ok((host.bind(py).getattr("_core_on_playback_progressed")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn on_playback_finished(&self, playback_position: f64, interrupted: bool, synchronized_transcript: ::std::option::Option<::std::string::String>) {
@@ -656,11 +638,10 @@ impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
         let playback_position_arg = playback_position;
         let interrupted_arg = interrupted;
         let synchronized_transcript_arg = synchronized_transcript;
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "PlaybackListener._core_on_playback_finished", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(playback_position_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(synchronized_transcript_arg, py)?];
-            Ok((host.bind(py).getattr("_core_on_playback_finished")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "PlaybackListener._core_on_playback_finished", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(playback_position_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(synchronized_transcript_arg, py)?];
+                Ok((host.bind(py).getattr("_core_on_playback_finished")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 }
 
@@ -698,7 +679,7 @@ impl AudioInputProxy {
             let v = obj.call_method0("_core_label")?;
             v.extract::<::std::string::String>()?
         };
-        Ok(AudioInputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), label })
+        Ok(AudioInputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label })
     }
 }
 
@@ -713,13 +694,12 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
 
     fn next_frame(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::AudioFrame>, ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AudioInput._core_next_frame", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_next_frame")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -736,20 +716,18 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
 
     fn on_attached(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "AudioInput._core_on_attached", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_on_attached")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "AudioInput._core_on_attached", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_on_attached")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn on_detached(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "AudioInput._core_on_detached", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_on_detached")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "AudioInput._core_on_detached", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_on_detached")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 }
 
@@ -787,7 +765,7 @@ impl VideoInputProxy {
             let v = obj.call_method0("_core_label")?;
             v.extract::<::std::string::String>()?
         };
-        Ok(VideoInputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), label })
+        Ok(VideoInputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label })
     }
 }
 
@@ -802,13 +780,12 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
 
     fn next_frame(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::voice::rtc::VideoFrameRef>, ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "VideoInput._core_next_frame", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_next_frame")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -825,20 +802,18 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
 
     fn on_attached(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "VideoInput._core_on_attached", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_on_attached")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "VideoInput._core_on_attached", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_on_attached")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn on_detached(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "VideoInput._core_on_detached", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_on_detached")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "VideoInput._core_on_detached", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_on_detached")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 }
 
@@ -891,7 +866,7 @@ impl AudioOutputProxy {
             let v = obj.call_method0("_core_sample_rate")?;
             if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<u32>(&v, "AudioOutput._core_sample_rate")).map(Some) }?
         };
-        Ok(AudioOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), label, tracker, capabilities, sample_rate })
+        Ok(AudioOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label, tracker, capabilities, sample_rate })
     }
 }
 
@@ -919,13 +894,12 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
     fn capture<'a>(&'a self, frame: &::lk_agents_abi::AudioFrame) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = ::std::clone::Clone::clone(frame);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AudioOutput._core_capture", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
                 Ok((host.bind(py).getattr("_core_capture")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -942,56 +916,50 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
 
     fn flush_segment(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "AudioOutput._core_flush_segment", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_flush_segment")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "AudioOutput._core_flush_segment", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_flush_segment")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn clear_buffer(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "AudioOutput._core_clear_buffer", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_clear_buffer")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "AudioOutput._core_clear_buffer", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_clear_buffer")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn on_attached(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "AudioOutput._core_on_attached", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_on_attached")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "AudioOutput._core_on_attached", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_on_attached")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn on_detached(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "AudioOutput._core_on_detached", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_on_detached")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "AudioOutput._core_on_detached", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_on_detached")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn pause(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "AudioOutput._core_pause", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_pause")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "AudioOutput._core_pause", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_pause")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn resume(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "AudioOutput._core_resume", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_resume")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "AudioOutput._core_resume", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_resume")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 }
 
@@ -1029,7 +997,7 @@ impl TextOutputProxy {
             let v = obj.call_method0("_core_label")?;
             v.extract::<::std::string::String>()?
         };
-        Ok(TextOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), label })
+        Ok(TextOutputProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label })
     }
 }
 
@@ -1045,13 +1013,12 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
     fn capture_timed<'a>(&'a self, text: &::lk_agents_abi::TimedString) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = ::std::clone::Clone::clone(text);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "TextOutput._core_capture_timed", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
                 Ok((host.bind(py).getattr("_core_capture_timed")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1069,13 +1036,12 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
     fn capture_text<'a>(&'a self, text: &str) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = text.to_owned();
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "TextOutput._core_capture_text", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
                 Ok((host.bind(py).getattr("_core_capture_text")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1092,29 +1058,26 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
 
     fn flush(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "TextOutput._core_flush", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_flush")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "TextOutput._core_flush", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_flush")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn on_attached(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "TextOutput._core_on_attached", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_on_attached")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "TextOutput._core_on_attached", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_on_attached")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn on_detached(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "TextOutput._core_on_detached", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_on_detached")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "TextOutput._core_on_detached", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_on_detached")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 }
 
@@ -1145,7 +1108,7 @@ impl SessionHooksProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(SessionHooksProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?) })
+        Ok(SessionHooksProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -1157,13 +1120,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
     fn on_enter<'a>(&'a self, agent: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = ::std::clone::Clone::clone(agent);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_enter", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
                 Ok((host.bind(py).getattr("_core_on_enter")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1181,13 +1143,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
     fn on_exit<'a>(&'a self, agent: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = ::std::clone::Clone::clone(agent);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_exit", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
                 Ok((host.bind(py).getattr("_core_on_exit")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1205,13 +1166,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
     fn close_toolsets<'a>(&'a self, agent: Option<&::lk_agents_abi::HostRef>) -> ::lk_agents_abi::BoxFuture<'a, ()> {
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = agent.map(::std::borrow::ToOwned::to_owned);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        if let Err(e) = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_close_toolsets", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
                 Ok((host.bind(py).getattr("_core_close_toolsets")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await {
+            }));
+        ::std::boxed::Box::pin(async move {
+        if let Err(e) = started.await {
             ::lk_agents_abi::python::log::warn!("SessionHooks._core_close_toolsets failed: {e}");
         }
         })
@@ -1220,13 +1180,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
     fn setup_tools<'a>(&'a self, tools: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::vec::Vec<::lk_agents_abi::ToolSpec>, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let tools_arg = ::std::clone::Clone::clone(tools);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_setup_tools", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(tools_arg, py)?];
                 Ok((host.bind(py).getattr("_core_setup_tools")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1243,13 +1202,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
 
     fn closing(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_closing", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_closing")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1270,13 +1228,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let chat_ctx_arg = chat_ctx;
         let new_transcript_arg = new_transcript.to_owned();
         let transcript_confidence_arg = transcript_confidence;
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_user_turn_completed", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(chat_ctx_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(new_transcript_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript_confidence_arg, py)?];
                 Ok((host.bind(py).getattr("_core_on_user_turn_completed")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1295,13 +1252,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = ::std::clone::Clone::clone(agent);
         let ev_arg = ::std::clone::Clone::clone(ev);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_on_user_turn_exceeded", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(ev_arg, py)?];
                 Ok((host.bind(py).getattr("_core_on_user_turn_exceeded")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1320,13 +1276,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let host = ::std::sync::Arc::clone(&self.host);
         let function_calls_arg = function_calls;
         let function_call_outputs_arg = function_call_outputs;
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_function_tools_executed", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(function_calls_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(function_call_outputs_arg, py)?];
                 Ok((host.bind(py).getattr("_core_function_tools_executed")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1345,13 +1300,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let host = ::std::sync::Arc::clone(&self.host);
         let source_arg = ::std::clone::Clone::clone(source);
         let step_arg = step;
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionHooks._core_filler_source", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(source_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(step_arg, py)?];
                 Ok((host.bind(py).getattr("_core_filler_source")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -1370,11 +1324,10 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let host = ::std::sync::Arc::clone(&self.host);
         let hook_arg = hook.to_owned();
         let error_arg = error;
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "SessionHooks._core_hook_failed", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(hook_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(error_arg, py)?];
-            Ok((host.bind(py).getattr("_core_hook_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "SessionHooks._core_hook_failed", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(hook_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(error_arg, py)?];
+                Ok((host.bind(py).getattr("_core_hook_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 }
 
@@ -1405,7 +1358,7 @@ impl SessionEventsProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(SessionEventsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?) })
+        Ok(SessionEventsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default() })
     }
 }
 
@@ -1417,29 +1370,27 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
     fn event(&self, wire: ::lk_agents_abi::voice::events::HostWire) {
         let host = ::std::sync::Arc::clone(&self.host);
         let wire_arg = wire;
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "SessionEvents._core_event", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(wire_arg, py)?];
-            Ok((host.bind(py).getattr("_core_event")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "SessionEvents._core_event", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(wire_arg, py)?];
+                Ok((host.bind(py).getattr("_core_event")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn error_message(&self, error: &::lk_agents_abi::voice::events::SessionErrorWire) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
         let error_arg = ::std::clone::Clone::clone(error);
-        ::pyo3::Python::attach(|py| {
-            // One place converts the call's failures to its declared error.
-            #[allow(clippy::redundant_closure_call)]
-            let out = (|| {
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(error_arg, py)?];
-                self.host.bind(py).call_method1("_core_error_message", ::pyo3::types::PyTuple::new(py, args)?)
-            })();
+                Ok((host.bind(py).getattr("_core_error_message")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = &out;
+            let o = out.bind(py);
             let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })

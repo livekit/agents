@@ -50,7 +50,7 @@ impl Item {}
 pub trait Llm {}
 "#;
 
-fn read(llm: &str) -> Result<Declarations, String> {
+pub(crate) fn read(llm: &str) -> Result<Declarations, String> {
     let krate = Crate::from_files(
         "lk_agents_abi",
         &[
@@ -333,7 +333,7 @@ fn mutable_classes_and_functions_are_their_own_forms() {
     assert!(err.contains("W: every method of #[host(functions)] is a `function`"), "{err}");
 }
 
-fn proxy(body: &str) -> String {
+pub(crate) fn proxy(body: &str) -> String {
     format!(
         "use super::chat::{{Report, Chunk, Conn}};\nuse crate::errors::{{HostError, Refused}};\n#[crate::host(proxy(host = \"livekit.agents.Callbacks\"))]\n#[async_trait]\npub trait Callbacks: Send + Sync {{ {body} }}"
     )
@@ -357,7 +357,7 @@ fn declared_proxies_call_the_host_in_their_context() {
         proxy(
             r#"
             #[host(await)] async fn render(&self, #[host(context)] at: &Report) -> Result<String, HostError>;
-            #[host(await)] async fn prepare(&self, #[host(context)] at: &Report, args: serde_json::Map<String, serde_json::Value>) -> Result<Result<Chunk, Refused>, HostError>;
+            #[host(await, requires(tool_call))] async fn prepare(&self, #[host(context)] at: &Report, args: serde_json::Map<String, serde_json::Value>) -> Result<Result<Chunk, Refused>, HostError>;
             #[host(notify, name = "abort")] fn cancel(&self, #[host(context)] at: &Report);
             "#
         )
@@ -378,6 +378,8 @@ fn declared_proxies_call_the_host_in_their_context() {
             (ProxyCall::Notify, "abort", Some(0))
         ]
     );
+    let unscoped = refuse_proxy("#[host(await, requires(tool_call))] async fn f(&self) -> Result<(), HostError>;");
+    assert!(unscoped.contains("#[host(context)]"), "{unscoped}");
     let refusal = p.methods[1].ret.refusal.as_ref().expect("declared");
     assert_eq!((refusal.module.as_str(), refusal.class.as_str()), ("livekit.agents", "Refused"));
     assert_eq!(p.methods[1].ret.err.as_deref(), Some("::lk_agents_abi::errors::HostError"));
@@ -386,15 +388,16 @@ fn declared_proxies_call_the_host_in_their_context() {
     for want in [
         "impl ::lk_agents_abi::llm::class::Callbacks for CallbacksProxy {",
         "#[::async_trait::async_trait]",
-        "let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(at).cloned() else {",
-        "let out = crate::host::call_in(context, move |py| {",
+        "let started = ::lk_agents_runtime::host::call(&crate::host::Entry, \"Callbacks.render\", at, &[], ::std::boxed::Box::new(move |py| {",
+        "\"Callbacks.prepare\", at, &[::lk_agents_abi::invoke::Scope::ToolCall], ",
+        "let out = started.await;",
         "Ok((host.bind(py).getattr(\"render\")?",
         "::lk_agents_abi::python::extra_to_py(py, &args_arg)?.into_any()",
         "if e.is_instance(py, &py.import(\"livekit.agents\").and_then(|m| m.getattr(\"Refused\"))",
         "return Ok(Err(<::lk_agents_abi::errors::Refused as ::std::convert::From<String>>::from(e.value(py).to_string())));",
         "<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e)",
         "fn cancel(&self, at: &::lk_agents_abi::llm::chat::Report) {",
-        "self.notifier.notify(context, \"Callbacks.abort\", move |py| {",
+        "::lk_agents_runtime::host::notify(&self.notifier, \"Callbacks.abort\", at, &[], false, ::std::boxed::Box::new(move |py| {",
         "Ok((host.bind(py).getattr(\"abort\")?",
         "let host = super::llm::CallbacksProxy::from_host(&host)?;",
         "native::<dyn ::lk_agents_abi::llm::class::Callbacks>(obj)",
@@ -439,7 +442,7 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
         "let v = obj.call_method0(\"_core_label\")?;",
         "context: crate::host::capture_context(obj.py())?",
         "fn label(&self) -> ::std::string::String {\n        ::std::clone::Clone::clone(&self.label)",
-        "let context = ::std::clone::Clone::clone(&self.context);",
+        "\"Callbacks.count\", &self.context, &[], ::std::boxed::Box::new(move |py| {",
         "Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))",
         "if let Some(bound) = bound {\n                    args.push(",
         "crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::llm::chat::Chunk>()?)",
@@ -766,7 +769,7 @@ fn a_proxy_without_async_trait_returns_boxed_futures() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
         llm.contains("fn handle<'a>(&'a self, at: &::lk_agents_abi::llm::chat::Report) -> ::lk_agents_abi::BoxFuture<'a, ")
-            && llm.contains("return ::std::boxed::Box::pin(async move { Err("),
+            && llm.contains("let started = ::lk_agents_runtime::host::call(&crate::host::Entry, \"Turns.handle\", at, &[], "),
         "{llm}"
     );
     let mixed = read(
@@ -820,7 +823,8 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
         llm.contains("fn state(&self, id: &str) -> ::std::result::Result<::lk_agents_abi::llm::chat::Chunk, ::lk_agents_abi::errors::HostError>")
-            && llm.contains("self.host.bind(py).call_method1(\"state\"")
+            && llm.contains("let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ")
+            && llm.contains("getattr(\"state\")")
             && llm.contains("return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));"),
         "{llm}"
     );
@@ -1218,7 +1222,7 @@ fn a_declared_proxy_is_handed_back_as_its_host_object() {
             && llm.contains(
                 "Some(x) => super::llm::NoiseProxy::to_host(py, ::std::sync::Arc::clone(&x))?"
             )
-            && llm.contains("let context = &self.context;"),
+            && llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();"),
         "{llm}"
     );
     let not_any = read(

@@ -103,6 +103,20 @@ fn invocation(context: lk_agents_abi::HostRef) -> Invocation {
     }
 }
 
+/// `invocation`'s copy for one tool call, as the HostInvoker derives it.
+fn tool_call(invocation: &Invocation) -> Invocation {
+    let call = lk_agents_abi::FunctionCall {
+        id: "item_1".into(),
+        call_id: "call_1".into(),
+        arguments: "{}".into(),
+        name: "lookup".into(),
+        created_at: std::time::SystemTime::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    Invocation { function_call: Some(call), ..invocation.clone() }
+}
+
 // Catches: a callback run outside the context its invocation captured, the captured context
 // handed to the host, a refusal read as a failure (or a failure as a refusal), a host shape read
 // by anything but its declaration, or a notification that never reaches the host.
@@ -126,6 +140,8 @@ fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
     let runtime = lk_agents_runtime::process::handle().unwrap();
     runtime.block_on(async {
         assert_eq!(proxy.render_instructions(&inv).await.unwrap(), "be brief");
+        let agent = inv.clone();
+        let inv = tool_call(&agent);
         let args = |key: &str| {
             let mut m = serde_json::Map::new();
             m.insert(key.into(), true.into());
@@ -154,7 +170,7 @@ fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
         let failed = proxy.prepare_tool(&inv, args("crash")).await.unwrap_err();
         assert_eq!(failed.kind, "KeyError");
         let verdict =
-            proxy.validate_output(&inv, OutputCandidate::Value(serde_json::json!(3))).await;
+            proxy.validate_output(&agent, OutputCandidate::Value(serde_json::json!(3))).await;
         assert!(matches!(verdict, Ok(ValidatedOutput::Retry(r)) if r == "not a number"));
     });
     proxy.cancel(&inv);
@@ -185,6 +201,41 @@ fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
         assert_eq!(candidate.getattr("value").unwrap().extract::<i64>().unwrap(), 3);
         let (var, operation): (String, u64) = seen.get_item("cancel").unwrap().extract().unwrap();
         assert_eq!((var.as_str(), operation), ("captured", 7));
+    });
+}
+
+// Catches: a tool callback dispatched without the tool call it belongs to (the host would run a
+// body with no call scope), or a refusal that enters the host anyway.
+#[test]
+fn a_tool_callback_without_a_tool_call_scope_is_refused_before_the_host() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    Python::initialize();
+    let (globals, proxy, inv) = Python::attach(|py| {
+        let globals = PyDict::new(py);
+        let models = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../livekit-agents-next/livekit/agents/_generated/agent_run.py"
+        );
+        globals.set_item("MODELS", models).unwrap();
+        py.run(&std::ffi::CString::new(HOST).unwrap(), Some(&globals), None).unwrap();
+        py.run(c"async def entered(invocation, arguments):\n    host.seen['entered'] = True\nhost.prepare_tool = entered\n", Some(&globals), None).unwrap();
+        let pair = globals.get_item("capture").unwrap().unwrap().call1(("captured",)).unwrap();
+        let context = lk_agents_abi::python::intern_host(pair.unbind());
+        let host = globals.get_item("host").unwrap().unwrap();
+        (globals.unbind(), AgentHostProxy::from_host(&host).unwrap(), invocation(context))
+    });
+    let runtime = lk_agents_runtime::process::handle().unwrap();
+    let error = runtime
+        .block_on(proxy.prepare_tool(&inv, serde_json::Map::new()))
+        .unwrap_err();
+    assert_eq!(error.kind, "RuntimeError");
+    assert!(
+        error.message.contains("AgentHost.prepare_tool: the call requires a tool call scope"),
+        "{error}"
+    );
+    Python::attach(|py| {
+        let seen = globals.bind(py).get_item("host").unwrap().unwrap().getattr("seen").unwrap();
+        assert!(seen.get_item("entered").is_err(), "the host was entered");
     });
 }
 

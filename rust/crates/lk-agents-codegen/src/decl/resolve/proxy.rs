@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// The scopes `requires(..)` names, as `lk_agents_abi::invoke::Scope` variants.
+const SCOPES: [(&str, &str); 5] = [
+    ("job", "Job"),
+    ("agent", "Agent"),
+    ("speech", "Speech"),
+    ("tool_call", "ToolCall"),
+    ("approval", "Approval"),
+];
+
 impl Resolver<'_> {
     /// A declaration-model proxy: every method declares its call and its context parameter.
     pub(super) fn proxy_trait(&self, tr: &syn::ItemTrait, proxy: &Entry) -> Result<Proxy, String> {
@@ -77,7 +86,11 @@ impl Resolver<'_> {
     fn proxy_method(&self, f: &syn::TraitItemFn, trait_path: &str) -> Result<ProxyMethod, String> {
         let at = format!("{}::{}", self.at, f.sig.ident);
         let entries = voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?;
-        voc::only(&at, &entries, &["await", "call", "notify", "read_once", "bind", "name"])?;
+        voc::only(
+            &at,
+            &entries,
+            &["await", "call", "notify", "read_once", "bind", "name", "requires"],
+        )?;
         let kinds = [
             ("await", ProxyCall::Await),
             ("call", ProxyCall::Call),
@@ -225,12 +238,39 @@ impl Resolver<'_> {
             }
             None => None,
         };
+        let requires = match voc::find(&entries, "requires") {
+            None => Vec::new(),
+            Some(requires) => {
+                if context.is_none() || !matches!(kind, ProxyCall::Await | ProxyCall::Notify) {
+                    return Err(format!(
+                        "{at}: requires(..) checks the scopes of an awaited or notify call's #[host(context)] parameter"
+                    ));
+                }
+                let mut scopes = Vec::new();
+                for scope in &requires.nested {
+                    let variant = SCOPES
+                        .iter()
+                        .find(|(key, _)| *key == scope.key && scope.value.is_none())
+                        .map(|(_, variant)| *variant)
+                        .ok_or_else(|| {
+                            format!(
+                                "{at}: requires(..) names scopes ({}), not `{}`",
+                                SCOPES.map(|(key, _)| key).join(", "),
+                                scope.key
+                            )
+                        })?;
+                    scopes.push(variant);
+                }
+                scopes
+            }
+        };
         Ok(ProxyMethod {
             rust_name: f.sig.ident.to_string(),
             name: voc::text(&at, &entries, "name")?.unwrap_or_else(|| f.sig.ident.to_string()),
             kind,
             params,
             context,
+            requires,
             ret,
             wrap,
             consumes,

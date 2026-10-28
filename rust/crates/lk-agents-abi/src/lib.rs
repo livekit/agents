@@ -24,6 +24,7 @@ pub mod agent;
 pub mod errors;
 pub mod evals;
 pub mod inference;
+pub mod invoke;
 pub mod llm;
 pub mod media;
 pub mod metrics;

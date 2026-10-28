@@ -9,6 +9,7 @@ pub mod run;
 use serde_json::{Map, Value};
 
 use crate::errors::HostError;
+use crate::invoke::Scope;
 use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use crate::llm::tool_executor::{Approval, ToolReport};
 use crate::utils::host_ref::HostRef;
@@ -39,14 +40,36 @@ pub struct Invocation {
     pub host_context: Option<HostRef>,
 }
 
-/// What a `#[host(context)]` parameter carries: the host context a proxy call runs in.
+/// What a host call runs in: the host context captured at its operation's entry, and the
+/// framework scopes that operation holds. A `#[host(context)]` proxy parameter is one; a proxy
+/// call without one runs in the context captured when the proxy was taken, holding no scope.
 pub trait HostContext {
     fn host_context(&self) -> Option<&HostRef>;
+
+    fn holds(&self, scope: Scope) -> bool {
+        let _ = scope;
+        false
+    }
+}
+
+impl HostContext for HostRef {
+    fn host_context(&self) -> Option<&HostRef> {
+        Some(self)
+    }
 }
 
 impl HostContext for Invocation {
     fn host_context(&self) -> Option<&HostRef> {
         self.host_context.as_ref()
+    }
+
+    fn holds(&self, scope: Scope) -> bool {
+        match scope {
+            Scope::Agent => true,
+            Scope::ToolCall => self.function_call.is_some(),
+            Scope::Approval => self.approval.is_some(),
+            Scope::Job | Scope::Speech => false,
+        }
     }
 }
 
@@ -155,7 +178,7 @@ pub trait AgentHost: Send + Sync {
 
     /// Binds the call's arguments to the tool's signature and validates them, in the call's
     /// invocation scope.
-    #[host(await)]
+    #[host(await, requires(tool_call))]
     fn prepare_tool<'a>(
         &'a self,
         #[host(context)] invocation: &'a Invocation,
@@ -163,7 +186,7 @@ pub trait AgentHost: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<Result<PreparedArguments, ToolArgumentError>, HostError>>;
 
     /// The tool's read-back function on the prepared arguments.
-    #[host(await)]
+    #[host(await, requires(tool_call))]
     fn read_back<'a>(
         &'a self,
         #[host(context)] invocation: &'a Invocation,
@@ -171,7 +194,7 @@ pub trait AgentHost: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<ReadBackAnswer, HostError>>;
 
     /// Runs the body with the prepared arguments and classifies what it returned or raised.
-    #[host(await)]
+    #[host(await, requires(tool_call))]
     fn run_tool<'a>(
         &'a self,
         #[host(context)] invocation: &'a Invocation,

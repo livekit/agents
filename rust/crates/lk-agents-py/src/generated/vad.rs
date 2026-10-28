@@ -52,7 +52,7 @@ impl VadProxy {
             let v = obj.call_method0("_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(VadProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), label, capabilities, id })
+        Ok(VadProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label, capabilities, id })
     }
 }
 
@@ -76,21 +76,20 @@ impl ::lk_agents_abi::Vad for VadProxy {
 
     fn prewarm(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "Vad._core_prewarm", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_prewarm")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "Vad._core_prewarm", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_prewarm")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     async fn stream(&self) -> ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>), ::lk_agents_abi::errors::ProviderError> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "Vad._core_stream", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -98,6 +97,9 @@ impl ::lk_agents_abi::Vad for VadProxy {
                     return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
                 }
             };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Vad._core_stream: the call captured no host context")));
+                };
             let o = out.bind(py);
             let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(o.extract::<::lk_agents_abi::VadEvent>()?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)

@@ -13,7 +13,7 @@ pub mod tree;
 pub mod vocabulary;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Everything the ABI declares, in source order.
 #[derive(Debug, Clone, Default)]
@@ -191,6 +191,8 @@ pub struct ProxyMethod {
     /// The `#[host(context)]` parameter: its type implements `HostContext`. `None`: the context
     /// the proxy captured.
     pub context: Option<usize>,
+    /// `requires(..)`: the `lk_agents_abi::invoke::Scope` variants the call's context must hold.
+    pub requires: Vec<&'static str>,
     pub ret: ProxyRet,
     /// `bind(wrap = T)`: the bound copy is handed out as `T::bound(copy, &x, clock)`, a native
     /// wrapper the core runs around it (the retry loop of a host STT).

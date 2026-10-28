@@ -114,13 +114,12 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
     fn evaluate<'a>(&'a self, evaluator: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::lk_agents_abi::evals::Judgment, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let evaluator_arg = ::std::clone::Clone::clone(evaluator);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "EvaluationHost.evaluate", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(evaluator_arg, py)?];
                 Ok((host.bind(py).getattr("evaluate")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,

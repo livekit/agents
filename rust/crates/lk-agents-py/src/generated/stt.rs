@@ -54,7 +54,7 @@ impl SttProxy {
             let v = obj.call_method0("_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(SttProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), label, capabilities, id, conn: None })
+        Ok(SttProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: ::std::default::Default::default(), label, capabilities, id, conn: None })
     }
 }
 
@@ -78,32 +78,29 @@ impl ::lk_agents_abi::Stt for SttProxy {
 
     fn prewarm(&self) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "Stt._core_prewarm", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-            Ok((host.bind(py).getattr("_core_prewarm")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "Stt._core_prewarm", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_prewarm")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn update_keyterms(&self, keyterms: &[::std::string::String]) {
         let host = ::std::sync::Arc::clone(&self.host);
         let keyterms_arg = keyterms.to_vec();
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "Stt._core_update_keyterms", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(keyterms_arg, py)?];
-            Ok((host.bind(py).getattr("_core_update_keyterms")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "Stt._core_update_keyterms", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(keyterms_arg, py)?];
+                Ok((host.bind(py).getattr("_core_update_keyterms")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn push_conversation_item(&self, role: &str, text: &str) {
         let host = ::std::sync::Arc::clone(&self.host);
         let role_arg = role.to_owned();
         let text_arg = text.to_owned();
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "Stt._core_push_conversation_item", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(role_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
-            Ok((host.bind(py).getattr("_core_push_conversation_item")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "Stt._core_push_conversation_item", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(role_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
+                Ok((host.bind(py).getattr("_core_push_conversation_item")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
@@ -117,11 +114,10 @@ impl ::lk_agents_abi::Stt for SttProxy {
             }
         };
         let recoverable_arg = recoverable;
-        let context = ::std::clone::Clone::clone(&self.context);
-        self.notifier.notify(context, "Stt._core_failed", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [error_arg.into_bound(py), ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?];
-            Ok((host.bind(py).getattr("_core_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "Stt._core_failed", &self.context, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [error_arg.into_bound(py), ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?];
+                Ok((host.bind(py).getattr("_core_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 
     fn with_conn_options(&self, conn: &::lk_agents_abi::ApiConnectOptions) -> ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Stt>> {
@@ -133,16 +129,15 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let buffer_arg = buffer.to_vec();
         let language_arg = language.map(::std::borrow::ToOwned::to_owned);
         let bound = ::std::clone::Clone::clone(&self.conn);
-        let context = ::std::clone::Clone::clone(&self.context);
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "Stt._core_recognize", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(buffer_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
                     args.push(py.import("livekit.agents.types")?.getattr("APIConnectOptions")?.call((), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
                 }
                 Ok((host.bind(py).getattr("_core_recognize")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -161,16 +156,16 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let language_arg = language.map(::std::borrow::ToOwned::to_owned);
         let start_time_offset_arg = start_time_offset;
         let bound = ::std::clone::Clone::clone(&self.conn);
-        let context = ::std::clone::Clone::clone(&self.context);
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "Stt._core_stream", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(start_time_offset_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
                     args.push(py.import("livekit.agents.types")?.getattr("APIConnectOptions")?.call((), Some(&::pyo3::IntoPyObject::into_pyobject(bound, py)?.cast_into::<::pyo3::types::PyDict>()?))?);
                 }
                 Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -178,6 +173,9 @@ impl ::lk_agents_abi::Stt for SttProxy {
                     return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
                 }
             };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Stt._core_stream: the call captured no host context")));
+                };
             let o = out.bind(py);
             let out = (if o.is_none() { ::pyo3::PyResult::Ok(None) } else { (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(o.extract::<::lk_agents_abi::SpeechEvent>()?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>))).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)

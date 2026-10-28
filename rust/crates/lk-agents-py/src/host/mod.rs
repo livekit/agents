@@ -1,7 +1,10 @@
-//! The Python entry of `HostInvoker` (decision 74: pyo3 is this crate's alone): a callback runs in a copy of the context its operation
-//! captured at entry, on that context's event loop. The call itself runs inside the copy (a sync
-//! callable included), an awaitable it returns becomes a task of the same copy, and the caller's
-//! context is never entered or changed. Dropping the call cancels the host task; it still settles.
+//! The Python entry of `HostInvoker` (decision 74: pyo3 is this crate's alone): [`Entry`] and
+//! [`Notifier`] implement the runtime's language-neutral port, which every generated proxy
+//! dispatches through (`lk_agents_runtime::host`). A callback runs in a copy of the context its
+//! operation captured at entry, on that context's event loop. The call itself runs inside the
+//! copy (a sync callable included), an awaitable it returns becomes a task of the same copy, and
+//! the caller's context is never entered or changed. Dropping the call cancels the host task; it
+//! still settles.
 //!
 //! The captured context crosses as a `HostRef` to the host's `(loop, contextvars.Context)` pair,
 //! taken at the operation's entry (`asyncio.get_running_loop(), contextvars.copy_context()`).
@@ -10,6 +13,8 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use lk_agents_abi::BoxFuture;
+use lk_agents_abi::invoke::{HostEntry, HostNotices, Refusal};
 use lk_agents_abi::python::resolve_key;
 use lk_agents_abi::utils::host_ref::HostRef;
 use pyo3::prelude::*;
@@ -20,6 +25,17 @@ use tokio::sync::oneshot;
 pub mod stream;
 #[cfg(test)]
 mod parentage_tests;
+
+/// The dispatch a generated proxy's call takes, in `context`, requiring no scope.
+#[cfg(test)]
+fn call_in<F>(context: &HostRef, call: F) -> BoxFuture<'static, PyResult<Py<PyAny>>>
+where
+    F: for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
+        + Send
+        + 'static,
+{
+    lk_agents_runtime::host::call(&Entry, "test", context, &[], Box::new(call))
+}
 
 /// A host call started on its loop: resolves to its value, or the value its awaitable resolved to.
 /// Dropping it before it settles cancels the host task; the task still settles on its loop.
@@ -182,83 +198,71 @@ pub(crate) fn captured_pair<'py>(
     captured.bind(py).extract()
 }
 
-/// Runs `call` (building the callable and its arguments) in a copy of `context`. Resolves to
-/// the call's value, or the value its awaitable resolved to.
-pub async fn call_in<F>(context: &HostRef, call: F) -> PyResult<Py<PyAny>>
-where
-    F: for<'py> FnOnce(
-            Python<'py>,
-        ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, pyo3::types::PyTuple>)>
-        + Send
-        + 'static,
-{
-    let mut started = Python::attach(|py| {
-        let (event_loop, ctx) = captured_pair(py, context)?;
-        let ctx = ctx.call_method0("copy")?;
-        start_in(py, &event_loop, &ctx, move |py| {
-            let (callable, arguments) = call(py)?;
-            callable.call1(arguments)
+/// A host call: builds the callable and its arguments, inside the entered context.
+pub type HostCall = Box<
+    dyn for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> + Send,
+>;
+
+/// The Python entry of the runtime's `HostInvoker`.
+pub struct Entry;
+
+impl HostEntry for Entry {
+    type Call = HostCall;
+    type Value = Py<PyAny>;
+    type Error = PyErr;
+
+    /// Runs `call` in a copy of `context`, once polled: resolves to the call's value, or the
+    /// value its awaitable resolved to.
+    fn enter(&self, context: &HostRef, call: HostCall) -> BoxFuture<'static, PyResult<Py<PyAny>>> {
+        let context = context.clone();
+        Box::pin(async move {
+            let mut started = Python::attach(|py| {
+                let (event_loop, ctx) = captured_pair(py, &context)?;
+                let ctx = ctx.call_method0("copy")?;
+                start_in(py, &event_loop, &ctx, move |py| {
+                    let (callable, arguments) = call(py)?;
+                    callable.call1(arguments)
+                })
+            })?;
+            started.settled().await
         })
-    })?;
-    started.settled().await
+    }
+
+    fn enter_now(&self, call: HostCall) -> PyResult<Py<PyAny>> {
+        Python::attach(|py| {
+            let (callable, arguments) = call(py)?;
+            callable.call1(arguments).map(Bound::unbind)
+        })
+    }
+
+    fn refused(&self, label: &'static str, refusal: Refusal) -> PyErr {
+        pyo3::exceptions::PyRuntimeError::new_err(format!("{label}: {refusal}"))
+    }
 }
 
 /// Notifications waiting for the host loop past which a new lossy one is dropped (and logged).
 pub const NOTIFY_QUEUE: usize = 256;
 
-/// Builds a notification's callable and arguments, on the loop.
-type Notice = Box<
-    dyn for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> + Send,
->;
-
 /// The `notify` calls of one proxy: delivered in call order, each in a copy of its own context,
-/// by one drain scheduled on the host loop at a time. Never a task per call, which could reorder
-/// them (a detector's audio frames).
-#[derive(Clone)]
+/// by one drain scheduled at a time on the loop of the notice that found the queue idle. Never a
+/// task per call, which could reorder them (a detector's audio frames).
+#[derive(Clone, Default)]
 pub struct Notifier(Arc<Notices>);
 
+#[derive(Default)]
 struct Notices {
-    /// The proxy's captured `(loop, context)`: the drains run on its loop.
-    context: HostRef,
     queue: Mutex<NoticeQueue>,
 }
 
 #[derive(Default)]
 struct NoticeQueue {
-    entries: VecDeque<(HostRef, &'static str, Notice)>,
+    entries: VecDeque<(HostRef, &'static str, HostCall)>,
     /// A drain is scheduled on the loop and has not emptied the queue yet.
     scheduled: bool,
 }
 
 impl Notifier {
-    pub fn new(context: HostRef) -> Self {
-        Notifier(Arc::new(Notices { context, queue: Mutex::default() }))
-    }
-
-    /// Queues `call` to run in a copy of `context`; `label` names it in the log line a failure
-    /// writes. Never dropped: a control notification (a flush, a clear, a session event) lost to a
-    /// slow loop is a wrong outcome, and the queue only grows while the host loop stalls.
-    pub fn notify<F>(&self, context: HostRef, label: &'static str, call: F)
-    where
-        F: for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
-            + Send
-            + 'static,
-    {
-        self.queue(context, label, false, Box::new(call));
-    }
-
-    /// [`notify`](Self::notify) for a stream of frames: dropped (and logged) once
-    /// [`NOTIFY_QUEUE`] notifications are waiting for the host loop.
-    pub fn notify_lossy<F>(&self, context: HostRef, label: &'static str, call: F)
-    where
-        F: for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
-            + Send
-            + 'static,
-    {
-        self.queue(context, label, true, Box::new(call));
-    }
-
-    fn queue(&self, context: HostRef, label: &'static str, lossy: bool, call: Notice) {
+    fn queue(&self, context: HostRef, label: &'static str, lossy: bool, call: HostCall) {
         let schedule = {
             let mut queue = self.0.queue.lock().unwrap_or_else(|p| p.into_inner());
             if lossy && queue.entries.len() >= NOTIFY_QUEUE {
@@ -266,10 +270,10 @@ impl Notifier {
                 lk_agents_abi::python::log::warn!(target: "livekit.agents", "{label} dropped: {NOTIFY_QUEUE} notifications are waiting for the host loop");
                 return;
             }
-            queue.entries.push_back((context, label, call));
+            queue.entries.push_back((context.clone(), label, call));
             !std::mem::replace(&mut queue.scheduled, true)
         };
-        if schedule && let Err(e) = Python::attach(|py| self.schedule(py)) {
+        if schedule && let Err(e) = Python::attach(|py| self.schedule(py, &context)) {
             let mut queue = self.0.queue.lock().unwrap_or_else(|p| p.into_inner());
             queue.entries.clear();
             queue.scheduled = false;
@@ -278,8 +282,8 @@ impl Notifier {
         }
     }
 
-    fn schedule(&self, py: Python<'_>) -> PyResult<()> {
-        let (event_loop, _) = captured_pair(py, &self.0.context)?;
+    fn schedule(&self, py: Python<'_>, context: &HostRef) -> PyResult<()> {
+        let (event_loop, _) = captured_pair(py, context)?;
         let notices = self.0.clone();
         let drain = PyCFunction::new_closure(py, None, None, move |args, _| {
             deliver(args.py(), &notices);
@@ -290,11 +294,22 @@ impl Notifier {
     }
 }
 
+/// A control notification (a flush, a clear, a session event) is never dropped: lost to a slow
+/// loop it is a wrong outcome, and the queue only grows while the host loop stalls. A lossy one
+/// (a stream's frame) is dropped, and logged, once [`NOTIFY_QUEUE`] wait for the host loop.
+impl HostNotices for Notifier {
+    type Call = HostCall;
+
+    fn notify(&self, context: HostRef, label: &'static str, lossy: bool, call: HostCall) {
+        self.queue(context, label, lossy, call);
+    }
+}
+
 /// On the loop: every queued notification, in order, until the queue is empty. An awaitable a
 /// notification returns runs as a task of its context copy, not awaited.
 fn deliver(py: Python<'_>, notices: &Notices) {
     loop {
-        let batch: Vec<(HostRef, &'static str, Notice)> = {
+        let batch: Vec<(HostRef, &'static str, HostCall)> = {
             let mut queue = notices.queue.lock().unwrap_or_else(|p| p.into_inner());
             if queue.entries.is_empty() {
                 queue.scheduled = false;
@@ -488,13 +503,18 @@ async def blocking():
             let c = captured(&g, "captured");
             (g.unbind(), c)
         });
-        let notifier = Notifier::new(context.clone());
+        let notifier = Notifier::default();
         for i in 0..200 {
             let g = Python::attach(|py| globals.clone_ref(py));
-            notifier.notify(context.clone(), "note", move |py| {
-                let f = g.bind(py).get_item("note")?.expect("defined");
-                Ok((f, PyTuple::new(py, [i])?))
-            });
+            notifier.notify(
+                context.clone(),
+                "note",
+                false,
+                Box::new(move |py| {
+                    let f = g.bind(py).get_item("note")?.expect("defined");
+                    Ok((f, PyTuple::new(py, [i])?))
+                }),
+            );
         }
         for _ in 0..200 {
             let order: Vec<(i64, String, bool)> = Python::attach(|py| {
@@ -523,7 +543,7 @@ async def blocking():
             let c = captured(&g, "captured");
             (g.unbind(), c)
         });
-        let notifier = Notifier::new(context.clone());
+        let notifier = Notifier::default();
         fn call(
             g: Py<PyDict>,
             name: &'static str,
@@ -535,10 +555,7 @@ async def blocking():
         }
         let send = |name: &'static str, i: i64, lossy: bool| {
             let g = Python::attach(|py| globals.clone_ref(py));
-            match lossy {
-                false => notifier.notify(context.clone(), "note", call(g, name, i)),
-                true => notifier.notify_lossy(context.clone(), "note", call(g, name, i)),
-            }
+            notifier.notify(context.clone(), "note", lossy, Box::new(call(g, name, i)))
         };
         send("stall", 0, false);
         let total = NOTIFY_QUEUE as i64 * 2;

@@ -196,7 +196,7 @@ impl AgentHostProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(AgentHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?) })
+        Ok(AgentHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), notifier: ::std::default::Default::default() })
     }
 }
 
@@ -208,15 +208,12 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     fn checkpoint<'a>(&'a self, invocation: &::lk_agents_abi::agent::Invocation) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<bool, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
-        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
-            return ::std::boxed::Box::pin(async move { Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.checkpoint: the call captured no host context")))) });
-        };
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AgentHost.checkpoint", invocation, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("checkpoint")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -234,15 +231,12 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     fn render_instructions<'a>(&'a self, invocation: &::lk_agents_abi::agent::Invocation) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
-        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
-            return ::std::boxed::Box::pin(async move { Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.render_instructions: the call captured no host context")))) });
-        };
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AgentHost.render_instructions", invocation, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("render_instructions")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -261,15 +255,12 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let arguments_arg = arguments;
-        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
-            return ::std::boxed::Box::pin(async move { Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.prepare_tool: the call captured no host context")))) });
-        };
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AgentHost.prepare_tool", invocation, &[::lk_agents_abi::invoke::Scope::ToolCall], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, ::lk_agents_abi::python::extra_to_py(py, &arguments_arg)?.into_any()];
                 Ok((host.bind(py).getattr("prepare_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -291,15 +282,12 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
-        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
-            return ::std::boxed::Box::pin(async move { Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.read_back: the call captured no host context")))) });
-        };
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AgentHost.read_back", invocation, &[::lk_agents_abi::invoke::Scope::ToolCall], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
                 Ok((host.bind(py).getattr("read_back")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -318,15 +306,12 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
-        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
-            return ::std::boxed::Box::pin(async move { Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.run_tool: the call captured no host context")))) });
-        };
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AgentHost.run_tool", invocation, &[::lk_agents_abi::invoke::Scope::ToolCall], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
                 Ok((host.bind(py).getattr("run_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -345,15 +330,12 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let candidate_arg = candidate;
-        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
-            return ::std::boxed::Box::pin(async move { Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.validate_output: the call captured no host context")))) });
-        };
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "AgentHost.validate_output", invocation, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, crate::generated::records::agent_run::output_candidate_to_py(py, candidate_arg)?];
                 Ok((host.bind(py).getattr("validate_output")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -371,14 +353,10 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     fn cancel(&self, invocation: &::lk_agents_abi::agent::Invocation) {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
-        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
-            ::lk_agents_abi::python::log::warn!("AgentHost.cancel failed: {}", ::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.cancel: the call captured no host context"));
-            return;
-        };
-        self.notifier.notify(context, "AgentHost.cancel", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
-            Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
-        });
+        ::lk_agents_runtime::host::notify(&self.notifier, "AgentHost.cancel", invocation, &[], false, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
+                Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
     }
 }
 
@@ -419,13 +397,12 @@ impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
     fn render<'a>(&'a self, speech: &::lk_agents_abi::CoreObject) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let speech_arg = ::std::clone::Clone::clone(speech);
-        let context = ::std::clone::Clone::clone(&self.context);
-        ::std::boxed::Box::pin(async move {
-        let context = &context;
-        let out = crate::host::call_in(context, move |py| {
+        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "HostInstructions._core_render", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(speech_arg, py)?];
                 Ok((host.bind(py).getattr("_core_render")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }).await;
+            }));
+        ::std::boxed::Box::pin(async move {
+        let out = started.await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,

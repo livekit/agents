@@ -1,9 +1,10 @@
 //! The declared proxies (`#[host(proxy)]` traits whose methods declare their calls), written into
 //! their subject's adapter module: `<Trait>Proxy` implements the ABI trait over a host object.
 //!
-//! Each call enters a copy of a captured host context (`crate::host::call_in`):
-//! the one its `#[host(context)]` parameter carries, else the one the proxy captured when it was
-//! taken from the host. Every parameter crosses by its declared kind and the result is read by its
+//! Each call dispatches through the runtime's HostInvoker (`lk_agents_runtime::host`), entered
+//! by `crate::host` in a copy of a captured host context: the one its `#[host(context)]`
+//! parameter carries (refused when it lacks a scope the call `requires`), else the one the proxy
+//! captured when it was taken from the host. Generation refuses a host call emitted any other way. Every parameter crosses by its declared kind and the result is read by its
 //! declared kind; a host failure becomes the declared error. `read_once` values are read when the
 //! proxy is taken; a `bind` method returns a copy whose awaited calls pass the bound value last,
 //! handed out through its declared native wrapper when it names one.
@@ -44,7 +45,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         fields.push(
             "    /// The `notify` calls, delivered in order.\n    notifier: crate::host::Notifier,\n".into(),
         );
-        inits.push("notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?)".into());
+        inits.push("notifier: ::std::default::Default::default()".into());
     }
     for m in p.methods.iter().filter(|m| m.kind == ProxyCall::ReadOnce) {
         let at = format!("{}::{}", tr, m.rust_name);
@@ -83,7 +84,11 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         s.push_str("#[::async_trait::async_trait]\n");
     }
     s.push_str(&format!("impl {tr} for {name} {{\n"));
-    let methods = p.methods.iter().map(|m| method(p, m)).collect::<Result<Vec<_>, _>>()?;
+    let methods = p
+        .methods
+        .iter()
+        .map(|m| method(p, m).and_then(|text| dispatched(p, m, text)))
+        .collect::<Result<Vec<_>, _>>()?;
     s.push_str(&methods.join("\n"));
     s.push_str("}\n");
     Ok(s)
@@ -184,91 +189,102 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         }
         _ => String::new(),
     };
-    let call = format!(
-        "crate::host::call_in(context, move |py| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n{bound}                Ok((host.bind(py).getattr({:?})?, ::pyo3::types::PyTuple::new(py, args)?))\n            }})",
+    // Every call dispatches through the runtime's HostInvoker, entered by `crate::host`.
+    let host_call = format!(
+        "::std::boxed::Box::new(move |py| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n{bound}                Ok((host.bind(py).getattr({:?})?, ::pyo3::types::PyTuple::new(py, args)?))\n            }})",
         args.len(),
         args.join(", "),
         m.name
     );
-    let no_context = format!(
-        "::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")"
-    );
-    // Before the call's future exists: a boxed future returns its failure as a ready future.
-    let ready = |value: &str| match m.boxed {
-        Some(_) => format!("return ::std::boxed::Box::pin(async move {{ {value} }});"),
-        None => format!("return {value};"),
+    // What the call runs in: its own context parameter, else the context the proxy captured.
+    let scope = match m.context {
+        Some(i) if m.params[i].by_ref => m.params[i].name.clone(),
+        Some(i) => format!("&{}", m.params[i].name),
+        None => "&self.context".to_owned(),
     };
-    let missing = match (m.kind, m.ret.err.as_deref()) {
-        (ProxyCall::Notify, _) => format!(
-            "::lk_agents_abi::python::log::warn!(\"{label} failed: {{}}\", {no_context});\n            return;"
-        ),
-        (_, None) => format!(
-            "::lk_agents_abi::python::log::warn!(\"{label} failed: {{}}\", {no_context});\n            {}",
-            ready("")
-        ),
-        (_, Some(err)) => ready(&format!(
-            "Err(::pyo3::Python::attach(|py| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &{no_context})))"
-        )),
+    let requires = m
+        .requires
+        .iter()
+        .map(|s| format!("::lk_agents_abi::invoke::Scope::{s}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // A host stream it returns is pulled in a copy of the context its call ran in.
+    let stream_context = |err: &str| {
+        format!(
+            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n"
+        )
     };
+    let context = match m.ret.ok.holds_host_stream() {
+        true => format!(
+            "        let context = ::lk_agents_abi::agent::HostContext::host_context({scope}).cloned();\n"
+        ),
+        false => String::new(),
+    };
+    let host = "        let host = ::std::sync::Arc::clone(&self.host);\n";
     if m.kind == ProxyCall::Call {
         let (ret, refused, wrap, err) = result_shape(m, &at)?;
         let read = from_host("o", &m.ret.ok, &label, &at)?;
-        // A host stream it returns is pulled in the call's context, else the captured one.
-        let context = match (m.ret.ok.holds_host_stream(), m.context) {
-            (false, _) => String::new(),
-            (true, Some(i)) => format!(
-                "        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context({}).cloned() else {{\n            {missing}\n        }};\n        let context = &context;\n",
-                m.params[i].name
-            ),
-            (true, None) => "        let context = &self.context;\n".into(),
-        };
+        let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
         return Ok(format!(
-            "    {sig} -> {ret} {{\n{moved}{context}        ::pyo3::Python::attach(|py| {{\n            // One place converts the call's failures to its declared error.\n            #[allow(clippy::redundant_closure_call)]\n            let out = (|| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n                self.host.bind(py).call_method1({:?}, ::pyo3::types::PyTuple::new(py, args)?)\n            }})();\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n            let o = &out;\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n",
-            args.len(),
-            args.join(", "),
-            m.name
+            "    {sig} -> {ret} {{\n{host}{moved}{context}        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, {host_call});\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n"
         ));
     }
-    // The call's own context, else the one the proxy captured.
-    let context = match m.context {
-        Some(i) => format!(
-            "        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context({}).cloned() else {{\n            {missing}\n        }};\n",
-            m.params[i].name
-        ),
-        None => "        let context = ::std::clone::Clone::clone(&self.context);\n".into(),
-    };
-    let head = format!("        let host = ::std::sync::Arc::clone(&self.host);\n{moved}{context}");
+    if m.kind == ProxyCall::Notify {
+        return Ok(format!(
+            "    {sig} {{\n{host}{moved}        ::lk_agents_runtime::host::notify(&self.notifier, \"{label}\", {scope}, &[{requires}], {}, {host_call});\n    }}\n",
+            m.lossy
+        ));
+    }
+    let head = format!(
+        "{host}{moved}{context}        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, \"{label}\", {scope}, &[{requires}], {host_call});\n"
+    );
     match m.kind {
-        ProxyCall::Notify => Ok(format!(
-            "    {sig} {{\n{head}        self.notifier.{}(context, \"{label}\", move |py| {{\n            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n            Ok((host.bind(py).getattr({:?})?, ::pyo3::types::PyTuple::new(py, args)?))\n        }});\n    }}\n",
-            if m.lossy { "notify_lossy" } else { "notify" },
-            args.len(),
-            args.join(", "),
-            m.name
-        )),
         ProxyCall::Await if m.ret.err.is_none() => Ok(awaited(
             m,
             &sig,
             "()",
             &head,
             &format!(
-                "        let context = &context;\n        if let Err(e) = {call}.await {{\n            ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n        }}\n"
+                "        if let Err(e) = started.await {{\n            ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n        }}\n"
             ),
         )),
         ProxyCall::Await => {
             let (ret, refused, wrap, err) = result_shape(m, &at)?;
             let read = from_host("o", &m.ret.ok, &label, &at)?;
+            let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
             Ok(awaited(
                 m,
                 &sig,
                 &ret,
                 &head,
                 &format!(
-                    "        let context = &context;\n        let out = {call}.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
+                    "        let out = started.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
                 ),
             ))
         }
-        ProxyCall::ReadOnce | ProxyCall::Bind | ProxyCall::Call => unreachable!("answered above"),
+        ProxyCall::ReadOnce | ProxyCall::Bind | ProxyCall::Call | ProxyCall::Notify => {
+            unreachable!("answered above")
+        }
+    }
+}
+
+/// `text`, once its host call (if any) dispatches through the runtime's HostInvoker and nothing
+/// else in it calls into the host.
+fn dispatched(p: &Proxy, m: &ProxyMethod, text: String) -> Result<String, String> {
+    let calls_host = matches!(m.kind, ProxyCall::Await | ProxyCall::Call | ProxyCall::Notify);
+    let bypass = ["call_method", "call_in(", "call_soon_threadsafe", "into_future", ".call1("]
+        .into_iter()
+        .find(|api| text.contains(api));
+    match (calls_host && !text.contains("::lk_agents_runtime::host::"), bypass) {
+        (false, None) => Ok(text),
+        (true, _) => Err(format!(
+            "{}::{}: a proxy's host call dispatches through `lk_agents_runtime::host`",
+            p.trait_path, m.rust_name
+        )),
+        (false, Some(api)) => Err(format!(
+            "{}::{}: `{api}` calls into the host outside HostInvoker",
+            p.trait_path, m.rust_name
+        )),
     }
 }
 
@@ -403,5 +419,28 @@ fn from_host(o: &str, ty: &Ty, label: &str, at: &str) -> Result<String, String> 
             from_host(o, t, label, at)?
         )),
         _ => from_object(o, ty, &format!("{label:?}"), at),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::decl::tests::{proxy, read};
+
+    // Catches: an emitted host call that bypasses HostInvoker (calling the host object in place,
+    // or entering a context itself) generated instead of refused.
+    #[test]
+    fn a_host_call_outside_host_invoker_is_refused() {
+        let decls = read(&proxy(
+            "#[host(call)] fn state(&self, id: &str) -> Result<String, HostError>;",
+        ))
+        .expect("resolves");
+        let (p, m) = (&decls.proxies[0], &decls.proxies[0].methods[0]);
+        assert!(super::dispatched(p, m, super::method(p, m).expect("emits")).is_ok());
+        let direct = "    fn state(&self) { self.host.bind(py).call_method1(\"state\", ()); }".to_owned();
+        let error = super::dispatched(p, m, direct).expect_err("refused");
+        assert!(error.contains("dispatches through `lk_agents_runtime::host`"), "{error}");
+        let bypass = "::lk_agents_runtime::host::call_now(..); crate::host::call_in(c, f)".to_owned();
+        let error = super::dispatched(p, m, bypass).expect_err("refused");
+        assert!(error.contains("`call_in(` calls into the host outside HostInvoker"), "{error}");
     }
 }
