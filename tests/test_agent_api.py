@@ -29,7 +29,7 @@ from livekit.agents.voice.agent_session import ExpressiveOptions
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .storage_fixture import new_session
-from .test_a2a_server import AGENT, API_KEY, API_SECRET, CREDENTIALS, http_client, wire
+from .test_a2a_server import AGENT, API_KEY, API_SECRET, http_client, wire
 from .test_doors import stream
 
 pytestmark = [pytest.mark.unit]
@@ -713,7 +713,7 @@ async def test_a_tool_in_an_a2a_turn_reads_its_task_and_thread(thread_storage: S
         storage=thread_storage, agent_name=AGENT, api_key=API_KEY, api_secret=API_SECRET
     )
     server.add(handler)
-    async with http_client(server, Authorization=f"Bearer {CREDENTIALS.project_token()}") as http:
+    async with http_client(server) as http:
         events = await stream(http, "/frontend/v1", wire("hi", "m1"))
 
     task = events[0]["task"]

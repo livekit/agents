@@ -68,13 +68,21 @@ def test_cli_generated_args_matrix_dispatches_every_command_and_preserves_status
 
 @pytest.mark.skipif(sys.platform == "linux", reason="Linux supports forkserver directly")
 async def test_non_linux_forkserver_fallback_is_reported_after_native_start(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     caplog.set_level(logging.WARNING, logger="livekit.agents")
+    # the worker exports its credentials for its job processes; monkeypatch restores them
+    credentials = {
+        "LIVEKIT_URL": "ws://127.0.0.1:1",
+        "LIVEKIT_API_KEY": "test-key",
+        "LIVEKIT_API_SECRET": "test-secret",
+    }
+    for name, value in credentials.items():
+        monkeypatch.setenv(name, value)
     server = AgentServer(
-        ws_url="ws://127.0.0.1:1",
-        api_key="test-key",
-        api_secret="test-secret",
+        ws_url=credentials["LIVEKIT_URL"],
+        api_key=credentials["LIVEKIT_API_KEY"],
+        api_secret=credentials["LIVEKIT_API_SECRET"],
         multiprocessing_context="forkserver",
         num_idle_processes=0,
     )
