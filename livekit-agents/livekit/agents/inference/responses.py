@@ -51,7 +51,7 @@ class ResponsesOptions(TypedDict, total=False):
     parallel_tool_calls: bool | None
     prompt_cache_options: PromptCacheOptions
     reasoning: Reasoning | dict[str, Any] | None
-    service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None
+    service_tier: Literal["auto", "default", "flex", "scale", "priority", "ultrafast"] | None
     temperature: float | None
     text: ResponseTextConfigParam
     top_p: float | None
@@ -153,33 +153,19 @@ class LLM(llm.LLM):
         inference_class: NotGivenOr[InferenceClass] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> ResponsesLLMStream:
-        extra: dict[str, Any] = {
-            k: v for k, v in self._opts.extra_kwargs.items() if k != "tool_choice"
-        }
+        extra: dict[str, Any] = dict(self._opts.extra_kwargs)
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
-        parallel_tool_calls = (
-            parallel_tool_calls
-            if is_given(parallel_tool_calls)
-            else self._opts.extra_kwargs.get("parallel_tool_calls", NOT_GIVEN)
-        )
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = (
-            tool_choice
-            if is_given(tool_choice)
-            else self._opts.extra_kwargs.get("tool_choice", NOT_GIVEN)
+        merged_tool_choice = extra.pop("tool_choice", None)
+        oai_tool_choice = _to_responses_tool_choice(
+            tool_choice if is_given(tool_choice) else merged_tool_choice
         )
-        if is_given(tool_choice):
-            oai_tool_choice: response_create_params.ToolChoice
-            if isinstance(tool_choice, dict):
-                oai_tool_choice = {"type": "function", "name": tool_choice["function"]["name"]}
-                extra["tool_choice"] = oai_tool_choice
-            elif tool_choice in ("auto", "required", "none"):
-                oai_tool_choice = tool_choice
-                extra["tool_choice"] = oai_tool_choice
+        if oai_tool_choice is not None:
+            extra["tool_choice"] = oai_tool_choice
 
         effective_inference_class = (
             inference_class if is_given(inference_class) else self._opts.inference_class
@@ -211,6 +197,16 @@ class LLM(llm.LLM):
         if isinstance(setting, bool):
             return setting
         return supports_prompt_cache_breakpoints(self._opts.model)
+
+
+def _to_responses_tool_choice(tool_choice: Any) -> response_create_params.ToolChoice | None:
+    # livekit names a function as {"type": "function", "function": {"name": ...}};
+    # a dict already in the Responses shape passes through
+    if isinstance(tool_choice, dict) and "function" in tool_choice:
+        return {"type": "function", "name": tool_choice["function"]["name"]}
+    if isinstance(tool_choice, dict) or tool_choice in ("auto", "required", "none"):
+        return tool_choice
+    return None
 
 
 class _GatewayResponsesLLMStream(ResponsesLLMStream):
